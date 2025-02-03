@@ -17,6 +17,7 @@ import toast from "react-hot-toast";
 import { Tooltip } from "react-tooltip";
 import { apiClient } from "@/utils/web-api";
 import { S3_BUCKET_URL } from "@cap/utils";
+import { clientEnv, NODE_ENV } from "@cap/env";
 
 declare global {
   interface Window {
@@ -388,7 +389,7 @@ export const ShareVideo = forwardRef<
 
       if (
         data.bucket &&
-        data.awsBucket !== process.env.NEXT_PUBLIC_CAP_AWS_BUCKET
+        data.awsBucket !== clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET
       ) {
         // For custom S3 buckets, fetch through the API
         transcriptionUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&fileType=transcription`;
@@ -465,14 +466,14 @@ export const ShareVideo = forwardRef<
   let videoSrc: string;
 
   if (data.source.type === "desktopMP4") {
-    videoSrc = `${process.env.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
+    videoSrc = `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
   } else if (
     // v.cap.so is only available in prod
-    process.env.NODE_ENV === "development" ||
+    NODE_ENV === "development" ||
     ((data.skipProcessing === true || data.jobStatus !== "COMPLETE") &&
       data.source.type === "MediaConvert")
   ) {
-    videoSrc = `${process.env.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
+    videoSrc = `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
   } else if (data.source.type === "MediaConvert") {
     videoSrc = `${S3_BUCKET_URL}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`;
   } else {

@@ -12,7 +12,7 @@ use cap_rendering::{
 };
 use futures::FutureExt;
 use image::{ImageBuffer, Rgba};
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 #[derive(thiserror::Error, Debug)]
 pub enum ExportError {
@@ -33,6 +33,9 @@ pub enum ExportError {
 
     #[error("Other:{0}")]
     Other(String),
+
+    #[error("Exporting timed out")]
+    Timeout(#[from] tokio::time::error::Elapsed),
 }
 
 pub struct Exporter<TOnProgress> {
@@ -128,7 +131,12 @@ where
 
         let fps = self.fps;
 
-        let audio_info = match self.audio_segments.get(0).and_then(|d| d.as_ref().as_ref()) {
+        let audio_info = match self
+            .audio_segments
+            .get(0)
+            .and_then(|d| d.as_ref().as_ref())
+            .filter(|_| !self.project.audio.mute)
+        {
             Some(audio_data) => Some(
                 AudioInfo::new(
                     audio_data.info.sample_format,
@@ -175,25 +183,34 @@ where
             let project_path = self.project_path.clone();
             async move {
                 println!("Starting FFmpeg output process...");
-                let mut audio =
-                    if let Some(_) = self.audio_segments.get(0).and_then(|d| d.as_ref().as_ref()) {
-                        Some(AudioRender {
-                            buffer: AudioFrameBuffer::new(
-                                self.audio_segments
-                                    .iter()
-                                    .map(|s| s.as_ref().as_ref().unwrap().clone())
-                                    .collect(),
-                            ),
-                        })
-                    } else {
-                        None
-                    };
+                let mut audio = if let Some(_) = self
+                    .audio_segments
+                    .get(0)
+                    .and_then(|d| d.as_ref().as_ref())
+                    .filter(|_| !self.project.audio.mute)
+                {
+                    Some(AudioRender {
+                        buffer: AudioFrameBuffer::new(
+                            self.audio_segments
+                                .iter()
+                                .map(|s| s.as_ref().as_ref().unwrap().clone())
+                                .collect(),
+                        ),
+                    })
+                } else {
+                    None
+                };
 
                 let mut frame_count = 0;
                 let mut first_frame = None;
 
-                while let Some((frame, frame_number)) = rx_image_data.recv().await {
-                    dbg!(frame_number);
+                loop {
+                    let Some((frame, frame_number)) =
+                        tokio::time::timeout(Duration::from_secs(3), rx_image_data.recv()).await?
+                    else {
+                        break;
+                    };
+
                     (self.on_progress)(frame_count);
 
                     if frame_count == 0 {
@@ -202,7 +219,7 @@ where
 
                     let audio_frame = if let Some(audio) = &mut audio {
                         if frame_count == 0 {
-                            audio.buffer.set_playhead(0., project.timeline());
+                            audio.buffer.set_playhead(0., &project);
                         }
 
                         let audio_info = audio.buffer.info();
@@ -210,17 +227,14 @@ where
                             f64::from(audio_info.sample_rate) / f64::from(self.fps);
                         let samples = estimated_samples_per_frame.ceil() as usize;
 
-                        if let Some((_, frame_data)) = audio
-                            .buffer
-                            .next_frame_data(samples, project.timeline.as_ref().map(|t| t))
+                        if let Some((_, frame_data)) =
+                            audio.buffer.next_frame_data(samples, &project)
                         {
                             let mut frame = audio_info
                                 .wrap_frame(unsafe { cast_f32_slice_to_bytes(&frame_data) }, 0);
                             let pts = (frame_number as f64 * f64::from(audio_info.sample_rate)
                                 / f64::from(fps)) as i64;
                             frame.set_pts(Some(pts));
-                            let audio_frame = &frame;
-                            dbg!(audio_frame.pts());
                             Some(frame)
                         } else {
                             None
@@ -241,7 +255,6 @@ where
                         frame.padded_bytes_per_row as usize,
                     );
                     video_frame.set_pts(Some(frame_number as i64));
-                    dbg!(video_frame.pts());
 
                     frame_tx
                         .send(MP4Input {

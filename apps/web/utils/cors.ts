@@ -1,5 +1,7 @@
+import { clientEnv } from "@cap/env";
+
 export const allowedOrigins = [
-  process.env.NEXT_PUBLIC_WEB_URL,
+  clientEnv.NEXT_PUBLIC_WEB_URL,
   "http://localhost:3001",
   "http://localhost:3000",
   "tauri://localhost",

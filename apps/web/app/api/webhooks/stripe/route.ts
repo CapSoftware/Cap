@@ -4,6 +4,7 @@ import { users } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
+import { serverEnv } from "@cap/env";
 
 const relevantEvents = new Set([
   "checkout.session.completed",
@@ -12,10 +13,17 @@ const relevantEvents = new Set([
 ]);
 
 // Helper function to find user with retries
-async function findUserWithRetry(email: string, userId?: string, maxRetries = 5): Promise<typeof users.$inferSelect | null> {
+async function findUserWithRetry(
+  email: string,
+  userId?: string,
+  maxRetries = 5
+): Promise<typeof users.$inferSelect | null> {
   for (let i = 0; i < maxRetries; i++) {
-    console.log(`[Attempt ${i + 1}/${maxRetries}] Looking for user:`, { email, userId });
-    
+    console.log(`[Attempt ${i + 1}/${maxRetries}] Looking for user:`, {
+      email,
+      userId,
+    });
+
     try {
       // Try finding by userId first if available
       if (userId) {
@@ -25,8 +33,8 @@ async function findUserWithRetry(email: string, userId?: string, maxRetries = 5)
           .from(users)
           .where(eq(users.id, userId))
           .limit(1)
-          .then(rows => rows[0] ?? null);
-        
+          .then((rows) => rows[0] ?? null);
+
         if (userById) {
           console.log(`Found user by ID: ${userId}`);
           return userById;
@@ -42,47 +50,53 @@ async function findUserWithRetry(email: string, userId?: string, maxRetries = 5)
           .from(users)
           .where(eq(users.email, email))
           .limit(1)
-          .then(rows => rows[0] ?? null);
-        
+          .then((rows) => rows[0] ?? null);
+
         if (userByEmail) {
           console.log(`Found user by email: ${email}`);
           return userByEmail;
         }
         console.log(`No user found by email: ${email}`);
       }
-      
+
       // If we reach here, no user was found on this attempt
       if (i < maxRetries - 1) {
         const delay = Math.pow(2, i) * 3000; // 3s, 6s, 12s, 24s, 48s
-        console.log(`No user found on attempt ${i + 1}. Waiting ${delay}ms before retry...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
+        console.log(
+          `No user found on attempt ${
+            i + 1
+          }. Waiting ${delay}ms before retry...`
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
     } catch (error) {
       console.error(`Error during attempt ${i + 1}:`, error);
       // If this is not the last attempt, continue to next retry
       if (i < maxRetries - 1) {
         const delay = Math.pow(2, i) * 3000;
-        await new Promise(resolve => setTimeout(resolve, delay));
+        await new Promise((resolve) => setTimeout(resolve, delay));
         continue;
       }
     }
   }
-  
-  console.log('All attempts exhausted. No user found.');
+
+  console.log("All attempts exhausted. No user found.");
   return null;
 }
 
 export const POST = async (req: Request) => {
-  console.log('Webhook received');
+  console.log("Webhook received");
   const buf = await req.text();
   const sig = req.headers.get("Stripe-Signature") as string;
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  const webhookSecret = serverEnv.STRIPE_WEBHOOK_SECRET;
   let event: Stripe.Event;
-  
+
   try {
     if (!sig || !webhookSecret) {
       console.log("❌ Missing webhook secret or signature");
-      return new Response("Missing webhook secret or signature", { status: 400 });
+      return new Response("Missing webhook secret or signature", {
+        status: 400,
+      });
     }
     event = stripe.webhooks.constructEvent(buf, sig, webhookSecret);
     console.log(`✅ Event received: ${event.type}`);
@@ -94,26 +108,26 @@ export const POST = async (req: Request) => {
   if (relevantEvents.has(event.type)) {
     try {
       if (event.type === "checkout.session.completed") {
-        console.log('Processing checkout.session.completed event');
+        console.log("Processing checkout.session.completed event");
         const session = event.data.object as Stripe.Checkout.Session;
-        console.log('Session data:', {
+        console.log("Session data:", {
           id: session.id,
           customerId: session.customer,
-          subscriptionId: session.subscription
+          subscriptionId: session.subscription,
         });
 
         const customer = await stripe.customers.retrieve(
           session.customer as string
         );
-        console.log('Retrieved customer:', {
+        console.log("Retrieved customer:", {
           id: customer.id,
-          email: 'email' in customer ? customer.email : undefined,
-          metadata: 'metadata' in customer ? customer.metadata : undefined
+          email: "email" in customer ? customer.email : undefined,
+          metadata: "metadata" in customer ? customer.metadata : undefined,
         });
-        
+
         let foundUserId;
         let customerEmail;
-        
+
         if ("metadata" in customer) {
           foundUserId = customer.metadata.userId;
         }
@@ -121,13 +135,21 @@ export const POST = async (req: Request) => {
           customerEmail = customer.email;
         }
 
-        console.log("Starting user lookup with:", { foundUserId, customerEmail });
-        
+        console.log("Starting user lookup with:", {
+          foundUserId,
+          customerEmail,
+        });
+
         // Try to find user with retries
-        const dbUser = await findUserWithRetry(customerEmail as string, foundUserId);
-        
+        const dbUser = await findUserWithRetry(
+          customerEmail as string,
+          foundUserId
+        );
+
         if (!dbUser) {
-          console.log("No user found after all retries. Returning 202 to allow retry.");
+          console.log(
+            "No user found after all retries. Returning 202 to allow retry."
+          );
           return new Response("User not found, webhook will be retried", {
             status: 202,
           });
@@ -136,15 +158,15 @@ export const POST = async (req: Request) => {
         console.log("Successfully found user:", {
           userId: dbUser.id,
           email: dbUser.email,
-          name: dbUser.name
+          name: dbUser.name,
         });
 
         const subscription = await stripe.subscriptions.retrieve(
           session.subscription as string
         );
-        console.log('Retrieved subscription:', {
+        console.log("Retrieved subscription:", {
           id: subscription.id,
-          status: subscription.status
+          status: subscription.status,
         });
 
         const inviteQuota = subscription.items.data.reduce(
@@ -152,11 +174,11 @@ export const POST = async (req: Request) => {
           0
         );
 
-        console.log('Updating user in database with:', {
+        console.log("Updating user in database with:", {
           subscriptionId: session.subscription,
           status: subscription.status,
           customerId: customer.id,
-          inviteQuota
+          inviteQuota,
         });
 
         await db
@@ -168,31 +190,31 @@ export const POST = async (req: Request) => {
             inviteQuota: inviteQuota,
           })
           .where(eq(users.id, dbUser.id));
-        
+
         console.log("Successfully updated user in database");
       }
 
       if (event.type === "customer.subscription.updated") {
-        console.log('Processing customer.subscription.updated event');
+        console.log("Processing customer.subscription.updated event");
         const subscription = event.data.object as Stripe.Subscription;
-        console.log('Subscription data:', {
+        console.log("Subscription data:", {
           id: subscription.id,
           status: subscription.status,
-          customerId: subscription.customer
+          customerId: subscription.customer,
         });
 
         const customer = await stripe.customers.retrieve(
           subscription.customer as string
         );
-        console.log('Retrieved customer:', {
+        console.log("Retrieved customer:", {
           id: customer.id,
-          email: 'email' in customer ? customer.email : undefined,
-          metadata: 'metadata' in customer ? customer.metadata : undefined
+          email: "email" in customer ? customer.email : undefined,
+          metadata: "metadata" in customer ? customer.metadata : undefined,
         });
 
         let foundUserId;
         let customerEmail;
-        
+
         if ("metadata" in customer) {
           foundUserId = customer.metadata.userId;
         }
@@ -200,13 +222,21 @@ export const POST = async (req: Request) => {
           customerEmail = customer.email;
         }
 
-        console.log("Starting user lookup with:", { foundUserId, customerEmail });
-        
+        console.log("Starting user lookup with:", {
+          foundUserId,
+          customerEmail,
+        });
+
         // Try to find user with retries
-        const dbUser = await findUserWithRetry(customerEmail as string, foundUserId);
-        
+        const dbUser = await findUserWithRetry(
+          customerEmail as string,
+          foundUserId
+        );
+
         if (!dbUser) {
-          console.log("No user found after all retries. Returning 202 to allow retry.");
+          console.log(
+            "No user found after all retries. Returning 202 to allow retry."
+          );
           return new Response("User not found, webhook will be retried", {
             status: 202,
           });
@@ -215,32 +245,35 @@ export const POST = async (req: Request) => {
         console.log("Successfully found user:", {
           userId: dbUser.id,
           email: dbUser.email,
-          name: dbUser.name
+          name: dbUser.name,
         });
 
         // Get all active subscriptions for this customer
         const subscriptions = await stripe.subscriptions.list({
           customer: customer.id,
-          status: 'active',
+          status: "active",
         });
 
-        console.log('Retrieved all active subscriptions:', {
-          count: subscriptions.data.length
+        console.log("Retrieved all active subscriptions:", {
+          count: subscriptions.data.length,
         });
 
         // Calculate total invite quota based on all active subscriptions
         const inviteQuota = subscriptions.data.reduce((total, sub) => {
-          return total + sub.items.data.reduce(
-            (subTotal, item) => subTotal + (item.quantity || 1),
-            0
+          return (
+            total +
+            sub.items.data.reduce(
+              (subTotal, item) => subTotal + (item.quantity || 1),
+              0
+            )
           );
         }, 0);
 
-        console.log('Updating user in database with:', {
+        console.log("Updating user in database with:", {
           subscriptionId: subscription.id,
           status: subscription.status,
           customerId: customer.id,
-          inviteQuota
+          inviteQuota,
         });
 
         await db
@@ -252,8 +285,11 @@ export const POST = async (req: Request) => {
             inviteQuota: inviteQuota,
           })
           .where(eq(users.id, dbUser.id));
-        
-        console.log("Successfully updated user in database with new invite quota:", inviteQuota);
+
+        console.log(
+          "Successfully updated user in database with new invite quota:",
+          inviteQuota
+        );
       }
 
       if (event.type === "customer.subscription.deleted") {
@@ -313,8 +349,11 @@ export const POST = async (req: Request) => {
             inviteQuota: 1, // Reset to default quota
           })
           .where(eq(users.id, foundUserId));
-        
-        console.log("User updated successfully", { foundUserId, inviteQuota: 1 });
+
+        console.log("User updated successfully", {
+          foundUserId,
+          inviteQuota: 1,
+        });
       }
 
       return NextResponse.json({ received: true });

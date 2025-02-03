@@ -7,9 +7,10 @@ import { cookies } from "next/headers";
 import { dub } from "@/utils/dub";
 import { eq } from "drizzle-orm";
 import { getS3Bucket, getS3Config } from "@/utils/s3";
+import { clientEnv, NODE_ENV } from "@cap/env";
 
 const allowedOrigins = [
-  process.env.NEXT_PUBLIC_WEB_URL,
+  clientEnv.NEXT_PUBLIC_WEB_URL,
   "http://localhost:3001",
   "http://localhost:3000",
   "tauri://localhost",
@@ -187,14 +188,9 @@ export async function GET(req: NextRequest) {
 
   await db.insert(videos).values(videoData);
 
-  if (process.env.NEXT_PUBLIC_IS_CAP && process.env.NODE_ENV === "production") {
-    console.log({
-      url: `${process.env.NEXT_PUBLIC_WEB_URL}/s/${id}`,
-      domain: "cap.link",
-      key: id,
-    });
+  if (clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {
     await dub.links.create({
-      url: `${process.env.NEXT_PUBLIC_WEB_URL}/s/${id}`,
+      url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${id}`,
       domain: "cap.link",
       key: id,
     });

@@ -167,19 +167,15 @@ export default function () {
                       ref={setRef}
                       style={{ "border-color": "rgba(255, 255, 255, 0.1)" }}
                       class={cx(
-                        "w-[260px] h-[150px] p-[0.1875rem] bg-gray-500/40 rounded-[12px] overflow-hidden shadow border-[1px] group relative",
-                        "transition-all duration-300",
-                        media.isNew && "ring-2 ring-blue-300 ring-opacity-75"
+                        "w-[260px] h-[150px] bg-gray-500/40 rounded-xl border-[1px] overflow-hidden shadow group relative transition-all duration-300"
                       )}
                     >
                       <div
                         class={cx(
-                          "w-full h-full flex relative bg-transparent rounded-[8px] border-[1px] z-10 overflow-hidden",
-                          "transition-all",
+                          "w-full h-full flex relative bg-transparent z-10 overflow-hidden transition-all",
                           isLoading() && "backdrop-blur bg-gray-500/80"
                         )}
                         style={{
-                          "border-color": "rgba(255, 255, 255, 0.1)",
                           "pointer-events": "auto",
                         }}
                       >
@@ -289,7 +285,7 @@ export default function () {
                             "background-color": "rgba(0, 0, 0, 0.4)",
                           }}
                           class={cx(
-                            "w-full h-full absolute inset-0 transition-all duration-150 pointer-events-auto rounded-[7.4px]",
+                            "absolute inset-0 transition-all duration-150 pointer-events-auto rounded-[7.4px]",
                             showUpgradeTooltip()
                               ? "opacity-100"
                               : "opacity-0 group-hover:opacity-100",
@@ -388,48 +384,43 @@ export default function () {
                             </Button>
                           </div>
                         </div>
-                        <Show when={metadata()}>
+                        <Show when={metadata.latest}>
                           {(metadata) => (
                             <div
                               style={{
-                                color: "white",
                                 "font-size": "12px",
                                 "border-end-end-radius": "7.4px",
                                 "border-end-start-radius": "7.4px",
                               }}
                               class={cx(
-                                "absolute bottom-0 left-0 right-0 font-medium bg-[--gray-50] dark:bg-gray-50/60 backdrop-blur-md p-2.5 flex justify-between items-center pointer-events-none transition-all max-w-full overflow-hidden",
+                                "absolute bottom-0 left-0 right-0 font-medium text-gray-200 bg-[#00000080] backdrop-blur-lg px-3 py-2 flex justify-between items-center pointer-events-none transition-all max-w-full overflow-hidden",
                                 isLoading() || showUpgradeTooltip()
                                   ? "opacity-0"
                                   : "group-hover:opacity-0"
                               )}
                             >
-                              <p class="flex items-center gap-4 text-[--gray-500]">
-                                <span class="flex items-center">
-                                  <IconCapCamera class="w-[16px] h-[16px] mr-1.5" />
-                                  {Math.floor(metadata().duration / 60)}:
-                                  {Math.floor(metadata().duration % 60)
-                                    .toString()
-                                    .padStart(2, "0")}
-                                </span>
-                                <span class="flex items-center">
-                                  <IconLucideHardDrive class="w-[16px] h-[16px] mr-1.5" />
-                                  {metadata().size.toFixed(2)} MB
-                                </span>
-                                <span class="flex items-center">
-                                  <IconLucideClock class="w-[16px] h-[16px] mr-1.5" />
-                                  ~
-                                  {Math.floor(
-                                    metadata().estimatedExportTime / 60
-                                  )}
-                                  :
-                                  {Math.floor(
-                                    metadata().estimatedExportTime % 60
-                                  )
-                                    .toString()
-                                    .padStart(2, "0")}
-                                </span>
-                              </p>
+                              <span class="flex items-center">
+                                <IconCapCamera class="w-[16px] h-[16px] mr-1.5" />
+                                {Math.floor(metadata().duration / 60)}:
+                                {Math.floor(metadata().duration % 60)
+                                  .toString()
+                                  .padStart(2, "0")}
+                              </span>
+                              <span class="flex items-center">
+                                <IconLucideHardDrive class="w-[16px] h-[16px] mr-1.5" />
+                                {metadata().size.toFixed(2)} MB
+                              </span>
+                              <span class="flex items-center">
+                                <IconLucideClock class="w-[16px] h-[16px] mr-1.5" />
+                                ~
+                                {Math.floor(
+                                  metadata().estimatedExportTime / 60
+                                )}
+                                :
+                                {Math.floor(metadata().estimatedExportTime % 60)
+                                  .toString()
+                                  .padStart(2, "0")}
+                              </span>
                             </div>
                           )}
                         </Show>

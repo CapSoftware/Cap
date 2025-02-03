@@ -1,6 +1,6 @@
 use crate::{
-    general_settings::GeneralSettingsStore, get_video_metadata, upsert_editor_instance,
-    windows::ShowCapWindow, AuthStore, RenderProgress, VideoRecordingMetadata, VideoType,
+    create_editor_instance_impl, get_video_metadata, windows::ShowCapWindow, AuthStore,
+    RenderProgress, VideoType,
 };
 use cap_project::{ProjectConfiguration, XY};
 use std::path::PathBuf;
@@ -17,6 +17,8 @@ pub async fn export_video(
     fps: u32,
     resolution_base: XY<u32>,
 ) -> Result<PathBuf, String> {
+    let editor_instance = create_editor_instance_impl(&app, &video_id).await?;
+
     let screen_metadata =
         match get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Screen)).await {
             Ok(meta) => meta,
@@ -45,7 +47,6 @@ pub async fn export_video(
             .unwrap_or(screen_metadata.duration),
     );
 
-    let editor_instance = upsert_editor_instance(&app, video_id.clone()).await?;
     let total_frames = editor_instance.get_total_frames(fps);
 
     let output_path = editor_instance.meta().output_path();
@@ -137,8 +138,7 @@ pub async fn get_export_estimates(
             .await
             .ok();
 
-    let editor_instance = upsert_editor_instance(&app, video_id.clone()).await?;
-    let total_frames = editor_instance.get_total_frames(fps);
+    let editor_instance = create_editor_instance_impl(&app, &video_id).await?;
 
     let raw_duration = screen_metadata.duration.max(
         camera_metadata

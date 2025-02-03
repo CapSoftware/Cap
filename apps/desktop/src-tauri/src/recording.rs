@@ -6,7 +6,7 @@ use crate::{
     create_screenshot,
     export::export_video,
     general_settings::GeneralSettingsStore,
-    list_recordings, notifications, open_editor, open_external_link, platform,
+    notifications, open_editor, open_external_link,
     upload::get_s3_config,
     upload_exported_video, web_api,
     windows::{CapWindowId, ShowCapWindow},
@@ -346,10 +346,6 @@ fn generate_zoom_segments_from_clicks(
 ) -> Vec<ZoomSegment> {
     let mut segments = vec![];
 
-    if !FLAGS.zoom {
-        return vec![];
-    };
-
     let max_duration = recordings.duration();
 
     const ZOOM_SEGMENT_AFTER_CLICK_PADDING: f64 = 1.5;
@@ -399,7 +395,7 @@ fn project_config_from_recording(
                 .iter()
                 .enumerate()
                 .map(|(i, segment)| TimelineSegment {
-                    recording_segment: Some(i as u32),
+                    recording_segment: i as u32,
                     start: 0.0,
                     end: segment.duration(),
                     timescale: 1.0,

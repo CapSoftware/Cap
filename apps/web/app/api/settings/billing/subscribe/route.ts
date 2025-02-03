@@ -4,6 +4,7 @@ import { NextRequest } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@cap/database";
 import { users } from "@cap/database/schema";
+import { clientEnv } from "@cap/env";
 
 export async function POST(request: NextRequest) {
   console.log("Starting subscription process");
@@ -61,8 +62,8 @@ export async function POST(request: NextRequest) {
       customer: customerId as string,
       line_items: [{ price: priceId, quantity: quantity }],
       mode: "subscription",
-      success_url: `${process.env.NEXT_PUBLIC_WEB_URL}/dashboard/caps?upgrade=true`,
-      cancel_url: `${process.env.NEXT_PUBLIC_WEB_URL}/pricing`,
+      success_url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/dashboard/caps?upgrade=true`,
+      cancel_url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/pricing`,
       allow_promotion_codes: true,
     });
 

@@ -2,13 +2,14 @@ import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { type NextRequest } from "next/server";
 import { ReadonlyHeaders } from "next/dist/server/web/spec-extension/adapters/headers";
+import { clientEnv } from "@cap/env";
 
 export function classNames(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
 export const allowedOrigins = [
-  process.env.NEXT_PUBLIC_WEB_URL,
+  clientEnv.NEXT_PUBLIC_WEB_URL,
   "https://cap.link",
   "cap.link",
 ];

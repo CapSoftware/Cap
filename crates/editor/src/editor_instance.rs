@@ -7,8 +7,8 @@ use cap_media::frame_ws::create_frame_ws;
 use cap_project::RecordingConfig;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, XY};
 use cap_rendering::{
-    get_duration, ProjectRecordings, ProjectUniforms, RecordingSegmentDecoders, RenderOptions,
-    RenderVideoConstants, SegmentVideoPaths,
+    get_duration, DecodedSegmentFrames, ProjectRecordings, ProjectUniforms,
+    RecordingSegmentDecoders, RenderOptions, RenderVideoConstants, SegmentVideoPaths,
 };
 use std::ops::Deref;
 use std::sync::Mutex as StdMutex;
@@ -38,7 +38,7 @@ pub struct EditorInstance {
 impl EditorInstance {
     pub async fn new(
         projects_path: PathBuf,
-        video_id: String,
+        video_id: &str,
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
         get_is_upgraded: impl Fn() -> bool + Send + 'static,
     ) -> Result<Arc<Self>, String> {
@@ -97,7 +97,7 @@ impl EditorInstance {
         let (preview_tx, preview_rx) = watch::channel(None);
 
         let this = Arc::new(Self {
-            id: video_id,
+            id: video_id.to_string(),
             project_path,
             recordings,
             ws_port,
@@ -177,7 +177,7 @@ impl EditorInstance {
     }
 
     pub async fn start_playback(
-        self: Arc<Self>,
+        self: &Arc<Self>,
         fps: u32,
         resolution_base: XY<u32>,
         is_upgraded: bool,
@@ -204,6 +204,7 @@ impl EditorInstance {
             (playback_handle, prev)
         };
 
+        let this = self.clone();
         tokio::spawn(async move {
             loop {
                 let event = *handle.receive_event().await;
@@ -211,7 +212,7 @@ impl EditorInstance {
                 match event {
                     playback::PlaybackEvent::Start => {}
                     playback::PlaybackEvent::Frame(frame_number) => {
-                        self.modify_and_emit_state(|state| {
+                        this.modify_and_emit_state(|state| {
                             state.playhead_position = frame_number;
                         })
                         .await;
@@ -244,35 +245,31 @@ impl EditorInstance {
 
                 let project = self.project_config.1.borrow().clone();
 
-                let Some((time, segment)) = project
-                    .timeline
-                    .as_ref()
-                    .map(|timeline| timeline.get_recording_time(frame_number as f64 / fps as f64))
-                    .unwrap_or(Some((frame_number as f64 / fps as f64, None)))
+                let Some((segment_time, segment_i)) =
+                    project.get_segment_time(frame_number as f64 / fps as f64)
                 else {
                     continue;
                 };
 
-                let segment = &self.segments[segment.unwrap_or(0) as usize];
+                let segment = &self.segments[segment_i as usize];
 
-                if let Some((screen_frame, camera_frame)) = segment
+                if let Some(segment_frames) = segment
                     .decoders
-                    .get_frames(time as f32, !project.camera.hide)
+                    .get_frames(segment_time as f32, !project.camera.hide)
                     .await
                 {
                     self.renderer
                         .render_frame(
-                            screen_frame,
-                            camera_frame,
+                            segment_frames,
                             project.background.source.clone(),
                             ProjectUniforms::new(
                                 &self.render_constants,
                                 &project,
-                                time as f32,
+                                frame_number,
+                                fps,
                                 resolution_base,
                                 get_is_upgraded(),
                             ),
-                            time as f32,
                             resolution_base,
                         )
                         .await;

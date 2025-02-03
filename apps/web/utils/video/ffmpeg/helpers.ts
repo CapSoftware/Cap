@@ -1,5 +1,6 @@
 import { S3_BUCKET_URL } from "@cap/utils";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
+import { clientEnv } from "@cap/env";
 
 export const playlistToMp4 = async (
   userId: string,
@@ -14,7 +15,7 @@ export const playlistToMp4 = async (
   }
 
   const videoFetch = await fetch(
-    `${process.env.NEXT_PUBLIC_WEB_URL}/api/video/playlistUrl?userId=${userId}&videoId=${videoId}`
+    `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/playlistUrl?userId=${userId}&videoId=${videoId}`
   );
 
   if (videoFetch.status !== 200) {
