@@ -4,6 +4,7 @@
     "build": "dotenv -e .env -- turbo run build",
     "db:studio": "dotenv -e .env -- pnpm --dir packages/database db:studio",
     "dev": "(pnpm run docker:up > /dev/null &) && sleep 5 && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
+    "dev:windows": "start /b cmd /c \"pnpm run docker:up > nul\" && timeout /t 5 /nobreak > nul && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
     "dev:web": "pnpm dev --filter=!@cap/desktop",
     "dev:desktop": "pnpm turbo run dev --filter=@cap/desktop",
     "dev:manual": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/storybook --no-cache --concurrency 1",

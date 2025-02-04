@@ -42,7 +42,7 @@ pub async fn spawn_decoder(
     path: PathBuf,
     fps: u32,
 ) -> Result<AsyncVideoDecoderHandle, String> {
-    let (ready_tx, ready_rx) = oneshot::channel();
+    let (ready_tx, ready_rx) = oneshot::channel::<Result<(), String>>();
     let (tx, rx) = mpsc::channel();
 
     let handle = AsyncVideoDecoderHandle { sender: tx };
