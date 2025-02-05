@@ -1,0 +1,21 @@
+{
+  "pretty_name": "Cap 2025-02-04 at 09.36.20",
+  "sharing": null,
+  "segments": [
+    {
+      "display": {
+        "path": "content/segments/segment-0/display.mp4",
+        "fps": 60
+      },
+      "display_audio": {
+        "path": "content/segments/segment-0/display-audio.ogg"
+      }
+    }
+  ],
+  "cursors": {
+    "0": "content/cursors/cursor_0.png",
+    "3": "content/cursors/cursor_3.png",
+    "1": "content/cursors/cursor_1.png",
+    "2": "content/cursors/cursor_2.png"
+  }
+}

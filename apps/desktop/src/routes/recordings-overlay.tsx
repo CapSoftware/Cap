@@ -393,7 +393,7 @@ export default function () {
                                 "border-end-start-radius": "7.4px",
                               }}
                               class={cx(
-                                "absolute bottom-0 left-0 right-0 font-medium text-gray-200 bg-[#00000080] backdrop-blur-lg px-3 py-2 flex justify-between items-center pointer-events-none transition-all max-w-full overflow-hidden",
+                                "absolute bottom-0 left-0 right-0 font-medium text-[#fff] bg-[#00000080] backdrop-blur-lg px-3 py-2 flex justify-between items-center pointer-events-none transition-all max-w-full overflow-hidden",
                                 isLoading() || showUpgradeTooltip()
                                   ? "opacity-0"
                                   : "group-hover:opacity-0"

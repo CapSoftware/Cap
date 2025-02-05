@@ -50,7 +50,7 @@ export default function (props: RouteSectionProps) {
             (() => {
               console.log("Inner window chrome suspense fallback");
 
-              return <span>BRUHLMAO</span>;
+              return <></>;
             }) as any
           }
         >

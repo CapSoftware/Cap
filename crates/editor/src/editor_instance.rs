@@ -308,6 +308,7 @@ pub struct EditorState {
 
 pub struct Segment {
     pub audio: Arc<Option<AudioData>>,
+    pub display_audio: Arc<Option<AudioData>>,
     pub cursor: Arc<CursorEvents>,
     pub decoders: RecordingSegmentDecoders,
 }
@@ -335,6 +336,7 @@ pub async fn create_segments(meta: &RecordingMeta) -> Result<Vec<Segment>, Strin
 
             Ok(vec![Segment {
                 audio,
+                display_audio: Arc::new(None),
                 cursor,
                 decoders,
             }])
@@ -345,6 +347,11 @@ pub async fn create_segments(meta: &RecordingMeta) -> Result<Vec<Segment>, Strin
             for (i, s) in inner.segments.iter().enumerate() {
                 let audio =
                     Arc::new(s.audio.as_ref().map(|audio_meta| {
+                        AudioData::from_file(meta.path(&audio_meta.path)).unwrap()
+                    }));
+
+                let display_audio =
+                    Arc::new(s.display_audio.as_ref().map(|audio_meta| {
                         AudioData::from_file(meta.path(&audio_meta.path)).unwrap()
                     }));
 
@@ -362,6 +369,7 @@ pub async fn create_segments(meta: &RecordingMeta) -> Result<Vec<Segment>, Strin
 
                 segments.push(Segment {
                     audio,
+                    display_audio,
                     cursor,
                     decoders,
                 });
@@ -370,17 +378,4 @@ pub async fn create_segments(meta: &RecordingMeta) -> Result<Vec<Segment>, Strin
             Ok(segments)
         }
     }
-}
-
-fn create_preview_config(recording_config: &RecordingConfig, meta: &RecordingMeta) -> VideoInfo {
-    let (width, height) = if recording_config.resolution.width > 1280 {
-        (1280, 720)
-    } else {
-        (
-            recording_config.resolution.width,
-            recording_config.resolution.height,
-        )
-    };
-
-    VideoInfo::from_raw(RawVideoFormat::Rgba, width, height, 30)
 }

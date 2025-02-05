@@ -1,0 +1,45 @@
+{
+  "aspectRatio": null,
+  "background": {
+    "source": {
+      "type": "color",
+      "value": [
+        71,
+        133,
+        255
+      ]
+    },
+    "blur": 0,
+    "padding": 0.0,
+    "rounding": 0.0,
+    "inset": 0,
+    "crop": null
+  },
+  "camera": {
+    "hide": false,
+    "mirror": false,
+    "position": {
+      "x": "right",
+      "y": "bottom"
+    },
+    "size": 30.0,
+    "zoom_size": null,
+    "rounding": 100.0,
+    "shadow": 0.0
+  },
+  "audio": {
+    "mute": false,
+    "improve": false
+  },
+  "cursor": {
+    "hideWhenIdle": false,
+    "size": 100,
+    "type": "pointer",
+    "animationStyle": "regular"
+  },
+  "hotkeys": {
+    "show": false
+  },
+  "timeline": null,
+  "motionBlur": null
+}

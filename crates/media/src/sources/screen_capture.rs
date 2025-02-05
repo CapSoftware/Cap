@@ -14,7 +14,7 @@ use std::{collections::HashMap, ops::ControlFlow};
 use tracing::{error, info, trace, warn};
 
 use crate::{
-    data::{FFVideo, RawVideoFormat, VideoInfo},
+    data::{AudioInfo, FFVideo, RawVideoFormat, VideoInfo},
     pipeline::{clock::*, control::Control, task::PipelineSourceTask},
     platform::{self, Bounds, Window},
     MediaError,
@@ -149,6 +149,10 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             VideoInfo::from_raw(RawVideoFormat::Bgra, frame_width, frame_height, MAX_FPS);
 
         this
+    }
+
+    pub fn is_capturing_audio(&self) -> bool {
+        cfg!(target_os = "macos")
     }
 
     pub fn get_bounds(&self) -> Bounds {
@@ -430,44 +434,116 @@ fn inner<T>(
 }
 
 #[derive(Debug)]
-pub struct CMSampleBufferCapture;
+pub struct MacOSRawCapture;
 
-#[cfg(target_os = "macos")]
-impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
-    type Clock = RealTimeClock<RawNanoseconds>;
-    type Output = (
-        screencapturekit::output::CMSampleBuffer,
-        screencapturekit::stream::output_type::SCStreamOutputType,
-    );
-
-    fn run(
-        &mut self,
-        _: Self::Clock,
-        ready_signal: crate::pipeline::task::PipelineReadySignal,
-        control_signal: crate::pipeline::control::PipelineControlSignal,
-        output: Sender<Self::Output>,
-    ) {
-        inner(
-            self,
-            ready_signal,
-            control_signal,
-            |capturer| match capturer.raw().get_next_sample_buffer() {
-                Ok((sample_buffer, typ)) => {
-                    if let Err(_) = output.send((sample_buffer, typ)) {
-                        eprintln!("Pipeline is unreachable. Shutting down recording.");
-                        return Some(ControlFlow::Continue(()));
-                    }
-
-                    None
-                }
-                Err(error) => {
-                    eprintln!("Capture error: {error}");
-                    Some(ControlFlow::Break(()))
-                }
-            },
+impl MacOSRawCapture {
+    pub fn audio_info() -> AudioInfo {
+        AudioInfo::new(
+            ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
+            48_000,
+            2,
         )
+        .unwrap()
     }
 }
+
+#[cfg(target_os = "macos")]
+pub mod macos {
+
+    use ffmpeg::ChannelLayout;
+    use screencapturekit::{
+        output::{CMSampleBuffer, CMSampleBufferRef},
+        stream::output_type::SCStreamOutputType,
+    };
+
+    use crate::data::PlanarData;
+
+    use super::*;
+
+    pub enum MacOSRawCaptureOutput {
+        Audio(ffmpeg::frame::Audio),
+        Video(screencapturekit::output::CMSampleBuffer),
+    }
+
+    impl PipelineSourceTask for ScreenCaptureSource<MacOSRawCapture> {
+        type Clock = RealTimeClock<RawNanoseconds>;
+        type Output = MacOSRawCaptureOutput;
+
+        fn run(
+            &mut self,
+            mut clock: Self::Clock,
+            ready_signal: crate::pipeline::task::PipelineReadySignal,
+            control_signal: crate::pipeline::control::PipelineControlSignal,
+            output: Sender<Self::Output>,
+        ) {
+            inner(
+                self,
+                ready_signal,
+                control_signal,
+                |capturer| match capturer.raw().get_next_sample_buffer() {
+                    Ok((sample_buffer, typ)) => {
+                        let value = match typ {
+                            SCStreamOutputType::Audio => {
+                                let buffers = sample_buffer.get_audio_buffer_list().unwrap();
+                                let pts = get_sample_buffer_pts(&sample_buffer);
+                                let Some(timestamp) =
+                                    clock.timestamp_for(RawNanoseconds(pts.value as u64))
+                                else {
+                                    return Some(ControlFlow::Break(()));
+                                };
+
+                                let mut frame = ffmpeg::frame::Audio::new(
+                                    ffmpeg::format::Sample::F32(
+                                        ffmpeg::format::sample::Type::Planar,
+                                    ),
+                                    sample_buffer.get_num_samples() as usize,
+                                    ChannelLayout::STEREO,
+                                );
+                                frame.set_rate(48_000);
+                                frame.set_pts(Some(timestamp));
+
+                                for i in 0..2 {
+                                    frame
+                                        .plane_data_mut(i)
+                                        .copy_from_slice(buffers.get(i).unwrap().data());
+                                }
+
+                                MacOSRawCaptureOutput::Audio(frame)
+                            }
+                            SCStreamOutputType::Screen => {
+                                MacOSRawCaptureOutput::Video(sample_buffer)
+                            }
+                        };
+
+                        if let Err(_) = output.send(value) {
+                            eprintln!("Pipeline is unreachable. Shutting down recording.");
+                            return Some(ControlFlow::Break(()));
+                        }
+
+                        None
+                    }
+                    Err(error) => {
+                        eprintln!("Capture error: {error}");
+                        Some(ControlFlow::Break(()))
+                    }
+                },
+            )
+        }
+    }
+
+    use core_media_rs::cm_time::CMTime;
+    fn get_sample_buffer_pts(sample_buffer: &CMSampleBuffer) -> CMTime {
+        extern "C" {
+            pub fn CMSampleBufferGetPresentationTimeStamp(sample: CMSampleBufferRef) -> CMTime;
+
+        }
+
+        use core_foundation::base::TCFType;
+        unsafe { CMSampleBufferGetPresentationTimeStamp(sample_buffer.as_concrete_TypeRef()) }
+    }
+}
+#[cfg(target_os = "macos")]
+pub use macos::*;
 
 pub fn list_screens() -> Vec<(CaptureScreen, Target)> {
     if !scap::has_permission() {

@@ -7,8 +7,7 @@ use std::{
 
 use cap_flags::FLAGS;
 use cap_media::{
-    data::{AudioInfo, Pixel},
-    encoders::{H264Encoder, MP4File, OggFile, OpusEncoder, SplitAVAssetWriterEncoder},
+    encoders::{H264Encoder, MP4File, OggFile, OpusEncoder, ScreenCaptureSplitEncoder},
     feeds::{AudioInputFeed, CameraFeed},
     pipeline::{builder::PipelineBuilder, Pipeline, RealTimeClock},
     sources::{AudioInputSource, CameraSource, ScreenCaptureSource, ScreenCaptureTarget},
@@ -69,6 +68,7 @@ pub struct RecordingSegment {
 struct RecordingPipeline {
     pub inner: Pipeline<RealTimeClock<()>>,
     pub display_output_path: PathBuf,
+    pub display_audio_output_path: Option<PathBuf>,
     pub audio_output_path: Option<PathBuf>,
     pub camera: Option<CameraPipelineInfo>,
     pub cursor: Option<CursorPipeline>,
@@ -440,6 +440,14 @@ async fn stop_recording(
                                 .unwrap(),
                                 fps: actor.options.capture_target.recording_fps(),
                             },
+                            display_audio: s.pipeline.display_audio_output_path.as_ref().map(
+                                |path| AudioMeta {
+                                    path: RelativePathBuf::from_path(
+                                        path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
+                                    )
+                                    .unwrap(),
+                                },
+                            ),
                             camera: s.pipeline.camera.as_ref().map(|camera| CameraMeta {
                                 path: RelativePathBuf::from_path(
                                     camera
@@ -497,7 +505,7 @@ fn create_screen_capture(
 ) -> ScreenCaptureSource<impl MakeCapturePipeline> {
     #[cfg(target_os = "macos")]
     {
-        ScreenCaptureSource::<cap_media::sources::CMSampleBufferCapture>::init(
+        ScreenCaptureSource::<cap_media::sources::MacOSRawCapture>::init(
             &recording_options.capture_target,
             recording_options.output_resolution.clone(),
             None,
@@ -536,6 +544,9 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
     let mut pipeline_builder = Pipeline::builder(clock);
 
     let display_output_path = dir.join("display.mp4");
+    let display_audio_output_path = screen_source
+        .is_capturing_audio()
+        .then(|| dir.join("display-audio.ogg"));
 
     trace!("preparing segment pipeline {index}");
 
@@ -544,6 +555,7 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
         pipeline_builder,
         screen_source,
         &display_output_path,
+        display_audio_output_path.clone(),
     )?;
 
     info!(
@@ -629,6 +641,7 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
         RecordingPipeline {
             inner: pipeline,
             display_output_path,
+            display_audio_output_path,
             audio_output_path,
             camera,
             cursor,
@@ -653,33 +666,45 @@ trait MakeCapturePipeline: std::fmt::Debug + 'static {
     fn make_capture_pipeline(
         builder: CapturePipelineBuilder,
         source: ScreenCaptureSource<Self>,
-        output_path: impl Into<PathBuf>,
+        video_output_path: impl Into<PathBuf>,
+        audio_output_path: Option<PathBuf>,
     ) -> Result<CapturePipelineBuilder, MediaError>
     where
         Self: Sized;
 }
 
-#[cfg(target_os = "macos")]
-impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
+impl MakeCapturePipeline for cap_media::sources::MacOSRawCapture {
     fn make_capture_pipeline(
         builder: CapturePipelineBuilder,
         source: ScreenCaptureSource<Self>,
-        output_path: impl Into<PathBuf>,
+        video_output_path: impl Into<PathBuf>,
+        audio_output_path: Option<PathBuf>,
     ) -> Result<CapturePipelineBuilder, MediaError> {
-        let output_path = output_path.into();
+        let video_output_path = video_output_path.into();
         let screen_config = source.info();
 
         Ok(builder.source("screen_capture", source).sink(
             "screen_capture_encoder",
-            SplitAVAssetWriterEncoder {
-                audio: Some(cap_media::encoders::ACCAVAsetWriterEncoder::init(
-                    "screen_audio",
-                    output_path.parent().unwrap().join("display-audio.m4a"),
-                )?),
+            ScreenCaptureSplitEncoder {
+                audio: audio_output_path
+                    .map(|path| {
+                        OggFile::init(
+                            path,
+                            // video_output_path
+                            //     .parent()
+                            //     .unwrap()
+                            //     .join("display-audio.ogg"),
+                            OpusEncoder::factory(
+                                "screen_audio",
+                                cap_media::sources::MacOSRawCapture::audio_info(),
+                            ),
+                        )
+                    })
+                    .transpose()?,
                 video: cap_media::encoders::H264AVAssetWriterEncoder::init(
                     "screen_video",
                     screen_config,
-                    output_path,
+                    video_output_path,
                 )?,
             },
         ))
@@ -690,7 +715,8 @@ impl MakeCapturePipeline for cap_media::sources::AVFrameCapture {
     fn make_capture_pipeline(
         builder: CapturePipelineBuilder,
         source: ScreenCaptureSource<Self>,
-        output_path: impl Into<PathBuf>,
+        video_output_path: impl Into<PathBuf>,
+        audio_output_path: Option<PathBuf>,
     ) -> Result<CapturePipelineBuilder, MediaError>
     where
         Self: Sized,
@@ -698,7 +724,7 @@ impl MakeCapturePipeline for cap_media::sources::AVFrameCapture {
         let screen_config = source.info();
         let screen_encoder = MP4File::init(
             "screen",
-            output_path.into(),
+            video_output_path.into(),
             H264Encoder::factory("screen", screen_config),
             |_| None,
         )?;

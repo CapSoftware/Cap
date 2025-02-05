@@ -243,6 +243,8 @@ impl MultipleSegments {
 pub struct MultipleSegment {
     pub display: Display,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_audio: Option<AudioMeta>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera: Option<CameraMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio: Option<AudioMeta>,

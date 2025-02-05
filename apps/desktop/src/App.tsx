@@ -36,7 +36,7 @@ const queryClient = new QueryClient({
 
 export default function App() {
   return (
-    <Suspense fallback={<span>ROOT SUSPENSE</span>}>
+    <Suspense>
       <Inner />
     </Suspense>
   );
