@@ -88,6 +88,9 @@ impl From<BackgroundSource> for Background {
             BackgroundSource::Image { path } => Background::Image {
                 path: path.clone().unwrap(),
             },
+            BackgroundSource::Wallpaper { path } => Background::Image {
+                path: path.clone().unwrap(),
+            },
         }
     }
 }

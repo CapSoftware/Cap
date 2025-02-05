@@ -9,9 +9,9 @@ import { Dynamic } from "solid-js/web";
 import { createWritableMemo } from "@solid-primitives/memo";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { produce } from "solid-js/store";
-import { writeFile, BaseDirectory } from '@tauri-apps/plugin-fs';
-import { appDataDir } from '@tauri-apps/api/path';
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { writeFile, BaseDirectory } from "@tauri-apps/plugin-fs";
+import { appDataDir } from "@tauri-apps/api/path";
+import { convertFileSrc } from "@tauri-apps/api/core";
 
 import type {
   BackgroundSource,
@@ -34,14 +34,14 @@ import {
 } from "./projectConfig";
 
 const BACKGROUND_SOURCES = {
-  // wallpaper: "Wallpaper",
+  wallpaper: "Wallpaper",
   image: "Image",
   color: "Color",
   gradient: "Gradient",
 } satisfies Record<BackgroundSource["type"], string>;
 
 const BACKGROUND_SOURCES_LIST = [
-  // "wallpaper",
+  "wallpaper",
   "image",
   "color",
   "gradient",
@@ -52,6 +52,28 @@ const CURSOR_ANIMATION_STYLES: Record<CursorAnimationStyle, string> = {
   regular: "Regular",
   fast: "Fast & Responsive",
 } as const;
+
+const UNSPLASH_ACCESS_KEY = "YOUR_UNSPLASH_ACCESS_KEY"; // You'll need to get this from Unsplash
+const WALLPAPERS_PER_PAGE = 14;
+
+const WALLPAPERS = [
+  {
+    id: "wall1",
+    url: "https://images.unsplash.com/photo-1542332213-9b5a5a3fad35?w=1920",
+  },
+  {
+    id: "wall2",
+    url: "https://images.unsplash.com/photo-1542810104-c5f07c7357ff?w=1920",
+  },
+  {
+    id: "wall3",
+    url: "https://images.unsplash.com/photo-1445368794737-0cf251429ca0?w=1920",
+  },
+  {
+    id: "wall4",
+    url: "https://images.unsplash.com/photo-1737365506116-ef7eba797492?w=1920",
+  },
+];
 
 export function ConfigSidebar() {
   const {
@@ -67,10 +89,10 @@ export function ConfigSidebar() {
   const backgrounds: {
     [K in BackgroundSource["type"]]: Extract<BackgroundSource, { type: K }>;
   } = {
-    // wallpaper: {
-    //   type: "wallpaper",
-    //   id: 0,
-    // },
+    wallpaper: {
+      type: "wallpaper",
+      path: null,
+    },
     image: {
       type: "image",
       path: null,
@@ -156,6 +178,12 @@ export function ConfigSidebar() {
                     });
                     return;
                   }
+                  case "wallpaper": {
+                    setProject("background", "source", {
+                      ...backgrounds.wallpaper,
+                    });
+                    return;
+                  }
                 }
               }}
             >
@@ -205,33 +233,54 @@ export function ConfigSidebar() {
                 </KTabs.Indicator>
               </KTabs.List>
               <KTabs.Content value="wallpaper">
-                {/* <KRadioGroup
+                <KRadioGroup
                   value={
-                    project.background.source.type === "wallpaper"
-                      ? project.background.source.id.toString()
+                    project.background.source.type === "image"
+                      ? project.background.source.path ?? undefined
                       : undefined
                   }
-                  onChange={(v) => {
-                    backgrounds.wallpaper = {
-                      type: "wallpaper",
-                      id: Number(v),
-                    };
-                    setProject("background", "source", backgrounds.wallpaper);
+                  onChange={async (photoUrl) => {
+                    try {
+                      const response = await fetch(photoUrl);
+                      const blob = await response.blob();
+                      const fileName = `wallpaper-${Date.now()}.jpg`;
+                      const arrayBuffer = await blob.arrayBuffer();
+                      const uint8Array = new Uint8Array(arrayBuffer);
+
+                      const fullPath = `${await appDataDir()}/${fileName}`;
+
+                      await writeFile(fileName, uint8Array, {
+                        baseDir: BaseDirectory.AppData,
+                      });
+
+                      setProject("background", "source", {
+                        type: "image",
+                        path: fullPath,
+                      });
+                    } catch (err) {
+                      console.error("Failed to save wallpaper:", err);
+                    }
                   }}
-                  class="grid grid-cols-7 grid-rows-2 gap-2 h-[6.8rem]"
+                  class="grid grid-cols-2 gap-2 h-auto"
                 >
-                  <For each={[...Array(14).keys()]}>
-                    {(_, i) => (
+                  <For each={WALLPAPERS}>
+                    {(photo) => (
                       <KRadioGroup.Item
-                        value={i().toString()}
-                        class="col-span-1 row-span-1"
+                        value={photo.url}
+                        class="col-span-1 aspect-video relative group"
                       >
                         <KRadioGroup.ItemInput class="peer" />
-                        <KRadioGroup.ItemControl class="cursor-pointer bg-gray-100 rounded-lg w-full h-full border border-gray-200 ui-checked:border-blue-300 peer-focus-visible:border-2 peer-focus-visible:border-blue-300" />
+                        <KRadioGroup.ItemControl class="cursor-pointer w-full h-full overflow-hidden rounded-lg border border-gray-200 ui-checked:border-blue-300 peer-focus-visible:border-2 peer-focus-visible:border-blue-300">
+                          <img
+                            src={photo.url}
+                            alt="Wallpaper option"
+                            class="w-full h-full object-cover"
+                          />
+                        </KRadioGroup.ItemControl>
                       </KRadioGroup.Item>
                     )}
                   </For>
-                </KRadioGroup> */}
+                </KRadioGroup>
               </KTabs.Content>
               <KTabs.Content value="image">
                 <Show
@@ -260,7 +309,12 @@ export function ConfigSidebar() {
                       <div class="absolute top-2 right-2">
                         <button
                           type="button"
-                          onClick={() => setProject("background", "source", { type: "color", value: [255, 255, 255] })}
+                          onClick={() =>
+                            setProject("background", "source", {
+                              type: "color",
+                              value: [255, 255, 255],
+                            })
+                          }
                           class="bg-black/50 text-white p-2 rounded-full hover:bg-black/70 transition-colors"
                         >
                           <IconCapCircleX class="w-4 h-4" />
@@ -277,24 +331,24 @@ export function ConfigSidebar() {
                   onChange={async (e) => {
                     const file = e.currentTarget.files?.[0];
                     if (!file) return;
-                    
+
                     try {
                       const fileName = `bg-${Date.now()}-${file.name}`;
                       const arrayBuffer = await file.arrayBuffer();
                       const uint8Array = new Uint8Array(arrayBuffer);
-                      
+
                       const fullPath = `${await appDataDir()}/${fileName}`;
-                      
+
                       await writeFile(fileName, uint8Array, {
-                        baseDir: BaseDirectory.AppData
+                        baseDir: BaseDirectory.AppData,
                       });
-                      
+
                       setProject("background", "source", {
                         type: "image",
                         path: fullPath,
                       });
                     } catch (err) {
-                      console.error('Failed to save image:', err);
+                      console.error("Failed to save image:", err);
                     }
                   }}
                 />
