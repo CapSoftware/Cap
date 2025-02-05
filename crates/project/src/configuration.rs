@@ -22,9 +22,9 @@ pub type Color = [u16; 3];
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum BackgroundSource {
-    Wallpaper {
-        id: u16,
-    },
+    // Wallpaper {
+    //     id: u16,
+    // },
     Image {
         path: Option<String>,
     },

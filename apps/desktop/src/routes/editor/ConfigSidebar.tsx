@@ -34,14 +34,14 @@ import {
 } from "./projectConfig";
 
 const BACKGROUND_SOURCES = {
-  wallpaper: "Wallpaper",
+  // wallpaper: "Wallpaper",
   image: "Image",
   color: "Color",
   gradient: "Gradient",
 } satisfies Record<BackgroundSource["type"], string>;
 
 const BACKGROUND_SOURCES_LIST = [
-  "wallpaper",
+  // "wallpaper",
   "image",
   "color",
   "gradient",
@@ -67,10 +67,10 @@ export function ConfigSidebar() {
   const backgrounds: {
     [K in BackgroundSource["type"]]: Extract<BackgroundSource, { type: K }>;
   } = {
-    wallpaper: {
-      type: "wallpaper",
-      id: 0,
-    },
+    // wallpaper: {
+    //   type: "wallpaper",
+    //   id: 0,
+    // },
     image: {
       type: "image",
       path: null,
@@ -138,12 +138,6 @@ export function ConfigSidebar() {
                 const tab = v as BackgroundSource["type"];
 
                 switch (tab) {
-                  case "wallpaper": {
-                    setProject("background", "source", {
-                      ...backgrounds.wallpaper,
-                    });
-                    return;
-                  }
                   case "image": {
                     setProject("background", "source", {
                       ...backgrounds.image,
@@ -211,7 +205,7 @@ export function ConfigSidebar() {
                 </KTabs.Indicator>
               </KTabs.List>
               <KTabs.Content value="wallpaper">
-                <KRadioGroup
+                {/* <KRadioGroup
                   value={
                     project.background.source.type === "wallpaper"
                       ? project.background.source.id.toString()
@@ -237,7 +231,7 @@ export function ConfigSidebar() {
                       </KRadioGroup.Item>
                     )}
                   </For>
-                </KRadioGroup>
+                </KRadioGroup> */}
               </KTabs.Content>
               <KTabs.Content value="image">
                 <Show
