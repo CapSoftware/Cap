@@ -113,8 +113,8 @@ importers:
         specifier: 2.0.1
         version: 2.0.1
       '@tauri-apps/plugin-fs':
-        specifier: 2.0.3
-        version: 2.0.3
+        specifier: 2.2.0
+        version: 2.2.0
       '@tauri-apps/plugin-http':
         specifier: ^2.0.1
         version: 2.0.1
@@ -4300,10 +4300,10 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@8.6.0-alpha.0':
-    resolution: {integrity: sha512-31OJfaS6Aj3vFO/0pJE6iz3sDkQU6TB0m6/WfZ+i80Re4OG1pu5GCvP8bqOFuEAQpyc2sFKs6B+wOBvZuuSskg==}
+  '@storybook/builder-vite@8.6.0-alpha.4':
+    resolution: {integrity: sha512-zaXoEd9jWaRpV1n+eIDUdK9CTvh1Qq2AFCFdS2/pj3kenojVmB/BYS9gjbscKMO2h8d38JjSuUY3U+3kpcvgpQ==}
     peerDependencies:
-      storybook: ^8.6.0-alpha.0
+      storybook: ^8.6.0-alpha.4
       vite: ^4.0.0 || ^5.0.0 || ^6.0.0
 
   '@storybook/core@8.3.3':
@@ -4314,10 +4314,10 @@ packages:
     peerDependencies:
       storybook: ^8.3.3
 
-  '@storybook/csf-plugin@8.6.0-alpha.0':
-    resolution: {integrity: sha512-FkI3YW7ObEAFBQokJ04uPIQnBbnsfUKf08jriZ/nB03dcUNVDkl1GjPHONXJK8IwUKfKsiXRVqmrqJPSkK6xvQ==}
+  '@storybook/csf-plugin@8.6.0-alpha.4':
+    resolution: {integrity: sha512-34zcOmaSR0aheFqaHWTBvbA6R3RQ4IAJ21Dks6KM+neJzdfm7vvWr/A2fqk8wppN49NNyF3B5g2rVYh/F4PspA==}
     peerDependencies:
-      storybook: ^8.6.0-alpha.0
+      storybook: ^8.6.0-alpha.4
 
   '@storybook/csf@0.1.11':
     resolution: {integrity: sha512-dHYFQH3mA+EtnCkHXzicbLgsvzYjcDJ1JWsogbItZogkPHgSJM/Wr71uMkcvw8v9mmCyP4NpXJuu6bPoVsOnzg==}
@@ -4550,8 +4550,8 @@ packages:
   '@tauri-apps/plugin-dialog@2.0.1':
     resolution: {integrity: sha512-fnUrNr6EfvTqdls/ufusU7h6UbNFzLKvHk/zTuOiBq01R3dTODqwctZlzakdbfSp/7pNwTKvgKTAgl/NAP/Z0Q==}
 
-  '@tauri-apps/plugin-fs@2.0.3':
-    resolution: {integrity: sha512-3Xv9cg5krj/2gSo1HFn9GbKUE0keh+DMx7O+hQeSzg1T4yGY5Fv/+yBISmrPa2j9thi3qcjgPj8PnMH4rbl/Dw==}
+  '@tauri-apps/plugin-fs@2.2.0':
+    resolution: {integrity: sha512-+08mApuONKI8/sCNEZ6AR8vf5vI9DXD4YfrQ9NQmhRxYKMLVhRW164vdW5BSLmMpuevftpQ2FVoL9EFkfG9Z+g==}
 
   '@tauri-apps/plugin-http@2.0.1':
     resolution: {integrity: sha512-j6IA3pVBybSCwPpsihpX4z8bs6PluuGtr06ahL/xy4D8HunNBTmRmadJrFOQi0gOAbaig4MkQ15nzNLBLy8R1A==}
@@ -15052,9 +15052,9 @@ snapshots:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
 
-  '@storybook/builder-vite@8.6.0-alpha.0(storybook@8.3.3)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0))':
+  '@storybook/builder-vite@8.6.0-alpha.4(storybook@8.3.3)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0))':
     dependencies:
-      '@storybook/csf-plugin': 8.6.0-alpha.0(storybook@8.3.3)
+      '@storybook/csf-plugin': 8.6.0-alpha.4(storybook@8.3.3)
       browser-assert: 1.2.1
       storybook: 8.3.3
       ts-dedent: 2.2.0
@@ -15085,7 +15085,7 @@ snapshots:
       storybook: 8.3.3
       unplugin: 1.16.0
 
-  '@storybook/csf-plugin@8.6.0-alpha.0(storybook@8.3.3)':
+  '@storybook/csf-plugin@8.6.0-alpha.4(storybook@8.3.3)':
     dependencies:
       storybook: 8.3.3
       unplugin: 1.16.0
@@ -15285,7 +15285,7 @@ snapshots:
     dependencies:
       '@tauri-apps/api': 2.1.1
 
-  '@tauri-apps/plugin-fs@2.0.3':
+  '@tauri-apps/plugin-fs@2.2.0':
     dependencies:
       '@tauri-apps/api': 2.1.1
 
@@ -17671,7 +17671,7 @@ snapshots:
       '@typescript-eslint/parser': 5.62.0(eslint@8.57.1)(typescript@5.7.2)
       eslint: 8.57.1
       eslint-import-resolver-node: 0.3.9
-      eslint-import-resolver-typescript: 3.6.3(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.30.0)(eslint@8.57.1)
+      eslint-import-resolver-typescript: 3.6.3(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.30.0(eslint@8.57.1))(eslint@8.57.1)
       eslint-plugin-import: 2.30.0(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-typescript@3.6.3)(eslint@8.57.1)
       eslint-plugin-jsx-a11y: 6.10.0(eslint@8.57.1)
       eslint-plugin-react: 7.37.0(eslint@8.57.1)
@@ -17725,25 +17725,6 @@ snapshots:
       debug: 4.3.7(supports-color@5.5.0)
       enhanced-resolve: 5.17.1
       eslint: 8.57.1
-      eslint-module-utils: 2.12.0(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-node@0.3.9)(eslint-import-resolver-typescript@3.6.3(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.30.0(eslint@8.57.1))(eslint@8.57.1))(eslint@8.57.1)
-      fast-glob: 3.3.2
-      get-tsconfig: 4.8.1
-      is-bun-module: 1.2.1
-      is-glob: 4.0.3
-    optionalDependencies:
-      eslint-plugin-import: 2.30.0(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-typescript@3.6.3)(eslint@8.57.1)
-    transitivePeerDependencies:
-      - '@typescript-eslint/parser'
-      - eslint-import-resolver-node
-      - eslint-import-resolver-webpack
-      - supports-color
-
-  eslint-import-resolver-typescript@3.6.3(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.30.0)(eslint@8.57.1):
-    dependencies:
-      '@nolyfill/is-core-module': 1.0.39
-      debug: 4.3.7(supports-color@5.5.0)
-      enhanced-resolve: 5.17.1
-      eslint: 8.57.1
       eslint-module-utils: 2.12.0(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-node@0.3.9)(eslint-import-resolver-typescript@3.6.3)(eslint@8.57.1)
       fast-glob: 3.3.2
       get-tsconfig: 4.8.1
@@ -17776,17 +17757,6 @@ snapshots:
       - eslint-import-resolver-webpack
       - supports-color
 
-  eslint-module-utils@2.12.0(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-node@0.3.9)(eslint-import-resolver-typescript@3.6.3(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.30.0(eslint@8.57.1))(eslint@8.57.1))(eslint@8.57.1):
-    dependencies:
-      debug: 3.2.7
-    optionalDependencies:
-      '@typescript-eslint/parser': 5.62.0(eslint@8.57.1)(typescript@5.7.2)
-      eslint: 8.57.1
-      eslint-import-resolver-node: 0.3.9
-      eslint-import-resolver-typescript: 3.6.3(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.30.0(eslint@8.57.1))(eslint@8.57.1)
-    transitivePeerDependencies:
-      - supports-color
-
   eslint-module-utils@2.12.0(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-node@0.3.9)(eslint-import-resolver-typescript@3.6.3)(eslint@8.57.1):
     dependencies:
       debug: 3.2.7
@@ -17794,7 +17764,7 @@ snapshots:
       '@typescript-eslint/parser': 5.62.0(eslint@8.57.1)(typescript@5.7.2)
       eslint: 8.57.1
       eslint-import-resolver-node: 0.3.9
-      eslint-import-resolver-typescript: 3.6.3(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.30.0)(eslint@8.57.1)
+      eslint-import-resolver-typescript: 3.6.3(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.30.0(eslint@8.57.1))(eslint@8.57.1)
     transitivePeerDependencies:
       - supports-color
 
@@ -22627,7 +22597,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.2(storybook@8.3.3)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0)):
     dependencies:
-      '@storybook/builder-vite': 8.6.0-alpha.0(storybook@8.3.3)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0))
+      '@storybook/builder-vite': 8.6.0-alpha.4(storybook@8.3.3)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0))
     transitivePeerDependencies:
       - storybook
       - vite

@@ -4,6 +4,20 @@
   "description": "Capability for the main window",
   "windows": ["*"],
   "permissions": [
+    "fs:default",
+    "fs:write-all",
+    "fs:read-all",
+    "fs:allow-appdata-read",
+    "fs:allow-appdata-write",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        { "path": "$APPDATA/**" },
+        { "path": "$HOME/**" }
+      ]
+    },
+    "core:path:allow-resolve-directory",
+    "core:path:default",
     "core:event:default",
     "core:window:default",
     "core:window:allow-close",

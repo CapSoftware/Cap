@@ -9,6 +9,9 @@ import { Dynamic } from "solid-js/web";
 import { createWritableMemo } from "@solid-primitives/memo";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { produce } from "solid-js/store";
+import { writeFile, BaseDirectory } from '@tauri-apps/plugin-fs';
+import { appDataDir } from '@tauri-apps/api/path';
+import { convertFileSrc } from '@tauri-apps/api/core';
 
 import type {
   BackgroundSource,
@@ -82,6 +85,8 @@ export function ConfigSidebar() {
       to: DEFAULT_GRADIENT_TO,
     },
   };
+
+  let fileInput!: HTMLInputElement;
 
   return (
     <KTabs
@@ -188,20 +193,15 @@ export function ConfigSidebar() {
                 </div>
                 <For each={BACKGROUND_SOURCES_LIST}>
                   {(item) => {
-                    const comingSoon = item === "wallpaper" || item === "image";
-
                     const el = (props?: object) => (
                       <KTabs.Trigger
                         class="flex-1 text-gray-400 py-1 z-10 ui-selected:text-gray-500 peer outline-none transition-colors duration-100"
                         value={item}
-                        disabled={comingSoon}
                         {...props}
                       >
                         {BACKGROUND_SOURCES[item]}
                       </KTabs.Trigger>
                     );
-
-                    if (comingSoon) return <ComingSoonTooltip as={el} />;
 
                     return el({});
                   }}
@@ -240,13 +240,70 @@ export function ConfigSidebar() {
                 </KRadioGroup>
               </KTabs.Content>
               <KTabs.Content value="image">
-                <button
-                  type="button"
-                  class="p-[0.75rem] bg-gray-100 w-full rounded-[0.5rem] border flex flex-col items-center justify-center gap-[0.5rem] text-gray-400"
+                <Show
+                  when={
+                    project.background.source.type === "image" &&
+                    project.background.source.path
+                  }
+                  fallback={
+                    <button
+                      type="button"
+                      onClick={() => fileInput.click()}
+                      class="p-[0.75rem] bg-gray-100 w-full rounded-[0.5rem] border flex flex-col items-center justify-center gap-[0.5rem] text-gray-400 hover:bg-gray-200 transition-colors duration-100"
+                    >
+                      <IconCapImage class="size-6" />
+                      <span>Click to select or drag and drop image</span>
+                    </button>
+                  }
                 >
-                  <IconCapImage class="size-6" />
-                  <span>Click to select or drag and drop image</span>
-                </button>
+                  {(source) => (
+                    <div class="group relative w-full h-48 rounded-md overflow-hidden border border-gray-200">
+                      <img
+                        src={convertFileSrc(source())}
+                        class="w-full h-full object-cover"
+                        alt="Selected background"
+                      />
+                      <div class="absolute top-2 right-2">
+                        <button
+                          type="button"
+                          onClick={() => setProject("background", "source", { type: "color", value: [255, 255, 255] })}
+                          class="bg-black/50 text-white p-2 rounded-full hover:bg-black/70 transition-colors"
+                        >
+                          <IconCapCircleX class="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </Show>
+                <input
+                  type="file"
+                  ref={fileInput}
+                  class="hidden"
+                  accept="image/*"
+                  onChange={async (e) => {
+                    const file = e.currentTarget.files?.[0];
+                    if (!file) return;
+                    
+                    try {
+                      const fileName = `bg-${Date.now()}-${file.name}`;
+                      const arrayBuffer = await file.arrayBuffer();
+                      const uint8Array = new Uint8Array(arrayBuffer);
+                      
+                      const fullPath = `${await appDataDir()}/${fileName}`;
+                      
+                      await writeFile(fileName, uint8Array, {
+                        baseDir: BaseDirectory.AppData
+                      });
+                      
+                      setProject("background", "source", {
+                        type: "image",
+                        path: fullPath,
+                      });
+                    } catch (err) {
+                      console.error('Failed to save image:', err);
+                    }
+                  }}
+                />
               </KTabs.Content>
               <KTabs.Content value="color">
                 <Show

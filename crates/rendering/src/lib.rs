@@ -56,6 +56,9 @@ pub enum Background {
         end: [f32; 4],
         angle: f32,
     },
+    // Image {
+    //     path: String,
+    // },
 }
 
 impl From<BackgroundSource> for Background {
@@ -82,6 +85,7 @@ impl From<BackgroundSource> for Background {
                 ],
                 angle: angle as f32,
             },
+            // BackgroundSource::Image { path } => Background::Image { path: path.clone().unwrap() },
             _ => unimplemented!(),
         }
     }
