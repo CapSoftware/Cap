@@ -972,91 +972,92 @@ pub async fn produce_frame(
 
     // First, handle the background
     match background {
-      // ... existing code ...
+        Background::Image { path } => {
+            // Use entry API to handle texture caching
+            let mut textures = constants.background_textures.write().await;
+            let texture = match textures.entry(path.clone()) {
+                std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    // Load image with error propagation
+                    let img = image::open(&path)
+                        .map_err(|e| RenderingError::ImageLoadError(e.to_string()))?;
+                    let rgba = img.to_rgba8();
+                    let dimensions = img.dimensions();
 
-Background::Image { path } => {
-    // Use entry API to handle texture caching
-    let mut textures = constants.background_textures.write().await;
-    let texture = match textures.entry(path.clone()) {
-        std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-        std::collections::hash_map::Entry::Vacant(e) => {
-            // Load image with error propagation
-            let img = image::open(&path)
-                .map_err(|e| RenderingError::ImageLoadError(e.to_string()))?;
-            let rgba = img.to_rgba8();
-            let dimensions = img.dimensions();
+                    // Create texture
+                    let texture = constants.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("Background Image Texture"),
+                        size: wgpu::Extent3d {
+                            width: dimensions.0,
+                            height: dimensions.1,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                        view_formats: &[],
+                    });
 
-            // Create texture
-            let texture = constants.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Background Image Texture"),
-                size: wgpu::Extent3d {
-                    width: dimensions.0,
-                    height: dimensions.1,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
+                    // Write texture data
+                    constants.queue.write_texture(
+                        wgpu::ImageCopyTexture {
+                            texture: &texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        &rgba,
+                        wgpu::ImageDataLayout {
+                            offset: 0,
+                            bytes_per_row: Some(4 * dimensions.0),
+                            rows_per_image: Some(dimensions.1),
+                        },
+                        wgpu::Extent3d {
+                            width: dimensions.0,
+                            height: dimensions.1,
+                            depth_or_array_layers: 1,
+                        },
+                    );
 
-            // Write texture data
-            constants.queue.write_texture(
-                wgpu::ImageCopyTexture {
-                    texture: &texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &rgba,
-                wgpu::ImageDataLayout {
-                    offset: 0,
-                    bytes_per_row: Some(4 * dimensions.0),
-                    rows_per_image: Some(dimensions.1),
-                },
-                wgpu::Extent3d {
-                    width: dimensions.0,
-                    height: dimensions.1,
-                    depth_or_array_layers: 1,
-                },
+                    e.insert(texture)
+                }
+            };
+
+            // Create uniforms and bind group
+            let image_uniforms = ImageBackgroundUniforms {
+                output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
+                padding: uniforms.project.background.padding as f32,
+                _padding: 0.0,
+            };
+
+            let uniform_buffer =
+                constants
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Image Background Uniforms"),
+                        contents: bytemuck::cast_slice(&[image_uniforms]),
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    });
+
+            let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let bind_group = constants.image_background_pipeline.bind_group(
+                &constants.device,
+                &uniform_buffer,
+                &texture_view,
             );
 
-            e.insert(texture)
+            do_render_pass(
+                &mut encoder,
+                get_either(texture_views, output_is_left),
+                &constants.image_background_pipeline.render_pipeline,
+                bind_group,
+                wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            );
+
+            output_is_left = !output_is_left;
         }
-    };
-
-    // Create uniforms and bind group
-    let image_uniforms = ImageBackgroundUniforms {
-        output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
-        padding: uniforms.project.background.padding as f32,
-        _padding: 0.0,
-    };
-
-    let uniform_buffer = constants.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Image Background Uniforms"),
-        contents: bytemuck::cast_slice(&[image_uniforms]),
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-    });
-
-    let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    let bind_group = constants.image_background_pipeline.bind_group(
-        &constants.device,
-        &uniform_buffer,
-        &texture_view,
-    );
-
-    do_render_pass(
-        &mut encoder,
-        get_either(texture_views, output_is_left),
-        &constants.image_background_pipeline.render_pipeline,
-        bind_group,
-        wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-    );
-
-    output_is_left = !output_is_left;
-}
         _ => {
             // Existing gradient/color background handling
             let bind_group = constants.gradient_or_color_pipeline.bind_group(
@@ -1731,7 +1732,9 @@ impl From<Background> for GradientOrColorUniforms {
                 angle,
                 _padding: [0.0; 3],
             },
-            Background::Image { .. } => unreachable!("Image backgrounds should be handled separately"),
+            Background::Image { .. } => {
+                unreachable!("Image backgrounds should be handled separately")
+            }
         }
     }
 }
@@ -2408,7 +2411,7 @@ struct ImageBackgroundPipeline {
 struct ImageBackgroundUniforms {
     output_size: [f32; 2],
     padding: f32,
-    _padding: f32,  // For alignment
+    _padding: f32, // For alignment
 }
 
 impl ImageBackgroundPipeline {
