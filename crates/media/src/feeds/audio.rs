@@ -1,7 +1,11 @@
-use cap_project::TimelineConfiguration;
+use cap_project::{ProjectConfiguration, TimelineConfiguration};
 use ffmpeg::{
     codec::{context, decoder},
-    format::sample::{Sample, Type},
+    format::{
+        self,
+        sample::{Sample, Type},
+    },
+    frame,
     software::resampling,
 };
 use ringbuf::{
@@ -11,21 +15,21 @@ use ringbuf::{
 use std::{path::PathBuf, sync::Arc};
 
 use crate::{
-    data::{AudioInfo, FFAudio, FromSampleBytes},
+    data::{cast_bytes_to_f32_slice, cast_f32_slice_to_bytes, AudioInfo, FFAudio, FromSampleBytes},
     MediaError,
 };
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 pub struct AudioData {
-    pub buffer: Arc<Vec<u8>>,
+    pub buffer: Arc<Vec<f32>>,
     pub info: AudioInfo,
 }
 
 impl AudioData {
-    pub const FORMAT: Sample = Sample::F64(Type::Packed);
+    pub const FORMAT: Sample = Sample::F32(Type::Packed);
 
     pub fn from_file(path: PathBuf) -> Result<Self, MediaError> {
-        let input_ctx = ffmpeg::format::input(&path)?;
+        let mut input_ctx = ffmpeg::format::input(&path)?;
         let input_stream = input_ctx
             .streams()
             .best(ffmpeg::media::Type::Audio)
@@ -36,29 +40,132 @@ impl AudioData {
         decoder.set_parameters(input_stream.parameters())?;
         decoder.set_packet_time_base(input_stream.time_base());
 
-        let input_info = AudioInfo::from_decoder(&decoder)?;
-        let mut output_info = input_info;
-        output_info.sample_format = Self::FORMAT;
+        let mut info = AudioInfo::from_decoder(&decoder)?;
+        info.sample_format = Self::FORMAT;
 
-        let resampler = AudioResampler::new(input_info, output_info)?;
-
-        let reader = AudioFileReader {
-            stream_index: input_stream.index(),
-            info: input_info,
-            resampler,
-            decoder,
-            first: true,
-        };
-
-        reader.read(input_ctx)
+        let stream_index = input_stream.index();
+        Ok(Self {
+            buffer: Arc::new(decode_audio_to_f32(
+                &mut decoder,
+                &mut input_ctx,
+                stream_index,
+            )),
+            info,
+        })
     }
+}
+
+fn decode_audio_to_f32(
+    decoder: &mut decoder::Audio,
+    input_ctx: &mut format::context::Input,
+    stream_index: usize,
+) -> Vec<f32> {
+    let mut decoded_frame = ffmpeg::frame::Audio::empty();
+    let mut resampled_frame = ffmpeg::frame::Audio::empty();
+
+    let mut resampler = ffmpeg::software::resampler(
+        (decoder.format(), decoder.channel_layout(), decoder.rate()),
+        (
+            Sample::F32(Type::Packed),
+            decoder.channel_layout(),
+            decoder.rate(),
+        ),
+    )
+    .unwrap();
+
+    // let mut resampled_frames = 0;
+    let mut samples: Vec<f32> = vec![];
+
+    fn process_resampler(
+        resampler: &mut resampling::Context,
+        samples: &mut Vec<f32>,
+        resampled_frame: &mut FFAudio,
+    ) {
+        loop {
+            let resample_delay = resampler.flush(resampled_frame).unwrap();
+            if resampled_frame.samples() == 0 {
+                break;
+            }
+
+            let slice = &resampled_frame.data(0)
+                [0..resampled_frame.samples() * 4 * resampled_frame.channels() as usize];
+            samples.extend(unsafe { cast_bytes_to_f32_slice(slice) });
+
+            if resample_delay.is_none() {
+                break;
+            }
+        }
+    }
+
+    fn process_decoder(
+        decoder: &mut ffmpeg::decoder::Audio,
+        decoded_frame: &mut FFAudio,
+        resampler: &mut resampling::Context,
+        resampled_frame: &mut FFAudio,
+        samples: &mut Vec<f32>,
+    ) {
+        while let Ok(_) = decoder.receive_frame(decoded_frame) {
+            let resample_delay = resampler.run(&decoded_frame, resampled_frame).unwrap();
+
+            let slice = &resampled_frame.data(0)
+                [0..resampled_frame.samples() * 4 * resampled_frame.channels() as usize];
+            samples.extend(unsafe { cast_bytes_to_f32_slice(slice) });
+
+            if resample_delay.is_some() {
+                process_resampler(resampler, samples, resampled_frame);
+            }
+        }
+    }
+
+    for (stream, packet) in input_ctx.packets() {
+        if stream.index() != stream_index {
+            continue;
+        }
+
+        decoder.send_packet(&packet).unwrap();
+
+        process_decoder(
+            decoder,
+            &mut decoded_frame,
+            &mut resampler,
+            &mut resampled_frame,
+            &mut samples,
+        );
+
+        if resampler.delay().is_some() {
+            process_resampler(&mut resampler, &mut samples, &mut resampled_frame);
+        }
+    }
+
+    decoder.send_eof().unwrap();
+
+    process_decoder(
+        decoder,
+        &mut decoded_frame,
+        &mut resampler,
+        &mut resampled_frame,
+        &mut samples,
+    );
+
+    process_resampler(&mut resampler, &mut samples, &mut resampled_frame);
+
+    samples
 }
 
 pub struct AudioFrameBuffer {
     data: Vec<AudioData>,
-    cursor: (usize, usize),
+    cursor: AudioFrameBufferCursor,
+    // sum of `frame.samples()` that have elapsed
+    // this * channel count = cursor
     elapsed_samples: usize,
     sample_size: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct AudioFrameBufferCursor {
+    segment_index: u32,
+    // excludes channels
+    samples: usize,
 }
 
 impl AudioFrameBuffer {
@@ -68,7 +175,10 @@ impl AudioFrameBuffer {
 
         Self {
             data,
-            cursor: (0, 0),
+            cursor: AudioFrameBufferCursor {
+                segment_index: 0,
+                samples: 0,
+            },
             elapsed_samples: 0,
             sample_size,
         }
@@ -76,21 +186,20 @@ impl AudioFrameBuffer {
 
     pub fn info(&self) -> AudioInfo {
         self.data[0].info
-        // self.data.info
     }
 
-    pub fn set_playhead(&mut self, playhead: f64, maybe_timeline: Option<&TimelineConfiguration>) {
+    pub fn set_playhead(&mut self, playhead: f64, project: &ProjectConfiguration) {
         self.elapsed_samples = self.playhead_to_samples(playhead);
 
-        self.cursor = match maybe_timeline {
-            Some(timeline) => match timeline.get_recording_time(playhead) {
-                Some((time, segment)) => {
-                    let index = segment.unwrap_or(0) as usize;
-                    (index, self.playhead_to_samples(time) * self.sample_size)
-                }
-                None => (0, self.data[0].buffer.len()),
+        self.cursor = match project.get_segment_time(playhead) {
+            Some((segment_time, segment_i)) => AudioFrameBufferCursor {
+                segment_index: segment_i,
+                samples: self.playhead_to_samples(segment_time),
             },
-            None => (0, self.elapsed_samples * self.sample_size),
+            None => AudioFrameBufferCursor {
+                segment_index: 0,
+                samples: self.elapsed_samples,
+            },
         };
     }
 
@@ -101,16 +210,19 @@ impl AudioFrameBuffer {
         // this will only seek if there is a significant change in actual vs expected next sample
         // (corresponding to a trim or split point). Currently this change is at least 0.2 seconds
         // - not sure we offer that much precision in the editor even!
-        let new_cursor = match timeline.get_recording_time(playhead) {
-            Some((time, segment)) => (
-                segment.unwrap_or(0) as usize,
-                self.playhead_to_samples(time) * self.sample_size,
-            ),
-            None => (0, self.data[0].buffer.len()),
+        let new_cursor = match timeline.get_segment_time(playhead) {
+            Some((segment_time, segment_i)) => AudioFrameBufferCursor {
+                segment_index: segment_i,
+                samples: self.playhead_to_samples(segment_time),
+            },
+            None => AudioFrameBufferCursor {
+                segment_index: 0,
+                samples: self.data[0].buffer.len() / self.info().channels,
+            },
         };
 
-        let cursor_diff = new_cursor.1 as isize - self.cursor.1 as isize;
-        if new_cursor.0 != self.cursor.0
+        let cursor_diff = new_cursor.samples as isize - self.cursor.samples as isize;
+        if new_cursor.segment_index != self.cursor.segment_index
             || cursor_diff.unsigned_abs() > (self.info().sample_rate as usize) / 5
         {
             self.cursor = new_cursor;
@@ -118,60 +230,63 @@ impl AudioFrameBuffer {
     }
 
     fn playhead_to_samples(&self, playhead: f64) -> usize {
-        let estimated_start_sample = playhead * f64::from(self.info().sample_rate);
-        num_traits::cast(estimated_start_sample).unwrap()
+        (playhead * self.info().sample_rate as f64) as usize
     }
 
     fn elapsed_samples_to_playhead(&self) -> f64 {
-        self.elapsed_samples as f64 / f64::from(self.info().sample_rate)
+        self.elapsed_samples as f64 / self.info().sample_rate as f64
     }
 
     pub fn next_frame(
         &mut self,
         requested_samples: usize,
-        timeline: Option<&TimelineConfiguration>,
+        project: &ProjectConfiguration,
     ) -> Option<FFAudio> {
         let format = self.info().sample_format;
         let channels = self.info().channel_layout();
         let sample_rate = self.info().sample_rate;
 
-        self.next_frame_data(requested_samples, timeline)
+        let res = self
+            .next_frame_data(requested_samples, project)
             .map(move |(samples, data)| {
                 let mut raw_frame = FFAudio::new(format, samples, channels);
                 raw_frame.set_rate(sample_rate);
-                raw_frame.data_mut(0)[0..data.len()].copy_from_slice(data);
+                raw_frame.data_mut(0)[0..data.len() * f32::BYTE_SIZE]
+                    .copy_from_slice(unsafe { cast_f32_slice_to_bytes(data) });
 
                 raw_frame
-            })
+            });
+
+        res
     }
 
+    // buffer samples = frame samples * channel count
     pub fn next_frame_data<'a>(
         &'a mut self,
-        mut samples: usize,
-        maybe_timeline: Option<&TimelineConfiguration>,
-    ) -> Option<(usize, &'a [u8])> {
-        if let Some(timeline) = maybe_timeline {
+        samples: usize,
+        project: &ProjectConfiguration,
+    ) -> Option<(usize, &'a [f32])> {
+        if let Some(timeline) = &project.timeline {
             self.adjust_cursor(timeline);
         }
+        let channels = self.info().channels;
 
-        let buffer = &self.data[self.cursor.0].buffer;
-        if self.cursor.1 >= buffer.len() {
+        let data = &self.data[self.cursor.segment_index as usize];
+        let buffer = &data.buffer;
+        if self.cursor.samples >= buffer.len() / channels {
             self.elapsed_samples += samples;
             return None;
         }
 
-        let mut bytes_size = self.sample_size * samples;
-
-        let remaining_data = buffer.len() - self.cursor.1;
-        if remaining_data < bytes_size {
-            bytes_size = remaining_data;
-            samples = remaining_data / self.sample_size;
-        }
+        let samples = (samples).min((buffer.len() / channels) - self.cursor.samples);
 
         let start = self.cursor;
         self.elapsed_samples += samples;
-        self.cursor.1 += bytes_size;
-        Some((samples, &buffer[start.1..self.cursor.1]))
+        self.cursor.samples += samples;
+        Some((
+            samples,
+            &buffer[start.samples * channels..self.cursor.samples * channels],
+        ))
     }
 }
 
@@ -206,31 +321,31 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
         }
     }
 
-    pub fn set_playhead(&mut self, playhead: f64, maybe_timeline: Option<&TimelineConfiguration>) {
+    pub fn set_playhead(&mut self, playhead: f64, project: &ProjectConfiguration) {
         self.resampler.reset();
         self.resampled_buffer.clear();
-        self.frame_buffer.set_playhead(playhead, maybe_timeline);
+        self.frame_buffer.set_playhead(playhead, project);
 
         println!("Successful seek to sample {:?}", self.frame_buffer.cursor);
     }
 
     pub fn buffer_reaching_limit(&self) -> bool {
         self.resampled_buffer.vacant_len()
-            <= 2 * (Self::PROCESSING_SAMPLES_COUNT as usize)
-                * self.resampler.output.channels
-                * self.resampler.output.sample_format.bytes()
+            <= 2 * (Self::PROCESSING_SAMPLES_COUNT as usize) * self.resampler.output.channels
     }
 
-    pub fn render(&mut self, timeline: Option<&TimelineConfiguration>) {
+    pub fn render(&mut self, project: &ProjectConfiguration) {
         if self.buffer_reaching_limit() {
             return;
         }
 
         let bytes_per_sample = self.resampler.output.sample_size();
-        let maybe_rendered = match self
+
+        let next_frame = self
             .frame_buffer
-            .next_frame(Self::PROCESSING_SAMPLES_COUNT as usize, timeline)
-        {
+            .next_frame(Self::PROCESSING_SAMPLES_COUNT as usize, project);
+
+        let maybe_rendered = match next_frame {
             Some(frame) => Some(self.resampler.queue_and_process_frame(&frame)),
             None => self.resampler.flush_frame(),
         };
@@ -251,71 +366,9 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
     }
 }
 
-struct AudioFileReader {
-    decoder: decoder::Audio,
-    resampler: AudioResampler,
-    stream_index: usize,
-    info: AudioInfo,
-    first: bool,
-}
-
-impl AudioFileReader {
-    fn read(
-        mut self,
-        mut input_ctx: ffmpeg::format::context::Input,
-    ) -> Result<AudioData, MediaError> {
-        let mut buffer = Vec::new();
-        let output_info = self.resampler.output;
-
-        for (stream, mut packet) in input_ctx.packets() {
-            if stream.index() == self.stream_index {
-                packet.rescale_ts(stream.time_base(), self.info.time_base);
-                self.decoder.send_packet(&packet).unwrap();
-                self.decode_packets(&mut buffer);
-            }
-        }
-
-        self.finish_resampling(&mut buffer);
-
-        Ok(AudioData {
-            buffer: Arc::new(buffer),
-            info: output_info,
-        })
-    }
-
-    fn decode_packets(&mut self, data: &mut Vec<u8>) {
-        let mut decoded_frame = FFAudio::empty();
-
-        while self.decoder.receive_frame(&mut decoded_frame).is_ok() {
-            let timestamp = decoded_frame.timestamp();
-            if self.first {
-                println!(
-                    "First timestamp: {timestamp:?}, time base {}",
-                    self.decoder.time_base()
-                );
-                self.first = false;
-            }
-            decoded_frame.set_pts(timestamp);
-            let resampled = self.resampler.queue_and_process_frame(&decoded_frame);
-            // println!("Resampled: {:?}", resampled);
-            data.extend_from_slice(resampled);
-            decoded_frame = FFAudio::empty();
-        }
-    }
-
-    fn finish_resampling(&mut self, data: &mut Vec<u8>) {
-        self.decoder.send_eof().unwrap();
-        self.decode_packets(data);
-
-        while let Some(resampled) = self.resampler.flush_frame() {
-            data.extend_from_slice(resampled);
-        }
-    }
-}
-
 pub struct AudioResampler {
-    context: resampling::Context,
-    output_frame: FFAudio,
+    pub context: resampling::Context,
+    pub output_frame: FFAudio,
     delay: Option<resampling::Delay>,
     input: AudioInfo,
     output: AudioInfo,

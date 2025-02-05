@@ -13,6 +13,7 @@ import { s3Buckets } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import type { NextRequest } from "next/server";
+import { clientEnv, serverEnv } from "@cap/env";
 
 export async function POST(request: NextRequest) {
   try {
@@ -64,17 +65,17 @@ export async function POST(request: NextRequest) {
       if (
         !bucket ||
         !s3Config ||
-        bucket.bucketName !== process.env.CAP_S3_BUCKET
+        bucket.bucketName !== clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET
       ) {
-        const distributionId = process.env.CAP_CLOUDFRONT_DISTRIBUTION_ID;
+        const distributionId = serverEnv.CAP_CLOUDFRONT_DISTRIBUTION_ID;
         if (distributionId) {
           console.log("Creating CloudFront invalidation for", fileKey);
 
           const cloudfront = new CloudFrontClient({
-            region: process.env.NEXT_PUBLIC_CAP_AWS_REGION || "us-east-1",
+            region: clientEnv.NEXT_PUBLIC_CAP_AWS_REGION || "us-east-1",
             credentials: {
-              accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
-              secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",
+              accessKeyId: serverEnv.CAP_AWS_ACCESS_KEY || "",
+              secretAccessKey: serverEnv.CAP_AWS_SECRET_KEY || "",
             },
           });
 
@@ -143,13 +144,21 @@ export async function POST(request: NextRequest) {
         }
       );
 
+      // When not using aws s3, we need to transform the url to the local endpoint
+      if (clientEnv.NEXT_PUBLIC_CAP_AWS_ENDPOINT) {
+        const endpoint = clientEnv.NEXT_PUBLIC_CAP_AWS_ENDPOINT;
+        const bucket = clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET;
+        const newUrl = `${endpoint}/${bucket}/`;
+        presignedPostData.url = newUrl;
+      }
+
       console.log("Presigned URL created successfully");
 
       // After successful presigned URL creation, trigger revalidation
       const videoId = fileKey.split("/")[1]; // Assuming fileKey format is userId/videoId/...
       if (videoId) {
         try {
-          await fetch(`${process.env.NEXT_PUBLIC_URL}/api/revalidate`, {
+          await fetch(`${clientEnv.NEXT_PUBLIC_WEB_URL}/api/revalidate`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",

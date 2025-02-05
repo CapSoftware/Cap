@@ -2,6 +2,7 @@
 
 import toast from "react-hot-toast";
 import { useState } from "react";
+import { clientEnv } from "@cap/env";
 
 interface ShareProps {
   post: {
@@ -13,7 +14,7 @@ interface ShareProps {
 }
 
 export function Share({ post }: ShareProps) {
-  const shareUrl = `${process.env.NEXT_PUBLIC_URL}/blog/${post.slug}`;
+  const shareUrl = `${clientEnv.NEXT_PUBLIC_WEB_URL}/blog/${post.slug}`;
   const [copied, setCopied] = useState(false);
 
   return (

@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { toast } from "react-hot-toast";
 import { Input, Label } from "@cap/ui";
+import { NODE_ENV } from "@cap/env";
 
 export function LoginForm() {
   const searchParams = useSearchParams();
@@ -39,9 +40,10 @@ export function LoginForm() {
 
   useEffect(() => {
     const pendingPriceId = localStorage.getItem("pendingPriceId");
+    const pendingQuantity = localStorage.getItem("pendingQuantity") ?? "1";
     if (emailSent && pendingPriceId) {
-      // Clear the pending price ID
       localStorage.removeItem("pendingPriceId");
+      localStorage.removeItem("pendingQuantity");
 
       // Wait a bit to ensure the user is created
       setTimeout(async () => {
@@ -50,9 +52,14 @@ export function LoginForm() {
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ priceId: pendingPriceId }),
+          body: JSON.stringify({
+            priceId: pendingPriceId,
+            quantity: parseInt(pendingQuantity),
+          }),
         });
         const data = await response.json();
+
+        console.log(data);
 
         if (data.url) {
           window.location.href = data.url;
@@ -201,7 +208,7 @@ export function LoginForm() {
                   }}
                   className="block w-full appearance-none rounded-full border border-gray-300 px-3 h-12 placeholder-gray-400 shadow-sm focus:border-black focus:outline-none focus:ring-black text-lg"
                 />
-                {process.env.NODE_ENV === "development" && (
+                {NODE_ENV === "development" && (
                   <div className="py-3 px-6 flex items-center justify-center bg-red-600 rounded-xl mt-3">
                     <p className="text-white text-lg">
                       <span className="font-bold text-white">
@@ -220,7 +227,7 @@ export function LoginForm() {
                 disabled={loading || emailSent}
               >
                 {emailSent
-                  ? process.env.NODE_ENV === "development"
+                  ? NODE_ENV === "development"
                     ? "Email sent to your terminal"
                     : "Email sent to your inbox"
                   : "Continue with Email"}

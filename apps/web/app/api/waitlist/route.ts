@@ -1,3 +1,5 @@
+import { serverEnv } from "@cap/env";
+
 export async function POST(request: Request) {
   const res = await request.json();
   const { email } = res;
@@ -12,7 +14,7 @@ export async function POST(request: Request) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.NEXT_LOOPS_KEY}`,
+      Authorization: `Bearer ${serverEnv.NEXT_LOOPS_KEY}`,
     },
     body: JSON.stringify({
       email,

@@ -3,6 +3,7 @@ import Image from "next/image";
 import { MDXRemote } from "next-mdx-remote/rsc";
 import { getDocs } from "@/utils/blog";
 import type { Metadata } from "next";
+import { clientEnv } from "@cap/env";
 
 interface DocProps {
   params: {
@@ -19,7 +20,7 @@ export async function generateMetadata({
   }
 
   let { title, summary: description, image } = doc.metadata;
-  let ogImage = image ? `${process.env.NEXT_PUBLIC_URL}${image}` : undefined;
+  let ogImage = image ? `${clientEnv.NEXT_PUBLIC_WEB_URL}${image}` : undefined;
 
   return {
     title,
@@ -28,7 +29,7 @@ export async function generateMetadata({
       title,
       description,
       type: "article",
-      url: `${process.env.NEXT_PUBLIC_URL}/docs/${doc.slug}`,
+      url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/docs/${doc.slug}`,
       ...(ogImage && {
         images: [
           {

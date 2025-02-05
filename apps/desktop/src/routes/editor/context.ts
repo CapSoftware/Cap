@@ -34,7 +34,7 @@ export type CurrentDialog =
 
 export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
 
-export const FPS = 30;
+export const FPS = 60;
 
 export const OUTPUT_SIZE = {
   x: 1920,
@@ -66,7 +66,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
           trackStore(project);
         },
         debounce(() => {
-          commands.setProjectConfig(editorInstanceContext.videoId, project);
+          commands.setProjectConfig(project);
         }),
         { defer: true }
       )
@@ -225,7 +225,7 @@ export const [TrackContextProvider, useTrackContext] = createContextProvider(
     isFreeForm: Accessor<boolean>;
   }) => {
     const [trackState, setTrackState] = createStore({
-      draggingHandle: false,
+      draggingSegment: false,
     });
     const bounds = createElementBounds(() => props.ref());
 

@@ -1,13 +1,12 @@
 use flume::{Receiver, Sender, TryRecvError};
 use indexmap::IndexMap;
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::pipeline::MediaError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Control {
     Play,
-    Pause,
     Shutdown,
 }
 
@@ -53,7 +52,7 @@ impl PipelineControlSignal {
 
 /// An extremely naive broadcast channel. Sends values synchronously to all receivers,
 /// might block if one receiver takes too long to receive value.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(super) struct ControlBroadcast {
     listeners: IndexMap<String, Sender<Control>>,
 }
@@ -77,7 +76,7 @@ impl ControlBroadcast {
 
         for (name, listener) in self.listeners.iter() {
             if let Err(_) = listener.send_async(value).await {
-                eprintln!("{name} is unreachable!");
+                error!("{name} is unreachable!");
                 any_dropped = true;
             }
         }

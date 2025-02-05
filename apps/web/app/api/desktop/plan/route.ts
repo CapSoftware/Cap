@@ -7,9 +7,10 @@ import { cookies } from "next/headers";
 import { isUserOnProPlan } from "@cap/utils";
 import { stripe } from "@cap/utils";
 import { eq } from "drizzle-orm";
+import { clientEnv } from "@cap/env";
 
 const allowedOrigins = [
-  process.env.NEXT_PUBLIC_URL,
+  clientEnv.NEXT_PUBLIC_WEB_URL,
   "http://localhost:3001",
   "tauri://localhost",
   "http://tauri.localhost",

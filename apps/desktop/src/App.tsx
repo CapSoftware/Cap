@@ -9,6 +9,7 @@ import {
 } from "solid-js";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { message } from "@tauri-apps/plugin-dialog";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 
 import "@cap/ui-solid/main.css";
 import "unfonts.css";
@@ -20,6 +21,8 @@ import {
   getCurrentWebviewWindow,
   WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
+import { Button } from "@cap/ui-solid";
+import { Toaster } from "solid-toast";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -44,37 +47,80 @@ function Inner() {
   createThemeListener(currentWindow);
 
   return (
-    <ErrorBoundary
-      fallback={(e: Error) => {
-        console.error(e);
-        return (
-          <>
-            <p>{e.toString()}</p>
-            <p>{e.stack?.toString()}</p>
-          </>
-        );
-      }}
-    >
-      <QueryClientProvider client={queryClient}>
-        <Router
-          root={(props) => {
-            const matches = useCurrentMatches();
+    <>
+      <Toaster
+        position="top-right"
+        toastOptions={{
+          duration: 3500,
+          style: {
+            padding: "8px 16px",
+            "border-radius": "15px",
+            "font-size": "1rem",
+          },
+        }}
+      />
+      <ErrorBoundary
+        fallback={(e: Error) => {
+          console.error(e);
+          return (
+            <div class="w-screen h-screen flex flex-col justify-center items-center bg-gray-100 border-gray-200 max-h-screen overflow-hidden transition-[border-radius] duration-200 text-[--text-secondary] gap-y-4">
+              <IconCapLogo />
+              <h1 class="text-[--text-primary] text-3xl font-bold">
+                An Error Occured
+              </h1>
+              <p>We're very sorry, but something has gone wrong.</p>
+              <div class="flex flex-row gap-x-4">
+                <Button
+                  onClick={() => {
+                    writeText(`${e.toString()}\n\n${e.stack}`);
+                  }}
+                >
+                  Copy Error to Clipboard
+                </Button>
+                <Button
+                  onClick={() => {
+                    location.reload();
+                  }}
+                  variant="secondary"
+                >
+                  Reload
+                </Button>
+              </div>
+            </div>
+          );
+        }}
+      >
+        <QueryClientProvider client={queryClient}>
+          <Router
+            root={(props) => {
+              const matches = useCurrentMatches();
 
-            onMount(() => {
-              for (const match of matches()) {
-                if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
-              }
+              onMount(() => {
+                for (const match of matches()) {
+                  if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
+                }
 
-              currentWindow.show();
-            });
+                currentWindow.show();
+              });
 
-            return <Suspense>{props.children}</Suspense>;
-          }}
-        >
-          <FileRoutes />
-        </Router>
-      </QueryClientProvider>
-    </ErrorBoundary>
+              return (
+                <Suspense
+                  fallback={
+                    (() => {
+                      console.log("Root suspense fallback showing");
+                    }) as any
+                  }
+                >
+                  {props.children}
+                </Suspense>
+              );
+            }}
+          >
+            <FileRoutes />
+          </Router>
+        </QueryClientProvider>
+      </ErrorBoundary>
+    </>
   );
 }
 

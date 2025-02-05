@@ -1,9 +1,9 @@
 {
-  "name": "web",
+  "name": "@cap/web",
   "version": "0.3.1",
   "private": true,
   "scripts": {
-    "dev": "dotenv -e ../../.env -- next dev",
+    "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
@@ -14,6 +14,7 @@
     "@aws-sdk/client-s3": "^3.485.0",
     "@aws-sdk/s3-presigned-post": "^3.485.0",
     "@aws-sdk/s3-request-presigner": "^3.485.0",
+    "@cap/env": "workspace:*",
     "@cap/database": "workspace:*",
     "@cap/ui": "workspace:*",
     "@cap/utils": "workspace:*",
@@ -29,6 +30,7 @@
     "@react-email/components": "^0.0.13",
     "@react-email/render": "0.0.11",
     "@stripe/stripe-js": "^3.3.0",
+    "@t3-oss/env-nextjs": "^0.12.0",
     "@tanstack/react-query": "^5.51.11",
     "@tanstack/react-store": "^0.5.5",
     "@tanstack/store": "^0.5.5",
@@ -69,7 +71,7 @@
     "subtitles-parser-vtt": "^0.1.0",
     "tailwind-merge": "^2.1.0",
     "video.js": "^8.17.3",
-    "zod": "^3.22.4"
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/file-saver": "^2.0.7",

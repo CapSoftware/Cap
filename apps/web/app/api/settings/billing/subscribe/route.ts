@@ -4,12 +4,13 @@ import { NextRequest } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@cap/database";
 import { users } from "@cap/database/schema";
+import { clientEnv } from "@cap/env";
 
 export async function POST(request: NextRequest) {
   console.log("Starting subscription process");
   const user = await getCurrentUser();
   let customerId = user?.stripeCustomerId;
-  const { priceId } = await request.json();
+  const { priceId, quantity } = await request.json();
 
   console.log("Received request with priceId:", priceId);
   console.log("Current user:", user?.id);
@@ -59,10 +60,10 @@ export async function POST(request: NextRequest) {
     console.log("Creating checkout session for customer:", customerId);
     const checkoutSession = await stripe.checkout.sessions.create({
       customer: customerId as string,
-      line_items: [{ price: priceId, quantity: 1 }],
+      line_items: [{ price: priceId, quantity: quantity }],
       mode: "subscription",
-      success_url: `${process.env.NEXT_PUBLIC_URL}/dashboard/caps?upgrade=true`,
-      cancel_url: `${process.env.NEXT_PUBLIC_URL}/pricing`,
+      success_url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/dashboard/caps?upgrade=true`,
+      cancel_url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/pricing`,
       allow_promotion_codes: true,
     });
 

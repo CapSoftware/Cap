@@ -8,6 +8,7 @@ import { toast } from "react-hot-toast";
 import { Copy, Loader2 } from "lucide-react";
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
+import { clientEnv, NODE_ENV } from "@cap/env";
 
 export const ShareHeader = ({
   data,
@@ -29,7 +30,7 @@ export const ShareHeader = ({
   const handleBlur = async () => {
     setIsEditing(false);
     const response = await fetch(
-      `${process.env.NEXT_PUBLIC_URL}/api/video/title`,
+      `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/title`,
       {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -144,31 +145,30 @@ export const ShareHeader = ({
                 className="hover:bg-gray-300"
                 onClick={() => {
                   if (
-                    process.env.NEXT_PUBLIC_IS_CAP &&
-                    process.env.NODE_ENV === "production"
+                    clientEnv.NEXT_PUBLIC_IS_CAP &&
+                    NODE_ENV === "production"
                   ) {
                     navigator.clipboard.writeText(
                       `https://cap.link/${data.id}`
                     );
                   } else {
                     navigator.clipboard.writeText(
-                      `${process.env.NEXT_PUBLIC_URL}/s/${data.id}`
+                      `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${data.id}`
                     );
                   }
                   toast.success("Link copied to clipboard!");
                 }}
               >
-                {process.env.NEXT_PUBLIC_IS_CAP &&
-                process.env.NODE_ENV === "production"
+                {clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
                   ? `cap.link/${data.id}`
-                  : `${process.env.NEXT_PUBLIC_URL}/s/${data.id}`}
+                  : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${data.id}`}
                 <Copy className="ml-2 h-4 w-4" />
               </Button>
               {user !== null && (
                 <div className="hidden md:flex">
                   <Button
                     onClick={() => {
-                      push(`${process.env.NEXT_PUBLIC_URL}/dashboard`);
+                      push(`${clientEnv.NEXT_PUBLIC_WEB_URL}/dashboard`);
                     }}
                   >
                     Go to Dashboard

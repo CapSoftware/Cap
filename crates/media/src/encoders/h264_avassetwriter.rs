@@ -1,6 +1,7 @@
+use std::path::PathBuf;
+
 use crate::{data::VideoInfo, pipeline::task::PipelineSinkTask, MediaError};
 
-use super::Output;
 use arc::Retained;
 use cidre::{objc::Obj, *};
 use tracing::{info, trace};
@@ -16,14 +17,11 @@ pub struct H264AVAssetWriterEncoder {
 }
 
 impl H264AVAssetWriterEncoder {
-    pub fn init(tag: &'static str, config: VideoInfo, output: Output) -> Result<Self, MediaError> {
+    pub fn init(tag: &'static str, config: VideoInfo, output: PathBuf) -> Result<Self, MediaError> {
         let fps = config.frame_rate.0 as f32 / config.frame_rate.1 as f32;
-        let Output::File(destination) = output;
 
         let mut asset_writer = av::AssetWriter::with_url_and_file_type(
-            cf::Url::with_path(destination.as_path(), false)
-                .unwrap()
-                .as_ns(),
+            cf::Url::with_path(output.as_path(), false).unwrap().as_ns(),
             av::FileType::mp4(),
         )
         .map_err(|_| MediaError::Any("Failed to create AVAssetWriter"))?;
@@ -117,26 +115,24 @@ impl H264AVAssetWriterEncoder {
     }
 }
 
-impl PipelineSinkTask for H264AVAssetWriterEncoder {
-    type Input = screencapturekit::cm_sample_buffer::CMSampleBuffer;
+use screencapturekit::cm_sample_buffer::CMSampleBuffer;
 
+impl PipelineSinkTask<CMSampleBuffer> for H264AVAssetWriterEncoder {
     fn run(
         &mut self,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
-        input: flume::Receiver<Self::Input>,
+        input: &flume::Receiver<CMSampleBuffer>,
     ) {
-        trace!("Starting {} video encoding thread", self.tag);
         ready_signal.send(Ok(())).ok();
 
         while let Ok(frame) = input.recv() {
             self.queue_frame(frame);
             self.process_frame();
         }
+    }
 
-        trace!("Received last {} frame. Finishing up encoding.", self.tag);
+    fn finish(&mut self) {
         self.finish();
-
-        info!("Shut down {} video encoding thread", self.tag);
     }
 }
 

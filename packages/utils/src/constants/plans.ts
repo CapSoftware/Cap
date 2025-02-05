@@ -1,3 +1,5 @@
+import { NODE_ENV } from "@cap/env";
+
 const planIds = {
   development: {
     yearly: "price_1Q3esrFJxA1XpeSsFwp486RN",
@@ -10,7 +12,7 @@ const planIds = {
 };
 
 export const getProPlanId = (billingCycle: "yearly" | "monthly") => {
-  const value = process.env.NEXT_PUBLIC_ENVIRONMENT;
+  const value = NODE_ENV;
   const environment = value === "development" ? "development" : "production";
 
   return planIds[environment]?.[billingCycle] || "";

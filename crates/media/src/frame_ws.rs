@@ -3,6 +3,8 @@ use std::sync::Arc;
 use flume::Receiver;
 use tokio::sync::mpsc;
 
+use crate::feeds::RawCameraFrame;
+
 pub struct WSFrame {
     pub data: Vec<u8>,
     pub width: u32,

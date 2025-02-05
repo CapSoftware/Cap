@@ -3,7 +3,8 @@ import { and, eq } from "drizzle-orm";
 import { accounts, sessions, users, verificationTokens } from "../schema";
 import type { Adapter } from "next-auth/adapters";
 import type { PlanetScaleDatabase } from "drizzle-orm/planetscale-serverless";
-import { stripe } from "@cap/utils";
+import { stripe, STRIPE_AVAILABLE } from "@cap/utils";
+import { serverEnv } from "@cap/env";
 
 export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
   return {
@@ -24,19 +25,21 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
       const row = rows[0];
       if (!row) throw new Error("User not found");
 
-      const customer = await stripe.customers.create({
-        email: userData.email,
-        metadata: {
-          userId: nanoId(),
-        },
-      });
+      if (STRIPE_AVAILABLE) {
+        const customer = await stripe.customers.create({
+          email: userData.email,
+          metadata: {
+            userId: nanoId(),
+          },
+        });
 
-      await db
-        .update(users)
-        .set({
-          stripeCustomerId: customer.id,
-        })
-        .where(eq(users.id, row.id));
+        await db
+          .update(users)
+          .set({
+            stripeCustomerId: customer.id,
+          })
+          .where(eq(users.id, row.id));
+      }
 
       return row;
     },
@@ -54,7 +57,11 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
         .select()
         .from(users)
         .where(eq(users.email, email))
-        .limit(1);
+        .limit(1)
+        .catch((e) => {
+          console.log(e);
+          throw e;
+        });
       const row = rows[0];
       return row ?? null;
     },

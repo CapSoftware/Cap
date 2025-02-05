@@ -5,9 +5,10 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { cookies } from "next/headers";
 import { isUserOnProPlan, stripe } from "@cap/utils";
 import { eq } from "drizzle-orm";
+import { clientEnv } from "@cap/env";
 
 const allowedOrigins = [
-  process.env.NEXT_PUBLIC_URL,
+  clientEnv.NEXT_PUBLIC_WEB_URL,
   "http://localhost:3001",
   "tauri://localhost",
   "http://tauri.localhost",
@@ -155,8 +156,8 @@ export async function POST(request: NextRequest) {
       },
     ],
     mode: "subscription",
-    success_url: `${process.env.NEXT_PUBLIC_URL}/dashboard/caps?upgrade=true`,
-    cancel_url: `${process.env.NEXT_PUBLIC_URL}/pricing`,
+    success_url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/dashboard/caps?upgrade=true`,
+    cancel_url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/pricing`,
     allow_promotion_codes: true,
   });
 

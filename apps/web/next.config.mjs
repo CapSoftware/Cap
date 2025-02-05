@@ -2,12 +2,6 @@
 
 import("dotenv").then(({ config }) => config({ path: "../../.env" }));
 
-if (process.env.DB_PLANETSCALE_HOST !== undefined) {
-  throw new Error(
-    "DB_PLANETSCALE_HOST no longer supported. Use DATABASE_URL instead. Must start with mysql:// for local dev, and https:// for production."
-  );
-}
-
 import fs from "fs";
 import path from "path";
 
@@ -42,7 +36,13 @@ const nextConfig = {
         port: "",
         pathname: "**",
       },
-    ],
+      process.env.NODE_ENV === "development" && {
+        protocol: "http",
+        hostname: "localhost",
+        port: "3902",
+        pathname: "**",
+      },
+    ].filter(Boolean),
   },
   async rewrites() {
     return [

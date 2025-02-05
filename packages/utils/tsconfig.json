@@ -5,6 +5,7 @@
   "compilerOptions": {
     "rootDir": "src",
     "baseUrl": ".",
+    "moduleResolution": "bundler",
     "paths": {
       "@/*": ["./src/*"]
     }

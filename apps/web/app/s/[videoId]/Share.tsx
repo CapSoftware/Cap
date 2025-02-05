@@ -8,6 +8,7 @@ import { Toolbar } from "./_components/Toolbar";
 import { Logo } from "@cap/ui";
 import { Sidebar } from "./_components/Sidebar";
 import { useEffect, useState, useRef } from "react";
+import { clientEnv } from "@cap/env";
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
   authorName: string | null;
@@ -132,7 +133,7 @@ export const Share: React.FC<ShareProps> = ({
       <div className="mt-auto py-4">
         <a
           target="_blank"
-          href={`${process.env.NEXT_PUBLIC_URL}?ref=video_${data.id}`}
+          href={`${clientEnv.NEXT_PUBLIC_WEB_URL}?ref=video_${data.id}`}
           className="flex items-center justify-center space-x-2 py-2 px-4 bg-gray-100 new-card-style rounded-full mx-auto w-fit"
         >
           <span className="text-sm">Recorded with</span>

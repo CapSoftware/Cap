@@ -1,9 +1,10 @@
 use std::{sync::Arc, time::Instant};
 
-use cap_media::frame_ws::WSFrame;
-use cap_project::{BackgroundSource, ProjectConfiguration, RecordingMeta, XY};
+use cap_media::{feeds::RawCameraFrame, frame_ws::WSFrame};
+use cap_project::{BackgroundSource, RecordingMeta, XY};
 use cap_rendering::{
-    decoder::DecodedFrame, produce_frame, ProjectRecordings, ProjectUniforms, RenderVideoConstants,
+    decoder::DecodedFrame, produce_frame, DecodedSegmentFrames, ProjectRecordings, ProjectUniforms,
+    RenderVideoConstants,
 };
 use tokio::{
     sync::{mpsc, oneshot},
@@ -12,11 +13,9 @@ use tokio::{
 
 pub enum RendererMessage {
     RenderFrame {
-        screen_frame: DecodedFrame,
-        camera_frame: Option<DecodedFrame>,
+        segment_frames: DecodedSegmentFrames,
         background: BackgroundSource,
         uniforms: ProjectUniforms,
-        time: f32, // Add this field
         finished: oneshot::Sender<()>,
         resolution_base: XY<u32>,
     },
@@ -47,7 +46,7 @@ impl Renderer {
 
         // Check camera duration if it exists
         if let Some(camera_path) = meta.content.camera_path() {
-            if let Ok(camera_duration) = recordings.get_source_duration(&camera_path) {
+            if let Ok(camera_duration) = recordings.get_source_duration(&meta.path(&camera_path)) {
                 max_duration = max_duration.max(camera_duration);
             }
         }
@@ -75,11 +74,9 @@ impl Renderer {
             while let Some(msg) = self.rx.recv().await {
                 match msg {
                     RendererMessage::RenderFrame {
-                        screen_frame,
-                        camera_frame,
+                        segment_frames,
                         background,
                         uniforms,
-                        time,
                         finished,
                         resolution_base,
                     } => {
@@ -93,17 +90,13 @@ impl Renderer {
 
                         let render_constants = self.render_constants.clone();
                         let frame_tx = self.frame_tx.clone();
-                        let total_frames = self.total_frames;
 
                         frame_task = Some(tokio::spawn(async move {
                             let frame = produce_frame(
                                 &render_constants,
-                                &screen_frame,
-                                &camera_frame,
+                                segment_frames,
                                 cap_rendering::Background::from(background),
                                 &uniforms,
-                                time,
-                                total_frames,
                                 resolution_base,
                             )
                             .await
@@ -143,21 +136,17 @@ impl RendererHandle {
 
     pub async fn render_frame(
         &self,
-        screen_frame: DecodedFrame,
-        camera_frame: Option<DecodedFrame>,
+        segment_frames: DecodedSegmentFrames,
         background: BackgroundSource,
         uniforms: ProjectUniforms,
-        time: f32,
         resolution_base: XY<u32>,
     ) {
         let (finished_tx, finished_rx) = oneshot::channel();
 
         self.send(RendererMessage::RenderFrame {
-            screen_frame,
-            camera_frame,
+            segment_frames,
             background,
             uniforms,
-            time, // Pass the time
             finished: finished_tx,
             resolution_base,
         })

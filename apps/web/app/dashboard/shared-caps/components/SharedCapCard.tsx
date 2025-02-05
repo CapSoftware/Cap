@@ -3,6 +3,7 @@ import { VideoThumbnail } from "@/components/VideoThumbnail";
 import { CapCardAnalytics } from "@/app/dashboard/caps/components/CapCardAnalytics";
 import moment from "moment";
 import { Tooltip } from "react-tooltip";
+import { serverEnv, clientEnv, NODE_ENV } from "@cap/env";
 
 interface SharedCapCardProps {
   cap: {
@@ -39,10 +40,9 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
       <a
         className="group block"
         href={
-          process.env.NEXT_PUBLIC_IS_CAP &&
-          process.env.NEXT_ENV === "production"
+          clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
             ? `https://cap.link/${cap.id}`
-            : `${process.env.NEXT_PUBLIC_URL}/s/${cap.id}`
+            : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
         }
       >
         <VideoThumbnail

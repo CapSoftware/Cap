@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@cap/ui";
 import toast from "react-hot-toast";
 import { AuthOverlay } from "./AuthOverlay";
+import { clientEnv } from "@cap/env";
 
 // million-ignore
 export const Toolbar = ({
@@ -83,7 +84,7 @@ export const Toolbar = ({
     console.log("Current timestamp:", timestamp);
 
     const response = await fetch(
-      `${process.env.NEXT_PUBLIC_URL}/api/video/comment`,
+      `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/comment`,
       {
         method: "POST",
         headers: {

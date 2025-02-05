@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import { nanoId } from "@cap/database/helpers";
 import { sendEmail } from "@cap/database/emails/config";
 import { WorkspaceInvite } from "@cap/database/emails/workspace-invite";
+import { clientEnv } from "@cap/env";
 
 export async function POST(request: NextRequest) {
   console.log("POST request received for workspace invite");
@@ -49,7 +50,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Send invitation email
-    const inviteUrl = `${process.env.NEXT_PUBLIC_URL}/invite/${inviteId}`;
+    const inviteUrl = `${clientEnv.NEXT_PUBLIC_WEB_URL}/invite/${inviteId}`;
     await sendEmail({
       email: email.trim(),
       subject: `Invitation to join ${space[0].name} on Cap`,

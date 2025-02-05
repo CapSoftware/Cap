@@ -4,6 +4,8 @@ import { videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { getHeaders } from "@/utils/helpers";
 import { CACHE_CONTROL_HEADERS } from "@/utils/helpers";
+import { S3_BUCKET_URL } from "@cap/utils";
+import { clientEnv } from "@cap/env";
 
 export const revalidate = 0;
 
@@ -59,7 +61,7 @@ export async function GET(request: NextRequest) {
   }
 
   if (video.jobStatus === "COMPLETE") {
-    const playlistUrl = `https://v.cap.so/${video.ownerId}/${video.id}/output/video_recording_000_output.m3u8`;
+    const playlistUrl = `${S3_BUCKET_URL}/${video.ownerId}/${video.id}/output/video_recording_000_output.m3u8`;
     return new Response(
       JSON.stringify({ playlistOne: playlistUrl, playlistTwo: null }),
       {
@@ -74,8 +76,8 @@ export async function GET(request: NextRequest) {
 
   return new Response(
     JSON.stringify({
-      playlistOne: `${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${video.ownerId}&videoId=${video.id}&videoType=video`,
-      playlistTwo: `${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${video.ownerId}&videoId=${video.id}&videoType=audio`,
+      playlistOne: `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${video.ownerId}&videoId=${video.id}&videoType=video`,
+      playlistTwo: `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${video.ownerId}&videoId=${video.id}&videoType=audio`,
     }),
     {
       status: 200,

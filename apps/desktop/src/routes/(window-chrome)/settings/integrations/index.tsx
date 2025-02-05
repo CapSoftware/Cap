@@ -15,7 +15,7 @@ export default function AppsTab() {
       description:
         "Connect your own S3 bucket. All new shareable link uploads will be uploaded here. Maintain complete ownership over your data.",
       icon: IconLucideDatabase,
-      url: "/settings/apps/s3-config",
+      url: "/settings/integrations/s3-config",
       pro: true,
     },
   ];

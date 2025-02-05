@@ -7,9 +7,10 @@ import { cookies } from "next/headers";
 import { dub } from "@/utils/dub";
 import { eq } from "drizzle-orm";
 import { getS3Bucket, getS3Config } from "@/utils/s3";
+import { clientEnv, NODE_ENV } from "@cap/env";
 
 const allowedOrigins = [
-  process.env.NEXT_PUBLIC_URL,
+  clientEnv.NEXT_PUBLIC_WEB_URL,
   "http://localhost:3001",
   "http://localhost:3000",
   "tauri://localhost",
@@ -54,7 +55,9 @@ export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
   const origin = params.get("origin") || null;
   const originalOrigin = req.nextUrl.origin;
-  const duration = params.get("duration") ? parseFloat(params.get("duration")!) : null;
+  const duration = params.get("duration")
+    ? parseFloat(params.get("duration")!)
+    : null;
 
   const user = await getCurrentUser();
   console.log("/api/desktop/video/create user", user);
@@ -136,7 +139,8 @@ export async function GET(req: NextRequest) {
               : "null",
           "Access-Control-Allow-Credentials": "true",
           "Access-Control-Allow-Methods": "GET, OPTIONS",
-          "Access-Control-Allow-Headers": "Authorization, sentry-trace, baggage",
+          "Access-Control-Allow-Headers":
+            "Authorization, sentry-trace, baggage",
         },
       });
     }
@@ -159,7 +163,8 @@ export async function GET(req: NextRequest) {
               : "null",
           "Access-Control-Allow-Credentials": "true",
           "Access-Control-Allow-Methods": "GET, OPTIONS",
-          "Access-Control-Allow-Headers": "Authorization, sentry-trace, baggage",
+          "Access-Control-Allow-Headers":
+            "Authorization, sentry-trace, baggage",
         },
       }
     );
@@ -171,23 +176,21 @@ export async function GET(req: NextRequest) {
     ownerId: user.id,
     awsRegion: s3Config.region,
     awsBucket: bucketName,
-    source: recordingMode === "hls" 
-      ? { type: "local" as const }
-      : recordingMode === "desktopMP4"
-      ? { type: "desktopMP4" as const }
-      : undefined,
+    source:
+      recordingMode === "hls"
+        ? { type: "local" as const }
+        : recordingMode === "desktopMP4"
+        ? { type: "desktopMP4" as const }
+        : undefined,
     isScreenshot,
     bucket: bucket?.id,
   };
 
   await db.insert(videos).values(videoData);
 
-  if (
-    process.env.NEXT_PUBLIC_IS_CAP &&
-    process.env.NEXT_PUBLIC_ENVIRONMENT === "production"
-  ) {
+  if (clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {
     await dub.links.create({
-      url: `${process.env.NEXT_PUBLIC_URL}/s/${id}`,
+      url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${id}`,
       domain: "cap.link",
       key: id,
     });

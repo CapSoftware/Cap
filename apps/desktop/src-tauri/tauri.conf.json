@@ -52,7 +52,6 @@
       "icons/macos/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["../../../target/binaries/ffmpeg"],
     "macOS": {
       "dmg": {
         "background": "assets/dmg-background.png",
@@ -64,7 +63,8 @@
           "x": 480,
           "y": 140
         }
-      }
+      },
+      "frameworks": ["../../../target/native-deps/Spacedrive.framework"]
     },
     "windows": {
       "nsis": {

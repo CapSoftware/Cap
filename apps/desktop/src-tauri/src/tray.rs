@@ -39,17 +39,19 @@ impl From<TrayItem> for MenuId {
     }
 }
 
-impl From<MenuId> for TrayItem {
-    fn from(value: MenuId) -> Self {
+impl TryFrom<MenuId> for TrayItem {
+    type Error = String;
+
+    fn try_from(value: MenuId) -> Result<Self, Self::Error> {
         match value.0.as_str() {
-            "open_cap" => TrayItem::OpenCap,
-            "new_recording" => TrayItem::StartNewRecording,
-            "take_screenshot" => TrayItem::TakeScreenshot,
-            "previous_recordings" => TrayItem::PreviousRecordings,
-            "previous_screenshots" => TrayItem::PreviousScreenshots,
-            "open_settings" => TrayItem::OpenSettings,
-            "quit" => TrayItem::Quit,
-            value => unreachable!("Invalid tray item id {value}"),
+            "open_cap" => Ok(TrayItem::OpenCap),
+            "new_recording" => Ok(TrayItem::StartNewRecording),
+            "take_screenshot" => Ok(TrayItem::TakeScreenshot),
+            "previous_recordings" => Ok(TrayItem::PreviousRecordings),
+            "previous_screenshots" => Ok(TrayItem::PreviousScreenshots),
+            "open_settings" => Ok(TrayItem::OpenSettings),
+            "quit" => Ok(TrayItem::Quit),
+            value => Err(format!("Invalid tray item id {value}")),
         }
     }
 }
@@ -107,39 +109,40 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             "../icons/tray-default-icon.png"
         ))?)
         .menu(&menu)
-        .menu_on_left_click(true)
+        .show_menu_on_left_click(true)
         .on_menu_event({
             let app_handle = app.clone();
-            move |app: &AppHandle, event| match TrayItem::from(event.id) {
-                TrayItem::OpenCap => {
+            move |app: &AppHandle, event| match TrayItem::try_from(event.id) {
+                Ok(TrayItem::OpenCap) => {
                     ShowCapWindow::Main.show(&app_handle).ok();
                 }
-                TrayItem::StartNewRecording => {
+                Ok(TrayItem::StartNewRecording) => {
                     let _ = RequestStartRecording.emit(&app_handle);
                 }
-                TrayItem::TakeScreenshot => {
+                Ok(TrayItem::TakeScreenshot) => {
                     let _ = RequestNewScreenshot.emit(&app_handle);
                 }
-                TrayItem::PreviousRecordings => {
+                Ok(TrayItem::PreviousRecordings) => {
                     let _ = RequestOpenSettings {
                         page: "recordings".to_string(),
                     }
                     .emit(&app_handle);
                 }
-                TrayItem::PreviousScreenshots => {
+                Ok(TrayItem::PreviousScreenshots) => {
                     let _ = RequestOpenSettings {
                         page: "screenshots".to_string(),
                     }
                     .emit(&app_handle);
                 }
-                TrayItem::OpenSettings => {
+                Ok(TrayItem::OpenSettings) => {
                     ShowCapWindow::Settings { page: None }
                         .show(&app_handle)
                         .ok();
                 }
-                TrayItem::Quit => {
+                Ok(TrayItem::Quit) => {
                     app.exit(0);
                 }
+                _ => {}
             }
         })
         .on_tray_icon_event({

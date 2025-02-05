@@ -1,0 +1,57 @@
+# This is meant for local development only. Do not use this in production.
+name: cap-so-dev
+
+services:
+  ps-mysql:
+    container_name: mysql-primary-db
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: planetscale
+      MYSQL_ROOT_HOST: "%"
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+    command:
+      [
+        "--max_connections=1000",
+        "--default-authentication-plugin=mysql_native_password",
+      ]
+    ports:
+      - 3306:3306
+    volumes:
+      - ps-mysql:/var/lib/mysql
+
+  # Local S3 Strorage
+  minio:
+    container_name: minio-storage
+    image: "bitnami/minio:latest"
+    restart: unless-stopped
+    ports:
+      - "3902:3902"
+      - "3903:3903"
+    environment:
+      - MINIO_ROOT_USER=capS3root
+      - MINIO_ROOT_PASSWORD=capS3root
+      - MINIO_API_PORT_NUMBER=3902
+      - MINIO_CONSOLE_PORT_NUMBER=3903
+    volumes:
+      - minio-data:/bitnami/minio/data
+      - minio-certs:/certs
+
+  createbuckets:
+    container_name: minio-bucket-creation
+    image: minio/mc
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 10;
+      /usr/bin/mc alias set myminio http://minio:3902 capS3root capS3root;
+      /usr/bin/mc mb myminio/capso;
+      echo '{\"Version\": \"2012-10-17\",\"Statement\": [{\"Effect\": \"Allow\",\"Principal\": {\"AWS\": [\"*\"]},\"Action\": [\"s3:GetObject\"],\"Resource\": [\"arn:aws:s3:::capso/*\"]}]}' > /tmp/policy.json;
+      /usr/bin/mc anonymous set-json /tmp/policy.json myminio/capso;
+      exit 0;
+      "
+volumes:
+  ps-mysql:
+  minio-data:
+  minio-certs:

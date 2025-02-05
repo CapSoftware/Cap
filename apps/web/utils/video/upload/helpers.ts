@@ -1,3 +1,5 @@
+import { clientEnv } from "@cap/env";
+
 export async function uploadToS3({
   filename,
   blobData,
@@ -20,7 +22,7 @@ export async function uploadToS3({
   awsRegion: string;
 }) {
   const response = await fetch(
-    `${process.env.NEXT_PUBLIC_URL}/api/upload/signed`,
+    `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/upload/signed`,
     {
       method: "POST",
       headers: {

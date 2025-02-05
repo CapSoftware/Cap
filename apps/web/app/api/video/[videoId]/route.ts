@@ -1,6 +1,7 @@
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
+import { serverEnv, clientEnv } from "@cap/env";
 import { NextResponse } from "next/server";
 
 export async function GET(
@@ -28,14 +29,14 @@ export async function GET(
   }
 
   const defaultBucket = {
-    name: process.env.NEXT_PUBLIC_CAP_AWS_BUCKET,
-    region: process.env.NEXT_PUBLIC_CAP_AWS_REGION,
-    accessKeyId: process.env.CAP_AWS_ACCESS_KEY,
-    secretAccessKey: process.env.CAP_AWS_SECRET_KEY,
+    name: clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET,
+    region: clientEnv.NEXT_PUBLIC_CAP_AWS_REGION,
+    accessKeyId: serverEnv.CAP_AWS_ACCESS_KEY,
+    secretAccessKey: serverEnv.CAP_AWS_SECRET_KEY,
   };
 
   return NextResponse.json({
     video: result.video,
     bucket: result.bucket || defaultBucket,
   });
-} 
+}

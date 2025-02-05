@@ -1,7 +1,7 @@
 use cap_editor::Segment;
 use cap_media::{
-    data::{AudioInfo, RawVideoFormat, VideoInfo},
-    encoders::{MP4Encoder, MP4Input},
+    data::{cast_f32_slice_to_bytes, AudioInfo, RawVideoFormat, VideoInfo},
+    encoders::{H264Encoder, MP4File, MP4Input, OpusEncoder},
     feeds::{AudioData, AudioFrameBuffer},
     MediaError,
 };
@@ -12,7 +12,7 @@ use cap_rendering::{
 };
 use futures::FutureExt;
 use image::{ImageBuffer, Rgba};
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 #[derive(thiserror::Error, Debug)]
 pub enum ExportError {
@@ -30,6 +30,12 @@ pub enum ExportError {
 
     #[error("Join: {0}")]
     Join(#[from] tokio::task::JoinError),
+
+    #[error("Other:{0}")]
+    Other(String),
+
+    #[error("Exporting timed out")]
+    Timeout(#[from] tokio::time::error::Elapsed),
 }
 
 pub struct Exporter<TOnProgress> {
@@ -51,7 +57,7 @@ impl<TOnProgress> Exporter<TOnProgress>
 where
     TOnProgress: Fn(u32) + Send + 'static,
 {
-    pub fn new(
+    pub async fn new(
         project: ProjectConfiguration,
         output_path: PathBuf,
         on_progress: TOnProgress,
@@ -69,34 +75,32 @@ where
         let output_size =
             ProjectUniforms::get_output_size(&render_constants.options, &project, resolution_base);
 
-        let (render_segments, audio_segments): (Vec<_>, Vec<_>) = segments
-            .iter()
-            .enumerate()
-            .map(|(i, segment)| {
-                let segment_paths = match &meta.content {
-                    cap_project::Content::SingleSegment { segment: s } => SegmentVideoPaths {
-                        display: s.display.path.as_path(),
-                        camera: s.camera.as_ref().map(|c| c.path.as_path()),
-                    },
-                    cap_project::Content::MultipleSegments { inner } => {
-                        let s = &inner.segments[i];
+        let mut render_segments = vec![];
+        let mut audio_segments = vec![];
 
-                        SegmentVideoPaths {
-                            display: s.display.path.as_path(),
-                            camera: s.camera.as_ref().map(|c| c.path.as_path()),
-                        }
+        for (i, s) in segments.iter().enumerate() {
+            let segment_paths = match &meta.content {
+                cap_project::Content::SingleSegment { segment: s } => SegmentVideoPaths {
+                    display: meta.path(&s.display.path),
+                    camera: s.camera.as_ref().map(|c| meta.path(&c.path)),
+                },
+                cap_project::Content::MultipleSegments { inner } => {
+                    let s = &inner.segments[i];
+
+                    SegmentVideoPaths {
+                        display: meta.path(&s.display.path),
+                        camera: s.camera.as_ref().map(|c| meta.path(&c.path)),
                     }
-                };
-
-                (
-                    RenderSegment {
-                        cursor: segment.cursor.clone(),
-                        decoders: RecordingSegmentDecoders::new(&meta, segment_paths),
-                    },
-                    segment.audio.clone(),
-                )
-            })
-            .unzip();
+                }
+            };
+            render_segments.push(RenderSegment {
+                cursor: s.cursor.clone(),
+                decoders: RecordingSegmentDecoders::new(&meta, segment_paths)
+                    .await
+                    .map_err(ExportError::Other)?,
+            });
+            audio_segments.push(s.audio.clone());
+        }
 
         Ok(Self {
             project,
@@ -121,12 +125,18 @@ where
 
         println!("Exporting with custom muxer");
 
-        let (tx_image_data, mut rx_image_data) = tokio::sync::mpsc::channel::<RenderedFrame>(4);
+        let (tx_image_data, mut rx_image_data) =
+            tokio::sync::mpsc::channel::<(RenderedFrame, u32)>(4);
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<MP4Input>(4);
 
         let fps = self.fps;
 
-        let audio_info = match self.audio_segments.get(0).and_then(|d| d.as_ref().as_ref()) {
+        let audio_info = match self
+            .audio_segments
+            .get(0)
+            .and_then(|d| d.as_ref().as_ref())
+            .filter(|_| !self.project.audio.mute)
+        {
             Some(audio_data) => Some(
                 AudioInfo::new(
                     audio_data.info.sample_format,
@@ -139,17 +149,21 @@ where
         };
 
         let encoder_thread = tokio::task::spawn_blocking(move || {
-            let mut encoder = cap_media::encoders::MP4Encoder::init(
+            let mut info = VideoInfo::from_raw(
+                RawVideoFormat::Rgba,
+                self.output_size.0,
+                self.output_size.1,
+                self.fps,
+            );
+            info.time_base = ffmpeg::Rational::new(1, self.fps as i32);
+
+            let mut encoder = cap_media::encoders::MP4File::init(
                 "output",
-                VideoInfo::from_raw(
-                    MP4Encoder::video_format(),
-                    self.output_size.0,
-                    self.output_size.1,
-                    self.fps,
-                ),
-                audio_info,
-                cap_media::encoders::Output::File(self.output_path.clone()),
-            )?;
+                self.output_path.clone(),
+                H264Encoder::factory("output_video", info),
+                move |o| audio_info.map(|a| OpusEncoder::init("output_audio", a, o)),
+            )
+            .unwrap();
 
             while let Ok(frame) = frame_rx.recv() {
                 encoder.queue_video_frame(frame.video);
@@ -169,24 +183,34 @@ where
             let project_path = self.project_path.clone();
             async move {
                 println!("Starting FFmpeg output process...");
-                let mut audio =
-                    if let Some(_) = self.audio_segments.get(0).and_then(|d| d.as_ref().as_ref()) {
-                        Some(AudioRender {
-                            buffer: AudioFrameBuffer::new(
-                                self.audio_segments
-                                    .iter()
-                                    .map(|s| s.as_ref().as_ref().unwrap().clone())
-                                    .collect(),
-                            ),
-                        })
-                    } else {
-                        None
-                    };
+                let mut audio = if let Some(_) = self
+                    .audio_segments
+                    .get(0)
+                    .and_then(|d| d.as_ref().as_ref())
+                    .filter(|_| !self.project.audio.mute)
+                {
+                    Some(AudioRender {
+                        buffer: AudioFrameBuffer::new(
+                            self.audio_segments
+                                .iter()
+                                .map(|s| s.as_ref().as_ref().unwrap().clone())
+                                .collect(),
+                        ),
+                    })
+                } else {
+                    None
+                };
 
                 let mut frame_count = 0;
                 let mut first_frame = None;
 
-                while let Some(frame) = rx_image_data.recv().await {
+                loop {
+                    let Some((frame, frame_number)) =
+                        tokio::time::timeout(Duration::from_secs(3), rx_image_data.recv()).await?
+                    else {
+                        break;
+                    };
+
                     (self.on_progress)(frame_count);
 
                     if frame_count == 0 {
@@ -195,7 +219,7 @@ where
 
                     let audio_frame = if let Some(audio) = &mut audio {
                         if frame_count == 0 {
-                            audio.buffer.set_playhead(0., project.timeline());
+                            audio.buffer.set_playhead(0., &project);
                         }
 
                         let audio_info = audio.buffer.info();
@@ -203,21 +227,14 @@ where
                             f64::from(audio_info.sample_rate) / f64::from(self.fps);
                         let samples = estimated_samples_per_frame.ceil() as usize;
 
-                        if let Some((_, frame_data)) = audio
-                            .buffer
-                            .next_frame_data(samples, project.timeline.as_ref().map(|t| t))
+                        if let Some((_, frame_data)) =
+                            audio.buffer.next_frame_data(samples, &project)
                         {
-                            let mut frame = audio_info.wrap_frame(&frame_data, 0);
-                            let pts = (frame_count as f64 * f64::from(audio_info.sample_rate)
+                            let mut frame = audio_info
+                                .wrap_frame(unsafe { cast_f32_slice_to_bytes(&frame_data) }, 0);
+                            let pts = (frame_number as f64 * f64::from(audio_info.sample_rate)
                                 / f64::from(fps)) as i64;
                             frame.set_pts(Some(pts));
-                            // println!(
-                            //     "Export: Sending audio frame {} with PTS: {:?}, samples: {}, data size: {}",
-                            //     frame_count,
-                            //     frame.pts(),
-                            //     samples,
-                            //     frame_data.len()
-                            // );
                             Some(frame)
                         } else {
                             None
@@ -225,11 +242,6 @@ where
                     } else {
                         None
                     };
-
-                    // println!(
-                    //     "Export: Processing frame {} (size: {}x{}, padded_bytes_per_row: {})",
-                    //     frame_count, frame.width, frame.height, frame.padded_bytes_per_row
-                    // );
 
                     let mut video_frame = VideoInfo::from_raw(
                         RawVideoFormat::Rgba,
@@ -242,13 +254,7 @@ where
                         0,
                         frame.padded_bytes_per_row as usize,
                     );
-                    video_frame.set_pts(Some(frame_count as i64));
-
-                    // println!(
-                    //     "Export: Sending frame {} to encoder (PTS: {:?})",
-                    //     frame_count,
-                    //     video_frame.pts()
-                    // );
+                    video_frame.set_pts(Some(frame_number as i64));
 
                     frame_tx
                         .send(MP4Input {

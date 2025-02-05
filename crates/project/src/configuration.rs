@@ -51,7 +51,7 @@ impl Default for BackgroundSource {
     }
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default)]
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct XY<T> {
     pub x: T,
@@ -213,8 +213,8 @@ impl Default for Camera {
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioConfiguration {
-    mute: bool,
-    improve: bool,
+    pub mute: bool,
+    pub improve: bool,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
@@ -263,7 +263,8 @@ pub struct HotkeysConfiguration {
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineSegment {
-    pub recording_segment: Option<u32>,
+    #[serde(default)]
+    pub recording_segment: u32,
     pub timescale: f64,
     pub start: f64,
     pub end: f64,
@@ -307,13 +308,13 @@ pub struct TimelineConfiguration {
 }
 
 impl TimelineConfiguration {
-    pub fn get_recording_time(&self, tick_time: f64) -> Option<(f64, Option<u32>)> {
+    pub fn get_segment_time(&self, frame_time: f64) -> Option<(f64, u32)> {
         let mut accum_duration = 0.0;
 
         for segment in self.segments.iter() {
-            if tick_time < accum_duration + segment.duration() {
+            if frame_time < accum_duration + segment.duration() {
                 return segment
-                    .interpolate_time(tick_time - accum_duration)
+                    .interpolate_time(frame_time - accum_duration)
                     .map(|t| (t, segment.recording_segment));
             }
 
@@ -355,8 +356,11 @@ impl ProjectConfiguration {
         )
     }
 
-    pub fn timeline(&self) -> Option<&TimelineConfiguration> {
-        self.timeline.as_ref()
+    pub fn get_segment_time(&self, frame_time: f64) -> Option<(f64, u32)> {
+        self.timeline
+            .as_ref()
+            .map(|t| t.get_segment_time(frame_time as f64))
+            .unwrap_or(Some((frame_time as f64, 0)))
     }
 }
 

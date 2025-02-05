@@ -10,6 +10,7 @@ mod platform;
 mod recording;
 // mod resource;
 mod audio_meter;
+mod editor_window;
 mod export;
 mod fake_window;
 mod tray;
@@ -19,8 +20,10 @@ mod windows;
 
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid, Plan};
+use camera::create_camera_preview_ws;
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
+use cap_media::feeds::RawCameraFrame;
 use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::frame_ws::WSFrame;
 use cap_media::sources::CaptureScreen;
@@ -31,11 +34,14 @@ use cap_recording::RecordingOptions;
 use cap_rendering::ProjectRecordings;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
+use editor_window::EditorInstances;
+use editor_window::WindowEditorInstance;
 use general_settings::{GeneralSettingsStore, RecordingConfig};
 use mp4::Mp4Reader;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use notifications::NotificationType;
 use png::{ColorType, Encoder};
+use relative_path::RelativePathBuf;
 use scap::capturer::Capturer;
 use scap::frame::Frame;
 use serde::{Deserialize, Serialize};
@@ -53,6 +59,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use tauri::Window;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State, WindowEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::DialogExt;
@@ -60,6 +67,9 @@ use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::sync::{Mutex, RwLock};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::Layer;
 use upload::{get_s3_config, upload_image, upload_video, S3UploadMeta};
 use web_api::ManagerExt;
 use windows::{CapWindowId, ShowCapWindow};
@@ -69,7 +79,7 @@ use windows::{CapWindowId, ShowCapWindow};
 pub struct App {
     start_recording_options: RecordingOptions,
     #[serde(skip)]
-    camera_tx: flume::Sender<WSFrame>,
+    camera_tx: flume::Sender<RawCameraFrame>,
     camera_ws_port: u16,
     #[serde(skip)]
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
@@ -122,7 +132,7 @@ impl App {
 
         if matches!(
             current_recording.options.capture_target,
-            ScreenCaptureTarget::Window(_)
+            ScreenCaptureTarget::Window(_) | ScreenCaptureTarget::Area(_)
         ) {
             let _ = ShowCapWindow::WindowCaptureOccluder.show(&self.handle);
         } else {
@@ -154,6 +164,7 @@ impl App {
                 match options.capture_target {
                     ScreenCaptureTarget::Screen(screen) => screen.name,
                     ScreenCaptureTarget::Window(window) => window.owner_name,
+                    ScreenCaptureTarget::Area(area) => area.screen.name,
                 }
                 .into(),
             );
@@ -194,13 +205,13 @@ impl App {
                         .await
                         .map_err(|e| e.to_string())?;
                 } else {
-                    self.camera_feed = Some(
-                        CameraFeed::init(camera_label, self.camera_tx.clone())
-                            .await
-                            .map(Mutex::new)
-                            .map(Arc::new)
-                            .map_err(|e| e.to_string())?,
-                    );
+                    let feed = CameraFeed::init(camera_label)
+                        .await
+                        .map_err(|e| e.to_string())?;
+
+                    feed.attach(self.camera_tx.clone());
+
+                    self.camera_feed = Some(Arc::new(Mutex::new(feed)));
                 }
             }
             None => {
@@ -651,18 +662,6 @@ async fn create_thumbnail(input: PathBuf, output: PathBuf, size: (u32, u32)) -> 
     .map_err(|e| format!("Task join error: {}", e))?
 }
 
-async fn get_rendered_video_path(app: AppHandle, video_id: String) -> Result<PathBuf, String> {
-    let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
-    let output_path = editor_instance.meta().output_path();
-
-    // If the file doesn't exist, return an error to trigger the progress-enabled path
-    if !output_path.exists() {
-        return Err("Rendered video does not exist".to_string());
-    }
-
-    Ok(output_path)
-}
-
 #[tauri::command]
 #[specta::specta]
 async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(), String> {
@@ -870,9 +869,13 @@ impl EditorStateChanged {
 
 #[tauri::command]
 #[specta::specta]
-async fn start_playback(app: AppHandle, video_id: String, fps: u32, resolution_base: XY<u32>) {
-    upsert_editor_instance(&app, video_id)
-        .await
+async fn start_playback(
+    app: AppHandle,
+    editor_instance: WindowEditorInstance,
+    fps: u32,
+    resolution_base: XY<u32>,
+) -> Result<(), String> {
+    editor_instance
         .start_playback(
             fps,
             resolution_base,
@@ -882,19 +885,21 @@ async fn start_playback(app: AppHandle, video_id: String, fps: u32, resolution_b
                 .map(|s| s.is_upgraded())
                 .unwrap_or(false),
         )
-        .await
+        .await;
+
+    Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
-async fn stop_playback(app: AppHandle, video_id: String) {
-    let editor_instance = upsert_editor_instance(&app, video_id).await;
-
+async fn stop_playback(editor_instance: WindowEditorInstance) -> Result<(), String> {
     let mut state = editor_instance.state.lock().await;
 
     if let Some(handle) = state.playback_task.take() {
         handle.stop();
     }
+
+    Ok(())
 }
 
 #[derive(Serialize, Type, Debug)]
@@ -911,13 +916,21 @@ struct SerializedEditorInstance {
 #[tauri::command]
 #[specta::specta]
 async fn create_editor_instance(
-    app: AppHandle,
+    window: Window,
     video_id: String,
 ) -> Result<SerializedEditorInstance, String> {
-    let editor_instance = upsert_editor_instance(&app, video_id).await;
+    let editor_instance = match EditorInstances::get(&window) {
+        Some(editor_instance) => editor_instance,
+        None => {
+            let editor_instance =
+                create_editor_instance_impl(window.app_handle(), &video_id).await?;
+            EditorInstances::add(&window, editor_instance.clone());
+            editor_instance
+        }
+    };
 
     // Load the RecordingMeta to get the pretty name
-    let mut meta = RecordingMeta::load_for_project(&editor_instance.project_path)
+    let meta = RecordingMeta::load_for_project(&editor_instance.project_path)
         .map_err(|e| format!("Failed to load recording meta: {}", e))?;
 
     println!("Pretty name: {}", meta.pretty_name);
@@ -972,66 +985,47 @@ async fn get_video_metadata(
         .join("recordings")
         .join(format!("{}.cap", video_id));
 
-    let mut meta = RecordingMeta::load_for_project(&project_path)?;
+    let meta = RecordingMeta::load_for_project(&project_path)?;
 
-    fn get_duration_for_paths(paths: Vec<PathBuf>) -> Result<f64, String> {
-        let mut max_duration: f64 = 0.0;
-        for path in paths {
-            let reader = BufReader::new(
-                File::open(&path).map_err(|e| format!("Failed to open video file: {}", e))?,
-            );
-            let file_size = path
-                .metadata()
-                .map_err(|e| format!("Failed to get file metadata: {}", e))?
-                .len();
+    fn get_duration_for_path(path: PathBuf) -> Result<f64, String> {
+        let reader = BufReader::new(
+            File::open(&path).map_err(|e| format!("Failed to open video file: {}", e))?,
+        );
+        let file_size = path
+            .metadata()
+            .map_err(|e| format!("Failed to get file metadata: {}", e))?
+            .len();
 
-            let current_duration = match Mp4Reader::read_header(reader, file_size) {
-                Ok(mp4) => mp4.duration().as_secs_f64(),
-                Err(e) => {
-                    println!(
-                        "Failed to read MP4 header: {}. Falling back to default duration.",
-                        e
-                    );
-                    0.0_f64
-                }
-            };
-            max_duration = max_duration.max(current_duration);
-        }
-        Ok(max_duration)
-    }
-
-    fn content_paths(project_path: &PathBuf, meta: &RecordingMeta) -> Vec<PathBuf> {
-        match &meta.content {
-            Content::SingleSegment { segment } => {
-                vec![segment.path(&meta, &segment.display.path)]
+        let current_duration = match Mp4Reader::read_header(reader, file_size) {
+            Ok(mp4) => mp4.duration().as_secs_f64(),
+            Err(e) => {
+                println!(
+                    "Failed to read MP4 header: {}. Falling back to default duration.",
+                    e
+                );
+                0.0_f64
             }
-            Content::MultipleSegments { inner } => inner
-                .segments
-                .iter()
-                .map(|s| inner.path(&meta, &s.display.path))
-                .collect(),
-        }
+        };
+
+        Ok(current_duration)
     }
 
-    // Get display duration
-    let display_duration = get_duration_for_paths(content_paths(&project_path, &meta))?;
-
-    // Get camera duration
-    let camera_paths = match &meta.content {
-        Content::SingleSegment { segment } => segment
-            .camera
-            .as_ref()
-            .map_or(vec![], |c| vec![segment.path(&meta, &c.path)]),
+    let display_paths = match &meta.content {
+        Content::SingleSegment { segment } => {
+            vec![meta.path(&segment.display.path)]
+        }
         Content::MultipleSegments { inner } => inner
             .segments
             .iter()
-            .filter_map(|s| s.camera.as_ref().map(|c| inner.path(&meta, &c.path)))
+            .map(|s| meta.path(&s.display.path))
             .collect(),
     };
-    let camera_duration = get_duration_for_paths(camera_paths)?;
 
-    // Use the longer duration
-    let duration = display_duration.max(camera_duration);
+    // Use the shorter duration
+    let duration = display_paths
+        .into_iter()
+        .map(get_duration_for_path)
+        .sum::<Result<_, _>>()?;
 
     // Calculate estimated size using same logic as get_export_estimates
     let (width, height) = (1920, 1080); // Default to 1080p
@@ -1106,24 +1100,30 @@ pub enum RenderProgress {
 
 #[tauri::command]
 #[specta::specta]
-async fn set_playhead_position(app: AppHandle, video_id: String, frame_number: u32) {
-    let editor_instance = upsert_editor_instance(&app, video_id).await;
-
+async fn set_playhead_position(
+    editor_instance: WindowEditorInstance,
+    frame_number: u32,
+) -> Result<(), String> {
     editor_instance
         .modify_and_emit_state(|state| {
             state.playhead_position = frame_number;
         })
         .await;
+
+    Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
-async fn set_project_config(app: AppHandle, video_id: String, config: ProjectConfiguration) {
-    let editor_instance = upsert_editor_instance(&app, video_id).await;
-
+async fn set_project_config(
+    editor_instance: WindowEditorInstance,
+    config: ProjectConfiguration,
+) -> Result<(), String> {
     config.write(&editor_instance.project_path).unwrap();
 
     editor_instance.project_config.0.send(config).ok();
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -1152,7 +1152,6 @@ fn open_main_window(app: AppHandle) {
 
 #[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
 pub struct UploadProgress {
-    stage: String,
     progress: f64,
     message: String,
 }
@@ -1228,7 +1227,6 @@ async fn upload_exported_video(
 
     // Start upload progress
     UploadProgress {
-        stage: "uploading".to_string(),
         progress: 0.0,
         message: "Starting upload...".to_string(),
     }
@@ -1260,7 +1258,6 @@ async fn upload_exported_video(
         Ok(uploaded_video) => {
             // Emit upload complete
             UploadProgress {
-                stage: "uploading".to_string(),
                 progress: 1.0,
                 message: "Upload complete!".to_string(),
             }
@@ -1477,7 +1474,10 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
             content: cap_project::Content::SingleSegment {
                 segment: cap_project::SingleSegment {
                     display: Display {
-                        path: screenshot_path.clone(),
+                        path: RelativePathBuf::from_path(
+                            &screenshot_path.strip_prefix(&recording_dir).unwrap(),
+                        )
+                        .unwrap(),
                         fps: 0,
                     },
                     camera: None,
@@ -1861,14 +1861,14 @@ async fn is_camera_window_open(app: AppHandle) -> bool {
 
 #[tauri::command]
 #[specta::specta]
-async fn seek_to(app: AppHandle, video_id: String, frame_number: u32) {
-    let editor_instance = upsert_editor_instance(&app, video_id).await;
-
+async fn seek_to(editor_instance: WindowEditorInstance, frame_number: u32) -> Result<(), String> {
     editor_instance
         .modify_and_emit_state(|state| {
             state.playhead_position = frame_number;
         })
         .await;
+
+    Ok(())
 }
 
 // keep this async otherwise opening windows may hang on windows
@@ -1912,8 +1912,42 @@ async fn check_notification_permissions(app: AppHandle) {
     }
 }
 
+fn configure_logging(folder: &PathBuf) -> tracing_appender::non_blocking::WorkerGuard {
+    let file_appender = tracing_appender::rolling::daily(folder, "cap-logs.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    let filter = || tracing_subscriber::filter::EnvFilter::builder().parse_lossy("cap-*=TRACE");
+
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_target(false)
+                .with_writer(non_blocking)
+                .with_filter(filter()),
+        )
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(true)
+                .with_target(false)
+                .with_filter(filter()),
+        )
+        .init();
+
+    _guard
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run() {
+    let tauri_context = tauri::generate_context!();
+
+    // let _guard = configure_logging(
+    //     &dirs::data_dir()
+    //         .unwrap()
+    //         .join(&tauri_context.config().identifier)
+    //         .join("logs"),
+    // );
+
     let specta_builder = tauri_specta::Builder::new()
         .commands(tauri_specta::collect_commands![
             get_recording_options,
@@ -1969,7 +2003,7 @@ pub async fn run() {
             global_message_dialog,
             show_window,
             write_clipboard_string,
-            get_editor_total_frames,
+            platform::perform_haptic_feedback
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2006,9 +2040,7 @@ pub async fn run() {
         )
         .expect("Failed to export typescript bindings");
 
-    let (camera_tx, camera_rx) = CameraFeed::create_channel();
-    // _shutdown needs to be kept alive to keep the camera ws running
-    let (camera_ws_port, _shutdown) = cap_media::frame_ws::create_frame_ws(camera_rx.clone()).await;
+    let (camera_tx, camera_ws_port, _shutdown) = create_camera_preview_ws().await;
 
     let (audio_input_tx, audio_input_rx) = AudioInputFeed::create_channel();
 
@@ -2022,33 +2054,10 @@ pub async fn run() {
 
     #[cfg(target_os = "macos")]
     {
-        builder = builder.plugin(tauri_nspanel::init()).plugin(
-            // TODO(Ilya): Also enable for Windows when Tao is updated to `0.31.0`
-            tauri_plugin_window_state::Builder::new()
-                .with_state_flags({
-                    use tauri_plugin_window_state::StateFlags;
-                    let mut flags = StateFlags::all();
-                    flags.remove(StateFlags::VISIBLE);
-                    flags
-                })
-                .with_denylist(&[
-                    CapWindowId::Setup.label().as_str(),
-                    CapWindowId::WindowCaptureOccluder.label().as_str(),
-                    CapWindowId::Camera.label().as_str(),
-                    CapWindowId::RecordingsOverlay.label().as_str(),
-                    CapWindowId::InProgressRecording.label().as_str(),
-                ])
-                .map_label(|label| match label {
-                    label if label.starts_with("editor-") => "editor",
-                    _ => label,
-                })
-                .build(),
-        );
+        builder = builder.plugin(tauri_nspanel::init());
     }
 
     builder
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -2059,6 +2068,31 @@ pub async fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .plugin(flags::plugin::init())
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags({
+                    use tauri_plugin_window_state::StateFlags;
+                    let mut flags = StateFlags::all();
+                    flags.remove(StateFlags::VISIBLE);
+                    flags
+                })
+                .with_denylist(&[
+                    CapWindowId::Setup.label().as_str(),
+                    CapWindowId::WindowCaptureOccluder.label().as_str(),
+                    CapWindowId::CaptureArea.label().as_str(),
+                    CapWindowId::Camera.label().as_str(),
+                    CapWindowId::RecordingsOverlay.label().as_str(),
+                    CapWindowId::InProgressRecording.label().as_str(),
+                ])
+                .map_label(|label| match label {
+                    label if label.starts_with("editor-") => "editor",
+                    _ => label,
+                })
+                .build(),
+        )
         .invoke_handler({
             let handler = specta_builder.invoke_handler();
 
@@ -2221,12 +2255,8 @@ pub async fn run() {
                                     w.close().ok();
                                 }
                             }
-                            CapWindowId::Editor { project_id } => {
-                                let app_handle = app.clone();
-                                tokio::spawn(async move {
-                                    let _ = remove_editor_instance(&app_handle, project_id).await;
-                                    tokio::task::yield_now().await;
-                                });
+                            CapWindowId::Editor { .. } => {
+                                EditorInstances::remove(window);
                             }
                             CapWindowId::Settings | CapWindowId::Upgrade => {
                                 // Don't quit the app when settings or upgrade window is closed
@@ -2260,7 +2290,7 @@ pub async fn run() {
                 _ => {}
             }
         })
-        .build(tauri::generate_context!())
+        .build(tauri_context)
         .expect("error while running tauri application")
         .run(|handle, event| match event {
             #[cfg(target_os = "macos")]
@@ -2295,51 +2325,10 @@ pub async fn run() {
         });
 }
 
-type EditorInstancesState = Arc<Mutex<HashMap<String, Arc<EditorInstance>>>>;
-
-pub async fn remove_editor_instance(
-    app: &AppHandle<impl Runtime>,
-    video_id: String,
-) -> Option<Arc<EditorInstance>> {
-    let map = match app.try_state::<EditorInstancesState>() {
-        Some(s) => (*s).clone(),
-        None => return None,
-    };
-
-    let mut map = map.lock().await;
-
-    if let Some(editor) = map.remove(&video_id) {
-        editor.dispose().await;
-        Some(editor)
-    } else {
-        None
-    }
-}
-
-pub async fn upsert_editor_instance(app: &AppHandle, video_id: String) -> Arc<EditorInstance> {
-    let map = match app.try_state::<EditorInstancesState>() {
-        Some(s) => (*s).clone(),
-        None => {
-            let map = Arc::new(Mutex::new(HashMap::new()));
-            app.manage(map.clone());
-            map
-        }
-    };
-
-    let mut map = map.lock().await;
-
-    use std::collections::hash_map::Entry;
-    match map.entry(video_id.clone()) {
-        Entry::Occupied(o) => o.get().clone(),
-        Entry::Vacant(v) => {
-            let instance = create_editor_instance_impl(app, video_id).await;
-            v.insert(instance.clone());
-            instance
-        }
-    }
-}
-
-async fn create_editor_instance_impl(app: &AppHandle, video_id: String) -> Arc<EditorInstance> {
+async fn create_editor_instance_impl(
+    app: &AppHandle,
+    video_id: &str,
+) -> Result<Arc<EditorInstance>, String> {
     let app = app.clone();
 
     let instance = EditorInstance::new(
@@ -2362,7 +2351,7 @@ async fn create_editor_instance_impl(app: &AppHandle, video_id: String) -> Arc<E
             }
         },
     )
-    .await;
+    .await?;
 
     RenderFrameEvent::listen_any(&app, {
         let preview_tx = instance.preview_tx.clone();
@@ -2377,7 +2366,7 @@ async fn create_editor_instance_impl(app: &AppHandle, video_id: String) -> Arc<E
         }
     });
 
-    instance
+    Ok(instance)
 }
 
 // use EditorInstance.project_path instead of this
@@ -2489,19 +2478,3 @@ trait EventExt: tauri_specta::Event {
 }
 
 impl<T: tauri_specta::Event> EventExt for T {}
-
-#[tauri::command(async)]
-#[specta::specta]
-async fn get_editor_total_frames(
-    app: AppHandle,
-    video_id: String,
-    fps: u32,
-) -> Result<u32, String> {
-    let editor_instances = app.state::<EditorInstancesState>();
-    let instances = editor_instances.lock().await;
-
-    let instance = instances
-        .get(&video_id)
-        .ok_or_else(|| "Editor instance not found".to_string())?;
-    Ok(instance.get_total_frames(fps))
-}

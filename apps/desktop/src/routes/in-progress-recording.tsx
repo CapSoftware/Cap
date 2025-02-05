@@ -8,6 +8,7 @@ import {
   createOptionsQuery,
   createCurrentRecordingQuery,
 } from "~/utils/queries";
+import { createStore, produce } from "solid-js/store";
 
 const audioLevelStore = {
   level: 0,
@@ -47,6 +48,14 @@ export default function () {
   const [audioLevel, setAudioLevel] = createSignal<number>(0);
   const currentRecording = createCurrentRecordingQuery();
   const { options } = createOptionsQuery();
+
+  const [pauseResumes, setPauseResumes] = createStore<
+    | []
+    | [
+        ...Array<{ pause: number; resume?: number }>,
+        { pause: number; resume?: number }
+      ]
+  >([]);
 
   const isAudioEnabled = () => {
     return options.data?.audioInputName != null;
@@ -97,11 +106,19 @@ export default function () {
     mutationFn: async () => {
       if (isPaused()) {
         await commands.resumeRecording();
+        setPauseResumes(
+          produce((a) => {
+            if (a.length === 0) return a;
+            a[a.length - 1].resume = Date.now();
+          })
+        );
         setIsPaused(false);
       } else {
         await commands.pauseRecording();
+        setPauseResumes((a) => [...a, { pause: Date.now() }]);
         setIsPaused(true);
       }
+      setTime(Date.now());
     },
   }));
 
@@ -114,6 +131,14 @@ export default function () {
     },
   }));
 
+  const adjustedTime = () => {
+    let t = time() - start;
+    for (const { pause, resume } of pauseResumes) {
+      if (pause && resume) t -= resume - pause;
+    }
+    return t;
+  };
+
   return (
     <div class="flex flex-row items-stretch bg-gray-500 dark:bg-gray-50 w-full h-full animate-in fade-in">
       <div class="flex flex-row justify-between p-[0.25rem] flex-1">
@@ -125,7 +150,7 @@ export default function () {
         >
           <IconCapStopCircle />
           <span class="font-[500] text-[0.875rem]">
-            {formatTime((time() - start) / 1000)}
+            {formatTime(adjustedTime() / 1000)}
           </span>
         </button>
 
@@ -151,14 +176,12 @@ export default function () {
             )}
           </div>
 
-          {window.FLAGS.pauseResume && (
-            <ActionButton
-              disabled={togglePause.isPending}
-              onClick={() => togglePause.mutate()}
-            >
-              {isPaused() ? <IconCapPlayCircle /> : <IconCapPauseCircle />}
-            </ActionButton>
-          )}
+          <ActionButton
+            disabled={togglePause.isPending}
+            onClick={() => togglePause.mutate()}
+          >
+            {isPaused() ? <IconCapPlayCircle /> : <IconCapPauseCircle />}
+          </ActionButton>
 
           <ActionButton
             disabled={restartRecording.isPending}

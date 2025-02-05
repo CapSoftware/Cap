@@ -6,6 +6,8 @@ import { eq } from "drizzle-orm";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { S3_BUCKET_URL } from "@cap/utils";
+import { clientEnv } from "@cap/env";
 
 export const revalidate = 0;
 
@@ -63,8 +65,11 @@ export async function GET(request: NextRequest) {
 
   let thumbnailUrl: string;
 
-  if (!result.bucket || video.awsBucket === process.env.NEXT_PUBLIC_CAP_AWS_BUCKET) {
-    thumbnailUrl = `https://v.cap.so/${prefix}screenshot/screen-capture.jpg`;
+  if (
+    !result.bucket ||
+    video.awsBucket === clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET
+  ) {
+    thumbnailUrl = `${S3_BUCKET_URL}/${prefix}screenshot/screen-capture.jpg`;
     return new Response(JSON.stringify({ screen: thumbnailUrl }), {
       status: 200,
       headers: getHeaders(origin),
@@ -83,7 +88,7 @@ export async function GET(request: NextRequest) {
     const listResponse = await s3Client.send(listCommand);
     const contents = listResponse.Contents || [];
 
-    const thumbnailKey = contents.find((item) => 
+    const thumbnailKey = contents.find((item) =>
       item.Key?.endsWith("screen-capture.jpg")
     )?.Key;
 
@@ -104,7 +109,7 @@ export async function GET(request: NextRequest) {
       s3Client,
       new GetObjectCommand({
         Bucket,
-        Key: thumbnailKey
+        Key: thumbnailKey,
       }),
       { expiresIn: 3600 }
     );

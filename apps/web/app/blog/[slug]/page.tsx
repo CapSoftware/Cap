@@ -7,6 +7,7 @@ import type { Metadata } from "next";
 import { Share } from "../_components/Share";
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
 import { calculateReadingTime } from "@/utils/readTime";
+import { clientEnv } from "@cap/env";
 
 interface PostProps {
   params: {
@@ -23,7 +24,7 @@ export async function generateMetadata({
   }
 
   let { title, publishedAt: publishedTime, description, image } = post.metadata;
-  let ogImage = `${process.env.NEXT_PUBLIC_URL}${image}`;
+  let ogImage = `${clientEnv.NEXT_PUBLIC_WEB_URL}${image}`;
 
   return {
     title,
@@ -33,7 +34,7 @@ export async function generateMetadata({
       description,
       type: "article",
       publishedTime,
-      url: `${process.env.NEXT_PUBLIC_URL}/blog/${post.slug}`,
+      url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/blog/${post.slug}`,
       images: [
         {
           url: ogImage,

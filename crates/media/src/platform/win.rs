@@ -11,8 +11,9 @@ use windows::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
 };
 use windows::Win32::Graphics::Gdi::{
-    EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, DISPLAY_DEVICEW, HDC, HMONITOR,
-    MONITORINFOEXW,
+    EnumDisplayDevicesW, EnumDisplayMonitors, EnumDisplaySettingsW, GetMonitorInfoW,
+    MonitorFromWindow, DEVMODEW, DISPLAY_DEVICEW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
+    MONITOR_DEFAULTTONULL,
 };
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -303,4 +304,44 @@ pub fn display_names() -> HashMap<u32, String> {
     }
 
     names
+}
+
+pub fn get_display_refresh_rate(monitor: HMONITOR) -> Option<u32> {
+    let mut monitorinfoexw: MONITORINFOEXW = unsafe { std::mem::zeroed() };
+    monitorinfoexw.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+
+    if let Err(_) =
+        unsafe { GetMonitorInfoW(monitor, &mut monitorinfoexw.monitorInfo as *mut MONITORINFO) }
+            .ok()
+    {
+        return None;
+    }
+
+    let mut dev_mode: DEVMODEW = unsafe { std::mem::zeroed() };
+    dev_mode.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+
+    let device_name = PCWSTR::from_raw(monitorinfoexw.szDevice.as_ptr());
+
+    if let Err(_) = unsafe {
+        EnumDisplaySettingsW(
+            device_name,
+            windows::Win32::Graphics::Gdi::ENUM_CURRENT_SETTINGS,
+            &mut dev_mode,
+        )
+    }
+    .ok()
+    {
+        return None;
+    }
+
+    Some(dev_mode.dmDisplayFrequency)
+}
+
+pub fn display_for_window(window: HWND) -> Option<HMONITOR> {
+    let hwmonitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONULL) };
+    if hwmonitor.is_invalid() {
+        None
+    } else {
+        Some(hwmonitor)
+    }
 }

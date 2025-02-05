@@ -3,19 +3,17 @@
 
 use crate::{fake_window, general_settings::AppTheme};
 use cap_flags::FLAGS;
+use cap_media::sources::CaptureScreen;
 use serde::Deserialize;
 use specta::Type;
 use std::{path::PathBuf, str::FromStr};
 use tauri::{
-    AppHandle, LogicalPosition, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry,
+    AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl,
+    WebviewWindow, WebviewWindowBuilder, Wry,
 };
 
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
-
-#[cfg(target_os = "windows")]
-const WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE: tauri::LogicalSize<f64> =
-    tauri::LogicalSize::new(12.0, 35.0);
 
 #[derive(Clone)]
 pub enum CapWindowId {
@@ -26,6 +24,7 @@ pub enum CapWindowId {
     Editor { project_id: String },
     RecordingsOverlay,
     WindowCaptureOccluder,
+    CaptureArea,
     Camera,
     InProgressRecording,
     Upgrade,
@@ -42,6 +41,7 @@ impl FromStr for CapWindowId {
             "settings" => Self::Settings,
             "camera" => Self::Camera,
             "window-capture-occluder" => Self::WindowCaptureOccluder,
+            "capture-area" => Self::CaptureArea,
             "in-progress-recording" => Self::InProgressRecording,
             "recordings-overlay" => Self::RecordingsOverlay,
             "upgrade" => Self::Upgrade,
@@ -62,6 +62,7 @@ impl std::fmt::Display for CapWindowId {
             Self::Settings => write!(f, "settings"),
             Self::Camera => write!(f, "camera"),
             Self::WindowCaptureOccluder => write!(f, "window-capture-occluder"),
+            Self::CaptureArea => write!(f, "capture-area"),
             Self::InProgressRecording => write!(f, "in-progress-recording"),
             Self::RecordingsOverlay => write!(f, "recordings-overlay"),
             Self::Upgrade => write!(f, "upgrade"),
@@ -81,6 +82,7 @@ impl CapWindowId {
             Self::Setup => "Cap Setup".to_string(),
             Self::Settings => "Cap Settings".to_string(),
             Self::WindowCaptureOccluder => "Cap Window Capture Occluder".to_string(),
+            Self::CaptureArea => "Cap Capture Area".to_string(),
             Self::InProgressRecording => "Cap In Progress Recording".to_string(),
             Self::Editor { .. } => "Cap Editor".to_string(),
             Self::SignIn => "Cap Sign In".to_string(),
@@ -111,7 +113,10 @@ impl CapWindowId {
             Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 40.0))),
             Self::Setup => Some(Some(LogicalPosition::new(14.0, 24.0))),
             Self::InProgressRecording => Some(Some(LogicalPosition::new(-100.0, -100.0))),
-            Self::Camera | Self::WindowCaptureOccluder | Self::RecordingsOverlay => None,
+            Self::Camera
+            | Self::WindowCaptureOccluder
+            | Self::CaptureArea
+            | Self::RecordingsOverlay => None,
             _ => Some(None),
         }
     }
@@ -137,6 +142,7 @@ pub enum ShowCapWindow {
     Editor { project_id: String },
     PrevRecordings,
     WindowCaptureOccluder,
+    CaptureArea { screen: CaptureScreen },
     Camera { ws_port: u16 },
     InProgressRecording { position: Option<(f64, f64)> },
     Upgrade,
@@ -257,8 +263,59 @@ impl ShowCapWindow {
                 {
                     crate::platform::set_window_level(
                         window.as_ref().window(),
-                        objc2_app_kit::NSScreenSaverWindowLevel as u32,
+                        objc2_app_kit::NSScreenSaverWindowLevel,
                     );
+                }
+
+                window
+            }
+            Self::CaptureArea { screen } => {
+                let mut window_builder = self
+                    .window_builder(app, "/capture-area")
+                    .maximized(false)
+                    .fullscreen(false)
+                    .shadow(false)
+                    .always_on_top(true)
+                    .content_protected(true)
+                    .skip_taskbar(true)
+                    .closable(true)
+                    .decorations(false)
+                    .transparent(true);
+
+                let screen_bounds = cap_media::platform::monitor_bounds(screen.id);
+                let target_monitor = app
+                    .monitor_from_point(screen_bounds.x, screen_bounds.y)
+                    .ok()
+                    .flatten()
+                    .unwrap_or(monitor);
+
+                let size = target_monitor.size();
+                let scale_factor = target_monitor.scale_factor();
+                let pos = target_monitor.position();
+                window_builder = window_builder
+                    .inner_size(
+                        (size.width as f64) / scale_factor,
+                        (size.height as f64) / scale_factor,
+                    )
+                    .position(pos.x as f64, pos.y as f64);
+
+                let window = window_builder.build()?;
+
+                #[cfg(target_os = "macos")]
+                crate::platform::set_window_level(
+                    window.as_ref().window(),
+                    objc2_app_kit::NSScreenSaverWindowLevel,
+                );
+
+                // Hide the main window if the target monitor is the same
+                if let Some(main_window) = CapWindowId::Main.get(&app) {
+                    if let (Ok(outer_pos), Ok(outer_size)) =
+                        (main_window.outer_position(), main_window.outer_size())
+                    {
+                        if target_monitor.intersects(outer_pos, outer_size) {
+                            let _ = main_window.minimize();
+                        }
+                    };
                 }
 
                 window
@@ -267,15 +324,9 @@ impl ShowCapWindow {
                 position: _position,
             } => {
                 let mut width = 180.0;
-                if FLAGS.pause_resume {
-                    width += 32.0;
-                }
-                let mut height = 40.0;
-                #[cfg(target_os = "windows")]
-                {
-                    width -= WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE.width;
-                    height -= WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE.height;
-                }
+                width += 32.0;
+
+                let height = 40.0;
 
                 self.window_builder(app, "/in-progress-recording")
                     .maximized(false)
@@ -351,44 +402,6 @@ impl ShowCapWindow {
 
         window.hide().ok();
 
-        // TODO(Ilya): Remove once Tao is updated to `0.31.0`
-        #[cfg(target_os = "windows")]
-        {
-            use tauri_plugin_positioner::{Position, WindowExt};
-
-            if matches!(
-                self,
-                Self::Setup
-                    | Self::Main
-                    | Self::Editor { .. }
-                    | Self::Settings { .. }
-                    | Self::Upgrade
-            ) {
-                let _ = window.move_window(Position::Center);
-            }
-
-            if matches!(self, Self::InProgressRecording { .. }) {
-                let _ = window.move_window(Position::BottomCenter);
-
-                if let Ok(outer_size) = window.outer_size() {
-                    let screen_position = monitor.position();
-                    let window_size = tauri::PhysicalSize::<i32> {
-                        width: outer_size.width as i32,
-                        height: outer_size.height as i32,
-                    };
-                    let screen_size = tauri::PhysicalSize::<i32> {
-                        width: monitor.size().width as i32,
-                        height: monitor.size().height as i32,
-                    };
-
-                    let _ = window.set_position(tauri::PhysicalPosition {
-                        x: screen_position.x + ((screen_size.width / 2) - (window_size.width / 2)),
-                        y: screen_size.height - (window_size.height - screen_position.y) - 120,
-                    });
-                }
-            }
-        }
-
         #[cfg(target_os = "macos")]
         if let Some(position) = id.traffic_lights_position() {
             add_traffic_lights(&window, position);
@@ -411,32 +424,9 @@ impl ShowCapWindow {
             .shadow(true);
 
         if let Some(min) = id.min_size() {
-            // TODO(Ilya): Remove once Tao is updated to `0.31.0`
-            // currently, undecorated windows with shadows get the invisible bounds of the titlebar and window frame added to the inner size
-            #[cfg(target_os = "windows")]
-            let size = if matches!(
-                self,
-                Self::Setup
-                    | Self::Main
-                    | Self::Editor { .. }
-                    | Self::Settings { .. }
-                    | Self::InProgressRecording { .. }
-                    | Self::Upgrade
-            ) {
-                (
-                    min.0 - WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE.width,
-                    min.1 - WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE.height,
-                )
-            } else {
-                min
-            };
-
-            #[cfg(not(target_os = "windows"))]
-            let size = min;
-
             builder = builder
-                .inner_size(size.0, size.1)
-                .min_inner_size(size.0, size.1);
+                .inner_size(min.0, min.1)
+                .min_inner_size(min.0, min.1);
         }
 
         #[cfg(target_os = "macos")]
@@ -468,6 +458,7 @@ impl ShowCapWindow {
             },
             ShowCapWindow::PrevRecordings => CapWindowId::RecordingsOverlay,
             ShowCapWindow::WindowCaptureOccluder => CapWindowId::WindowCaptureOccluder,
+            ShowCapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
             ShowCapWindow::Camera { .. } => CapWindowId::Camera,
             ShowCapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
             ShowCapWindow::Upgrade => CapWindowId::Upgrade,
@@ -552,4 +543,33 @@ fn position_traffic_lights_impl(
             );
         })
         .ok();
+}
+
+// Credits: tauri-plugin-window-state
+trait MonitorExt {
+    fn intersects(&self, position: PhysicalPosition<i32>, size: PhysicalSize<u32>) -> bool;
+}
+
+impl MonitorExt for Monitor {
+    fn intersects(&self, position: PhysicalPosition<i32>, size: PhysicalSize<u32>) -> bool {
+        let PhysicalPosition { x, y } = *self.position();
+        let PhysicalSize { width, height } = *self.size();
+
+        let left = x;
+        let right = x + width as i32;
+        let top = y;
+        let bottom = y + height as i32;
+
+        [
+            (position.x, position.y),
+            (position.x + size.width as i32, position.y),
+            (position.x, position.y + size.height as i32),
+            (
+                position.x + size.width as i32,
+                position.y + size.height as i32,
+            ),
+        ]
+        .into_iter()
+        .any(|(x, y)| x >= left && x < right && y >= top && y < bottom)
+    }
 }

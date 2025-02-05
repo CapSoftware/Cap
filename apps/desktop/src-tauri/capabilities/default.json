@@ -19,8 +19,10 @@
     "core:path:allow-resolve-directory",
     "core:path:default",
     "core:event:default",
+    "core:menu:default",
     "core:window:default",
     "core:window:allow-close",
+    "core:window:allow-destroy",
     "core:window:allow-hide",
     "core:window:allow-show",
     "core:window:allow-center",
@@ -52,6 +54,7 @@
         { "url": "https://cap.so" },
         { "url": "http://localhost:3000/*" }
       ]
-    }
+    },
+    "clipboard-manager:allow-write-text"
   ]
 }

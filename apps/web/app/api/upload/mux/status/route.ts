@@ -6,9 +6,10 @@ import {
   MediaConvertClient,
   GetJobCommand,
 } from "@aws-sdk/client-mediaconvert";
+import { serverEnv, clientEnv } from "@cap/env";
 
 const allowedOrigins = [
-  process.env.NEXT_PUBLIC_URL,
+  clientEnv.NEXT_PUBLIC_WEB_URL,
   "http://localhost:3001",
   "tauri://localhost",
   "http://tauri.localhost",
@@ -117,10 +118,10 @@ export async function GET(request: NextRequest) {
   }
 
   const mediaConvertClient = new MediaConvertClient({
-    region: process.env.NEXT_PUBLIC_CAP_AWS_REGION || "",
+    region: clientEnv.NEXT_PUBLIC_CAP_AWS_REGION || "",
     credentials: {
-      accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
-      secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",
+      accessKeyId: serverEnv.CAP_AWS_ACCESS_KEY || "",
+      secretAccessKey: serverEnv.CAP_AWS_SECRET_KEY || "",
     },
   });
 

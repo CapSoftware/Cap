@@ -10,7 +10,7 @@ use scap::{
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{collections::HashMap, ops::ControlFlow};
-use tracing::{error, info, instrument, trace, warn};
+use tracing::{error, info, trace, warn};
 
 use crate::{
     data::{FFVideo, RawVideoFormat, VideoInfo},
@@ -43,10 +43,17 @@ pub struct CaptureScreen {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct CaptureArea {
+    pub screen: CaptureScreen,
+    pub bounds: Bounds,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase", tag = "variant")]
 pub enum ScreenCaptureTarget {
     Window(CaptureWindow),
     Screen(CaptureScreen),
+    Area(CaptureArea),
 }
 
 impl PartialEq<Target> for ScreenCaptureTarget {
@@ -55,11 +62,15 @@ impl PartialEq<Target> for ScreenCaptureTarget {
             (Self::Window(capture_window), Target::Window(window)) => {
                 window.id == capture_window.id
             }
+            (ScreenCaptureTarget::Area(capture_area), Target::Display(display)) => {
+                display.id == capture_area.screen.id
+            }
             (ScreenCaptureTarget::Screen(capture_screen), Target::Display(display)) => {
                 display.id == capture_screen.id
             }
             (&ScreenCaptureTarget::Window(_), &scap::Target::Display(_))
-            | (&ScreenCaptureTarget::Screen(_), &scap::Target::Window(_)) => todo!(),
+            | (&ScreenCaptureTarget::Screen(_), &scap::Target::Window(_))
+            | (&ScreenCaptureTarget::Area(_), &scap::Target::Window(_)) => todo!(),
         }
     }
 }
@@ -69,6 +80,7 @@ impl ScreenCaptureTarget {
         match self {
             ScreenCaptureTarget::Window(window) => window.refresh_rate,
             ScreenCaptureTarget::Screen(screen) => screen.refresh_rate,
+            ScreenCaptureTarget::Area(area) => area.screen.refresh_rate,
         }
         .min(MAX_FPS)
     }
@@ -144,6 +156,7 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             ScreenCaptureTarget::Screen(capture_screen) => {
                 platform::monitor_bounds(capture_screen.id)
             }
+            ScreenCaptureTarget::Area(capture_area) => capture_area.bounds,
         }
     }
 
@@ -171,36 +184,60 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                 },
             }),
             ScreenCaptureTarget::Screen(_) => None,
+            ScreenCaptureTarget::Area(capture_area) => Some(Area {
+                size: Size {
+                    width: capture_area.bounds.width,
+                    height: capture_area.bounds.height,
+                },
+                origin: Point {
+                    x: capture_area.bounds.x,
+                    y: capture_area.bounds.y,
+                },
+            }),
         };
 
         let target = match &self.target {
             ScreenCaptureTarget::Window(w) => {
+                let window_target = targets
+                    .iter()
+                    .find_map(|t| match t {
+                        Target::Window(window) if window.id == w.id => Some(window),
+                        _ => None,
+                    })
+                    .unwrap();
+
                 #[cfg(target_os = "macos")]
                 {
-                    let window_target = targets
-                        .iter()
-                        .find_map(|t| match t {
-                            Target::Window(window) if window.id == w.id => Some(window),
-                            _ => None,
-                        })
-                        .unwrap();
-
-                    display_for_window(window_target.raw_handle).and_then(|display| {
+                    platform::display_for_window(window_target.raw_handle).and_then(|display| {
                         targets.into_iter().find(|t| match t {
                             Target::Display(d) => d.raw_handle.id == display.id,
                             _ => false,
                         })
                     })
                 }
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(target_os = "windows")]
                 {
-                    todo!("implement display_for_window on windows")
+                    platform::display_for_window(window_target.raw_handle).and_then(|display| {
+                        targets.into_iter().find(|t| match t {
+                            Target::Display(d) => d.raw_handle == display,
+                            _ => false,
+                        })
+                    })
                 }
+                #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+                None
             }
             ScreenCaptureTarget::Screen(capture_screen) => targets
                 .iter()
                 .find(|t| match t {
                     Target::Display(display) => display.id == capture_screen.id,
+                    _ => false,
+                })
+                .cloned(),
+            ScreenCaptureTarget::Area(capture_area) => targets
+                .iter()
+                .find(|t| match t {
+                    Target::Display(display) => display.id == capture_area.screen.id,
                     _ => false,
                 })
                 .cloned(),
@@ -213,7 +250,7 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             show_highlight: true,
             target: Some(target),
             crop_area,
-            output_type: self.output_type.unwrap_or(FrameType::YUVFrame),
+            output_type: self.output_type.unwrap_or(FrameType::BGRAFrame),
             output_resolution: self.output_resolution.unwrap_or(ScapResolution::Captured),
             excluded_targets: Some(excluded_targets),
         }
@@ -338,7 +375,7 @@ fn inner<T>(
             error!("Failed to build capturer: {e}");
             ready_signal
                 .send(Err(MediaError::Any("Failed to build capturer")))
-                .unwrap();
+                .ok();
             return;
         }
     };
@@ -346,18 +383,12 @@ fn inner<T>(
     info!("Capturer built");
 
     let mut capturing = false;
-    ready_signal.send(Ok(())).unwrap();
+    ready_signal.send(Ok(())).ok();
+
+    let t = std::time::Instant::now();
 
     loop {
         match control_signal.last() {
-            Some(Control::Pause) => {
-                trace!("Received pause signal");
-                if capturing {
-                    capturer.stop_capture();
-                    info!("Capturer stopped");
-                    capturing = false;
-                }
-            }
             Some(Control::Shutdown) | None => {
                 trace!("Received shutdown signal");
                 if capturing {
@@ -458,7 +489,13 @@ pub fn list_screens() -> Vec<(CaptureScreen, Target)> {
                     .get(&screen.id)
                     .cloned()
                     .unwrap_or_else(|| format!("Screen {}", idx + 1)),
-                refresh_rate: get_target_fps(&Target::Display(screen.clone())).unwrap(),
+                refresh_rate: {
+                    let Some(fps) = get_target_fps(&Target::Display(screen.clone())) else {
+                        continue;
+                    };
+
+                    fps
+                },
             },
             Target::Display(screen),
         ));
@@ -490,7 +527,7 @@ pub fn list_windows() -> Vec<(CaptureWindow, Target)> {
                             owner_name: platform_window.owner_name.clone(),
                             name: platform_window.name.clone(),
                             bounds: platform_window.bounds,
-                            refresh_rate: get_target_fps(&target).unwrap(),
+                            refresh_rate: get_target_fps(&target).unwrap_or_default(),
                         },
                         target,
                     )
@@ -503,57 +540,19 @@ pub fn list_windows() -> Vec<(CaptureWindow, Target)> {
 
 pub fn get_target_fps(target: &scap::Target) -> Option<u32> {
     #[cfg(target_os = "macos")]
-    {
-        match target {
-            scap::Target::Display(display) => refresh_rate_for_display(display.raw_handle.id),
-            scap::Target::Window(window) => {
-                refresh_rate_for_display(display_for_window(window.raw_handle)?.id)
-            }
+    match target {
+        scap::Target::Display(display) => platform::get_display_refresh_rate(display.raw_handle.id),
+        scap::Target::Window(window) => {
+            platform::get_display_refresh_rate(platform::display_for_window(window.raw_handle)?.id)
         }
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        todo!()
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn display_for_window(
-    window: core_graphics::window::CGWindowID,
-) -> Option<core_graphics::display::CGDisplay> {
-    use core_foundation::array::CFArray;
-    use core_graphics::{
-        display::{CFDictionary, CGDisplay, CGRect},
-        window::{create_description_from_array, kCGWindowBounds},
-    };
-
-    let descriptions = create_description_from_array(CFArray::from_copyable(&[window]))?;
-
-    let window_bounds = CGRect::from_dict_representation(
-        &descriptions
-            .get(0)?
-            .get(unsafe { kCGWindowBounds })
-            .downcast::<CFDictionary>()?,
-    )?;
-
-    for id in CGDisplay::active_displays().ok()? {
-        let display = CGDisplay::new(id);
-        if window_bounds.is_intersects(&display.bounds()) {
-            return Some(display);
+    #[cfg(target_os = "windows")]
+    match target {
+        scap::Target::Display(display) => platform::get_display_refresh_rate(display.raw_handle),
+        scap::Target::Window(window) => {
+            platform::get_display_refresh_rate(platform::display_for_window(window.raw_handle)?)
         }
     }
-
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     None
-}
-
-#[cfg(target_os = "macos")]
-fn refresh_rate_for_display(display_id: core_graphics::display::CGDirectDisplayID) -> Option<u32> {
-    use core_graphics::display::CGDisplay;
-
-    Some(
-        CGDisplay::new(display_id)
-            .display_mode()?
-            .refresh_rate()
-            .round() as u32,
-    )
 }

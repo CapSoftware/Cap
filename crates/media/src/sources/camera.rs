@@ -1,6 +1,6 @@
 use flume::{Receiver, Sender};
 use std::time::Instant;
-use tracing::info;
+use tracing::{error, info};
 
 use crate::{
     data::{FFVideo, VideoInfo},
@@ -82,45 +82,36 @@ impl PipelineSourceTask for CameraSource {
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
         output: Sender<Self::Output>,
     ) {
-        info!("Preparing camera source thread...");
-
         let mut frames_rx: Option<Receiver<RawCameraFrame>> = None;
+
+        info!("Camera source ready");
+
+        let frames = frames_rx.get_or_insert_with(|| self.feed_connection.attach());
+
         ready_signal.send(Ok(())).unwrap();
 
         loop {
             match control_signal.last() {
-                Some(Control::Play) => {
-                    let frames = frames_rx.get_or_insert_with(|| self.feed_connection.attach());
-
-                    match frames.recv() {
-                        Ok(frame) => {
-                            if let Err(error) = self.process_frame(&mut clock, &output, frame) {
-                                eprintln!("{error}");
-                                break;
-                            }
-                        }
-                        Err(_) => {
-                            eprintln!("Lost connection with the camera feed");
+                Some(Control::Play) => match frames.drain().last().or_else(|| frames.recv().ok()) {
+                    Some(frame) => {
+                        if let Err(error) = self.process_frame(&mut clock, &output, frame) {
+                            eprintln!("{error}");
                             break;
                         }
                     }
-                }
-                Some(Control::Pause) => {
-                    // TODO: This blocks to process frames in the queue, which may delay resumption
-                    // Some way to prevent this from delaying the listen loop?
-                    if let Some(rx) = frames_rx.take() {
-                        self.pause_and_drain_frames(&mut clock, &output, rx);
+                    None => {
+                        error!("Lost connection with the camera feed");
+                        break;
                     }
-                }
+                },
                 Some(Control::Shutdown) | None => {
                     if let Some(rx) = frames_rx.take() {
                         self.pause_and_drain_frames(&mut clock, &output, rx);
                     }
+                    info!("Camera source stopped");
                     break;
                 }
             }
         }
-
-        info!("Shutting down camera source thread.");
     }
 }

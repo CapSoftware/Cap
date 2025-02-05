@@ -67,7 +67,6 @@ impl AudioInputSource {
         frames_rx: Receiver<AudioInputSamples>,
     ) {
         let frames: Vec<AudioInputSamples> = frames_rx.drain().collect();
-        drop(frames_rx);
 
         for frame in frames {
             if let Err(error) = self.process_frame(clock, output, frame) {
@@ -113,13 +112,6 @@ impl PipelineSourceTask for AudioInputSource {
                         }
                     }
                 }
-                Some(Control::Pause) => {
-                    // TODO: This blocks to process frames in the queue, which may delay resumption
-                    // Some way to prevent this from delaying the listen loop?
-                    if let Some(rx) = samples_rx.take() {
-                        self.pause_and_drain_frames(&mut clock, &output, rx);
-                    }
-                }
                 Some(Control::Shutdown) | None => {
                     if let Some(rx) = samples_rx.take() {
                         self.pause_and_drain_frames(&mut clock, &output, rx);
@@ -129,6 +121,6 @@ impl PipelineSourceTask for AudioInputSource {
             }
         }
 
-        info!("Shutting down audio input source thread.");
+        info!("Shut down audio input source thread.");
     }
 }

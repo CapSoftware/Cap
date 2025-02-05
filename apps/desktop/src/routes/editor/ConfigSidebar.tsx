@@ -4,7 +4,14 @@ import {
 } from "@kobalte/core/radio-group";
 import { Tabs as KTabs } from "@kobalte/core/tabs";
 import { cx } from "cva";
-import { batch, type Component, createRoot, For, Show } from "solid-js";
+import {
+  batch,
+  createResource,
+  createRoot,
+  createSignal,
+  For,
+  Show,
+} from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { createWritableMemo } from "@solid-primitives/memo";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
@@ -13,10 +20,10 @@ import { writeFile, BaseDirectory } from "@tauri-apps/plugin-fs";
 import { appDataDir } from "@tauri-apps/api/path";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
-import type {
-  BackgroundSource,
-  CursorType,
-  CursorAnimationStyle,
+import {
+  type BackgroundSource,
+  type CursorAnimationStyle,
+  commands,
 } from "~/utils/tauri";
 import { useEditorContext } from "./context";
 import {
@@ -32,6 +39,8 @@ import {
   DEFAULT_GRADIENT_TO,
   DEFAULT_PROJECT_CONFIG,
 } from "./projectConfig";
+import { generalSettingsStore } from "~/store";
+import { type as ostype } from "@tauri-apps/plugin-os";
 
 const BACKGROUND_SOURCES = {
   wallpaper: "Wallpaper",
@@ -52,9 +61,6 @@ const CURSOR_ANIMATION_STYLES: Record<CursorAnimationStyle, string> = {
   regular: "Regular",
   fast: "Fast & Responsive",
 } as const;
-
-const UNSPLASH_ACCESS_KEY = "YOUR_UNSPLASH_ACCESS_KEY"; // You'll need to get this from Unsplash
-const WALLPAPERS_PER_PAGE = 14;
 
 const WALLPAPERS = [
   {
@@ -107,6 +113,13 @@ export function ConfigSidebar() {
       to: DEFAULT_GRADIENT_TO,
     },
   };
+
+  const [previousAngle, setPreviousAngle] = createSignal(0);
+  const [hapticsEnabled, hapticsEnabledOptions] = createResource(
+    async () =>
+      (await generalSettingsStore.get())?.hapticsEnabled && ostype() === "macos"
+  );
+  generalSettingsStore.listen(() => hapticsEnabledOptions.refetch());
 
   let fileInput!: HTMLInputElement;
 
@@ -436,6 +449,21 @@ export function ConfigSidebar() {
                                     ? rawNewAngle
                                     : Math.round(rawNewAngle / 45) * 45;
 
+                                  if (
+                                    !moveEvent.shiftKey &&
+                                    hapticsEnabled() &&
+                                    project.background.source.type ===
+                                      "gradient"
+                                  ) {
+                                    if (previousAngle() !== newAngle) {
+                                      commands.performHapticFeedback(
+                                        "Alignment",
+                                        "Now"
+                                      );
+                                    }
+                                    setPreviousAngle(newAngle);
+                                  }
+
                                   setProject("background", "source", {
                                     type: "gradient",
                                     angle:
@@ -569,27 +597,25 @@ export function ConfigSidebar() {
               step={0.1}
             />
           </Field>
-          {window.FLAGS.zoom && (
-            <Field
-              name="Size During Zoom"
-              icon={<IconCapEnlarge />}
-              value={`${
+          <Field
+            name="Size During Zoom"
+            icon={<IconCapEnlarge />}
+            value={`${
+              project.camera.zoom_size ??
+              DEFAULT_PROJECT_CONFIG.camera.zoom_size
+            }%`}
+          >
+            <Slider
+              value={[
                 project.camera.zoom_size ??
-                DEFAULT_PROJECT_CONFIG.camera.zoom_size
-              }%`}
-            >
-              <Slider
-                value={[
-                  project.camera.zoom_size ??
-                    DEFAULT_PROJECT_CONFIG.camera.zoom_size,
-                ]}
-                onChange={(v) => setProject("camera", "zoom_size", v[0])}
-                minValue={10}
-                maxValue={60}
-                step={0.1}
-              />
-            </Field>
-          )}
+                  DEFAULT_PROJECT_CONFIG.camera.zoom_size,
+              ]}
+              onChange={(v) => setProject("camera", "zoom_size", v[0])}
+              minValue={10}
+              maxValue={60}
+              step={0.1}
+            />
+          </Field>
           <Field name="Rounded Corners" icon={<IconCapCorners />}>
             <Slider
               value={[
@@ -632,11 +658,12 @@ export function ConfigSidebar() {
         <KTabs.Content value="audio" class="flex flex-col gap-6">
           <Field name="Audio" icon={<IconCapAudioOn />}>
             <div class="flex flex-col gap-3 ">
-              <ComingSoonTooltip>
-                <Subfield name="Mute Audio">
-                  <Toggle disabled />
-                </Subfield>
-              </ComingSoonTooltip>
+              <Subfield name="Mute Audio">
+                <Toggle
+                  checked={project.audio.mute}
+                  onChange={(v) => setProject("audio", "mute", v)}
+                />
+              </Subfield>
               <ComingSoonTooltip>
                 <Subfield name="Improve Mic Quality">
                   <Toggle disabled />
@@ -646,7 +673,7 @@ export function ConfigSidebar() {
           </Field>
         </KTabs.Content>
         <KTabs.Content value="cursor" class="flex flex-col gap-6">
-          {window.FLAGS.recordMouse ? (
+          {window.FLAGS.recordMouse === false ? (
             <>
               <Field name="Cursor" icon={<IconCapCursor />}>
                 <Subfield name="Hide cursor when not moving">
@@ -656,71 +683,62 @@ export function ConfigSidebar() {
                   />
                 </Subfield>
               </Field>
-              <ComingSoonTooltip>
-                <Field name="Size" icon={<IconCapEnlarge />}>
-                  <Slider
-                    value={[project.cursor.size]}
-                    onChange={(v) => setProject("cursor", "size", v[0])}
-                    minValue={20}
-                    maxValue={300}
-                    step={1}
-                    disabled
-                  />
-                </Field>
-              </ComingSoonTooltip>
-              {window.FLAGS.zoom && (
-                <ComingSoonTooltip>
-                  <Field name="Animation Style" icon={<IconLucideRabbit />}>
-                    <RadioGroup
-                      defaultValue="regular"
-                      value={project.cursor.animationStyle}
-                      onChange={(value) => {
-                        console.log("Changing animation style to:", value);
-                        setProject(
-                          "cursor",
-                          "animationStyle",
-                          value as CursorAnimationStyle
-                        );
-                      }}
-                      class="flex flex-col gap-2"
-                      disabled
-                    >
-                      {(
-                        Object.entries(CURSOR_ANIMATION_STYLES) as [
-                          CursorAnimationStyle,
-                          string
-                        ][]
-                      ).map(([value, label]) => (
-                        <RadioGroup.Item
-                          value={value}
-                          class="flex items-center"
-                        >
-                          <RadioGroup.ItemInput class="peer sr-only" />
-                          <RadioGroup.ItemControl
-                            class={cx(
-                              "w-4 h-4 rounded-full border border-gray-300 mr-2",
-                              "relative after:absolute after:inset-0 after:m-auto after:block after:w-2 after:h-2 after:rounded-full",
-                              "after:transition-colors after:duration-200",
-                              "peer-checked:border-blue-500 peer-checked:after:bg-blue-400",
-                              "peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/50",
-                              "peer-disabled:opacity-50"
-                            )}
-                          />
-                          <span
-                            class={cx(
-                              "text-gray-500",
-                              "peer-checked:text-gray-900",
-                              "peer-disabled:opacity-50"
-                            )}
-                          >
-                            {label}
-                          </span>
-                        </RadioGroup.Item>
-                      ))}
-                    </RadioGroup>
-                  </Field>
-                </ComingSoonTooltip>
-              )}
+              <Field name="Size" icon={<IconCapEnlarge />}>
+                <Slider
+                  value={[project.cursor.size]}
+                  onChange={(v) => setProject("cursor", "size", v[0])}
+                  minValue={20}
+                  maxValue={300}
+                  step={1}
+                  disabled={window.FLAGS.recordMouse}
+                />
+              </Field>
+              <Field name="Animation Style" icon={<IconLucideRabbit />}>
+                <RadioGroup
+                  defaultValue="regular"
+                  value={project.cursor.animationStyle}
+                  onChange={(value) => {
+                    console.log("Changing animation style to:", value);
+                    setProject(
+                      "cursor",
+                      "animationStyle",
+                      value as CursorAnimationStyle
+                    );
+                  }}
+                  class="flex flex-col gap-2"
+                  disabled
+                >
+                  {(
+                    Object.entries(CURSOR_ANIMATION_STYLES) as [
+                      CursorAnimationStyle,
+                      string
+                    ][]
+                  ).map(([value, label]) => (
+                    <RadioGroup.Item value={value} class="flex items-center">
+                      <RadioGroup.ItemInput class="peer sr-only" />
+                      <RadioGroup.ItemControl
+                        class={cx(
+                          "w-4 h-4 rounded-full border border-gray-300 mr-2",
+                          "relative after:absolute after:inset-0 after:m-auto after:block after:w-2 after:h-2 after:rounded-full",
+                          "after:transition-colors after:duration-200",
+                          "peer-checked:border-blue-500 peer-checked:after:bg-blue-400",
+                          "peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/50",
+                          "peer-disabled:opacity-50"
+                        )}
+                      />
+                      <span
+                        class={cx(
+                          "text-gray-500",
+                          "peer-checked:text-gray-900",
+                          "peer-disabled:opacity-50"
+                        )}
+                      >
+                        {label}
+                      </span>
+                    </RadioGroup.Item>
+                  ))}
+                </RadioGroup>
+              </Field>
             </>
           ) : (
             <div class="flex flex-col items-center justify-center gap-2 text-gray-400 p-4">

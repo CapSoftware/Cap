@@ -2,15 +2,22 @@
   "type": "module",
   "scripts": {
     "build": "dotenv -e .env -- turbo run build",
-    "dev": "(cd apps/web && docker compose up -d && cd ../..) && dotenv -e .env -- pnpm --dir packages/database db:generate && dotenv -e .env -- pnpm --dir packages/database db:push && dotenv -e .env -- turbo run dev --filter=!@cap/storybook --no-cache --concurrency 12",
-    "dev:manual": "dotenv -e .env -- turbo run dev --filter=!@cap/storybook --no-cache --concurrency 1",
+    "db:studio": "dotenv -e .env -- pnpm --dir packages/database db:studio",
+    "dev": "(pnpm run docker:up > /dev/null &) && sleep 5 && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
+    "dev:windows": "start /b cmd /c \"pnpm run docker:up > nul\" && timeout /t 5 /nobreak > nul && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
+    "dev:web": "pnpm dev --filter=!@cap/desktop",
+    "dev:desktop": "pnpm turbo run dev --filter=@cap/desktop",
+    "dev:manual": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/storybook --no-cache --concurrency 1",
     "lint": "turbo run lint",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
-    "db:push": "dotenv -e .env -- pnpm --dir packages/database db:push",
-    "db:generate": "dotenv -e .env -- pnpm --dir packages/database db:generate",
-    "db:studio": "dotenv -e .env -- pnpm --dir packages/database db:studio",
+    "db:push": "(pnpm run docker:up &) && sleep 5 && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run db:push",
+    "db:generate": "dotenv -e .env -- turbo run db:generate",
     "tauri:build": "dotenv -e .env -- pnpm --dir apps/desktop tauri build --verbose",
-    "typecheck": "pnpm tsc -b"
+    "typecheck": "pnpm tsc -b",
+    "docker:up": "turbo run docker:up",
+    "docker:stop": "turbo run docker:stop",
+    "docker:clean": "turbo run docker:clean",
+    "cap-setup": "node scripts/setup.js"
   },
   "devDependencies": {
     "@turbo/gen": "^1.9.7",
@@ -18,7 +25,8 @@
     "eslint": "^7.32.0",
     "extract-zip": "^2.0.1",
     "prettier": "^2.5.1",
-    "turbo": "^1.10.16"
+    "turbo": "^2.3.4",
+    "typescript": "^5.7.2"
   },
   "packageManager": "pnpm@9.8.0",
   "name": "cap",

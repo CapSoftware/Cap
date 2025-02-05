@@ -1,4 +1,6 @@
+import { type as ostype } from "@tauri-apps/plugin-os";
 import { Show, Suspense } from "solid-js";
+import CropAreaRenderer from "~/components/CropAreaRenderer";
 import { createCurrentRecordingQuery } from "~/utils/queries";
 
 export default function () {
@@ -9,39 +11,15 @@ export default function () {
       <Show
         when={
           currentRecording.data &&
-          currentRecording.data.captureTarget.variant === "window" &&
+          (currentRecording.data.captureTarget.variant !== "screen") &&
           currentRecording.data.captureTarget.bounds
         }
       >
         {(bounds) => (
-          <div class="w-screen h-screen relative animate-in fade-in">
-            <div
-              class="bg-black-transparent-40 absolute inset-x-0 top-0"
-              style={{ height: `${bounds().y}px` }}
-            />
-            <div
-              class="bg-black-transparent-40 absolute left-0"
-              style={{
-                top: `${bounds().y}px`,
-                height: `${bounds().height}px`,
-                width: `${bounds().x}px`,
-              }}
-            />
-            <div
-              class="bg-black-transparent-40 absolute right-0"
-              style={{
-                top: `${bounds().y}px`,
-                height: `${bounds().height}px`,
-                width: `calc(100vw - ${bounds().x + bounds().width}px)`,
-              }}
-            />
-            <div
-              class="bg-black-transparent-40 absolute inset-x-0 bottom-0"
-              style={{
-                height: `calc(100vh - ${bounds().y + bounds().height}px)`,
-              }}
-            />
-          </div>
+          <CropAreaRenderer
+            bounds={bounds()}
+            borderRadius={ostype() === "macos" ? 9 : 7}
+          />
         )}
       </Show>
     </Suspense>

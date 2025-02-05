@@ -4,12 +4,21 @@ import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { cx } from "cva";
-import { For, Show, Suspense, createEffect, createSignal } from "solid-js";
+import {
+  For,
+  Show,
+  Suspense,
+  createEffect,
+  createResource,
+  createSignal,
+} from "solid-js";
 import { reconcile } from "solid-js/store";
+import { useNavigate } from "@solidjs/router";
 
 import { type AspectRatio, commands } from "~/utils/tauri";
 import { FPS, OUTPUT_SIZE, useEditorContext } from "./context";
 import { ASPECT_RATIOS } from "./projectConfig";
+import { authStore } from "~/store";
 import {
   ComingSoonTooltip,
   DropdownItem,
@@ -23,6 +32,8 @@ import {
 import { formatTime } from "./utils";
 
 export function Player() {
+  const navigate = useNavigate();
+  const [auth] = createResource(() => authStore.get());
   const {
     project,
     videoId,
@@ -32,6 +43,7 @@ export function Player() {
     setDialog,
     playbackTime,
     setPlaybackTime,
+    previewTime,
     playing,
     setPlaying,
     split,
@@ -77,7 +89,7 @@ export function Player() {
 
   createEffect(() => {
     if (isAtEnd() && playing()) {
-      commands.stopPlayback(videoId);
+      commands.stopPlayback();
       setPlaying(false);
     }
   });
@@ -85,16 +97,16 @@ export function Player() {
   const handlePlayPauseClick = async () => {
     try {
       if (isAtEnd()) {
-        await commands.stopPlayback(videoId);
+        await commands.stopPlayback();
         setPlaybackTime(0);
-        await commands.seekTo(videoId, 0);
-        await commands.startPlayback(videoId, FPS, OUTPUT_SIZE);
+        await commands.seekTo(0);
+        await commands.startPlayback(FPS, OUTPUT_SIZE);
         setPlaying(true);
       } else if (playing()) {
-        await commands.stopPlayback(videoId);
+        await commands.stopPlayback();
         setPlaying(false);
       } else {
-        await commands.startPlayback(videoId, FPS, OUTPUT_SIZE);
+        await commands.startPlayback(FPS, OUTPUT_SIZE);
         setPlaying(true);
       }
     } catch (error) {
@@ -106,6 +118,11 @@ export function Player() {
   createEventListener(document, "keydown", async (e: KeyboardEvent) => {
     if (e.code === "Space" && e.target === document.body) {
       e.preventDefault();
+      const time = previewTime();
+      if (!playing() && time !== undefined) {
+        setPlaybackTime(time);
+        await commands.seekTo(Math.floor(time * FPS));
+      }
       await handlePlayPauseClick();
     }
   });
@@ -216,11 +233,27 @@ export function Player() {
           }}
         </Show>
       </div>
-      <div class="flex flex-row items-center p-[0.75rem] z-10 bg-gray-50">
-        <div class="flex-1" />
-        <div class="flex flex-row items-center justify-center gap-[0.5rem] text-gray-400 text-[0.875rem]">
+      <div class="flex flex-row items-center p-[0.75rem] z-10 bg-gray-50 justify-between">
+        <div class="flex-1 flex items-center">
+          <Show when={!auth()?.plan?.upgraded}>
+            <EditorButton
+              class="bg-gray-200 text-xs"
+              onClick={() => commands.showWindow("Upgrade")}
+            >
+              Remove watermark
+            </EditorButton>
+          </Show>
+        </div>
+        <div class="flex-1 flex flex-row items-center justify-center gap-[0.5rem] text-gray-400 text-[0.875rem]">
           <span>{formatTime(playbackTime())}</span>
-          <button type="button" disabled>
+          <button
+            type="button"
+            onClick={async () => {
+              setPlaying(false);
+              await commands.stopPlayback();
+              await commands.setPlayheadPosition(0);
+            }}
+          >
             <IconCapFrameFirst class="size-[1.2rem]" />
           </button>
           <button
@@ -234,7 +267,16 @@ export function Player() {
               <IconCapStopCircle class="size-[1.5rem]" />
             )}
           </button>
-          <button type="button" disabled>
+          <button
+            type="button"
+            onClick={async () => {
+              setPlaying(false);
+              await commands.stopPlayback();
+              await commands.setPlayheadPosition(
+                Math.floor(totalDuration() * FPS)
+              );
+            }}
+          >
             <IconCapFrameLast class="size-[1rem]" />
           </button>
           <span>{formatTime(totalDuration())}</span>

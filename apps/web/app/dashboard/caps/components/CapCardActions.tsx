@@ -1,3 +1,4 @@
+import { serverEnv, clientEnv, NODE_ENV } from "@cap/env";
 import { LinkIcon, Trash } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { Tooltip } from "react-tooltip";
@@ -13,9 +14,9 @@ export const CapCardActions: React.FC<CapCardActionsProps> = ({
 }) => {
   const copyLink = () => {
     const link =
-      process.env.NEXT_PUBLIC_IS_CAP && process.env.NEXT_ENV === "production"
+      clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
         ? `https://cap.link/${capId}`
-        : `${process.env.NEXT_PUBLIC_URL}/s/${capId}`;
+        : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${capId}`;
 
     navigator.clipboard.writeText(link);
     toast.success("Link copied to clipboard!");

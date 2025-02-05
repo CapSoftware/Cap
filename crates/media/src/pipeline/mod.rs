@@ -35,26 +35,17 @@ impl<T: PipelineClock> Pipeline<T> {
         self.control.broadcast(Control::Play).await
     }
 
-    pub async fn pause(&mut self) -> Result<(), MediaError> {
-        if self.is_shutdown {
-            return Err(MediaError::ShutdownPipeline);
-        };
-
-        self.clock.stop();
-        self.control.broadcast(Control::Pause).await
-    }
-
     pub async fn shutdown(&mut self) -> Result<(), MediaError> {
         if self.is_shutdown {
             return Err(MediaError::ShutdownPipeline);
         };
 
-        trace!("Shutting down pipeline execution");
+        trace!("Shutting down pipeline");
         let _ = self.control.broadcast(Control::Shutdown).await;
         for (_name, task) in self.task_handles.drain(..) {
             let _ = task.join();
         }
-        info!("Pipeline has been stopped.");
+        info!("Pipeline stopped");
         // TODO: Collect shutdown errors?
         Ok(())
     }
