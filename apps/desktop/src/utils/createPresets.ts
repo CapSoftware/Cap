@@ -63,7 +63,7 @@ export function createPresets() {
       if (!config) return DEFAULT_PROJECT_CONFIG;
 
       console.log("Config:", config);
-      
+
       // @ts-ignore we reeeally don't want the timeline in the preset
       config.timeline = undefined;
       return config;

@@ -18,6 +18,8 @@ import { clientEnv } from "~/utils/env";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands } from "~/utils/tauri";
 import { Window } from "@tauri-apps/api/window";
+import { identifyUser, trackEvent } from "~/utils/analytics";
+
 const signInAction = action(async () => {
   let res: (url: URL) => void;
 
@@ -86,6 +88,7 @@ const signInAction = action(async () => {
     await authStore.set({
       token,
       user_id,
+      intercom_hash: existingAuth?.intercom_hash ?? "",
       expires,
       plan: {
         upgraded: false,
@@ -93,6 +96,9 @@ const signInAction = action(async () => {
         manual: existingAuth?.plan?.manual ?? false,
       },
     });
+
+    identifyUser(user_id);
+    trackEvent("user_signed_in", { platform: "desktop" });
 
     const currentWindow = await Window.getByLabel("signin");
     await commands.openMainWindow();
@@ -178,12 +184,17 @@ export default function Page() {
           token,
           user_id,
           expires,
+          intercom_hash: existingAuth?.intercom_hash ?? "",
           plan: {
             upgraded: false,
             last_checked: 0,
             manual: existingAuth?.plan?.manual ?? false,
           },
         });
+
+        identifyUser(user_id);
+        trackEvent("user_signed_in", { platform: "desktop" });
+
         setIsSignedIn(true);
         const currentWindow = await Window.getByLabel("signin");
         await commands.openMainWindow();

@@ -1761,6 +1761,7 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
         token: auth.token,
         user_id: auth.user_id,
         expires: auth.expires,
+        intercom_hash: auth.intercom_hash,
         plan: Some(Plan {
             upgraded: is_pro,
             manual: auth.plan.map(|p| p.manual).unwrap_or(false),

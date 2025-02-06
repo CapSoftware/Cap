@@ -1,6 +1,9 @@
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { createOptionsQuery } from "~/utils/queries";
-import { getCurrentWebviewWindow, WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import {
+  getCurrentWebviewWindow,
+  WebviewWindow,
+} from "@tauri-apps/api/webviewWindow";
 import Cropper from "~/components/Cropper";
 import { createStore } from "solid-js/store";
 import { type Crop } from "~/utils/tauri";
@@ -13,9 +16,12 @@ export default function CaptureArea() {
   const { options, setOptions } = createOptionsQuery();
   const webview = getCurrentWebviewWindow();
 
-  const [state, setState] = makePersisted(createStore({
-    showGrid: true,
-  }), { name: "captureArea" });
+  const [state, setState] = makePersisted(
+    createStore({
+      showGrid: true,
+    }),
+    { name: "captureArea" }
+  );
 
   const setPendingState = (pending: boolean) =>
     webview.emitTo("main", "cap-window://capture-area/state/pending", pending);
@@ -100,7 +106,11 @@ export default function CaptureArea() {
               <Tooltip.Root openDelay={500}>
                 <Tooltip.Trigger tabIndex={-1}>
                   <button
-                    class={`py-[0.25rem] px-2 gap-[0.25rem] mr-2 hover:bg-gray-200 flex flex-row items-center rounded-[8px] transition-colors duration-200 ${state.showGrid ? "bg-gray-200 text-blue-300" : "text-gray-500 opacity-50"}`}
+                    class={`py-[0.25rem] px-2 gap-[0.25rem] mr-2 hover:bg-gray-200 flex flex-row items-center rounded-[8px] transition-colors duration-200 ${
+                      state.showGrid
+                        ? "bg-gray-200 text-blue-300"
+                        : "text-gray-500 opacity-50"
+                    }`}
                     type="button"
                     onClick={() => setState("showGrid", (v) => !v)}
                   >
@@ -121,7 +131,9 @@ export default function CaptureArea() {
                   onClick={handleConfirm}
                 >
                   <IconCapCircleCheck class="size-5" />
-                  <span class="font-[500] text-[0.875rem]">Confirm selection</span>
+                  <span class="font-[500] text-[0.875rem]">
+                    Confirm selection
+                  </span>
                 </button>
               </div>
             </div>

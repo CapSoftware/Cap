@@ -1,9 +1,9 @@
 // Attribution to area-selection (MIT License) by 7anshuai
 // https://github.com/7anshuai/area-selection
 
-type XY = { x: number, y: number };
+type XY = { x: number; y: number };
 
-export type Bounds = { size: XY, position: XY };
+export type Bounds = { size: XY; position: XY };
 
 export default class Box {
   x: number;
@@ -25,7 +25,7 @@ export default class Box {
   toBounds(): Bounds {
     return {
       position: { x: this.x, y: this.y },
-      size: { x: this.width, y: this.height }
+      size: { x: this.width, y: this.height },
     };
   }
 

@@ -1,13 +1,13 @@
 import { type NextRequest } from "next/server";
 import { db } from "@cap/database";
-import { users, videos } from "@cap/database/schema";
+import { users } from "@cap/database/schema";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { nanoId } from "@cap/database/helpers";
 import { cookies } from "next/headers";
 import { isUserOnProPlan } from "@cap/utils";
 import { stripe } from "@cap/utils";
 import { eq } from "drizzle-orm";
 import { clientEnv } from "@cap/env";
+import crypto from "crypto";
 
 const allowedOrigins = [
   clientEnv.NEXT_PUBLIC_WEB_URL,
@@ -91,10 +91,19 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  let intercomHash = "";
+  if (process.env.INTERCOM_SECRET) {
+    intercomHash = crypto
+      .createHmac("sha256", process.env.INTERCOM_SECRET)
+      .update(user?.id ?? "")
+      .digest("hex");
+  }
+
   return new Response(
     JSON.stringify({
       upgraded: isSubscribed,
       stripeSubscriptionStatus: user.stripeSubscriptionStatus,
+      intercomHash: intercomHash
     }),
     {
       status: 200,
