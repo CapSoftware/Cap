@@ -1,6 +1,5 @@
 struct Uniforms {
     output_size: vec2<f32>,
-    image_size: vec2<f32>,
     padding: f32,
     _padding: f32,  // Matches the Rust struct alignment padding
 };
@@ -23,18 +22,34 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
     out.clip_position = vec4<f32>(x, y, 0.0, 1.0);
     return out;
 }
-
 @fragment
 fn fs_main(@location(0) tex_coords: vec2<f32>) -> @location(0) vec4<f32> {
-    // Calculate scaling factors for width and height
-    let scale_x = u.output_size.x / u.image_size.x;
-    let scale_y = u.output_size.y / u.image_size.y;
+    // Calculate the padding in UV space
+    let padding_uv = u.padding / max(u.output_size.x, u.output_size.y);
     
-    // Use the larger scale factor to ensure coverage
-    let scale = max(scale_x, scale_y);
+    // Adjust UV coordinates to account for padding
+    let adjusted_coords = tex_coords * (1.0 - 2.0 * padding_uv) + padding_uv;
     
-    // Transform coordinates to sample from the center of the scaled image
-    let adjusted_coords = (tex_coords - 0.5) * (u.output_size / (u.image_size * scale)) + 0.5;
+    // Calculate aspect ratios
+    let container_ratio = u.output_size.x / u.output_size.y;
+    let texture_dims = vec2<f32>(textureDimensions(t_image));
+    let texture_ratio = texture_dims.x / texture_dims.y;
     
-    return textureSample(t_image, s_image, adjusted_coords);
+    // Calculate scale factors to achieve 'cover' behavior
+    var scale = vec2<f32>(1.0);
+    if (container_ratio > texture_ratio) {
+        // Container is wider than texture - scale based on height
+        scale.x = texture_ratio / container_ratio;
+        scale.y = 1.0;
+    } else {
+        // Container is taller than texture - scale based on width
+        scale.x = 1.0;
+        scale.y = container_ratio / texture_ratio;
+    }
+    
+    // Transform coordinates to center and scale the image
+    let transformed_coords = (adjusted_coords - 0.5) * scale + 0.5;
+    
+    // Let the sampler handle the edge clamping
+    return textureSample(t_image, s_image, transformed_coords);
 }
