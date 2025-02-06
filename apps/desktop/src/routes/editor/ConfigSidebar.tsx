@@ -146,7 +146,7 @@ export function ConfigSidebar() {
             // },
             { id: "audio" as const, icon: IconCapAudioOn },
             { id: "cursor" as const, icon: IconCapCursor },
-            { id: "hotkeys" as const, icon: IconCapHotkeys },
+            // { id: "hotkeys" as const, icon: IconCapHotkeys },
           ]}
         >
           {(item) => (
@@ -503,7 +503,7 @@ export function ConfigSidebar() {
             </KTabs>
           </Field>
 
-          <ComingSoonTooltip>
+          {/* <ComingSoonTooltip>
             <Field name="Background Blur" icon={<IconCapBlur />}>
               <Slider
                 disabled
@@ -513,7 +513,7 @@ export function ConfigSidebar() {
                 maxValue={100}
               />
             </Field>
-          </ComingSoonTooltip>
+          </ComingSoonTooltip> */}
           <Field name="Padding" icon={<IconCapPadding />}>
             <Slider
               value={[project.background.padding]}
@@ -532,7 +532,7 @@ export function ConfigSidebar() {
               step={0.1}
             />
           </Field>
-          <ComingSoonTooltip>
+          {/* <ComingSoonTooltip>
             <Field name="Inset" icon={<IconCapInset />}>
               <Slider
                 disabled
@@ -542,7 +542,7 @@ export function ConfigSidebar() {
                 maxValue={100}
               />
             </Field>
-          </ComingSoonTooltip>
+          </ComingSoonTooltip> */}
         </KTabs.Content>
         <KTabs.Content value="camera" class="flex flex-col gap-[1.5rem]">
           <Field name="Camera" icon={<IconCapCamera />}>
@@ -647,7 +647,7 @@ export function ConfigSidebar() {
               step={0.1}
             />
           </Field>
-          <ComingSoonTooltip>
+          {/* <ComingSoonTooltip>
             <Field name="Shadow" icon={<IconCapShadow />}>
               <Slider
                 disabled
@@ -657,7 +657,7 @@ export function ConfigSidebar() {
                 maxValue={100}
               />
             </Field>
-          </ComingSoonTooltip>
+          </ComingSoonTooltip> */}
         </KTabs.Content>
         <KTabs.Content value="transcript" class="flex flex-col gap-6">
           <Field name="Transcript" icon={<IconCapMessageBubble />}>
@@ -683,11 +683,11 @@ export function ConfigSidebar() {
                   onChange={(v) => setProject("audio", "mute", v)}
                 />
               </Subfield>
-              <ComingSoonTooltip>
+              {/* <ComingSoonTooltip>
                 <Subfield name="Improve Mic Quality">
                   <Toggle disabled />
                 </Subfield>
-              </ComingSoonTooltip>
+              </ComingSoonTooltip> */}
             </div>
           </Field>
         </KTabs.Content>

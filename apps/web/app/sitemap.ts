@@ -25,10 +25,7 @@ async function getPagePaths(
     ) {
       const relativePath = path.relative(process.cwd(), dir);
       const routePath = "/" + relativePath.split(path.sep).slice(1).join("/");
-      if (
-        !routePath.includes("/dashboard") &&
-        !routePath.includes("[")
-      ) {
+      if (!routePath.includes("/dashboard") && !routePath.includes("[")) {
         const stats = await fs.stat(fullPath);
         paths.push({
           path: routePath === "/app" ? "/" : routePath,

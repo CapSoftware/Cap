@@ -23,6 +23,7 @@ import {
 } from "@tauri-apps/api/webviewWindow";
 import { Button } from "@cap/ui-solid";
 import { Toaster } from "solid-toast";
+import { initAnonymousUser } from "./utils/analytics";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -45,6 +46,10 @@ export default function App() {
 function Inner() {
   const currentWindow = getCurrentWebviewWindow();
   createThemeListener(currentWindow);
+
+  onMount(() => {
+    initAnonymousUser();
+  });
 
   return (
     <>

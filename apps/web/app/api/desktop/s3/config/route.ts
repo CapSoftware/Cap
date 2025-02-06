@@ -74,14 +74,16 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("Error in S3 config route:", error);
     return new Response(
-      JSON.stringify({ 
+      JSON.stringify({
         error: "Failed to save S3 configuration",
-        details: error instanceof Error ? error.message : String(error)
+        details: error instanceof Error ? error.message : String(error),
       }),
       {
         status: 500,
         headers: {
-          "Access-Control-Allow-Origin": request.headers.get("origin") as string,
+          "Access-Control-Allow-Origin": request.headers.get(
+            "origin"
+          ) as string,
           "Access-Control-Allow-Credentials": "true",
         },
       }

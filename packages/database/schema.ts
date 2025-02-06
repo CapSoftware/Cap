@@ -30,13 +30,13 @@ const nanoIdNullable = customType<{ data: string; notNull: false }>({
 // Add a custom type for encrypted strings
 const encryptedText = customType<{ data: string; notNull: true }>({
   dataType() {
-    return 'text';
+    return "text";
   },
 });
 
 const encryptedTextNullable = customType<{ data: string; notNull: false }>({
   dataType() {
-    return 'text';
+    return "text";
   },
 });
 

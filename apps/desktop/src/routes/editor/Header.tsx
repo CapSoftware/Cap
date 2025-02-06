@@ -22,6 +22,7 @@ import { createStore, produce } from "solid-js/store";
 import { commands, events, RenderProgress } from "~/utils/tauri";
 import { useEditorContext } from "./context";
 import { authStore } from "~/store";
+import { trackEvent } from "~/utils/analytics";
 import {
   Dialog,
   DialogContent,
@@ -150,6 +151,12 @@ function ExportButton(props: {
       });
       if (!path) return;
 
+      trackEvent("export_started", {
+        resolution: props.selectedResolution.value,
+        fps: props.selectedFps,
+        path: path,
+      });
+
       setExportState({ type: "starting" });
 
       const progress = new Channel<RenderProgress>();
@@ -218,7 +225,10 @@ function ExportButton(props: {
     <div class="relative">
       <Button
         variant="primary"
-        onClick={() => setShowExportOptions(!showExportOptions())}
+        onClick={() => {
+          trackEvent("export_button_clicked");
+          setShowExportOptions(!showExportOptions());
+        }}
       >
         Export
       </Button>
@@ -235,7 +245,16 @@ function ExportButton(props: {
                 optionTextValue="label"
                 placeholder="Select Resolution"
                 value={props.selectedResolution}
-                onChange={props.setSelectedResolution}
+                onChange={(value) => {
+                  if (value) {
+                    trackEvent("export_resolution_changed", {
+                      resolution: value.value,
+                      width: value.width,
+                      height: value.height,
+                    });
+                    props.setSelectedResolution(value);
+                  }
+                }}
                 itemComponent={(props) => (
                   <MenuItem<typeof KSelect.Item>
                     as={KSelect.Item}
@@ -280,7 +299,13 @@ function ExportButton(props: {
                 value={FPS_OPTIONS.find(
                   (opt) => opt.value === props.selectedFps
                 )}
-                onChange={(option) => props.setSelectedFps(option?.value ?? 30)}
+                onChange={(option) => {
+                  const fps = option?.value ?? 30;
+                  trackEvent("export_fps_changed", {
+                    fps: fps,
+                  });
+                  props.setSelectedFps(fps);
+                }}
                 itemComponent={(props) => (
                   <MenuItem<typeof KSelect.Item>
                     as={KSelect.Item}
@@ -451,6 +476,12 @@ function ShareButton(props: {
         await commands.showWindow("SignIn");
         throw new Error("You need to sign in to share recordings");
       }
+
+      trackEvent("create_shareable_link_clicked", {
+        resolution: props.selectedResolution().value,
+        fps: props.selectedFps(),
+        has_existing_auth: !!existingAuth,
+      });
 
       const meta = recordingMeta();
       if (!meta) {
