@@ -72,7 +72,8 @@ export default function Page() {
   return (
     <div
       class={`py-5 max-w-[700px] mx-auto relative ${
-        upgradeComplete() ? "h-full" : ""}`}
+        upgradeComplete() ? "h-full" : ""
+      }`}
     >
       {upgradeComplete() && (
         <div class="flex justify-center items-center h-full bg-gray-800 bg-opacity-75">
@@ -161,8 +162,10 @@ export default function Page() {
                         class={`pointer-events-none block h-4 w-4 rounded-full dark:bg-gray-500
                            bg-gray-50 shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4
                             data-[state=unchecked]:translate-x-0 border-2 ${
-                         isAnnual() ? "border-blue-400 dark:border-[#3F75E0]" : "border-gray-300 dark:border-[--white-transparent-20]"
-                        }`}
+                              isAnnual()
+                                ? "border-blue-400 dark:border-[#3F75E0]"
+                                : "border-gray-300 dark:border-[--white-transparent-20]"
+                            }`}
                       />
                     </button>
                   </div>

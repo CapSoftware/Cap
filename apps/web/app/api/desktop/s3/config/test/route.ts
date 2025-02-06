@@ -47,8 +47,8 @@ export async function POST(request: NextRequest) {
         secretAccessKey: data.secretAccessKey,
       },
       requestHandler: {
-        abortSignal: controller.signal
-      }
+        abortSignal: controller.signal,
+      },
     });
 
     try {
@@ -57,35 +57,39 @@ export async function POST(request: NextRequest) {
           Bucket: data.bucketName,
         })
       );
-      
+
       clearTimeout(timeoutId);
     } catch (error) {
       clearTimeout(timeoutId);
       let errorMessage = "Failed to connect to S3";
-      
+
       if (error instanceof Error) {
         if (error.name === "AbortError" || error.name === "TimeoutError") {
-          errorMessage = "Connection timed out after 5 seconds. Please check the endpoint URL and your network connection.";
+          errorMessage =
+            "Connection timed out after 5 seconds. Please check the endpoint URL and your network connection.";
         } else if (error.name === "NoSuchBucket") {
           errorMessage = `Bucket '${data.bucketName}' does not exist`;
         } else if (error.name === "NetworkingError") {
-          errorMessage = "Network error. Please check the endpoint URL and your network connection.";
+          errorMessage =
+            "Network error. Please check the endpoint URL and your network connection.";
         } else if (error.name === "InvalidAccessKeyId") {
           errorMessage = "Invalid Access Key ID";
         } else if (error.name === "SignatureDoesNotMatch") {
           errorMessage = "Invalid Secret Access Key";
         } else if (error.name === "AccessDenied") {
-          errorMessage = "Access denied. Please check your credentials and bucket permissions.";
+          errorMessage =
+            "Access denied. Please check your credentials and bucket permissions.";
         } else if ((error as any).$metadata?.httpStatusCode === 301) {
-          errorMessage = "Received 301 redirect. This usually means the endpoint URL is incorrect or the bucket is in a different region.";
+          errorMessage =
+            "Received 301 redirect. This usually means the endpoint URL is incorrect or the bucket is in a different region.";
         }
       }
-      
+
       return new Response(
-        JSON.stringify({ 
+        JSON.stringify({
           error: errorMessage,
           details: error instanceof Error ? error.message : String(error),
-          metadata: (error as any)?.$metadata
+          metadata: (error as any)?.$metadata,
         }),
         {
           status: 500,
@@ -105,15 +109,17 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     return new Response(
-      JSON.stringify({ 
+      JSON.stringify({
         error: "Failed to connect to S3",
         details: error instanceof Error ? error.message : String(error),
-        metadata: (error as any)?.$metadata
+        metadata: (error as any)?.$metadata,
       }),
       {
         status: 500,
         headers: {
-          "Access-Control-Allow-Origin": request.headers.get("origin") as string,
+          "Access-Control-Allow-Origin": request.headers.get(
+            "origin"
+          ) as string,
           "Access-Control-Allow-Credentials": "true",
         },
       }
