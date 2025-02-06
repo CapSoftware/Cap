@@ -41,6 +41,7 @@ import {
 } from "./projectConfig";
 import { generalSettingsStore } from "~/store";
 import { type as ostype } from "@tauri-apps/plugin-os";
+import toast from "solid-toast";
 
 const BACKGROUND_SOURCES = {
   wallpaper: "Wallpaper",
@@ -340,10 +341,28 @@ export function ConfigSidebar() {
                   type="file"
                   ref={fileInput}
                   class="hidden"
-                  accept="image/*"
+                  accept="image/apng, image/avif, image/jpeg, image/png, image/webp"
                   onChange={async (e) => {
                     const file = e.currentTarget.files?.[0];
                     if (!file) return;
+
+                    /* 
+                    this is a Tauri bug in WebKit so we need to validate the file type manually 
+                    https://github.com/tauri-apps/tauri/issues/9158
+                    */
+                    const validExtensions = [
+                      "jpg",
+                      "jpeg",
+                      "png",
+                      "gif",
+                      "webp",
+                      "bmp",
+                    ];
+                    const extension = file.name.split(".").pop()?.toLowerCase();
+                    if (!extension || !validExtensions.includes(extension)) {
+                      toast.error("Invalid image file type");
+                      return;
+                    }
 
                     try {
                       const fileName = `bg-${Date.now()}-${file.name}`;

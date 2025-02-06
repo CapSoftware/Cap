@@ -973,14 +973,16 @@ pub async fn produce_frame(
     // First, handle the background
     match background {
         Background::Image { path } => {
+            let img = image::open(&path)
+            .map_err(|e| RenderingError::ImageLoadError(e.to_string()))?;
+
             // Use entry API to handle texture caching
             let mut textures = constants.background_textures.write().await;
             let texture = match textures.entry(path.clone()) {
                 std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
                 std::collections::hash_map::Entry::Vacant(e) => {
                     // Load image with error propagation
-                    let img = image::open(&path)
-                        .map_err(|e| RenderingError::ImageLoadError(e.to_string()))?;
+
                     let rgba = img.to_rgba8();
                     let dimensions = img.dimensions();
 
@@ -1028,6 +1030,7 @@ pub async fn produce_frame(
             // Create uniforms and bind group
             let image_uniforms = ImageBackgroundUniforms {
                 output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
+                image_size: [img.dimensions().0 as f32, img.dimensions().1 as f32],
                 padding: uniforms.project.background.padding as f32,
                 _padding: 0.0,
             };
@@ -2410,6 +2413,7 @@ struct ImageBackgroundPipeline {
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct ImageBackgroundUniforms {
     output_size: [f32; 2],
+    image_size: [f32; 2],
     padding: f32,
     _padding: f32, // For alignment
 }
