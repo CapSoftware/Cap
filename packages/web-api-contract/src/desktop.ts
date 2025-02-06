@@ -53,7 +53,7 @@ const protectedContract = c.router(
       method: "GET",
       path: "/desktop/plan",
       responses: {
-        200: z.object({ 
+        200: z.object({
           upgraded: z.boolean(),
           stripeSubscriptionStatus: z.string().nullable(),
         }),

@@ -26,4 +26,4 @@ export interface SeoPageContent {
     title: string;
     buttonText: string;
   };
-} 
+}

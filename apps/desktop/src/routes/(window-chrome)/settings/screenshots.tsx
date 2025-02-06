@@ -54,7 +54,9 @@ export default function Screenshots() {
           <Show
             when={fetchScreenshots.data && fetchScreenshots.data.length > 0}
             fallback={
-              <p class="text-center text-[--text-tertiary]">No screenshots found</p>
+              <p class="text-center text-[--text-tertiary]">
+                No screenshots found
+              </p>
             }
           >
             <For each={fetchScreenshots.data}>
@@ -96,7 +98,9 @@ function ScreenshotItem(props: {
             onError={() => setImageExists(false)}
           />
         </Show>
-        <span class="text-[--text-primary]">{props.screenshot.prettyName.replace(".png", "")}</span>
+        <span class="text-[--text-primary]">
+          {props.screenshot.prettyName.replace(".png", "")}
+        </span>
       </div>
       <div class="flex items-center">
         <button
