@@ -55,6 +55,9 @@ importers:
       '@corvu/tooltip':
         specifier: ^0.2.1
         version: 0.2.1(solid-js@1.9.3)
+      '@intercom/messenger-js-sdk':
+        specifier: ^0.0.14
+        version: 0.0.14
       '@kobalte/core':
         specifier: ^0.13.7
         version: 0.13.7(patch_hash=kzigaefucz2gzue42hjqb5kxba)(solid-js@1.9.3)
@@ -157,6 +160,9 @@ importers:
       mp4box:
         specifier: ^0.5.2
         version: 0.5.2
+      posthog-js:
+        specifier: ^1.215.3
+        version: 1.215.3
       solid-js:
         specifier: ^1.9.3
         version: 1.9.3
@@ -178,6 +184,9 @@ importers:
       unplugin-icons:
         specifier: ^0.19.2
         version: 0.19.3
+      uuid:
+        specifier: ^9.0.1
+        version: 9.0.1
       vinxi:
         specifier: ^0.4.1
         version: 0.4.3(@planetscale/database@1.19.0)(@types/node@22.12.0)(ioredis@5.4.1)(terser@5.34.0)(xml2js@0.6.2)
@@ -200,6 +209,9 @@ importers:
       '@types/dom-webcodecs':
         specifier: ^0.1.11
         version: 0.1.11
+      '@types/uuid':
+        specifier: ^9.0.8
+        version: 9.0.8
       cross-env:
         specifier: ^7.0.3
         version: 7.0.3
@@ -588,8 +600,8 @@ importers:
         specifier: ^2.2.0
         version: 2.2.0(next@14.2.3(@opentelemetry/api@1.9.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))
       posthog-js:
-        specifier: ^1.129.0
-        version: 1.165.0
+        specifier: ^1.215.3
+        version: 1.215.3
       react:
         specifier: ^18.2.0
         version: 18.3.1
@@ -632,6 +644,9 @@ importers:
       tailwind-merge:
         specifier: ^2.1.0
         version: 2.5.2
+      uuid:
+        specifier: ^9.0.1
+        version: 9.0.1
       video.js:
         specifier: ^8.17.3
         version: 8.17.4
@@ -654,6 +669,9 @@ importers:
       '@types/react-dom':
         specifier: ^18
         version: 18.3.0
+      '@types/uuid':
+        specifier: ^9.0.8
+        version: 9.0.8
       autoprefixer:
         specifier: ^10.4.14
         version: 10.4.20(postcss@8.4.47)
@@ -4333,10 +4351,10 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@8.6.0-alpha.3':
-    resolution: {integrity: sha512-NfLTdOSm1oGaxJJ62esQlNXkHxWNuawWPwg0TBeyuNxE7YA9YmMa+07dtTz6WVr7LuDxWl6qq0NBz3s05JpYAA==}
+  '@storybook/builder-vite@8.6.0-alpha.4':
+    resolution: {integrity: sha512-zaXoEd9jWaRpV1n+eIDUdK9CTvh1Qq2AFCFdS2/pj3kenojVmB/BYS9gjbscKMO2h8d38JjSuUY3U+3kpcvgpQ==}
     peerDependencies:
-      storybook: ^8.6.0-alpha.3
+      storybook: ^8.6.0-alpha.4
       vite: ^4.0.0 || ^5.0.0 || ^6.0.0
 
   '@storybook/core@8.3.3':
@@ -4347,10 +4365,10 @@ packages:
     peerDependencies:
       storybook: ^8.3.3
 
-  '@storybook/csf-plugin@8.6.0-alpha.3':
-    resolution: {integrity: sha512-uAyRJyec4ydCWrUyzPXyjnJLUI1jbYfSklRW1sEjTIEfRxkPNKNg2XIajGOxeF4GEyvKqArz/4KJU3sFt66w/w==}
+  '@storybook/csf-plugin@8.6.0-alpha.4':
+    resolution: {integrity: sha512-34zcOmaSR0aheFqaHWTBvbA6R3RQ4IAJ21Dks6KM+neJzdfm7vvWr/A2fqk8wppN49NNyF3B5g2rVYh/F4PspA==}
     peerDependencies:
-      storybook: ^8.6.0-alpha.3
+      storybook: ^8.6.0-alpha.4
 
   '@storybook/csf@0.1.11':
     resolution: {integrity: sha512-dHYFQH3mA+EtnCkHXzicbLgsvzYjcDJ1JWsogbItZogkPHgSJM/Wr71uMkcvw8v9mmCyP4NpXJuu6bPoVsOnzg==}
@@ -5910,6 +5928,9 @@ packages:
 
   core-js-pure@3.38.1:
     resolution: {integrity: sha512-BY8Etc1FZqdw1glX0XNOq2FDwfrg/VGqoZOZCdaL+UmdaqDwQwYXkMJT4t6In+zfEfOJDcM9T0KdbBeJg8KKCQ==}
+
+  core-js@3.40.0:
+    resolution: {integrity: sha512-7vsMc/Lty6AGnn7uFpYT56QesI5D2Y/UkgKounk87OP9Z2H9Z8kj6jzcSGAxFmUtDOS0ntK6lbQz+Nsa0Jj6mQ==}
 
   core-util-is@1.0.3:
     resolution: {integrity: sha512-ZQBvi1DcpJ4GDqanjucZ2Hj3wEO5pZDS89BWbkcrvdxksJorwUDDZamX9ldFkp9aw2lmBDLgkObEA4DWNJ9FYQ==}
@@ -9295,8 +9316,8 @@ packages:
     resolution: {integrity: sha512-56rxCq7G/XfB4EkXq9Egn5GCqugWvDFjafDOThIdMBsI15iqPqR5r15TfSr1YPYeEI19YeaXMCbY6u88Y76GLQ==}
     engines: {node: ^10 || ^12 || >=14}
 
-  posthog-js@1.165.0:
-    resolution: {integrity: sha512-rUfRJobvOz3Q9Er+zwb32Eq2qs+ToBe/B4k4IoKzmyszI7240Rf4xVWRB0ky8LvmdZfCeYX5knS2Uv3pnn/d5A==}
+  posthog-js@1.215.3:
+    resolution: {integrity: sha512-vTk8/gyjbKP7EbDxWzo/GBCK7Ok7M6RTqEWOzRgIxCPf/KA5faFi5z1T4cRR1oPgcDqLeB1ZGa04Za/cPEHxgA==}
 
   preact-render-to-string@5.2.6:
     resolution: {integrity: sha512-JyhErpYOvBV1hEPwIxc/fHWXPfnEGdRKxc8gFdAZ7XV4tlzyzG847XAyEZqoDnynP88akM4eaHcSOzNcLWFguw==}
@@ -15137,9 +15158,9 @@ snapshots:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
 
-  '@storybook/builder-vite@8.6.0-alpha.3(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))':
+  '@storybook/builder-vite@8.6.0-alpha.4(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))':
     dependencies:
-      '@storybook/csf-plugin': 8.6.0-alpha.3(storybook@8.3.3)
+      '@storybook/csf-plugin': 8.6.0-alpha.4(storybook@8.3.3)
       browser-assert: 1.2.1
       storybook: 8.3.3
       ts-dedent: 2.2.0
@@ -15168,9 +15189,9 @@ snapshots:
   '@storybook/csf-plugin@8.3.3(storybook@8.3.3)':
     dependencies:
       storybook: 8.3.3
-      unplugin: 1.16.0
+      unplugin: 1.16.1
 
-  '@storybook/csf-plugin@8.6.0-alpha.3(storybook@8.3.3)':
+  '@storybook/csf-plugin@8.6.0-alpha.4(storybook@8.3.3)':
     dependencies:
       storybook: 8.3.3
       unplugin: 1.16.1
@@ -17022,6 +17043,8 @@ snapshots:
 
   core-js-pure@3.38.1: {}
 
+  core-js@3.40.0: {}
+
   core-util-is@1.0.3: {}
 
   cors@2.8.5:
@@ -17938,7 +17961,7 @@ snapshots:
       doctrine: 2.1.0
       eslint: 8.57.1
       eslint-import-resolver-node: 0.3.9
-      eslint-module-utils: 2.12.0(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-node@0.3.9)(eslint-import-resolver-typescript@3.6.3(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.30.0(eslint@8.57.1))(eslint@8.57.1))(eslint@8.57.1)
+      eslint-module-utils: 2.12.0(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-node@0.3.9)(eslint-import-resolver-typescript@3.6.3(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.30.0)(eslint@8.57.1))(eslint@8.57.1)
       hasown: 2.0.2
       is-core-module: 2.15.1
       is-glob: 4.0.3
@@ -21781,8 +21804,9 @@ snapshots:
       picocolors: 1.1.0
       source-map-js: 1.2.1
 
-  posthog-js@1.165.0:
+  posthog-js@1.215.3:
     dependencies:
+      core-js: 3.40.0
       fflate: 0.4.8
       preact: 10.24.1
       web-vitals: 4.2.3
@@ -22761,7 +22785,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.2(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0)):
     dependencies:
-      '@storybook/builder-vite': 8.6.0-alpha.3(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))
+      '@storybook/builder-vite': 8.6.0-alpha.4(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))
     transitivePeerDependencies:
       - storybook
       - vite

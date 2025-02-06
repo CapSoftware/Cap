@@ -14,6 +14,7 @@ pub struct AuthStore {
     pub user_id: Option<String>,
     pub expires: i32,
     pub plan: Option<Plan>,
+    pub intercom_hash: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Type, Debug)]
@@ -78,6 +79,7 @@ impl AuthStore {
         #[derive(Deserialize)]
         struct Response {
             upgraded: bool,
+            intercom_hash: Option<String>,
         }
 
         let plan_response: Response = response.json().await.map_err(|e| e.to_string())?;
@@ -87,6 +89,7 @@ impl AuthStore {
             last_checked: chrono::Utc::now().timestamp() as i32,
             manual: auth.plan.as_ref().map_or(false, |p| p.manual),
         });
+        auth.intercom_hash = Some(plan_response.intercom_hash.unwrap_or_default());
 
         Self::set(app, Some(auth))?;
 

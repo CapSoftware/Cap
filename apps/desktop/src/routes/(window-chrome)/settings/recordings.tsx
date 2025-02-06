@@ -3,6 +3,7 @@ import { For, Show, Suspense, createSignal } from "solid-js";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 import { commands, events, type RecordingMeta } from "~/utils/tauri";
+import { trackEvent } from "~/utils/analytics";
 
 type MediaEntry = {
   id: string;
@@ -39,16 +40,21 @@ export default function Recordings() {
   }));
 
   const handleRecordingClick = (recording: MediaEntry) => {
+    trackEvent("recording_view_clicked", { recording_id: recording.id });
     events.newRecordingAdded.emit({ path: recording.path });
   };
 
   const handleOpenFolder = (path: string) => {
+    trackEvent("recording_folder_clicked", { path });
     commands.openFilePath(path);
   };
 
   const handleOpenEditor = (id: string) => {
     const normalizedPath = id.replace(/\\/g, "/");
     const fileName = normalizedPath.split("/").pop() || "";
+    trackEvent("recording_editor_clicked", {
+      recording_id: fileName.replace(".cap", ""),
+    });
     commands.openEditor(fileName.replace(".cap", ""));
   };
 

@@ -1,13 +1,165 @@
 import { createSignal, onCleanup, onMount } from "solid-js";
 import { Button } from "@cap/ui-solid";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import * as shell from "@tauri-apps/plugin-shell";
+import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
+import { action, useAction, useSubmission, redirect } from "@solidjs/router";
+import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
+import { Window } from "@tauri-apps/api/window";
 
 import { authStore } from "../../store";
 import { getProPlanId } from "~/utils/plans";
 import { commands } from "~/utils/tauri";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
+import { clientEnv } from "~/utils/env";
+import { identifyUser, trackEvent } from "~/utils/analytics";
+import callbackTemplate from "./callback.template";
+
+const signInAction = action(async (planType: "yearly" | "monthly") => {
+  console.log("Starting sign in action");
+  let res: (url: URL) => void;
+
+  try {
+    console.log("Setting up OAuth URL listener");
+    const stopListening = await listen(
+      "oauth://url",
+      (data: { payload: string }) => {
+        console.log("Received OAuth URL:", data.payload);
+        if (!data.payload.includes("token")) {
+          console.log("URL does not contain token, ignoring");
+          return;
+        }
+
+        const urlObject = new URL(data.payload);
+        res(urlObject);
+      }
+    );
+
+    try {
+      console.log("Stopping any existing OAuth server");
+      await invoke("plugin:oauth|stop");
+    } catch (e) {
+      console.log("No existing OAuth server to stop");
+    }
+
+    console.log("Starting OAuth server");
+    const port: string = await invoke("plugin:oauth|start", {
+      config: {
+        response: callbackTemplate,
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "Cache-Control": "no-store, no-cache, must-revalidate",
+          Pragma: "no-cache",
+        },
+        cleanup: true,
+      },
+    });
+    console.log("OAuth server started on port:", port);
+
+    const platform =
+      import.meta.env.VITE_ENVIRONMENT === "development" ? "web" : "desktop";
+    console.log("Platform:", platform);
+
+    const callbackUrl = new URL(
+      `${clientEnv.VITE_SERVER_URL}/api/desktop/session/request`
+    );
+    callbackUrl.searchParams.set("port", port);
+    callbackUrl.searchParams.set("platform", platform);
+    console.log("Callback URL:", callbackUrl.toString());
+
+    console.log("Hiding upgrade window");
+    const currentUpgradeWindow = await Window.getByLabel("upgrade");
+    if (currentUpgradeWindow) {
+      await currentUpgradeWindow.hide();
+    }
+
+    console.log("Opening auth URL in browser");
+    await shell.open(callbackUrl.toString());
+
+    console.log("Waiting for OAuth callback");
+    const url = await new Promise<URL>((r) => {
+      res = r;
+    });
+    console.log("Received OAuth callback");
+    stopListening();
+
+    const isDevMode = import.meta.env.VITE_ENVIRONMENT === "development";
+    if (!isDevMode) {
+      console.log("Not in dev mode, returning");
+      return;
+    }
+
+    const token = url.searchParams.get("token");
+    const user_id = url.searchParams.get("user_id");
+    const expires = Number(url.searchParams.get("expires"));
+    if (!token || !expires || !user_id) {
+      console.error("Missing required auth params");
+      throw new Error("Invalid token or expires");
+    }
+    console.log("Received valid auth params");
+
+    const existingAuth = await authStore.get();
+    console.log("Setting auth store");
+    await authStore.set({
+      token,
+      user_id,
+      expires,
+      intercom_hash: existingAuth?.intercom_hash ?? "",
+      plan: {
+        upgraded: false,
+        last_checked: 0,
+        manual: existingAuth?.plan?.manual ?? false,
+      },
+    });
+
+    console.log("Identifying user in analytics");
+    identifyUser(user_id);
+    console.log("Tracking sign in event");
+    trackEvent("user_signed_in", { platform: "desktop" });
+
+    console.log("Reopening upgrade window");
+    await commands.showWindow("Upgrade");
+
+    console.log("Waiting for window to be ready");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    console.log("Getting upgrade window reference");
+    const focusedUpgradeWindow = await Window.getByLabel("upgrade");
+    if (focusedUpgradeWindow) {
+      try {
+        console.log("Setting focus on upgrade window");
+        await focusedUpgradeWindow.show();
+        await focusedUpgradeWindow.setFocus();
+      } catch (e) {
+        console.error("Failed to focus upgrade window:", e);
+      }
+    }
+
+    console.log("Getting checkout URL");
+    const planId = getProPlanId(planType);
+    const response = await apiClient.desktop.getProSubscribeURL({
+      body: { priceId: planId },
+      headers: await protectedHeaders(),
+    });
+
+    if (response.status === 200) {
+      console.log("Opening checkout URL in external browser");
+      commands.openExternalLink(response.body.url);
+      console.log("Minimizing upgrade window");
+      if (focusedUpgradeWindow) {
+        await focusedUpgradeWindow.minimize();
+      }
+    }
+  } catch (error) {
+    console.error("Sign in failed:", error);
+    await authStore.set();
+    throw error;
+  }
+});
 
 export default function Page() {
+  console.log("Rendering upgrade page");
   const proFeatures = [
     "Remove watermark from recordings",
     "Unlimited cloud storage & Shareable links",
@@ -22,34 +174,46 @@ export default function Page() {
   const [isAnnual, setIsAnnual] = createSignal(true);
   const [upgradeComplete, setUpgradeComplete] = createSignal(false);
   const [loading, setLoading] = createSignal(false);
+  const [isAuthenticated, setIsAuthenticated] = createSignal(true);
+  const signIn = useAction(signInAction);
+  const submission = useSubmission(signInAction);
 
   const togglePricing = () => {
+    console.log("Toggling pricing plan");
     setIsAnnual(!isAnnual());
   };
 
   const openCheckoutInExternalBrowser = async () => {
+    console.log("Opening checkout in external browser");
     setLoading(true);
-    const planId = getProPlanId(isAnnual() ? "yearly" : "monthly");
 
     try {
       const auth = await authStore.get();
+      console.log("Auth status:", auth ? "authenticated" : "not authenticated");
 
       if (!auth) {
-        console.error("User not authenticated");
-        const window = getCurrentWindow();
-        window.close();
+        console.log("No auth found, starting sign in flow");
+        await signIn(isAnnual() ? "yearly" : "monthly");
         return;
       }
 
+      const planId = getProPlanId(isAnnual() ? "yearly" : "monthly");
+      console.log("Getting checkout URL for plan:", planId);
       const response = await apiClient.desktop.getProSubscribeURL({
         body: { priceId: planId },
         headers: await protectedHeaders(),
       });
 
       if (response.status === 200) {
+        console.log("Opening checkout URL in external browser");
         commands.openExternalLink(response.body.url);
+        console.log("Minimizing upgrade window");
+        const focusedUpgradeWindow = await Window.getByLabel("upgrade");
+        if (focusedUpgradeWindow) {
+          await focusedUpgradeWindow.minimize();
+        }
       } else {
-        console.error("Failed to get checkout URL");
+        console.error("Failed to get checkout URL, status:", response.status);
       }
     } catch (error) {
       console.error("Error getting checkout URL:", error);
@@ -59,20 +223,114 @@ export default function Page() {
   };
 
   const checkUpgradeStatus = async () => {
+    console.log("Checking upgrade status");
     const result = await commands.checkUpgradedAndUpdate();
     if (result) {
+      console.log("Upgrade complete");
       setUpgradeComplete(true);
     }
   };
 
-  onMount(() => {
+  onMount(async () => {
+    console.log("Component mounted");
+    const unsubscribeDeepLink = await onOpenUrl(async (urls) => {
+      console.log("Deep link received:", urls);
+      const isDevMode = import.meta.env.VITE_ENVIRONMENT === "development";
+      if (isDevMode) {
+        console.log("In dev mode, ignoring deep link");
+        return;
+      }
+
+      for (const url of urls) {
+        if (!url.includes("token=")) {
+          console.log("URL does not contain token, skipping");
+          return;
+        }
+
+        console.log("Processing auth URL");
+        const urlObject = new URL(url);
+        const token = urlObject.searchParams.get("token");
+        const user_id = urlObject.searchParams.get("user_id");
+        const expires = Number(urlObject.searchParams.get("expires"));
+
+        if (!token || !expires || !user_id) {
+          console.error("Invalid signin params");
+          throw new Error("Invalid signin params");
+        }
+
+        console.log("Setting auth store with new credentials");
+        const existingAuth = await authStore.get();
+        await authStore.set({
+          token,
+          user_id,
+          expires,
+          intercom_hash: existingAuth?.intercom_hash ?? "",
+          plan: {
+            upgraded: false,
+            last_checked: 0,
+            manual: existingAuth?.plan?.manual ?? false,
+          },
+        });
+
+        console.log("Identifying user in analytics");
+        identifyUser(user_id);
+        console.log("Tracking sign in event");
+        trackEvent("user_signed_in", { platform: "desktop" });
+
+        console.log("Reopening upgrade window");
+        await commands.showWindow("Upgrade");
+
+        console.log("Waiting for window to be ready");
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
+        console.log("Getting upgrade window reference");
+        const upgradeWindow = await Window.getByLabel("upgrade");
+        if (upgradeWindow) {
+          try {
+            console.log("Setting focus on upgrade window");
+            await upgradeWindow.show();
+            await upgradeWindow.setFocus();
+          } catch (e) {
+            console.error("Failed to focus upgrade window:", e);
+          }
+        }
+
+        console.log("Getting checkout URL");
+        const planId = getProPlanId(isAnnual() ? "yearly" : "monthly");
+        const response = await apiClient.desktop.getProSubscribeURL({
+          body: { priceId: planId },
+          headers: await protectedHeaders(),
+        });
+
+        if (response.status === 200) {
+          console.log("Opening checkout URL in external browser");
+          commands.openExternalLink(response.body.url);
+          console.log("Minimizing upgrade window");
+          if (upgradeWindow) {
+            await upgradeWindow.minimize();
+          }
+        }
+      }
+    });
+
+    onCleanup(() => {
+      console.log("Cleaning up deep link listener");
+      unsubscribeDeepLink();
+    });
+
+    console.log("Setting up upgrade status check interval");
     const interval = setInterval(checkUpgradeStatus, 5000);
-    onCleanup(() => clearInterval(interval));
+    onCleanup(() => {
+      console.log("Cleaning up upgrade status check interval");
+      clearInterval(interval);
+    });
   });
+
   return (
     <div
       class={`py-5 max-w-[700px] mx-auto relative ${
-        upgradeComplete() ? "h-full" : ""}`}
+        upgradeComplete() ? "h-full" : ""
+      }`}
     >
       {upgradeComplete() && (
         <div class="flex justify-center items-center h-full bg-gray-800 bg-opacity-75">
@@ -82,6 +340,7 @@ export default function Page() {
             </h2>
             <Button
               onClick={() => {
+                console.log("Closing window after upgrade");
                 const window = getCurrentWindow();
                 window.close();
               }}
@@ -161,8 +420,10 @@ export default function Page() {
                         class={`pointer-events-none block h-4 w-4 rounded-full dark:bg-gray-500
                            bg-gray-50 shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4
                             data-[state=unchecked]:translate-x-0 border-2 ${
-                         isAnnual() ? "border-blue-400 dark:border-[#3F75E0]" : "border-gray-300 dark:border-[--white-transparent-20]"
-                        }`}
+                              isAnnual()
+                                ? "border-blue-400 dark:border-[#3F75E0]"
+                                : "border-gray-300 dark:border-[--white-transparent-20]"
+                            }`}
                       />
                     </button>
                   </div>
