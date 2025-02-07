@@ -137,6 +137,7 @@ jobs:
       - name: Create .env file in root
         run: |
           echo "appVersion=${{ needs.draft.outputs.version }}" >> .env
+          echo "VITE_ENVIRONMENT=production" >> .env
           echo "CAP_DESKTOP_SENTRY_URL=https://6a3b6a09e6ae976c2ad6fff710e88748@o4506859771527168.ingest.us.sentry.io/4508330917101568" >> .env
           echo "NEXT_PUBLIC_WEB_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}" >> .env
           echo 'NEXTAUTH_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env

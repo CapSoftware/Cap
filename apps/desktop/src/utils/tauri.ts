@@ -166,6 +166,9 @@ async writeClipboardString(text: string) : Promise<null> {
 },
 async performHapticFeedback(pattern: HapticPattern | null, time: HapticPerformanceTime | null) : Promise<null> {
     return await TAURI_INVOKE("perform_haptic_feedback", { pattern, time });
+},
+async getWallpaperPath(filename: string) : Promise<string> {
+    return await TAURI_INVOKE("get_wallpaper_path", { filename });
 }
 }
 

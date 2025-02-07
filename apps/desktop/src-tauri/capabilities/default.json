@@ -5,15 +5,19 @@
   "windows": ["*"],
   "permissions": [
     "fs:default",
+    "fs:allow-resource-read",
+    "fs:allow-resource-read-recursive",
     "fs:write-all",
     "fs:read-all",
     "fs:allow-appdata-read",
     "fs:allow-appdata-write",
+    "fs:allow-picture-read-recursive",
     {
       "identifier": "fs:scope",
       "allow": [
         { "path": "$APPDATA/**" },
-        { "path": "$HOME/**" }
+        { "path": "$HOME/**" },
+        { "path": "$RESOURCE/**" }
       ]
     },
     "core:path:allow-resolve-directory",

@@ -11,13 +11,19 @@ import {
   createSignal,
   For,
   Show,
+  onMount,
 } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { createWritableMemo } from "@solid-primitives/memo";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { produce } from "solid-js/store";
 import { writeFile, BaseDirectory } from "@tauri-apps/plugin-fs";
-import { appDataDir } from "@tauri-apps/api/path";
+import {
+  appDataDir,
+  appLocalDataDir,
+  join,
+  resolveResource,
+} from "@tauri-apps/api/path";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 import {
@@ -63,24 +69,20 @@ const CURSOR_ANIMATION_STYLES: Record<CursorAnimationStyle, string> = {
   fast: "Fast & Responsive",
 } as const;
 
-const WALLPAPERS = [
-  {
-    id: "wall1",
-    url: "https://images.unsplash.com/photo-1542332213-9b5a5a3fad35?w=1920",
-  },
-  {
-    id: "wall2",
-    url: "https://images.unsplash.com/photo-1542810104-c5f07c7357ff?w=1920",
-  },
-  {
-    id: "wall3",
-    url: "https://images.unsplash.com/photo-1445368794737-0cf251429ca0?w=1920",
-  },
-  {
-    id: "wall4",
-    url: "https://images.unsplash.com/photo-1737365506116-ef7eba797492?w=1920",
-  },
-];
+const WALLPAPER_NAMES = [
+  "sequoia-dark",
+  "sequoia-light",
+  "sonoma-clouds",
+  "sonoma-dark",
+  "sonoma-evening",
+  "sonoma-fromabove",
+  "sonoma-horizon",
+  "sonoma-light",
+  "sonoma-river",
+  "ventura-dark",
+  "ventura-semi-dark",
+  "ventura",
+] as const;
 
 export function ConfigSidebar() {
   const {
@@ -92,6 +94,55 @@ export function ConfigSidebar() {
     state,
     setState,
   } = useEditorContext();
+
+  const [wallpapers] = createResource(async () => {
+    return Promise.all(
+      WALLPAPER_NAMES.map(async (id) => {
+        try {
+          // Get the validated path from Rust
+          const path = await commands.getWallpaperPath(`${id}.jpg`);
+
+          // Convert to proper URL
+          const url = convertFileSrc(path);
+
+          return {
+            id,
+            url,
+          };
+        } catch (err) {
+          return {
+            id,
+            url: null,
+          };
+        }
+      })
+    );
+  });
+
+  // Validate background source path on mount
+  onMount(() => {
+    if (
+      project.background.source.type === "wallpaper" ||
+      project.background.source.type === "image"
+    ) {
+      const path = project.background.source.path;
+      if (path) {
+        if (project.background.source.type === "image") {
+          // Use async IIFE to check file existence
+          (async () => {
+            try {
+              await fetch(convertFileSrc(path), { method: "HEAD" });
+            } catch {
+              setProject("background", "source", {
+                type: "image",
+                path: null,
+              });
+            }
+          })();
+        }
+      }
+    }
+  });
 
   const backgrounds: {
     [K in BackgroundSource["type"]]: Extract<BackgroundSource, { type: K }>;
@@ -249,51 +300,63 @@ export function ConfigSidebar() {
               <KTabs.Content value="wallpaper">
                 <KRadioGroup
                   value={
-                    project.background.source.type === "image"
-                      ? project.background.source.path ?? undefined
+                    project.background.source.type === "wallpaper"
+                      ? wallpapers()?.find((w) =>
+                          (
+                            project.background.source as { path?: string }
+                          ).path?.includes(w.id)
+                        )?.url ?? undefined
                       : undefined
                   }
                   onChange={async (photoUrl) => {
                     try {
-                      const response = await fetch(photoUrl);
-                      const blob = await response.blob();
-                      const fileName = `wallpaper-${Date.now()}.jpg`;
-                      const arrayBuffer = await blob.arrayBuffer();
-                      const uint8Array = new Uint8Array(arrayBuffer);
+                      const wallpaper = wallpapers()?.find(
+                        (w) => w.url === photoUrl
+                      );
+                      if (!wallpaper) return;
 
-                      const fullPath = `${await appDataDir()}/${fileName}`;
-
-                      await writeFile(fileName, uint8Array, {
-                        baseDir: BaseDirectory.AppData,
-                      });
+                      // Get the raw path without any URL prefixes
+                      const rawPath = decodeURIComponent(
+                        photoUrl.replace("file://", "")
+                      );
 
                       setProject("background", "source", {
-                        type: "image",
-                        path: fullPath,
-                      });
+                        type: "wallpaper",
+                        path: rawPath,
+                      } as const);
                     } catch (err) {
-                      console.error("Failed to save wallpaper:", err);
+                      console.error("Failed to set wallpaper:", err);
+                      toast.error("Failed to set wallpaper");
                     }
                   }}
-                  class="grid grid-cols-2 gap-2 h-auto"
+                  class="grid grid-cols-7 gap-2 h-auto"
                 >
-                  <For each={WALLPAPERS}>
-                    {(photo) => (
-                      <KRadioGroup.Item
-                        value={photo.url}
-                        class="col-span-1 aspect-video relative group"
-                      >
-                        <KRadioGroup.ItemInput class="peer" />
-                        <KRadioGroup.ItemControl class="cursor-pointer w-full h-full overflow-hidden rounded-lg border border-gray-200 ui-checked:border-blue-300 peer-focus-visible:border-2 peer-focus-visible:border-blue-300">
-                          <img
-                            src={photo.url}
-                            alt="Wallpaper option"
-                            class="w-full h-full object-cover"
-                          />
-                        </KRadioGroup.ItemControl>
-                      </KRadioGroup.Item>
-                    )}
-                  </For>
+                  <Show
+                    when={!wallpapers.loading}
+                    fallback={
+                      <div class="col-span-7 flex items-center justify-center h-32 text-gray-400">
+                        Loading wallpapers...
+                      </div>
+                    }
+                  >
+                    <For each={wallpapers()?.filter((p) => p.url !== null)}>
+                      {(photo) => (
+                        <KRadioGroup.Item
+                          value={photo.url!}
+                          class="aspect-square relative group"
+                        >
+                          <KRadioGroup.ItemInput class="peer" />
+                          <KRadioGroup.ItemControl class="cursor-pointer w-full h-full overflow-hidden rounded-lg border border-gray-200 ui-checked:border-blue-300 ui-checked:ring-2 ui-checked:ring-blue-300 peer-focus-visible:border-2 peer-focus-visible:border-blue-300">
+                            <img
+                              src={photo.url!}
+                              alt="Wallpaper option"
+                              class="w-full h-full object-cover"
+                            />
+                          </KRadioGroup.ItemControl>
+                        </KRadioGroup.Item>
+                      )}
+                    </For>
+                  </Show>
                 </KRadioGroup>
               </KTabs.Content>
               <KTabs.Content value="image">
@@ -454,10 +517,7 @@ export function ConfigSidebar() {
 
                             createRoot((dispose) =>
                               createEventListenerMap(window, {
-                                mouseup: () => {
-                                  resumeHistory();
-                                  dispose();
-                                },
+                                mouseup: () => dispose(),
                                 mousemove: (moveEvent) => {
                                   const rawNewAngle =
                                     Math.round(
