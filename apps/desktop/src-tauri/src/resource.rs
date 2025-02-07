@@ -50,3 +50,24 @@ impl<T> Resource<T> {
         self.value.borrow().as_ref()
     }
 }
+
+// UI labels and constants for export dialogs.
+pub mod export_ui {
+    /// Title for the export dialog.
+    pub const EXPORT_DIALOG_TITLE: &str = "Export Options";
+
+    /// Label for the file type selection dropdown.
+    pub const FILE_TYPE_LABEL: &str = "Select Export Format:";
+
+    /// Option value for MP4.
+    pub const MP4_OPTION: &str = "MP4";
+
+    /// Option value for GIF.
+    pub const GIF_OPTION: &str = "GIF";
+
+    /// Label for GIF FPS input.
+    pub const GIF_FPS_LABEL: &str = "Enter desired FPS (default is 15):";
+
+    /// Label for the high quality GIF toggle.
+    pub const GIF_QUALITY_LABEL: &str = "High Quality GIF:";
+}

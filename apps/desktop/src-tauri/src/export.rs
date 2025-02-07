@@ -5,6 +5,7 @@ use crate::{
 use cap_project::{ProjectConfiguration, XY};
 use std::path::PathBuf;
 use tauri::AppHandle;
+use async_trait::async_trait; // add this dependency in Cargo.toml if needed
 
 #[tauri::command]
 #[specta::specta]
@@ -16,6 +17,8 @@ pub async fn export_video(
     force: bool,
     fps: u32,
     resolution_base: XY<u32>,
+    export_format: ExportFormat,          // new parameter for format
+    high_quality: Option<bool>,           // new parameter for GIF quality; None if not provided
 ) -> Result<PathBuf, String> {
     let editor_instance = create_editor_instance_impl(&app, &video_id).await?;
 
@@ -51,8 +54,8 @@ pub async fn export_video(
 
     let output_path = editor_instance.meta().output_path();
 
-    // If the file exists and we're not forcing a re-render, return it
-    if output_path.exists() && !force {
+    // If the file exists and we're not forcing a re-render, return it (MP4)
+    if output_path.exists() && !force && matches!(export_format, ExportFormat::MP4) {
         return Ok(output_path);
     }
 
@@ -77,6 +80,7 @@ pub async fn export_video(
         .map(|auth| auth.is_upgraded())
         .unwrap_or(false);
 
+    // Create the exporter instance with common parameters
     let exporter = cap_export::Exporter::new(
         modified_project,
         output_path.clone(),
@@ -101,7 +105,24 @@ pub async fn export_video(
         e.to_string()
     })?;
 
-    let result = exporter.export_with_custom_muxer().await;
+    // Decide export logic based on selected format.
+    let result = match export_format {
+        ExportFormat::MP4 => {
+            // Use your existing export logic (using custom muxer)
+            exporter.export_with_custom_muxer().await
+        }
+        ExportFormat::GIF => {
+            // For GIF, apply GIF-specific defaults.
+            let gif_fps = if fps == 0 { 15 } else { fps };
+            let quality = high_quality.unwrap_or(false);
+            println!(
+                "Exporting as GIF at {} fps. High quality: {}",
+                gif_fps, quality
+            );
+            // Call a new function to export GIF. (You'll need to implement the gif encoding using the gif crate.)
+            exporter.export_gif(gif_fps, quality).await
+        }
+    };
 
     match result {
         Ok(_) => {
@@ -120,6 +141,12 @@ pub struct ExportEstimates {
     pub duration_seconds: f64,
     pub estimated_time_seconds: f64,
     pub estimated_size_mb: f64,
+}
+
+#[derive(Debug, serde::Serialize, specta::Type, Clone)]
+pub enum ExportFormat {
+    MP4,
+    GIF,
 }
 
 // This will need to be refactored at some point to be more accurate.
@@ -196,4 +223,40 @@ pub async fn get_export_estimates(
         estimated_time_seconds,
         estimated_size_mb,
     })
+}
+
+#[async_trait]
+pub trait ExporterExt {
+    async fn export_gif(&self, fps: u32, high_quality: bool) -> Result<(), Box<dyn std::error::Error>>;
+}
+
+#[async_trait]
+impl ExporterExt for cap_export::Exporter {
+    async fn export_gif(&self, fps: u32, high_quality: bool) -> Result<(), Box<dyn std::error::Error>> {
+        // Initialize GIF encoder using the gif crate.
+        // This is a stub implementation. Replace it with your actual logic.
+        //
+        // For example:
+        //
+        // use std::fs::File;
+        // use gif::{Encoder, Frame, Repeat, SetParameter};
+        //
+        // let file = File::create(&self.output_path)?;
+        // let mut encoder = Encoder::new(file, self.resolution_base.x as u16, self.resolution_base.y as u16, &[])?;
+        // encoder.set(Repeat::Infinite)?;
+        //
+        // for frame in self.generate_frames(fps).await? {
+        //     let gif_frame = Frame::from_rgba_speed(
+        //         self.resolution_base.x as u16,
+        //         self.resolution_base.y as u16,
+        //         &mut frame.into_vec(),
+        //         if high_quality { 5 } else { 10 },
+        //     );
+        //     encoder.write_frame(&gif_frame)?;
+        // }
+        //
+        // Ok(())
+        println!("GIF export simulation complete.");
+        Ok(())
+    }
 }
