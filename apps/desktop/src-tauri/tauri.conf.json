@@ -13,10 +13,10 @@
   "app": {
     "macOSPrivateApi": true,
     "security": {
-      "csp": null,
+       "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost",
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA/**"]
+        "scope": ["$APPDATA/**", "**/*.jpg", "$RESOURCE/**", "$HOME/**"]
       }
     }
   },
@@ -51,6 +51,9 @@
       "icons/128x128@2x.png",
       "icons/macos/icon.icns",
       "icons/icon.ico"
+    ],
+    "resources": [
+      "assets/backgrounds/macOS/*"
     ],
     "macOS": {
       "dmg": {

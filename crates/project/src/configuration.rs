@@ -23,7 +23,7 @@ pub type Color = [u16; 3];
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum BackgroundSource {
     Wallpaper {
-        id: u16,
+        path: Option<String>,
     },
     Image {
         path: Option<String>,

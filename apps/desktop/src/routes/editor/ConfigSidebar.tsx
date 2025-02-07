@@ -6,21 +6,28 @@ import { Tabs as KTabs } from "@kobalte/core/tabs";
 import { cx } from "cva";
 import {
   batch,
-  type Component,
   createResource,
   createRoot,
   createSignal,
   For,
   Show,
+  onMount,
 } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { createWritableMemo } from "@solid-primitives/memo";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { produce } from "solid-js/store";
+import { writeFile, BaseDirectory } from "@tauri-apps/plugin-fs";
+import {
+  appDataDir,
+  appLocalDataDir,
+  join,
+  resolveResource,
+} from "@tauri-apps/api/path";
+import { convertFileSrc } from "@tauri-apps/api/core";
 
 import {
   type BackgroundSource,
-  type CursorType,
   type CursorAnimationStyle,
   commands,
 } from "~/utils/tauri";
@@ -40,6 +47,7 @@ import {
 } from "./projectConfig";
 import { generalSettingsStore } from "~/store";
 import { type as ostype } from "@tauri-apps/plugin-os";
+import toast from "solid-toast";
 
 const BACKGROUND_SOURCES = {
   wallpaper: "Wallpaper",
@@ -61,6 +69,21 @@ const CURSOR_ANIMATION_STYLES: Record<CursorAnimationStyle, string> = {
   fast: "Fast & Responsive",
 } as const;
 
+const WALLPAPER_NAMES = [
+  "sequoia-dark",
+  "sequoia-light",
+  "sonoma-clouds",
+  "sonoma-dark",
+  "sonoma-evening",
+  "sonoma-fromabove",
+  "sonoma-horizon",
+  "sonoma-light",
+  "sonoma-river",
+  "ventura-dark",
+  "ventura-semi-dark",
+  "ventura",
+] as const;
+
 export function ConfigSidebar() {
   const {
     selectedTab,
@@ -72,12 +95,61 @@ export function ConfigSidebar() {
     setState,
   } = useEditorContext();
 
+  const [wallpapers] = createResource(async () => {
+    return Promise.all(
+      WALLPAPER_NAMES.map(async (id) => {
+        try {
+          // Get the validated path from Rust
+          const path = await commands.getWallpaperPath(`${id}.jpg`);
+
+          // Convert to proper URL
+          const url = convertFileSrc(path);
+
+          return {
+            id,
+            url,
+          };
+        } catch (err) {
+          return {
+            id,
+            url: null,
+          };
+        }
+      })
+    );
+  });
+
+  // Validate background source path on mount
+  onMount(() => {
+    if (
+      project.background.source.type === "wallpaper" ||
+      project.background.source.type === "image"
+    ) {
+      const path = project.background.source.path;
+      if (path) {
+        if (project.background.source.type === "image") {
+          // Use async IIFE to check file existence
+          (async () => {
+            try {
+              await fetch(convertFileSrc(path), { method: "HEAD" });
+            } catch {
+              setProject("background", "source", {
+                type: "image",
+                path: null,
+              });
+            }
+          })();
+        }
+      }
+    }
+  });
+
   const backgrounds: {
     [K in BackgroundSource["type"]]: Extract<BackgroundSource, { type: K }>;
   } = {
     wallpaper: {
       type: "wallpaper",
-      id: 0,
+      path: null,
     },
     image: {
       type: "image",
@@ -100,6 +172,8 @@ export function ConfigSidebar() {
       (await generalSettingsStore.get())?.hapticsEnabled && ostype() === "macos"
   );
   generalSettingsStore.listen(() => hapticsEnabledOptions.refetch());
+
+  let fileInput!: HTMLInputElement;
 
   return (
     <KTabs
@@ -151,12 +225,6 @@ export function ConfigSidebar() {
                 const tab = v as BackgroundSource["type"];
 
                 switch (tab) {
-                  case "wallpaper": {
-                    setProject("background", "source", {
-                      ...backgrounds.wallpaper,
-                    });
-                    return;
-                  }
                   case "image": {
                     setProject("background", "source", {
                       ...backgrounds.image,
@@ -172,6 +240,12 @@ export function ConfigSidebar() {
                   case "gradient": {
                     setProject("background", "source", {
                       ...backgrounds.gradient,
+                    });
+                    return;
+                  }
+                  case "wallpaper": {
+                    setProject("background", "source", {
+                      ...backgrounds.wallpaper,
                     });
                     return;
                   }
@@ -206,20 +280,15 @@ export function ConfigSidebar() {
                 </div>
                 <For each={BACKGROUND_SOURCES_LIST}>
                   {(item) => {
-                    const comingSoon = item === "wallpaper" || item === "image";
-
                     const el = (props?: object) => (
                       <KTabs.Trigger
                         class="flex-1 text-gray-400 py-1 z-10 ui-selected:text-gray-500 peer outline-none transition-colors duration-100"
                         value={item}
-                        disabled={comingSoon}
                         {...props}
                       >
                         {BACKGROUND_SOURCES[item]}
                       </KTabs.Trigger>
                     );
-
-                    if (comingSoon) return <ComingSoonTooltip as={el} />;
 
                     return el({});
                   }}
@@ -232,39 +301,152 @@ export function ConfigSidebar() {
                 <KRadioGroup
                   value={
                     project.background.source.type === "wallpaper"
-                      ? project.background.source.id.toString()
+                      ? wallpapers()?.find((w) =>
+                          (
+                            project.background.source as { path?: string }
+                          ).path?.includes(w.id)
+                        )?.url ?? undefined
                       : undefined
                   }
-                  onChange={(v) => {
-                    backgrounds.wallpaper = {
-                      type: "wallpaper",
-                      id: Number(v),
-                    };
-                    setProject("background", "source", backgrounds.wallpaper);
+                  onChange={async (photoUrl) => {
+                    try {
+                      const wallpaper = wallpapers()?.find(
+                        (w) => w.url === photoUrl
+                      );
+                      if (!wallpaper) return;
+
+                      // Get the raw path without any URL prefixes
+                      const rawPath = decodeURIComponent(
+                        photoUrl.replace("file://", "")
+                      );
+
+                      setProject("background", "source", {
+                        type: "wallpaper",
+                        path: rawPath,
+                      } as const);
+                    } catch (err) {
+                      console.error("Failed to set wallpaper:", err);
+                      toast.error("Failed to set wallpaper");
+                    }
                   }}
-                  class="grid grid-cols-7 grid-rows-2 gap-2 h-[6.8rem]"
+                  class="grid grid-cols-7 gap-2 h-auto"
                 >
-                  <For each={[...Array(14).keys()]}>
-                    {(_, i) => (
-                      <KRadioGroup.Item
-                        value={i().toString()}
-                        class="col-span-1 row-span-1"
-                      >
-                        <KRadioGroup.ItemInput class="peer" />
-                        <KRadioGroup.ItemControl class="cursor-pointer bg-gray-100 rounded-lg w-full h-full border border-gray-200 ui-checked:border-blue-300 peer-focus-visible:border-2 peer-focus-visible:border-blue-300" />
-                      </KRadioGroup.Item>
-                    )}
-                  </For>
+                  <Show
+                    when={!wallpapers.loading}
+                    fallback={
+                      <div class="col-span-7 flex items-center justify-center h-32 text-gray-400">
+                        Loading wallpapers...
+                      </div>
+                    }
+                  >
+                    <For each={wallpapers()?.filter((p) => p.url !== null)}>
+                      {(photo) => (
+                        <KRadioGroup.Item
+                          value={photo.url!}
+                          class="aspect-square relative group"
+                        >
+                          <KRadioGroup.ItemInput class="peer" />
+                          <KRadioGroup.ItemControl class="cursor-pointer w-full h-full overflow-hidden rounded-lg border border-gray-200 ui-checked:border-blue-300 ui-checked:ring-2 ui-checked:ring-blue-300 peer-focus-visible:border-2 peer-focus-visible:border-blue-300">
+                            <img
+                              src={photo.url!}
+                              alt="Wallpaper option"
+                              class="w-full h-full object-cover"
+                            />
+                          </KRadioGroup.ItemControl>
+                        </KRadioGroup.Item>
+                      )}
+                    </For>
+                  </Show>
                 </KRadioGroup>
               </KTabs.Content>
               <KTabs.Content value="image">
-                <button
-                  type="button"
-                  class="p-[0.75rem] bg-gray-100 w-full rounded-[0.5rem] border flex flex-col items-center justify-center gap-[0.5rem] text-gray-400"
+                <Show
+                  when={
+                    project.background.source.type === "image" &&
+                    project.background.source.path
+                  }
+                  fallback={
+                    <button
+                      type="button"
+                      onClick={() => fileInput.click()}
+                      class="p-[0.75rem] bg-gray-100 w-full rounded-[0.5rem] border flex flex-col items-center justify-center gap-[0.5rem] text-gray-400 hover:bg-gray-200 transition-colors duration-100"
+                    >
+                      <IconCapImage class="size-6" />
+                      <span>Click to select or drag and drop image</span>
+                    </button>
+                  }
                 >
-                  <IconCapImage class="size-6" />
-                  <span>Click to select or drag and drop image</span>
-                </button>
+                  {(source) => (
+                    <div class="group relative w-full h-48 rounded-md overflow-hidden border border-gray-200">
+                      <img
+                        src={convertFileSrc(source())}
+                        class="w-full h-full object-cover"
+                        alt="Selected background"
+                      />
+                      <div class="absolute top-2 right-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setProject("background", "source", {
+                              type: "color",
+                              value: [255, 255, 255],
+                            })
+                          }
+                          class="bg-black/50 text-white p-2 rounded-full hover:bg-black/70 transition-colors"
+                        >
+                          <IconCapCircleX class="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </Show>
+                <input
+                  type="file"
+                  ref={fileInput}
+                  class="hidden"
+                  accept="image/apng, image/avif, image/jpeg, image/png, image/webp"
+                  onChange={async (e) => {
+                    const file = e.currentTarget.files?.[0];
+                    if (!file) return;
+
+                    /* 
+                    this is a Tauri bug in WebKit so we need to validate the file type manually 
+                    https://github.com/tauri-apps/tauri/issues/9158
+                    */
+                    const validExtensions = [
+                      "jpg",
+                      "jpeg",
+                      "png",
+                      "gif",
+                      "webp",
+                      "bmp",
+                    ];
+                    const extension = file.name.split(".").pop()?.toLowerCase();
+                    if (!extension || !validExtensions.includes(extension)) {
+                      toast.error("Invalid image file type");
+                      return;
+                    }
+
+                    try {
+                      const fileName = `bg-${Date.now()}-${file.name}`;
+                      const arrayBuffer = await file.arrayBuffer();
+                      const uint8Array = new Uint8Array(arrayBuffer);
+
+                      const fullPath = `${await appDataDir()}/${fileName}`;
+
+                      await writeFile(fileName, uint8Array, {
+                        baseDir: BaseDirectory.AppData,
+                      });
+
+                      setProject("background", "source", {
+                        type: "image",
+                        path: fullPath,
+                      });
+                    } catch (err) {
+                      console.error("Failed to save image:", err);
+                    }
+                  }}
+                />
               </KTabs.Content>
               <KTabs.Content value="color">
                 <Show
@@ -335,10 +517,7 @@ export function ConfigSidebar() {
 
                             createRoot((dispose) =>
                               createEventListenerMap(window, {
-                                mouseup: () => {
-                                  resumeHistory();
-                                  dispose();
-                                },
+                                mouseup: () => dispose(),
                                 mousemove: (moveEvent) => {
                                   const rawNewAngle =
                                     Math.round(

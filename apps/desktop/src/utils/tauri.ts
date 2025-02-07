@@ -166,6 +166,9 @@ async writeClipboardString(text: string) : Promise<null> {
 },
 async performHapticFeedback(pattern: HapticPattern | null, time: HapticPerformanceTime | null) : Promise<null> {
     return await TAURI_INVOKE("perform_haptic_feedback", { pattern, time });
+},
+async getWallpaperPath(filename: string) : Promise<string> {
+    return await TAURI_INVOKE("get_wallpaper_path", { filename });
 }
 }
 
@@ -227,7 +230,7 @@ export type AudioMeta = { path: string }
 export type AuthStore = { token: string; user_id: string | null; expires: number; plan: Plan | null; intercom_hash: string | null }
 export type AuthenticationInvalid = null
 export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; inset: number; crop: Crop | null }
-export type BackgroundSource = { type: "wallpaper"; id: number } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number] } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number }
+export type BackgroundSource = { type: "wallpaper"; path: string | null } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number] } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number }
 export type Bounds = { x: number; y: number; width: number; height: number }
 export type Camera = { hide: boolean; mirror: boolean; position: CameraPosition; size: number; zoom_size: number | null; rounding: number; shadow: number }
 export type CameraMeta = { path: string; fps?: number }
