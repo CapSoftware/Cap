@@ -572,7 +572,7 @@ const SCREEN_MAX_PADDING: f64 = 0.4;
 
 impl ProjectUniforms {
     fn get_crop(options: &RenderOptions, project: &ProjectConfiguration) -> Crop {
-        project.background.crop.unwrap_or(Crop {
+        project.background.crop.as_ref().cloned().unwrap_or(Crop {
             position: XY { x: 0, y: 0 },
             size: XY {
                 x: options.screen_size.x,

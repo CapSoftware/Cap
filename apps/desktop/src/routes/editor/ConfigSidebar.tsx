@@ -22,6 +22,8 @@ import {
   type BackgroundSource,
   type CursorType,
   type CursorAnimationStyle,
+  type ExportFormat,
+  type GifQuality,
   commands,
 } from "~/utils/tauri";
 import { useEditorContext } from "./context";
@@ -60,6 +62,12 @@ const CURSOR_ANIMATION_STYLES: Record<CursorAnimationStyle, string> = {
   regular: "Regular",
   fast: "Fast & Responsive",
 } as const;
+
+type TabDef = {
+  id: "background" | "camera" | "audio" | "cursor";
+  icon: typeof IconCapImage;
+  disabled?: boolean;
+};
 
 export function ConfigSidebar() {
   const {
@@ -109,22 +117,17 @@ export function ConfigSidebar() {
       <KTabs.List class="h-[3.5rem] flex flex-row divide-x divide-gray-200 text-black/50 text-lg relative z-40 overflow-x-auto border-b border-gray-200 shrink-0">
         <For
           each={[
-            { id: "background" as const, icon: IconCapImage },
+            { id: "background", icon: IconCapImage },
             {
-              id: "camera" as const,
+              id: "camera",
               icon: IconCapCamera,
               disabled: editorInstance.recordings.segments.every(
                 (s) => s.camera === null
               ),
             },
-            // {
-            //   id: "transcript" as const,
-            //   icon: IconCapMessageBubble,
-            // },
-            { id: "audio" as const, icon: IconCapAudioOn },
-            { id: "cursor" as const, icon: IconCapCursor },
-            // { id: "hotkeys" as const, icon: IconCapHotkeys },
-          ]}
+            { id: "audio", icon: IconCapAudioOn },
+            { id: "cursor", icon: IconCapCursor },
+          ] satisfies TabDef[]}
         >
           {(item) => (
             <KTabs.Trigger
@@ -646,6 +649,63 @@ export function ConfigSidebar() {
               <span>Cursor settings coming soon</span>
             </div>
           )}
+        </KTabs.Content>
+        <KTabs.Content value="export" class="flex flex-col gap-[1.5rem]">
+          <Field name="Export Settings" icon={<IconCapUpload />}>
+            <div class="space-y-4">
+              <Subfield name="File Type">
+                <RadioGroup
+                  value={project.export?.format ?? DEFAULT_PROJECT_CONFIG.export.format}
+                  onChange={(value: string) => {
+                    batch(() => {
+                      setProject("export", "format", value as ExportFormat);
+                      if (value === 'gif') {
+                        setProject("export", "gifFps", 15);
+                      }
+                    });
+                  }}
+                  class="flex flex-row gap-2 text-gray-400"
+                >
+                  <RadioGroup.Item value="mp4" class="flex-1 text-gray-400 border rounded-lg p-2 cursor-pointer ui-checked:bg-gray-100 ui-checked:text-gray-500 hover:bg-gray-50 text-center">
+                    MP4
+                  </RadioGroup.Item>
+                  <RadioGroup.Item value="gif" class="flex-1 text-gray-400 border rounded-lg p-2 cursor-pointer ui-checked:bg-gray-100 ui-checked:text-gray-500 hover:bg-gray-50 text-center">
+                    GIF
+                  </RadioGroup.Item>
+                </RadioGroup>
+              </Subfield>
+
+              <Show when={project.export?.format === "gif"}>
+                <Subfield name="GIF Quality">
+                  <RadioGroup
+                    value={project.export?.gifQuality ?? DEFAULT_PROJECT_CONFIG.export.gifQuality}
+                    onChange={(value: string) => setProject(produce(draft => {
+                      if (!draft.export) draft.export = { ...DEFAULT_PROJECT_CONFIG.export };
+                      draft.export.gifQuality = value as GifQuality;
+                    }))}
+                    class="flex flex-row gap-2 text-gray-400"
+                  >
+                    <RadioGroup.Item value="standard" class="flex-1 text-gray-400 border rounded-lg p-2 cursor-pointer ui-checked:bg-gray-100 ui-checked:text-gray-500 hover:bg-gray-50 text-center">
+                      Standard
+                    </RadioGroup.Item>
+                    <RadioGroup.Item value="high" class="flex-1 text-gray-400 border rounded-lg p-2 cursor-pointer ui-checked:bg-gray-100 ui-checked:text-gray-500 hover:bg-gray-50 text-center">
+                      High Quality
+                    </RadioGroup.Item>
+                  </RadioGroup>
+                </Subfield>
+
+                <Subfield name="FPS">
+                  <Slider
+                    value={[project.export?.gifFps ?? DEFAULT_PROJECT_CONFIG.export.gifFps]}
+                    onChange={(v) => setProject("export", "gifFps", v[0])}
+                    minValue={10}
+                    maxValue={30}
+                    step={5}
+                  />
+                </Subfield>
+              </Show>
+            </div>
+          </Field>
         </KTabs.Content>
         <KTabs.Content value="hotkeys">
           <Field name="Hotkeys" icon={<IconCapHotkeys />}>

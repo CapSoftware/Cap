@@ -25,7 +25,7 @@ import { makePersisted } from "@solid-primitives/storage";
 import { createStore, produce, SetStoreFunction } from "solid-js/store";
 import IconLucideClock from "~icons/lucide/clock";
 
-import { commands, events, RenderProgress, UploadResult } from "~/utils/tauri";
+import { commands, events, RenderProgress, UploadResult, ProjectConfiguration } from "~/utils/tauri";
 import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
 import { createPresets } from "~/utils/createPresets";
 import { FPS, OUTPUT_SIZE } from "./editor/context";
@@ -111,10 +111,12 @@ export default function () {
                 const normalizedPath = media.path.replace(/\\/g, "/");
                 const mediaId = normalizedPath.split("/").pop()?.split(".")[0]!;
 
+                const presets = createPresets();
+
                 const type = media.type ?? "recording";
                 const isRecording = type !== "screenshot";
 
-                const { copy, save, upload, actionState } =
+                const { copy, save, upload, actionState, setActionState, selectedFormat, setSelectedFormat } =
                   createRecordingMutations(media, (e) => {
                     if (e === "upgradeRequired") setShowUpgradeTooltip(true);
                   });
@@ -206,13 +208,14 @@ export default function () {
                           >
                             {(state) => (
                               <ActionProgressOverlay
-                                title={
-                                  state.type === "rendering"
-                                    ? "Rendering video"
+                                title={(() => {
+                                  const isGif = presets.getDefaultConfig()?.export?.format === "gif";
+                                  return state.type === "rendering"
+                                    ? `Rendering ${isGif ? "GIF" : "video"}`
                                     : state.type === "copying"
                                     ? "Copying to clipboard"
-                                    : "Copied to clipboard"
-                                }
+                                    : "Copied to clipboard";
+                                })()}
                                 progressPercentage={actionProgressPercentage(
                                   actionState
                                 )}
@@ -232,11 +235,12 @@ export default function () {
                                     return "Preparing";
 
                                   if (isRecording) {
+                                    const isGif = selectedFormat() === "gif" || presets.getDefaultConfig()?.export?.format === "gif";
                                     if (state.type === "rendering")
-                                      return "Rendering video";
+                                      return `Rendering ${isGif ? "GIF" : "video"}`;
                                     if (state.type === "saving")
-                                      return "Saving video";
-                                    return "Saved video";
+                                      return `Saving ${isGif ? "GIF" : "video"}`;
+                                    return `Saved ${isGif ? "GIF" : "video"}`;
                                   } else {
                                     if (state.type === "rendering")
                                       return "Rendering image";
@@ -250,8 +254,12 @@ export default function () {
                                 )}
                                 progressMessage={
                                   state.type === "choosing-location" &&
-                                  `Choose where to ${
-                                    isRecording ? "export video" : "save image"
+                                  `Choose where to save ${
+                                    state.mediaType === "gif" 
+                                      ? "gif" 
+                                      : state.mediaType === "video" 
+                                        ? "video" 
+                                        : "image"
                                   }...`
                                 }
                               />
@@ -265,13 +273,14 @@ export default function () {
                           >
                             {(state) => (
                               <ActionProgressOverlay
-                                title={
-                                  state.type === "rendering"
-                                    ? "Rendering video"
+                                title={(() => {
+                                  const isGif = presets.getDefaultConfig()?.export?.format === "gif";
+                                  return state.type === "rendering"
+                                    ? `Rendering ${isGif ? "GIF" : "video"}`
                                     : state.type === "uploading"
                                     ? "Creating shareable link"
-                                    : "Shareable link copied"
-                                }
+                                    : "Shareable link copied";
+                                })()}
                                 progressPercentage={actionProgressPercentage(
                                   actionState
                                 )}
@@ -378,12 +387,57 @@ export default function () {
                             <Button
                               variant="white"
                               size="sm"
-                              onClick={() => save.mutate()}
+                              onClick={() => {
+                                if (isRecording) {
+                                  setActionState({
+                                    type: "save",
+                                    state: { type: "choosing-format" }
+                                  });
+                                } else {
+                                  save.mutate();
+                                }
+                              }}
                             >
                               Export
                             </Button>
                           </div>
                         </div>
+                        <Show when={actionState.type === "save" && actionState.state.type === "choosing-format"}>
+                          <div
+                            style={{
+                              "background-color": "rgba(0, 0, 0, 0.85)",
+                            }}
+                            class="absolute inset-0 flex items-center justify-center z-[999999] pointer-events-auto"
+                          >
+                            <div class="w-[80%] text-center">
+                              <h3 class="text-sm font-medium mb-3 text-gray-50">Choose Export Format</h3>
+                              <div class="flex justify-center gap-2">
+                                <Button
+                                  variant="white"
+                                  size="sm"
+                                  onClick={() => {
+                                    setSelectedFormat("mp4");
+                                    setActionState({ type: "idle" });
+                                    save.mutate();
+                                  }}
+                                >
+                                  MP4 Video
+                                </Button>
+                                <Button
+                                  variant="white"
+                                  size="sm"
+                                  onClick={() => {
+                                    setSelectedFormat("gif");
+                                    setActionState({ type: "idle" });
+                                    save.mutate();
+                                  }}
+                                >
+                                  GIF
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        </Show>
                         <Show when={metadata.latest}>
                           {(metadata) => (
                             <div
@@ -443,6 +497,40 @@ function ActionProgressOverlay(props: {
   progressPercentage: number;
   progressMessage?: string | false;
 }) {
+  const getProgressMessage = () => {
+    if (typeof props.progressMessage === "string") {
+      return props.progressMessage;
+    }
+    
+    if (props.title.includes("GIF")) {
+      const percentage = Math.floor(props.progressPercentage);
+      if (percentage >= 100) return "Finalizing...";
+      if (percentage > 90) return "Writing GIF to disk...";
+      if (percentage > 80) return "Optimizing GIF...";
+      return `Processing frames: ${percentage}%`;
+    }
+    
+    return `${Math.floor(props.progressPercentage)}%`;
+  };
+
+  const getTitle = () => {
+    // If it's a choosing-location state with mediaType, show appropriate message
+    if (props.title === "Preparing" && typeof props.progressMessage === "string") {
+      if (props.progressMessage.includes("Choose where to save")) {
+        if (props.progressMessage.includes("gif")) {
+          return "Choose where to save GIF...";
+        }
+        if (props.progressMessage.includes("video")) {
+          return "Choose where to save video...";
+        }
+        if (props.progressMessage.includes("image")) {
+          return "Choose where to save image...";
+        }
+      }
+    }
+    return props.title;
+  };
+
   return (
     <div
       style={{
@@ -452,7 +540,7 @@ function ActionProgressOverlay(props: {
     >
       <div class="w-[80%] text-center">
         <h3 class="text-sm font-medium mb-3 text-gray-50 dark:text-gray-500">
-          {props.title}
+          {getTitle()}
         </h3>
         <div class="w-full bg-gray-400 rounded-full h-2.5 mb-2">
           <div
@@ -464,9 +552,7 @@ function ActionProgressOverlay(props: {
         </div>
 
         <p class="text-xs text-gray-50 dark:text-gray-500 mt-2">
-          {typeof props.progressMessage === "string"
-            ? props.progressMessage
-            : `${Math.floor(props.progressPercentage)}%`}
+          {getProgressMessage()}
         </p>
       </div>
     </div>
@@ -554,6 +640,7 @@ function createRecordingMutations(
   onEvent: (e: "upgradeRequired") => void
 ) {
   const presets = createPresets();
+  const [selectedFormat, setSelectedFormat] = createSignal<"mp4" | "gif">("mp4");
 
   const normalizedPath = media.path.replace(/\\/g, "/");
   const mediaId = normalizedPath.split("/").pop()?.split(".")[0]!;
@@ -584,13 +671,25 @@ function createRecordingMutations(
         if (isRecording) {
           const progress = createRenderProgressChannel("copy", setActionState);
 
+          // Get current config and check format
+          const currentConfig = presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG;
+          const format = currentConfig.export?.format ?? "mp4";
+          const exportConfig: ProjectConfiguration = {
+            ...currentConfig,
+            export: {
+              format,
+              gifQuality: "high",
+              gifFps: format === "gif" ? 15 : 30
+            }
+          };
+
           // First try to get existing rendered video
           const outputPath = await commands.exportVideo(
             mediaId,
-            presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
+            exportConfig,
             progress,
             false,
-            FPS,
+            format === "gif" ? 15 : FPS,
             OUTPUT_SIZE
           );
 
@@ -645,17 +744,21 @@ function createRecordingMutations(
       const suggestedName = meta.pretty_name || defaultName;
 
       const fileType = isRecording ? "recording" : "screenshot";
-      const extension = isRecording ? ".mp4" : ".png";
+      const extension = isRecording 
+        ? (selectedFormat() === "gif" ? ".gif" : ".mp4") 
+        : ".png";
 
-      const fullFileName = suggestedName.endsWith(extension)
-        ? suggestedName
-        : `${suggestedName}${extension}`;
+      // Remove any existing extensions before adding the correct one
+      const baseFileName = suggestedName.replace(/\.(mp4|gif|png)$/, "");
+      const fullFileName = `${baseFileName}${extension}`;
 
       setActionState({
         type: "save",
         state: {
           type: "choosing-location",
-          mediaType: isRecording ? "video" : "screenshot",
+          mediaType: isRecording 
+            ? (selectedFormat() === "gif" ? "gif" : "video")
+            : "screenshot",
         },
       });
 
@@ -677,13 +780,23 @@ function createRecordingMutations(
       if (isRecording) {
         const progress = createRenderProgressChannel("save", setActionState);
 
+        // Update config with export format
+        const exportConfig: ProjectConfiguration = {
+          ...DEFAULT_PROJECT_CONFIG,
+          export: {
+            format: selectedFormat(),
+            gifQuality: "high",
+            gifFps: selectedFormat() === "gif" ? 15 : 30
+          }
+        };
+
         // Always force re-render when saving
         const outputPath = await commands.exportVideo(
           mediaId,
-          presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
+          exportConfig,
           progress,
-          true, // Force re-render
-          FPS,
+          true,
+          selectedFormat() === "gif" ? 15 : FPS,
           OUTPUT_SIZE
         );
 
@@ -838,7 +951,7 @@ function createRecordingMutations(
     type: "idle",
   });
 
-  return { copy, save, upload, actionState };
+  return { copy, save, upload, actionState, setActionState, selectedFormat, setSelectedFormat };
 }
 
 type ActionState =
@@ -853,7 +966,8 @@ type ActionState =
   | {
       type: "save";
       state:
-        | { type: "choosing-location"; mediaType: "video" | "screenshot" }
+        | { type: "choosing-format" }
+        | { type: "choosing-location"; mediaType: "video" | "screenshot" | "gif" }
         | { type: "rendering"; state: RenderState }
         | { type: "saving" }
         | { type: "saved" };

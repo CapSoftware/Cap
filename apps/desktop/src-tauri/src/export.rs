@@ -1,6 +1,5 @@
 use crate::{
-    create_editor_instance_impl, get_video_metadata, windows::ShowCapWindow, AuthStore,
-    RenderProgress, VideoType,
+    create_editor_instance_impl, get_video_metadata, notifications, windows::ShowCapWindow, AuthStore, RenderProgress, VideoType
 };
 use cap_project::{ProjectConfiguration, XY};
 use std::path::PathBuf;
@@ -106,10 +105,30 @@ pub async fn export_video(
     match result {
         Ok(_) => {
             ShowCapWindow::PrevRecordings.show(&app).ok();
+            
+            // Send the appropriate notification based on export format
+            notifications::send_notification(
+                &app,
+                match project.export.format {
+                    cap_project::ExportFormat::Gif => notifications::NotificationType::GifSaved,
+                    cap_project::ExportFormat::Mp4 => notifications::NotificationType::VideoSaved,
+                }
+            );
+            
             Ok(output_path)
         }
         Err(e) => {
             sentry::capture_message(&e.to_string(), sentry::Level::Error);
+            
+            // Send the appropriate error notification based on export format
+            notifications::send_notification(
+                &app,
+                match project.export.format {
+                    cap_project::ExportFormat::Gif => notifications::NotificationType::GifSaveFailed,
+                    cap_project::ExportFormat::Mp4 => notifications::NotificationType::VideoSaveFailed,
+                }
+            );
+            
             Err(e.to_string())
         }
     }

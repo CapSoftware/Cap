@@ -668,13 +668,23 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
     println!("Attempting to copy file from {} to {}", src, dst);
 
     let is_screenshot = src.contains("screenshots/");
-
     let src_path = std::path::Path::new(&src);
+    
     if !src_path.exists() {
         return Err(format!("Source file {} does not exist", src));
     }
 
-    if !is_screenshot {
+    // Check if either source or destination is a GIF
+    let is_gif = src_path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("gif"))
+        .unwrap_or(false) ||
+        std::path::Path::new(&dst).extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("gif"))
+        .unwrap_or(false);
+
+    if !is_screenshot && !is_gif {
         if !is_valid_mp4(src_path) {
             // Wait for up to 10 seconds for the file to become valid
             let mut attempts = 0;
@@ -725,7 +735,8 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
                     continue;
                 }
 
-                if !is_screenshot && !is_valid_mp4(std::path::Path::new(&dst)) {
+                // Only validate MP4 if it's not a screenshot and not a GIF
+                if !is_screenshot && !is_gif && !is_valid_mp4(std::path::Path::new(&dst)) {
                     last_error = Some("Destination file is not a valid MP4".to_string());
                     // Delete the invalid file
                     let _ = tokio::fs::remove_file(&dst).await;
@@ -1524,20 +1535,22 @@ async fn save_file_dialog(
         .to_string();
     println!("File name after removing .cap suffix: {}", file_name);
 
-    // Determine the file type and extension
-    let (name, extension) = match file_type.as_str() {
-        "recording" => {
-            println!("File type is recording");
-            ("MP4 Video", "mp4")
-        }
-        "screenshot" => {
-            println!("File type is screenshot");
-            ("PNG Image", "png")
-        }
-        _ => {
-            println!("Invalid file type: {}", file_type);
-            return Err("Invalid file type".to_string());
-        }
+    // Determine the file type and extension from the filename first
+    let extension = if file_name.ends_with(".gif") {
+        "gif"
+    } else if file_name.ends_with(".mp4") {
+        "mp4"
+    } else if file_type == "screenshot" {
+        "png"
+    } else {
+        "mp4"  // default for recordings
+    };
+
+    let name = match extension {
+        "gif" => "GIF Animation",
+        "mp4" => "MP4 Video",
+        "png" => "PNG Image",
+        _ => "Video",
     };
 
     println!(

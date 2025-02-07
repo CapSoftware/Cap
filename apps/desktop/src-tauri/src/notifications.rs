@@ -13,6 +13,8 @@ pub enum NotificationType {
     ScreenshotCopiedToClipboard,
     ScreenshotSaveFailed,
     ScreenshotCopyFailed,
+    GifSaved,
+    GifSaveFailed,
 }
 
 impl NotificationType {
@@ -59,6 +61,12 @@ impl NotificationType {
             NotificationType::ScreenshotCopyFailed => (
                 "Copy Failed",
                 "Unable to copy screenshot to clipboard. Please try again",
+                true,
+            ),
+            NotificationType::GifSaved => ("GIF Export Complete", "GIF exported successfully", false),
+            NotificationType::GifSaveFailed => (
+                "GIF Export Failed",
+                "Unable to export GIF. Please try again",
                 true,
             ),
         }

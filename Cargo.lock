@@ -986,8 +986,12 @@ dependencies = [
  "cap-utils",
  "ffmpeg-next",
  "futures",
+ "gifski",
  "image 0.25.5",
+ "imgref",
  "mp4",
+ "rayon",
+ "rgb",
  "tempfile",
  "thiserror 1.0.63",
  "tokio",
@@ -2882,6 +2886,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "gif-dispose"
+version = "5.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e1aa07391f3d9c279f388cea6faf291555dd891df59bed01d4378583df946ac"
+dependencies = [
+ "gif",
+ "imgref",
+ "rgb",
+]
+
+[[package]]
+name = "gifski"
+version = "1.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa3aeeed337aa658d1c2d90cb21b6db6172d1b8a84dfb462ade81f48eb0fd5eb"
+dependencies = [
+ "clap 4.5.23",
+ "crossbeam-channel",
+ "crossbeam-utils",
+ "dunce",
+ "gif",
+ "gif-dispose",
+ "imagequant",
+ "imgref",
+ "lodepng",
+ "loop9",
+ "natord",
+ "num-traits",
+ "ordered-channel",
+ "pbr",
+ "quick-error",
+ "resize",
+ "rgb",
+ "wild",
+ "y4m",
+ "yuv",
+]
+
+[[package]]
 name = "gimli"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3516,6 +3559,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "imagequant"
+version = "4.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1cede25dbe6a6c3842989fa341cba6e2a4dc33ba12a33f553baeed257f965cb5"
+dependencies = [
+ "arrayvec",
+ "once_cell",
+ "rayon",
+ "rgb",
+ "thread_local",
+]
+
+[[package]]
 name = "imgref"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3917,6 +3973,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lodepng"
+version = "3.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7720115060cd38dcfe5c758525a43fd34dc615d0566374212ff0dc3b6151eac"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "libc",
+ "rgb",
+]
+
+[[package]]
 name = "log"
 version = "0.4.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4253,6 +4321,12 @@ dependencies = [
  "security-framework-sys",
  "tempfile",
 ]
+
+[[package]]
+name = "natord"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "308d96db8debc727c3fd9744aac51751243420e46edf401010908da7f8d5e57c"
 
 [[package]]
 name = "ndk"
@@ -4919,6 +4993,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
+name = "ordered-channel"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f0bc569ca0974cb90125f52cf76f7b6ad3a072301beba78eb0aa4174c4964ed"
+dependencies = [
+ "crossbeam-channel",
+]
+
+[[package]]
 name = "ordered-multimap"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5030,6 +5113,17 @@ name = "pathdiff"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8835116a5c179084a830efb3adc117ab007512b535bc1a21c991d3b32a6b44dd"
+
+[[package]]
+name = "pbr"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed5827dfa0d69b6c92493d6c38e633bbaa5937c153d0d7c28bf12313f8c6d514"
+dependencies = [
+ "crossbeam-channel",
+ "libc",
+ "winapi",
+]
 
 [[package]]
 name = "peeking_take_while"
@@ -5856,6 +5950,16 @@ dependencies = [
  "web-sys",
  "webpki-roots",
  "windows-registry 0.2.0",
+]
+
+[[package]]
+name = "resize"
+version = "0.8.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87a103d0b47e783f4579149402f7499397ab25540c7a57b2f70487a5d2d20ef0"
+dependencies = [
+ "rayon",
+ "rgb",
 ]
 
 [[package]]
@@ -8709,6 +8813,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7219d36b6eac893fa81e84ebe06485e7dcbb616177469b142df14f1f4deb1311"
 
 [[package]]
+name = "wild"
+version = "2.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3131afc8c575281e1e80f36ed6a092aa502c08b18ed7524e86fbbb12bb410e1"
+dependencies = [
+ "glob",
+]
+
+[[package]]
 name = "winapi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9344,6 +9457,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "539a77ee7c0de333dcc6da69b177380a0b81e0dacfa4f7344c465a36871ee601"
 
 [[package]]
+name = "y4m"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
+
+[[package]]
 name = "yansi"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9356,6 +9475,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fe5c30ade05e61656247b2e334a031dfd0cc466fadef865bdcdea8d537951bf1"
 dependencies = [
  "winapi",
+]
+
+[[package]]
+name = "yuv"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8cbe2d856acbe6d86c0fa6f458b73e962834061ca2f7f94c6e4633afc9efd4d4"
+dependencies = [
+ "num-traits",
+ "rgb",
 ]
 
 [[package]]
