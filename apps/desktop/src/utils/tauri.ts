@@ -166,6 +166,9 @@ async writeClipboardString(text: string) : Promise<null> {
 },
 async performHapticFeedback(pattern: HapticPattern | null, time: HapticPerformanceTime | null) : Promise<null> {
     return await TAURI_INVOKE("perform_haptic_feedback", { pattern, time });
+},
+async getWallpaperPath(filename: string) : Promise<string> {
+    return await TAURI_INVOKE("get_wallpaper_path", { filename });
 }
 }
 
@@ -226,10 +229,10 @@ export type AudioInputLevelChange = number
 export type AudioMeta = { path: string }
 export type AuthStore = { token: string; user_id: string | null; expires: number; plan: Plan | null; intercom_hash: string | null }
 export type AuthenticationInvalid = null
-export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; inset: number; crop: Crop | null }
-export type BackgroundSource = { type: "wallpaper"; id: number } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number] } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number }
+export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; inset: number; crop: Crop | null; shadow: number; advancedShadow?: ShadowConfiguration | null }
+export type BackgroundSource = { type: "wallpaper"; path: string | null } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number] } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number }
 export type Bounds = { x: number; y: number; width: number; height: number }
-export type Camera = { hide: boolean; mirror: boolean; position: CameraPosition; size: number; zoom_size: number | null; rounding: number; shadow: number }
+export type Camera = { hide: boolean; mirror: boolean; position: CameraPosition; size: number; zoom_size: number | null; rounding: number; shadow: number; advanced_shadow?: ShadowConfiguration | null }
 export type CameraMeta = { path: string; fps?: number }
 export type CameraPosition = { x: CameraXPosition; y: CameraYPosition }
 export type CameraXPosition = "left" | "center" | "right"
@@ -289,6 +292,7 @@ export type S3UploadMeta = { id: string; user_id: string; aws_region?: string; a
 export type ScreenCaptureTarget = ({ variant: "window" } & CaptureWindow) | ({ variant: "screen" } & CaptureScreen) | ({ variant: "area" } & CaptureArea)
 export type SegmentRecordings = { display: Video; camera: Video | null; audio: Audio | null }
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordings; path: string; prettyName: string }
+export type ShadowConfiguration = { size: number; opacity: number; blur: number }
 export type SharingMeta = { id: string; link: string }
 export type ShowCapWindow = "Setup" | "Main" | { Settings: { page: string | null } } | { Editor: { project_id: string } } | "PrevRecordings" | "WindowCaptureOccluder" | { CaptureArea: { screen: CaptureScreen } } | { Camera: { ws_port: number } } | { InProgressRecording: { position: [number, number] | null } } | "Upgrade" | "SignIn"
 export type SingleSegment = { display: Display; camera?: CameraMeta | null; audio?: AudioMeta | null; cursor?: string | null }

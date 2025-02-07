@@ -16,7 +16,7 @@ import { createStore } from "solid-js/store";
 import { createMutation } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
-import { type Crop, events } from "~/utils/tauri";
+import { type Crop, events, commands } from "~/utils/tauri";
 import {
   EditorContextProvider,
   EditorInstanceContextProvider,
@@ -71,22 +71,45 @@ export function Editor() {
 }
 
 function Inner() {
-  const { project, playbackTime, setPlaybackTime, playing, previewTime } =
-    useEditorContext();
+  const {
+    project,
+    playbackTime,
+    setPlaybackTime,
+    playing,
+    previewTime,
+    videoId,
+  } = useEditorContext();
 
-  onMount(() => {
-    events.editorStateChanged.listen((e) => {
-      renderFrame.clear();
-      setPlaybackTime(e.payload.playhead_position / FPS);
-    });
+  const [isLoading, setIsLoading] = createSignal(true);
+
+  onMount(async () => {
+    try {
+      // Initialize critical resources first
+      await Promise.all([
+        commands.createEditorInstance(videoId),
+        // Load initial project config
+      ]);
+
+      setIsLoading(false);
+
+      events.editorStateChanged.listen((e) => {
+        renderFrame.clear();
+        setPlaybackTime(e.payload.playhead_position / FPS);
+      });
+    } catch (error) {
+      console.error("Failed to initialize editor:", error);
+      setIsLoading(false);
+    }
   });
 
   const renderFrame = throttle((time: number) => {
-    events.renderFrameEvent.emit({
-      frame_number: Math.max(Math.floor(time * FPS), 0),
-      fps: FPS,
-      resolution_base: OUTPUT_SIZE,
-    });
+    if (!playing()) {
+      events.renderFrameEvent.emit({
+        frame_number: Math.max(Math.floor(time * FPS), 0),
+        fps: FPS,
+        resolution_base: OUTPUT_SIZE,
+      });
+    }
   }, 1000 / FPS);
 
   const frameNumberToRender = createMemo(() => {
@@ -114,22 +137,34 @@ function Inner() {
   );
 
   return (
-    <div class="w-screen h-screen flex flex-col">
-      <Header />
-      <div
-        class="p-5 pt-0 flex-1 w-full overflow-y-hidden flex flex-col gap-4 bg-gray-50 leading-5 animate-in fade-in"
-        data-tauri-drag-region
-      >
-        <div class="rounded-2xl overflow-hidden  shadow border flex-1 flex flex-col divide-y bg-white">
-          <div class="flex flex-row flex-1 divide-x overflow-y-hidden">
-            <Player />
-            <ConfigSidebar />
+    <Show
+      when={!isLoading()}
+      fallback={
+        <div class="w-screen h-screen flex items-center justify-center bg-gray-50">
+          <div class="flex flex-col items-center gap-4">
+            <div class="animate-spin rounded-full h-8 w-8 border-2 border-gray-300 border-t-blue-400" />
+            <span class="text-gray-500">Loading editor...</span>
           </div>
-          <Timeline />
         </div>
-        <Dialogs />
+      }
+    >
+      <div class="w-screen h-screen flex flex-col">
+        <Header />
+        <div
+          class="p-5 pt-0 flex-1 w-full overflow-y-hidden flex flex-col gap-4 bg-gray-50 leading-5 animate-in fade-in"
+          data-tauri-drag-region
+        >
+          <div class="rounded-2xl overflow-hidden shadow border flex-1 flex flex-col divide-y bg-white">
+            <div class="flex flex-row flex-1 divide-x overflow-y-hidden">
+              <Player />
+              <ConfigSidebar />
+            </div>
+            <Timeline />
+          </div>
+          <Dialogs />
+        </div>
       </div>
-    </div>
+    </Show>
   );
 }
 

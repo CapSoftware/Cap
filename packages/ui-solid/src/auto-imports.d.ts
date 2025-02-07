@@ -52,6 +52,7 @@ declare global {
   const IconLucideBell: typeof import('~icons/lucide/bell.jsx')['default']
   const IconLucideCamera: typeof import('~icons/lucide/camera.jsx')['default']
   const IconLucideCheck: typeof import('~icons/lucide/check.jsx')['default']
+  const IconLucideChevronDown: typeof import('~icons/lucide/chevron-down.jsx')['default']
   const IconLucideClock: typeof import('~icons/lucide/clock.jsx')['default']
   const IconLucideDatabase: typeof import('~icons/lucide/database.jsx')['default']
   const IconLucideEdit: typeof import('~icons/lucide/edit.jsx')['default']

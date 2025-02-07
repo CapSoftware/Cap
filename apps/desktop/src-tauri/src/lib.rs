@@ -1951,6 +1951,28 @@ fn configure_logging(folder: &PathBuf) -> tracing_appender::non_blocking::Worker
     _guard
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn get_wallpaper_path(app: AppHandle, filename: String) -> Result<String, String> {
+    let resource_path = app
+        .path()
+        .resource_dir()
+        .map_err(|_| "Failed to get resource dir".to_string())?
+        .join("assets")
+        .join("backgrounds")
+        .join(if filename.ends_with(".jpg") {
+            filename
+        } else {
+            format!("{}.jpg", filename)
+        });
+
+    if resource_path.exists() {
+        Ok(resource_path.to_string_lossy().to_string())
+    } else {
+        Err(format!("Resource not found: {:?}", resource_path))
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run() {
     let tauri_context = tauri::generate_context!();
@@ -2017,7 +2039,8 @@ pub async fn run() {
             global_message_dialog,
             show_window,
             write_clipboard_string,
-            platform::perform_haptic_feedback
+            platform::perform_haptic_feedback,
+            get_wallpaper_path
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2084,6 +2107,7 @@ pub async fn run() {
         .plugin(flags::plugin::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_fs::init())
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags({

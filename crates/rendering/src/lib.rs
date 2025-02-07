@@ -49,13 +49,16 @@ pub struct WebcamStyle {
     pub shadow_offset: (f32, f32),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type, Copy)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub enum Background {
     Color([f32; 4]),
     Gradient {
         start: [f32; 4],
         end: [f32; 4],
         angle: f32,
+    },
+    Image {
+        path: String,
     },
 }
 
@@ -83,7 +86,21 @@ impl From<BackgroundSource> for Background {
                 ],
                 angle: angle as f32,
             },
-            _ => unimplemented!(),
+            BackgroundSource::Image { path } | BackgroundSource::Wallpaper { path } => {
+                if let Some(path) = path {
+                    if !path.is_empty() {
+                        let clean_path = path
+                            .replace("asset://localhost/", "/")
+                            .replace("asset://", "")
+                            .replace("localhost//", "/");
+
+                        if std::path::Path::new(&clean_path).exists() {
+                            return Background::Image { path: clean_path };
+                        }
+                    }
+                }
+                Background::Color([1.0, 1.0, 1.0, 1.0])
+            }
         }
     }
 }
@@ -164,6 +181,8 @@ pub enum RenderingError {
     BufferMapFailed(#[from] wgpu::BufferAsyncError),
     #[error("Sending frame to channel failed")]
     ChannelSendFrameFailed(#[from] mpsc::error::SendError<(RenderedFrame, u32)>),
+    #[error("Failed to load image: {0}")]
+    ImageLoadError(String),
 }
 
 pub struct RenderSegment {
@@ -181,7 +200,7 @@ pub async fn render_video_to_channel(
     resolution_base: XY<u32>,
     is_upgraded: bool,
 ) -> Result<(), RenderingError> {
-    let constants = RenderVideoConstants::new(options, meta).await?;
+    let mut constants = RenderVideoConstants::new(options, meta).await?;
     let recordings = ProjectRecordings::new(meta);
 
     ffmpeg::init().unwrap();
@@ -232,11 +251,10 @@ pub async fn render_video_to_channel(
                 resolution_base,
                 is_upgraded,
             );
-
             let frame = produce_frame(
                 &constants,
                 segment_frames,
-                background,
+                background.clone(),
                 &uniforms,
                 resolution_base,
             )
@@ -317,6 +335,8 @@ pub struct RenderVideoConstants {
     watermark_texture: wgpu::Texture,
     watermark_bind_group: wgpu::BindGroup,
     watermark_dimensions: (u32, u32),
+    image_background_pipeline: ImageBackgroundPipeline,
+    background_textures: std::sync::Arc<tokio::sync::RwLock<HashMap<String, wgpu::Texture>>>,
 }
 
 impl RenderVideoConstants {
@@ -431,6 +451,9 @@ impl RenderVideoConstants {
             ],
         });
 
+        let image_background_pipeline = ImageBackgroundPipeline::new(&device);
+        let background_textures = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+
         Ok(Self {
             _instance: instance,
             _adapter: adapter,
@@ -445,6 +468,8 @@ impl RenderVideoConstants {
             watermark_texture,
             watermark_bind_group,
             watermark_dimensions: dimensions,
+            image_background_pipeline,
+            background_textures,
         })
     }
 
@@ -797,7 +822,23 @@ impl ProjectUniforms {
                 velocity_uv: velocity,
                 motion_blur_amount,
                 camera_motion_blur_amount: 0.0,
-                _padding: [0.0; 4],
+                shadow: project.background.shadow,
+                shadow_size: project
+                    .background
+                    .advanced_shadow
+                    .as_ref()
+                    .map_or(50.0, |s| s.size),
+                shadow_opacity: project
+                    .background
+                    .advanced_shadow
+                    .as_ref()
+                    .map_or(18.0, |s| s.opacity),
+                shadow_blur: project
+                    .background
+                    .advanced_shadow
+                    .as_ref()
+                    .map_or(50.0, |s| s.blur),
+                _padding: [0.0; 3],
             }
         };
 
@@ -844,17 +885,6 @@ impl ProjectUniforms {
 
                 // Calculate camera motion blur based on zoom transition
                 let camera_motion_blur = 0.0;
-                // {
-                //     let base_blur = project.motion_blur.unwrap_or(0.2);
-                //     let zoom_delta = (current_zoom.amount - prev_zoom.amount).abs() as f32;
-
-                //     // Calculate a smooth transition factor
-                //     let transition_speed = 30.0f32; // Frames per second
-                //     let transition_factor = (zoom_delta * transition_speed).min(1.0);
-
-                //     // Reduce multiplier from 3.0 to 2.0 for weaker blur
-                //     (base_blur * 2.0 * transition_factor).min(1.0)
-                // };
 
                 CompositeVideoFrameUniforms {
                     output_size,
@@ -875,7 +905,23 @@ impl ProjectUniforms {
                     velocity_uv: [0.0, 0.0],
                     motion_blur_amount,
                     camera_motion_blur_amount: camera_motion_blur,
-                    _padding: [0.0; 4],
+                    shadow: project.camera.shadow,
+                    shadow_size: project
+                        .camera
+                        .advanced_shadow
+                        .as_ref()
+                        .map_or(50.0, |s| s.size),
+                    shadow_opacity: project
+                        .camera
+                        .advanced_shadow
+                        .as_ref()
+                        .map_or(18.0, |s| s.opacity),
+                    shadow_blur: project
+                        .camera
+                        .advanced_shadow
+                        .as_ref()
+                        .map_or(50.0, |s| s.blur),
+                    _padding: [0.0; 3],
                 }
             });
 
@@ -954,22 +1000,111 @@ pub async fn produce_frame(
 
     let mut output_is_left = true;
 
-    // First, clear the background
-    {
-        let bind_group = constants.gradient_or_color_pipeline.bind_group(
-            &constants.device,
-            &GradientOrColorUniforms::from(background).to_buffer(&constants.device),
-        );
+    // First, handle the background
+    match background {
+        Background::Image { path } => {
+            // Use entry API to handle texture caching
+            let mut textures = constants.background_textures.write().await;
+            let texture = match textures.entry(path.clone()) {
+                std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    // Load image with error propagation
+                    let img = image::open(&path)
+                        .map_err(|e| RenderingError::ImageLoadError(e.to_string()))?;
+                    let rgba = img.to_rgba8();
+                    let dimensions = img.dimensions();
 
-        do_render_pass(
-            &mut encoder,
-            get_either(texture_views, output_is_left),
-            &constants.gradient_or_color_pipeline.render_pipeline,
-            bind_group,
-            wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-        );
+                    // Create texture
+                    let texture = constants.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("Background Image Texture"),
+                        size: wgpu::Extent3d {
+                            width: dimensions.0,
+                            height: dimensions.1,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                        view_formats: &[],
+                    });
 
-        output_is_left = !output_is_left;
+                    // Write texture data
+                    constants.queue.write_texture(
+                        wgpu::ImageCopyTexture {
+                            texture: &texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        &rgba,
+                        wgpu::ImageDataLayout {
+                            offset: 0,
+                            bytes_per_row: Some(4 * dimensions.0),
+                            rows_per_image: Some(dimensions.1),
+                        },
+                        wgpu::Extent3d {
+                            width: dimensions.0,
+                            height: dimensions.1,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+
+                    e.insert(texture)
+                }
+            };
+
+            // Create uniforms and bind group
+            let image_uniforms = ImageBackgroundUniforms {
+                output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
+                padding: uniforms.project.background.padding as f32,
+                _padding: 0.0,
+            };
+
+            let uniform_buffer =
+                constants
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Image Background Uniforms"),
+                        contents: bytemuck::cast_slice(&[image_uniforms]),
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    });
+
+            let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let bind_group = constants.image_background_pipeline.bind_group(
+                &constants.device,
+                &uniform_buffer,
+                &texture_view,
+            );
+
+            do_render_pass(
+                &mut encoder,
+                get_either(texture_views, output_is_left),
+                &constants.image_background_pipeline.render_pipeline,
+                bind_group,
+                wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            );
+
+            output_is_left = !output_is_left;
+        }
+        _ => {
+            // Existing gradient/color background handling
+            let bind_group = constants.gradient_or_color_pipeline.bind_group(
+                &constants.device,
+                &GradientOrColorUniforms::from(background).to_buffer(&constants.device),
+            );
+
+            do_render_pass(
+                &mut encoder,
+                get_either(texture_views, output_is_left),
+                &constants.gradient_or_color_pipeline.render_pipeline,
+                bind_group,
+                wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            );
+
+            output_is_left = !output_is_left;
+        }
     }
 
     // Then render the screen frame
@@ -1463,7 +1598,11 @@ struct CompositeVideoFrameUniforms {
     pub mirror_x: f32,
     pub motion_blur_amount: f32,
     pub camera_motion_blur_amount: f32,
-    _padding: [f32; 4],
+    pub shadow: f32,
+    pub shadow_size: f32,
+    pub shadow_opacity: f32,
+    pub shadow_blur: f32,
+    _padding: [f32; 3],
 }
 
 impl CompositeVideoFrameUniforms {
@@ -1627,6 +1766,9 @@ impl From<Background> for GradientOrColorUniforms {
                 angle,
                 _padding: [0.0; 3],
             },
+            Background::Image { .. } => {
+                unreachable!("Image backgrounds should be handled separately")
+            }
         }
     }
 }
@@ -2291,4 +2433,149 @@ struct WatermarkUniforms {
     position: [f32; 2],
     opacity: f32,
     is_upgraded: f32,
+}
+
+struct ImageBackgroundPipeline {
+    pub bind_group_layout: wgpu::BindGroupLayout,
+    pub render_pipeline: wgpu::RenderPipeline,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct ImageBackgroundUniforms {
+    output_size: [f32; 2],
+    padding: f32,
+    _padding: f32, // For alignment
+}
+
+impl ImageBackgroundPipeline {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("ImageBackgroundBindGroupLayout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("ImageBackgroundShader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/image-background.wgsl").into()),
+        });
+
+        let empty_constants: HashMap<String, f64> = HashMap::new();
+
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("ImageBackgroundPipeline"),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("ImageBackgroundPipelineLayout"),
+                    bind_group_layouts: &[&bind_group_layout],
+                    push_constant_ranges: &[],
+                }),
+            ),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &empty_constants,
+                    zero_initialize_workgroup_memory: false,
+                    vertex_pulling_transform: false,
+                },
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &empty_constants,
+                    zero_initialize_workgroup_memory: false,
+                    vertex_pulling_transform: false,
+                },
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        Self {
+            bind_group_layout,
+            render_pipeline,
+        }
+    }
+
+    pub fn bind_group(
+        &self,
+        device: &wgpu::Device,
+        uniforms: &wgpu::Buffer,
+        texture: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ImageBackgroundBindGroup"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniforms.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(texture),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        })
+    }
 }

@@ -53,7 +53,7 @@ import {
 
 const getAuth = cache(async () => {
   const value = await authStore.get();
-  const local = import.meta.env.VITE_LOCAL_MODE === "true";
+  const local = import.meta.env.VITE_ENVIRONMENT === "development";
 
   const res = await apiClient.desktop.getUserPlan({
     headers: await protectedHeaders(),

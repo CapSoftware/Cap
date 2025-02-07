@@ -11,15 +11,15 @@ export const DEFAULT_PROJECT_CONFIG = {
   aspectRatio: null,
   background: {
     source: {
-      type: "gradient",
-      from: DEFAULT_GRADIENT_FROM,
-      to: DEFAULT_GRADIENT_TO,
+      type: "wallpaper",
+      path: "sequoia-dark",
     },
     blur: 0,
     padding: 0,
     rounding: 0,
     inset: 0,
     crop: null,
+    shadow: 50,
   },
   camera: {
     hide: false,
