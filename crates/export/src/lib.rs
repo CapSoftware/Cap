@@ -7,16 +7,16 @@ use cap_media::{
 };
 use cap_project::{ProjectConfiguration, RecordingMeta, XY};
 use cap_rendering::{
-    ProjectUniforms, RecordingSegmentDecoders, RenderSegment, RenderVideoConstants, RenderedFrame,
-    SegmentVideoPaths, ProjectRecordings,
+    ProjectRecordings, ProjectUniforms, RecordingSegmentDecoders, RenderSegment,
+    RenderVideoConstants, RenderedFrame, SegmentVideoPaths,
 };
 use futures::FutureExt;
-use gifski::{self, Settings, progress::NoProgress, Collector};
+use gifski::{self, progress::NoProgress, Collector, Settings};
 use image::{ImageBuffer, Rgba};
 use imgref::Img;
+use rayon::prelude::*;
 use rgb::RGBA8;
 use std::{fs::File, path::PathBuf, sync::Arc, time::Duration};
-use rayon::prelude::*;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ExportError {
@@ -358,7 +358,7 @@ where
         let recordings = ProjectRecordings::new(&self.meta);
         let duration = get_duration(&recordings, &self.meta, &self.project);
         let total_frames = (self.fps as f64 * duration).ceil() as u32;
-        
+
         println!(
             "Final export duration: {} seconds ({} frames at {}fps)",
             duration, total_frames, self.fps
@@ -378,13 +378,13 @@ where
 
         let output_path_clone = output_path.clone();
         let on_progress = self.on_progress;
-        
+
         // Create a channel for collecting frames
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel(32); // Increased buffer for better throughput
-        
+
         // Clone on_progress for the receive task
         let on_progress_receive = on_progress.clone();
-        
+
         // Spawn a task to receive frames and collect them
         let receive_task = tokio::spawn(async move {
             let mut frames = Vec::with_capacity(total_frames as usize);
@@ -394,58 +394,55 @@ where
                 on_progress_receive(frame_number + 1);
             }
             // Send all collected frames through the sync channel
-            frame_tx.send(frames).map_err(|e| {
-                ExportError::Other(format!("Failed to send frames: {}", e))
-            })?;
+            frame_tx
+                .send(frames)
+                .map_err(|e| ExportError::Other(format!("Failed to send frames: {}", e)))?;
             Ok::<_, ExportError>(())
         });
 
         let encoder_thread = tokio::task::spawn_blocking(move || {
-            let (collector, writer) = gifski::new(settings)
-                .map_err(|e| ExportError::Other(e.to_string()))?;
+            let (collector, writer) =
+                gifski::new(settings).map_err(|e| ExportError::Other(e.to_string()))?;
 
             let writer_handle = std::thread::spawn(move || {
                 println!("Starting to write final GIF file to disk...");
-                writer.write(
-                    File::create(&output_path_clone).map_err(ExportError::IO)?,
-                    &mut NoProgress{},
-                )
-                .map_err(|e| ExportError::Other(e.to_string()))
+                writer
+                    .write(
+                        File::create(&output_path_clone).map_err(ExportError::IO)?,
+                        &mut NoProgress {},
+                    )
+                    .map_err(|e| ExportError::Other(e.to_string()))
             });
 
             // Receive all frames at once
-            let frames = frame_rx.recv().map_err(|e| 
-                ExportError::Other(format!("Failed to receive frames: {}", e)))?;
+            let frames = frame_rx
+                .recv()
+                .map_err(|e| ExportError::Other(format!("Failed to receive frames: {}", e)))?;
 
             println!("Processing {} frames in parallel", frames.len());
 
             // Process frames in parallel using rayon
-            let chunk_size = frames.len() / 10;  // Split into 10 chunks for progress
+            let chunk_size = frames.len() / 10; // Split into 10 chunks for progress
             let chunks = frames.par_chunks(chunk_size.max(1));
-            
+
             // Process all chunks first
             chunks.enumerate().try_for_each(|(chunk_idx, chunk)| {
                 chunk.iter().try_for_each(|(frame, frame_number)| {
-                    let rgba_pixels: Vec<RGBA8> = frame.data
+                    let rgba_pixels: Vec<RGBA8> = frame
+                        .data
                         .chunks_exact(4)
                         .map(|chunk| RGBA8::new(chunk[0], chunk[1], chunk[2], chunk[3]))
                         .collect();
-                    
-                    let pixels = Img::new(
-                        rgba_pixels,
-                        frame.width as usize,
-                        frame.height as usize,
-                    );
-                    
+
+                    let pixels = Img::new(rgba_pixels, frame.width as usize, frame.height as usize);
+
                     let timestamp = *frame_number as f64 / fps as f64;
-                    
-                    collector.add_frame_rgba(
-                        *frame_number as usize,
-                        pixels,
-                        timestamp,
-                    ).map_err(|e| ExportError::Other(e.to_string()))
+
+                    collector
+                        .add_frame_rgba(*frame_number as usize, pixels, timestamp)
+                        .map_err(|e| ExportError::Other(e.to_string()))
                 })?;
-                
+
                 Ok::<_, ExportError>(())
             })?;
 
@@ -455,20 +452,21 @@ where
             }
 
             println!("Completed parallel GIF encoding of {} frames", frames.len());
-            
+
             // GIF assembly phase: total_frames + 11
             on_progress(total_frames + 11);
             println!("Starting final GIF assembly and optimization...");
-            
+
             drop(collector);
-            
+
             // Writing to disk phase: total_frames + 12
             on_progress(total_frames + 12);
             println!("Writing optimized GIF to disk (this may take a moment)...");
-            
-            let result = writer_handle.join()
+
+            let result = writer_handle
+                .join()
                 .map_err(|_| ExportError::Other("GIF writer thread panicked".into()))?;
-                
+
             // Complete phase: total_frames + 13
             on_progress(total_frames + 13);
             println!("GIF file has been successfully written to disk");
@@ -476,9 +474,9 @@ where
         });
 
         // Wait for all tasks to complete
-        let (video_result, receive_result, encoder_result) = 
+        let (video_result, receive_result, encoder_result) =
             tokio::join!(render_video_task, receive_task, encoder_thread);
-        
+
         video_result?;
         receive_result?;
         encoder_result?;

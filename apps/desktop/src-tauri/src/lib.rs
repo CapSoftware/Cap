@@ -669,20 +669,22 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
 
     let is_screenshot = src.contains("screenshots/");
     let src_path = std::path::Path::new(&src);
-    
+
     if !src_path.exists() {
         return Err(format!("Source file {} does not exist", src));
     }
 
     // Check if either source or destination is a GIF
-    let is_gif = src_path.extension()
+    let is_gif = src_path
+        .extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.eq_ignore_ascii_case("gif"))
-        .unwrap_or(false) ||
-        std::path::Path::new(&dst).extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("gif"))
-        .unwrap_or(false);
+        .unwrap_or(false)
+        || std::path::Path::new(&dst)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("gif"))
+            .unwrap_or(false);
 
     if !is_screenshot && !is_gif {
         if !is_valid_mp4(src_path) {
@@ -1543,7 +1545,7 @@ async fn save_file_dialog(
     } else if file_type == "screenshot" {
         "png"
     } else {
-        "mp4"  // default for recordings
+        "mp4" // default for recordings
     };
 
     let name = match extension {

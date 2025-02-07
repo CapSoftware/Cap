@@ -63,7 +63,9 @@ impl NotificationType {
                 "Unable to copy screenshot to clipboard. Please try again",
                 true,
             ),
-            NotificationType::GifSaved => ("GIF Export Complete", "GIF exported successfully", false),
+            NotificationType::GifSaved => {
+                ("GIF Export Complete", "GIF exported successfully", false)
+            }
             NotificationType::GifSaveFailed => (
                 "GIF Export Failed",
                 "Unable to export GIF. Please try again",
