@@ -597,7 +597,7 @@ const SCREEN_MAX_PADDING: f64 = 0.4;
 
 impl ProjectUniforms {
     fn get_crop(options: &RenderOptions, project: &ProjectConfiguration) -> Crop {
-        project.background.crop.unwrap_or(Crop {
+        project.background.crop.as_ref().cloned().unwrap_or(Crop {
             position: XY { x: 0, y: 0 },
             size: XY {
                 x: options.screen_size.x,
@@ -822,7 +822,23 @@ impl ProjectUniforms {
                 velocity_uv: velocity,
                 motion_blur_amount,
                 camera_motion_blur_amount: 0.0,
-                _padding: [0.0; 4],
+                shadow: project.background.shadow,
+                shadow_size: project
+                    .background
+                    .advanced_shadow
+                    .as_ref()
+                    .map_or(50.0, |s| s.size),
+                shadow_opacity: project
+                    .background
+                    .advanced_shadow
+                    .as_ref()
+                    .map_or(18.0, |s| s.opacity),
+                shadow_blur: project
+                    .background
+                    .advanced_shadow
+                    .as_ref()
+                    .map_or(50.0, |s| s.blur),
+                _padding: [0.0; 3],
             }
         };
 
@@ -869,17 +885,6 @@ impl ProjectUniforms {
 
                 // Calculate camera motion blur based on zoom transition
                 let camera_motion_blur = 0.0;
-                // {
-                //     let base_blur = project.motion_blur.unwrap_or(0.2);
-                //     let zoom_delta = (current_zoom.amount - prev_zoom.amount).abs() as f32;
-
-                //     // Calculate a smooth transition factor
-                //     let transition_speed = 30.0f32; // Frames per second
-                //     let transition_factor = (zoom_delta * transition_speed).min(1.0);
-
-                //     // Reduce multiplier from 3.0 to 2.0 for weaker blur
-                //     (base_blur * 2.0 * transition_factor).min(1.0)
-                // };
 
                 CompositeVideoFrameUniforms {
                     output_size,
@@ -900,7 +905,23 @@ impl ProjectUniforms {
                     velocity_uv: [0.0, 0.0],
                     motion_blur_amount,
                     camera_motion_blur_amount: camera_motion_blur,
-                    _padding: [0.0; 4],
+                    shadow: project.camera.shadow,
+                    shadow_size: project
+                        .camera
+                        .advanced_shadow
+                        .as_ref()
+                        .map_or(50.0, |s| s.size),
+                    shadow_opacity: project
+                        .camera
+                        .advanced_shadow
+                        .as_ref()
+                        .map_or(18.0, |s| s.opacity),
+                    shadow_blur: project
+                        .camera
+                        .advanced_shadow
+                        .as_ref()
+                        .map_or(50.0, |s| s.blur),
+                    _padding: [0.0; 3],
                 }
             });
 
@@ -1577,7 +1598,11 @@ struct CompositeVideoFrameUniforms {
     pub mirror_x: f32,
     pub motion_blur_amount: f32,
     pub camera_motion_blur_amount: f32,
-    _padding: [f32; 4],
+    pub shadow: f32,
+    pub shadow_size: f32,
+    pub shadow_opacity: f32,
+    pub shadow_blur: f32,
+    _padding: [f32; 3],
 }
 
 impl CompositeVideoFrameUniforms {

@@ -53,7 +53,11 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "assets/backgrounds/macOS/*"
+      "assets/backgrounds/macOS/*",
+      "assets/backgrounds/blue/*",
+      "assets/backgrounds/dark/*",
+      "assets/backgrounds/orange/*",
+      "assets/backgrounds/purple/*"
     ],
     "macOS": {
       "dmg": {

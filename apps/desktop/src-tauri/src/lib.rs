@@ -1947,8 +1947,11 @@ async fn get_wallpaper_path(app: AppHandle, filename: String) -> Result<String, 
         .map_err(|_| "Failed to get resource dir".to_string())?
         .join("assets")
         .join("backgrounds")
-        .join("macOS")
-        .join(filename);
+        .join(if filename.ends_with(".jpg") {
+            filename
+        } else {
+            format!("{}.jpg", filename)
+        });
 
     if resource_path.exists() {
         Ok(resource_path.to_string_lossy().to_string())

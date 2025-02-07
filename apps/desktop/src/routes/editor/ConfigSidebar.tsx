@@ -25,6 +25,7 @@ import {
   resolveResource,
 } from "@tauri-apps/api/path";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { Collapsible } from "@kobalte/core/collapsible";
 
 import {
   type BackgroundSource,
@@ -70,18 +71,50 @@ const CURSOR_ANIMATION_STYLES: Record<CursorAnimationStyle, string> = {
 } as const;
 
 const WALLPAPER_NAMES = [
-  "sequoia-dark",
-  "sequoia-light",
-  "sonoma-clouds",
-  "sonoma-dark",
-  "sonoma-evening",
-  "sonoma-fromabove",
-  "sonoma-horizon",
-  "sonoma-light",
-  "sonoma-river",
-  "ventura-dark",
-  "ventura-semi-dark",
-  "ventura",
+  // macOS wallpapers
+  "macOS/sequoia-dark",
+  "macOS/sequoia-light",
+  "macOS/sonoma-clouds",
+  "macOS/sonoma-dark",
+  "macOS/sonoma-evening",
+  "macOS/sonoma-fromabove",
+  "macOS/sonoma-horizon",
+  "macOS/sonoma-light",
+  "macOS/sonoma-river",
+  "macOS/ventura-dark",
+  "macOS/ventura-semi-dark",
+  "macOS/ventura",
+  // Blue wallpapers
+  "blue/1",
+  "blue/2",
+  "blue/3",
+  "blue/4",
+  "blue/5",
+  "blue/6",
+  // Purple wallpapers
+  "purple/1",
+  "purple/2",
+  "purple/3",
+  "purple/4",
+  "purple/5",
+  "purple/6",
+  // Dark wallpapers
+  "dark/1",
+  "dark/2",
+  "dark/3",
+  "dark/4",
+  "dark/5",
+  "dark/6",
+  // Orange wallpapers
+  "orange/1",
+  "orange/2",
+  "orange/3",
+  "orange/4",
+  "orange/5",
+  "orange/6",
+  "orange/7",
+  "orange/8",
+  "orange/9",
 ] as const;
 
 export function ConfigSidebar() {
@@ -93,46 +126,139 @@ export function ConfigSidebar() {
     editorInstance,
     state,
     setState,
+    history,
   } = useEditorContext();
 
-  const [wallpapers] = createResource(async () => {
-    return Promise.all(
-      WALLPAPER_NAMES.map(async (id) => {
+  const [wallpapers, { mutate }] = createResource(async () => {
+    // Only load visible wallpapers initially
+    const visibleWallpaperPaths = WALLPAPER_NAMES.slice(0, 21).map(
+      async (id) => {
         try {
-          // Get the validated path from Rust
-          const path = await commands.getWallpaperPath(`${id}.jpg`);
-
-          // Convert to proper URL
-          const url = convertFileSrc(path);
-
-          return {
-            id,
-            url,
-          };
+          const path = await commands.getWallpaperPath(id);
+          return { id, path };
         } catch (err) {
-          return {
-            id,
-            url: null,
-          };
+          console.error(`Failed to get path for ${id}:`, err);
+          return { id, path: null };
+        }
+      }
+    );
+
+    // Load initial batch
+    const initialPaths = await Promise.all(visibleWallpaperPaths);
+
+    return initialPaths
+      .filter((p) => p.path !== null)
+      .map(({ id, path }) => ({
+        id,
+        url: convertFileSrc(path!),
+        rawPath: path!,
+      }));
+  });
+
+  // Add a signal to track if additional wallpapers are being loaded
+  const [loadingMore, setLoadingMore] = createSignal(false);
+  // Add a signal to track if all wallpapers are loaded
+  const [allWallpapersLoaded, setAllWallpapersLoaded] = createSignal(false);
+
+  // Function to load more wallpapers
+  const loadMoreWallpapers = async () => {
+    if (loadingMore() || allWallpapersLoaded()) return;
+
+    setLoadingMore(true);
+    const currentLength = wallpapers()?.length || 0;
+
+    if (currentLength >= WALLPAPER_NAMES.length) {
+      setAllWallpapersLoaded(true);
+      setLoadingMore(false);
+      return;
+    }
+
+    const nextBatch = WALLPAPER_NAMES.slice(currentLength, currentLength + 21);
+    const newPaths = await Promise.all(
+      nextBatch.map(async (id) => {
+        try {
+          const path = await commands.getWallpaperPath(id);
+          return { id, path };
+        } catch (err) {
+          console.error(`Failed to get path for ${id}:`, err);
+          return { id, path: null };
         }
       })
     );
-  });
+
+    const newWallpapers = newPaths
+      .filter((p) => p.path !== null)
+      .map(({ id, path }) => ({
+        id,
+        url: convertFileSrc(path!),
+        rawPath: path!,
+      }));
+
+    mutate((prev) => [...(prev || []), ...newWallpapers]);
+    setLoadingMore(false);
+  };
+
+  const filteredWallpapers = () => wallpapers() ?? [];
 
   // Validate background source path on mount
-  onMount(() => {
+  onMount(async () => {
+    console.log("Validating background source path on mount");
+    console.log(
+      "Current project background source:",
+      project.background.source
+    );
+
     if (
       project.background.source.type === "wallpaper" ||
       project.background.source.type === "image"
     ) {
       const path = project.background.source.path;
+      console.log("Background source path:", path);
+
       if (path) {
-        if (project.background.source.type === "image") {
-          // Use async IIFE to check file existence
+        if (project.background.source.type === "wallpaper") {
+          // If the path is just the wallpaper ID (e.g. "sequoia-dark"), get the full path
+          if (
+            WALLPAPER_NAMES.includes(path as (typeof WALLPAPER_NAMES)[number])
+          ) {
+            console.log("Valid wallpaper ID found:", path);
+            // Wait for wallpapers to load
+            const loadedWallpapers = await wallpapers();
+            console.log("Loaded wallpapers:", loadedWallpapers);
+            if (!loadedWallpapers) return;
+
+            // Find the wallpaper with matching ID
+            const wallpaper = loadedWallpapers.find((w) => w.id === path);
+            console.log("Found matching wallpaper:", wallpaper);
+            if (!wallpaper?.url) return;
+
+            // Directly trigger the radio group's onChange handler
+            const radioGroupOnChange = async (photoUrl: string) => {
+              try {
+                const wallpaper = wallpapers()?.find((w) => w.url === photoUrl);
+                if (!wallpaper) return;
+
+                // Get the raw path without any URL prefixes
+                const rawPath = decodeURIComponent(
+                  photoUrl.replace("file://", "")
+                );
+
+                debouncedSetProject(rawPath);
+              } catch (err) {
+                toast.error("Failed to set wallpaper");
+              }
+            };
+
+            await radioGroupOnChange(wallpaper.url);
+          }
+        } else if (project.background.source.type === "image") {
           (async () => {
             try {
-              await fetch(convertFileSrc(path), { method: "HEAD" });
-            } catch {
+              const convertedPath = convertFileSrc(path);
+              console.log("Checking image existence at:", convertedPath);
+              await fetch(convertedPath, { method: "HEAD" });
+            } catch (err) {
+              console.error("Failed to verify image existence:", err);
               setProject("background", "source", {
                 type: "image",
                 path: null,
@@ -174,6 +300,20 @@ export function ConfigSidebar() {
   generalSettingsStore.listen(() => hapticsEnabledOptions.refetch());
 
   let fileInput!: HTMLInputElement;
+
+  // Optimize the debounced set project function
+  const debouncedSetProject = (wallpaperPath: string) => {
+    const resumeHistory = history.pause();
+    queueMicrotask(() => {
+      batch(() => {
+        setProject("background", "source", {
+          type: "wallpaper",
+          path: wallpaperPath,
+        } as const);
+        resumeHistory();
+      });
+    });
+  };
 
   return (
     <KTabs
@@ -308,24 +448,15 @@ export function ConfigSidebar() {
                         )?.url ?? undefined
                       : undefined
                   }
-                  onChange={async (photoUrl) => {
+                  onChange={(photoUrl) => {
                     try {
                       const wallpaper = wallpapers()?.find(
                         (w) => w.url === photoUrl
                       );
                       if (!wallpaper) return;
 
-                      // Get the raw path without any URL prefixes
-                      const rawPath = decodeURIComponent(
-                        photoUrl.replace("file://", "")
-                      );
-
-                      setProject("background", "source", {
-                        type: "wallpaper",
-                        path: rawPath,
-                      } as const);
+                      debouncedSetProject(wallpaper.rawPath);
                     } catch (err) {
-                      console.error("Failed to set wallpaper:", err);
                       toast.error("Failed to set wallpaper");
                     }
                   }}
@@ -335,11 +466,14 @@ export function ConfigSidebar() {
                     when={!wallpapers.loading}
                     fallback={
                       <div class="col-span-7 flex items-center justify-center h-32 text-gray-400">
-                        Loading wallpapers...
+                        <div class="flex flex-col items-center gap-2">
+                          <div class="animate-spin rounded-full h-6 w-6 border-2 border-gray-300 border-t-blue-400" />
+                          <span>Loading wallpapers...</span>
+                        </div>
                       </div>
                     }
                   >
-                    <For each={wallpapers()?.filter((p) => p.url !== null)}>
+                    <For each={filteredWallpapers().slice(0, 21)}>
                       {(photo) => (
                         <KRadioGroup.Item
                           value={photo.url!}
@@ -356,6 +490,60 @@ export function ConfigSidebar() {
                         </KRadioGroup.Item>
                       )}
                     </For>
+                    <Show when={filteredWallpapers().length > 21}>
+                      <Collapsible class="col-span-7">
+                        <Collapsible.Trigger
+                          class="w-full text-left text-gray-500 hover:text-gray-700 flex items-center gap-1 px-2 py-2"
+                          onClick={() => {
+                            if (!allWallpapersLoaded()) {
+                              loadMoreWallpapers();
+                            }
+                          }}
+                        >
+                          <Show
+                            when={!loadingMore()}
+                            fallback={
+                              <div class="flex items-center gap-2">
+                                <div class="animate-spin rounded-full h-4 w-4 border-2 border-gray-300 border-t-blue-400" />
+                                <span>Loading more wallpapers...</span>
+                              </div>
+                            }
+                          >
+                            <div class="flex items-center gap-1">
+                              <span class="data-[expanded]:hidden">
+                                Show more wallpapers
+                              </span>
+                              <span class="hidden data-[expanded]:inline">
+                                Hide wallpapers
+                              </span>
+                              <IconCapChevronDown class="w-4 h-4 ui-expanded:rotate-180 transition-transform" />
+                            </div>
+                          </Show>
+                        </Collapsible.Trigger>
+                        <Collapsible.Content class="animate-in slide-in-from-top-2 fade-in">
+                          <div class="grid grid-cols-7 gap-2">
+                            <For each={filteredWallpapers().slice(21)}>
+                              {(photo) => (
+                                <KRadioGroup.Item
+                                  value={photo.url!}
+                                  class="aspect-square relative group"
+                                >
+                                  <KRadioGroup.ItemInput class="peer" />
+                                  <KRadioGroup.ItemControl class="cursor-pointer w-full h-full overflow-hidden rounded-lg border border-gray-200 ui-checked:border-blue-300 ui-checked:ring-2 ui-checked:ring-blue-300 peer-focus-visible:border-2 peer-focus-visible:border-blue-300">
+                                    <img
+                                      src={photo.url!}
+                                      alt="Wallpaper option"
+                                      class="w-full h-full object-cover"
+                                      loading="lazy"
+                                    />
+                                  </KRadioGroup.ItemControl>
+                                </KRadioGroup.Item>
+                              )}
+                            </For>
+                          </div>
+                        </Collapsible.Content>
+                      </Collapsible>
+                    </Show>
                   </Show>
                 </KRadioGroup>
               </KTabs.Content>
@@ -443,7 +631,7 @@ export function ConfigSidebar() {
                         path: fullPath,
                       });
                     } catch (err) {
-                      console.error("Failed to save image:", err);
+                      toast.error("Failed to save image");
                     }
                   }}
                 />
@@ -592,6 +780,94 @@ export function ConfigSidebar() {
               step={0.1}
             />
           </Field>
+          <Field name="Shadow" icon={<IconCapShadow />}>
+            <div class="space-y-3">
+              <Slider
+                value={[project.background.shadow]}
+                onChange={(v) => {
+                  batch(() => {
+                    setProject("background", "shadow", v[0]);
+                    // Initialize advanced shadow settings if they don't exist and shadow is enabled
+                    if (v[0] > 0 && !project.background.advancedShadow) {
+                      setProject("background", "advancedShadow", {
+                        size: 50,
+                        opacity: 18,
+                        blur: 50,
+                      });
+                    }
+                  });
+                }}
+                minValue={0}
+                maxValue={100}
+                step={0.1}
+              />
+              <Collapsible>
+                <Collapsible.Trigger class="w-full text-left text-gray-500 hover:text-gray-700 flex items-center gap-1">
+                  Advanced shadow settings
+                  <IconCapChevronDown class="w-4 h-4 ui-expanded:rotate-180 transition-transform" />
+                </Collapsible.Trigger>
+                <Collapsible.Content class="space-y-3 mt-3 animate-in slide-in-from-top-2 fade-in">
+                  <div class="flex flex-col gap-2">
+                    <span class="text-gray-500 text-sm">Size</span>
+                    <Slider
+                      value={[project.background.advancedShadow?.size ?? 50]}
+                      onChange={(v) => {
+                        setProject("background", "advancedShadow", {
+                          ...(project.background.advancedShadow ?? {
+                            size: 50,
+                            opacity: 18,
+                            blur: 50,
+                          }),
+                          size: v[0],
+                        });
+                      }}
+                      minValue={0}
+                      maxValue={100}
+                      step={0.1}
+                    />
+                  </div>
+                  <div class="flex flex-col gap-2">
+                    <span class="text-gray-500 text-sm">Opacity</span>
+                    <Slider
+                      value={[project.background.advancedShadow?.opacity ?? 18]}
+                      onChange={(v) => {
+                        setProject("background", "advancedShadow", {
+                          ...(project.background.advancedShadow ?? {
+                            size: 50,
+                            opacity: 18,
+                            blur: 50,
+                          }),
+                          opacity: v[0],
+                        });
+                      }}
+                      minValue={0}
+                      maxValue={100}
+                      step={0.1}
+                    />
+                  </div>
+                  <div class="flex flex-col gap-2">
+                    <span class="text-gray-500 text-sm">Blur</span>
+                    <Slider
+                      value={[project.background.advancedShadow?.blur ?? 50]}
+                      onChange={(v) => {
+                        setProject("background", "advancedShadow", {
+                          ...(project.background.advancedShadow ?? {
+                            size: 50,
+                            opacity: 18,
+                            blur: 50,
+                          }),
+                          blur: v[0],
+                        });
+                      }}
+                      minValue={0}
+                      maxValue={100}
+                      step={0.1}
+                    />
+                  </div>
+                </Collapsible.Content>
+              </Collapsible>
+            </div>
+          </Field>
           {/* <ComingSoonTooltip>
             <Field name="Inset" icon={<IconCapInset />}>
               <Slider
@@ -707,6 +983,82 @@ export function ConfigSidebar() {
               step={0.1}
             />
           </Field>
+          <Field name="Shadow" icon={<IconCapShadow />}>
+            <div class="space-y-3">
+              <Slider
+                value={[project.camera.shadow]}
+                onChange={(v) => setProject("camera", "shadow", v[0])}
+                minValue={0}
+                maxValue={100}
+                step={0.1}
+              />
+              <Collapsible>
+                <Collapsible.Trigger class="w-full text-left text-gray-500 hover:text-gray-700 flex items-center gap-1">
+                  Advanced shadow settings
+                  <IconCapChevronDown class="w-4 h-4 ui-expanded:rotate-180 transition-transform" />
+                </Collapsible.Trigger>
+                <Collapsible.Content class="space-y-3 mt-3 animate-in slide-in-from-top-2 fade-in">
+                  <div class="flex flex-col gap-2">
+                    <span class="text-gray-500 text-sm">Size</span>
+                    <Slider
+                      value={[project.camera.advanced_shadow?.size ?? 33.9]}
+                      onChange={(v) => {
+                        setProject("camera", "advanced_shadow", {
+                          ...(project.camera.advanced_shadow ?? {
+                            size: 33.9,
+                            opacity: 44.2,
+                            blur: 10.5,
+                          }),
+                          size: v[0],
+                        });
+                      }}
+                      minValue={0}
+                      maxValue={100}
+                      step={0.1}
+                    />
+                  </div>
+                  <div class="flex flex-col gap-2">
+                    <span class="text-gray-500 text-sm">Opacity</span>
+                    <Slider
+                      value={[project.camera.advanced_shadow?.opacity ?? 44.2]}
+                      onChange={(v) => {
+                        setProject("camera", "advanced_shadow", {
+                          ...(project.camera.advanced_shadow ?? {
+                            size: 33.9,
+                            opacity: 44.2,
+                            blur: 10.5,
+                          }),
+                          opacity: v[0],
+                        });
+                      }}
+                      minValue={0}
+                      maxValue={100}
+                      step={0.1}
+                    />
+                  </div>
+                  <div class="flex flex-col gap-2">
+                    <span class="text-gray-500 text-sm">Blur</span>
+                    <Slider
+                      value={[project.camera.advanced_shadow?.blur ?? 10.5]}
+                      onChange={(v) => {
+                        setProject("camera", "advanced_shadow", {
+                          ...(project.camera.advanced_shadow ?? {
+                            size: 33.9,
+                            opacity: 44.2,
+                            blur: 10.5,
+                          }),
+                          blur: v[0],
+                        });
+                      }}
+                      minValue={0}
+                      maxValue={100}
+                      step={0.1}
+                    />
+                  </div>
+                </Collapsible.Content>
+              </Collapsible>
+            </div>
+          </Field>
           {/* <ComingSoonTooltip>
             <Field name="Shadow" icon={<IconCapShadow />}>
               <Slider
@@ -777,7 +1129,6 @@ export function ConfigSidebar() {
                   defaultValue="regular"
                   value={project.cursor.animationStyle}
                   onChange={(value) => {
-                    console.log("Changing animation style to:", value);
                     setProject(
                       "cursor",
                       "animationStyle",

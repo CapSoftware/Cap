@@ -45,8 +45,8 @@ fn default_gradient_angle() -> u16 {
 
 impl Default for BackgroundSource {
     fn default() -> Self {
-        BackgroundSource::Color {
-            value: [71, 133, 255],
+        BackgroundSource::Wallpaper {
+            path: Some("sequoia-dark".to_string()),
         }
     }
 }
@@ -137,7 +137,7 @@ impl<T: Div<Output = T> + Copy> Div<T> for XY<T> {
     }
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Crop {
     pub position: XY<u32>,
@@ -150,7 +150,14 @@ impl Crop {
     }
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+pub struct ShadowConfiguration {
+    pub size: f32,    // Overall shadow size (0-100)
+    pub opacity: f32, // Shadow opacity (0-100)
+    pub blur: f32,    // Shadow blur amount (0-100)
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct BackgroundConfiguration {
     pub source: BackgroundSource,
@@ -159,6 +166,24 @@ pub struct BackgroundConfiguration {
     pub rounding: f64,
     pub inset: u32,
     pub crop: Option<Crop>,
+    pub shadow: f32,
+    #[serde(default)]
+    pub advanced_shadow: Option<ShadowConfiguration>,
+}
+
+impl Default for BackgroundConfiguration {
+    fn default() -> Self {
+        Self {
+            source: BackgroundSource::default(),
+            blur: 0,
+            padding: 0.0,
+            rounding: 0.0,
+            inset: 0,
+            crop: None,
+            shadow: 73.6,
+            advanced_shadow: Some(ShadowConfiguration::default()),
+        }
+    }
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
@@ -194,6 +219,8 @@ pub struct Camera {
     pub zoom_size: Option<f32>,
     pub rounding: f32,
     pub shadow: f32,
+    #[serde(default)]
+    pub advanced_shadow: Option<ShadowConfiguration>,
 }
 
 impl Default for Camera {
@@ -205,7 +232,22 @@ impl Default for Camera {
             size: 30.0,
             zoom_size: None,
             rounding: 100.0,
-            shadow: 0.0,
+            shadow: 62.5,
+            advanced_shadow: Some(ShadowConfiguration {
+                size: 33.9,
+                opacity: 44.2,
+                blur: 10.5,
+            }),
+        }
+    }
+}
+
+impl Default for ShadowConfiguration {
+    fn default() -> Self {
+        Self {
+            size: 14.4,
+            opacity: 68.1,
+            blur: 3.8,
         }
     }
 }
@@ -329,6 +371,8 @@ impl TimelineConfiguration {
     }
 }
 
+pub const WALLPAPERS_PATH: &str = "assets/backgrounds/macOS";
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectConfiguration {
@@ -345,8 +389,11 @@ pub struct ProjectConfiguration {
 
 impl ProjectConfiguration {
     pub fn load(project_path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
-        std::fs::read_to_string(project_path.as_ref().join("project-config.json"))
-            .map(|s| serde_json::from_str(&s).unwrap_or_default())
+        let config_str =
+            std::fs::read_to_string(project_path.as_ref().join("project-config.json"))?;
+        let mut config: Self = serde_json::from_str(&config_str).unwrap_or_default();
+
+        Ok(config)
     }
 
     pub fn write(&self, project_path: impl AsRef<Path>) -> Result<(), std::io::Error> {
@@ -368,10 +415,7 @@ impl Default for ProjectConfiguration {
     fn default() -> Self {
         ProjectConfiguration {
             aspect_ratio: None,
-            background: BackgroundConfiguration {
-                source: BackgroundSource::default(),
-                ..Default::default()
-            },
+            background: BackgroundConfiguration::default(),
             camera: Camera::default(),
             audio: AudioConfiguration::default(),
             cursor: CursorConfiguration::default(),
