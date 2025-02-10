@@ -88,7 +88,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
     const [playing, setPlaying] = createSignal(false);
 
     createEffect(() => {
-      if (playing())
+      if (!playing())
         commands.setPlayheadPosition(Math.floor(playbackTime() * FPS));
     });
 
