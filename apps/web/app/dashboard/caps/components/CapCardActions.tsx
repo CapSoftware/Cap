@@ -2,7 +2,7 @@ import { serverEnv, clientEnv, NODE_ENV } from "@cap/env";
 import { LinkIcon, Trash } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { Tooltip } from "react-tooltip";
-
+import { useSharedContext } from "../../_components/DynamicSharedLayout";
 interface CapCardActionsProps {
   capId: string;
   onDelete: (videoId: string) => Promise<void>;
@@ -12,9 +12,12 @@ export const CapCardActions: React.FC<CapCardActionsProps> = ({
   capId,
   onDelete,
 }) => {
+  const { activeSpace } = useSharedContext();
   const copyLink = () => {
     const link =
-      clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+      activeSpace?.space.customDomain && activeSpace.space.domainVerified
+        ? `https://${activeSpace.space.customDomain}/s/${capId}`
+        : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
         ? `https://cap.link/${capId}`
         : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${capId}`;
 

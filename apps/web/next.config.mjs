@@ -50,6 +50,16 @@ const nextConfig = {
         source: "/r/:path*",
         destination: "https://dub.cap.link/:path*",
       },
+      {
+        source: '/s/:videoId',
+        destination: '/s/:videoId',
+        has: [
+          {
+            type: 'host',
+            value: '(?!cap\.so|cap\.link).*',
+          },
+        ],
+      }
     ];
   },
   async redirects() {

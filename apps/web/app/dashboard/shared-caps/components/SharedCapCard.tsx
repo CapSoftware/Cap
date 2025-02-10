@@ -41,8 +41,8 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
       <a
         className="group block"
         href={
-          activeSpace?.space.customDomain
-            ? `https://${activeSpace.space.customDomain}/${cap.id}`
+          activeSpace?.space.customDomain && activeSpace.space.domainVerified
+            ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
             : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
             ? `https://cap.link/${cap.id}`
             : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
