@@ -13,6 +13,9 @@ use decoder::{spawn_decoder, AsyncVideoDecoderHandle};
 use futures::future::OptionFuture;
 use futures::FutureExt;
 use futures_intrusive::channel::shared::oneshot_channel;
+use reactive_graph::computed::ArcMemo;
+use reactive_graph::signal::{arc_signal, ArcReadSignal, ArcWriteSignal};
+use reactive_graph::traits::{Get, Write};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::ops::{Add, Deref, Mul, Sub};
@@ -219,6 +222,8 @@ pub async fn render_video_to_channel(
     let mut frame_number = 0;
     let background = Background::from(project.background.source.clone());
 
+    let mut frame_renderer = FrameRenderer::new(&constants);
+
     loop {
         if frame_number >= total_frames {
             break;
@@ -251,14 +256,14 @@ pub async fn render_video_to_channel(
                 resolution_base,
                 is_upgraded,
             );
-            let frame = produce_frame(
-                &constants,
-                segment_frames,
-                background.clone(),
-                &uniforms,
-                resolution_base,
-            )
-            .await?;
+            let frame = frame_renderer
+                .render(
+                    segment_frames,
+                    background.clone(),
+                    &uniforms,
+                    resolution_base,
+                )
+                .await?;
 
             if frame.width == 0 || frame.height == 0 {
                 continue;
@@ -337,6 +342,8 @@ pub struct RenderVideoConstants {
     watermark_dimensions: (u32, u32),
     image_background_pipeline: ImageBackgroundPipeline,
     background_textures: std::sync::Arc<tokio::sync::RwLock<HashMap<String, wgpu::Texture>>>,
+    screen_frame: (wgpu::Texture, wgpu::TextureView),
+    camera_frame: Option<(wgpu::Texture, wgpu::TextureView)>,
 }
 
 impl RenderVideoConstants {
@@ -454,6 +461,56 @@ impl RenderVideoConstants {
         let image_background_pipeline = ImageBackgroundPipeline::new(&device);
         let background_textures = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
 
+        let screen_frame = {
+            let texture = device.create_texture(
+                &(wgpu::TextureDescriptor {
+                    size: wgpu::Extent3d {
+                        width: options.screen_size.x,
+                        height: options.screen_size.y,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::COPY_DST,
+                    label: Some("Screen Frame texture"),
+                    view_formats: &[],
+                }),
+            );
+
+            let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+            (texture, texture_view)
+        };
+
+        let camera_frame = options.camera_size.map(|s| {
+            let texture = device.create_texture(
+                &(wgpu::TextureDescriptor {
+                    size: wgpu::Extent3d {
+                        width: s.x,
+                        height: s.y,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::COPY_DST,
+                    label: Some("Camera texture"),
+                    view_formats: &[],
+                }),
+            );
+
+            let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+            (texture, texture_view)
+        });
+
         Ok(Self {
             _instance: instance,
             _adapter: adapter,
@@ -470,6 +527,8 @@ impl RenderVideoConstants {
             watermark_dimensions: dimensions,
             image_background_pipeline,
             background_textures,
+            screen_frame,
+            camera_frame,
         })
     }
 
@@ -950,39 +1009,84 @@ pub struct DecodedSegmentFrames {
     pub segment_time: f32,
 }
 
-pub async fn produce_frame(
+pub struct FrameRenderer<'a> {
+    constants: &'a RenderVideoConstants,
+    output_texture_desc: Option<wgpu::TextureDescriptor<'static>>,
+    output_textures: Option<(wgpu::Texture, wgpu::Texture)>,
+}
+
+impl<'a> FrameRenderer<'a> {
+    pub fn new(constants: &'a RenderVideoConstants) -> Self {
+        Self {
+            constants,
+            output_texture_desc: None,
+            output_textures: None,
+        }
+    }
+
+    fn update_output_textures(&mut self, width: u32, height: u32) {
+        if let Some(desc) = &self.output_texture_desc {
+            if desc.size.width == width && desc.size.height == height {
+                return;
+            }
+        }
+
+        let output_texture_desc = self.output_texture_desc.insert(wgpu::TextureDescriptor {
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC,
+            label: Some("Intermediate Texture"),
+            view_formats: &[],
+        });
+
+        self.output_textures = Some((
+            self.constants.device.create_texture(output_texture_desc),
+            self.constants.device.create_texture(output_texture_desc),
+        ));
+    }
+
+    pub async fn render(
+        &mut self,
+        segment_frames: DecodedSegmentFrames,
+        background: Background,
+        uniforms: &ProjectUniforms,
+        resolution_base: XY<u32>,
+    ) -> Result<RenderedFrame, RenderingError> {
+        self.update_output_textures(uniforms.output_size.0, uniforms.output_size.1);
+
+        produce_frame(
+            &self.constants,
+            segment_frames,
+            background,
+            uniforms,
+            resolution_base,
+            self.output_textures.as_ref().unwrap(),
+        )
+        .await
+    }
+}
+
+async fn produce_frame(
     constants: &RenderVideoConstants,
     segment_frames: DecodedSegmentFrames,
     background: Background,
     uniforms: &ProjectUniforms,
     resolution_base: XY<u32>,
+    textures: &(wgpu::Texture, wgpu::Texture),
 ) -> Result<RenderedFrame, RenderingError> {
     let mut encoder = constants.device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         }),
-    );
-
-    let output_texture_desc = wgpu::TextureDescriptor {
-        size: wgpu::Extent3d {
-            width: uniforms.output_size.0,
-            height: uniforms.output_size.1,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::COPY_SRC,
-        label: Some("Intermediate Texture"),
-        view_formats: &[],
-    };
-
-    let textures = (
-        constants.device.create_texture(&output_texture_desc),
-        constants.device.create_texture(&output_texture_desc),
     );
 
     let textures = (&textures.0, &textures.1);
@@ -1111,30 +1215,9 @@ pub async fn produce_frame(
     {
         let frame_size = constants.options.screen_size;
 
-        let texture = constants.device.create_texture(
-            &(wgpu::TextureDescriptor {
-                size: wgpu::Extent3d {
-                    width: constants.options.screen_size.x,
-                    height: constants.options.screen_size.y,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_DST,
-                label: Some("Screen Frame texture"),
-                view_formats: &[],
-            }),
-        );
-
-        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
         constants.queue.write_texture(
             wgpu::ImageCopyTexture {
-                texture: &texture,
+                texture: &constants.screen_frame.0,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -1159,7 +1242,7 @@ pub async fn produce_frame(
             constants.composite_video_frame_pipeline.bind_group(
                 &constants.device,
                 &uniforms.display.to_buffer(&constants.device),
-                &texture_view,
+                &constants.screen_frame.1,
                 get_either(texture_views, !output_is_left),
             ),
             wgpu::LoadOp::Load, // Load existing content
@@ -1179,32 +1262,12 @@ pub async fn produce_frame(
     );
 
     // camera
-    if let (Some(camera_size), Some(camera_frame), Some(uniforms)) = (
+    if let (Some(camera_size), Some(camera_frame), Some(uniforms), Some((texture, texture_view))) = (
         constants.options.camera_size,
         &segment_frames.camera_frame,
         &uniforms.camera,
+        &constants.camera_frame,
     ) {
-        let texture = constants.device.create_texture(
-            &(wgpu::TextureDescriptor {
-                size: wgpu::Extent3d {
-                    width: camera_size.x,
-                    height: camera_size.y,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_DST,
-                label: Some("Camera texture"),
-                view_formats: &[],
-            }),
-        );
-
-        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
         constants.queue.write_texture(
             wgpu::ImageCopyTexture {
                 texture: &texture,

@@ -208,7 +208,7 @@ impl AVAssetReaderDecoder {
                 .ok_or_else(|| format!("UrlAsset::with_url{{{path:?}}}"))?;
 
                 Ok((
-                    get_reader_track_output(&asset, 0.0, &handle, pixel_format)?,
+                    get_reader_track_output(&path, 0.0, &handle, pixel_format)?,
                     width,
                     height,
                     asset,
@@ -267,7 +267,7 @@ impl AVAssetReaderDecoder {
                         {
                             reader.cancel_reading();
                             (track_output, reader) = get_reader_track_output(
-                                &asset,
+                                &path,
                                 requested_time,
                                 &handle,
                                 pixel_format,
@@ -404,11 +404,18 @@ fn pixel_format_to_pixel(format: cv::PixelFormat) -> format::Pixel {
 }
 
 fn get_reader_track_output(
-    asset: &av::UrlAsset,
+    path: &PathBuf,
+    // asset: &av::UrlAsset,
     time: f32,
     handle: &TokioHandle,
     pixel_format: cv::PixelFormat,
 ) -> Result<(R<av::AssetReaderTrackOutput>, R<av::AssetReader>), String> {
+    let asset = av::UrlAsset::with_url(
+        &ns::Url::with_fs_path_str(path.to_str().unwrap(), false),
+        None,
+    )
+    .ok_or_else(|| format!("UrlAsset::with_url{{{path:?}}}"))?;
+
     let mut reader =
         av::AssetReader::with_asset(&asset).map_err(|e| format!("AssetReader::with_asset: {e}"))?;
 

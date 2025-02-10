@@ -55,8 +55,6 @@ impl Playback {
         tokio::spawn(async move {
             let start = Instant::now();
 
-            let mut frame_number = self.start_frame_number + 1;
-
             let duration = if let Some(timeline) = &self.project.borrow().timeline {
                 timeline.duration()
             } else {
@@ -80,15 +78,17 @@ impl Playback {
             };
 
             loop {
+                let time =
+                    (self.start_frame_number as f64 / fps as f64) + start.elapsed().as_secs_f64();
+                let frame_number = (time * fps as f64).floor() as u32;
+
                 if frame_number as f64 >= fps as f64 * duration {
                     break;
                 };
 
                 let project = self.project.borrow().clone();
 
-                if let Some((segment_time, segment_i)) =
-                    project.get_segment_time(frame_number as f64 / fps as f64)
-                {
+                if let Some((segment_time, segment_i)) = project.get_segment_time(time) {
                     let segment = &self.segments[segment_i as usize];
 
                     tokio::select! {
@@ -130,8 +130,6 @@ impl Playback {
                 .await;
 
                 event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
-
-                frame_number += 1;
             }
 
             stop_tx.send(true).ok();
@@ -194,7 +192,6 @@ impl AudioPlayback {
             handle.block_on(stop_rx.changed()).ok();
 
             stream.pause().ok();
-            drop(stream);
         });
     }
 
