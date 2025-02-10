@@ -4,7 +4,7 @@ import { CapCardAnalytics } from "@/app/dashboard/caps/components/CapCardAnalyti
 import moment from "moment";
 import { Tooltip } from "react-tooltip";
 import { serverEnv, clientEnv, NODE_ENV } from "@cap/env";
-
+import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 interface SharedCapCardProps {
   cap: {
     id: string;
@@ -26,6 +26,7 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(cap.name);
+  const { activeSpace } = useSharedContext();
 
   const displayCount =
     analytics === 0
@@ -40,7 +41,9 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
       <a
         className="group block"
         href={
-          clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+          activeSpace?.space.customDomain
+            ? `https://${activeSpace.space.customDomain}/${cap.id}`
+            : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
             ? `https://cap.link/${cap.id}`
             : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
         }

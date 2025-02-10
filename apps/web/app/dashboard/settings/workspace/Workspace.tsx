@@ -29,6 +29,7 @@ import toast from "react-hot-toast";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { format } from "date-fns";
 import { Tooltip } from "react-tooltip";
+import { CustomDomain } from "./components/CustomDomain";
 
 export const Workspace = () => {
   const { spaceData, activeSpace, user } = useSharedContext();
@@ -231,6 +232,20 @@ export const Workspace = () => {
           Save
         </Button>
       </CardFooter>
+      {user.email === "richie@mcilroy.co" && (
+        <>
+          <CardContent className="pt-6">
+            <CardTitle>Custom Domain</CardTitle>
+            <CardDescription>
+              Configure a custom domain for your workspace's shared caps.
+            </CardDescription>
+            <div className="mt-4">
+              <CustomDomain />
+            </div>
+          </CardContent>
+          <CardFooter className="border-b px-6 pt-0 pb-2"></CardFooter>
+        </>
+      )}
       <CardHeader>
         <div className="flex items-center justify-between">
           <div>

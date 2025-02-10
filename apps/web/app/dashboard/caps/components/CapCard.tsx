@@ -9,7 +9,7 @@ import { ShareIcon, ChevronDown } from "lucide-react";
 import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
 import { useRouter } from "next/navigation"; // Add this import
 import { serverEnv, clientEnv, NODE_ENV } from "@cap/env";
-
+import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 interface CapCardProps {
   cap: {
     id: string;
@@ -38,7 +38,8 @@ export const CapCard: React.FC<CapCardProps> = ({
   const [title, setTitle] = useState(cap.name);
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
   const [sharedSpaces, setSharedSpaces] = useState(cap.sharedSpaces);
-  const router = useRouter(); // Add this line
+  const router = useRouter();
+  const { activeSpace } = useSharedContext();
 
   const handleTitleBlur = async () => {
     if (!title) {
@@ -121,7 +122,9 @@ export const CapCard: React.FC<CapCardProps> = ({
       <a
         className="group block"
         href={
-          clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+          activeSpace?.space.customDomain
+            ? `https://${activeSpace.space.customDomain}/${cap.id}`
+            : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
             ? `https://cap.link/${cap.id}`
             : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
         }
