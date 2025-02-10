@@ -111,7 +111,11 @@ export function Timeline() {
     const { left } = timelineBounds;
     if (zoomSegmentDragState.type !== "moving") {
       setPlaybackTime(
-        secsPerPixel() * (e.clientX - left!) + state.timelineTransform.position
+        Math.min(
+          secsPerPixel() * (e.clientX - left!) +
+            state.timelineTransform.position,
+          totalDuration()
+        )
       );
     }
   }
@@ -285,7 +289,10 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
     project.timeline?.segments ?? [{ start: 0, end: duration(), timescale: 1 }];
 
   function onHandleReleased() {
-    if (state.timelineTransform.zoom > totalDuration() + 4) {
+    if (
+      state.timelineTransform.position + state.timelineTransform.zoom >
+      totalDuration() + 4
+    ) {
       state.timelineTransform.updateZoom(totalDuration(), previewTime()!);
     }
   }
