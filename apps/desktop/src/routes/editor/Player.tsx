@@ -11,9 +11,9 @@ import {
   createEffect,
   createResource,
   createSignal,
+  on,
 } from "solid-js";
 import { reconcile } from "solid-js/store";
-import { useNavigate } from "@solidjs/router";
 
 import { type AspectRatio, commands } from "~/utils/tauri";
 import { FPS, OUTPUT_SIZE, useEditorContext } from "./context";
@@ -26,13 +26,13 @@ import {
   MenuItem,
   MenuItemList,
   PopperContent,
+  Slider,
   dropdownContainerClasses,
   topLeftAnimateClasses,
 } from "./ui";
 import { formatTime } from "./utils";
 
 export function Player() {
-  const navigate = useNavigate();
   const [auth] = createResource(() => authStore.get());
   const {
     project,
@@ -44,10 +44,14 @@ export function Player() {
     playbackTime,
     setPlaybackTime,
     previewTime,
+    setPreviewTime,
     playing,
     setPlaying,
     split,
     setSplit,
+    totalDuration,
+    state,
+    zoomOutLimit,
   } = useEditorContext();
 
   let canvasRef!: HTMLCanvasElement;
@@ -76,12 +80,6 @@ export function Player() {
     </EditorButton>
   );
 
-  const totalDuration = () =>
-    project.timeline?.segments.reduce(
-      (acc, s) => acc + (s.end - s.start) / s.timescale,
-      0
-    ) ?? editorInstance.recordingDuration;
-
   const isAtEnd = () => {
     const total = totalDuration();
     return total > 0 && total - playbackTime() <= 0.1;
@@ -109,6 +107,7 @@ export function Player() {
         await commands.startPlayback(FPS, OUTPUT_SIZE);
         setPlaying(true);
       }
+      if (playing()) setPreviewTime();
     } catch (error) {
       console.error("Error handling play/pause:", error);
       setPlaying(false);
@@ -233,7 +232,7 @@ export function Player() {
           }}
         </Show>
       </div>
-      <div class="flex flex-row items-center p-[0.75rem] z-10 bg-gray-50 justify-between">
+      <div class="flex flex-row items-center p-[0.75rem] gap-[0.5rem] z-10 bg-gray-50 justify-between">
         <div class="flex-1 flex items-center">
           <Show when={!auth()?.plan?.upgraded}>
             <EditorButton
@@ -243,15 +242,16 @@ export function Player() {
               Remove watermark
             </EditorButton>
           </Show>
+          <div class="flex-1" />
+          <Time seconds={Math.max(previewTime() ?? playbackTime(), 0)} />
         </div>
-        <div class="flex-1 flex flex-row items-center justify-center gap-[0.5rem] text-gray-400 text-[0.875rem]">
-          <span>{formatTime(playbackTime())}</span>
+        <div class="flex flex-row items-center justify-center text-gray-400 text-[0.875rem]">
           <button
             type="button"
             onClick={async () => {
               setPlaying(false);
               await commands.stopPlayback();
-              await commands.setPlayheadPosition(0);
+              setPlaybackTime(0);
             }}
           >
             <IconCapFrameFirst class="size-[1.2rem]" />
@@ -272,21 +272,38 @@ export function Player() {
             onClick={async () => {
               setPlaying(false);
               await commands.stopPlayback();
-              await commands.setPlayheadPosition(
-                Math.floor(totalDuration() * FPS)
-              );
+              setPlaybackTime(totalDuration());
             }}
           >
             <IconCapFrameLast class="size-[1rem]" />
           </button>
-          <span>{formatTime(totalDuration())}</span>
         </div>
-        <div class="flex-1 flex flex-row justify-end">
+        <div class="flex-1 flex flex-row justify-end items-center gap-2">
+          <Time seconds={totalDuration()} />
+          <div class="flex-1" />
           {window.FLAGS.split ? (
             splitButton()
           ) : (
             <ComingSoonTooltip>{splitButton()}</ComingSoonTooltip>
           )}
+          <Slider
+            class="w-24"
+            minValue={0}
+            maxValue={1}
+            step={0.001}
+            value={[
+              Math.min(
+                Math.max(1 - state.timelineTransform.zoom / zoomOutLimit(), 0),
+                1
+              ),
+            ]}
+            onChange={([v]) => {
+              state.timelineTransform.updateZoom(
+                (1 - v) * zoomOutLimit(),
+                playbackTime()
+              );
+            }}
+          />
         </div>
       </div>
     </div>
@@ -497,5 +514,13 @@ function PresetsDropdown() {
         </Suspense>
       </KDropdownMenu.Portal>
     </KDropdownMenu>
+  );
+}
+
+function Time(props: { seconds: number; fps?: number }) {
+  return (
+    <span class="text-gray-400 text-[0.875rem] tabular-nums">
+      {formatTime(props.seconds, props.fps ?? FPS)}
+    </span>
   );
 }

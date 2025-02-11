@@ -6,13 +6,14 @@ import { createUndoHistory } from "@solid-primitives/history";
 import { debounce } from "@solid-primitives/scheduled";
 import {
   Accessor,
+  batch,
   createEffect,
   createResource,
   createSignal,
   on,
 } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
-import { createElementBounds } from "@solid-primitives/bounds";
+import { createElementBounds, NullableBounds } from "@solid-primitives/bounds";
 
 import type { PresetsStore } from "../../store";
 import {
@@ -40,6 +41,8 @@ export const OUTPUT_SIZE = {
   x: 1920,
   y: 1080,
 };
+
+export const MAX_ZOOM_IN = 3;
 
 export const [EditorContextProvider, useEditorContext] = createContextProvider(
   (props: {
@@ -84,10 +87,77 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
     const [playbackTime, setPlaybackTime] = createSignal<number>(0);
     const [playing, setPlaying] = createSignal(false);
 
+    createEffect(() => {
+      if (!playing())
+        commands.setPlayheadPosition(Math.floor(playbackTime() * FPS));
+    });
+
     const [split, setSplit] = createSignal(false);
+
+    const totalDuration = () =>
+      project.timeline?.segments.reduce(
+        (acc, s) => acc + (s.end - s.start) / s.timescale,
+        0
+      ) ?? props.editorInstance.recordingDuration;
+
+    type State = {
+      zoom: number;
+      position: number;
+    };
+
+    const zoomOutLimit = () => totalDuration();
+
+    function updateZoom(state: State, newZoom: number, origin: number): State {
+      const zoom = Math.max(Math.min(newZoom, zoomOutLimit()), MAX_ZOOM_IN);
+
+      const visibleOrigin = origin - state.position;
+
+      const originPercentage = Math.min(1, visibleOrigin / state.zoom);
+
+      const newVisibleOrigin = zoom * originPercentage;
+      const newPosition = origin - newVisibleOrigin;
+
+      return {
+        zoom,
+        position: newPosition,
+      };
+    }
 
     const [state, setState] = createStore({
       timelineSelection: null as null | { type: "zoom"; index: number },
+      timelineTransform: {
+        // visible seconds
+        zoom: 17,
+        updateZoom(z: number, origin: number) {
+          const { zoom, position } = updateZoom(
+            {
+              zoom: state.timelineTransform.zoom,
+              position: state.timelineTransform.position,
+            },
+            z,
+            origin
+          );
+
+          const transform = state.timelineTransform;
+          batch(() => {
+            setState("timelineTransform", "zoom", zoom);
+            if (transform.zoom !== zoom) return;
+            transform.setPosition(position);
+          });
+        },
+        // number of seconds of leftmost point
+        position: 0,
+        setPosition(p: number) {
+          setState(
+            "timelineTransform",
+            "position",
+            Math.min(
+              Math.max(p, 0),
+              zoomOutLimit() + 4 - state.timelineTransform.zoom
+            )
+          );
+        },
+      },
     });
 
     return {
@@ -110,6 +180,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       setSplit,
       state,
       setState,
+      totalDuration,
+      zoomOutLimit,
     };
   },
   // biome-ignore lint/style/noNonNullAssertion: it's ok
@@ -213,23 +285,38 @@ type Static<T = unknown> =
   | T[];
 
 export const [TimelineContextProvider, useTimelineContext] =
-  createContextProvider((props: { duration: number }) => {
-    return {
-      duration: () => props.duration,
-    };
-  }, null!);
+  createContextProvider(
+    (props: {
+      duration: number;
+      secsPerPixel: number;
+      timelineBounds: Readonly<NullableBounds>;
+    }) => {
+      return {
+        duration: () => props.duration,
+        secsPerPixel: () => props.secsPerPixel,
+        timelineBounds: props.timelineBounds,
+      };
+    },
+    null!
+  );
 
 export const [TrackContextProvider, useTrackContext] = createContextProvider(
   (props: {
     ref: Accessor<Element | undefined>;
     isFreeForm: Accessor<boolean>;
   }) => {
+    const { state } = useEditorContext();
+
     const [trackState, setTrackState] = createStore({
       draggingSegment: false,
     });
     const bounds = createElementBounds(() => props.ref());
 
+    const secsPerPixel = () =>
+      state.timelineTransform.zoom / (bounds.width ?? 1);
+
     return {
+      secsPerPixel,
       trackBounds: bounds,
       isFreeForm: () => props.isFreeForm(),
       trackState,

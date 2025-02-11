@@ -1,6 +1,8 @@
 struct Uniforms {
     output_size: vec2<f32>,
     padding: f32,
+    x_width: f32,
+    y_height: f32,
     _padding: f32,  // Matches the Rust struct alignment padding
 };
 
@@ -22,34 +24,18 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
     out.clip_position = vec4<f32>(x, y, 0.0, 1.0);
     return out;
 }
+
 @fragment
 fn fs_main(@location(0) tex_coords: vec2<f32>) -> @location(0) vec4<f32> {
-    // Calculate the padding in UV space
-    let padding_uv = u.padding / max(u.output_size.x, u.output_size.y);
-    
-    // Adjust UV coordinates to account for padding
-    let adjusted_coords = tex_coords * (1.0 - 2.0 * padding_uv) + padding_uv;
-    
-    // Calculate aspect ratios
-    let container_ratio = u.output_size.x / u.output_size.y;
-    let texture_dims = vec2<f32>(textureDimensions(t_image));
-    let texture_ratio = texture_dims.x / texture_dims.y;
-    
-    // Calculate scale factors to achieve 'cover' behavior
-    var scale = vec2<f32>(1.0);
-    if (container_ratio > texture_ratio) {
-        // Container is wider than texture - scale based on height
-        scale.x = texture_ratio / container_ratio;
-        scale.y = 1.0;
-    } else {
-        // Container is taller than texture - scale based on width
-        scale.x = 1.0;
-        scale.y = container_ratio / texture_ratio;
-    }
-    
-    // Transform coordinates to center and scale the image
-    let transformed_coords = (adjusted_coords - 0.5) * scale + 0.5;
-    
-    // Let the sampler handle the edge clamping
-    return textureSample(t_image, s_image, transformed_coords);
+    let x_width = (0.5 - u.x_width) * 2.0;
+    let y_height = (0.5 - u.y_height) * 2.0;
+
+    return textureSample(
+    	t_image,
+     	s_image,
+      vec2<f32>(
+      	u.x_width + x_width * tex_coords.x,
+        u.y_height + y_height * tex_coords.y
+      )
+    );
 }

@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Instant};
 use cap_media::{feeds::RawCameraFrame, frame_ws::WSFrame};
 use cap_project::{BackgroundSource, RecordingMeta, XY};
 use cap_rendering::{
-    decoder::DecodedFrame, produce_frame, DecodedSegmentFrames, ProjectRecordings, ProjectUniforms,
+    decoder::DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectRecordings, ProjectUniforms,
     RenderVideoConstants,
 };
 use tokio::{
@@ -70,6 +70,8 @@ impl Renderer {
     async fn run(mut self) {
         let mut frame_task: Option<JoinHandle<()>> = None;
 
+        let mut frame_renderer = FrameRenderer::new(&self.render_constants);
+
         loop {
             while let Some(msg) = self.rx.recv().await {
                 match msg {
@@ -91,9 +93,9 @@ impl Renderer {
                         let render_constants = self.render_constants.clone();
                         let frame_tx = self.frame_tx.clone();
 
-                        frame_task = Some(tokio::spawn(async move {
-                            let frame = produce_frame(
-                                &render_constants,
+                        // frame_task = Some(tokio::spawn(async move {
+                        let frame = frame_renderer
+                            .render(
                                 segment_frames,
                                 cap_rendering::Background::from(background),
                                 &uniforms,
@@ -102,16 +104,16 @@ impl Renderer {
                             .await
                             .unwrap();
 
-                            frame_tx
-                                .try_send(WSFrame {
-                                    data: frame.data,
-                                    width: uniforms.output_size.0,
-                                    height: uniforms.output_size.1,
-                                    stride: frame.padded_bytes_per_row,
-                                })
-                                .ok();
-                            finished.send(()).ok();
-                        }));
+                        frame_tx
+                            .try_send(WSFrame {
+                                data: frame.data,
+                                width: uniforms.output_size.0,
+                                height: uniforms.output_size.1,
+                                stride: frame.padded_bytes_per_row,
+                            })
+                            .ok();
+                        finished.send(()).ok();
+                        // }));
                     }
                     RendererMessage::Stop { finished } => {
                         // Cancel any ongoing frame task
