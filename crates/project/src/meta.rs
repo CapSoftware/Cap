@@ -176,9 +176,7 @@ impl SingleSegment {
                             .and_then(|s| s.strip_suffix(".png"))
                         {
                             println!("Found cursor image: {} -> {}", id, filename_str);
-                            data.cursor_images
-                                .0
-                                .insert(id.to_string(), filename.to_string_lossy().into_owned());
+                            data.cursor_images.0.insert(id.to_string(), entry.path());
                         }
                     }
                 }
@@ -193,7 +191,8 @@ impl SingleSegment {
 pub struct MultipleSegments {
     pub segments: Vec<MultipleSegment>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub cursors: HashMap<String, PathBuf>,
+    #[specta(type = HashMap<String, String>)]
+    pub cursors: HashMap<String, RelativePathBuf>,
 }
 
 impl MultipleSegments {
@@ -202,10 +201,16 @@ impl MultipleSegments {
     }
 
     pub fn cursor_images(&self, meta: &RecordingMeta) -> Result<CursorImages, String> {
-        let file = File::open(self.path(meta, "content/cursors.json"))
-            .map_err(|e| format!("Failed to open cursor file: {}", e))?;
-        let cursor_images: CursorImages = serde_json::from_reader(file)
-            .map_err(|e| format!("Failed to parse cursor data: {}", e))?;
+        Ok(CursorImages(
+            self.cursors
+                .iter()
+                .map(|(k, v)| (k.clone(), meta.path(v)))
+                .collect::<_>(),
+        ))
+        // let file = File::open(self.path(meta, "content/cursors.json"))
+        //     .map_err(|e| format!("Failed to open cursor file: {}", e))?;
+        // let cursor_images: CursorImages = serde_json::from_reader(file)
+        //     .map_err(|e| format!("Failed to parse cursor data: {}", e))?;
 
         // let cursors_dir = self.path(meta, "content/cursors");
         // if cursor_images.0.is_empty() && cursors_dir.exists() {
@@ -235,7 +240,7 @@ impl MultipleSegments {
         //     println!("Found {} cursor images", cursor_images.0.len());
         // }
 
-        Ok(cursor_images)
+        // Ok(cursor_images)
     }
 }
 
@@ -247,7 +252,8 @@ pub struct MultipleSegment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio: Option<AudioMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<PathBuf>,
+    #[specta(type = Option<String>)]
+    pub cursor: Option<RelativePathBuf>,
 }
 
 impl MultipleSegment {
@@ -260,7 +266,7 @@ impl MultipleSegment {
             return CursorEvents::default();
         };
 
-        let full_path = self.path(meta, cursor_path);
+        let full_path = meta.path(cursor_path);
         println!("Loading cursor data from: {:?}", full_path);
 
         // Try to load the cursor data

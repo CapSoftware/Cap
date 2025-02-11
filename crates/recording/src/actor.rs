@@ -457,7 +457,16 @@ async fn stop_recording(
                                 )
                                 .unwrap(),
                             }),
-                            cursor: None,
+                            cursor: s.pipeline.cursor.as_ref().map(|cursor| {
+                                RelativePathBuf::from_path(
+                                    cursor
+                                        .output_path
+                                        .strip_prefix(&actor.recording_dir)
+                                        .unwrap()
+                                        .to_owned(),
+                                )
+                                .unwrap()
+                            }),
                         })
                         .collect()
                 },
@@ -466,7 +475,7 @@ async fn stop_recording(
                     .map(|(file_name, id)| {
                         (
                             id.to_string(),
-                            PathBuf::from("content/cursors").join(&file_name),
+                            RelativePathBuf::from("content/cursors").join(&file_name),
                         )
                     })
                     .collect(),

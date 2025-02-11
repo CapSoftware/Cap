@@ -269,8 +269,10 @@ impl EditorInstance {
                                 fps,
                                 resolution_base,
                                 get_is_upgraded(),
+                                &segment.cursor,
                             ),
                             resolution_base,
+                            segment.cursor.clone(),
                         )
                         .await;
                 }

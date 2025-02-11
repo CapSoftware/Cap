@@ -203,7 +203,7 @@ pub async fn render_video_to_channel(
     resolution_base: XY<u32>,
     is_upgraded: bool,
 ) -> Result<(), RenderingError> {
-    let mut constants = RenderVideoConstants::new(options, meta).await?;
+    let constants = RenderVideoConstants::new(options, meta).await?;
     let recordings = ProjectRecordings::new(meta);
 
     ffmpeg::init().unwrap();
@@ -255,6 +255,7 @@ pub async fn render_video_to_channel(
                 fps,
                 resolution_base,
                 is_upgraded,
+                &segment.cursor,
             );
             let frame = frame_renderer
                 .render(
@@ -262,6 +263,7 @@ pub async fn render_video_to_channel(
                     background.clone(),
                     &uniforms,
                     resolution_base,
+                    &segment.cursor,
                 )
                 .await?;
 
@@ -552,18 +554,19 @@ impl RenderVideoConstants {
             Content::MultipleSegments { inner } => inner.cursor_images(meta).unwrap_or_default(),
         };
 
-        for (cursor_id, filename) in &cursor_images.0 {
-            println!("Loading cursor image: {} -> {}", cursor_id, filename);
+        dbg!(&cursor_images);
 
-            let cursor_path = cursors_dir.join(filename);
-            println!("Full cursor path: {:?}", cursor_path);
+        for (cursor_id, path) in &cursor_images.0 {
+            println!("Loading cursor image: {} -> {}", cursor_id, path.display());
 
-            if !cursor_path.exists() {
-                println!("Cursor image file does not exist: {:?}", cursor_path);
+            println!("Full cursor path: {:?}", path);
+
+            if !path.exists() {
+                println!("Cursor image file does not exist: {:?}", path);
                 continue;
             }
 
-            match image::open(&cursor_path) {
+            match image::open(&path) {
                 Ok(img) => {
                     let dimensions = img.dimensions();
                     println!(
@@ -613,7 +616,7 @@ impl RenderVideoConstants {
                     println!("Successfully loaded cursor texture: {}", cursor_id);
                 }
                 Err(e) => {
-                    println!("Failed to load cursor image {}: {}", filename, e);
+                    println!("Failed to load cursor image {}: {}", path.display(), e);
                     // Don't return error, just skip this cursor image
                     continue;
                 }
@@ -788,16 +791,14 @@ impl ProjectUniforms {
         fps: u32,
         resolution_base: XY<u32>,
         is_upgraded: bool,
+        cursor_events: &CursorEvents,
     ) -> Self {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project, resolution_base);
         let frame_time = frame_number as f32 / fps as f32;
 
-        let cursor_position = interpolate_cursor_position(
-            &Default::default(), /*constants.cursor*/
-            frame_time,
-            &project.cursor.animation_style,
-        );
+        let cursor_position =
+            interpolate_cursor_position(cursor_events, frame_time, &project.cursor.animation_style);
 
         // let zoom_keyframes = ZoomKeyframes::new(project);
         // let current_zoom = zoom_keyframes.interpolate(time as f64);
@@ -1060,6 +1061,7 @@ impl<'a> FrameRenderer<'a> {
         background: Background,
         uniforms: &ProjectUniforms,
         resolution_base: XY<u32>,
+        cursor: &CursorEvents,
     ) -> Result<RenderedFrame, RenderingError> {
         self.update_output_textures(uniforms.output_size.0, uniforms.output_size.1);
 
@@ -1070,6 +1072,7 @@ impl<'a> FrameRenderer<'a> {
             uniforms,
             resolution_base,
             self.output_textures.as_ref().unwrap(),
+            cursor,
         )
         .await
     }
@@ -1082,6 +1085,7 @@ async fn produce_frame(
     uniforms: &ProjectUniforms,
     resolution_base: XY<u32>,
     textures: &(wgpu::Texture, wgpu::Texture),
+    cursor: &CursorEvents,
 ) -> Result<RenderedFrame, RenderingError> {
     let mut encoder = constants.device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
@@ -1279,6 +1283,7 @@ async fn produce_frame(
         &mut encoder,
         get_either(texture_views, !output_is_left),
         resolution_base,
+        cursor,
     );
 
     // camera
@@ -1520,9 +1525,10 @@ fn draw_cursor(
     encoder: &mut CommandEncoder,
     view: &wgpu::TextureView,
     resolution_base: XY<u32>,
+    cursor: &CursorEvents,
 ) {
     let Some(cursor_position) = interpolate_cursor_position(
-        &Default::default(), // constants.cursor,
+        cursor,
         segment_time,
         &uniforms.project.cursor.animation_style,
     ) else {
@@ -1530,36 +1536,35 @@ fn draw_cursor(
     };
 
     // Calculate previous position for velocity
-    let prev_position = interpolate_cursor_position(
-        &Default::default(), // constants.cursor,
-        segment_time - 1.0 / 30.0,
-        &uniforms.project.cursor.animation_style,
-    );
+    // let prev_position = interpolate_cursor_position(
+    //     cursor,
+    //     segment_time - 1.0 / 30.0,
+    //     &uniforms.project.cursor.animation_style,
+    // );
 
     // Calculate velocity in screen space
-    let velocity = if let Some(prev_pos) = prev_position {
-        let curr_frame_pos =
-            cursor_position.to_frame_space(&constants.options, &uniforms.project, resolution_base);
-        let prev_frame_pos =
-            prev_pos.to_frame_space(&constants.options, &uniforms.project, resolution_base);
-        let frame_velocity = curr_frame_pos.coord - prev_frame_pos.coord;
+    let velocity: [f32; 2] = [0.0, 0.0];
+    // if let Some(prev_pos) = prev_position {
+    //     let curr_frame_pos =
+    //         cursor_position.to_frame_space(&constants.options, &uniforms.project, resolution_base);
+    //     let prev_frame_pos =
+    //         prev_pos.to_frame_space(&constants.options, &uniforms.project, resolution_base);
+    //     let frame_velocity = curr_frame_pos.coord - prev_frame_pos.coord;
 
-        // Convert to pixels per frame
-        [frame_velocity.x as f32, frame_velocity.y as f32]
-    } else {
-        [0.0, 0.0]
-    };
+    //     // Convert to pixels per frame
+    //     [frame_velocity.x as f32, frame_velocity.y as f32]
+    // } else {
+    //     [0.0, 0.0]
+    // };
 
     // Calculate motion blur amount based on velocity magnitude
     let speed = (velocity[0] * velocity[0] + velocity[1] * velocity[1]).sqrt();
     let motion_blur_amount = (speed * 0.3).min(1.0) * uniforms.project.motion_blur.unwrap_or(0.8);
 
-    let cursor = Default::default();
-    let cursor_event = find_cursor_event(&cursor /* constants.cursor */, segment_time);
+    let cursor_event = find_cursor_event(&cursor, segment_time);
 
-    let last_click_time =  /* constants
-        .cursor
-        .clicks */ Vec::<CursorClickEvent>::new()
+    let last_click_time = cursor
+        .clicks
         .iter()
         .filter(|click| click.down && click.process_time_ms <= (segment_time as f64) * 1000.0)
         .max_by_key(|click| click.process_time_ms as i64)
@@ -2016,7 +2021,7 @@ fn get_either<T>((a, b): (T, T), left: bool) -> T {
 }
 
 fn interpolate_cursor_position(
-    cursor: &CursorData,
+    cursor: &CursorEvents,
     time_secs: f32,
     animation_style: &CursorAnimationStyle,
 ) -> Option<Coord<RawDisplayUVSpace>> {
@@ -2026,109 +2031,19 @@ fn interpolate_cursor_position(
         return None;
     }
 
-    // Get style-specific parameters
-    let (num_samples, velocity_threshold) = match animation_style {
-        CursorAnimationStyle::Slow => (SLOW_SMOOTHING_SAMPLES, SLOW_VELOCITY_THRESHOLD),
-        CursorAnimationStyle::Regular => (REGULAR_SMOOTHING_SAMPLES, REGULAR_VELOCITY_THRESHOLD),
-        CursorAnimationStyle::Fast => (FAST_SMOOTHING_SAMPLES, FAST_VELOCITY_THRESHOLD),
+    let Some(event) = cursor.moves.windows(2).find_map(|chunk| {
+        if time_ms >= chunk[0].process_time_ms && time_ms < chunk[1].process_time_ms {
+            Some(&chunk[0])
+        } else {
+            None
+        }
+    }) else {
+        return None;
     };
 
-    // Find the closest move events around current time
-    let mut closest_events: Vec<&CursorMoveEvent> = cursor
-        .moves
-        .iter()
-        .filter(|m| (m.process_time_ms - time_ms).abs() <= 100.0) // Look at events within 100ms
-        .collect();
-
-    closest_events.sort_by(|a, b| {
-        (a.process_time_ms - time_ms)
-            .abs()
-            .partial_cmp(&(b.process_time_ms - time_ms).abs())
-            .unwrap()
-    });
-
-    // Take the nearest events up to num_samples
-    let samples: Vec<(f64, f64, f64)> = closest_events
-        .iter()
-        .take(num_samples)
-        .map(|m| (m.process_time_ms, m.x, m.y))
-        .collect();
-
-    if samples.is_empty() {
-        // Fallback to nearest event if no samples in range
-        let nearest = cursor
-            .moves
-            .iter()
-            .min_by_key(|m| (m.process_time_ms - time_ms).abs() as i64)?;
-        return Some(Coord::new(XY {
-            x: nearest.x.clamp(0.0, 1.0),
-            y: nearest.y.clamp(0.0, 1.0),
-        }));
-    }
-
-    // Calculate velocities between consecutive points
-    let mut velocities = Vec::with_capacity(samples.len() - 1);
-    for i in 0..samples.len() - 1 {
-        let (t1, x1, y1) = samples[i];
-        let (t2, x2, y2) = samples[i + 1];
-        let dt = (t2 - t1).max(1.0); // Avoid division by zero
-        let dx = x2 - x1;
-        let dy = y2 - y1;
-        let velocity = ((dx * dx + dy * dy) / (dt * dt)).sqrt();
-        velocities.push(velocity);
-    }
-
-    // Apply adaptive smoothing based on velocities and time distance
-    let mut x = 0.0;
-    let mut y = 0.0;
-    let mut total_weight = 0.0;
-
-    for (i, &(t, px, py)) in samples.iter().enumerate() {
-        // Time-based weight with style-specific falloff
-        let time_diff = (t - time_ms).abs();
-        let style_factor = match animation_style {
-            CursorAnimationStyle::Slow => 0.0005,
-            CursorAnimationStyle::Regular => 0.001,
-            CursorAnimationStyle::Fast => 0.002,
-        };
-        let time_weight = 1.0 / (1.0 + time_diff * style_factor);
-
-        // Velocity-based weight
-        let velocity_weight = if i < velocities.len() {
-            let vel = velocities[i];
-            if vel > velocity_threshold {
-                (velocity_threshold / vel).powf(match animation_style {
-                    CursorAnimationStyle::Slow => 1.5,
-                    CursorAnimationStyle::Regular => 1.0,
-                    CursorAnimationStyle::Fast => 0.5,
-                })
-            } else {
-                1.0
-            }
-        } else {
-            1.0
-        };
-
-        // Combine weights with style-specific emphasis
-        let weight = match animation_style {
-            CursorAnimationStyle::Slow => time_weight * velocity_weight.powf(1.5),
-            CursorAnimationStyle::Regular => time_weight * velocity_weight,
-            CursorAnimationStyle::Fast => time_weight * velocity_weight.powf(0.5),
-        };
-
-        x += px * weight;
-        y += py * weight;
-        total_weight += weight;
-    }
-
-    if total_weight > 0.0 {
-        x /= total_weight;
-        y /= total_weight;
-    }
-
     Some(Coord::new(XY {
-        x: x.clamp(0.0, 1.0),
-        y: y.clamp(0.0, 1.0),
+        x: event.x,
+        y: event.y,
     }))
 }
 
@@ -2151,7 +2066,7 @@ struct CursorUniforms {
     _alignment: [f32; 7],
 }
 
-fn find_cursor_event(cursor: &CursorData, time: f32) -> &CursorMoveEvent {
+fn find_cursor_event(cursor: &CursorEvents, time: f32) -> &CursorMoveEvent {
     let time_ms = time * 1000.0;
 
     let event = cursor
@@ -2334,9 +2249,10 @@ impl Coord<RawDisplayUVSpace> {
         project: &ProjectConfiguration,
         resolution_base: XY<u32>,
     ) -> Coord<FrameSpace> {
-        self.to_raw_display_space(options)
-            .to_cropped_display_space(options, project)
-            .to_frame_space(options, project, resolution_base)
+        dbg!(self
+            .to_raw_display_space(options)
+            .to_cropped_display_space(options, project))
+        .to_frame_space(options, project, resolution_base)
     }
 }
 
@@ -2358,8 +2274,13 @@ impl Coord<CroppedDisplaySpace> {
         project: &ProjectConfiguration,
         resolution_base: XY<u32>,
     ) -> Coord<FrameSpace> {
-        let padding = ProjectUniforms::get_display_offset(options, project, resolution_base);
-        Coord::new(self.coord + *padding)
+        let output_size = ProjectUniforms::get_output_size(options, project, resolution_base);
+        let padding_offset = ProjectUniforms::get_display_offset(options, project, resolution_base);
+
+        let screen_output_size =
+            XY::new(output_size.0 as f64, output_size.1 as f64) - padding_offset.coord;
+
+        Coord::new(self.coord / options.screen_size.map(|v| v as f64) * screen_output_size)
     }
 }
 

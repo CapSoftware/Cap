@@ -104,6 +104,7 @@ impl Playback {
                                     fps,
                                     resolution_base,
                                     is_upgraded,
+                                    &segment.cursor
                                 );
 
                                 self
@@ -112,7 +113,8 @@ impl Playback {
                                         segment_frames,
                                         project.background.source.clone(),
                                         uniforms,
-                                        resolution_base
+                                        resolution_base,
+                                        segment.cursor.clone()
                                     )
                                     .await;
                             }

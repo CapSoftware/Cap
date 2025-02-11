@@ -137,6 +137,17 @@ impl<T: Div<Output = T> + Copy> Div<T> for XY<T> {
     }
 }
 
+impl<T: Div<Output = T>> Div<XY<T>> for XY<T> {
+    type Output = Self;
+
+    fn div(self, other: XY<T>) -> Self {
+        Self {
+            x: self.x / other.x,
+            y: self.y / other.y,
+        }
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Crop {
