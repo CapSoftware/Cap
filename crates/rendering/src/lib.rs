@@ -1159,10 +1159,30 @@ async fn produce_frame(
                 }
             };
 
+            let output_ar = uniforms.output_size.1 as f32 / uniforms.output_size.0 as f32;
+            let image_ar = texture.height() as f32 / texture.width() as f32;
+
+            let y_height = if output_ar < image_ar {
+                ((image_ar - output_ar) / 2.0) / image_ar
+            } else {
+                0.0
+            };
+
+            let x_width = if output_ar > image_ar {
+                let output_ar = 1.0 / output_ar;
+                let image_ar = 1.0 / image_ar;
+
+                ((image_ar - output_ar) / 2.0) / image_ar
+            } else {
+                0.0
+            };
+
             // Create uniforms and bind group
             let image_uniforms = ImageBackgroundUniforms {
                 output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
-                padding: uniforms.project.background.padding as f32,
+                padding: 0.0, //uniforms.project.background.padding as f32,
+                x_width,
+                y_height,
                 _padding: 0.0,
             };
 
@@ -2508,6 +2528,8 @@ struct ImageBackgroundPipeline {
 struct ImageBackgroundUniforms {
     output_size: [f32; 2],
     padding: f32,
+    x_width: f32,
+    y_height: f32,
     _padding: f32, // For alignment
 }
 
