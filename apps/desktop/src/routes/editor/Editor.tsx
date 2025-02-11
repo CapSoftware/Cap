@@ -11,6 +11,7 @@ import {
   createSignal,
   on,
   onMount,
+  untrack,
 } from "solid-js";
 import { createStore } from "solid-js/store";
 import { createMutation } from "@tanstack/solid-query";
@@ -94,7 +95,9 @@ function Inner() {
 
       events.editorStateChanged.listen((e) => {
         renderFrame.clear();
-        setPlaybackTime(e.payload.playhead_position / FPS);
+        untrack(() => {
+          setPlaybackTime(e.payload.playhead_position / FPS);
+        });
       });
     } catch (error) {
       console.error("Failed to initialize editor:", error);
