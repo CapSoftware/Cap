@@ -344,6 +344,7 @@ pub struct RenderVideoConstants {
     background_textures: std::sync::Arc<tokio::sync::RwLock<HashMap<String, wgpu::Texture>>>,
     screen_frame: (wgpu::Texture, wgpu::TextureView),
     camera_frame: Option<(wgpu::Texture, wgpu::TextureView)>,
+    pub background_blur_pipeline: BackgroundBlurPipeline,
 }
 
 impl RenderVideoConstants {
@@ -364,14 +365,12 @@ impl RenderVideoConstants {
             )
             .await?;
 
-        // Pass project_path to load_cursor_textures
         let cursor_textures = Self::load_cursor_textures(&device, &queue, meta);
         let cursor_pipeline = CursorPipeline::new(&device);
         let watermark_pipeline = WatermarkPipeline::new(&device);
         let composite_video_frame_pipeline = CompositeVideoFramePipeline::new(&device);
         let gradient_or_color_pipeline = GradientOrColorPipeline::new(&device);
 
-        // Create watermark texture from embedded logo
         let watermark_bytes = include_bytes!("../assets/watermark.png");
         println!(
             "Loading watermark texture from embedded bytes: {} bytes",
@@ -461,6 +460,8 @@ impl RenderVideoConstants {
         let image_background_pipeline = ImageBackgroundPipeline::new(&device);
         let background_textures = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
 
+        let background_blur_pipeline = BackgroundBlurPipeline::new(&device);
+
         let screen_frame = {
             let texture = device.create_texture(
                 &(wgpu::TextureDescriptor {
@@ -529,6 +530,7 @@ impl RenderVideoConstants {
             background_textures,
             screen_frame,
             camera_frame,
+            background_blur_pipeline,
         })
     }
 
@@ -1099,7 +1101,6 @@ async fn produce_frame(
             .1
             .create_view(&wgpu::TextureViewDescriptor::default()),
     );
-
     let texture_views = (&texture_views.0, &texture_views.1);
 
     let mut output_is_left = true;
@@ -1107,18 +1108,15 @@ async fn produce_frame(
     // First, handle the background
     match background {
         Background::Image { path } => {
-            // Use entry API to handle texture caching
             let mut textures = constants.background_textures.write().await;
             let texture = match textures.entry(path.clone()) {
                 std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
                 std::collections::hash_map::Entry::Vacant(e) => {
-                    // Load image with error propagation
                     let img = image::open(&path)
                         .map_err(|e| RenderingError::ImageLoadError(e.to_string()))?;
                     let rgba = img.to_rgba8();
                     let dimensions = img.dimensions();
 
-                    // Create texture
                     let texture = constants.device.create_texture(&wgpu::TextureDescriptor {
                         label: Some("Background Image Texture"),
                         size: wgpu::Extent3d {
@@ -1134,7 +1132,6 @@ async fn produce_frame(
                         view_formats: &[],
                     });
 
-                    // Write texture data
                     constants.queue.write_texture(
                         wgpu::ImageCopyTexture {
                             texture: &texture,
@@ -1177,10 +1174,9 @@ async fn produce_frame(
                 0.0
             };
 
-            // Create uniforms and bind group
             let image_uniforms = ImageBackgroundUniforms {
                 output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
-                padding: 0.0, //uniforms.project.background.padding as f32,
+                padding: 0.0,
                 x_width,
                 y_height,
                 _padding: 0.0,
@@ -1213,7 +1209,6 @@ async fn produce_frame(
             output_is_left = !output_is_left;
         }
         _ => {
-            // Existing gradient/color background handling
             let bind_group = constants.gradient_or_color_pipeline.bind_group(
                 &constants.device,
                 &GradientOrColorUniforms::from(background).to_buffer(&constants.device),
@@ -1224,6 +1219,55 @@ async fn produce_frame(
                 get_either(texture_views, output_is_left),
                 &constants.gradient_or_color_pipeline.render_pipeline,
                 bind_group,
+                wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            );
+
+            output_is_left = !output_is_left;
+        }
+    }
+
+    {
+        let background_view = get_either(texture_views, !output_is_left);
+        if uniforms.project.background.blur > 0 {
+            let blur_strength = uniforms.project.background.blur as f32 / 100.0;
+            let blur_uniform = BackgroundBlurUniforms {
+                output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
+                blur_strength,
+                _padding: 0.0,
+            };
+            let blur_buffer =
+                constants
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("BackgroundBlur Uniform Buffer"),
+                        contents: bytemuck::cast_slice(&[blur_uniform]),
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    });
+            let sampler = constants.device.create_sampler(&wgpu::SamplerDescriptor {
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                address_mode_w: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::FilterMode::Nearest,
+                ..Default::default()
+            });
+
+            // Use the other texture view as the output target
+            let output_view = get_either(texture_views, output_is_left);
+
+            let blur_bind_group = constants.background_blur_pipeline.bind_group(
+                &constants.device,
+                &blur_buffer,
+                background_view,
+                &sampler,
+            );
+
+            do_render_pass(
+                &mut encoder,
+                output_view,
+                &constants.background_blur_pipeline.render_pipeline,
+                blur_bind_group,
                 wgpu::LoadOp::Clear(wgpu::Color::BLACK),
             );
 
@@ -1265,7 +1309,7 @@ async fn produce_frame(
                 &constants.screen_frame.1,
                 get_either(texture_views, !output_is_left),
             ),
-            wgpu::LoadOp::Load, // Load existing content
+            wgpu::LoadOp::Load,
         );
 
         output_is_left = !output_is_left;
@@ -1889,18 +1933,147 @@ impl GradientOrColorPipeline {
     }
 
     pub fn bind_group(&self, device: &wgpu::Device, uniforms: &wgpu::Buffer) -> wgpu::BindGroup {
-        let bind_group = device.create_bind_group(
-            &(wgpu::BindGroupDescriptor {
-                layout: &self.bind_group_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniforms.as_entire_binding(),
-                }],
-                label: Some("bind_group"),
-            }),
-        );
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &self.bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniforms.as_entire_binding(),
+            }],
+            label: Some("bind_group"),
+        });
 
         bind_group
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+struct BackgroundBlurUniforms {
+    output_size: [f32; 2],
+    blur_strength: f32,
+    _padding: f32,
+}
+
+struct BackgroundBlurPipeline {
+    pub bind_group_layout: wgpu::BindGroupLayout,
+    pub render_pipeline: wgpu::RenderPipeline,
+}
+
+impl BackgroundBlurPipeline {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("background-blur Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Background Blur Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/background-blur.wgsl").into()),
+        });
+        let empty_constants: HashMap<String, f64> = HashMap::new();
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Background Blur Pipeline Layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Background Blur Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &empty_constants,
+                    zero_initialize_workgroup_memory: false,
+                    vertex_pulling_transform: false,
+                },
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &empty_constants,
+                    zero_initialize_workgroup_memory: false,
+                    vertex_pulling_transform: false,
+                },
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        Self {
+            bind_group_layout,
+            render_pipeline,
+        }
+    }
+
+    pub fn bind_group(
+        &self,
+        device: &wgpu::Device,
+        uniform_buffer: &wgpu::Buffer,
+        texture_view: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("BackgroundBlur Bind Group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        })
     }
 }
 

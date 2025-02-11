@@ -775,17 +775,16 @@ export function ConfigSidebar() {
             </KTabs>
           </Field>
 
-          {/* <ComingSoonTooltip>
-            <Field name="Background Blur" icon={<IconCapBlur />}>
-              <Slider
-                disabled
-                value={[project.background.blur]}
-                onChange={(v) => setProject("background", "blur", v[0])}
-                minValue={0}
-                maxValue={100}
-              />
-            </Field>
-          </ComingSoonTooltip> */}
+          <Field name="Background Blur" icon={<IconCapBlur />}>
+            <Slider
+              value={[project.background.blur]}
+              onChange={(v) => setProject("background", "blur", v[0])}
+              minValue={0}
+              maxValue={100}
+              step={0.1}
+            />
+          </Field>
+
           <Field name="Padding" icon={<IconCapPadding />}>
             <Slider
               value={[project.background.padding]}
