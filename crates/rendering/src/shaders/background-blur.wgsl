@@ -25,27 +25,29 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(@location(0) tex_coords: vec2<f32>) -> @location(0) vec4<f32> {
-    let blur_radius = u.blur_strength * 8.0;
+    // Early return if no blur
+    if (u.blur_strength <= 0.01) {
+        return textureSample(t_background, s_background, tex_coords);
+    }
+
+    // Use smaller kernel for light blur
+    let radius = u.blur_strength * 16.0;
+    let sigma = radius * 0.5;
+    let samples = min(16, max(4, i32(radius * 0.3)));
+    
     var color = vec4<f32>(0.0);
     var total_weight = 0.0;
     
-    let samples = 15;
-    let start = -(f32(samples) / 2.0);
-    let end = (f32(samples) / 2.0);
-    
-    for (var x = 0; x < samples; x++) {
-        for (var y = 0; y < samples; y++) {
-            let xf = start + f32(x);
-            let yf = start + f32(y);
-            
+    for (var y = -samples; y <= samples; y++) {
+        for (var x = -samples; x <= samples; x++) {
             let offset = vec2<f32>(
-                xf * blur_radius / u.output_size.x,
-                yf * blur_radius / u.output_size.y
+                f32(x) * radius / u.output_size.x,
+                f32(y) * radius / u.output_size.y
             );
-            let sample_pos = tex_coords + offset;
             
-            let distance_squared = xf * xf + yf * yf;
-            let weight = exp(-distance_squared / (2.0 * u.blur_strength));
+            let sample_pos = tex_coords + offset;
+            let dist = f32(x * x + y * y);
+            let weight = exp(-dist / (2.0 * sigma * sigma));
             
             color += textureSample(t_background, s_background, sample_pos) * weight;
             total_weight += weight;
