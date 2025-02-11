@@ -105,7 +105,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       position: number;
     };
 
-    const zoomOutLimit = () => totalDuration();
+    const zoomOutLimit = () => Math.min(totalDuration(), 60 * 10);
 
     function updateZoom(state: State, newZoom: number, origin: number): State {
       const zoom = Math.max(Math.min(newZoom, zoomOutLimit()), MAX_ZOOM_IN);
@@ -127,7 +127,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       timelineSelection: null as null | { type: "zoom"; index: number },
       timelineTransform: {
         // visible seconds
-        zoom: 17,
+        zoom: zoomOutLimit(),
         updateZoom(z: number, origin: number) {
           const { zoom, position } = updateZoom(
             {
