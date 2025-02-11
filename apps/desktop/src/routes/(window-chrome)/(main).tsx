@@ -51,6 +51,8 @@ import {
   topRightAnimateClasses,
 } from "../editor/ui";
 
+import * as TMenu from "@tauri-apps/api/menu";
+
 const getAuth = cache(async () => {
   const value = await authStore.get();
   const local = import.meta.env.VITE_ENVIRONMENT === "development";
@@ -107,15 +109,15 @@ export default function () {
 
         if (!cameraWindowActive) {
           console.log("cameraWindow not found");
-          await setOptions.mutate({
+          await setOptions.mutateAsync({
             ...options.data,
           });
         }
       }
 
       // Enforce window size with multiple safeguards
-      const currentWindow = await getCurrentWindow();
-      const MAIN_WINDOW_SIZE = { width: 300, height: 360 };
+      const currentWindow = getCurrentWindow();
+      const MAIN_WINDOW_SIZE = { width: 300, height: 285 };
 
       // Set initial size
       await currentWindow.setSize(
@@ -213,13 +215,18 @@ export default function () {
         </div>
       }
     >
-      <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-[--gray-50] h-full text-[--text-primary]">
-        <div class="flex items-center justify-between pb-[0.25rem]">
+      <div class="flex justify-start flex-col p-4 gap-[0.8rem] text-[0.875rem] font-[400] bg-[--gray-50] h-full text-[--text-primary]">
+        <div class="flex items-center justify-between">
           <div class="flex items-center space-x-1">
-            <div class="*:w-[92px] *:h-auto text-[--text-primary] ">
+            <a
+              class="*:w-[92px] *:h-auto text-[--text-primary] hover:opacity-80 transition-opacity"
+              href={`${import.meta.env.VITE_SERVER_URL}/dashboard`}
+              target="_blank"
+              rel="noreferrer"
+            >
               <IconCapLogoFullDark class="dark:block hidden" />
               <IconCapLogoFull class="dark:hidden block" />
-            </div>
+            </a>
             <ErrorBoundary fallback={<></>}>
               <Suspense>
                 <span
@@ -239,17 +246,14 @@ export default function () {
               </Suspense>
             </ErrorBoundary>
           </div>
-          <div class="flex items-center space-x-2">
+          <div class="flex flex-row items-center space-x-2">
             <Tooltip.Root openDelay={0}>
-              <Tooltip.Trigger>
-                <button
-                  type="button"
-                  onClick={() =>
-                    commands.showWindow({ Settings: { page: "recordings" } })
-                  }
-                >
-                  <IconLucideSquarePlay class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
-                </button>
+              <Tooltip.Trigger
+                onClick={() =>
+                  commands.showWindow({ Settings: { page: "recordings" } })
+                }
+              >
+                <IconLucideSquarePlay class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
               </Tooltip.Trigger>
               <Tooltip.Portal>
                 <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
@@ -260,15 +264,12 @@ export default function () {
             </Tooltip.Root>
 
             <Tooltip.Root openDelay={0}>
-              <Tooltip.Trigger>
-                <button
-                  type="button"
-                  onClick={() =>
-                    commands.showWindow({ Settings: { page: "general" } })
-                  }
-                >
-                  <IconCapSettings class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
-                </button>
+              <Tooltip.Trigger
+                onClick={() =>
+                  commands.showWindow({ Settings: { page: "general" } })
+                }
+              >
+                <IconCapSettings class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
               </Tooltip.Trigger>
               <Tooltip.Portal>
                 <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
@@ -301,14 +302,14 @@ export default function () {
             <IconLucideCamera class="w-[1rem] h-[1rem]" />
           </Button>
         </div>
-        <a
+        {/* <a
           href={`${import.meta.env.VITE_SERVER_URL}/dashboard`}
           target="_blank"
           rel="noreferrer"
           class="text-[--text-tertiary] text-[0.875rem] mx-auto hover:text-[--text-primary] hover:underline"
         >
           Open Cap on Web
-        </a>
+        </a> */}
       </div>
     </Show>
   );
@@ -663,7 +664,6 @@ function CameraSelect(props: {
   };
 
   const selectOptions = createMemo(() => [
-    { name: "No Camera", isCamera: false },
     ...videoDevices.map((d) => ({ isCamera: true, name: d })),
   ]);
 
@@ -672,12 +672,12 @@ function CameraSelect(props: {
 
   return (
     <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
-      <label class="text-[--text-tertiary] text-[0.875rem]">Camera</label>
       <KSelect<Option | null>
         options={selectOptions()}
         optionValue="name"
         optionTextValue="name"
         placeholder="No Camera"
+        placement="top"
         value={value()}
         disabled={!!currentRecording.data}
         onChange={onChange}
@@ -698,9 +698,35 @@ function CameraSelect(props: {
           setOpen(isOpen);
         }}
       >
-        <KSelect.Trigger
+        <button
           disabled={loading()}
           class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect"
+          onClick={async () => {
+            const test = await TMenu.Menu.new({
+              items: [
+                ...(await Promise.all(
+                  selectOptions().map((o) =>
+                    TMenu.CheckMenuItem.new({
+                      text: o.name,
+                      checked: value()?.name === o.name,
+                      action: () => {
+                        if (value()?.name === o.name) onChange(null);
+                        else onChange({ isCamera: true, name: o.name });
+                      },
+                    })
+                  )
+                )),
+                await TMenu.PredefinedMenuItem.new({ item: "Separator" }),
+                await TMenu.CheckMenuItem.new({
+                  text: "No Camera",
+                  checked: value() === null,
+                  action: () => onChange(null),
+                }),
+              ],
+            });
+
+            test.popup();
+          }}
         >
           <IconCapCamera class="text-gray-400 size-[1.25rem]" />
           <KSelect.Value<Option | null> class="flex-1 text-left truncate">
@@ -718,18 +744,7 @@ function CameraSelect(props: {
               });
             }}
           />
-        </KSelect.Trigger>
-        <KSelect.Portal>
-          <PopperContent<typeof KSelect.Content>
-            as={KSelect.Content}
-            class={topLeftAnimateClasses}
-          >
-            <MenuItemList<typeof KSelect.Listbox>
-              class="max-h-32 overflow-y-auto"
-              as={KSelect.Listbox}
-            />
-          </PopperContent>
-        </KSelect.Portal>
+        </button>
       </KSelect>
     </div>
   );
@@ -818,14 +833,15 @@ function MicrophoneSelect(props: {
     });
   });
 
+  const options = () => devices.data ?? [];
+
   return (
     <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
-      <label class="text-[--text-tertiary]">Microphone</label>
       <KSelect<Option>
-        options={[{ name: "No Audio", deviceId: "" }, ...(devices.data ?? [])]}
+        options={[...(devices.data ?? [])]}
         optionValue="deviceId"
         optionTextValue="name"
-        placeholder="No Audio"
+        placeholder="No Microphone"
         value={value()}
         disabled={!!currentRecording.data}
         onChange={handleMicrophoneChange}
@@ -846,9 +862,40 @@ function MicrophoneSelect(props: {
           setOpen(isOpen);
         }}
       >
-        <KSelect.Trigger
+        <button
           disabled={loading()}
           class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10"
+          onClick={async () => {
+            const test = await TMenu.Menu.new({
+              items: [
+                ...(await Promise.all(
+                  options().map((o) =>
+                    TMenu.CheckMenuItem.new({
+                      text: o.name,
+                      checked: value()?.name === o.name,
+                      action: () => {
+                        if (value()?.name === o.name)
+                          handleMicrophoneChange(null);
+                        else
+                          handleMicrophoneChange({
+                            deviceId: o.deviceId,
+                            name: o.name,
+                          });
+                      },
+                    })
+                  )
+                )),
+                await TMenu.PredefinedMenuItem.new({ item: "Separator" }),
+                await TMenu.CheckMenuItem.new({
+                  text: "No Camera",
+                  checked: value() === null,
+                  action: () => handleMicrophoneChange(null),
+                }),
+              ],
+            });
+
+            test.popup();
+          }}
         >
           <Show when={dbs()}>
             {(s) => (
@@ -885,18 +932,7 @@ function MicrophoneSelect(props: {
               });
             }}
           />
-        </KSelect.Trigger>
-        <KSelect.Portal>
-          <PopperContent<typeof KSelect.Content>
-            as={KSelect.Content}
-            class={topLeftAnimateClasses}
-          >
-            <MenuItemList<typeof KSelect.Listbox>
-              class="max-h-36 overflow-y-auto"
-              as={KSelect.Listbox}
-            />
-          </PopperContent>
-        </KSelect.Portal>
+        </button>
       </KSelect>
     </div>
   );
@@ -991,7 +1027,7 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
               <div class="p-2 text-gray-500">{props.optionsEmptyText}</div>
             }
           >
-            <KSelect.Listbox class="max-h-52 max-w-[17rem]" as={MenuItemList} />
+            <KSelect.Listbox class="max-h-32 max-w-[17rem]" as={MenuItemList} />
           </Show>
         </PopperContent>
       </KSelect.Portal>
