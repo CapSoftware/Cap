@@ -1595,6 +1595,16 @@ fn draw_cursor(
     let position = frame_position;
     let relative_position = [position.x as f32, position.y as f32];
 
+    fn smoothstep(low: f32, high: f32, v: f32) -> f32 {
+        let t = f32::clamp((v - low) / (high - low), 0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+
+    let click_scale = 1.0
+        - (0.2
+            * smoothstep(0.0, 0.25, last_click_time)
+            * (1.0 - smoothstep(0.25, 0.5, last_click_time)));
+
     let cursor_uniforms = CursorUniforms {
         position: [relative_position[0], relative_position[1], 0.0, 0.0],
         size: [normalized_size[0], normalized_size[1], 0.0, 0.0],
@@ -1605,7 +1615,7 @@ fn draw_cursor(
             0.0,
         ],
         screen_bounds: uniforms.display.target_bounds,
-        cursor_size: cursor_size_percentage,
+        cursor_size: cursor_size_percentage * click_scale,
         last_click_time,
         velocity,
         motion_blur_amount,
@@ -2276,6 +2286,8 @@ impl Coord<CroppedDisplaySpace> {
     ) -> Coord<FrameSpace> {
         let output_size = ProjectUniforms::get_output_size(options, project, resolution_base);
         let padding_offset = ProjectUniforms::get_display_offset(options, project, resolution_base);
+        dbg!(padding_offset);
+        dbg!(output_size);
 
         let screen_output_size =
             XY::new(output_size.0 as f64, output_size.1 as f64) - padding_offset.coord;

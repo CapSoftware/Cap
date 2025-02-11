@@ -597,8 +597,8 @@ export function ConfigSidebar() {
                     const file = e.currentTarget.files?.[0];
                     if (!file) return;
 
-                    /* 
-                    this is a Tauri bug in WebKit so we need to validate the file type manually 
+                    /*
+                    this is a Tauri bug in WebKit so we need to validate the file type manually
                     https://github.com/tauri-apps/tauri/issues/9158
                     */
                     const validExtensions = [
@@ -1104,78 +1104,68 @@ export function ConfigSidebar() {
           </Field>
         </KTabs.Content>
         <KTabs.Content value="cursor" class="flex flex-col gap-6">
-          {window.FLAGS.recordMouse === false ? (
-            <>
-              <Field name="Cursor" icon={<IconCapCursor />}>
-                <Subfield name="Hide cursor when not moving">
-                  <Toggle
-                    checked={project.cursor.hideWhenIdle}
-                    onChange={(v) => setProject("cursor", "hideWhenIdle", v)}
+          <Field name="Cursor" icon={<IconCapCursor />}>
+            <Subfield name="Hide cursor when not moving">
+              <Toggle
+                checked={project.cursor.hideWhenIdle}
+                onChange={(v) => setProject("cursor", "hideWhenIdle", v)}
+              />
+            </Subfield>
+          </Field>
+          <Field name="Size" icon={<IconCapEnlarge />}>
+            <Slider
+              value={[project.cursor.size]}
+              onChange={(v) => setProject("cursor", "size", v[0])}
+              minValue={20}
+              maxValue={300}
+              step={1}
+            />
+          </Field>
+          {/* <Field name="Animation Style" icon={<IconLucideRabbit />}>
+            <RadioGroup
+              defaultValue="regular"
+              value={project.cursor.animationStyle}
+              onChange={(value) => {
+                setProject(
+                  "cursor",
+                  "animationStyle",
+                  value as CursorAnimationStyle
+                );
+              }}
+              class="flex flex-col gap-2"
+              disabled
+            >
+              {(
+                Object.entries(CURSOR_ANIMATION_STYLES) as [
+                  CursorAnimationStyle,
+                  string
+                ][]
+              ).map(([value, label]) => (
+                <RadioGroup.Item value={value} class="flex items-center">
+                  <RadioGroup.ItemInput class="peer sr-only" />
+                  <RadioGroup.ItemControl
+                    class={cx(
+                      "w-4 h-4 rounded-full border border-gray-300 mr-2",
+                      "relative after:absolute after:inset-0 after:m-auto after:block after:w-2 after:h-2 after:rounded-full",
+                      "after:transition-colors after:duration-200",
+                      "peer-checked:border-blue-500 peer-checked:after:bg-blue-400",
+                      "peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/50",
+                      "peer-disabled:opacity-50"
+                    )}
                   />
-                </Subfield>
-              </Field>
-              <Field name="Size" icon={<IconCapEnlarge />}>
-                <Slider
-                  value={[project.cursor.size]}
-                  onChange={(v) => setProject("cursor", "size", v[0])}
-                  minValue={20}
-                  maxValue={300}
-                  step={1}
-                  disabled={window.FLAGS.recordMouse}
-                />
-              </Field>
-              <Field name="Animation Style" icon={<IconLucideRabbit />}>
-                <RadioGroup
-                  defaultValue="regular"
-                  value={project.cursor.animationStyle}
-                  onChange={(value) => {
-                    setProject(
-                      "cursor",
-                      "animationStyle",
-                      value as CursorAnimationStyle
-                    );
-                  }}
-                  class="flex flex-col gap-2"
-                  disabled
-                >
-                  {(
-                    Object.entries(CURSOR_ANIMATION_STYLES) as [
-                      CursorAnimationStyle,
-                      string
-                    ][]
-                  ).map(([value, label]) => (
-                    <RadioGroup.Item value={value} class="flex items-center">
-                      <RadioGroup.ItemInput class="peer sr-only" />
-                      <RadioGroup.ItemControl
-                        class={cx(
-                          "w-4 h-4 rounded-full border border-gray-300 mr-2",
-                          "relative after:absolute after:inset-0 after:m-auto after:block after:w-2 after:h-2 after:rounded-full",
-                          "after:transition-colors after:duration-200",
-                          "peer-checked:border-blue-500 peer-checked:after:bg-blue-400",
-                          "peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/50",
-                          "peer-disabled:opacity-50"
-                        )}
-                      />
-                      <span
-                        class={cx(
-                          "text-gray-500",
-                          "peer-checked:text-gray-900",
-                          "peer-disabled:opacity-50"
-                        )}
-                      >
-                        {label}
-                      </span>
-                    </RadioGroup.Item>
-                  ))}
-                </RadioGroup>
-              </Field>
-            </>
-          ) : (
-            <div class="flex flex-col items-center justify-center gap-2 text-gray-400 p-4">
-              <IconCapCursor class="size-6" />
-              <span>Cursor settings coming soon</span>
-            </div>
-          )}
+                  <span
+                    class={cx(
+                      "text-gray-500",
+                      "peer-checked:text-gray-900",
+                      "peer-disabled:opacity-50"
+                    )}
+                  >
+                    {label}
+                  </span>
+                </RadioGroup.Item>
+              ))}
+            </RadioGroup>
+          </Field> */}
         </KTabs.Content>
         <KTabs.Content value="hotkeys">
           <Field name="Hotkeys" icon={<IconCapHotkeys />}>
