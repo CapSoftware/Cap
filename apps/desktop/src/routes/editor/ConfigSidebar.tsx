@@ -367,27 +367,51 @@ export function ConfigSidebar() {
                 switch (tab) {
                   case "image": {
                     setProject("background", "source", {
-                      ...backgrounds.image,
+                      type: "image",
+                      path:
+                        project.background.source.type === "image"
+                          ? project.background.source.path
+                          : null,
                     });
-                    return;
+                    break;
                   }
                   case "color": {
                     setProject("background", "source", {
-                      ...backgrounds.color,
+                      type: "color",
+                      value:
+                        project.background.source.type === "color"
+                          ? project.background.source.value
+                          : DEFAULT_GRADIENT_FROM,
                     });
-                    return;
+                    break;
                   }
                   case "gradient": {
                     setProject("background", "source", {
-                      ...backgrounds.gradient,
+                      type: "gradient",
+                      from:
+                        project.background.source.type === "gradient"
+                          ? project.background.source.from
+                          : DEFAULT_GRADIENT_FROM,
+                      to:
+                        project.background.source.type === "gradient"
+                          ? project.background.source.to
+                          : DEFAULT_GRADIENT_TO,
+                      angle:
+                        project.background.source.type === "gradient"
+                          ? project.background.source.angle
+                          : 90,
                     });
-                    return;
+                    break;
                   }
                   case "wallpaper": {
                     setProject("background", "source", {
-                      ...backgrounds.wallpaper,
+                      type: "wallpaper",
+                      path:
+                        project.background.source.type === "wallpaper"
+                          ? project.background.source.path
+                          : null,
                     });
-                    return;
+                    break;
                   }
                 }
               }}
@@ -576,8 +600,8 @@ export function ConfigSidebar() {
                           type="button"
                           onClick={() =>
                             setProject("background", "source", {
-                              type: "color",
-                              value: [255, 255, 255],
+                              type: "image",
+                              path: null,
                             })
                           }
                           class="bg-black/50 text-white p-2 rounded-full hover:bg-black/70 transition-colors"
@@ -751,17 +775,16 @@ export function ConfigSidebar() {
             </KTabs>
           </Field>
 
-          {/* <ComingSoonTooltip>
-            <Field name="Background Blur" icon={<IconCapBlur />}>
-              <Slider
-                disabled
-                value={[project.background.blur]}
-                onChange={(v) => setProject("background", "blur", v[0])}
-                minValue={0}
-                maxValue={100}
-              />
-            </Field>
-          </ComingSoonTooltip> */}
+          <Field name="Background Blur" icon={<IconCapBlur />}>
+            <Slider
+              value={[project.background.blur]}
+              onChange={(v) => setProject("background", "blur", v[0])}
+              minValue={0}
+              maxValue={100}
+              step={0.1}
+            />
+          </Field>
+
           <Field name="Padding" icon={<IconCapPadding />}>
             <Slider
               value={[project.background.padding]}

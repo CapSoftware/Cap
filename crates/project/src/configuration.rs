@@ -172,7 +172,7 @@ pub struct ShadowConfiguration {
 #[serde(rename_all = "camelCase")]
 pub struct BackgroundConfiguration {
     pub source: BackgroundSource,
-    pub blur: u32,
+    pub blur: f64,
     pub padding: f64,
     pub rounding: f64,
     pub inset: u32,
@@ -186,7 +186,7 @@ impl Default for BackgroundConfiguration {
     fn default() -> Self {
         Self {
             source: BackgroundSource::default(),
-            blur: 0,
+            blur: 0.0,
             padding: 0.0,
             rounding: 0.0,
             inset: 0,

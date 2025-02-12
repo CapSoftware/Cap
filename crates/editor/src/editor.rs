@@ -98,7 +98,7 @@ impl Renderer {
                         let frame = frame_renderer
                             .render(
                                 segment_frames,
-                                cap_rendering::Background::from(background),
+                                background,
                                 &uniforms,
                                 resolution_base,
                                 &cursor,
