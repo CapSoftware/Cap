@@ -638,9 +638,6 @@ impl ProjectUniforms {
         let output_size = Self::get_output_size(options, project, resolution_base);
         let frame_time = frame_number as f32 / fps as f32;
 
-        let cursor_position =
-            interpolate_cursor_position(cursor_events, frame_time, &project.cursor.animation_style);
-
         // let zoom_keyframes = ZoomKeyframes::new(project);
         // let current_zoom = zoom_keyframes.interpolate(time as f64);
         // let prev_zoom = zoom_keyframes.interpolate((time - 1.0 / 30.0) as f64);
@@ -943,7 +940,7 @@ async fn produce_frame(
 
         DisplayLayer::render(&mut pipeline, &segment_frames);
 
-        CursorLayer::render(&mut pipeline, &segment_frames, resolution_base);
+        CursorLayer::render(&mut pipeline, &segment_frames, resolution_base, &cursor);
 
         if let (
             Some(camera_size),

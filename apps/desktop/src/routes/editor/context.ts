@@ -198,6 +198,8 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
     }>();
 
     const [editorInstance] = createResource(async () => {
+      console.log("WHAT");
+      // await new Promise((r) => {});
       const instance = await commands.createEditorInstance(props.videoId);
 
       const [ws, isConnected] = createImageDataWS(
