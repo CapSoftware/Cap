@@ -1,31 +1,18 @@
 use cap_project::XY;
 
-use crate::{
-    frame_output::{FramePipelineEncoder, FramePipelineState},
-    CompositeVideoFrameUniforms, DecodedFrame,
-};
+use crate::{frame_pipeline::FramePipeline, CompositeVideoFrameUniforms, DecodedFrame};
 
-pub struct CameraLayer<'a, 'b> {
-    pub pipeline: &'a mut FramePipelineState<'b>,
-    pub encoder: &'a mut FramePipelineEncoder,
-}
+pub struct CameraLayer;
 
-impl<'a, 'b> CameraLayer<'a, 'b> {
-    pub fn new(
-        pipeline: &'a mut FramePipelineState<'b>,
-        encoder: &'a mut FramePipelineEncoder,
-    ) -> Self {
-        Self { pipeline, encoder }
-    }
-
+impl CameraLayer {
     pub fn render(
-        &mut self,
+        pipeline: &mut FramePipeline,
         camera_size: XY<u32>,
         camera_frame: &DecodedFrame,
         uniforms: &CompositeVideoFrameUniforms,
         (texture, texture_view): (&wgpu::Texture, &wgpu::TextureView),
     ) {
-        let constants = self.pipeline.constants;
+        let constants = pipeline.state.constants;
 
         constants.queue.write_texture(
             wgpu::ImageCopyTexture {
@@ -47,18 +34,18 @@ impl<'a, 'b> CameraLayer<'a, 'b> {
             },
         );
 
-        self.encoder.do_render_pass(
-            self.pipeline.get_current_texture_view(),
+        pipeline.encoder.do_render_pass(
+            pipeline.state.get_current_texture_view(),
             &constants.composite_video_frame_pipeline.render_pipeline,
             constants.composite_video_frame_pipeline.bind_group(
                 &constants.device,
                 &uniforms.to_buffer(&constants.device),
                 &texture_view,
-                self.pipeline.get_other_texture_view(),
+                pipeline.state.get_other_texture_view(),
             ),
             wgpu::LoadOp::Load,
         );
 
-        self.pipeline.output_is_left = !self.pipeline.output_is_left;
+        pipeline.state.switch_output();
     }
 }

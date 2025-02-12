@@ -1,31 +1,81 @@
 use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
+use cap_project::BackgroundSource;
 use image::GenericImageView;
+use serde::{Deserialize, Serialize};
+use specta::Type;
 use wgpu::{include_wgsl, util::DeviceExt};
 
 use crate::{
-    create_shader_render_pipeline,
-    frame_output::{FramePipelineEncoder, FramePipelineState},
-    Background, RenderingError,
+    create_shader_render_pipeline, frame_pipeline::FramePipeline, srgb_to_linear, RenderingError,
 };
 
-pub struct BackgroundLayer<'a, 'b: 'a> {
-    pub pipeline: &'a mut FramePipelineState<'b>,
-    pub encoder: &'a mut FramePipelineEncoder,
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub enum Background {
+    Color([f32; 4]),
+    Gradient {
+        start: [f32; 4],
+        end: [f32; 4],
+        angle: f32,
+    },
+    Image {
+        path: String,
+    },
 }
 
-impl<'a, 'b> BackgroundLayer<'a, 'b> {
-    pub fn new(
-        pipeline: &'a mut FramePipelineState<'b>,
-        encoder: &'a mut FramePipelineEncoder,
-    ) -> Self {
-        Self { pipeline, encoder }
-    }
+impl From<BackgroundSource> for Background {
+    fn from(value: BackgroundSource) -> Self {
+        match value {
+            BackgroundSource::Color { value } => Background::Color([
+                srgb_to_linear(value[0]),
+                srgb_to_linear(value[1]),
+                srgb_to_linear(value[2]),
+                1.0,
+            ]),
+            BackgroundSource::Gradient { from, to, angle } => Background::Gradient {
+                start: [
+                    srgb_to_linear(from[0]),
+                    srgb_to_linear(from[1]),
+                    srgb_to_linear(from[2]),
+                    1.0,
+                ],
+                end: [
+                    srgb_to_linear(to[0]),
+                    srgb_to_linear(to[1]),
+                    srgb_to_linear(to[2]),
+                    1.0,
+                ],
+                angle: angle as f32,
+            },
+            BackgroundSource::Image { path } | BackgroundSource::Wallpaper { path } => {
+                if let Some(path) = path {
+                    if !path.is_empty() {
+                        let clean_path = path
+                            .replace("asset://localhost/", "/")
+                            .replace("asset://", "")
+                            .replace("localhost//", "/");
 
-    pub async fn render(&mut self, background: Background) -> Result<(), RenderingError> {
-        let constants = self.pipeline.constants;
-        let uniforms = self.pipeline.uniforms;
+                        if std::path::Path::new(&clean_path).exists() {
+                            return Background::Image { path: clean_path };
+                        }
+                    }
+                }
+                Background::Color([1.0, 1.0, 1.0, 1.0])
+            }
+        }
+    }
+}
+
+pub struct BackgroundLayer;
+
+impl BackgroundLayer {
+    pub async fn render<'a, 'b>(
+        pipeline: &mut FramePipeline<'a, 'b>,
+        background: Background,
+    ) -> Result<(), RenderingError> {
+        let constants = pipeline.state.constants;
+        let uniforms = pipeline.state.uniforms;
 
         // First, handle the background
         match background {
@@ -121,8 +171,8 @@ impl<'a, 'b> BackgroundLayer<'a, 'b> {
                     &texture_view,
                 );
 
-                self.encoder.do_render_pass(
-                    self.pipeline.get_current_texture_view(),
+                pipeline.encoder.do_render_pass(
+                    pipeline.state.get_current_texture_view(),
                     &constants.image_background_pipeline.render_pipeline,
                     bind_group,
                     wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -134,8 +184,8 @@ impl<'a, 'b> BackgroundLayer<'a, 'b> {
                     &GradientOrColorUniforms::from(background).to_buffer(&constants.device),
                 );
 
-                self.encoder.do_render_pass(
-                    self.pipeline.get_current_texture_view(),
+                pipeline.encoder.do_render_pass(
+                    pipeline.state.get_current_texture_view(),
                     &constants.gradient_or_color_pipeline.render_pipeline,
                     bind_group,
                     wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -143,49 +193,49 @@ impl<'a, 'b> BackgroundLayer<'a, 'b> {
             }
         }
 
-        {
-            if uniforms.project.background.blur > 0 {
-                let blur_strength = uniforms.project.background.blur as f32 / 100.0;
-                let blur_uniform = BackgroundBlurUniforms {
-                    output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
-                    blur_strength,
-                    _padding: 0.0,
-                };
-                let blur_buffer =
-                    constants
-                        .device
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("BackgroundBlur Uniform Buffer"),
-                            contents: bytemuck::cast_slice(&[blur_uniform]),
-                            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                        });
-                let sampler = constants.device.create_sampler(&wgpu::SamplerDescriptor {
-                    address_mode_u: wgpu::AddressMode::ClampToEdge,
-                    address_mode_v: wgpu::AddressMode::ClampToEdge,
-                    address_mode_w: wgpu::AddressMode::ClampToEdge,
-                    mag_filter: wgpu::FilterMode::Linear,
-                    min_filter: wgpu::FilterMode::Linear,
-                    mipmap_filter: wgpu::FilterMode::Nearest,
-                    ..Default::default()
-                });
+        pipeline.state.switch_output();
 
-                let blur_bind_group = constants.background_blur_pipeline.bind_group(
-                    &constants.device,
-                    &blur_buffer,
-                    self.pipeline.get_current_texture_view(),
-                    &sampler,
-                );
+        if uniforms.project.background.blur > 0.0 {
+            let blur_strength = uniforms.project.background.blur as f32 / 100.0;
+            let blur_uniform = BackgroundBlurUniforms {
+                output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
+                blur_strength,
+                _padding: 0.0,
+            };
+            let blur_buffer =
+                constants
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("BackgroundBlur Uniform Buffer"),
+                        contents: bytemuck::cast_slice(&[blur_uniform]),
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    });
+            let sampler = constants.device.create_sampler(&wgpu::SamplerDescriptor {
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                address_mode_w: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::FilterMode::Nearest,
+                ..Default::default()
+            });
 
-                self.encoder.do_render_pass(
-                    self.pipeline.get_other_texture_view(),
-                    &constants.background_blur_pipeline.render_pipeline,
-                    blur_bind_group,
-                    wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                );
-            }
+            let blur_bind_group = constants.background_blur_pipeline.bind_group(
+                &constants.device,
+                &blur_buffer,
+                pipeline.state.get_other_texture_view(),
+                &sampler,
+            );
+
+            pipeline.encoder.do_render_pass(
+                pipeline.state.get_current_texture_view(),
+                &constants.background_blur_pipeline.render_pipeline,
+                blur_bind_group,
+                wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            );
+
+            pipeline.state.switch_output();
         }
-
-        self.pipeline.output_is_left = !self.pipeline.output_is_left;
 
         Ok(())
     }

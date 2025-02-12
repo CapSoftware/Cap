@@ -1,33 +1,29 @@
 use anyhow::Result;
-use bytemuck::{Pod, Zeroable};
 use cap_project::{
-    AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Content, Crop,
-    CursorAnimationStyle, CursorData, CursorEvents, CursorMoveEvent, ProjectConfiguration,
-    RecordingMeta, FAST_SMOOTHING_SAMPLES, FAST_VELOCITY_THRESHOLD, REGULAR_SMOOTHING_SAMPLES,
-    REGULAR_VELOCITY_THRESHOLD, SLOW_SMOOTHING_SAMPLES, SLOW_VELOCITY_THRESHOLD, XY,
+    AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Content, Crop, CursorEvents,
+    ProjectConfiguration, RecordingMeta, XY,
 };
+use composite_frame::{CompositeVideoFramePipeline, CompositeVideoFrameUniforms};
 use core::f64;
 use decoder::{spawn_decoder, AsyncVideoDecoderHandle};
-use frame_output::{FramePipelineEncoder, FramePipelineState};
+use frame_pipeline::{FramePipeline, FramePipelineEncoder, FramePipelineState};
 use futures::future::OptionFuture;
 use futures::FutureExt;
 use layers::{
-    BackgroundBlurPipeline, BackgroundLayer, CameraLayer, CursorLayer, CursorPipeline,
+    Background, BackgroundBlurPipeline, BackgroundLayer, CameraLayer, CursorLayer, CursorPipeline,
     DisplayLayer, GradientOrColorPipeline, ImageBackgroundPipeline,
 };
-use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc;
-use wgpu::include_wgsl;
-use wgpu::util::DeviceExt;
 
 use image::GenericImageView;
 use std::{path::PathBuf, time::Instant};
 
+mod composite_frame;
 mod coord;
 pub mod decoder;
-mod frame_output;
+mod frame_pipeline;
 mod layers;
 mod project_recordings;
 mod zoom;
@@ -44,70 +40,6 @@ const STANDARD_CURSOR_HEIGHT: f32 = 75.0;
 pub struct RenderOptions {
     pub camera_size: Option<XY<u32>>,
     pub screen_size: XY<u32>,
-}
-
-#[derive(Debug, Clone, Type)]
-pub struct WebcamStyle {
-    pub border_radius: f32,
-    pub shadow_color: [f32; 4],
-    pub shadow_blur: f32,
-    pub shadow_offset: (f32, f32),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub enum Background {
-    Color([f32; 4]),
-    Gradient {
-        start: [f32; 4],
-        end: [f32; 4],
-        angle: f32,
-    },
-    Image {
-        path: String,
-    },
-}
-
-impl From<BackgroundSource> for Background {
-    fn from(value: BackgroundSource) -> Self {
-        match value {
-            BackgroundSource::Color { value } => Background::Color([
-                srgb_to_linear(value[0]),
-                srgb_to_linear(value[1]),
-                srgb_to_linear(value[2]),
-                1.0,
-            ]),
-            BackgroundSource::Gradient { from, to, angle } => Background::Gradient {
-                start: [
-                    srgb_to_linear(from[0]),
-                    srgb_to_linear(from[1]),
-                    srgb_to_linear(from[2]),
-                    1.0,
-                ],
-                end: [
-                    srgb_to_linear(to[0]),
-                    srgb_to_linear(to[1]),
-                    srgb_to_linear(to[2]),
-                    1.0,
-                ],
-                angle: angle as f32,
-            },
-            BackgroundSource::Image { path } | BackgroundSource::Wallpaper { path } => {
-                if let Some(path) = path {
-                    if !path.is_empty() {
-                        let clean_path = path
-                            .replace("asset://localhost/", "/")
-                            .replace("asset://", "")
-                            .replace("localhost//", "/");
-
-                        if std::path::Path::new(&clean_path).exists() {
-                            return Background::Image { path: clean_path };
-                        }
-                    }
-                }
-                Background::Color([1.0, 1.0, 1.0, 1.0])
-            }
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -222,7 +154,7 @@ pub async fn render_video_to_channel(
     );
 
     let mut frame_number = 0;
-    let background = Background::from(project.background.source.clone());
+    let background = project.background.source.clone();
 
     let mut frame_renderer = FrameRenderer::new(&constants);
 
@@ -335,14 +267,14 @@ pub struct RenderVideoConstants {
     pub device: wgpu::Device,
     pub options: RenderOptions,
     composite_video_frame_pipeline: CompositeVideoFramePipeline,
-    gradient_or_color_pipeline: GradientOrColorPipeline,
     pub cursor_textures: HashMap<String, wgpu::Texture>,
     cursor_pipeline: CursorPipeline,
+    gradient_or_color_pipeline: GradientOrColorPipeline,
     image_background_pipeline: ImageBackgroundPipeline,
+    pub background_blur_pipeline: BackgroundBlurPipeline,
     background_textures: std::sync::Arc<tokio::sync::RwLock<HashMap<String, wgpu::Texture>>>,
     screen_frame: (wgpu::Texture, wgpu::TextureView),
     camera_frame: Option<(wgpu::Texture, wgpu::TextureView)>,
-    pub background_blur_pipeline: BackgroundBlurPipeline,
 }
 
 impl RenderVideoConstants {
@@ -702,11 +634,11 @@ impl ProjectUniforms {
         let output_size = Self::get_output_size(options, project, resolution_base);
         let frame_time = frame_number as f32 / fps as f32;
 
-        let cursor_position = interpolate_cursor_position(
-            &Default::default(), /*constants.cursor*/
-            frame_time,
-            &project.cursor.animation_style,
-        );
+        // let cursor_position = interpolate_cursor_position(
+        //     &Default::default(), /*constants.cursor*/
+        //     frame_time,
+        //     &project.cursor.animation_style,
+        // );
 
         // let zoom_keyframes = ZoomKeyframes::new(project);
         // let current_zoom = zoom_keyframes.interpolate(time as f64);
@@ -966,7 +898,7 @@ impl<'a> FrameRenderer<'a> {
     pub async fn render(
         &mut self,
         segment_frames: DecodedSegmentFrames,
-        background: Background,
+        background: BackgroundSource,
         uniforms: &ProjectUniforms,
         resolution_base: XY<u32>,
     ) -> Result<RenderedFrame, RenderingError> {
@@ -987,39 +919,51 @@ impl<'a> FrameRenderer<'a> {
 async fn produce_frame(
     constants: &RenderVideoConstants,
     segment_frames: DecodedSegmentFrames,
-    background: Background,
+    background: BackgroundSource,
     uniforms: &ProjectUniforms,
     resolution_base: XY<u32>,
     textures: &(wgpu::Texture, wgpu::Texture),
 ) -> Result<RenderedFrame, RenderingError> {
-    let mut pipeline = FramePipelineState::new(constants, uniforms, textures);
-    let mut encoder = FramePipelineEncoder::new(&pipeline);
+    let background = Background::from(background);
 
-    BackgroundLayer::new(&mut pipeline, &mut encoder)
-        .render(background)
-        .await?;
+    let mut state = FramePipelineState::new(constants, uniforms, textures);
+    let mut encoder = FramePipelineEncoder::new(&state);
 
-    DisplayLayer::new(&mut pipeline, &mut encoder).render(&segment_frames);
+    {
+        let mut pipeline = FramePipeline {
+            state: &mut state,
+            encoder: &mut encoder,
+        };
 
-    CursorLayer::new(&mut pipeline, &mut encoder).render(&segment_frames, resolution_base);
+        BackgroundLayer::render(&mut pipeline, background).await?;
 
-    // camera
-    if let (Some(camera_size), Some(camera_frame), Some(uniforms), Some((texture, texture_view))) = (
-        constants.options.camera_size,
-        &segment_frames.camera_frame,
-        &uniforms.camera,
-        &constants.camera_frame,
-    ) {
-        CameraLayer::new(&mut pipeline, &mut encoder).render(
-            camera_size,
-            camera_frame,
-            uniforms,
-            (texture, texture_view),
-        );
+        DisplayLayer::render(&mut pipeline, &segment_frames);
+
+        CursorLayer::render(&mut pipeline, &segment_frames, resolution_base);
+
+        if let (
+            Some(camera_size),
+            Some(camera_frame),
+            Some(uniforms),
+            Some((texture, texture_view)),
+        ) = (
+            constants.options.camera_size,
+            &segment_frames.camera_frame,
+            &uniforms.camera,
+            &constants.camera_frame,
+        ) {
+            CameraLayer::render(
+                &mut pipeline,
+                camera_size,
+                camera_frame,
+                uniforms,
+                (texture, texture_view),
+            );
+        }
     }
 
-    let padded_bytes_per_row = encoder.padded_bytes_per_row(&pipeline);
-    let image_data = encoder.copy_output(pipeline).await?;
+    let padded_bytes_per_row = encoder.padded_bytes_per_row(&state);
+    let image_data = encoder.copy_output(state).await?;
 
     Ok(RenderedFrame {
         data: image_data,
@@ -1027,150 +971,6 @@ async fn produce_frame(
         width: uniforms.output_size.0,
         height: uniforms.output_size.1,
     })
-}
-
-struct CompositeVideoFramePipeline {
-    pub bind_group_layout: wgpu::BindGroupLayout,
-    pub render_pipeline: wgpu::RenderPipeline,
-}
-
-#[derive(Debug, Clone, Copy, Pod, Zeroable, Default)]
-#[repr(C)]
-struct CompositeVideoFrameUniforms {
-    pub crop_bounds: [f32; 4],
-    pub target_bounds: [f32; 4],
-    pub output_size: [f32; 2],
-    pub frame_size: [f32; 2],
-    pub velocity_uv: [f32; 2],
-    pub target_size: [f32; 2],
-    pub rounding_px: f32,
-    pub mirror_x: f32,
-    pub motion_blur_amount: f32,
-    pub camera_motion_blur_amount: f32,
-    pub shadow: f32,
-    pub shadow_size: f32,
-    pub shadow_opacity: f32,
-    pub shadow_blur: f32,
-    _padding: [f32; 3],
-}
-
-impl CompositeVideoFrameUniforms {
-    fn to_buffer(self, device: &wgpu::Device) -> wgpu::Buffer {
-        device.create_buffer_init(
-            &(wgpu::util::BufferInitDescriptor {
-                label: Some("CompositeVideoFrameUniforms Buffer"),
-                contents: bytemuck::cast_slice(&[self]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            }),
-        )
-    }
-}
-
-impl CompositeVideoFramePipeline {
-    pub fn new(device: &wgpu::Device) -> Self {
-        let bind_group_layout = Self::bind_group_layout(device);
-        let render_pipeline = create_shader_render_pipeline(
-            device,
-            &bind_group_layout,
-            include_wgsl!("shaders/composite-video-frame.wgsl"),
-        );
-
-        Self {
-            bind_group_layout,
-            render_pipeline,
-        }
-    }
-
-    fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("composite-video-frame.wgsl Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        })
-    }
-
-    pub fn bind_group(
-        &self,
-        device: &wgpu::Device,
-        uniforms: &wgpu::Buffer,
-        frame: &wgpu::TextureView,
-        intermediate: &wgpu::TextureView,
-    ) -> wgpu::BindGroup {
-        let sampler = device.create_sampler(
-            &(wgpu::SamplerDescriptor {
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
-                address_mode_w: wgpu::AddressMode::ClampToEdge,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                mipmap_filter: wgpu::FilterMode::Nearest,
-                ..Default::default()
-            }),
-        );
-
-        let bind_group = device.create_bind_group(
-            &(wgpu::BindGroupDescriptor {
-                layout: &self.bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: uniforms.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(frame),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(intermediate),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
-                    },
-                ],
-                label: Some("bind_group"),
-            }),
-        );
-
-        bind_group
-    }
 }
 
 pub fn create_shader_render_pipeline(
@@ -1250,121 +1050,4 @@ fn get_either<T>((a, b): (T, T), left: bool) -> T {
     } else {
         b
     }
-}
-
-fn interpolate_cursor_position(
-    cursor: &CursorData,
-    time_secs: f32,
-    animation_style: &CursorAnimationStyle,
-) -> Option<Coord<RawDisplayUVSpace>> {
-    let time_ms = (time_secs * 1000.0) as f64;
-
-    if cursor.moves.is_empty() {
-        return None;
-    }
-
-    // Get style-specific parameters
-    let (num_samples, velocity_threshold) = match animation_style {
-        CursorAnimationStyle::Slow => (SLOW_SMOOTHING_SAMPLES, SLOW_VELOCITY_THRESHOLD),
-        CursorAnimationStyle::Regular => (REGULAR_SMOOTHING_SAMPLES, REGULAR_VELOCITY_THRESHOLD),
-        CursorAnimationStyle::Fast => (FAST_SMOOTHING_SAMPLES, FAST_VELOCITY_THRESHOLD),
-    };
-
-    // Find the closest move events around current time
-    let mut closest_events: Vec<&CursorMoveEvent> = cursor
-        .moves
-        .iter()
-        .filter(|m| (m.process_time_ms - time_ms).abs() <= 100.0) // Look at events within 100ms
-        .collect();
-
-    closest_events.sort_by(|a, b| {
-        (a.process_time_ms - time_ms)
-            .abs()
-            .partial_cmp(&(b.process_time_ms - time_ms).abs())
-            .unwrap()
-    });
-
-    // Take the nearest events up to num_samples
-    let samples: Vec<(f64, f64, f64)> = closest_events
-        .iter()
-        .take(num_samples)
-        .map(|m| (m.process_time_ms, m.x, m.y))
-        .collect();
-
-    if samples.is_empty() {
-        // Fallback to nearest event if no samples in range
-        let nearest = cursor
-            .moves
-            .iter()
-            .min_by_key(|m| (m.process_time_ms - time_ms).abs() as i64)?;
-        return Some(Coord::new(XY {
-            x: nearest.x.clamp(0.0, 1.0),
-            y: nearest.y.clamp(0.0, 1.0),
-        }));
-    }
-
-    // Calculate velocities between consecutive points
-    let mut velocities = Vec::with_capacity(samples.len() - 1);
-    for i in 0..samples.len() - 1 {
-        let (t1, x1, y1) = samples[i];
-        let (t2, x2, y2) = samples[i + 1];
-        let dt = (t2 - t1).max(1.0); // Avoid division by zero
-        let dx = x2 - x1;
-        let dy = y2 - y1;
-        let velocity = ((dx * dx + dy * dy) / (dt * dt)).sqrt();
-        velocities.push(velocity);
-    }
-
-    // Apply adaptive smoothing based on velocities and time distance
-    let mut x = 0.0;
-    let mut y = 0.0;
-    let mut total_weight = 0.0;
-
-    for (i, &(t, px, py)) in samples.iter().enumerate() {
-        // Time-based weight with style-specific falloff
-        let time_diff = (t - time_ms).abs();
-        let style_factor = match animation_style {
-            CursorAnimationStyle::Slow => 0.0005,
-            CursorAnimationStyle::Regular => 0.001,
-            CursorAnimationStyle::Fast => 0.002,
-        };
-        let time_weight = 1.0 / (1.0 + time_diff * style_factor);
-
-        // Velocity-based weight
-        let velocity_weight = if i < velocities.len() {
-            let vel = velocities[i];
-            if vel > velocity_threshold {
-                (velocity_threshold / vel).powf(match animation_style {
-                    CursorAnimationStyle::Slow => 1.5,
-                    CursorAnimationStyle::Regular => 1.0,
-                    CursorAnimationStyle::Fast => 0.5,
-                })
-            } else {
-                1.0
-            }
-        } else {
-            1.0
-        };
-
-        // Combine weights with style-specific emphasis
-        let weight = match animation_style {
-            CursorAnimationStyle::Slow => time_weight * velocity_weight.powf(1.5),
-            CursorAnimationStyle::Regular => time_weight * velocity_weight,
-            CursorAnimationStyle::Fast => time_weight * velocity_weight.powf(0.5),
-        };
-
-        x += px * weight;
-        y += py * weight;
-        total_weight += weight;
-    }
-
-    if total_weight > 0.0 {
-        x /= total_weight;
-        y /= total_weight;
-    }
-
-    Some(Coord::new(XY {
-        x: x.clamp(0.0, 1.0),
-        y: y.clamp(0.0, 1.0),
-    }))
 }

@@ -3,12 +3,17 @@ use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
 use crate::{get_either, ProjectUniforms, RenderVideoConstants, RenderingError};
 
+pub struct FramePipeline<'a, 'b> {
+    pub state: &'a mut FramePipelineState<'b>,
+    pub encoder: &'a mut FramePipelineEncoder,
+}
+
 pub struct FramePipelineState<'a> {
     pub constants: &'a RenderVideoConstants,
     pub uniforms: &'a ProjectUniforms,
     pub textures: &'a (wgpu::Texture, wgpu::Texture),
     pub texture_views: (wgpu::TextureView, wgpu::TextureView),
-    pub output_is_left: bool,
+    output_is_left: bool,
 }
 
 impl<'a> FramePipelineState<'a> {
@@ -44,13 +49,21 @@ impl<'a> FramePipelineState<'a> {
 
     pub fn get_other_texture_view(&self) -> &wgpu::TextureView {
         get_either(
-            (&self.texture_views.1, &self.texture_views.0),
+            (&self.texture_views.0, &self.texture_views.1),
             !self.output_is_left,
         )
     }
 
+    pub fn get_current_texture(&self) -> &wgpu::Texture {
+        get_either((&self.textures.1, &self.textures.0), self.output_is_left)
+    }
+
     pub fn get_other_texture(&self) -> &wgpu::Texture {
         get_either((&self.textures.1, &self.textures.0), !self.output_is_left)
+    }
+
+    pub fn switch_output(&mut self) {
+        self.output_is_left = !self.output_is_left;
     }
 }
 
@@ -141,7 +154,7 @@ impl FramePipelineEncoder {
 
             encoder.copy_texture_to_buffer(
                 wgpu::ImageCopyTexture {
-                    texture: state.get_other_texture(),
+                    texture: state.get_current_texture(),
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
@@ -174,6 +187,7 @@ impl FramePipelineEncoder {
         let data = buffer_slice.get_mapped_range();
         let data_vec = data.to_vec();
 
+        drop(data);
         output_buffer.unmap();
 
         Ok(data_vec)

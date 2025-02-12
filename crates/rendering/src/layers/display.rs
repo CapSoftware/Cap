@@ -1,25 +1,14 @@
-use crate::{
-    frame_output::{FramePipelineEncoder, FramePipelineState},
-    DecodedSegmentFrames,
-};
+use crate::{frame_pipeline::FramePipeline, DecodedSegmentFrames};
 
-pub struct DisplayLayer<'a, 'b: 'a> {
-    pub pipeline: &'a mut FramePipelineState<'b>,
-    pub encoder: &'a mut FramePipelineEncoder,
+pub struct DisplayLayer {
+    // composite_resources: CompositeFrameResources,
 }
 
-impl<'a, 'b> DisplayLayer<'a, 'b> {
-    pub fn new(
-        pipeline: &'a mut FramePipelineState<'b>,
-        encoder: &'a mut FramePipelineEncoder,
-    ) -> Self {
-        Self { pipeline, encoder }
-    }
-
-    pub fn render(&mut self, segment_frames: &DecodedSegmentFrames) {
-        let constants = self.pipeline.constants;
-        let uniforms = self.pipeline.uniforms;
-        let frame_size = self.pipeline.constants.options.screen_size;
+impl DisplayLayer {
+    pub fn render(pipeline: &mut FramePipeline, segment_frames: &DecodedSegmentFrames) {
+        let constants = pipeline.state.constants;
+        let uniforms = pipeline.state.uniforms;
+        let frame_size = pipeline.state.constants.options.screen_size;
 
         constants.queue.write_texture(
             wgpu::ImageCopyTexture {
@@ -41,18 +30,18 @@ impl<'a, 'b> DisplayLayer<'a, 'b> {
             },
         );
 
-        self.encoder.do_render_pass(
-            self.pipeline.get_current_texture_view(),
+        pipeline.encoder.do_render_pass(
+            pipeline.state.get_current_texture_view(),
             &constants.composite_video_frame_pipeline.render_pipeline,
             constants.composite_video_frame_pipeline.bind_group(
                 &constants.device,
                 &uniforms.display.to_buffer(&constants.device),
                 &constants.screen_frame.1,
-                self.pipeline.get_other_texture_view(),
+                pipeline.state.get_other_texture_view(),
             ),
             wgpu::LoadOp::Load,
         );
 
-        self.pipeline.output_is_left = !self.pipeline.output_is_left;
+        pipeline.state.switch_output();
     }
 }

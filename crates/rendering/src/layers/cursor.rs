@@ -1,33 +1,27 @@
 use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
-use cap_project::{CursorClickEvent, CursorData, CursorMoveEvent, XY};
+use cap_project::*;
 use wgpu::{include_wgsl, util::DeviceExt};
 
 use crate::{
-    frame_output::{FramePipelineEncoder, FramePipelineState},
-    interpolate_cursor_position, DecodedSegmentFrames, STANDARD_CURSOR_HEIGHT,
+    frame_pipeline::{FramePipeline, FramePipelineState},
+    Coord, DecodedSegmentFrames, RawDisplayUVSpace, STANDARD_CURSOR_HEIGHT,
 };
 
-pub struct CursorLayer<'a, 'b: 'a> {
-    pub pipeline: &'a mut FramePipelineState<'b>,
-    pub encoder: &'a mut FramePipelineEncoder,
-}
+pub struct CursorLayer;
 
-impl<'a, 'b> CursorLayer<'a, 'b> {
-    pub fn new(
-        pipeline: &'a mut FramePipelineState<'b>,
-        encoder: &'a mut FramePipelineEncoder,
-    ) -> Self {
-        Self { pipeline, encoder }
-    }
-
-    pub fn render(&mut self, segment_frames: &DecodedSegmentFrames, resolution_base: XY<u32>) {
+impl CursorLayer {
+    pub fn render(
+        pipeline: &mut FramePipeline,
+        segment_frames: &DecodedSegmentFrames,
+        resolution_base: XY<u32>,
+    ) {
         let FramePipelineState {
             uniforms,
             constants,
             ..
-        } = &self.pipeline;
+        } = &pipeline.state;
         let segment_time = segment_frames.segment_time;
 
         let Some(cursor_position) = interpolate_cursor_position(
@@ -156,12 +150,14 @@ impl<'a, 'b> CursorLayer<'a, 'b> {
                 label: Some("Cursor Bind Group"),
             });
 
-        self.encoder.do_render_pass(
-            self.pipeline.get_other_texture_view(),
+        pipeline.encoder.do_render_pass(
+            pipeline.state.get_current_texture_view(),
             &constants.cursor_pipeline.render_pipeline,
             cursor_bind_group,
             wgpu::LoadOp::Load,
         );
+
+        pipeline.state.switch_output();
     }
 }
 
@@ -302,4 +298,121 @@ impl CursorPipeline {
             render_pipeline,
         }
     }
+}
+
+fn interpolate_cursor_position(
+    cursor: &CursorData,
+    time_secs: f32,
+    animation_style: &CursorAnimationStyle,
+) -> Option<Coord<RawDisplayUVSpace>> {
+    let time_ms = (time_secs * 1000.0) as f64;
+
+    if cursor.moves.is_empty() {
+        return None;
+    }
+
+    // Get style-specific parameters
+    let (num_samples, velocity_threshold) = match animation_style {
+        CursorAnimationStyle::Slow => (SLOW_SMOOTHING_SAMPLES, SLOW_VELOCITY_THRESHOLD),
+        CursorAnimationStyle::Regular => (REGULAR_SMOOTHING_SAMPLES, REGULAR_VELOCITY_THRESHOLD),
+        CursorAnimationStyle::Fast => (FAST_SMOOTHING_SAMPLES, FAST_VELOCITY_THRESHOLD),
+    };
+
+    // Find the closest move events around current time
+    let mut closest_events: Vec<&CursorMoveEvent> = cursor
+        .moves
+        .iter()
+        .filter(|m| (m.process_time_ms - time_ms).abs() <= 100.0) // Look at events within 100ms
+        .collect();
+
+    closest_events.sort_by(|a, b| {
+        (a.process_time_ms - time_ms)
+            .abs()
+            .partial_cmp(&(b.process_time_ms - time_ms).abs())
+            .unwrap()
+    });
+
+    // Take the nearest events up to num_samples
+    let samples: Vec<(f64, f64, f64)> = closest_events
+        .iter()
+        .take(num_samples)
+        .map(|m| (m.process_time_ms, m.x, m.y))
+        .collect();
+
+    if samples.is_empty() {
+        // Fallback to nearest event if no samples in range
+        let nearest = cursor
+            .moves
+            .iter()
+            .min_by_key(|m| (m.process_time_ms - time_ms).abs() as i64)?;
+        return Some(Coord::new(XY {
+            x: nearest.x.clamp(0.0, 1.0),
+            y: nearest.y.clamp(0.0, 1.0),
+        }));
+    }
+
+    // Calculate velocities between consecutive points
+    let mut velocities = Vec::with_capacity(samples.len() - 1);
+    for i in 0..samples.len() - 1 {
+        let (t1, x1, y1) = samples[i];
+        let (t2, x2, y2) = samples[i + 1];
+        let dt = (t2 - t1).max(1.0); // Avoid division by zero
+        let dx = x2 - x1;
+        let dy = y2 - y1;
+        let velocity = ((dx * dx + dy * dy) / (dt * dt)).sqrt();
+        velocities.push(velocity);
+    }
+
+    // Apply adaptive smoothing based on velocities and time distance
+    let mut x = 0.0;
+    let mut y = 0.0;
+    let mut total_weight = 0.0;
+
+    for (i, &(t, px, py)) in samples.iter().enumerate() {
+        // Time-based weight with style-specific falloff
+        let time_diff = (t - time_ms).abs();
+        let style_factor = match animation_style {
+            CursorAnimationStyle::Slow => 0.0005,
+            CursorAnimationStyle::Regular => 0.001,
+            CursorAnimationStyle::Fast => 0.002,
+        };
+        let time_weight = 1.0 / (1.0 + time_diff * style_factor);
+
+        // Velocity-based weight
+        let velocity_weight = if i < velocities.len() {
+            let vel = velocities[i];
+            if vel > velocity_threshold {
+                (velocity_threshold / vel).powf(match animation_style {
+                    CursorAnimationStyle::Slow => 1.5,
+                    CursorAnimationStyle::Regular => 1.0,
+                    CursorAnimationStyle::Fast => 0.5,
+                })
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        };
+
+        // Combine weights with style-specific emphasis
+        let weight = match animation_style {
+            CursorAnimationStyle::Slow => time_weight * velocity_weight.powf(1.5),
+            CursorAnimationStyle::Regular => time_weight * velocity_weight,
+            CursorAnimationStyle::Fast => time_weight * velocity_weight.powf(0.5),
+        };
+
+        x += px * weight;
+        y += py * weight;
+        total_weight += weight;
+    }
+
+    if total_weight > 0.0 {
+        x /= total_weight;
+        y /= total_weight;
+    }
+
+    Some(Coord::new(XY {
+        x: x.clamp(0.0, 1.0),
+        y: y.clamp(0.0, 1.0),
+    }))
 }

@@ -95,12 +95,7 @@ impl Renderer {
 
                         // frame_task = Some(tokio::spawn(async move {
                         let frame = frame_renderer
-                            .render(
-                                segment_frames,
-                                cap_rendering::Background::from(background),
-                                &uniforms,
-                                resolution_base,
-                            )
+                            .render(segment_frames, background, &uniforms, resolution_base)
                             .await
                             .unwrap();
 
