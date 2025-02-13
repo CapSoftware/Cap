@@ -76,7 +76,7 @@ struct RecordingPipeline {
 
 struct CursorPipeline {
     output_path: PathBuf,
-    actor: CursorActor,
+    actor: Option<CursorActor>,
 }
 
 #[derive(Clone)]
@@ -237,8 +237,10 @@ pub async fn spawn_recording_actor(
                                 loop {
                                     let msg = tokio::select! {
                                         _ = &mut pipeline_done_rx => {
-                                            if let Some(cursor) = pipeline.cursor.take() {
-                                                cursor.actor.stop().await;
+                                            if let Some(cursor) = &mut pipeline.cursor {
+                                                if let Some(actor) = cursor.actor.take() {
+                                                    actor.stop().await;
+                                                }
                                             }
 
                                             break 'outer;
@@ -262,18 +264,22 @@ pub async fn spawn_recording_actor(
 
                                         let segment_stop_time = current_time_f64();
 
-                                        let cursors = if let Some(cursor) = pipeline.cursor.take() {
-                                            let res = cursor.actor.stop().await;
+                                        let cursors = if let Some(cursor) = &mut pipeline.cursor {
+                                            if let Some(actor) = cursor.actor.take() {
+                                                let res = actor.stop().await;
 
-                                            std::fs::write(
-                                                &cursor.output_path,
-                                                serde_json::to_string_pretty(&CursorEvents {
-                                                    clicks: res.clicks,
-                                                    moves: res.moves,
-                                                })?,
-                                            )?;
+                                                std::fs::write(
+                                                    &cursor.output_path,
+                                                    serde_json::to_string_pretty(&CursorEvents {
+                                                        clicks: res.clicks,
+                                                        moves: res.moves,
+                                                    })?,
+                                                )?;
 
-                                            (res.cursors, res.next_cursor_id)
+                                                (res.cursors, res.next_cursor_id)
+                                            } else {
+                                                Default::default()
+                                            }
                                         } else {
                                             Default::default()
                                         };
@@ -616,7 +622,7 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
 
     let (mut pipeline, pipeline_done_rx) = pipeline_builder.build().await?;
 
-    let cursor = FLAGS.record_mouse.then(|| {
+    let cursor = FLAGS.record_mouse_state.then(|| {
         let cursor = spawn_cursor_recorder(
             screen_bounds,
             cursors_dir.clone(),
@@ -626,7 +632,7 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
 
         CursorPipeline {
             output_path: dir.join("cursor.json"),
-            actor: cursor,
+            actor: Some(cursor),
         }
     });
 

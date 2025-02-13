@@ -87,10 +87,12 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
     const [playbackTime, setPlaybackTime] = createSignal<number>(0);
     const [playing, setPlaying] = createSignal(false);
 
-    createEffect(() => {
-      if (!playing())
-        commands.setPlayheadPosition(Math.floor(playbackTime() * FPS));
-    });
+    createEffect(
+      on(playing, () => {
+        if (!playing())
+          commands.setPlayheadPosition(Math.floor(playbackTime() * FPS));
+      })
+    );
 
     const [split, setSplit] = createSignal(false);
 

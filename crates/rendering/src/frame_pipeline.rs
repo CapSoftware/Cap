@@ -155,7 +155,6 @@ impl FramePipelineEncoder {
             }),
         );
 
-        dbg!(state.is_left());
         encoder.copy_texture_to_buffer(
             wgpu::ImageCopyTexture {
                 texture: state.get_current_texture(),

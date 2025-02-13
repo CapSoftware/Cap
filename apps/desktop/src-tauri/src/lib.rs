@@ -2378,7 +2378,6 @@ async fn create_editor_instance_impl(
     RenderFrameEvent::listen_any(&app, {
         let preview_tx = instance.preview_tx.clone();
         move |e| {
-            dbg!(&e.payload);
             preview_tx
                 .send(Some((
                     e.payload.frame_number,

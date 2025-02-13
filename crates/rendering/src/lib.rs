@@ -480,6 +480,7 @@ pub struct ProjectUniforms {
     camera: Option<CompositeVideoFrameUniforms>,
     pub project: ProjectConfiguration,
     pub is_upgraded: bool,
+    pub zoom: InterpolatedZoom,
 }
 
 #[derive(Debug, Clone)]
@@ -582,7 +583,7 @@ impl ProjectUniforms {
         // ((base_width + 1) & !1, (base_height + 1) & !1)
     }
 
-    pub fn get_display_offset(
+    pub fn display_offset(
         options: &RenderOptions,
         project: &ProjectConfiguration,
         resolution_base: XY<u32>,
@@ -623,6 +624,21 @@ impl ProjectUniforms {
         } else {
             XY::new(padding, target_offset.y)
         })
+    }
+
+    pub fn display_size(
+        options: &RenderOptions,
+        project: &ProjectConfiguration,
+        resolution_base: XY<u32>,
+    ) -> Coord<FrameSpace> {
+        let output_size = Self::get_output_size(options, project, resolution_base);
+        let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
+
+        let display_offset = Self::display_offset(options, project, resolution_base);
+
+        let end = Coord::new(output_size) - display_offset;
+
+        end - display_offset
     }
 
     pub fn new(
@@ -687,15 +703,14 @@ impl ProjectUniforms {
                 (crop.position.y + crop.size.y) as f64,
             ));
 
-            let display_offset = Self::get_display_offset(options, project, resolution_base);
+            let display_offset = Self::display_offset(options, project, resolution_base);
+            let display_size = Self::display_size(options, project, resolution_base);
 
             let end = Coord::new(output_size) - display_offset;
 
-            let target_size = end - display_offset;
-
             let (zoom_start, zoom_end) = (
-                Coord::new(zoom.bounds.top_left * target_size.coord),
-                Coord::new((zoom.bounds.bottom_right - 1.0) * target_size.coord),
+                Coord::new(zoom.bounds.top_left * display_size.coord),
+                Coord::new((zoom.bounds.bottom_right - 1.0) * display_size.coord),
             );
 
             let start = display_offset + zoom_start;
@@ -830,6 +845,7 @@ impl ProjectUniforms {
             camera,
             project: project.clone(),
             is_upgraded,
+            zoom,
         }
     }
 }
@@ -940,7 +956,13 @@ async fn produce_frame(
 
         DisplayLayer::render(&mut pipeline, &segment_frames);
 
-        CursorLayer::render(&mut pipeline, &segment_frames, resolution_base, &cursor);
+        CursorLayer::render(
+            &mut pipeline,
+            &segment_frames,
+            resolution_base,
+            &cursor,
+            &uniforms.zoom,
+        );
 
         if let (
             Some(camera_size),

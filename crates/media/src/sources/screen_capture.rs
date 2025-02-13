@@ -246,7 +246,7 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 
         Options {
             fps: self.fps,
-            show_cursor: FLAGS.record_mouse,
+            show_cursor: !FLAGS.record_mouse_state,
             show_highlight: true,
             target: Some(target),
             crop_area,
