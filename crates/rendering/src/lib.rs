@@ -395,8 +395,6 @@ impl RenderVideoConstants {
             Content::MultipleSegments { inner } => inner.cursor_images(meta).unwrap_or_default(),
         };
 
-        dbg!(&cursor_images);
-
         for (cursor_id, path) in &cursor_images.0 {
             println!("Loading cursor image: {} -> {}", cursor_id, path.display());
 
