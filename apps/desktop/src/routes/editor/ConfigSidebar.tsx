@@ -1127,7 +1127,7 @@ export function ConfigSidebar() {
           </Field>
         </KTabs.Content>
         <KTabs.Content value="cursor" class="flex flex-col gap-6">
-          {window.FLAGS.recordMouseState === false ? (
+          {window.FLAGS.recordMouseState === true ? (
             <>
               <Field name="Cursor" icon={<IconCapCursor />}>
                 <Subfield name="Hide cursor when not moving">
