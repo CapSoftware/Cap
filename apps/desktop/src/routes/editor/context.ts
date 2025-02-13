@@ -303,10 +303,7 @@ export const [TimelineContextProvider, useTimelineContext] =
   );
 
 export const [TrackContextProvider, useTrackContext] = createContextProvider(
-  (props: {
-    ref: Accessor<Element | undefined>;
-    isFreeForm: Accessor<boolean>;
-  }) => {
+  (props: { ref: Accessor<Element | undefined> }) => {
     const { state } = useEditorContext();
 
     const [trackState, setTrackState] = createStore({
@@ -320,7 +317,6 @@ export const [TrackContextProvider, useTrackContext] = createContextProvider(
     return {
       secsPerPixel,
       trackBounds: bounds,
-      isFreeForm: () => props.isFreeForm(),
       trackState,
       setTrackState,
     };
