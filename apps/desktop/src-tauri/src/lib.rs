@@ -2369,12 +2369,6 @@ async fn create_editor_instance_impl(
     )
     .await?;
 
-    println!(
-        "CREATING EDITOR INSTANCE FOR '{}': {}",
-        video_id,
-        std::backtrace::Backtrace::capture()
-    );
-
     RenderFrameEvent::listen_any(&app, {
         let preview_tx = instance.preview_tx.clone();
         move |e| {

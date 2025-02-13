@@ -1127,24 +1127,26 @@ export function ConfigSidebar() {
           </Field>
         </KTabs.Content>
         <KTabs.Content value="cursor" class="flex flex-col gap-6">
-          <Field name="Cursor" icon={<IconCapCursor />}>
-            <Subfield name="Hide cursor when not moving">
-              <Toggle
-                checked={project.cursor.hideWhenIdle}
-                onChange={(v) => setProject("cursor", "hideWhenIdle", v)}
-              />
-            </Subfield>
-          </Field>
-          <Field name="Size" icon={<IconCapEnlarge />}>
-            <Slider
-              value={[project.cursor.size]}
-              onChange={(v) => setProject("cursor", "size", v[0])}
-              minValue={20}
-              maxValue={300}
-              step={1}
-            />
-          </Field>
-          {/* <Field name="Animation Style" icon={<IconLucideRabbit />}>
+          {window.FLAGS.recordMouseState === false ? (
+            <>
+              <Field name="Cursor" icon={<IconCapCursor />}>
+                <Subfield name="Hide cursor when not moving">
+                  <Toggle
+                    checked={project.cursor.hideWhenIdle}
+                    onChange={(v) => setProject("cursor", "hideWhenIdle", v)}
+                  />
+                </Subfield>
+              </Field>
+              <Field name="Size" icon={<IconCapEnlarge />}>
+                <Slider
+                  value={[project.cursor.size]}
+                  onChange={(v) => setProject("cursor", "size", v[0])}
+                  minValue={20}
+                  maxValue={300}
+                  step={1}
+                />
+              </Field>
+              {/* <Field name="Animation Style" icon={<IconLucideRabbit />}>
             <RadioGroup
               defaultValue="regular"
               value={project.cursor.animationStyle}
@@ -1189,6 +1191,13 @@ export function ConfigSidebar() {
               ))}
             </RadioGroup>
           </Field> */}
+            </>
+          ) : (
+            <div class="flex flex-col items-center justify-center gap-2 text-gray-400 p-4">
+              <IconCapCursor class="size-6" />
+              <span>Cursor settings coming soon</span>
+            </div>
+          )}
         </KTabs.Content>
         <KTabs.Content value="hotkeys">
           <Field name="Hotkeys" icon={<IconCapHotkeys />}>

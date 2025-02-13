@@ -207,40 +207,6 @@ impl MultipleSegments {
                 .map(|(k, v)| (k.clone(), meta.path(v)))
                 .collect::<_>(),
         ))
-        // let file = File::open(self.path(meta, "content/cursors.json"))
-        //     .map_err(|e| format!("Failed to open cursor file: {}", e))?;
-        // let cursor_images: CursorImages = serde_json::from_reader(file)
-        //     .map_err(|e| format!("Failed to parse cursor data: {}", e))?;
-
-        // let cursors_dir = self.path(meta, "content/cursors");
-        // if cursor_images.0.is_empty() && cursors_dir.exists() {
-        //     println!("Scanning cursors directory: {:?}", cursors_dir);
-        //     if let Ok(entries) = std::fs::read_dir(&cursors_dir) {
-        //         for entry in entries {
-        //             let Ok(entry) = entry else {
-        //                 continue;
-        //             };
-
-        //             let filename = entry.file_name();
-        //             let filename_str = filename.to_string_lossy();
-        //             if filename_str.starts_with("cursor_") && filename_str.ends_with(".png") {
-        //                 // Extract cursor ID from filename (cursor_X.png -> X)
-        //                 if let Some(id) = filename_str
-        //                     .strip_prefix("cursor_")
-        //                     .and_then(|s| s.strip_suffix(".png"))
-        //                 {
-        //                     println!("Found cursor image: {} -> {}", id, filename_str);
-        //                     cursor_images
-        //                         .0
-        //                         .insert(id.to_string(), filename.to_string_lossy().into_owned());
-        //                 }
-        //             }
-        //         }
-        //     }
-        //     println!("Found {} cursor images", cursor_images.0.len());
-        // }
-
-        // Ok(cursor_images)
     }
 }
 
