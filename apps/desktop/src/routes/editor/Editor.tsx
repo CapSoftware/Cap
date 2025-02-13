@@ -72,37 +72,16 @@ export function Editor() {
 }
 
 function Inner() {
-  const {
-    project,
-    playbackTime,
-    setPlaybackTime,
-    playing,
-    previewTime,
-    videoId,
-  } = useEditorContext();
+  const { project, playbackTime, setPlaybackTime, playing, previewTime } =
+    useEditorContext();
 
-  const [isLoading, setIsLoading] = createSignal(true);
-
-  onMount(async () => {
-    try {
-      // Initialize critical resources first
-      await Promise.all([
-        commands.createEditorInstance(videoId),
-        // Load initial project config
-      ]);
-
-      setIsLoading(false);
-
-      events.editorStateChanged.listen((e) => {
-        renderFrame.clear();
-        untrack(() => {
-          setPlaybackTime(e.payload.playhead_position / FPS);
-        });
+  onMount(() => {
+    events.editorStateChanged.listen((e) => {
+      renderFrame.clear();
+      untrack(() => {
+        setPlaybackTime(e.payload.playhead_position / FPS);
       });
-    } catch (error) {
-      console.error("Failed to initialize editor:", error);
-      setIsLoading(false);
-    }
+    });
   });
 
   const renderFrame = throttle((time: number) => {
@@ -130,44 +109,28 @@ function Inner() {
 
   createEffect(
     on(
-      () => {
-        trackDeep(project);
-      },
-      () => {
-        renderFrame(playbackTime());
-      }
+      () => trackDeep(project),
+      () => renderFrame(playbackTime())
     )
   );
 
   return (
-    <Show
-      when={!isLoading()}
-      fallback={
-        <div class="w-screen h-screen flex items-center justify-center bg-gray-50">
-          <div class="flex flex-col items-center gap-4">
-            <div class="animate-spin rounded-full h-8 w-8 border-2 border-gray-300 border-t-blue-400" />
-            <span class="text-gray-500">Loading editor...</span>
+    <div class="w-screen h-screen flex flex-col">
+      <Header />
+      <div
+        class="p-5 pt-0 flex-1 w-full overflow-y-hidden flex flex-col gap-4 bg-gray-50 leading-5 animate-in fade-in"
+        data-tauri-drag-region
+      >
+        <div class="rounded-2xl overflow-hidden shadow border flex-1 flex flex-col divide-y bg-white">
+          <div class="flex flex-row flex-1 divide-x overflow-y-hidden">
+            <Player />
+            <ConfigSidebar />
           </div>
+          <Timeline />
         </div>
-      }
-    >
-      <div class="w-screen h-screen flex flex-col">
-        <Header />
-        <div
-          class="p-5 pt-0 flex-1 w-full overflow-y-hidden flex flex-col gap-4 bg-gray-50 leading-5 animate-in fade-in"
-          data-tauri-drag-region
-        >
-          <div class="rounded-2xl overflow-hidden shadow border flex-1 flex flex-col divide-y bg-white">
-            <div class="flex flex-row flex-1 divide-x overflow-y-hidden">
-              <Player />
-              <ConfigSidebar />
-            </div>
-            <Timeline />
-          </div>
-          <Dialogs />
-        </div>
+        <Dialogs />
       </div>
-    </Show>
+    </div>
   );
 }
 

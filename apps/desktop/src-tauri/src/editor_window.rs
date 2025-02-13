@@ -1,11 +1,10 @@
-use std::{
-    collections::HashMap,
-    ops::Deref,
-    sync::{Arc, RwLock},
-};
+use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use cap_editor::EditorInstance;
 use tauri::{ipc::CommandArg, Manager, Runtime, Window};
+use tokio::sync::RwLock;
+
+use crate::create_editor_instance_impl;
 
 #[derive(Clone)]
 pub struct EditorInstances(Arc<RwLock<HashMap<String, Arc<EditorInstance>>>>);
@@ -39,22 +38,17 @@ impl<'de, R: Runtime> CommandArg<'de, R> for WindowEditorInstance {
         let window = Window::from_command(command)?;
 
         let instances = window.state::<EditorInstances>();
-        let instance = instances.0.read().unwrap();
+        let instance = futures::executor::block_on(instances.0.read());
 
         Ok(Self(instance.get(window.label()).cloned().unwrap()))
     }
 }
 
 impl EditorInstances {
-    pub fn get(window: &Window) -> Option<Arc<EditorInstance>> {
-        let instances = window.try_state::<EditorInstances>()?;
-
-        let instances = instances.0.read().unwrap();
-
-        instances.get(window.label()).cloned()
-    }
-
-    pub fn add(window: &Window, instance: Arc<EditorInstance>) {
+    pub async fn get_or_create(
+        window: &Window,
+        video_id: &str,
+    ) -> Result<Arc<EditorInstance>, String> {
         let instances = match window.try_state::<EditorInstances>() {
             Some(s) => (*s).clone(),
             None => {
@@ -64,16 +58,25 @@ impl EditorInstances {
             }
         };
 
-        let mut instances = instances.0.write().unwrap();
+        let mut instances = instances.0.write().await;
 
-        instances.insert(window.label().to_string(), instance);
+        use std::collections::hash_map::Entry;
+
+        match instances.entry(window.label().to_string()) {
+            Entry::Vacant(entry) => {
+                let instance = create_editor_instance_impl(window.app_handle(), video_id).await?;
+                entry.insert(instance.clone());
+                Ok(instance)
+            }
+            Entry::Occupied(entry) => Ok(entry.get().clone()),
+        }
     }
 
-    pub fn remove(window: &Window) {
+    pub async fn remove(window: &Window) {
         let Some(instances) = window.try_state::<EditorInstances>() else {
             return;
         };
 
-        instances.0.write().unwrap().remove(window.label());
+        instances.0.write().await.remove(window.label());
     }
 }

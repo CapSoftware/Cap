@@ -40,6 +40,10 @@ impl<'a> FramePipelineState<'a> {
         }
     }
 
+    pub fn is_left(&self) -> bool {
+        self.output_is_left
+    }
+
     pub fn get_current_texture_view(&self) -> &wgpu::TextureView {
         get_either(
             (&self.texture_views.0, &self.texture_views.1),
@@ -55,11 +59,11 @@ impl<'a> FramePipelineState<'a> {
     }
 
     pub fn get_current_texture(&self) -> &wgpu::Texture {
-        get_either((&self.textures.1, &self.textures.0), self.output_is_left)
+        get_either((&self.textures.0, &self.textures.1), self.output_is_left)
     }
 
     pub fn get_other_texture(&self) -> &wgpu::Texture {
-        get_either((&self.textures.1, &self.textures.0), !self.output_is_left)
+        get_either((&self.textures.0, &self.textures.1), !self.output_is_left)
     }
 
     pub fn switch_output(&mut self) {
@@ -105,7 +109,7 @@ impl FramePipelineEncoder {
 
         render_pass.set_pipeline(render_pipeline);
         render_pass.set_bind_group(0, &bind_group, &[]);
-        render_pass.draw(0..3, 0..1);
+        render_pass.draw(0..4, 0..1);
     }
 
     pub fn padded_bytes_per_row(&self, state: &FramePipelineState<'_>) -> u32 {
@@ -145,33 +149,31 @@ impl FramePipelineEncoder {
             mapped_at_creation: false,
         });
 
-        {
-            let mut encoder = constants.device.create_command_encoder(
-                &(wgpu::CommandEncoderDescriptor {
-                    label: Some("Copy Encoder"),
-                }),
-            );
+        let mut encoder = constants.device.create_command_encoder(
+            &(wgpu::CommandEncoderDescriptor {
+                label: Some("Copy Encoder"),
+            }),
+        );
 
-            encoder.copy_texture_to_buffer(
-                wgpu::ImageCopyTexture {
-                    texture: state.get_current_texture(),
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
+        encoder.copy_texture_to_buffer(
+            wgpu::ImageCopyTexture {
+                texture: state.get_current_texture(),
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::ImageCopyBuffer {
+                buffer: &output_buffer,
+                layout: wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(state.uniforms.output_size.1),
                 },
-                wgpu::ImageCopyBuffer {
-                    buffer: &output_buffer,
-                    layout: wgpu::ImageDataLayout {
-                        offset: 0,
-                        bytes_per_row: Some(padded_bytes_per_row),
-                        rows_per_image: Some(state.uniforms.output_size.1),
-                    },
-                },
-                output_texture_size,
-            );
+            },
+            output_texture_size,
+        );
 
-            constants.queue.submit(std::iter::once(encoder.finish()));
-        }
+        constants.queue.submit(std::iter::once(encoder.finish()));
 
         let buffer_slice = output_buffer.slice(..);
         let (tx, rx) = oneshot_channel();

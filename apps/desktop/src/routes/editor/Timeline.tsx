@@ -482,7 +482,7 @@ function ZoomTrack(props: {
 }) {
   const { project, setProject, history, setState, state } = useEditorContext();
 
-  const { duration, timelineBounds, secsPerPixel } = useTimelineContext();
+  const { duration, secsPerPixel } = useTimelineContext();
 
   const [hoveringSegment, setHoveringSegment] = createSignal(false);
   const [hoveredTime, setHoveredTime] = createSignal<number>();
@@ -505,15 +505,15 @@ function ZoomTrack(props: {
             (e.clientX - bounds.left) * secsPerPixel() +
             state.timelineTransform.position;
 
-          const prevSegmentIndex = project.timeline?.zoomSegments?.findIndex(
-            (s) => s.end < time
-          );
-
           const nextSegmentIndex = project.timeline?.zoomSegments?.findIndex(
             (s) => time < s.start
           );
 
           if (nextSegmentIndex !== undefined) {
+            const prevSegmentIndex = nextSegmentIndex - 1;
+
+            if (prevSegmentIndex === undefined) return;
+
             const nextSegment =
               project.timeline?.zoomSegments?.[nextSegmentIndex];
 
@@ -552,7 +552,17 @@ function ZoomTrack(props: {
                   "zoomSegments",
                   produce((zoomSegments) => {
                     zoomSegments ??= [];
-                    zoomSegments.push({
+
+                    let index = zoomSegments.length;
+
+                    for (let i = zoomSegments.length - 1; i >= 0; i--) {
+                      if (zoomSegments[i].start > time) {
+                        index = i;
+                        break;
+                      }
+                    }
+
+                    zoomSegments.splice(index, 0, {
                       start: time,
                       end: time + 1,
                       amount: 1.5,

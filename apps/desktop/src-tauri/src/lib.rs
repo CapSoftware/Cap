@@ -919,15 +919,7 @@ async fn create_editor_instance(
     window: Window,
     video_id: String,
 ) -> Result<SerializedEditorInstance, String> {
-    let editor_instance = match EditorInstances::get(&window) {
-        Some(editor_instance) => editor_instance,
-        None => {
-            let editor_instance =
-                create_editor_instance_impl(window.app_handle(), &video_id).await?;
-            EditorInstances::add(&window, editor_instance.clone());
-            editor_instance
-        }
-    };
+    let editor_instance = EditorInstances::get_or_create(&window, &video_id).await?;
 
     // Load the RecordingMeta to get the pretty name
     let meta = RecordingMeta::load_for_project(&editor_instance.project_path)

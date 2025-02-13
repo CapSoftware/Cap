@@ -137,7 +137,7 @@ pub async fn render_video_to_channel(
     resolution_base: XY<u32>,
     is_upgraded: bool,
 ) -> Result<(), RenderingError> {
-    let mut constants = RenderVideoConstants::new(options, meta).await?;
+    let constants = RenderVideoConstants::new(options, meta).await?;
     let recordings = ProjectRecordings::new(meta);
 
     ffmpeg::init().unwrap();
@@ -189,6 +189,7 @@ pub async fn render_video_to_channel(
                 fps,
                 resolution_base,
                 is_upgraded,
+                &segment.cursor,
             );
             let frame = frame_renderer
                 .render(
@@ -196,6 +197,7 @@ pub async fn render_video_to_channel(
                     background.clone(),
                     &uniforms,
                     resolution_base,
+                    &segment.cursor,
                 )
                 .await?;
 
@@ -393,18 +395,17 @@ impl RenderVideoConstants {
             Content::MultipleSegments { inner } => inner.cursor_images(meta).unwrap_or_default(),
         };
 
-        for (cursor_id, filename) in &cursor_images.0 {
-            println!("Loading cursor image: {} -> {}", cursor_id, filename);
+        for (cursor_id, path) in &cursor_images.0 {
+            println!("Loading cursor image: {} -> {}", cursor_id, path.display());
 
-            let cursor_path = cursors_dir.join(filename);
-            println!("Full cursor path: {:?}", cursor_path);
+            println!("Full cursor path: {:?}", path);
 
-            if !cursor_path.exists() {
-                println!("Cursor image file does not exist: {:?}", cursor_path);
+            if !path.exists() {
+                println!("Cursor image file does not exist: {:?}", path);
                 continue;
             }
 
-            match image::open(&cursor_path) {
+            match image::open(&path) {
                 Ok(img) => {
                     let dimensions = img.dimensions();
                     println!(
@@ -454,7 +455,7 @@ impl RenderVideoConstants {
                     println!("Successfully loaded cursor texture: {}", cursor_id);
                 }
                 Err(e) => {
-                    println!("Failed to load cursor image {}: {}", filename, e);
+                    println!("Failed to load cursor image {}: {}", path.display(), e);
                     // Don't return error, just skip this cursor image
                     continue;
                 }
@@ -477,6 +478,7 @@ pub struct ProjectUniforms {
     camera: Option<CompositeVideoFrameUniforms>,
     pub project: ProjectConfiguration,
     pub is_upgraded: bool,
+    pub zoom: InterpolatedZoom,
 }
 
 #[derive(Debug, Clone)]
@@ -579,7 +581,7 @@ impl ProjectUniforms {
         // ((base_width + 1) & !1, (base_height + 1) & !1)
     }
 
-    pub fn get_display_offset(
+    pub fn display_offset(
         options: &RenderOptions,
         project: &ProjectConfiguration,
         resolution_base: XY<u32>,
@@ -622,6 +624,21 @@ impl ProjectUniforms {
         })
     }
 
+    pub fn display_size(
+        options: &RenderOptions,
+        project: &ProjectConfiguration,
+        resolution_base: XY<u32>,
+    ) -> Coord<FrameSpace> {
+        let output_size = Self::get_output_size(options, project, resolution_base);
+        let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
+
+        let display_offset = Self::display_offset(options, project, resolution_base);
+
+        let end = Coord::new(output_size) - display_offset;
+
+        end - display_offset
+    }
+
     pub fn new(
         constants: &RenderVideoConstants,
         project: &ProjectConfiguration,
@@ -629,16 +646,11 @@ impl ProjectUniforms {
         fps: u32,
         resolution_base: XY<u32>,
         is_upgraded: bool,
+        cursor_events: &CursorEvents,
     ) -> Self {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project, resolution_base);
         let frame_time = frame_number as f32 / fps as f32;
-
-        // let cursor_position = interpolate_cursor_position(
-        //     &Default::default(), /*constants.cursor*/
-        //     frame_time,
-        //     &project.cursor.animation_style,
-        // );
 
         // let zoom_keyframes = ZoomKeyframes::new(project);
         // let current_zoom = zoom_keyframes.interpolate(time as f64);
@@ -689,15 +701,14 @@ impl ProjectUniforms {
                 (crop.position.y + crop.size.y) as f64,
             ));
 
-            let display_offset = Self::get_display_offset(options, project, resolution_base);
+            let display_offset = Self::display_offset(options, project, resolution_base);
+            let display_size = Self::display_size(options, project, resolution_base);
 
             let end = Coord::new(output_size) - display_offset;
 
-            let target_size = end - display_offset;
-
             let (zoom_start, zoom_end) = (
-                Coord::new(zoom.bounds.top_left * target_size.coord),
-                Coord::new((zoom.bounds.bottom_right - 1.0) * target_size.coord),
+                Coord::new(zoom.bounds.top_left * display_size.coord),
+                Coord::new((zoom.bounds.bottom_right - 1.0) * display_size.coord),
             );
 
             let start = display_offset + zoom_start;
@@ -832,6 +843,7 @@ impl ProjectUniforms {
             camera,
             project: project.clone(),
             is_upgraded,
+            zoom,
         }
     }
 }
@@ -901,6 +913,7 @@ impl<'a> FrameRenderer<'a> {
         background: BackgroundSource,
         uniforms: &ProjectUniforms,
         resolution_base: XY<u32>,
+        cursor: &CursorEvents,
     ) -> Result<RenderedFrame, RenderingError> {
         self.update_output_textures(uniforms.output_size.0, uniforms.output_size.1);
 
@@ -911,6 +924,7 @@ impl<'a> FrameRenderer<'a> {
             uniforms,
             resolution_base,
             self.output_textures.as_ref().unwrap(),
+            cursor,
         )
         .await
     }
@@ -923,6 +937,7 @@ async fn produce_frame(
     uniforms: &ProjectUniforms,
     resolution_base: XY<u32>,
     textures: &(wgpu::Texture, wgpu::Texture),
+    cursor: &CursorEvents,
 ) -> Result<RenderedFrame, RenderingError> {
     let background = Background::from(background);
 
@@ -939,7 +954,13 @@ async fn produce_frame(
 
         DisplayLayer::render(&mut pipeline, &segment_frames);
 
-        CursorLayer::render(&mut pipeline, &segment_frames, resolution_base);
+        CursorLayer::render(
+            &mut pipeline,
+            &segment_frames,
+            resolution_base,
+            &cursor,
+            &uniforms.zoom,
+        );
 
         if let (
             Some(camera_size),

@@ -34,6 +34,8 @@ impl CameraLayer {
             },
         );
 
+        pipeline.state.switch_output();
+
         pipeline.encoder.do_render_pass(
             pipeline.state.get_current_texture_view(),
             &constants.composite_video_frame_pipeline.render_pipeline,
@@ -45,7 +47,5 @@ impl CameraLayer {
             ),
             wgpu::LoadOp::Load,
         );
-
-        pipeline.state.switch_output();
     }
 }

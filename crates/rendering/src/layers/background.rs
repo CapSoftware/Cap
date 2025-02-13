@@ -77,6 +77,8 @@ impl BackgroundLayer {
         let constants = pipeline.state.constants;
         let uniforms = pipeline.state.uniforms;
 
+        pipeline.state.switch_output();
+
         // First, handle the background
         match background {
             Background::Image { path } => {
@@ -193,9 +195,9 @@ impl BackgroundLayer {
             }
         }
 
-        pipeline.state.switch_output();
-
         if uniforms.project.background.blur > 0.0 {
+            pipeline.state.switch_output();
+
             let blur_strength = uniforms.project.background.blur as f32 / 100.0;
             let blur_uniform = BackgroundBlurUniforms {
                 output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
@@ -233,8 +235,6 @@ impl BackgroundLayer {
                 blur_bind_group,
                 wgpu::LoadOp::Clear(wgpu::Color::BLACK),
             );
-
-            pipeline.state.switch_output();
         }
 
         Ok(())
