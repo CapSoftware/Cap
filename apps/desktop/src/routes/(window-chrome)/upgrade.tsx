@@ -161,7 +161,6 @@ const signInAction = action(async (planType: "yearly" | "monthly") => {
 export default function Page() {
   console.log("Rendering upgrade page");
   const proFeatures = [
-    "Remove watermark from recordings",
     "Unlimited cloud storage & Shareable links",
     "Connect custom S3 storage bucket",
     "Advanced teams features",
@@ -411,7 +410,7 @@ export default function Page() {
                       class="peer inline-flex h-4 w-8 shrink-0
                        cursor-pointer items-center rounded-full border-2 border-transparent
                        dark:bg-[#3F75E0]
-                        transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 
+                        transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2
                       focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 bg-[--blue-400]"
                       onClick={togglePricing}
                     >
