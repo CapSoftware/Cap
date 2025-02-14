@@ -16,9 +16,18 @@ const targetDir = path.join(__root, "target");
 
 const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
 
-async function main() {
+// IMPORTANT: Increment this number when the setup script changes
+const SETUP_VERSION_NUMBER = 1;
 
-  if (await fileExists(path.join(__root, ".capsetup"))) {
+async function main() {
+  const setupFile = path.join(__root, ".capsetup");
+  const setupContent =
+    (await fileExists(setupFile)) && (await fs.readFile(setupFile, "utf-8"));
+  if (
+    setupContent &&
+    setupContent?.startsWith("version:") &&
+    setupContent.split(":")[1].trim() === SETUP_VERSION_NUMBER.toString()
+  ) {
     console.log("Cap setup already done");
     return;
   }
@@ -140,8 +149,10 @@ async function main() {
     console.log("Copied ffmpeg/lib and ffmpeg/include to target/native-deps");
   }
 
-  await fs.writeFile(path.join(__root, ".capsetup"), "done");
-
+  await fs.writeFile(
+    path.join(__root, ".capsetup"),
+    `version: ${SETUP_VERSION_NUMBER}`
+  );
 }
 
 main();
