@@ -17,6 +17,12 @@ const targetDir = path.join(__root, "target");
 const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
 
 async function main() {
+
+  if (await fileExists(path.join(__root, ".capsetup"))) {
+    console.log("Cap setup already done");
+    return;
+  }
+
   if (process.platform === "darwin") {
     const NATIVE_DEPS_URL =
       "https://github.com/spacedriveapp/native-deps/releases/latest/download";
@@ -133,6 +139,9 @@ async function main() {
     );
     console.log("Copied ffmpeg/lib and ffmpeg/include to target/native-deps");
   }
+
+  await fs.writeFile(path.join(__root, ".capsetup"), "done");
+
 }
 
 main();
