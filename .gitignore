@@ -38,4 +38,3 @@ apps/storybook/storybook-static
 tauri.*.conf.json
 
 *.tsbuildinfo
-.capsetup
