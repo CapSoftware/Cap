@@ -33,6 +33,8 @@ async function main() {
 
     const nativeDepsTar = `native-deps-${NATIVE_DEPS_VERSION}.tar.xz`;
     const nativeDepsTarPath = path.join(targetDir, nativeDepsTar);
+    let downloadedNativeDeps = false;
+
     if (!(await fileExists(nativeDepsTarPath))) {
       console.log(`Downloading ${nativeDepsTar}`);
       const nativeDepsBytes = await fetch(
@@ -42,19 +44,15 @@ async function main() {
         .then((b) => b.arrayBuffer());
       await fs.writeFile(nativeDepsTarPath, Buffer.from(nativeDepsBytes));
       console.log("Downloaded native deps");
+      downloadedNativeDeps = true;
     } else console.log(`Using cached ${nativeDepsTar}`);
 
-    const nativeDepsFolder = `native-deps-${NATIVE_DEPS_VERSION}`;
+    const nativeDepsFolder = `native-deps`;
     const nativeDepsDir = path.join(targetDir, nativeDepsFolder);
     const frameworkDir = path.join(nativeDepsDir, "Spacedrive.framework");
-    if (!(await fileExists(nativeDepsDir))) {
+    if (downloadedNativeDeps || !(await fileExists(nativeDepsDir))) {
       await fs.mkdir(nativeDepsDir, { recursive: true });
-      await exec(
-        `tar xf ${path.join(
-          targetDir,
-          "native-deps.tar.xz"
-        )} -C ${nativeDepsDir}`
-      );
+      await exec(`tar xf ${nativeDepsTarPath} -C ${nativeDepsDir}`);
       console.log(`Extracted ${nativeDepsFolder}`);
     } else console.log(`Using cached ${nativeDepsFolder}`);
 
