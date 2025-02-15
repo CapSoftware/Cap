@@ -23,6 +23,29 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
+  // Check if we have a cached verification
+  const verifiedDomain = request.cookies.get('verified_domain');
+  if (verifiedDomain?.value === hostname) {
+    // Domain is verified from cache, handle CORS for API routes
+    if (path.startsWith('/api/')) {
+      if (request.method === 'OPTIONS') {
+        const response = new NextResponse(null, { status: 204 });
+        response.headers.set('Access-Control-Allow-Origin', '*');
+        response.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+        response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        response.headers.set('Access-Control-Max-Age', '86400');
+        return response;
+      }
+
+      const response = NextResponse.next();
+      response.headers.set('Access-Control-Allow-Origin', '*');
+      response.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      return response;
+    }
+    return NextResponse.next();
+  }
+
   try {
     // Query the space with this custom domain
     const [space] = await db
@@ -37,8 +60,47 @@ export async function middleware(request: NextRequest) {
       return NextResponse.redirect(url);
     }
 
-    // Allow the request to continue to the destination
-    return NextResponse.next();
+    // Domain is verified at this point, handle CORS for API routes
+    if (path.startsWith('/api/')) {
+      if (request.method === 'OPTIONS') {
+        const response = new NextResponse(null, { status: 204 });
+        response.headers.set('Access-Control-Allow-Origin', '*');
+        response.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+        response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        response.headers.set('Access-Control-Max-Age', '86400');
+        // Set verification cookie
+        response.cookies.set('verified_domain', hostname, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'strict',
+          maxAge: 3600 // Cache for 1 hour
+        });
+        return response;
+      }
+
+      const response = NextResponse.next();
+      response.headers.set('Access-Control-Allow-Origin', '*');
+      response.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      // Set verification cookie
+      response.cookies.set('verified_domain', hostname, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        maxAge: 3600 // Cache for 1 hour
+      });
+      return response;
+    }
+
+    // Set verification cookie for non-API routes too
+    const response = NextResponse.next();
+    response.cookies.set('verified_domain', hostname, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 3600 // Cache for 1 hour
+    });
+    return response;
   } catch (error) {
     console.error('Error in middleware:', error);
     return NextResponse.next();
@@ -46,5 +108,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!api|_next/static|_next/image|favicon.ico).*)']
+  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)']
 };

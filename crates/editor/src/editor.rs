@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Instant};
 
 use cap_media::{feeds::RawCameraFrame, frame_ws::WSFrame};
-use cap_project::{BackgroundSource, RecordingMeta, XY};
+use cap_project::{BackgroundSource, CursorEvents, RecordingMeta, XY};
 use cap_rendering::{
     decoder::DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectRecordings, ProjectUniforms,
     RenderVideoConstants,
@@ -18,6 +18,7 @@ pub enum RendererMessage {
         uniforms: ProjectUniforms,
         finished: oneshot::Sender<()>,
         resolution_base: XY<u32>,
+        cursor: Arc<CursorEvents>,
     },
     Stop {
         finished: oneshot::Sender<()>,
@@ -81,6 +82,7 @@ impl Renderer {
                         uniforms,
                         finished,
                         resolution_base,
+                        cursor,
                     } => {
                         if let Some(task) = frame_task.as_ref() {
                             if task.is_finished() {
@@ -90,16 +92,16 @@ impl Renderer {
                             }
                         }
 
-                        let render_constants = self.render_constants.clone();
                         let frame_tx = self.frame_tx.clone();
 
                         // frame_task = Some(tokio::spawn(async move {
                         let frame = frame_renderer
                             .render(
                                 segment_frames,
-                                cap_rendering::Background::from(background),
+                                background,
                                 &uniforms,
                                 resolution_base,
+                                &cursor,
                             )
                             .await
                             .unwrap();
@@ -142,6 +144,7 @@ impl RendererHandle {
         background: BackgroundSource,
         uniforms: ProjectUniforms,
         resolution_base: XY<u32>,
+        cursor: Arc<CursorEvents>,
     ) {
         let (finished_tx, finished_rx) = oneshot::channel();
 
@@ -151,6 +154,7 @@ impl RendererHandle {
             uniforms,
             finished: finished_tx,
             resolution_base,
+            cursor,
         })
         .await;
 

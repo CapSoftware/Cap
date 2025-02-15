@@ -370,27 +370,51 @@ export function ConfigSidebar() {
                 switch (tab) {
                   case "image": {
                     setProject("background", "source", {
-                      ...backgrounds.image,
+                      type: "image",
+                      path:
+                        project.background.source.type === "image"
+                          ? project.background.source.path
+                          : null,
                     });
-                    return;
+                    break;
                   }
                   case "color": {
                     setProject("background", "source", {
-                      ...backgrounds.color,
+                      type: "color",
+                      value:
+                        project.background.source.type === "color"
+                          ? project.background.source.value
+                          : DEFAULT_GRADIENT_FROM,
                     });
-                    return;
+                    break;
                   }
                   case "gradient": {
                     setProject("background", "source", {
-                      ...backgrounds.gradient,
+                      type: "gradient",
+                      from:
+                        project.background.source.type === "gradient"
+                          ? project.background.source.from
+                          : DEFAULT_GRADIENT_FROM,
+                      to:
+                        project.background.source.type === "gradient"
+                          ? project.background.source.to
+                          : DEFAULT_GRADIENT_TO,
+                      angle:
+                        project.background.source.type === "gradient"
+                          ? project.background.source.angle
+                          : 90,
                     });
-                    return;
+                    break;
                   }
                   case "wallpaper": {
                     setProject("background", "source", {
-                      ...backgrounds.wallpaper,
+                      type: "wallpaper",
+                      path:
+                        project.background.source.type === "wallpaper"
+                          ? project.background.source.path
+                          : null,
                     });
-                    return;
+                    break;
                   }
                 }
               }}
@@ -579,8 +603,8 @@ export function ConfigSidebar() {
                           type="button"
                           onClick={() =>
                             setProject("background", "source", {
-                              type: "color",
-                              value: [255, 255, 255],
+                              type: "image",
+                              path: null,
                             })
                           }
                           class="bg-black/50 text-white p-2 rounded-full hover:bg-black/70 transition-colors"
@@ -600,8 +624,8 @@ export function ConfigSidebar() {
                     const file = e.currentTarget.files?.[0];
                     if (!file) return;
 
-                    /* 
-                    this is a Tauri bug in WebKit so we need to validate the file type manually 
+                    /*
+                    this is a Tauri bug in WebKit so we need to validate the file type manually
                     https://github.com/tauri-apps/tauri/issues/9158
                     */
                     const validExtensions = [
@@ -754,17 +778,16 @@ export function ConfigSidebar() {
             </KTabs>
           </Field>
 
-          {/* <ComingSoonTooltip>
-            <Field name="Background Blur" icon={<IconCapBlur />}>
-              <Slider
-                disabled
-                value={[project.background.blur]}
-                onChange={(v) => setProject("background", "blur", v[0])}
-                minValue={0}
-                maxValue={100}
-              />
-            </Field>
-          </ComingSoonTooltip> */}
+          <Field name="Background Blur" icon={<IconCapBlur />}>
+            <Slider
+              value={[project.background.blur]}
+              onChange={(v) => setProject("background", "blur", v[0])}
+              minValue={0}
+              maxValue={100}
+              step={0.1}
+            />
+          </Field>
+
           <Field name="Padding" icon={<IconCapPadding />}>
             <Slider
               value={[project.background.padding]}
@@ -1107,7 +1130,7 @@ export function ConfigSidebar() {
           </Field>
         </KTabs.Content>
         <KTabs.Content value="cursor" class="flex flex-col gap-6">
-          {window.FLAGS.recordMouse === false ? (
+          {window.FLAGS.recordMouseState === true ? (
             <>
               <Field name="Cursor" icon={<IconCapCursor />}>
                 <Subfield name="Hide cursor when not moving">
@@ -1124,54 +1147,53 @@ export function ConfigSidebar() {
                   minValue={20}
                   maxValue={300}
                   step={1}
-                  disabled={window.FLAGS.recordMouse}
                 />
               </Field>
-              <Field name="Animation Style" icon={<IconLucideRabbit />}>
-                <RadioGroup
-                  defaultValue="regular"
-                  value={project.cursor.animationStyle}
-                  onChange={(value) => {
-                    setProject(
-                      "cursor",
-                      "animationStyle",
-                      value as CursorAnimationStyle
-                    );
-                  }}
-                  class="flex flex-col gap-2"
-                  disabled
-                >
-                  {(
-                    Object.entries(CURSOR_ANIMATION_STYLES) as [
-                      CursorAnimationStyle,
-                      string
-                    ][]
-                  ).map(([value, label]) => (
-                    <RadioGroup.Item value={value} class="flex items-center">
-                      <RadioGroup.ItemInput class="peer sr-only" />
-                      <RadioGroup.ItemControl
-                        class={cx(
-                          "w-4 h-4 rounded-full border border-gray-300 mr-2",
-                          "relative after:absolute after:inset-0 after:m-auto after:block after:w-2 after:h-2 after:rounded-full",
-                          "after:transition-colors after:duration-200",
-                          "peer-checked:border-blue-500 peer-checked:after:bg-blue-400",
-                          "peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/50",
-                          "peer-disabled:opacity-50"
-                        )}
-                      />
-                      <span
-                        class={cx(
-                          "text-gray-500",
-                          "peer-checked:text-gray-900",
-                          "peer-disabled:opacity-50"
-                        )}
-                      >
-                        {label}
-                      </span>
-                    </RadioGroup.Item>
-                  ))}
-                </RadioGroup>
-              </Field>
+              {/* <Field name="Animation Style" icon={<IconLucideRabbit />}>
+            <RadioGroup
+              defaultValue="regular"
+              value={project.cursor.animationStyle}
+              onChange={(value) => {
+                setProject(
+                  "cursor",
+                  "animationStyle",
+                  value as CursorAnimationStyle
+                );
+              }}
+              class="flex flex-col gap-2"
+              disabled
+            >
+              {(
+                Object.entries(CURSOR_ANIMATION_STYLES) as [
+                  CursorAnimationStyle,
+                  string
+                ][]
+              ).map(([value, label]) => (
+                <RadioGroup.Item value={value} class="flex items-center">
+                  <RadioGroup.ItemInput class="peer sr-only" />
+                  <RadioGroup.ItemControl
+                    class={cx(
+                      "w-4 h-4 rounded-full border border-gray-300 mr-2",
+                      "relative after:absolute after:inset-0 after:m-auto after:block after:w-2 after:h-2 after:rounded-full",
+                      "after:transition-colors after:duration-200",
+                      "peer-checked:border-blue-500 peer-checked:after:bg-blue-400",
+                      "peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/50",
+                      "peer-disabled:opacity-50"
+                    )}
+                  />
+                  <span
+                    class={cx(
+                      "text-gray-500",
+                      "peer-checked:text-gray-900",
+                      "peer-disabled:opacity-50"
+                    )}
+                  >
+                    {label}
+                  </span>
+                </RadioGroup.Item>
+              ))}
+            </RadioGroup>
+          </Field> */}
             </>
           ) : (
             <div class="flex flex-col items-center justify-center gap-2 text-gray-400 p-4">

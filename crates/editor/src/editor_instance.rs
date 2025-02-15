@@ -11,6 +11,7 @@ use cap_rendering::{
     RecordingSegmentDecoders, RenderOptions, RenderVideoConstants, SegmentVideoPaths,
 };
 use std::ops::Deref;
+use std::path::Path;
 use std::sync::Mutex as StdMutex;
 use std::time::Instant;
 use std::{path::PathBuf, sync::Arc};
@@ -36,6 +37,18 @@ pub struct EditorInstance {
 }
 
 impl EditorInstance {
+    pub fn project_path(projects_path: &PathBuf, video_id: &str) -> PathBuf {
+        projects_path.join(format!(
+            "{}{}",
+            video_id,
+            if video_id.ends_with(".cap") {
+                ""
+            } else {
+                ".cap"
+            }
+        ))
+    }
+
     pub async fn new(
         projects_path: PathBuf,
         video_id: &str,
@@ -269,8 +282,10 @@ impl EditorInstance {
                                 fps,
                                 resolution_base,
                                 get_is_upgraded(),
+                                &segment.cursor,
                             ),
                             resolution_base,
+                            segment.cursor.clone(),
                         )
                         .await;
                 }

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::collections::HashMap;
 use std::fs::File;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Serialize, Deserialize, Clone, Type, Debug)]
 pub struct CursorMoveEvent {
@@ -28,7 +28,7 @@ pub struct CursorClickEvent {
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone)]
 #[serde(transparent)]
-pub struct CursorImages(pub HashMap<String, String>);
+pub struct CursorImages(pub HashMap<String, PathBuf>);
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone)]
 pub struct CursorData {

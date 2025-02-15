@@ -101,6 +101,11 @@ impl InterpolatedZoom {
         Self::new_with_easing(cursor, ease_in, ease_out)
     }
 
+    // the multiplier applied to the display width/height
+    pub fn display_amount(&self) -> f64 {
+        (self.bounds.bottom_right - self.bounds.top_left).x
+    }
+
     pub(self) fn new_with_easing(
         cursor: SegmentsCursor,
         ease_in: impl Fn(f32) -> f32,

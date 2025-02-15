@@ -171,6 +171,17 @@ impl<T: Div<Output = T> + Copy> Div<T> for XY<T> {
     }
 }
 
+impl<T: Div<Output = T>> Div<XY<T>> for XY<T> {
+    type Output = Self;
+
+    fn div(self, other: XY<T>) -> Self {
+        Self {
+            x: self.x / other.x,
+            y: self.y / other.y,
+        }
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Crop {
@@ -195,7 +206,7 @@ pub struct ShadowConfiguration {
 #[serde(rename_all = "camelCase")]
 pub struct BackgroundConfiguration {
     pub source: BackgroundSource,
-    pub blur: u32,
+    pub blur: f64,
     pub padding: f64,
     pub rounding: f64,
     pub inset: u32,
@@ -209,7 +220,7 @@ impl Default for BackgroundConfiguration {
     fn default() -> Self {
         Self {
             source: BackgroundSource::default(),
-            blur: 0,
+            blur: 0.0,
             padding: 0.0,
             rounding: 0.0,
             inset: 0,

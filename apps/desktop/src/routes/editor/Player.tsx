@@ -234,14 +234,6 @@ export function Player() {
       </div>
       <div class="flex flex-row items-center p-[0.75rem] gap-[0.5rem] z-10 bg-gray-50 justify-between">
         <div class="flex-1 flex items-center">
-          <Show when={!auth()?.plan?.upgraded}>
-            <EditorButton
-              class="bg-gray-200 text-xs"
-              onClick={() => commands.showWindow("Upgrade")}
-            >
-              Remove watermark
-            </EditorButton>
-          </Show>
           <div class="flex-1" />
           <Time seconds={Math.max(previewTime() ?? playbackTime(), 0)} />
         </div>

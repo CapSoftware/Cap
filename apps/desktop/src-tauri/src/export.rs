@@ -1,8 +1,9 @@
 use crate::{
-    create_editor_instance_impl, get_video_metadata, notifications, windows::ShowCapWindow,
+    create_editor_instance_impl, get_video_metadata, notifications, recordings_path, windows::ShowCapWindow,
     AuthStore, RenderProgress, VideoType,
 };
-use cap_project::{ProjectConfiguration, XY};
+use cap_editor::EditorInstance;
+use cap_project::{ProjectConfiguration, RecordingMeta, XY};
 use std::path::PathBuf;
 use tauri::AppHandle;
 
@@ -162,15 +163,14 @@ pub async fn get_export_estimates(
             .await
             .ok();
 
-    let editor_instance = create_editor_instance_impl(&app, &video_id).await?;
-
     let raw_duration = screen_metadata.duration.max(
         camera_metadata
             .map(|m| m.duration)
             .unwrap_or(screen_metadata.duration),
     );
 
-    let meta = editor_instance.meta();
+    let project_path = EditorInstance::project_path(&recordings_path(&app), &video_id);
+    let meta = RecordingMeta::load_for_project(&project_path).unwrap();
     let project_config = meta.project_config();
     let duration_seconds = if let Some(timeline) = &project_config.timeline {
         timeline

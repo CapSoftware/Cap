@@ -822,10 +822,13 @@ function MicrophoneSelect(props: {
     <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
       <label class="text-[--text-tertiary]">Microphone</label>
       <KSelect<Option>
-        options={[{ name: "No Audio", deviceId: "" }, ...(devices.data ?? [])]}
+        options={[
+          { name: "No Microphone", deviceId: "" },
+          ...(devices.data ?? []),
+        ]}
         optionValue="deviceId"
         optionTextValue="name"
-        placeholder="No Audio"
+        placeholder="No Microphone"
         value={value()}
         disabled={!!currentRecording.data}
         onChange={handleMicrophoneChange}

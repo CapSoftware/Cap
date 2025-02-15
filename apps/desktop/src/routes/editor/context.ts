@@ -87,10 +87,12 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
     const [playbackTime, setPlaybackTime] = createSignal<number>(0);
     const [playing, setPlaying] = createSignal(false);
 
-    createEffect(() => {
-      if (!playing())
-        commands.setPlayheadPosition(Math.floor(playbackTime() * FPS));
-    });
+    createEffect(
+      on(playing, () => {
+        if (!playing())
+          commands.setPlayheadPosition(Math.floor(playbackTime() * FPS));
+      })
+    );
 
     const [split, setSplit] = createSignal(false);
 
@@ -105,7 +107,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       position: number;
     };
 
-    const zoomOutLimit = () => totalDuration();
+    const zoomOutLimit = () => Math.min(totalDuration(), 60 * 10);
 
     function updateZoom(state: State, newZoom: number, origin: number): State {
       const zoom = Math.max(Math.min(newZoom, zoomOutLimit()), MAX_ZOOM_IN);
@@ -127,7 +129,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       timelineSelection: null as null | { type: "zoom"; index: number },
       timelineTransform: {
         // visible seconds
-        zoom: 17,
+        zoom: zoomOutLimit(),
         updateZoom(z: number, origin: number) {
           const { zoom, position } = updateZoom(
             {
@@ -301,10 +303,7 @@ export const [TimelineContextProvider, useTimelineContext] =
   );
 
 export const [TrackContextProvider, useTrackContext] = createContextProvider(
-  (props: {
-    ref: Accessor<Element | undefined>;
-    isFreeForm: Accessor<boolean>;
-  }) => {
+  (props: { ref: Accessor<Element | undefined> }) => {
     const { state } = useEditorContext();
 
     const [trackState, setTrackState] = createStore({
@@ -318,7 +317,6 @@ export const [TrackContextProvider, useTrackContext] = createContextProvider(
     return {
       secsPerPixel,
       trackBounds: bounds,
-      isFreeForm: () => props.isFreeForm(),
       trackState,
       setTrackState,
     };

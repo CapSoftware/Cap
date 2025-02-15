@@ -7,6 +7,7 @@ import {
   Setter,
   Show,
   batch,
+  createEffect,
   createRoot,
   createSignal,
   on,
@@ -300,101 +301,111 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
   return (
     <TrackRoot ref={props.ref}>
       <For each={segments()}>
-        {(segment, i) => (
-          <SegmentRoot
-            class="border-blue-300"
-            innerClass="ring-blue-300"
-            segment={segment}
-            onMouseDown={(e) => {
-              if (!split()) return;
-              e.stopPropagation();
+        {(segment, i) => {
+          const prevDuration = () =>
+            segments()
+              .slice(0, i())
+              .reduce((t, s) => t + (s.end - s.start) / s.timescale, 0);
 
-              const rect = e.currentTarget.getBoundingClientRect();
-              const fraction = (e.clientX - rect.left) / rect.width;
-
-              const splitTime =
-                segment.start + fraction * (segment.end - segment.start);
-
-              setProject(
-                "timeline",
-                "segments",
-                produce((segments) => {
-                  segments.splice(i() + 1, 0, {
-                    start: splitTime,
-                    end: segment.end,
-                    timescale: 1,
-                    recordingSegment: segment.recordingSegment,
-                  });
-                  segments[i()].end = splitTime;
-                })
-              );
-            }}
-          >
-            <SegmentHandle
-              class="bg-blue-300"
-              onMouseDown={(downEvent) => {
-                const start = segment.start;
-
-                const maxSegmentDuration =
-                  editorInstance.recordings.segments[
-                    segment.recordingSegment ?? 0
-                  ].display.duration;
-
-                const availableTimelineDuration =
-                  editorInstance.recordingDuration -
-                  segments().reduce(
-                    (acc, segment, segmentI) =>
-                      segmentI === i()
-                        ? acc
-                        : acc +
-                          (segment.end - segment.start) / segment.timescale,
-                    0
-                  );
-
-                const maxDuration = Math.min(
-                  maxSegmentDuration,
-                  availableTimelineDuration
-                );
-
-                function update(event: MouseEvent) {
-                  const newStart =
-                    start +
-                    (event.clientX - downEvent.clientX) * secsPerPixel();
-
-                  setProject(
-                    "timeline",
-                    "segments",
-                    i(),
-                    "start",
-                    Math.min(
-                      Math.max(
-                        Math.max(newStart, 0),
-                        segment.end - maxDuration
-                      ),
-                      segment.end - 1
-                    )
-                  );
-                }
-
-                const resumeHistory = history.pause();
-                createRoot((dispose) => {
-                  createEventListenerMap(window, {
-                    mousemove: update,
-                    mouseup: (e) => {
-                      dispose();
-                      resumeHistory();
-                      update(e);
-                      onHandleReleased();
-                    },
-                  });
-                });
+          return (
+            <SegmentRoot
+              class="border-blue-300"
+              innerClass="ring-blue-300"
+              segment={{
+                ...segment,
+                start: prevDuration(),
+                end: segment.end - segment.start + prevDuration(),
               }}
-            />
-            <SegmentContent class="bg-blue-50 justify-between">
-              <span class="text-black-transparent-60 text-[0.625rem] mt-auto">
-                {formatTime(segment.start)}
-              </span>
-              {/* <Show when={segments().length > 1}>
+              onMouseDown={(e) => {
+                if (!split()) return;
+                e.stopPropagation();
+
+                const rect = e.currentTarget.getBoundingClientRect();
+                const fraction = (e.clientX - rect.left) / rect.width;
+
+                const splitTime =
+                  segment.start + fraction * (segment.end - segment.start);
+
+                setProject(
+                  "timeline",
+                  "segments",
+                  produce((segments) => {
+                    segments.splice(i() + 1, 0, {
+                      start: splitTime,
+                      end: segment.end,
+                      timescale: 1,
+                      recordingSegment: segment.recordingSegment,
+                    });
+                    segments[i()].end = splitTime;
+                  })
+                );
+              }}
+            >
+              <SegmentHandle
+                class="bg-blue-300"
+                onMouseDown={(downEvent) => {
+                  const start = segment.start;
+
+                  const maxSegmentDuration =
+                    editorInstance.recordings.segments[
+                      segment.recordingSegment ?? 0
+                    ].display.duration;
+
+                  const availableTimelineDuration =
+                    editorInstance.recordingDuration -
+                    segments().reduce(
+                      (acc, segment, segmentI) =>
+                        segmentI === i()
+                          ? acc
+                          : acc +
+                            (segment.end - segment.start) / segment.timescale,
+                      0
+                    );
+
+                  const maxDuration = Math.min(
+                    maxSegmentDuration,
+                    availableTimelineDuration
+                  );
+
+                  function update(event: MouseEvent) {
+                    const newStart =
+                      start +
+                      (event.clientX - downEvent.clientX) * secsPerPixel();
+
+                    setProject(
+                      "timeline",
+                      "segments",
+                      i(),
+                      "start",
+                      Math.min(
+                        Math.max(
+                          Math.max(newStart, 0),
+                          segment.end - maxDuration
+                        ),
+                        segment.end - 1
+                      )
+                    );
+                  }
+
+                  const resumeHistory = history.pause();
+                  createRoot((dispose) => {
+                    createEventListenerMap(window, {
+                      mousemove: update,
+                      mouseup: (e) => {
+                        dispose();
+                        resumeHistory();
+                        update(e);
+                        onHandleReleased();
+                      },
+                    });
+                  });
+                }}
+              />
+              <SegmentContent class="bg-blue-50 justify-between">
+                <span class="text-black-transparent-60 text-[0.625rem] mt-auto">
+                  {formatTime(segment.start)}
+                </span>
+                {/* <Show when={segments().length > 1}>
                     <button
                       onClick={() => {
                         setProject(
@@ -410,67 +421,69 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                       <IconCapTrash class="size-4 text-gray-400 group-hover/button:text-gray-500 transition-colors" />
                     </button>
                   </Show> */}
-              <span class="text-black-transparent-60 text-[0.625rem] mt-auto">
-                {formatTime(segment.end)}
-              </span>
-            </SegmentContent>
-            <SegmentHandle
-              class="bg-blue-300"
-              onMouseDown={(downEvent) => {
-                const end = segment.end;
+                <span class="text-black-transparent-60 text-[0.625rem] mt-auto">
+                  {formatTime(segment.end)}
+                </span>
+              </SegmentContent>
+              <SegmentHandle
+                class="bg-blue-300"
+                onMouseDown={(downEvent) => {
+                  const end = segment.end;
 
-                const maxSegmentDuration =
-                  editorInstance.recordings.segments[
-                    segment.recordingSegment ?? 0
-                  ].display.duration;
+                  const maxSegmentDuration =
+                    editorInstance.recordings.segments[
+                      segment.recordingSegment ?? 0
+                    ].display.duration;
 
-                const availableTimelineDuration =
-                  editorInstance.recordingDuration -
-                  segments().reduce(
-                    (acc, segment, segmentI) =>
-                      segmentI === i()
-                        ? acc
-                        : acc +
-                          (segment.end - segment.start) / segment.timescale,
-                    0
-                  );
+                  const availableTimelineDuration =
+                    editorInstance.recordingDuration -
+                    segments().reduce(
+                      (acc, segment, segmentI) =>
+                        segmentI === i()
+                          ? acc
+                          : acc +
+                            (segment.end - segment.start) / segment.timescale,
+                      0
+                    );
 
-                function update(event: MouseEvent) {
-                  const newEnd =
-                    end + (event.clientX - downEvent.clientX) * secsPerPixel();
+                  function update(event: MouseEvent) {
+                    const newEnd =
+                      end +
+                      (event.clientX - downEvent.clientX) * secsPerPixel();
 
-                  setProject(
-                    "timeline",
-                    "segments",
-                    i(),
-                    "end",
-                    Math.max(
-                      Math.min(
-                        newEnd,
-                        maxSegmentDuration,
-                        availableTimelineDuration
-                      ),
-                      segment.start + 1
-                    )
-                  );
-                }
+                    setProject(
+                      "timeline",
+                      "segments",
+                      i(),
+                      "end",
+                      Math.max(
+                        Math.min(
+                          newEnd,
+                          maxSegmentDuration,
+                          availableTimelineDuration
+                        ),
+                        segment.start + 1
+                      )
+                    );
+                  }
 
-                const resumeHistory = history.pause();
-                createRoot((dispose) => {
-                  createEventListenerMap(window, {
-                    mousemove: update,
-                    mouseup: (e) => {
-                      dispose();
-                      resumeHistory();
-                      update(e);
-                      onHandleReleased();
-                    },
+                  const resumeHistory = history.pause();
+                  createRoot((dispose) => {
+                    createEventListenerMap(window, {
+                      mousemove: update,
+                      mouseup: (e) => {
+                        dispose();
+                        resumeHistory();
+                        update(e);
+                        onHandleReleased();
+                      },
+                    });
                   });
-                });
-              }}
-            />
-          </SegmentRoot>
-        )}
+                }}
+              />
+            </SegmentRoot>
+          );
+        }}
       </For>
     </TrackRoot>
   );
@@ -482,7 +495,7 @@ function ZoomTrack(props: {
 }) {
   const { project, setProject, history, setState, state } = useEditorContext();
 
-  const { duration, timelineBounds, secsPerPixel } = useTimelineContext();
+  const { duration, secsPerPixel } = useTimelineContext();
 
   const [hoveringSegment, setHoveringSegment] = createSignal(false);
   const [hoveredTime, setHoveredTime] = createSignal<number>();
@@ -492,7 +505,6 @@ function ZoomTrack(props: {
       <div class="h-2 w-full" />
 
       <TrackRoot
-        isFreeForm
         onMouseMove={(e) => {
           if (hoveringSegment()) {
             setHoveredTime(undefined);
@@ -505,15 +517,15 @@ function ZoomTrack(props: {
             (e.clientX - bounds.left) * secsPerPixel() +
             state.timelineTransform.position;
 
-          const prevSegmentIndex = project.timeline?.zoomSegments?.findIndex(
-            (s) => s.end < time
-          );
-
           const nextSegmentIndex = project.timeline?.zoomSegments?.findIndex(
             (s) => time < s.start
           );
 
           if (nextSegmentIndex !== undefined) {
+            const prevSegmentIndex = nextSegmentIndex - 1;
+
+            if (prevSegmentIndex === undefined) return;
+
             const nextSegment =
               project.timeline?.zoomSegments?.[nextSegmentIndex];
 
@@ -552,7 +564,17 @@ function ZoomTrack(props: {
                   "zoomSegments",
                   produce((zoomSegments) => {
                     zoomSegments ??= [];
-                    zoomSegments.push({
+
+                    let index = zoomSegments.length;
+
+                    for (let i = zoomSegments.length - 1; i >= 0; i--) {
+                      if (zoomSegments[i].start > time) {
+                        index = i;
+                        break;
+                      }
+                    }
+
+                    zoomSegments.splice(index, 0, {
                       start: time,
                       end: time + 1,
                       amount: 1.5,
@@ -813,14 +835,11 @@ function ZoomTrack(props: {
   );
 }
 
-function TrackRoot(props: ComponentProps<"div"> & { isFreeForm?: boolean }) {
+function TrackRoot(props: ComponentProps<"div">) {
   const [ref, setRef] = createSignal<HTMLDivElement>();
 
   return (
-    <TrackContextProvider
-      ref={ref}
-      isFreeForm={() => props.isFreeForm ?? false}
-    >
+    <TrackContextProvider ref={ref}>
       <div
         {...props}
         ref={mergeRefs(setRef, props.ref)}
@@ -841,7 +860,7 @@ function SegmentRoot(
     ) => void;
   }
 ) {
-  const { isFreeForm, secsPerPixel } = useTrackContext();
+  const { secsPerPixel } = useTrackContext();
   const { state, project } = useEditorContext();
 
   const isSelected = createMemo(() => {
@@ -858,7 +877,7 @@ function SegmentRoot(
   const translateX = createMemo(() => {
     const base = state.timelineTransform.position;
 
-    const delta = !isFreeForm() ? 0 : props.segment.start;
+    const delta = props.segment.start;
 
     return (delta - base) / secsPerPixel();
   });
