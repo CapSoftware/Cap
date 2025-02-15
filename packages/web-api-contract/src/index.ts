@@ -1,6 +1,11 @@
 import { z } from "zod";
 import desktop from "./desktop";
 import { c } from "./util";
+import {
+  ClientInferRequest,
+  ClientInferResponseBody,
+  ClientInferResponses,
+} from "@ts-rest/core";
 
 export const contract = c.router({
   desktop,
@@ -32,4 +37,33 @@ export const contract = c.router({
       },
     },
   }),
+});
+
+export const licenseContract = c.router({
+  activateCommercialLicense: {
+    method: "POST",
+    path: "/commercial/activate",
+    headers: z.object({ licensekey: z.string(), instanceid: z.string() }),
+    body: z.object({ reset: z.boolean().optional() }),
+    responses: {
+      200: z.object({
+        message: z.string(),
+        expiryDate: z.number(),
+        refresh: z.number(),
+      }),
+      403: z.object({ message: z.string() }),
+    },
+  },
+  createCommercialCheckoutUrl: {
+    method: "POST",
+    path: "/commercial/checkout",
+    body: z.object({
+      type: z.enum(["yearly", "lifetime"]),
+      quantity: z.number().min(1).max(100).optional(),
+    }),
+    responses: {
+      200: z.object({ url: z.string() }),
+      500: z.object({ message: z.string() }),
+    },
+  },
 });

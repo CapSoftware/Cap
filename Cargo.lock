@@ -6765,6 +6765,7 @@ dependencies = [
  "paste",
  "specta-macros",
  "thiserror 1.0.63",
+ "uuid",
 ]
 
 [[package]]

@@ -5,10 +5,13 @@ use specta::Type;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_store::StoreExt;
+use uuid::Uuid;
 
-#[derive(Serialize, Deserialize, Type, Default)]
+#[derive(Serialize, Deserialize, Type, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct GeneralSettingsStore {
+    #[serde(default = "uuid::Uuid::new_v4")]
+    pub instance_id: Uuid,
     #[serde(default)]
     pub upload_individual_files: bool,
     #[serde(default)]
@@ -30,6 +33,39 @@ pub struct GeneralSettingsStore {
     pub theme: AppTheme,
     #[serde(default)]
     pub recording_config: Option<RecordingConfig>,
+    #[serde(default)]
+    pub commercial_license: Option<CommercialLicense>,
+    #[serde(default)]
+    pub last_version: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Type, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CommercialLicense {
+    license_key: String,
+    expiry_date: u32,
+    refresh: u32,
+    activated_on: u32,
+}
+
+impl Default for GeneralSettingsStore {
+    fn default() -> Self {
+        Self {
+            instance_id: uuid::Uuid::new_v4(),
+            upload_individual_files: false,
+            open_editor_after_recording: false,
+            hide_dock_icon: false,
+            haptics_enabled: true,
+            auto_create_shareable_link: false,
+            enable_notifications: true,
+            disable_auto_open_links: false,
+            has_completed_startup: false,
+            theme: AppTheme::System,
+            recording_config: None,
+            commercial_license: None,
+            last_version: None,
+        }
+    }
 }
 
 #[derive(Default, Debug, Copy, Clone, Serialize, Deserialize, Type)]
@@ -71,7 +107,7 @@ impl GeneralSettingsStore {
                 // Handle potential deserialization errors gracefully
                 match serde_json::from_value(store) {
                     Ok(settings) => Ok(Some(settings)),
-                    Err(_) => Ok(Some(GeneralSettingsStore::default())),
+                    Err(_) => Err("Failed to deserialize general settings store".to_string()),
                 }
             }
             _ => Ok(None),
@@ -101,21 +137,4 @@ pub fn init(app: &AppHandle) {
         .unwrap_or_default();
     app.manage(GeneralSettingsState::new(store));
     println!("GeneralSettingsState managed");
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn get_recording_config(app: AppHandle) -> Result<RecordingConfig, String> {
-    let settings = GeneralSettingsStore::get(&app)?;
-    Ok(settings
-        .and_then(|s| s.recording_config)
-        .unwrap_or_default())
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn set_recording_config(app: AppHandle, config: RecordingConfig) -> Result<(), String> {
-    GeneralSettingsStore::update(&app, |settings| {
-        settings.recording_config = Some(config);
-    })
 }

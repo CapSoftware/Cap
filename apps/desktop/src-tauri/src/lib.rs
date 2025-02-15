@@ -2102,6 +2102,7 @@ pub async fn run() {
                     CapWindowId::Camera.label().as_str(),
                     CapWindowId::RecordingsOverlay.label().as_str(),
                     CapWindowId::InProgressRecording.label().as_str(),
+                    CapWindowId::Upgrade.label().as_str(),
                 ])
                 .map_label(|label| match label {
                     label if label.starts_with("editor-") => "editor",
@@ -2173,9 +2174,7 @@ pub async fn run() {
 
             if !permissions.screen_recording.permitted()
                 || !permissions.accessibility.permitted()
-                || GeneralSettingsStore::get(&app)
-                    .ok()
-                    .flatten()
+                || dbg!(GeneralSettingsStore::get(&app).ok().flatten())
                     .map(|s| !s.has_completed_startup)
                     .unwrap_or(false)
             {

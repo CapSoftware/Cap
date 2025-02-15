@@ -1,31 +1,36 @@
-import { initClient } from "@ts-rest/core";
-import { contract } from "@cap/web-api-contract";
+import { ApiFetcher, AppRouter, initClient } from "@ts-rest/core";
+import { contract, licenseContract } from "@cap/web-api-contract";
 import { fetch } from "@tauri-apps/plugin-http";
 
 import { clientEnv } from "./env";
 import { authStore } from "~/store";
 
-const baseUrl = `${clientEnv.VITE_SERVER_URL}/api`;
+const api: ApiFetcher = async (args) => {
+  const resp = await fetch(args.path, args);
+
+  let body;
+
+  const contentType = resp.headers.get("content-type");
+  if (contentType === "application/json") {
+    body = await resp.json();
+  } else {
+    body = await resp.text();
+  }
+
+  return {
+    body,
+    status: resp.status,
+    headers: resp.headers,
+  };
+};
+
 export const apiClient = initClient(contract, {
-  baseUrl,
-  api: async (args) => {
-    const resp = await fetch(args.path, args);
-
-    let body;
-
-    const contentType = resp.headers.get("content-type");
-    if (contentType === "application/json") {
-      body = await resp.json();
-    } else {
-      body = await resp.text();
-    }
-
-    return {
-      body,
-      status: resp.status,
-      headers: resp.headers,
-    };
-  },
+  baseUrl: `${clientEnv.VITE_SERVER_URL}/api`,
+  api,
+});
+export const licenseApiClient = initClient(licenseContract, {
+  baseUrl: `https://l.cap.so/api`,
+  api,
 });
 
 export async function maybeProtectedHeaders() {

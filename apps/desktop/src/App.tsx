@@ -68,13 +68,15 @@ function Inner() {
         fallback={(e: Error) => {
           console.error(e);
           return (
-            <div class="w-screen h-screen flex flex-col justify-center items-center bg-gray-100 border-gray-200 max-h-screen overflow-hidden transition-[border-radius] duration-200 text-[--text-secondary] gap-y-4">
-              <IconCapLogo />
-              <h1 class="text-[--text-primary] text-3xl font-bold">
+            <div class="w-screen h-screen flex flex-col justify-center items-center bg-gray-100 border-gray-200 max-h-screen overflow-hidden transition-[border-radius] duration-200 text-[--text-secondary] gap-y-4 max-sm:gap-y-2 px-8 text-center">
+              <IconCapLogo class="max-sm:size-16" />
+              <h1 class="text-[--text-primary] text-3xl max-sm:text-xl font-bold">
                 An Error Occured
               </h1>
-              <p>We're very sorry, but something has gone wrong.</p>
-              <div class="flex flex-row gap-x-4">
+              <p class="max-sm:text-sm mb-2">
+                We're very sorry, but something has gone wrong.
+              </p>
+              <div class="flex max-sm:flex-col flex-row max-sm:gap-2 gap-4">
                 <Button
                   onClick={() => {
                     writeText(`${e.toString()}\n\n${e.stack}`);

@@ -56,6 +56,7 @@
       "identifier": "http:default",
       "allow": [
         { "url": "https://cap.so" },
+        { "url": "https://l.cap.so" },
         { "url": "http://localhost:3000/*" }
       ]
     },

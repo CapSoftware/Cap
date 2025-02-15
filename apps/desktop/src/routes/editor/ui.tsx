@@ -99,7 +99,7 @@ export function Input(props: ComponentProps<"input">) {
     <input
       {...props}
       class={cx(
-        "rounded-[0.5rem] h-[2rem] p-[0.375rem] border w-full text-[0.875rem] focus:border-blue-300 outline-none text-gray-500 dark:text-gray-50",
+        "rounded-[0.5rem] h-[2rem] p-[0.375rem] border w-full text-[0.875rem] focus:border-blue-300 outline-none text-gray-500 dark:text-gray-50 placeholder:text-black-transparent-20",
         props.class
       )}
     />
