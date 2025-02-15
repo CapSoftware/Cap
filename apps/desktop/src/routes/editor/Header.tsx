@@ -13,6 +13,8 @@ import {
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { Tooltip } from "@kobalte/core";
 import { Select as KSelect } from "@kobalte/core/select";
+import { RadioGroup } from "@kobalte/core/radio-group";
+import { Slider } from "@kobalte/core/slider";
 import { createMutation } from "@tanstack/solid-query";
 import { save } from "@tauri-apps/plugin-dialog";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -34,6 +36,7 @@ import {
 import Titlebar from "~/components/titlebar/Titlebar";
 import { initializeTitlebar, setTitlebar } from "~/utils/titlebar-state";
 import { Channel } from "@tauri-apps/api/core";
+import type { ExportFormat, GifQuality } from "~/utils/tauri";
 
 type ResolutionOption = {
   label: string;
@@ -123,7 +126,7 @@ function ExportButton(props: {
   setSelectedResolution: Setter<ResolutionOption>;
   setSelectedFps: Setter<number>;
 }) {
-  const { videoId, project, prettyName } = useEditorContext();
+  const { videoId, project, prettyName, setProject } = useEditorContext();
   const [showExportOptions, setShowExportOptions] = createSignal(false);
 
   const [exportEstimates] = createResource(
@@ -145,15 +148,17 @@ function ExportButton(props: {
 
       setShowExportOptions(false);
 
+      const extension = project.export?.format === 'gif' ? 'gif' : 'mp4';
       const path = await save({
-        filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
-        defaultPath: `~/Desktop/${prettyName()}.mp4`,
+        filters: [{ name: `${extension} filter`, extensions: [extension] }],
+        defaultPath: `~/Desktop/${prettyName()}.${extension}`,
       });
       if (!path) return;
 
       trackEvent("export_started", {
         resolution: props.selectedResolution.value,
-        fps: props.selectedFps,
+        fps: project.export?.format === 'gif' ? project.export.gifFps : props.selectedFps,
+        format: project.export?.format,
         path: path,
       });
 
@@ -183,7 +188,7 @@ function ExportButton(props: {
           project,
           progress,
           true,
-          props.selectedFps,
+          project.export?.format === 'gif' ? project.export.gifFps : props.selectedFps,
           {
             x: props.selectedResolution.width,
             y: props.selectedResolution.height,
@@ -237,116 +242,230 @@ function ExportButton(props: {
           <div class="space-y-4">
             <div>
               <label class="block text-sm font-medium mb-1 text-gray-500 dark:text-gray-400">
-                Resolution
+                File Type
               </label>
-              <KSelect<ResolutionOption>
-                options={RESOLUTION_OPTIONS}
-                optionValue="value"
-                optionTextValue="label"
-                placeholder="Select Resolution"
-                value={props.selectedResolution}
-                onChange={(value) => {
-                  if (value) {
-                    trackEvent("export_resolution_changed", {
-                      resolution: value.value,
-                      width: value.width,
-                      height: value.height,
-                    });
-                    props.setSelectedResolution(value);
-                  }
-                }}
-                itemComponent={(props) => (
-                  <MenuItem<typeof KSelect.Item>
-                    as={KSelect.Item}
-                    item={props.item}
-                  >
-                    <KSelect.ItemLabel class="flex-1">
-                      {props.item.rawValue.label}
-                    </KSelect.ItemLabel>
-                  </MenuItem>
-                )}
-              >
-                <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect">
-                  <KSelect.Value<ResolutionOption> class="flex-1 text-sm text-left truncate text-[--gray-500]">
-                    {(state) => <span>{state.selectedOption()?.label}</span>}
-                  </KSelect.Value>
-                  <KSelect.Icon>
-                    <IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
-                  </KSelect.Icon>
-                </KSelect.Trigger>
-                <KSelect.Portal>
-                  <PopperContent<typeof KSelect.Content>
-                    as={KSelect.Content}
-                    class={cx(topLeftAnimateClasses, "z-50")}
-                  >
-                    <MenuItemList<typeof KSelect.Listbox>
-                      class="max-h-32 overflow-y-auto"
-                      as={KSelect.Listbox}
-                    />
-                  </PopperContent>
-                </KSelect.Portal>
-              </KSelect>
-            </div>
-            <div>
-              <label class="block text-sm font-medium mb-1 text-gray-500 dark:text-gray-400">
-                FPS
-              </label>
-              <KSelect
-                options={FPS_OPTIONS}
-                optionValue="value"
-                optionTextValue="label"
-                placeholder="Select FPS"
-                value={FPS_OPTIONS.find(
-                  (opt) => opt.value === props.selectedFps
-                )}
-                onChange={(option) => {
-                  const fps = option?.value ?? 30;
-                  trackEvent("export_fps_changed", {
-                    fps: fps,
+              <RadioGroup
+                value={project.export?.format}
+                onChange={(value: string) => {
+                  batch(() => {
+                    setProject("export", "format", value as ExportFormat);
+                    if (value === 'gif') {
+                      setProject("export", "gifFps", 15);
+                    }
                   });
-                  props.setSelectedFps(fps);
                 }}
-                itemComponent={(props) => (
-                  <MenuItem<typeof KSelect.Item>
-                    as={KSelect.Item}
-                    item={props.item}
-                  >
-                    <KSelect.ItemLabel class="flex-1">
-                      {props.item.rawValue.label}
-                    </KSelect.ItemLabel>
-                  </MenuItem>
-                )}
+                class="flex flex-col gap-2"
               >
-                <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect">
-                  <KSelect.Value<
-                    (typeof FPS_OPTIONS)[number]
-                  > class="flex-1 text-sm text-left truncate text-[--gray-500]">
-                    {(state) => <span>{state.selectedOption()?.label}</span>}
-                  </KSelect.Value>
-                  <KSelect.Icon>
-                    <IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
-                  </KSelect.Icon>
-                </KSelect.Trigger>
-                <KSelect.Portal>
-                  <PopperContent<typeof KSelect.Content>
-                    as={KSelect.Content}
-                    class={cx(topLeftAnimateClasses, "z-50")}
-                  >
-                    <MenuItemList<typeof KSelect.Listbox>
-                      class="max-h-32 overflow-y-auto"
-                      as={KSelect.Listbox}
-                    />
-                  </PopperContent>
-                </KSelect.Portal>
-              </KSelect>
+                <RadioGroup.Item value="mp4" class="flex items-center">
+                  <RadioGroup.ItemInput class="peer sr-only" />
+                  <RadioGroup.ItemControl
+                    class={cx(
+                      "w-4 h-4 rounded-full border border-gray-300 mr-2",
+                      "relative after:absolute after:inset-0 after:m-auto after:block after:w-2 after:h-2 after:rounded-full",
+                      "after:transition-colors after:duration-200",
+                      "peer-checked:border-blue-500 peer-checked:after:bg-blue-400",
+                      "peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/50"
+                    )}
+                  />
+                  <span class={cx("text-gray-500", "peer-checked:text-gray-900")}>
+                    MP4
+                  </span>
+                </RadioGroup.Item>
+                <RadioGroup.Item value="gif" class="flex items-center">
+                  <RadioGroup.ItemInput class="peer sr-only" />
+                  <RadioGroup.ItemControl
+                    class={cx(
+                      "w-4 h-4 rounded-full border border-gray-300 mr-2",
+                      "relative after:absolute after:inset-0 after:m-auto after:block after:w-2 after:h-2 after:rounded-full",
+                      "after:transition-colors after:duration-200",
+                      "peer-checked:border-blue-500 peer-checked:after:bg-blue-400",
+                      "peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/50"
+                    )}
+                  />
+                  <span class={cx("text-gray-500", "peer-checked:text-gray-900")}>
+                    GIF
+                  </span>
+                </RadioGroup.Item>
+              </RadioGroup>
             </div>
+
+            <Show when={project.export?.format === 'gif'}>
+              <div>
+                <label class="block text-sm font-medium mb-1 text-gray-500 dark:text-gray-400">
+                  GIF Quality
+                </label>
+                <RadioGroup
+                  value={project.export?.gifQuality}
+                  onChange={(value: string) => setProject("export", "gifQuality", value as GifQuality)}
+                  class="flex flex-col gap-2"
+                >
+                  <RadioGroup.Item value="standard" class="flex items-center">
+                    <RadioGroup.ItemInput class="peer sr-only" />
+                    <RadioGroup.ItemControl
+                      class={cx(
+                        "w-4 h-4 rounded-full border border-gray-300 mr-2",
+                        "relative after:absolute after:inset-0 after:m-auto after:block after:w-2 after:h-2 after:rounded-full",
+                        "after:transition-colors after:duration-200",
+                        "peer-checked:border-blue-500 peer-checked:after:bg-blue-400",
+                        "peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/50"
+                      )}
+                    />
+                    <span class={cx("text-gray-500", "peer-checked:text-gray-900")}>
+                      Standard
+                    </span>
+                  </RadioGroup.Item>
+                  <RadioGroup.Item value="high" class="flex items-center">
+                    <RadioGroup.ItemInput class="peer sr-only" />
+                    <RadioGroup.ItemControl
+                      class={cx(
+                        "w-4 h-4 rounded-full border border-gray-300 mr-2",
+                        "relative after:absolute after:inset-0 after:m-auto after:block after:w-2 after:h-2 after:rounded-full",
+                        "after:transition-colors after:duration-200",
+                        "peer-checked:border-blue-500 peer-checked:after:bg-blue-400",
+                        "peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/50"
+                      )}
+                    />
+                    <span class={cx("text-gray-500", "peer-checked:text-gray-900")}>
+                      High Quality
+                    </span>
+                  </RadioGroup.Item>
+                </RadioGroup>
+              </div>
+
+              <div>
+                <label class="block text-sm font-medium mb-1 text-gray-500 dark:text-gray-400">
+                  FPS
+                </label>
+                <Slider
+                  value={[project.export?.gifFps ?? 15]}
+                  onChange={(v) => setProject("export", "gifFps", v[0])}
+                  minValue={10}
+                  maxValue={30}
+                  step={5}
+                />
+                <div class="text-xs text-gray-500 mt-1 text-center">
+                  {project.export?.gifFps ?? 15} FPS
+                </div>
+              </div>
+            </Show>
+
+            <Show when={project.export?.format === 'mp4'}>
+              <div>
+                <label class="block text-sm font-medium mb-1 text-gray-500 dark:text-gray-400">
+                  Resolution
+                </label>
+                <KSelect<ResolutionOption>
+                  options={RESOLUTION_OPTIONS}
+                  optionValue="value"
+                  optionTextValue="label"
+                  placeholder="Select Resolution"
+                  value={props.selectedResolution}
+                  onChange={(value) => {
+                    if (value) {
+                      trackEvent("export_resolution_changed", {
+                        resolution: value.value,
+                        width: value.width,
+                        height: value.height,
+                      });
+                      props.setSelectedResolution(value);
+                    }
+                  }}
+                  itemComponent={(props) => (
+                    <MenuItem<typeof KSelect.Item>
+                      as={KSelect.Item}
+                      item={props.item}
+                    >
+                      <KSelect.ItemLabel class="flex-1">
+                        {props.item.rawValue.label}
+                      </KSelect.ItemLabel>
+                    </MenuItem>
+                  )}
+                >
+                  <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect">
+                    <KSelect.Value<ResolutionOption> class="flex-1 text-sm text-left truncate text-[--gray-500]">
+                      {(state) => <span>{state.selectedOption()?.label}</span>}
+                    </KSelect.Value>
+                    <KSelect.Icon>
+                      <IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
+                    </KSelect.Icon>
+                  </KSelect.Trigger>
+                  <KSelect.Portal>
+                    <PopperContent<typeof KSelect.Content>
+                      as={KSelect.Content}
+                      class={cx(topLeftAnimateClasses, "z-50")}
+                    >
+                      <MenuItemList<typeof KSelect.Listbox>
+                        class="max-h-32 overflow-y-auto"
+                        as={KSelect.Listbox}
+                      />
+                    </PopperContent>
+                  </KSelect.Portal>
+                </KSelect>
+              </div>
+
+              <div>
+                <label class="block text-sm font-medium mb-1 text-gray-500 dark:text-gray-400">
+                  FPS
+                </label>
+                <KSelect
+                  options={FPS_OPTIONS}
+                  optionValue="value"
+                  optionTextValue="label"
+                  placeholder="Select FPS"
+                  value={FPS_OPTIONS.find(
+                    (opt) => opt.value === props.selectedFps
+                  )}
+                  onChange={(option) => {
+                    const fps = option?.value ?? 30;
+                    trackEvent("export_fps_changed", {
+                      fps: fps,
+                    });
+                    props.setSelectedFps(fps);
+                  }}
+                  itemComponent={(props) => (
+                    <MenuItem<typeof KSelect.Item>
+                      as={KSelect.Item}
+                      item={props.item}
+                    >
+                      <KSelect.ItemLabel class="flex-1">
+                        {props.item.rawValue.label}
+                      </KSelect.ItemLabel>
+                    </MenuItem>
+                  )}
+                >
+                  <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect">
+                    <KSelect.Value<
+                      (typeof FPS_OPTIONS)[number]
+                    > class="flex-1 text-sm text-left truncate text-[--gray-500]">
+                      {(state) => <span>{state.selectedOption()?.label}</span>}
+                    </KSelect.Value>
+                    <KSelect.Icon>
+                      <IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
+                    </KSelect.Icon>
+                  </KSelect.Trigger>
+                  <KSelect.Portal>
+                    <PopperContent<typeof KSelect.Content>
+                      as={KSelect.Content}
+                      class={cx(topLeftAnimateClasses, "z-50")}
+                    >
+                      <MenuItemList<typeof KSelect.Listbox>
+                        class="max-h-32 overflow-y-auto"
+                        as={KSelect.Listbox}
+                      />
+                    </PopperContent>
+                  </KSelect.Portal>
+                </KSelect>
+              </div>
+            </Show>
+
             <Button
               variant="primary"
               class="w-full justify-center"
               onClick={() => exportWithSettings.mutate()}
             >
-              Export Video
+              Export {project.export?.format === 'gif' ? 'GIF' : 'Video'}
             </Button>
+
             <Show when={exportEstimates.latest}>
               {(est) => (
                 <div
@@ -445,7 +564,7 @@ function ExportButton(props: {
               {exportState.type == "idle" || exportState.type === "starting"
                 ? "Preparing to render..."
                 : exportState.type === "rendering"
-                ? `Rendering video (${exportState.renderedFrames}/${exportState.totalFrames} frames)`
+                ? `Rendering ${project.export?.format === 'gif' ? 'GIF' : 'video'} (${exportState.renderedFrames}/${exportState.totalFrames} frames)`
                 : "Exported successfully!"}
             </p>
           </div>
@@ -624,7 +743,7 @@ function ShareButton(props: {
         fallback={
           <Button
             disabled={uploadVideo.isPending}
-            onClick={(e) => uploadVideo.mutate()}
+            onClick={() => uploadVideo.mutate()}
             variant="primary"
             class="flex items-center space-x-1"
           >
@@ -648,7 +767,7 @@ function ShareButton(props: {
                 <Tooltip.Trigger>
                   <Button
                     disabled={uploadVideo.isPending}
-                    onClick={(e) => uploadVideo.mutate()}
+                    onClick={() => uploadVideo.mutate()}
                     variant="secondary"
                     class="flex items-center space-x-1"
                   >
@@ -723,7 +842,7 @@ function ShareButton(props: {
               {uploadState.type == "idle" || uploadState.type === "starting"
                 ? "Preparing to render..."
                 : uploadState.type === "rendering"
-                ? `Rendering video (${uploadState.renderedFrames}/${uploadState.totalFrames} frames)`
+                ? `Rendering ${project.export?.format === 'gif' ? 'GIF' : 'video'} (${uploadState.renderedFrames}/${uploadState.totalFrames} frames)`
                 : uploadState.type === "uploading"
                 ? `Uploading - ${Math.floor(uploadState.progress)}%`
                 : "Link copied to clipboard!"}

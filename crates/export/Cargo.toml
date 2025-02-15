@@ -14,7 +14,11 @@ cap-flags = { path = "../flags" }
 tokio.workspace = true
 tempfile = "3.12.0"
 image = "0.25.2"
+gifski = "1.12.2"
+imgref = "1.9.4"
+rgb = "0.8.36"
 mp4 = "0.14.0"
+rayon = "1.10.0"
 thiserror.workspace = true
 futures = "0.3.31"
 # tauri = { workspace = true }

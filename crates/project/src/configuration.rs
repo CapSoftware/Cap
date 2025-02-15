@@ -8,6 +8,40 @@ use specta::Type;
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
+pub enum ExportFormat {
+    #[default]
+    Mp4,
+    Gif,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum GifQuality {
+    #[default]
+    Standard,
+    High,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportConfiguration {
+    pub format: ExportFormat,
+    pub gif_quality: GifQuality,
+    pub gif_fps: u32,
+}
+
+impl Default for ExportConfiguration {
+    fn default() -> Self {
+        Self {
+            format: ExportFormat::Mp4,
+            gif_quality: GifQuality::Standard,
+            gif_fps: 15,
+        }
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
 pub enum AspectRatio {
     #[default]
     Wide,
@@ -396,6 +430,8 @@ pub struct ProjectConfiguration {
     #[serde(default)]
     pub timeline: Option<TimelineConfiguration>,
     pub motion_blur: Option<f32>,
+    #[serde(default)]
+    pub export: ExportConfiguration,
 }
 
 impl ProjectConfiguration {
@@ -424,7 +460,7 @@ impl ProjectConfiguration {
 
 impl Default for ProjectConfiguration {
     fn default() -> Self {
-        ProjectConfiguration {
+        Self {
             aspect_ratio: None,
             background: BackgroundConfiguration::default(),
             camera: Camera::default(),
@@ -433,6 +469,7 @@ impl Default for ProjectConfiguration {
             hotkeys: HotkeysConfiguration::default(),
             timeline: None,
             motion_blur: None,
+            export: ExportConfiguration::default(),
         }
     }
 }

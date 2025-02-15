@@ -81,8 +81,7 @@ impl ProjectRecordings {
                 let display = Video::new(&meta.path(&segment.display.path))
                     .expect("Failed to read display video");
                 let camera = segment.camera.as_ref().map(|camera| {
-                    Video::new(&meta.path(&camera.path))
-                        .expect("Failed to read camera video")
+                    Video::new(&meta.path(&camera.path)).expect("Failed to read camera video")
                 });
                 let audio = segment
                     .audio
@@ -102,8 +101,7 @@ impl ProjectRecordings {
                     let display = Video::new(&meta.path(&s.display.path))
                         .expect("Failed to read display video");
                     let camera = s.camera.as_ref().map(|camera| {
-                        Video::new(&meta.path(&camera.path))
-                            .expect("Failed to read camera video")
+                        Video::new(&meta.path(&camera.path)).expect("Failed to read camera video")
                     });
                     let audio = s
                         .audio
