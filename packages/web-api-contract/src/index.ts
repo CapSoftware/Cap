@@ -48,7 +48,7 @@ export const licenseContract = c.router({
     responses: {
       200: z.object({
         message: z.string(),
-        expiryDate: z.number(),
+        expiryDate: z.number().optional(),
         refresh: z.number(),
       }),
       403: z.object({ message: z.string() }),

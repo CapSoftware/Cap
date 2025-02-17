@@ -60,12 +60,18 @@ export default function Page() {
                   {license().licenseKey}
                 </pre>
               </div>
-              <div class="flex flex-col">
-                <label class="text-[--text-tertiary] text-sm">Expires</label>
-                <span class="text-[--text-secondary] mt-1 ml-0.5">
-                  {new Date(license().expiryDate).toUTCString()}
-                </span>
-              </div>
+              <Show when={license().expiryDate}>
+                {(expiry) => (
+                  <div class="flex flex-col">
+                    <label class="text-[--text-tertiary] text-sm">
+                      Expires
+                    </label>
+                    <span class="text-[--text-secondary] mt-1 ml-0.5">
+                      {new Date(expiry()).toUTCString()}
+                    </span>
+                  </div>
+                )}
+              </Show>
 
               {/* <p class="text-[--text-tertiary] text-sm pt-1">
                 Instance ID: {license().instanceId}

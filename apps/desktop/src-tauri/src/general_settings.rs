@@ -43,7 +43,7 @@ pub struct GeneralSettingsStore {
 #[serde(rename_all = "camelCase")]
 pub struct CommercialLicense {
     license_key: String,
-    expiry_date: u32,
+    expiry_date: Option<u32>,
     refresh: u32,
     activated_on: u32,
 }

@@ -6,6 +6,6 @@ pub struct Flags {
 }
 
 pub const FLAGS: Flags = Flags {
-    record_mouse_state: cfg!(debug_assertions),
-    split: cfg!(debug_assertions),
+    record_mouse_state: false,
+    split: false,
 };
