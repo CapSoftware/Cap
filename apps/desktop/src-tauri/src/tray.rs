@@ -3,6 +3,7 @@ use crate::{
     RecordingStarted, RecordingStopped, RequestNewScreenshot, RequestOpenSettings,
     RequestStartRecording, RequestStopRecording,
 };
+use cap_fail::fail;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::menu::{MenuId, PredefinedMenuItem};

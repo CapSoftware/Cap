@@ -12,7 +12,7 @@ name = "desktop_solid_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.0.3", features = [] }
+tauri-build = { version = "2.0.5", features = [] }
 
 [target.'cfg(target_os = "macos")'.build-dependencies]
 swift-rs = { version = "1.0.6", features = ["build"] }
@@ -41,6 +41,7 @@ tauri-plugin-oauth = { git = "https://github.com/FabianLars/tauri-plugin-oauth",
 tauri-plugin-window-state = "2.2.0"
 tauri-plugin-positioner = "2.2.0"
 tauri-plugin-deep-link = "2.2.0"
+tauri-plugin-clipboard-manager = "2.2.1"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -85,7 +86,8 @@ tracing-subscriber = "0.3.19"
 tracing-appender = "0.2.3"
 dirs = "6.0.0"
 relative-path = "1.9.3"
-tauri-plugin-clipboard-manager = "2.2.1"
+cap-fail = { version = "0.1.0", path = "../../../crates/fail" }
+tokio-stream = { version = "0.1.17", features = ["sync"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"

@@ -158,6 +158,16 @@ export default function () {
           </Button>
           <ChangelogButton />
           <GiftButton />
+          {import.meta.env.DEV && (
+            <button
+              type="button"
+              onClick={() => {
+                new WebviewWindow("debug", { url: "/debug" });
+              }}
+            >
+              <IconLucideBug class="text-gray-400 hover:text-gray-500" />
+            </button>
+          )}
         </div>
       );
 
@@ -346,6 +356,7 @@ import {
   getCurrentWebviewWindow,
   WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
+import { Webview } from "@tauri-apps/api/webview";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -765,17 +776,13 @@ function MicrophoneSelect(props: {
 
   type Option = { name: string; deviceId: string };
 
-  const [loading, setLoading] = createSignal(false);
   const handleMicrophoneChange = async (item: Option | null) => {
     if (!item || !props.options) return;
 
-    setLoading(true);
-    await props.setOptions
-      .mutateAsync({
-        ...props.options,
-        audioInputName: item.deviceId !== "" ? item.name : null,
-      })
-      .finally(() => setLoading(false));
+    await props.setOptions.mutateAsync({
+      ...props.options,
+      audioInputName: item.deviceId !== "" ? item.name : null,
+    });
     if (!item.deviceId) setDbs();
 
     trackEvent("microphone_selected", {
@@ -850,7 +857,7 @@ function MicrophoneSelect(props: {
         }}
       >
         <KSelect.Trigger
-          disabled={loading()}
+          disabled={props.setOptions.isPending}
           class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10"
         >
           <Show when={dbs()}>

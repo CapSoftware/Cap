@@ -916,6 +916,7 @@ dependencies = [
  "base64 0.22.1",
  "cap-editor",
  "cap-export",
+ "cap-fail",
  "cap-flags",
  "cap-media",
  "cap-project",
@@ -976,6 +977,7 @@ dependencies = [
  "tauri-specta",
  "tempfile",
  "tokio",
+ "tokio-stream",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -1023,6 +1025,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-fail"
+version = "0.1.0"
+dependencies = [
+ "inventory",
+]
+
+[[package]]
 name = "cap-flags"
 version = "0.1.0"
 dependencies = [
@@ -1042,6 +1051,7 @@ name = "cap-media"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "cap-fail",
  "cap-flags",
  "cap-gpu-converters",
  "cap-project",
@@ -3607,6 +3617,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.90",
+]
+
+[[package]]
+name = "inventory"
+version = "0.3.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54b12ebb6799019b044deaf431eadfe23245b259bba5a2c0796acec3943a3cdb"
+dependencies = [
+ "rustversion",
 ]
 
 [[package]]
@@ -6763,6 +6782,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ccbb212565d2dc177bc15ecb7b039d66c4490da892436a4eee5b394d620c9bc"
 dependencies = [
  "paste",
+ "serde_json",
  "specta-macros",
  "thiserror 1.0.63",
 ]
@@ -7887,6 +7907,18 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "tokio",
+]
+
+[[package]]
+name = "tokio-stream"
+version = "0.1.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eca58d7bba4a75707817a2c44174253f9236b2d5fbd055602e9d5c07c139a047"
+dependencies = [
+ "futures-core",
+ "pin-project-lite",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

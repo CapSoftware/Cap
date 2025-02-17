@@ -169,6 +169,18 @@ async performHapticFeedback(pattern: HapticPattern | null, time: HapticPerforman
 },
 async getWallpaperPath(filename: string) : Promise<string> {
     return await TAURI_INVOKE("get_wallpaper_path", { filename });
+},
+async listFails() : Promise<{ [key in string]: boolean }> {
+    return await TAURI_INVOKE("list_fails");
+},
+async setFail(name: string, value: boolean) : Promise<void> {
+    await TAURI_INVOKE("set_fail", { name, value });
+},
+async getLiveData(name: string) : Promise<JsonValue> {
+    return await TAURI_INVOKE("get_live_data", { name });
+},
+async subscribeLiveData(name: string, channel: TAURI_CHANNEL<JsonValue>) : Promise<void> {
+    await TAURI_INVOKE("subscribe_live_data", { name, channel });
 }
 }
 
@@ -257,6 +269,7 @@ export type HotkeyAction = "startRecording" | "stopRecording" | "restartRecordin
 export type HotkeysConfiguration = { show: boolean }
 export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } }
 export type JsonValue<T> = [T]
+export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type MultipleSegment = { display: Display; camera?: CameraMeta | null; audio?: AudioMeta | null; cursor?: string | null }
 export type MultipleSegments = { segments: MultipleSegment[]; cursors: { [key in string]: string } }
 export type NewNotification = { title: string; body: string; is_error: boolean }

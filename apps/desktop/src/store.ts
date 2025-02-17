@@ -1,3 +1,4 @@
+import { Channel } from "@tauri-apps/api/core";
 import { Store } from "@tauri-apps/plugin-store";
 
 import {
@@ -5,6 +6,7 @@ import {
   type ProjectConfiguration,
   type HotkeysStore,
   type GeneralSettingsStore,
+  commands,
 } from "~/utils/tauri";
 
 let _store: Promise<Store> | undefined;
@@ -73,3 +75,18 @@ export const generalSettingsStore = {
       s.onKeyChange<GeneralSettingsStore>("general_settings", fn)
     ),
 };
+
+function createLiveData<T>(name: string) {
+  return {
+    get: () => {
+      commands.getLiveData(name);
+    },
+    subscribe: (cb: (data: T) => void) => {
+      const channel = new Channel<T>();
+      channel.onmessage = (data) => {
+        cb(data);
+      };
+      commands.subscribeLiveData(name, channel);
+    },
+  };
+}

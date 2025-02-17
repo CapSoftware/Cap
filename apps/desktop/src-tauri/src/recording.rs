@@ -13,6 +13,7 @@ use crate::{
     App, CurrentRecordingChanged, MutableState, NewRecordingAdded, PreCreatedVideo,
     RecordingStarted, RecordingStopped, UploadMode,
 };
+use cap_fail::fail;
 use cap_flags::FLAGS;
 use cap_media::feeds::CameraFeed;
 use cap_media::sources::{CaptureScreen, CaptureWindow};
@@ -81,28 +82,23 @@ pub async fn start_recording(
         .map(|settings| settings.auto_create_shareable_link)
         .unwrap_or(false);
 
-    if auto_create_shareable_link {
-        sentry::configure_scope(|scope| {
-            scope.set_tag("task", "auto_create_shareable_link");
-        });
+    if let Ok(Some(auth)) = AuthStore::get(&app) {
+        if auto_create_shareable_link && auth.is_upgraded() {
+            // Pre-create the video and get the shareable link
+            if let Ok(s3_config) = get_s3_config(&app, false, None).await {
+                let link = web_api::make_url(format!("/s/{}", s3_config.id()));
 
-        if let Ok(Some(auth)) = AuthStore::get(&app) {
-            if auth.is_upgraded() {
-                // Pre-create the video and get the shareable link
-                if let Ok(s3_config) = get_s3_config(&app, false, None).await {
-                    let link = web_api::make_url(format!("/s/{}", s3_config.id()));
+                state.pre_created_video = Some(PreCreatedVideo {
+                    id: s3_config.id().to_string(),
+                    link: link.clone(),
+                    config: s3_config,
+                });
 
-                    state.pre_created_video = Some(PreCreatedVideo {
-                        id: s3_config.id().to_string(),
-                        link: link.clone(),
-                        config: s3_config,
-                    });
-
-                    println!("Pre-created shareable link: {}", link);
-                };
-            }
+                println!("Pre-created shareable link: {}", link);
+            };
         }
     }
+
     let (actor, actor_done_rx) = cap_recording::spawn_recording_actor(
         id,
         recording_dir,
