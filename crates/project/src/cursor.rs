@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
+use crate::XY;
+
 #[derive(Serialize, Deserialize, Clone, Type, Debug)]
 pub struct CursorMoveEvent {
     pub active_modifiers: Vec<String>,
@@ -28,7 +30,13 @@ pub struct CursorClickEvent {
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone)]
 #[serde(transparent)]
-pub struct CursorImages(pub HashMap<String, PathBuf>);
+pub struct CursorImages(pub HashMap<String, CursorImage>);
+
+#[derive(Default, Serialize, Deserialize, Debug, Clone)]
+pub struct CursorImage {
+    pub path: PathBuf,
+    pub hotspot: XY<f64>,
+}
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone)]
 pub struct CursorData {

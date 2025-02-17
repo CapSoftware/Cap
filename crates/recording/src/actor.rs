@@ -478,10 +478,14 @@ async fn stop_recording(
                 },
                 cursors: cursors
                     .into_values()
-                    .map(|(file_name, id)| {
+                    .map(|cursor| {
                         (
-                            id.to_string(),
-                            RelativePathBuf::from("content/cursors").join(&file_name),
+                            cursor.id.to_string(),
+                            CursorMeta {
+                                image_path: RelativePathBuf::from("content/cursors")
+                                    .join(&cursor.file_name),
+                                hotspot: cursor.hotspot,
+                            },
                         )
                     })
                     .collect(),

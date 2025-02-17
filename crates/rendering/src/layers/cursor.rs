@@ -2,18 +2,40 @@ use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
 use cap_project::*;
-use wgpu::{include_wgsl, util::DeviceExt};
+use wgpu::{include_wgsl, util::DeviceExt, FilterMode};
 
 use crate::{
     frame_pipeline::{FramePipeline, FramePipelineState},
     zoom::InterpolatedZoom,
-    Coord, DecodedSegmentFrames, ProjectUniforms, RawDisplayUVSpace, STANDARD_CURSOR_HEIGHT,
+    Coord, DecodedSegmentFrames, ProjectUniforms, RawDisplayUVSpace, RenderVideoConstants,
+    STANDARD_CURSOR_HEIGHT,
 };
 
-pub struct CursorLayer;
+pub struct CursorLayer {
+    uniform_buffer: wgpu::Buffer,
+    texture_sampler: wgpu::Sampler,
+}
 
 impl CursorLayer {
+    pub fn new(device: &wgpu::Device) -> Self {
+        Self {
+            uniform_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Cursor Uniform Buffer"),
+                contents: bytemuck::cast_slice(&[CursorUniforms::default()]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }),
+            texture_sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                mag_filter: FilterMode::Linear,
+                min_filter: FilterMode::Linear,
+                mipmap_filter: FilterMode::Linear,
+                anisotropy_clamp: 4,
+                ..Default::default()
+            }),
+        }
+    }
+
     pub fn render(
+        &self,
         pipeline: &mut FramePipeline,
         segment_frames: &DecodedSegmentFrames,
         resolution_base: XY<u32>,
@@ -76,7 +98,7 @@ impl CursorLayer {
             return;
         };
 
-        let cursor_size = cursor_texture.size();
+        let cursor_size = cursor_texture.inner.size();
         let aspect_ratio = cursor_size.width as f32 / cursor_size.height as f32;
 
         let cursor_size_percentage = if uniforms.cursor_size <= 0.0 {
@@ -113,7 +135,7 @@ impl CursorLayer {
         let display_size =
             ProjectUniforms::display_size(&constants.options, &uniforms.project, resolution_base);
 
-        let cursor_uniforms = CursorUniforms {
+        let uniforms = CursorUniforms {
             position: [relative_position[0], relative_position[1], 0.0, 0.0],
             size: [normalized_size[0], normalized_size[1], 0.0, 0.0],
             output_size: [
@@ -130,17 +152,16 @@ impl CursorLayer {
             last_click_time,
             velocity,
             motion_blur_amount,
-            _alignment: [0.0; 7],
+            hotspot: [
+                cursor_texture.hotspot.x as f32,
+                cursor_texture.hotspot.y as f32,
+            ],
+            _alignment: [0.0; 5],
         };
 
-        let cursor_uniform_buffer =
-            constants
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Cursor Uniform Buffer"),
-                    contents: bytemuck::cast_slice(&[cursor_uniforms]),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                });
+        constants
+            .queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
         let cursor_bind_group = constants
             .device
@@ -149,21 +170,19 @@ impl CursorLayer {
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: cursor_uniform_buffer.as_entire_binding(),
+                        resource: self.uniform_buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
                         resource: wgpu::BindingResource::TextureView(
-                            &cursor_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                            &cursor_texture
+                                .inner
+                                .create_view(&wgpu::TextureViewDescriptor::default()),
                         ),
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: wgpu::BindingResource::Sampler(
-                            &constants
-                                .device
-                                .create_sampler(&wgpu::SamplerDescriptor::default()),
-                        ),
+                        resource: wgpu::BindingResource::Sampler(&self.texture_sampler),
                     },
                 ],
                 label: Some("Cursor Bind Group"),
@@ -184,7 +203,7 @@ pub struct CursorPipeline {
 }
 
 #[repr(C, align(16))]
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable, Default)]
 pub struct CursorUniforms {
     position: [f32; 4],
     size: [f32; 4],
@@ -194,7 +213,8 @@ pub struct CursorUniforms {
     last_click_time: f32,
     velocity: [f32; 2],
     motion_blur_amount: f32,
-    _alignment: [f32; 7],
+    hotspot: [f32; 2],
+    _alignment: [f32; 5],
 }
 
 pub fn find_cursor_event(cursor: &CursorEvents, time: f32) -> &CursorMoveEvent {

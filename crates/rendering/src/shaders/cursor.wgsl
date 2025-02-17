@@ -12,6 +12,7 @@ struct Uniforms {
     last_click_time: f32,
     velocity: vec2<f32>,
     motion_blur_amount: f32,
+    hotspot: vec2<f32>,
     _alignment: vec4<f32>,
 };
 
@@ -40,12 +41,9 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
         vec2<f32>(1.0, 1.0)
     );
 
-    let pos = positions[vertex_index];
+    let pos = positions[vertex_index] - uniforms.hotspot;
     let size = uniforms.size.xy;
     let screen_pos = uniforms.position.xy;
-
-    // Calculate click animation scale factor
-    let time_since_click = uniforms.last_click_time;
 
     let scaled_size = size * uniforms.cursor_size;
 
