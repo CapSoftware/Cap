@@ -1706,6 +1706,14 @@ fn list_screenshots(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMet
 #[specta::specta]
 async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
     println!("Checking upgraded status and updating...");
+
+    // Check for commercial license first
+    if let Ok(Some(settings)) = GeneralSettingsStore::get(&app) {
+        if settings.commercial_license.is_some() {
+            return Ok(true);
+        }
+    }
+
     let Ok(Some(mut auth)) = AuthStore::get(&app) else {
         println!("No auth found, clearing auth store");
         AuthStore::set(&app, None).map_err(|e| e.to_string())?;

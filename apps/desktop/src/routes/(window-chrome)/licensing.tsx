@@ -67,9 +67,9 @@ export default function Page() {
                 </span>
               </div>
 
-              <p class="text-[--text-tertiary] text-sm pt-1">
+              {/* <p class="text-[--text-tertiary] text-sm pt-1">
                 Instance ID: {license().instanceId}
-              </p>
+              </p> */}
               <div class="flex flex-row justify-end">
                 <Button variant="destructive">Deactivate License Key</Button>
               </div>
@@ -138,9 +138,9 @@ function LicenseKeyActivate(props: {
               >
                 Submit
               </Button>
-              <p class="text-[--text-tertiary] text-sm pt-1">
+              {/* <p class="text-[--text-tertiary] text-sm pt-1">
                 Instance ID: {generalSettings().instanceId}
-              </p>
+              </p> */}
             </div>
           );
         }}

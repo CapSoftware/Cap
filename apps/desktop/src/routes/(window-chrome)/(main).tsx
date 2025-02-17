@@ -136,7 +136,19 @@ export default function () {
           Feedback
         </Button>
         <ChangelogButton />
-        <GiftButton />
+        <Show when={!license.isLoading && license.data?.type === "personal"}>
+          <button
+            type="button"
+            onClick={() => commands.showWindow("Upgrade")}
+            class="relative"
+          >
+            <IconLucideGift class="size-[1.10rem] text-gray-400 hover:text-gray-500" />
+            <div
+              style={{ "background-color": "#FF4747" }}
+              class="block z-10 absolute top-0 right-0 size-1.5 rounded-full animate-bounce"
+            />
+          </button>
+        </Show>
       </div>
     );
 
@@ -167,10 +179,10 @@ export default function () {
                 } rounded-lg px-1.5 py-0.5`}
               >
                 {license.data?.type === "commercial"
-                  ? "Commercial"
+                  ? "Commercial License"
                   : license.data?.type === "pro"
                   ? "Pro"
-                  : "Personal"}
+                  : "Personal License"}
               </span>
             </Suspense>
           </ErrorBoundary>
@@ -1042,25 +1054,5 @@ function ChangelogButton() {
         />
       )}
     </button>
-  );
-}
-
-function GiftButton() {
-  const [isUpgraded] = createResource(() => commands.checkUpgradedAndUpdate());
-
-  return (
-    <Show when={!isUpgraded()}>
-      <button
-        type="button"
-        onClick={() => commands.showWindow("Upgrade")}
-        class="relative"
-      >
-        <IconLucideGift class="size-[1.10rem] text-gray-400 hover:text-gray-500" />
-        <div
-          style={{ "background-color": "#FF4747" }}
-          class="block z-10 absolute top-0 right-0 size-1.5 rounded-full animate-bounce"
-        />
-      </button>
-    </Show>
   );
 }

@@ -129,7 +129,7 @@ impl CapWindowId {
             Self::Editor { .. } => (900.0, 800.0),
             Self::Settings => (600.0, 450.0),
             Self::Camera => (460.0, 920.0),
-            Self::Upgrade => (800.0, 850.0),
+            Self::Upgrade => (850.0, 850.0),
             _ => return None,
         })
     }
@@ -205,6 +205,7 @@ impl ShowCapWindow {
                 .focused(true)
                 .always_on_top(true)
                 .maximized(false)
+                .shadow(true)
                 .transparent(true)
                 .center()
                 .build()?,
