@@ -16,41 +16,45 @@ const targetDir = path.join(__root, "target");
 
 const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
 
+// IMPORTANT: Increment this number when the setup script changes
+const SETUP_VERSION_NUMBER = 1;
+
 async function main() {
+  await fs.mkdir(targetDir, { recursive: true });
+
   if (process.platform === "darwin") {
-    const NATIVE_DEPS_URL =
-      "https://github.com/spacedriveapp/native-deps/releases/latest/download";
+    const NATIVE_DEPS_VERSION = "v0.25";
+    const NATIVE_DEPS_URL = `https://github.com/spacedriveapp/native-deps/releases/download/${NATIVE_DEPS_VERSION}`;
 
     const NATIVE_DEPS_ASSETS = {
       x86_64: "native-deps-x86_64-darwin-apple.tar.xz",
       aarch64: "native-deps-aarch64-darwin-apple.tar.xz",
     };
 
-    await fs.mkdir(targetDir, { recursive: true });
+    const nativeDepsTar = `native-deps-${NATIVE_DEPS_VERSION}.tar.xz`;
+    const nativeDepsTarPath = path.join(targetDir, nativeDepsTar);
+    let downloadedNativeDeps = false;
 
-    const nativeDepsTar = path.join(targetDir, "/native-deps.tar.xz");
-    if (!(await fileExists(nativeDepsTar))) {
+    if (!(await fileExists(nativeDepsTarPath))) {
+      console.log(`Downloading ${nativeDepsTar}`);
       const nativeDepsBytes = await fetch(
         `${NATIVE_DEPS_URL}/${NATIVE_DEPS_ASSETS[arch]}`
       )
         .then((r) => r.blob())
         .then((b) => b.arrayBuffer());
-      await fs.writeFile(nativeDepsTar, Buffer.from(nativeDepsBytes));
+      await fs.writeFile(nativeDepsTarPath, Buffer.from(nativeDepsBytes));
       console.log("Downloaded native deps");
-    } else console.log("Using cached native-deps.tar.xz");
+      downloadedNativeDeps = true;
+    } else console.log(`Using cached ${nativeDepsTar}`);
 
-    const nativeDepsDir = path.join(targetDir, "/native-deps");
+    const nativeDepsFolder = `native-deps`;
+    const nativeDepsDir = path.join(targetDir, nativeDepsFolder);
     const frameworkDir = path.join(nativeDepsDir, "Spacedrive.framework");
-    if (!(await fileExists(nativeDepsDir))) {
+    if (downloadedNativeDeps || !(await fileExists(nativeDepsDir))) {
       await fs.mkdir(nativeDepsDir, { recursive: true });
-      await exec(
-        `tar xf ${path.join(
-          targetDir,
-          "native-deps.tar.xz"
-        )} -C ${nativeDepsDir}`
-      );
-      console.log("Extracted native-deps");
-    } else console.log("Using cached native-deps");
+      await exec(`tar xf ${nativeDepsTarPath} -C ${nativeDepsDir}`);
+      console.log(`Extracted ${nativeDepsFolder}`);
+    } else console.log(`Using cached ${nativeDepsFolder}`);
 
     await trimMacOSFramework(frameworkDir);
     console.log("Trimmed .framework");
@@ -81,19 +85,21 @@ async function main() {
     }
     console.log("Copied ffmpeg dylibs to target/debug");
   } else if (process.platform === "win32") {
-    const FFMPEG_ZIP_NAME = "ffmpeg-7.1-full_build-shared";
-    const FFMPEG_ZIP_URL = `https://github.com/GyanD/codexffmpeg/releases/download/7.1/${FFMPEG_ZIP_NAME}.zip`;
+    const FFMPEG_VERSION = "7.1";
+    const FFMPEG_ZIP_NAME = `ffmpeg-${FFMPEG_VERSION}-full_build-shared`;
+    const FFMPEG_ZIP_URL = `https://github.com/GyanD/codexffmpeg/releases/download/${FFMPEG_VERSION}/${FFMPEG_ZIP_NAME}.zip`;
 
     await fs.mkdir(targetDir, { recursive: true });
 
-    const ffmpegZip = path.join(targetDir, "ffmpeg.zip");
-    if (!(await fileExists(ffmpegZip))) {
+    const ffmpegZip = `ffmpeg-${FFMPEG_VERSION}.zip`;
+    const ffmpegZipPath = path.join(targetDir, ffmpegZip);
+    if (!(await fileExists(ffmpegZipPath))) {
       const ffmpegZipBytes = await fetch(FFMPEG_ZIP_URL)
         .then((r) => r.blob())
         .then((b) => b.arrayBuffer());
-      await fs.writeFile(ffmpegZip, Buffer.from(ffmpegZipBytes));
-      console.log("Downloaded ffmpeg.zip");
-    } else console.log("Using cached ffmpeg.zip");
+      await fs.writeFile(ffmpegZipPath, Buffer.from(ffmpegZipBytes));
+      console.log(`Downloaded ${ffmpegZip}`);
+    } else console.log(`Using cached ${ffmpegZip}`);
 
     const ffmpegDir = path.join(targetDir, "ffmpeg");
     if (!(await fileExists(ffmpegDir))) {
