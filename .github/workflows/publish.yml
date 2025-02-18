@@ -86,6 +86,7 @@ jobs:
           api-key: ${{ secrets.CN_API_KEY }}
 
       - name: Create draft GH release
+        id: create_gh_release
         # TODO: Change to stable version when available
         uses: softprops/action-gh-release@v2
         with:
@@ -106,8 +107,9 @@ jobs:
                 method: "POST",
                 body: JSON.stringify({
                   type: "release-ready",
-                  version: "${{ steps.read_version.outputs.value }}",
                   tag: "${{ steps.create_tag.outputs.tag_name }}",
+                  version: "${{ steps.read_version.outputs.value }}",
+                  releaseUrl: ${{ steps.create_gh_release.outputs.url }},
                   interactionId: "${{ inputs.interactionId }}"
                 }),
                 headers: {
