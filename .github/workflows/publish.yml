@@ -45,7 +45,6 @@ jobs:
             const tag = "cap-v${{ steps.read_version.outputs.value }}";
             const tagRef = `tags/${tag}`;
 
-
             const TAG_EXISTED = "tag_existed";
             const TAG_NAME = "tag_name";
 
@@ -105,7 +104,7 @@ jobs:
           script: |
             async function main() {
               const token = await core.getIDToken("cap-discord-bot");
-              const cnReleaseId = JSON.parse(`${{ steps.create_gh_release.outputs.stdout }}`).id;
+              const cnReleaseId = JSON.parse(`${{ steps.create_cn_release.outputs.stdout }}`).id;
 
               const resp = await fetch("https://cap-discord-bot.brendonovich.workers.dev/github-workflow", {
                 method: "POST",
