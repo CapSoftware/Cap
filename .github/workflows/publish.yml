@@ -23,6 +23,7 @@ jobs:
       needs_release: ${{ steps.create_tag.outputs.tag_existed != 'true' }}
     permissions:
       contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
