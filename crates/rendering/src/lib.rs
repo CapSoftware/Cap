@@ -784,7 +784,7 @@ impl ProjectUniforms {
 
                 // Calculate camera size based on zoom
                 let base_size = project.camera.size / 100.0;
-                let zoom_size = project.camera.zoom_size.unwrap_or(60.0) / 100.0;
+                let zoom_size = project.camera.zoom_size / 100.0;
 
                 let zoomed_size =
                     (zoom.t as f32) * zoom_size * base_size + (1.0 - zoom.t as f32) * base_size;

@@ -12,7 +12,6 @@ use tauri::AppHandle;
 pub async fn export_video(
     app: AppHandle,
     video_id: String,
-    project: ProjectConfiguration,
     progress: tauri::ipc::Channel<RenderProgress>,
     force: bool,
     fps: u32,
@@ -62,7 +61,7 @@ pub async fn export_video(
         .ok();
 
     // Create a modified project configuration that accounts for different video lengths
-    let mut modified_project = project.clone();
+    let mut modified_project = editor_instance.project_config.1.borrow().clone();
     if let Some(timeline) = &mut modified_project.timeline {
         // Ensure timeline duration matches the longest video
         for segment in timeline.segments.iter_mut() {

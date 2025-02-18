@@ -13,6 +13,7 @@ mod audio_meter;
 mod editor_window;
 mod export;
 mod fake_window;
+mod presets;
 mod tray;
 mod upload;
 mod web_api;
@@ -41,6 +42,7 @@ use mp4::Mp4Reader;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use notifications::NotificationType;
 use png::{ColorType, Encoder};
+use presets::PresetsStore;
 use relative_path::RelativePathBuf;
 use scap::capturer::Capturer;
 use scap::frame::Frame;
@@ -2002,6 +2004,7 @@ pub async fn run() {
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
         .typ::<AuthStore>()
+        .typ::<presets::PresetsStore>()
         .typ::<hotkeys::HotkeysStore>()
         .typ::<general_settings::GeneralSettingsStore>()
         .typ::<cap_flags::Flags>();

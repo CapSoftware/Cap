@@ -210,7 +210,6 @@ function ExportButton(props: {
       try {
         const videoPath = await commands.exportVideo(
           videoId,
-          project,
           progress,
           true,
           props.selectedFps,
@@ -573,7 +572,6 @@ function ShareButton(props: {
 
         await commands.exportVideo(
           videoId,
-          project,
           progress,
           true,
           props.selectedFps(),

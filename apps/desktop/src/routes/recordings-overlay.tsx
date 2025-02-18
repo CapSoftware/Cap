@@ -26,7 +26,6 @@ import { createStore, produce, SetStoreFunction } from "solid-js/store";
 import IconLucideClock from "~icons/lucide/clock";
 
 import { commands, events, RenderProgress, UploadResult } from "~/utils/tauri";
-import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
 import { createPresets } from "~/utils/createPresets";
 import { FPS, OUTPUT_SIZE } from "./editor/context";
 import { authStore } from "~/store";
@@ -587,7 +586,6 @@ function createRecordingMutations(
           // First try to get existing rendered video
           const outputPath = await commands.exportVideo(
             mediaId,
-            presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
             progress,
             false,
             FPS,
@@ -680,7 +678,6 @@ function createRecordingMutations(
         // Always force re-render when saving
         const outputPath = await commands.exportVideo(
           mediaId,
-          presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
           progress,
           true, // Force re-render
           FPS,
@@ -772,7 +769,6 @@ function createRecordingMutations(
           // First try to get existing rendered video
           await commands.exportVideo(
             mediaId,
-            presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
             progress,
             false,
             FPS,

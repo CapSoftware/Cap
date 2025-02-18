@@ -1,4 +1,4 @@
-import { createSignal, onCleanup, onMount } from "solid-js";
+import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { Button } from "@cap/ui-solid";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as shell from "@tauri-apps/plugin-shell";
@@ -172,28 +172,24 @@ const signInAction = action(async (planType: "yearly" | "monthly") => {
   }
 });
 
-export default function Page() {
-  const proFeatures = [
-    "Commercial License Included",
-    "Unlimited cloud storage & Shareable links",
-    "Connect custom S3 storage bucket",
-    "Advanced teams features",
-    "Unlimited views",
-    "Password protected videos",
-    "Advanced analytics",
-    "Priority support",
-  ];
+const proFeatures = [
+  "Commercial License Included",
+  "Unlimited cloud storage & Shareable links",
+  "Connect custom S3 storage bucket",
+  "Advanced teams features",
+  "Unlimited views",
+  "Password protected videos",
+  "Advanced analytics",
+  "Priority support",
+];
 
+export default function Page() {
   const [isAnnual, setIsAnnual] = createSignal(true);
   const [isCommercialAnnual, setIsCommercialAnnual] = createSignal(true);
   const [upgradeComplete, setUpgradeComplete] = createSignal(false);
   const [loading, setLoading] = createSignal(false);
-  const [isAuthenticated, setIsAuthenticated] = createSignal(true);
-  const [licenseKey, setLicenseKey] = createSignal("");
   const signIn = useAction(signInAction);
-  const submission = useSubmission(signInAction);
   const license = createLicenseQuery();
-  const navigate = useNavigate();
 
   const resetLicense = createMutation(() => ({
     mutationFn: async () => {
@@ -231,16 +227,6 @@ export default function Page() {
       license.refetch();
     },
   }));
-
-  const togglePricing = () => {
-    console.log("Toggling pricing plan");
-    setIsAnnual(!isAnnual());
-  };
-
-  const toggleCommercialPricing = () => {
-    console.log("Toggling commercial pricing plan");
-    setIsCommercialAnnual(!isCommercialAnnual());
-  };
 
   const openCheckoutInExternalBrowser = async () => {
     console.log("Opening checkout in external browser");
@@ -298,38 +284,6 @@ export default function Page() {
       } else {
         throw resp.body;
       }
-    },
-  }));
-
-  const activateLicenseKey = createMutation(() => ({
-    mutationFn: async (vars: { licenseKey: string }) => {
-      const generalSettings = await generalSettingsStore.get();
-      if (!generalSettings?.instanceId) {
-        throw new Error("No instance ID found");
-      }
-      const resp = await licenseApiClient.activateCommercialLicense({
-        headers: {
-          licensekey: vars.licenseKey,
-          instanceid: generalSettings.instanceId,
-        },
-        body: { reset: false },
-      });
-
-      if (resp.status === 200)
-        return { ...resp.body, licenseKey: vars.licenseKey };
-      if (typeof resp.body === "object" && resp.body && "message" in resp.body)
-        throw resp.body.message;
-      throw new Error((resp.body as any).toString());
-    },
-    onSuccess: async (value) => {
-      await generalSettingsStore.set({
-        commercialLicense: {
-          activatedOn: Date.now(),
-          expiryDate: value.expiryDate,
-          refresh: value.refresh,
-          licenseKey: value.licenseKey,
-        },
-      });
     },
   }));
 
@@ -482,21 +436,25 @@ export default function Page() {
                     </pre>
                   </div>
 
-                  <div class="space-y-2">
-                    <label class="text-sm font-medium text-[--text-primary]">
-                      Expiration Date
-                    </label>
-                    <div class="w-full p-3 bg-gray-50 dark:bg-[--gray-800] rounded-lg border border-gray-200 dark:border-[--gray-700] text-sm text-[--text-secondary]">
-                      {new Date(license.data.expiryDate).toLocaleDateString(
-                        undefined,
-                        {
-                          year: "numeric",
-                          month: "long",
-                          day: "numeric",
-                        }
-                      )}
-                    </div>
-                  </div>
+                  <Show when={license.data.expiryDate}>
+                    {(expiryDate) => (
+                      <div class="space-y-2">
+                        <label class="text-sm font-medium text-[--text-primary]">
+                          Expiration Date
+                        </label>
+                        <div class="w-full p-3 bg-gray-50 dark:bg-[--gray-800] rounded-lg border border-gray-200 dark:border-[--gray-700] text-sm text-[--text-secondary]">
+                          {new Date(expiryDate()).toLocaleDateString(
+                            undefined,
+                            {
+                              year: "numeric",
+                              month: "long",
+                              day: "numeric",
+                            }
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </Show>
 
                   <div class="pt-4 border-t border-gray-200 dark:border-[--gray-700]">
                     <Button
@@ -575,7 +533,7 @@ export default function Page() {
                           }
                           value={!isCommercialAnnual() ? "on" : "off"}
                           class="peer inline-flex h-4 w-8 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent bg-[--gray-400] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"
-                          onClick={toggleCommercialPricing}
+                          onClick={() => setIsCommercialAnnual((v) => !v)}
                         >
                           <span
                             data-state={
@@ -601,31 +559,8 @@ export default function Page() {
                           : "Purchase License"}
                       </button>
                     </div>
-                    <div class="px-6 pt-0">
-                      <p class="text-[--text-primary] text-sm mb-2">
-                        Already have a license key?
-                      </p>
-                      <div class="h-[76px]">
-                        <Input
-                          placeholder="Enter license key"
-                          value={licenseKey()}
-                          onInput={(e) => setLicenseKey(e.currentTarget.value)}
-                        />
-                        <Button
-                          class="mt-2 w-full relative"
-                          disabled={activateLicenseKey.isPending}
-                          onClick={() =>
-                            activateLicenseKey.mutate({
-                              licenseKey: licenseKey(),
-                            })
-                          }
-                        >
-                          <div class="w-full flex justify-center">
-                            Activate License
-                          </div>
-                        </Button>
-                      </div>
-                    </div>
+                    <LicenseKeyActivation />
+
                     <div class="flex items-center px-6 pt-0 pb-6">
                       <div class="space-y-6">
                         <div>
@@ -692,7 +627,7 @@ export default function Page() {
                           data-state={isAnnual() ? "unchecked" : "checked"}
                           value={isAnnual() ? "on" : "off"}
                           class="peer inline-flex h-4 w-8 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent dark:bg-[#3F75E0] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 bg-[--blue-400]"
-                          onClick={togglePricing}
+                          onClick={() => setIsAnnual((v) => !v)}
                         >
                           <span
                             data-state={isAnnual() ? "unchecked" : "checked"}
@@ -739,6 +674,68 @@ export default function Page() {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+function LicenseKeyActivation() {
+  const [licenseKey, setLicenseKey] = createSignal("");
+
+  const activateLicenseKey = createMutation(() => ({
+    mutationFn: async (vars: { licenseKey: string }) => {
+      const generalSettings = await generalSettingsStore.get();
+      if (!generalSettings?.instanceId) {
+        throw new Error("No instance ID found");
+      }
+      const resp = await licenseApiClient.activateCommercialLicense({
+        headers: {
+          licensekey: vars.licenseKey,
+          instanceid: generalSettings.instanceId,
+        },
+        body: { reset: false },
+      });
+
+      if (resp.status === 200)
+        return { ...resp.body, licenseKey: vars.licenseKey };
+      if (typeof resp.body === "object" && resp.body && "message" in resp.body)
+        throw resp.body.message;
+      throw new Error((resp.body as any).toString());
+    },
+    onSuccess: async (value) => {
+      await generalSettingsStore.set({
+        commercialLicense: {
+          activatedOn: Date.now(),
+          expiryDate: value.expiryDate ?? null,
+          refresh: value.refresh,
+          licenseKey: value.licenseKey,
+        },
+      });
+    },
+  }));
+
+  return (
+    <div class="px-6 pt-0">
+      <p class="text-[--text-primary] text-sm mb-2">
+        Already have a license key?
+      </p>
+      <div class="h-[76px]">
+        <Input
+          placeholder="Enter license key"
+          value={licenseKey()}
+          onInput={(e) => setLicenseKey(e.currentTarget.value)}
+        />
+        <Button
+          class="mt-2 w-full relative"
+          disabled={activateLicenseKey.isPending}
+          onClick={() =>
+            activateLicenseKey.mutate({
+              licenseKey: licenseKey(),
+            })
+          }
+        >
+          <div class="w-full flex justify-center">Activate License</div>
+        </Button>
+      </div>
     </div>
   );
 }

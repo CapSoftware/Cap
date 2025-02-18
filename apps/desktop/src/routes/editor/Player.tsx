@@ -401,7 +401,7 @@ function PresetsDropdown() {
               class="flex-1 overflow-y-auto scrollbar-none"
             >
               <For
-                each={presets.query()?.presets ?? []}
+                each={presets.query.data?.presets ?? []}
                 fallback={
                   <div class="w-full text-sm text-gray-400 text-center py-1">
                     No Presets
@@ -419,7 +419,7 @@ function PresetsDropdown() {
                         onClick={() => setShowSettings(false)}
                       >
                         <span class="mr-auto">{preset.name}</span>
-                        <Show when={presets.query()?.default === i()}>
+                        <Show when={presets.query.data?.default === i()}>
                           <span class="px-[0.375rem] h-[1.25rem] rounded-full bg-gray-100 text-gray-400 text-[0.75rem]">
                             Default
                           </span>

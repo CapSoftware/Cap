@@ -53,10 +53,12 @@ export function Editor() {
             when={(() => {
               const ctx = useEditorInstanceContext();
               const editorInstance = ctx.editorInstance();
-              const presets = ctx.presets.query();
 
-              if (!editorInstance || !presets) return;
-              return { editorInstance, presets };
+              if (!editorInstance) return;
+
+              return {
+                editorInstance,
+              };
             })()}
           >
             {(values) => (
@@ -209,7 +211,7 @@ function Dialogs() {
             >
               {(dialog) => {
                 const [name, setName] = createSignal(
-                  presets.query()?.presets[dialog().presetIndex].name!
+                  presets.query.data?.presets[dialog().presetIndex].name!
                 );
 
                 const renamePreset = createMutation(() => ({

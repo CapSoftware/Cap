@@ -274,7 +274,7 @@ function CommercialLicensePurchase() {
           await generalSettingsStore.set({
             commercialLicense: {
               activatedOn: Date.now(),
-              expiryDate: value.expiryDate,
+              expiryDate: value.expiryDate ?? null,
               refresh: value.refresh,
               licenseKey: value.licenseKey,
             },

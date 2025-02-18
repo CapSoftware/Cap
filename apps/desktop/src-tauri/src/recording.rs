@@ -7,6 +7,7 @@ use crate::{
     export::export_video,
     general_settings::GeneralSettingsStore,
     notifications, open_editor, open_external_link,
+    presets::PresetsStore,
     upload::get_s3_config,
     upload_exported_video, web_api,
     windows::{CapWindowId, ShowCapWindow},
@@ -235,7 +236,11 @@ async fn handle_recording_finished(
 
         let recordings = ProjectRecordings::new(&completed_recording.meta);
 
-        let config = project_config_from_recording(&completed_recording, &recordings);
+        let config = project_config_from_recording(
+            &completed_recording,
+            &recordings,
+            PresetsStore::get_default_preset(&app)?.map(|p| p.config),
+        );
 
         config
             .write(&completed_recording.recording_dir)
@@ -277,7 +282,6 @@ async fn handle_recording_finished(
                                 export_video(
                                     app.clone(),
                                     completed_recording.id.clone(),
-                                    config,
                                     tauri::ipc::Channel::new(|_| Ok(())),
                                     true,
                                     completed_recording.meta.content.max_fps(),
@@ -387,6 +391,7 @@ fn generate_zoom_segments_from_clicks(
 fn project_config_from_recording(
     completed_recording: &CompletedRecording,
     recordings: &ProjectRecordings,
+    default_config: Option<ProjectConfiguration>,
 ) -> ProjectConfiguration {
     ProjectConfiguration {
         timeline: Some(TimelineConfiguration {
@@ -403,6 +408,6 @@ fn project_config_from_recording(
                 .collect(),
             zoom_segments: generate_zoom_segments_from_clicks(&completed_recording, &recordings),
         }),
-        ..Default::default()
+        ..default_config.unwrap_or_default()
     }
 }

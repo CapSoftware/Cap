@@ -4,7 +4,7 @@ import { onCleanup } from "solid-js";
 
 import {
   type AuthStore,
-  type ProjectConfiguration,
+  type PresetsStore,
   type HotkeysStore,
   type GeneralSettingsStore,
 } from "~/utils/tauri";
@@ -16,14 +16,6 @@ const store = () => {
   }
 
   return _store;
-};
-
-export type PresetsStore = {
-  presets: Array<{
-    name: string;
-    config: Omit<ProjectConfiguration, "timeline">;
-  }>;
-  default?: number;
 };
 
 function declareStore<T extends object>(name: string) {
