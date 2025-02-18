@@ -45,7 +45,7 @@ impl AuthStore {
         serde_json::from_value(store).map_err(|e| e.to_string())
     }
 
-    pub async fn fetch_and_update_plan(app: &AppHandle) -> Result<(), String> {
+    pub async fn update_auth_plan(app: &AppHandle) -> Result<(), String> {
         let auth = Self::get(app)?;
         let Some(auth) = auth else {
             return Err("User not authenticated".to_string());

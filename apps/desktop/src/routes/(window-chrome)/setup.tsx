@@ -145,7 +145,7 @@ export default function () {
             undefined
           }
           onClick={() => {
-            commands.openMainWindow().then(() => {
+            commands.showWindow("Main").then(() => {
               getCurrentWindow().close();
             });
           }}
@@ -482,7 +482,7 @@ function Startup(props: { onClose: () => void }) {
                   size="lg"
                   onClick={async () => {
                     handleStartupCompleted();
-                    await commands.openMainWindow();
+                    await commands.showWindow("Main");
                     getCurrentWindow().close();
                   }}
                 >

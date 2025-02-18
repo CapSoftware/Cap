@@ -1,7 +1,7 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
-use crate::{fake_window, general_settings::AppTheme};
+use crate::{fake_window, general_settings::AppTheme, permissions};
 use cap_flags::FLAGS;
 use cap_media::sources::CaptureScreen;
 use serde::Deserialize;
@@ -170,13 +170,18 @@ impl ShowCapWindow {
                 .maximizable(false)
                 .shadow(true)
                 .build()?,
-            Self::Main => self
-                .window_builder(app, "/")
-                .resizable(false)
-                .maximized(false)
-                .maximizable(false)
-                .center()
-                .build()?,
+            Self::Main => {
+                if permissions::do_permissions_check(false).necessary_granted() {
+                    self.window_builder(app, "/")
+                        .resizable(false)
+                        .maximized(false)
+                        .maximizable(false)
+                        .center()
+                        .build()?
+                } else {
+                    Self::Setup.show(app)?
+                }
+            }
             Self::SignIn => self
                 .window_builder(app, "/signin")
                 .resizable(false)

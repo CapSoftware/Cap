@@ -177,6 +177,7 @@ pub struct BackgroundConfiguration {
     pub rounding: f64,
     pub inset: u32,
     pub crop: Option<Crop>,
+    #[serde(default)]
     pub shadow: f32,
     #[serde(default)]
     pub advanced_shadow: Option<ShadowConfiguration>,
@@ -229,6 +230,7 @@ pub struct Camera {
     pub size: f32,
     pub zoom_size: Option<f32>,
     pub rounding: f32,
+    #[serde(default)]
     pub shadow: f32,
     #[serde(default)]
     pub advanced_shadow: Option<ShadowConfiguration>,

@@ -33,7 +33,6 @@ import {
 import { formatTime } from "./utils";
 
 export function Player() {
-  const [auth] = createResource(() => authStore.get());
   const {
     project,
     videoId,

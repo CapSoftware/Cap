@@ -1131,17 +1131,6 @@ async fn list_audio_devices() -> Result<Vec<String>, ()> {
     Ok(AudioInputFeed::list_devices().keys().cloned().collect())
 }
 
-#[tauri::command(async)]
-#[specta::specta]
-fn open_main_window(app: AppHandle) {
-    let permissions = permissions::do_permissions_check(false);
-    if !permissions.screen_recording.permitted() || !permissions.accessibility.permitted() {
-        return;
-    }
-
-    ShowCapWindow::Main.show(&app).ok();
-}
-
 #[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
 pub struct UploadProgress {
     progress: f64,
@@ -1293,28 +1282,8 @@ async fn upload_screenshot(
     };
 
     if !auth.is_upgraded() {
-        match AuthStore::fetch_and_update_plan(&app).await {
-            Ok(_) => match AuthStore::get(&app) {
-                Ok(Some(updated_auth)) => {
-                    auth = updated_auth;
-                }
-                Ok(None) => {
-                    return Ok(UploadResult::NotAuthenticated);
-                }
-                Err(e) => return Err(format!("Failed to refresh auth: {}", e)),
-            },
-            Err(e) => {
-                if e.contains("Authentication expired") {
-                    return Ok(UploadResult::NotAuthenticated);
-                }
-                return Ok(UploadResult::PlanCheckFailed);
-            }
-        }
-
-        if !auth.is_upgraded() {
-            ShowCapWindow::Upgrade.show(&app).ok();
-            return Ok(UploadResult::UpgradeRequired);
-        }
+        ShowCapWindow::Upgrade.show(&app).ok();
+        return Ok(UploadResult::UpgradeRequired);
     }
 
     println!("Uploading screenshot: {:?}", screenshot_path);
@@ -1792,30 +1761,6 @@ fn open_external_link(app: tauri::AppHandle, url: String) -> Result<(), String> 
 
 #[tauri::command]
 #[specta::specta]
-async fn delete_auth_open_signin(app: AppHandle) -> Result<(), String> {
-    AuthStore::set(&app, None).map_err(|e| e.to_string())?;
-
-    if let Some(window) = CapWindowId::Settings.get(&app) {
-        window.close().ok();
-    }
-
-    if let Some(window) = CapWindowId::Camera.get(&app) {
-        window.close().ok();
-    }
-    if let Some(window) = CapWindowId::Main.get(&app) {
-        window.close().ok();
-    }
-
-    // Show the signin window
-    ShowCapWindow::SignIn
-        .show(&app)
-        .map_err(|e| e.to_string())?;
-
-    Ok(())
-}
-
-#[tauri::command]
-#[specta::specta]
 async fn reset_camera_permissions(_app: AppHandle) -> Result<(), ()> {
     #[cfg(target_os = "macos")]
     {
@@ -1960,6 +1905,12 @@ async fn get_wallpaper_path(app: AppHandle, filename: String) -> Result<String, 
     }
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn update_auth_plan(app: AppHandle) {
+    AuthStore::update_auth_plan(&app).await.ok();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run() {
     let tauri_context = tauri::generate_context!();
@@ -2002,7 +1953,6 @@ pub async fn run() {
             set_playhead_position,
             set_project_config,
             open_editor,
-            open_main_window,
             permissions::open_permission_settings,
             permissions::do_permissions_check,
             permissions::request_permission,
@@ -2015,7 +1965,6 @@ pub async fn run() {
             check_upgraded_and_update,
             open_external_link,
             hotkeys::set_hotkey,
-            delete_auth_open_signin,
             reset_camera_permissions,
             reset_microphone_permissions,
             is_camera_window_open,
@@ -2027,7 +1976,8 @@ pub async fn run() {
             show_window,
             write_clipboard_string,
             platform::perform_haptic_feedback,
-            get_wallpaper_path
+            get_wallpaper_path,
+            update_auth_plan
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2259,10 +2209,6 @@ pub async fn run() {
                 .ok();
             });
 
-            AuthenticationInvalid::listen_any_spawn(&app, |_, app| async move {
-                delete_auth_open_signin(app).await.ok();
-            });
-
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -2340,8 +2286,7 @@ pub async fn run() {
                         window.set_focus().ok();
                     }
                 } else {
-                    // No editor, settings or signin window open, show main window
-                    open_main_window(handle.clone());
+                    ShowCapWindow::Main.show(handle).ok();
                 }
             }
             _ => {}

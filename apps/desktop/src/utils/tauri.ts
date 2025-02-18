@@ -92,9 +92,6 @@ async setProjectConfig(config: ProjectConfiguration) : Promise<null> {
 async openEditor(id: string) : Promise<void> {
     await TAURI_INVOKE("open_editor", { id });
 },
-async openMainWindow() : Promise<void> {
-    await TAURI_INVOKE("open_main_window");
-},
 async openPermissionSettings(permission: OSPermission) : Promise<void> {
     await TAURI_INVOKE("open_permission_settings", { permission });
 },
@@ -131,9 +128,6 @@ async openExternalLink(url: string) : Promise<null> {
 async setHotkey(action: HotkeyAction, hotkey: Hotkey | null) : Promise<null> {
     return await TAURI_INVOKE("set_hotkey", { action, hotkey });
 },
-async deleteAuthOpenSignin() : Promise<null> {
-    return await TAURI_INVOKE("delete_auth_open_signin");
-},
 async resetCameraPermissions() : Promise<null> {
     return await TAURI_INVOKE("reset_camera_permissions");
 },
@@ -169,6 +163,9 @@ async performHapticFeedback(pattern: HapticPattern | null, time: HapticPerforman
 },
 async getWallpaperPath(filename: string) : Promise<string> {
     return await TAURI_INVOKE("get_wallpaper_path", { filename });
+},
+async updateAuthPlan() : Promise<void> {
+    await TAURI_INVOKE("update_auth_plan");
 }
 }
 
