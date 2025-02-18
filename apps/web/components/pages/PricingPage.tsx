@@ -326,8 +326,7 @@ export const PricingPage = () => {
             </h1>
             <p
               className={`max-w-[800px] mx-auto ${
-                initialRender ? "fade-in-down animate-delay-1" : ""
-              }`}
+                initialRender ? "fade-in-down animate-delay-1" : ""}`}
             >
               Cap is currently in public beta, and we're offering special early
               adopter pricing to our first users. This pricing will be locked in
