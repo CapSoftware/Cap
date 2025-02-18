@@ -42,9 +42,11 @@ jobs:
             const tag = "cap-v${{ steps.read_version.outputs.value }}";
             const tagRef = `tags/${tag}`;
 
-            core.setOutput(TAG_NAME, tag);
 
             const TAG_EXISTED = "tag_existed";
+            const TAG_NAME = "tag_name";
+
+            core.setOutput(TAG_NAME, tag);
 
             async function main() {
               let tagExisted = true;
