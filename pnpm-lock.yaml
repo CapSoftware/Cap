@@ -262,109 +262,6 @@ importers:
         specifier: ^3.109.1
         version: 3.109.1(@cloudflare/workers-types@4.20250214.0)
 
-  apps/embed:
-    dependencies:
-      '@cap/database':
-        specifier: workspace:*
-        version: link:../../packages/database
-      '@cap/ui':
-        specifier: workspace:*
-        version: link:../../packages/ui
-      '@cap/utils':
-        specifier: workspace:*
-        version: link:../../packages/utils
-      '@headlessui/react':
-        specifier: ^1.7.17
-        version: 1.7.19(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      clsx:
-        specifier: ^2.0.0
-        version: 2.1.1
-      date-fns:
-        specifier: ^3.2.0
-        version: 3.6.0
-      dotenv:
-        specifier: ^16.3.1
-        version: 16.4.5
-      drizzle-orm:
-        specifier: 0.30.9
-        version: 0.30.9(@cloudflare/workers-types@4.20250214.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(@types/react@18.3.9)(mysql2@3.11.3)(react@18.3.1)
-      hls.js:
-        specifier: ^1.5.3
-        version: 1.5.15
-      lucide-react:
-        specifier: ^0.294.0
-        version: 0.294.0(react@18.3.1)
-      million:
-        specifier: ^2.6.4
-        version: 2.6.4
-      moment:
-        specifier: ^2.30.1
-        version: 2.30.1
-      next:
-        specifier: 14.2.9
-        version: 14.2.9(@babel/core@7.25.2)(@opentelemetry/api@1.9.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      next-auth:
-        specifier: ^4.24.5
-        version: 4.24.8(next@14.2.9(@opentelemetry/api@1.9.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(nodemailer@6.9.15)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      react:
-        specifier: ^18.2.0
-        version: 18.3.1
-      react-dom:
-        specifier: ^18.2.0
-        version: 18.3.1(react@18.3.1)
-      react-hls-player:
-        specifier: ^3.0.7
-        version: 3.0.7(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      react-hot-toast:
-        specifier: ^2.4.1
-        version: 2.4.1(csstype@3.1.3)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      react-player:
-        specifier: ^2.14.1
-        version: 2.16.0(react@18.3.1)
-      react-rnd:
-        specifier: ^10.4.1
-        version: 10.4.13(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      react-tooltip:
-        specifier: ^5.26.3
-        version: 5.28.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      server-only:
-        specifier: ^0.0.1
-        version: 0.0.1
-      subtitles-parser-vtt:
-        specifier: ^0.1.0
-        version: 0.1.0
-      zod:
-        specifier: ^3.24.1
-        version: 3.24.1
-    devDependencies:
-      '@types/node':
-        specifier: ^20.11.5
-        version: 20.16.9
-      '@types/react':
-        specifier: ^18.2.7
-        version: 18.3.9
-      '@types/react-dom':
-        specifier: ^18
-        version: 18.3.0
-      autoprefixer:
-        specifier: ^10.4.14
-        version: 10.4.20(postcss@8.4.47)
-      eslint:
-        specifier: ^8.41.0
-        version: 8.57.1
-      eslint-config-next:
-        specifier: 14.1.0
-        version: 14.1.0(eslint@8.57.1)(typescript@5.7.2)
-      postcss:
-        specifier: ^8.4.23
-        version: 8.4.47
-      tailwindcss:
-        specifier: ^3
-        version: 3.4.13(ts-node@10.9.2(@types/node@20.16.9)(typescript@5.7.2))
-      typescript:
-        specifier: ^5.7.2
-        version: 5.7.2
-
   apps/storybook:
     dependencies:
       '@cap/ui-solid':
@@ -805,7 +702,7 @@ importers:
         version: 5.0.7
       next:
         specifier: 14.2.9
-        version: 14.2.9(@babel/core@7.25.2)(@opentelemetry/api@1.9.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+        version: 14.2.9(@opentelemetry/api@1.9.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       next-auth:
         specifier: ^4.24.5
         version: 4.24.8(next@14.2.9(@opentelemetry/api@1.9.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(nodemailer@6.9.15)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -9054,10 +8951,6 @@ packages:
   micromatch@4.0.8:
     resolution: {integrity: sha512-PXwfBhYu0hBCPw8Dn0E+WDYb7af3dSLVWKi3HGv84IdF4TyFoC0ysxFd0Goxw7nSv4T/PzEJQxsYsEiFCKo2BA==}
     engines: {node: '>=8.6'}
-
-  million@2.6.4:
-    resolution: {integrity: sha512-voUkdd/jHWrG+7NS+mX49Pat+POKdgGW78V7pYMSrTaOjUitR6ySEcAci8hn17Rsx1IMI3+5w41dkADM1J1ZEg==}
-    hasBin: true
 
   mime-db@1.52.0:
     resolution: {integrity: sha512-sPU4uV7dYlvtWJxwwxHD0PuihVNiE7TyAbQ5SWxDCB9mUYvOgroQOwYQQOKPJ8CIbE+1ETVlOoK1UC2nU3gYvg==}
@@ -21853,20 +21746,6 @@ snapshots:
       braces: 3.0.3
       picomatch: 2.3.1
 
-  million@2.6.4:
-    dependencies:
-      '@babel/core': 7.25.2
-      '@babel/generator': 7.25.6
-      '@babel/plugin-syntax-jsx': 7.24.7(@babel/core@7.25.2)
-      '@babel/plugin-syntax-typescript': 7.25.4(@babel/core@7.25.2)
-      '@babel/types': 7.25.6
-      kleur: 4.1.5
-      rollup: 3.29.5
-      unplugin: 1.14.1
-    transitivePeerDependencies:
-      - supports-color
-      - webpack-sources
-
   mime-db@1.52.0: {}
 
   mime-types@2.1.35:
@@ -22068,7 +21947,7 @@ snapshots:
       '@panva/hkdf': 1.2.1
       cookie: 0.5.0
       jose: 4.15.9
-      next: 14.2.9(@babel/core@7.25.2)(@opentelemetry/api@1.9.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      next: 14.2.9(@opentelemetry/api@1.9.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       oauth: 0.9.15
       openid-client: 5.7.0
       preact: 10.24.1
@@ -22117,7 +21996,7 @@ snapshots:
       postcss: 8.4.31
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
-      styled-jsx: 5.1.1(@babel/core@7.25.2)(react@18.3.1)
+      styled-jsx: 5.1.1(react@18.3.1)
     optionalDependencies:
       '@next/swc-darwin-arm64': 14.2.3
       '@next/swc-darwin-x64': 14.2.3
@@ -22133,7 +22012,7 @@ snapshots:
       - '@babel/core'
       - babel-plugin-macros
 
-  next@14.2.9(@babel/core@7.25.2)(@opentelemetry/api@1.9.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
+  next@14.2.9(@opentelemetry/api@1.9.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
     dependencies:
       '@next/env': 14.2.9
       '@swc/helpers': 0.5.5
@@ -22143,7 +22022,7 @@ snapshots:
       postcss: 8.4.31
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
-      styled-jsx: 5.1.1(@babel/core@7.25.2)(react@18.3.1)
+      styled-jsx: 5.1.1(react@18.3.1)
     optionalDependencies:
       '@next/swc-darwin-arm64': 14.2.9
       '@next/swc-darwin-x64': 14.2.9
@@ -23941,12 +23820,10 @@ snapshots:
     dependencies:
       inline-style-parser: 0.2.4
 
-  styled-jsx@5.1.1(@babel/core@7.25.2)(react@18.3.1):
+  styled-jsx@5.1.1(react@18.3.1):
     dependencies:
       client-only: 0.0.1
       react: 18.3.1
-    optionalDependencies:
-      '@babel/core': 7.25.2
 
   subtitles-parser-vtt@0.1.0: {}
 
