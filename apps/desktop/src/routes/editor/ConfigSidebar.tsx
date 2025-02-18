@@ -977,7 +977,7 @@ export function ConfigSidebar() {
             value={`${project.camera.zoom_size}%`}
           >
             <Slider
-              value={[project.camera.zoom_size!]}
+              value={[project.camera.zoom_size ?? 60]}
               onChange={(v) => setProject("camera", "zoom_size", v[0])}
               minValue={10}
               maxValue={60}
