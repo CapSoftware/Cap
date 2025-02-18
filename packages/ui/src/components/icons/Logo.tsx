@@ -17,15 +17,15 @@ export const Logo = ({
         viewBox="0 0 103 40"
         className={className}
       >
-        <rect
+        {/* <rect
           width="39.5"
           height="39.5"
           x="0.25"
           y="0.25"
           fill="#fff"
           rx="7.75"
-        ></rect>
-        <rect
+        ></rect> */}
+        {/* <rect
           width="39.5"
           height="39.5"
           x="0.25"
@@ -33,7 +33,7 @@ export const Logo = ({
           stroke="#E7EAF0"
           strokeWidth="0.5"
           rx="7.75"
-        ></rect>
+        ></rect> */}
         <path
           fill="#4785FF"
           d="M20 36c8.837 0 16-7.163 16-16 0-8.836-7.163-16-16-16-8.836 0-16 7.164-16 16 0 8.837 7.164 16 16 16z"

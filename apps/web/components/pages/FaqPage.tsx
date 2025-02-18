@@ -30,15 +30,15 @@ const faqContent = [
 
 export const FaqPage = () => {
   return (
-    <div className="wrapper wrapper-sm py-20">
-      <div className="text-center page-intro mb-14">
+    <div className="py-32 wrapper wrapper-sm">
+      <div className="mb-14 text-center page-intro">
         <h1>FAQ</h1>
       </div>
       <div className="mb-10">
         {faqContent.map((section, index) => {
           return (
-            <div key={index} className="max-w-2xl mx-auto my-8">
-              <h2 className="text-xl mb-2">{section.title}</h2>
+            <div key={index} className="mx-auto my-8 max-w-2xl">
+              <h2 className="mb-2 text-xl">{section.title}</h2>
               <p className="text-lg">{section.answer}</p>
             </div>
           );

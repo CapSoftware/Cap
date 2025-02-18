@@ -164,7 +164,7 @@ export const PricingPage = () => {
 
   return (
     <div>
-      <div className="wrapper py-12 space-y-24">
+      <div className="py-12 mt-16 space-y-24 wrapper">
         <div className="space-y-12">
           <div className="text-center">
             <div className={`mb-4 ${initialRender ? "fade-in-down" : ""}`}>
@@ -172,15 +172,13 @@ export const PricingPage = () => {
             </div>
             <h1
               className={`text-4xl md:text-5xl ${
-                initialRender ? "fade-in-down" : ""
-              } mb-6`}
+                initialRender ? "fade-in-down" : ""}mb-6 }`}
             >
               Early Adopter Pricing
             </h1>
             <p
               className={`max-w-[800px] mx-auto ${
-                initialRender ? "fade-in-down animate-delay-1" : ""
-              }`}
+                initialRender ? "fade-in-down animate-delay-1" : ""}`}
             >
               Cap is currently in public beta, and we're offering special early
               adopter pricing to our first users. This pricing will be locked in
@@ -193,9 +191,9 @@ export const PricingPage = () => {
                 Used by employees at leading tech companies
               </h2>
             </div>
-            <div className="flex flex-col items-center text-center lg:flex-row lg:items-center lg:justify-between lg:text-left pb-8 lg:pb-0">
-              <div className="grid grid-cols-2 gap-10 md:grid-cols-5 lg:max-w-4xl lg:gap-10 mx-auto">
-                <div className="flex items-center justify-center lg:mt-0 ">
+            <div className="flex flex-col items-center pb-8 text-center lg:flex-row lg:items-center lg:justify-between lg:text-left lg:pb-0">
+              <div className="grid grid-cols-2 gap-10 mx-auto md:grid-cols-5 lg:max-w-4xl lg:gap-10">
+                <div className="flex justify-center items-center lg:mt-0">
                   <img
                     alt="Tesla Logo"
                     loading="lazy"
@@ -206,7 +204,7 @@ export const PricingPage = () => {
                     src="/logos/tesla.svg"
                   />
                 </div>
-                <div className="flex items-center justify-center lg:mt-0 ">
+                <div className="flex justify-center items-center lg:mt-0">
                   <img
                     alt="Microsoft Logo"
                     loading="lazy"
@@ -217,7 +215,7 @@ export const PricingPage = () => {
                     src="/logos/microsoft.svg"
                   />
                 </div>
-                <div className="flex items-center justify-center lg:mt-0 ">
+                <div className="flex justify-center items-center lg:mt-0">
                   <img
                     alt="Coinbase Logo"
                     loading="lazy"
@@ -228,7 +226,7 @@ export const PricingPage = () => {
                     src="/logos/coinbase.svg"
                   />
                 </div>
-                <div className="flex items-center justify-center lg:mt-0 ">
+                <div className="flex justify-center items-center lg:mt-0">
                   <img
                     alt="IBM Logo"
                     loading="lazy"
@@ -239,7 +237,7 @@ export const PricingPage = () => {
                     src="/logos/ibm.svg"
                   />
                 </div>
-                <div className="flex items-center justify-center lg:mt-0 ">
+                <div className="flex justify-center items-center lg:mt-0">
                   <img
                     alt="Dropbox Logo"
                     loading="lazy"
@@ -253,11 +251,10 @@ export const PricingPage = () => {
               </div>
             </div>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-stretch">
+          <div className="grid grid-cols-1 gap-3 items-stretch md:grid-cols-3">
             <Card
               className={`bg-gray-100 rounded-xl min-h-[600px] flex-grow ${
-                initialRender ? "fade-in-down animate-delay-2" : ""
-              }`}
+                initialRender ? "fade-in-down animate-delay-2" : ""}`}
             >
               <div className="space-y-4">
                 <CardHeader>
@@ -301,8 +298,7 @@ export const PricingPage = () => {
             </Card>
             <Card
               className={`bg-blue-300 rounded-xl min-h-[600px] flex-grow border-blue-500/20 ${
-                initialRender ? "fade-in-up animate-delay-2" : ""
-              }`}
+                initialRender ? "fade-in-up animate-delay-2" : ""}`}
             >
               <div className="space-y-3">
                 <CardHeader>
@@ -329,7 +325,7 @@ export const PricingPage = () => {
                         </p>
                         {isAnnual && (
                           <p
-                            className="text-sm text-white/80 cursor-pointer hover:text-white transition-colors"
+                            className="text-sm transition-colors cursor-pointer text-white/80 hover:text-white"
                             onClick={() => setIsAnnual(false)}
                           >
                             or, ${9 * quantity}/month,{" "}
@@ -341,11 +337,11 @@ export const PricingPage = () => {
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center border-t-2 border-white/20 pt-2 mt-2">
-                      <span className="text-xs text-white/80 mr-2">
+                    <div className="flex items-center pt-2 mt-2 border-t-2 border-white/20">
+                      <span className="mr-2 text-xs text-white/80">
                         Number of users:
                       </span>
-                      <div className="flex items-center gap-2">
+                      <div className="flex gap-2 items-center">
                         <Button
                           variant="secondary"
                           size="sm"
@@ -369,9 +365,9 @@ export const PricingPage = () => {
                         </Button>
                       </div>
                     </div>
-                    <div className="flex flex-col gap-4 mt-2 -mb-4 pt-4 border-t-2 border-white/20">
+                    <div className="flex flex-col gap-4 pt-4 mt-2 -mb-4 border-t-2 border-white/20">
                       <div className="flex items-center">
-                        <span className="text-xs text-white/80 mr-2">
+                        <span className="mr-2 text-xs text-white/80">
                           {isAnnual
                             ? "Switch to monthly"
                             : "Switch to annually"}
@@ -389,7 +385,7 @@ export const PricingPage = () => {
                     type="button"
                     spinner={loading}
                     onClick={() => planCheckout()}
-                    className="w-full -mb-4"
+                    className="-mb-4 w-full"
                     size="lg"
                     variant="white"
                   >
@@ -399,11 +395,11 @@ export const PricingPage = () => {
                 <CardFooter>
                   <div className="space-y-8">
                     <div>
-                      <ul className="list-none p-0 space-y-3">
+                      <ul className="p-0 space-y-3 list-none">
                         {proList.map((item, index) => (
                           <li
                             key={index}
-                            className="flex items-center justify-start"
+                            className="flex justify-start items-center"
                           >
                             <div className="w-5 h-5 m-0 p-0 flex items-center border-[2px] border-white justify-center rounded-full">
                               <Check className="w-3 h-3 stroke-[4px] stroke-white" />
@@ -421,8 +417,7 @@ export const PricingPage = () => {
             </Card>
             <Card
               className={`bg-gray-900 text-white rounded-xl min-h-[600px] flex-grow ${
-                initialRender ? "fade-in-down animate-delay-2" : ""
-              }`}
+                initialRender ? "fade-in-down animate-delay-2" : ""}`}
             >
               <div className="space-y-4">
                 <CardHeader>
@@ -444,8 +439,8 @@ export const PricingPage = () => {
                 <CardFooter>
                   <div className="space-y-8">
                     <div>
-                      <ul className="list-none p-0 space-y-3">
-                        <li className="flex items-center justify-start">
+                      <ul className="p-0 space-y-3 list-none">
+                        <li className="flex justify-start items-center">
                           <div className="w-5 h-5 m-0 p-0 flex items-center border-[2px] border-white justify-center rounded-full">
                             <Check className="w-3 h-3 stroke-[4px] stroke-white" />
                           </div>
@@ -453,7 +448,7 @@ export const PricingPage = () => {
                             Everything in Pro
                           </span>
                         </li>
-                        <li className="flex items-center justify-start">
+                        <li className="flex justify-start items-center">
                           <div className="w-5 h-5 m-0 p-0 flex items-center border-[2px] border-white justify-center rounded-full">
                             <Check className="w-3 h-3 stroke-[4px] stroke-white" />
                           </div>
@@ -461,7 +456,7 @@ export const PricingPage = () => {
                             Custom deployment options
                           </span>
                         </li>
-                        <li className="flex items-center justify-start">
+                        <li className="flex justify-start items-center">
                           <div className="w-5 h-5 m-0 p-0 flex items-center border-[2px] border-white justify-center rounded-full">
                             <Check className="w-3 h-3 stroke-[4px] stroke-white" />
                           </div>
@@ -469,7 +464,7 @@ export const PricingPage = () => {
                             Dedicated support
                           </span>
                         </li>
-                        <li className="flex items-center justify-start">
+                        <li className="flex justify-start items-center">
                           <div className="w-5 h-5 m-0 p-0 flex items-center border-[2px] border-white justify-center rounded-full">
                             <Check className="w-3 h-3 stroke-[4px] stroke-white" />
                           </div>
@@ -477,7 +472,7 @@ export const PricingPage = () => {
                             SLA guarantees
                           </span>
                         </li>
-                        <li className="flex items-center justify-start">
+                        <li className="flex justify-start items-center">
                           <div className="w-5 h-5 m-0 p-0 flex items-center border-[2px] border-white justify-center rounded-full">
                             <Check className="w-3 h-3 stroke-[4px] stroke-white" />
                           </div>
@@ -495,7 +490,7 @@ export const PricingPage = () => {
         </div>
         <div>
           <img
-            className="w-full mx-auto h-auto"
+            className="mx-auto w-full h-auto"
             src="/illustrations/comparison.png"
             alt="Cap vs Competitors Table"
           />

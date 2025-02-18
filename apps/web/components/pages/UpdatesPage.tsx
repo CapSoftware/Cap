@@ -7,8 +7,8 @@ export const UpdatesPage = () => {
   const allUpdates = getBlogPosts();
 
   return (
-    <div className="wrapper wrapper-sm py-20">
-      <div className="text-center page-intro mb-14">
+    <div className="py-32 wrapper wrapper-sm">
+      <div className="mb-14 text-center page-intro">
         <h1>Blog</h1>
       </div>
       <div>
@@ -19,7 +19,7 @@ export const UpdatesPage = () => {
             .map((post) => (
               <article
                 key={post.slug}
-                className="w-full rounded-xl overflow-hidden border"
+                className="overflow-hidden w-full rounded-xl border"
               >
                 <Link href={"/blog/" + post.slug}>
                   {post.metadata.image && (
@@ -35,7 +35,7 @@ export const UpdatesPage = () => {
                     </div>
                   )}
                   <div className="p-10 space-y-4">
-                    <h2 className="text-xl md:text-4xl text-gray-500">
+                    <h2 className="text-xl text-gray-500 md:text-4xl">
                       {post.metadata.title}
                     </h2>
                     <div className="flex space-x-2">
