@@ -21,6 +21,8 @@ jobs:
     outputs:
       version: ${{ steps.read_version.outputs.value }}
       needs_release: ${{ steps.create_tag.outputs.tag_existed != 'true' }}
+      cn_release_stdout: ${{ steps.create_cn_release.outputs.stdout }}
+      gh_release_url: ${{ steps.create_gh_release.outputs.url }}
     permissions:
       contents: write
       id-token: write
@@ -80,6 +82,7 @@ jobs:
             main();
 
       - name: Create draft CN release
+        id: create_cn_release
         uses: crabnebula-dev/cloud-release@v0
         with:
           command: release draft ${{ env.CN_APPLICATION }} ${{ steps.read_version.outputs.value }} --framework tauri
@@ -235,3 +238,39 @@ jobs:
         run: |
           curl -sL https://sentry.io/get-cli/ | bash
           sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} Cap.dSYM
+
+  done:
+    needs: [draft, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Send Discord notification
+        if: ${{ inputs.interactionId != '' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            async function main() {
+              const token = await core.getIDToken("cap-discord-bot");
+              const cnReleaseId = JSON.parse("${{ needs.draft.outputs.cn_release_stdout }}").id;
+
+              const resp = await fetch("https://cap-discord-bot.brendonovich.workers.dev/github-workflow", {
+                method: "POST",
+                body: JSON.stringify({
+                  type: "release-done",
+                  interactionId: "${{ inputs.interactionId }}",
+                  version: "${{ steps.read_version.outputs.value }}",
+                  releaseUrl: "${{ needs.draft.outputs.gh_release_url }}",
+                  cnReleaseId
+                }),
+                headers: {
+                	"Content-Type": "application/json",
+                  Authorization: `Bearer ${token}`,
+                }
+              });
+
+              if(resp.status !== 200) throw new Error(await resp.text());
+            }
+
+            main();

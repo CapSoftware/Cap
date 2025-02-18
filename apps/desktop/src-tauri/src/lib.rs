@@ -1601,7 +1601,7 @@ fn list_recordings(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMeta
             // Try to get recording meta, skip if it fails
             match get_recording_meta(app.clone(), id.clone(), "recording".to_string()) {
                 Ok(meta) => Some((id, path.clone(), meta)),
-                Err(_) => None,
+                Err(e) => None,
             }
         })
         .collect::<Vec<_>>();

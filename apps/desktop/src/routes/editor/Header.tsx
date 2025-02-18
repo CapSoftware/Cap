@@ -63,7 +63,6 @@ export interface ExportEstimates {
 }
 
 export function Header() {
-  const currentWindow = getCurrentWindow();
   const license = createLicenseQuery();
 
   const [selectedFps, setSelectedFps] = createSignal(
@@ -128,11 +127,11 @@ export function Header() {
                   await commands.showWindow("Upgrade");
                 }
               }}
-              class={`text-[0.85rem] ${
+              class={`text-[0.8rem] ${
                 license.data?.type === "pro"
                   ? "bg-[--blue-400] text-gray-50 dark:text-gray-500"
                   : "bg-gray-200 cursor-pointer hover:bg-gray-300"
-              } rounded-lg px-1.5 py-0.5`}
+              } rounded-[0.55rem] px-2 py-1`}
             >
               {license.data?.type === "commercial"
                 ? "Commercial License"

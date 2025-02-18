@@ -144,8 +144,31 @@ pub struct SingleSegment {
 #[serde(rename_all = "camelCase")]
 pub struct MultipleSegments {
     pub segments: Vec<MultipleSegment>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub cursors: HashMap<String, CursorMeta>,
+    #[serde(default, skip_serializing_if = "Cursors::is_empty")]
+    pub cursors: Cursors,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(untagged, rename_all = "camelCase")]
+pub enum Cursors {
+    // needed for backwards compat as i wasn't strict enough with feature flagging 🤦
+    Old(HashMap<String, String>),
+    Correct(HashMap<String, CursorMeta>),
+}
+
+impl Cursors {
+    fn is_empty(&self) -> bool {
+        match self {
+            Cursors::Old(map) => map.is_empty(),
+            Cursors::Correct(map) => map.is_empty(),
+        }
+    }
+}
+
+impl Default for Cursors {
+    fn default() -> Self {
+        Self::Correct(Default::default())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -162,8 +185,9 @@ impl MultipleSegments {
     }
 
     pub fn cursor_images(&self, meta: &RecordingMeta) -> Result<CursorImages, CursorImage> {
-        Ok(CursorImages(
-            self.cursors
+        Ok(CursorImages(match &self.cursors {
+            Cursors::Old(_) => Default::default(),
+            Cursors::Correct(map) => map
                 .iter()
                 .map(|(k, v)| {
                     (
@@ -175,7 +199,7 @@ impl MultipleSegments {
                     )
                 })
                 .collect::<_>(),
-        ))
+        }))
     }
 }
 

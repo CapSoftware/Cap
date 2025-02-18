@@ -476,19 +476,21 @@ async fn stop_recording(
                         })
                         .collect()
                 },
-                cursors: cursors
-                    .into_values()
-                    .map(|cursor| {
-                        (
-                            cursor.id.to_string(),
-                            CursorMeta {
-                                image_path: RelativePathBuf::from("content/cursors")
-                                    .join(&cursor.file_name),
-                                hotspot: cursor.hotspot,
-                            },
-                        )
-                    })
-                    .collect(),
+                cursors: cap_project::Cursors::Correct(
+                    cursors
+                        .into_values()
+                        .map(|cursor| {
+                            (
+                                cursor.id.to_string(),
+                                CursorMeta {
+                                    image_path: RelativePathBuf::from("content/cursors")
+                                        .join(&cursor.file_name),
+                                    hotspot: cursor.hotspot,
+                                },
+                            )
+                        })
+                        .collect(),
+                ),
             },
         },
     };

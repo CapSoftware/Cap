@@ -18,6 +18,7 @@ const CHANNEL_MESSAGE_WITH_SOURCE = 4;
 type InteractionBody = {
 	id: string;
 	token: string;
+	channel_id: string;
 	member: {
 		user: {
 			id: string;
@@ -91,26 +92,35 @@ app.post(
 	ghActionsOidc,
 	vValidator(
 		'json',
-		v.object({
-			type: v.literal('release-ready'),
-			tag: v.string(),
-			version: v.string(),
-			interactionId: v.string(),
-			releaseUrl: v.string(),
-		})
+		v.union([
+			v.object({
+				type: v.literal('release-ready'),
+				tag: v.string(),
+				version: v.string(),
+				interactionId: v.string(),
+				releaseUrl: v.string(),
+			}),
+			v.object({
+				type: v.literal('release-done'),
+				version: v.string(),
+				interactionId: v.string(),
+				releaseUrl: v.string(),
+				cnReleaseId: v.string(),
+			}),
+		])
 	),
 	async (c) => {
 		const body = c.req.valid('json');
 
+		const interactionStr = await c.env.release_discord_interactions.get(body.interactionId);
+		if (!interactionStr) return new Response('Interaction not found', { status: 404 });
+
+		const interaction: InteractionBody = JSON.parse(interactionStr);
+
+		if (interaction.data.name !== 'release') return new Response('Invalid interaction', { status: 400 });
+
 		switch (body.type) {
 			case 'release-ready': {
-				const interactionStr = await c.env.release_discord_interactions.get(body.interactionId);
-				if (!interactionStr) return new Response('Interaction not found', { status: 404 });
-
-				const interaction: InteractionBody = JSON.parse(interactionStr);
-
-				if (interaction.data.name !== 'release') return new Response('Invalid interaction', { status: 400 });
-
 				await fetch(`https://discord.com/api/v10/webhooks/${DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
 					method: 'PATCH',
 					body: JSON.stringify(releaseWorkflowRunningMessageData(body.version, body.releaseUrl, c.get('githubToken').run_id)),
@@ -118,6 +128,21 @@ app.post(
 				});
 
 				return new Response('Successfully updated message', { status: 200 });
+			}
+			case 'release-done': {
+				await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}`, {
+					method: 'POST',
+					body: JSON.stringify(
+						releaseWorkflowDoneMessageData(
+							interaction.member.user.id,
+							body.version,
+							body.releaseUrl,
+							body.cnReleaseId,
+							c.get('githubToken').run_id
+						)
+					),
+					headers: { 'Content-Type': 'application/json' },
+				});
 			}
 			default: {
 				return new Response('Invalid type', { status: 400 });
@@ -207,6 +232,37 @@ function releaseWorkflowRunningMessageData(version: string, releaseUrl: string, 
 						type: 2,
 						label: 'Release Notes',
 						url: releaseUrl,
+						style: 5,
+					},
+					{
+						type: 2,
+						label: 'Workflow Run',
+						url: `https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/actions/runs/${workflowRunId}`,
+						style: 5,
+					},
+				],
+			},
+		],
+	};
+}
+
+function releaseWorkflowDoneMessageData(userId: string, version: string, releaseUrl: string, cnReleaseId: string, workflowRunId: string) {
+	return {
+		content: [`<@${userId}> v${version} has finished building!`],
+		components: [
+			{
+				type: 1,
+				components: [
+					{
+						type: 2,
+						label: 'Release Notes',
+						url: releaseUrl,
+						style: 5,
+					},
+					{
+						type: 2,
+						label: 'CN Cloud Release',
+						url: `https://web.crabnebula.cloud/org/cap/cap/releases/${cnReleaseId}`,
 						style: 5,
 					},
 					{

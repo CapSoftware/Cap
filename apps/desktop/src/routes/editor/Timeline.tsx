@@ -253,7 +253,7 @@ function TimelineMarkings() {
       <For each={timelineMarkings()}>
         {(second) => (
           <div
-            class="absolute bottom-1 left-0 text-center rounded-full w-1 h-1 bg-gray-400 text-gray-400"
+            class="absolute bottom-1 left-0 text-center rounded-full w-1 h-1 bg-[--text-tertiary] text-[--text-tertiary]"
             style={{
               left: `${
                 (second - state.timelineTransform.position) / secsPerPixel() - 1
@@ -262,7 +262,7 @@ function TimelineMarkings() {
           >
             <Show when={second % 1 === 0}>
               <div class="absolute -top-4 -translate-x-1/2">
-                0:{second.toString().padStart(2, "0")}
+                {formatTime(second)}
               </div>
             </Show>
           </div>
