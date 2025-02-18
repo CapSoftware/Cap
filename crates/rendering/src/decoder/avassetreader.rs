@@ -201,23 +201,13 @@ impl AVAssetReaderDecoder {
                     )
                 };
 
-                let asset = av::UrlAsset::with_url(
-                    &ns::Url::with_fs_path_str(path.to_str().unwrap(), false),
-                    None,
-                )
-                .ok_or_else(|| format!("UrlAsset::with_url{{{path:?}}}"))?;
-
                 Ok((
                     get_reader_track_output(&path, 0.0, &handle, pixel_format)?,
-                    width,
-                    height,
-                    asset,
                     pixel_format,
                 ))
             };
 
-            let ((mut track_output, mut reader), width, height, asset, pixel_format) = match init()
-            {
+            let ((mut track_output, mut reader), pixel_format) = match init() {
                 Ok(v) => {
                     ready_tx.send(Ok(())).ok();
                     v
@@ -405,7 +395,6 @@ fn pixel_format_to_pixel(format: cv::PixelFormat) -> format::Pixel {
 
 fn get_reader_track_output(
     path: &PathBuf,
-    // asset: &av::UrlAsset,
     time: f32,
     handle: &TokioHandle,
     pixel_format: cv::PixelFormat,
@@ -421,7 +410,7 @@ fn get_reader_track_output(
 
     let time_range = cm::TimeRange {
         start: cm::Time::with_secs(time as f64, 100),
-        duration: asset.duration(),
+        duration: cm::Time::infinity(),
     };
 
     reader.set_time_range(time_range);
