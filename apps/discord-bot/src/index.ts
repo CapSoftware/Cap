@@ -99,6 +99,7 @@ app.post(
 				version: v.string(),
 				interactionId: v.string(),
 				releaseUrl: v.string(),
+				cnReleaseId: v.string(),
 			}),
 			v.object({
 				type: v.literal('release-done'),
@@ -123,7 +124,7 @@ app.post(
 			case 'release-ready': {
 				await fetch(`https://discord.com/api/v10/webhooks/${DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
 					method: 'PATCH',
-					body: JSON.stringify(releaseWorkflowRunningMessageData(body.version, body.releaseUrl, c.get('githubToken').run_id)),
+					body: JSON.stringify(releaseWorkflowRunningMessageData({ ...body, workflowRunId: c.get('githubToken').run_id })),
 					headers: { 'Content-Type': 'application/json' },
 				});
 
@@ -133,13 +134,11 @@ app.post(
 				await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}`, {
 					method: 'POST',
 					body: JSON.stringify(
-						releaseWorkflowDoneMessageData(
-							interaction.member.user.id,
-							body.version,
-							body.releaseUrl,
-							body.cnReleaseId,
-							c.get('githubToken').run_id
-						)
+						releaseWorkflowDoneMessageData({
+							...body,
+							userId: interaction.member.user.id,
+							workflowRunId: c.get('githubToken').run_id,
+						})
 					),
 					headers: { 'Content-Type': 'application/json' },
 				});
@@ -221,58 +220,54 @@ function releaseWorkflowStartedMessageData() {
 	};
 }
 
-function releaseWorkflowRunningMessageData(version: string, releaseUrl: string, workflowRunId: string) {
+function releaseWorkflowRunningMessageData(props: { version: string } & Parameters<typeof releaseDraftedMessageComponents>[0]) {
 	return {
-		content: `v${version} workflow running, go edit the release notes!`,
+		content: `v${props.version} workflow running, go edit the release notes!`,
 		components: [
 			{
 				type: 1,
-				components: [
-					{
-						type: 2,
-						label: 'Release Notes',
-						url: releaseUrl,
-						style: 5,
-					},
-					{
-						type: 2,
-						label: 'Workflow Run',
-						url: `https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/actions/runs/${workflowRunId}`,
-						style: 5,
-					},
-				],
+				components: releaseDraftedMessageComponents(props),
 			},
 		],
 	};
 }
 
-function releaseWorkflowDoneMessageData(userId: string, version: string, releaseUrl: string, cnReleaseId: string, workflowRunId: string) {
+function releaseWorkflowDoneMessageData(
+	props: {
+		userId: string;
+		version: string;
+	} & Parameters<typeof releaseDraftedMessageComponents>[0]
+) {
 	return {
-		content: [`<@${userId}> v${version} has finished building!`],
+		content: [`<@${props.userId}> v${props.version} has finished building!`],
 		components: [
 			{
 				type: 1,
-				components: [
-					{
-						type: 2,
-						label: 'Release Notes',
-						url: releaseUrl,
-						style: 5,
-					},
-					{
-						type: 2,
-						label: 'CN Cloud Release',
-						url: `https://web.crabnebula.cloud/org/cap/cap/releases/${cnReleaseId}`,
-						style: 5,
-					},
-					{
-						type: 2,
-						label: 'Workflow Run',
-						url: `https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/actions/runs/${workflowRunId}`,
-						style: 5,
-					},
-				],
+				components: releaseDraftedMessageComponents(props),
 			},
 		],
 	};
+}
+
+function releaseDraftedMessageComponents(props: { releaseUrl: string; cnReleaseId: string; workflowRunId: string }) {
+	return [
+		{
+			type: 2,
+			label: 'Release Notes',
+			url: props.releaseUrl,
+			style: 5,
+		},
+		{
+			type: 2,
+			label: 'CN Cloud Release',
+			url: `https://web.crabnebula.cloud/org/cap/cap/releases/${props.cnReleaseId}`,
+			style: 5,
+		},
+		{
+			type: 2,
+			label: 'Workflow Run',
+			url: `https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/actions/runs/${props.workflowRunId}`,
+			style: 5,
+		},
+	];
 }
