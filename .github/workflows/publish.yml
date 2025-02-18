@@ -101,7 +101,7 @@ jobs:
             async function main() {
               const token = await core.getIDToken("cap-discord-bot");
 
-              await fetch("https://cap-discord-bot.brendonovich.workers.dev/github-workflow", {
+              const resp = await fetch("https://cap-discord-bot.brendonovich.workers.dev/github-workflow", {
                 method: "POST",
                 body: JSON.stringify({
                   type: "release-ready",
@@ -112,6 +112,8 @@ jobs:
                   Authorization: `Bearer ${token}`,
                 }
               });
+
+              if(resp.status !== 200) throw new Error(await resp.text());
             }
 
             main();
