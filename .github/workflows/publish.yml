@@ -109,7 +109,7 @@ jobs:
                   type: "release-ready",
                   tag: "${{ steps.create_tag.outputs.tag_name }}",
                   version: "${{ steps.read_version.outputs.value }}",
-                  releaseUrl: ${{ steps.create_gh_release.outputs.url }},
+                  releaseUrl: "${{ steps.create_gh_release.outputs.url }}",
                   interactionId: "${{ inputs.interactionId }}"
                 }),
                 headers: {
