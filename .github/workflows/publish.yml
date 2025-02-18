@@ -89,7 +89,8 @@ jobs:
         # TODO: Change to stable version when available
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.read_version.outputs.tag_name }}
+          name: ${{ steps.read_version.outputs.value }}
+          tag_name: ${{ steps.create_tag.outputs.tag_name }}
           draft: true
           generate_release_notes: true
 
@@ -105,7 +106,8 @@ jobs:
                 method: "POST",
                 body: JSON.stringify({
                   type: "release-ready",
-                  tag: "${{ steps.read_version.outputs.tag_name }}",
+                  version: "${{ steps.read_version.outputs.value }}",
+                  tag: "${{ steps.create_tag.outputs.tag_name }}",
                   interactionId: "${{ inputs.interactionId }}"
                 }),
                 headers: {
