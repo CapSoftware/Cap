@@ -79,33 +79,30 @@ export const HomePage = () => {
           {videoToggled && <VideoModal setVideoToggled={setVideoToggled} />}
         </AnimatePresence>
         <Parallax
-          className="cursor-pointer relative flex items-center justify-center w-full max-w-[540px] mx-auto mt-[200px] mb-[240px]"
-          scale={[1, 1.8]}
+          className="relative flex items-center justify-center w-full max-w-[540px] mx-auto mt-[100px] mb-[190px] sm:mt-[160px] sm:mb-[200px]"
+          scale={[1, 1.6]}
         >
           <motion.div
             whileTap={{ scale: 0.95 }}
             whileHover={{ scale: 1.05 }}
             onClick={() => setVideoToggled(true)}
-            className="absolute size-[100px] flex items-center justify-center group"
+            className="absolute cursor-pointer size-[100px] flex items-center justify-center group"
           >
             <div
               style={{
                 background:
                   "linear-gradient(180deg, rgba(255, 255, 255, 0.10) 30%, #3B7BFA 100%)",
                 boxShadow: "0px 0px 40px 16px rgba(25, 39, 67, 0.25)",
-                backdropFilter: "blur(5px)",
               }}
-              className="size-[100px] relative rounded-full backdrop-blur-[5px] flex items-center justify-center play-button-outer-border"
+              className="size-[100px] relative backdrop-blur-[6px] rounded-full flex items-center justify-center play-button-outer-border"
             >
               <div
-                className="size-[80px] flex items-center justify-center relative inner-play-button-border-two group-hover:brightness-110 transition-all duration-300"
+                className="size-[80px] flex items-center justify-center relative inner-play-button-border-two group-hover:brightness-110 transition-all duration-300 backdrop-blur-[6px] rounded-[80px]"
                 style={{
-                  borderRadius: "80px",
                   background:
                     "linear-gradient(180deg, #90BDFF 0%, #3588FF 100%)",
                   boxShadow:
                     "0px 2px 0px 0px #C5DDFF inset, 0px 12px 6.3px -2px #A5CAFF inset, 0px -7px 9.2px 0px #305098 inset, 0px 14px 20px -8px #0E275E, 0px -19px 24px 0px #2363BF inset",
-                  backdropFilter: "blur(6px)",
                 }}
               >
                 <FontAwesomeIcon

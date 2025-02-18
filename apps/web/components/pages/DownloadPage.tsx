@@ -20,7 +20,7 @@ export const DownloadPage = () => {
   };
 
   return (
-    <div className="py-16 wrapper wrapper-sm md:py-52">
+    <div className="pt-32 pb-16 wrapper wrapper-sm md:py-52">
       <div className="space-y-4 text-center">
         <h1 className="text-2xl fade-in-down animate-delay-1 md:text-4xl">
           Download Cap

@@ -264,6 +264,7 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
                 <li>
                   <Button
                     variant="radialblue"
+                    className="font-medium h-[50px] !text-white" 
                     href={auth === false ? "/download" : "/dashboard"}
                     size="lg"
                   >
