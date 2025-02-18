@@ -11,6 +11,7 @@ import {
   uniqueIndex,
   varchar,
   float,
+  serial,
 } from "drizzle-orm/mysql-core";
 import { relations } from "drizzle-orm/relations";
 import { nanoIdLength } from "./helpers";
@@ -38,6 +39,18 @@ const encryptedTextNullable = customType<{ data: string; notNull: false }>({
   dataType() {
     return "text";
   },
+});
+
+export const serverConfigTable = mysqlTable("server_config", {
+  id: serial("id").notNull().primaryKey().unique(),
+  licenseKey: varchar("licenseKey", { length: 255 }),
+  licenseValid: boolean("licenseValid").notNull().default(false),
+  isCapCloud: boolean("isCapCloud").notNull().default(false),
+  licenseValidityCache: timestamp("licenseValidityCache"),
+  superAdminIds: json("superAdminIds").$type<string[]>().notNull().default([]),
+  signupsEnabled: boolean("signupsEnabled").notNull().default(false),
+  emailSendFromName: varchar("emailSendFromName", { length: 255 }),
+  emailSendFromEmail: varchar("emailSendFromEmail", { length: 255 }),
 });
 
 export const users = mysqlTable(
@@ -68,6 +81,9 @@ export const users = mysqlTable(
     onboarding_completed_at: timestamp("onboarding_completed_at"),
     customBucket: nanoIdNullable("customBucket"),
     inviteQuota: int("inviteQuota").notNull().default(1),
+    pro: boolean("pro").notNull().default(false),
+    proExpiresAt: timestamp("proExpiresAt"),
+    proWorkspaceId: nanoIdNullable("proWorkspaceId"),
   },
   (table) => ({
     emailIndex: uniqueIndex("email_idx").on(table.email),

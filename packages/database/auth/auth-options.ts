@@ -10,6 +10,7 @@ import { LoginLink } from "../emails/login-link";
 import { nanoId } from "../helpers";
 import WorkOSProvider from "next-auth/providers/workos";
 import { NODE_ENV, serverEnv } from "@cap/env";
+import { PlanetScaleDatabase } from "drizzle-orm/planetscale-serverless";
 
 export const config = {
   maxDuration: 120,
@@ -18,7 +19,7 @@ export const config = {
 const secret = serverEnv.NEXTAUTH_SECRET;
 
 export const authOptions: NextAuthOptions = {
-  adapter: DrizzleAdapter(db),
+  adapter: DrizzleAdapter(db as PlanetScaleDatabase),
   debug: true,
   session: {
     strategy: "jwt",
