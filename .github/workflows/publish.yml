@@ -1,7 +1,13 @@
 name: "publish"
 
 # change this when ready to release if you want CI/CD
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      interactionId:
+        description: "Discord Interaction ID"
+        required: false
+        type: string
 
 env:
   CN_APPLICATION: cap/cap
@@ -35,6 +41,8 @@ jobs:
           script: |
             const tag = "cap-v${{ steps.read_version.outputs.value }}";
             const tagRef = `tags/${tag}`;
+
+            core.setOutput(TAG_NAME, tag);
 
             const TAG_EXISTED = "tag_existed";
 
@@ -78,8 +86,32 @@ jobs:
         # TODO: Change to stable version when available
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.read_version.outputs.tag_name }}
           draft: true
           generate_release_notes: true
+
+      - name: Update Discord interaction
+        if: ${{ inputs.interactionId != '' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            async function main() {
+              const token = await core.getIDToken("cap-discord-bot");
+
+              await fetch("https://cap-discord-bot.brendonovich.workers.dev/github-workflow", {
+                method: "POST",
+                body: JSON.stringify({
+                  type: "release-ready",
+                  tag: "${{ steps.read_version.outputs.tag_name }}",
+                  interactionId: "${{ inputs.interactionId }}"
+                }),
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                }
+              });
+            }
+
+            main();
 
   build:
     needs: draft
