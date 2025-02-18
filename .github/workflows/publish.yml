@@ -105,7 +105,7 @@ jobs:
           script: |
             async function main() {
               const token = await core.getIDToken("cap-discord-bot");
-              const cnReleaseId = JSON.parse(`${{ needs.draft.outputs.cn_release_stdout }}`).id;
+              const cnReleaseId = JSON.parse(`${{ steps.create_gh_release.outputs.cn_release_stdout }}`).id;
 
               const resp = await fetch("https://cap-discord-bot.brendonovich.workers.dev/github-workflow", {
                 method: "POST",
