@@ -1,43 +1,9 @@
-import type { AspectRatio, ProjectConfiguration } from "~/utils/tauri";
+import type { AspectRatio } from "~/utils/tauri";
 
 export type RGBColor = [number, number, number];
 
 export const DEFAULT_GRADIENT_FROM = [71, 133, 255] satisfies RGBColor;
 export const DEFAULT_GRADIENT_TO = [255, 71, 102] satisfies RGBColor;
-
-export const DEFAULT_PROJECT_CONFIG = {
-  aspectRatio: null,
-  background: {
-    source: {
-      type: "wallpaper",
-      path: "sequoia-dark",
-    },
-    blur: 0,
-    padding: 0,
-    rounding: 0,
-    inset: 0,
-    crop: null,
-    shadow: 50,
-  },
-  camera: {
-    hide: false,
-    mirror: false,
-    position: { x: "right", y: "bottom" },
-    rounding: 100,
-    shadow: 50,
-    size: 30,
-    zoom_size: 60,
-  },
-  audio: { mute: false, improve: false },
-  cursor: {
-    hideWhenIdle: false,
-    size: 0,
-    type: "pointer",
-    animationStyle: "regular" as const,
-  },
-  hotkeys: { show: false },
-  motionBlur: 0.2,
-} satisfies ProjectConfiguration;
 
 export const ASPECT_RATIOS = {
   wide: { name: "Wide", ratio: [16, 9] },

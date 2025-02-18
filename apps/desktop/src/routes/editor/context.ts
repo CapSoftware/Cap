@@ -15,15 +15,14 @@ import {
 import { createStore, reconcile, unwrap } from "solid-js/store";
 import { createElementBounds, NullableBounds } from "@solid-primitives/bounds";
 
-import type { PresetsStore } from "../../store";
 import {
+  PresetsStore,
   type ProjectConfiguration,
   type SerializedEditorInstance,
   type XY,
   commands,
   events,
 } from "~/utils/tauri";
-import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
 import { createImageDataWS, createLazySignal } from "~/utils/socket";
 import { createPresets } from "~/utils/createPresets";
 
@@ -45,22 +44,10 @@ export const OUTPUT_SIZE = {
 export const MAX_ZOOM_IN = 3;
 
 export const [EditorContextProvider, useEditorContext] = createContextProvider(
-  (props: {
-    editorInstance: SerializedEditorInstance;
-    presets: PresetsStore;
-  }) => {
+  (props: { editorInstance: SerializedEditorInstance }) => {
     const editorInstanceContext = useEditorInstanceContext();
     const [project, setProject] = createStore<ProjectConfiguration>(
-      props.editorInstance.savedProjectConfig ??
-        (() => {
-          const config =
-            props.presets.presets[props.presets.default ?? 0]?.config;
-          if (!config) return;
-          // @ts-ignore
-          config.timeline = undefined;
-          return config;
-        })() ??
-        DEFAULT_PROJECT_CONFIG
+      props.editorInstance.savedProjectConfig
     );
 
     createEffect(

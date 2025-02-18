@@ -228,12 +228,24 @@ pub struct Camera {
     pub mirror: bool,
     pub position: CameraPosition,
     pub size: f32,
-    pub zoom_size: Option<f32>,
+    #[serde(default = "Camera::default_zoom_size")]
+    pub zoom_size: f32,
+    #[serde(default = "Camera::default_rounding")]
     pub rounding: f32,
     #[serde(default)]
     pub shadow: f32,
     #[serde(default)]
     pub advanced_shadow: Option<ShadowConfiguration>,
+}
+
+impl Camera {
+    fn default_zoom_size() -> f32 {
+        60.0
+    }
+
+    fn default_rounding() -> f32 {
+        30.0
+    }
 }
 
 impl Default for Camera {
@@ -243,8 +255,8 @@ impl Default for Camera {
             mirror: false,
             position: CameraPosition::default(),
             size: 30.0,
-            zoom_size: None,
-            rounding: 100.0,
+            zoom_size: Self::default_zoom_size(),
+            rounding: Self::default_rounding(),
             shadow: 62.5,
             advanced_shadow: Some(ShadowConfiguration {
                 size: 33.9,

@@ -41,11 +41,7 @@ import {
   Toggle,
   Slider,
 } from "./ui";
-import {
-  DEFAULT_GRADIENT_FROM,
-  DEFAULT_GRADIENT_TO,
-  DEFAULT_PROJECT_CONFIG,
-} from "./projectConfig";
+import { DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO } from "./projectConfig";
 import { generalSettingsStore } from "~/store";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import toast from "solid-toast";
@@ -806,7 +802,7 @@ export function ConfigSidebar() {
           <Field name="Shadow" icon={<IconCapShadow />}>
             <div class="space-y-3">
               <Slider
-                value={[project.background.shadow]}
+                value={[project.background.shadow!]}
                 onChange={(v) => {
                   batch(() => {
                     setProject("background", "shadow", v[0]);
@@ -978,16 +974,10 @@ export function ConfigSidebar() {
           <Field
             name="Size During Zoom"
             icon={<IconCapEnlarge />}
-            value={`${
-              project.camera.zoom_size ??
-              DEFAULT_PROJECT_CONFIG.camera.zoom_size
-            }%`}
+            value={`${project.camera.zoom_size}%`}
           >
             <Slider
-              value={[
-                project.camera.zoom_size ??
-                  DEFAULT_PROJECT_CONFIG.camera.zoom_size,
-              ]}
+              value={[project.camera.zoom_size!]}
               onChange={(v) => setProject("camera", "zoom_size", v[0])}
               minValue={10}
               maxValue={60}
@@ -996,10 +986,7 @@ export function ConfigSidebar() {
           </Field>
           <Field name="Rounded Corners" icon={<IconCapCorners />}>
             <Slider
-              value={[
-                project.camera.rounding ??
-                  DEFAULT_PROJECT_CONFIG.camera.rounding,
-              ]}
+              value={[project.camera.rounding!]}
               onChange={(v) => setProject("camera", "rounding", v[0])}
               minValue={0}
               maxValue={100}
@@ -1009,7 +996,7 @@ export function ConfigSidebar() {
           <Field name="Shadow" icon={<IconCapShadow />}>
             <div class="space-y-3">
               <Slider
-                value={[project.camera.shadow]}
+                value={[project.camera.shadow!]}
                 onChange={(v) => setProject("camera", "shadow", v[0])}
                 minValue={0}
                 maxValue={100}
