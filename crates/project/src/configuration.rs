@@ -307,6 +307,7 @@ pub struct CursorConfiguration {
     pub size: u32,
     r#type: CursorType,
     pub animation_style: CursorAnimationStyle,
+    pub smoothing_time: f32,
 }
 
 impl Default for CursorConfiguration {
@@ -316,6 +317,7 @@ impl Default for CursorConfiguration {
             size: 100,
             r#type: CursorType::default(),
             animation_style: CursorAnimationStyle::Regular,
+            smoothing_time: 0.2,
         }
     }
 }

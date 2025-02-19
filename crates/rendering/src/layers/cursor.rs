@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 use bytemuck::{Pod, Zeroable};
 use cap_project::*;
@@ -52,7 +52,7 @@ impl CursorLayer {
         let Some(cursor_position) = interpolate_cursor_position(
             cursor,
             segment_time,
-            &uniforms.project.cursor.animation_style,
+            uniforms.project.cursor.smoothing_time,
         ) else {
             return;
         };
@@ -344,7 +344,7 @@ impl CursorPipeline {
 fn interpolate_cursor_position(
     cursor: &CursorEvents,
     time_secs: f32,
-    animation_style: &CursorAnimationStyle,
+    smoothing_time: f32,
 ) -> Option<Coord<RawDisplayUVSpace>> {
     let time_ms = (time_secs * 1000.0) as f64;
 
@@ -370,18 +370,88 @@ fn interpolate_cursor_position(
         }
     }
 
-    let Some(event) = cursor.moves.windows(2).find_map(|chunk| {
-        if time_ms >= chunk[0].process_time_ms && time_ms < chunk[1].process_time_ms {
-            Some(&chunk[0])
-        } else {
-            None
-        }
+    let position = get_smoothed_position(cursor, time_secs as f64, smoothing_time as f64)?;
+
+    // let Some(position) = cursor.moves.windows(2).enumerate().find_map(|(i, chunk)| {
+    //     if time_ms >= chunk[0].process_time_ms && time_ms < chunk[1].process_time_ms {
+    //         Some(&chunk[0])
+    //     } else {
+    //         None
+    //     }
+    // }) else {
+    //     return None;
+    // };
+
+    Some(Coord::new(XY {
+        x: position.0 as f64,
+        y: position.1 as f64,
+    }))
+}
+
+fn get_smoothed_position(
+    cursor: &CursorEvents,
+    query_time: f64,
+    smoothing_time: f64,
+) -> Option<(f32, f32)> {
+    if cursor.moves.is_empty() {
+        return None;
+    }
+
+    let query_time_ms = query_time * 1000.0;
+    dbg!(smoothing_time, query_time_ms);
+
+    let window_points: Vec<_> = cursor
+        .moves
+        .iter()
+        .filter(|point| {
+            let time_diff = query_time_ms - point.process_time_ms;
+
+            time_diff >= 0.0 && time_diff <= smoothing_time
+        })
+        .collect();
+
+    let Some(start_i) = cursor.moves.windows(2).position(|chunk| {
+        chunk[0].process_time_ms <= query_time_ms - smoothing_time
+            && chunk[1].process_time_ms > query_time_ms - smoothing_time
     }) else {
         return None;
     };
 
-    Some(Coord::new(XY {
-        x: event.x,
-        y: event.y,
-    }))
+    let Some(end_i) = cursor.moves.windows(2).position(|chunk| {
+        chunk[0].process_time_ms <= query_time_ms && chunk[1].process_time_ms > query_time_ms
+    }) else {
+        return None;
+    };
+
+    let window = cursor.moves[start_i..end_i].to_vec();
+
+    let min_query_time = query_time_ms - smoothing_time;
+    let weights = window
+        .iter()
+        .enumerate()
+        .map(|(i, point)| {
+            let next_point = window.get(i + 1).unwrap_or(point);
+            let clamped_time_ms = (point.process_time_ms - min_query_time).max(0.0);
+            let next_clamped_time_ms = (next_point.process_time_ms - min_query_time).max(0.0);
+
+            (next_clamped_time_ms - clamped_time_ms) / smoothing_time
+        })
+        .collect::<Vec<_>>();
+
+    let weight_sum: f64 = weights.iter().sum();
+    let weighted_x: f64 = window_points
+        .iter()
+        .zip(weights.iter())
+        .map(|(point, weight)| (point.x * weight))
+        .sum();
+    let weighted_y: f64 = window_points
+        .iter()
+        .zip(weights.iter())
+        .map(|(point, weight)| (point.y * weight))
+        .sum();
+
+    Some((
+        (weighted_x / weight_sum) as f32,
+        (weighted_y / weight_sum) as f32,
+    ))
 }

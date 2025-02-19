@@ -1133,6 +1133,15 @@ export function ConfigSidebar() {
                   step={1}
                 />
               </Field>
+              <Field name="Smoothing">
+                <Slider
+                  value={[project.cursor.smoothingTime]}
+                  onChange={(v) => setProject("cursor", "smoothingTime", v[0])}
+                  minValue={0}
+                  maxValue={1000}
+                  step={1}
+                />
+              </Field>
               {/* <Field name="Animation Style" icon={<IconLucideRabbit />}>
             <RadioGroup
               defaultValue="regular"
