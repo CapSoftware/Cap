@@ -208,7 +208,6 @@ jobs:
       - name: Build app
         working-directory: apps/desktop
         run: |
-          export TARGET_TRIPLE=${{ matrix.settings.target }}
           pnpm -w cap-setup
           pnpm tauri build --target ${{ matrix.settings.target }} --config src-tauri/tauri.conf.prod.json
         env:

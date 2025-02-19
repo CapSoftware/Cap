@@ -108,6 +108,12 @@ jobs:
           echo "NEXT_PUBLIC_CAP_AWS_REGION=${{ secrets.NEXT_PUBLIC_CAP_AWS_REGION }}" >> .env
           echo "NEXT_PUBLIC_CAP_AWS_BUCKET=${{ secrets.NEXT_PUBLIC_CAP_AWS_BUCKET }}" >> .env
 
+      - name: Copy .env to apps/desktop
+        run: cp .env apps/desktop/.env
+
+      - name: Output .env file
+        run: cat apps/desktop/.env
+
       - name: Build macOS apps
         working-directory: apps/desktop
         run: |
