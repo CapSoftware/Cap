@@ -37,7 +37,7 @@ use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
 use editor_window::EditorInstances;
 use editor_window::WindowEditorInstance;
-use general_settings::{GeneralSettingsStore, RecordingConfig};
+use general_settings::GeneralSettingsStore;
 use mp4::Mp4Reader;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use notifications::NotificationType;
@@ -59,11 +59,9 @@ use std::{
     process::Command,
     str::FromStr,
     sync::Arc,
-    time::Duration,
 };
 use tauri::Window;
-use tauri::{AppHandle, Emitter, Manager, Runtime, State, WindowEvent};
-use tauri_plugin_deep_link::DeepLinkExt;
+use tauri::{AppHandle, Manager, State, WindowEvent};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_shell::ShellExt;
@@ -404,14 +402,6 @@ async fn get_recording_options(
 ) -> Result<RecordingOptions, ()> {
     let mut state = state.write().await;
 
-    // Load settings from disk if they exist
-    if let Ok(Some(settings)) = GeneralSettingsStore::get(&app) {
-        if let Some(config) = settings.recording_config {
-            state.start_recording_options.fps = config.fps;
-            state.start_recording_options.output_resolution = Some(config.resolution);
-        }
-    }
-
     // If there's a saved audio input but no feed, initialize it
     if let Some(audio_input_name) = state.start_recording_options.audio_input_name() {
         if state.audio_input_feed.is_none() {
@@ -443,17 +433,6 @@ async fn set_recording_options(
         .await
         .set_start_recording_options(options.clone())
         .await?;
-
-    // Update persistent settings
-    GeneralSettingsStore::update(&app, |settings| {
-        settings.recording_config = Some(RecordingConfig {
-            fps: options.fps,
-            resolution: options.output_resolution.unwrap_or_else(|| Resolution {
-                width: 1920,
-                height: 1080,
-            }),
-        });
-    })?;
 
     Ok(())
 }
@@ -2115,8 +2094,6 @@ pub async fn run() {
                         }),
                         camera_label: None,
                         audio_input_name: None,
-                        fps: 30,
-                        output_resolution: None,
                     },
                     current_recording: None,
                     pre_created_video: None,
