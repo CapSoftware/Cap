@@ -16,9 +16,6 @@ const targetDir = path.join(__root, "target");
 
 const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
 
-// IMPORTANT: Increment this number when the setup script changes
-const SETUP_VERSION_NUMBER = 1;
-
 async function main() {
   await fs.mkdir(targetDir, { recursive: true });
 
@@ -138,6 +135,23 @@ async function main() {
       }
     );
     console.log("Copied ffmpeg/lib and ffmpeg/include to target/native-deps");
+
+    const { stdout: vcInstallDir } = await exec(
+      '$(& "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath)',
+      { shell: "powershell.exe" }
+    );
+
+    const libclangPath = path.join(
+      vcInstallDir.trim(),
+      "VC/Tools/LLVM/x64/bin/libclang.dll"
+    );
+
+    await fs.writeFile(
+      path.join(__root, ".cargo/config.toml"),
+      `[env]
+FFMPEG_DIR = { relative = true, force = true, value = "target/native-deps" }
+LIBCLANG_PATH = "${libclangPath}"`
+    );
   }
 }
 
