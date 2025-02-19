@@ -7,7 +7,6 @@
     "beforeDevCommand": "pnpm localdev",
     "devUrl": "http://localhost:3001",
     "beforeBuildCommand": "pnpm turbo build --filter @cap/desktop",
-    "beforeBundleCommand": "node scripts/beforeBundle.js",
     "frontendDist": "../.output/public"
   },
   "app": {
