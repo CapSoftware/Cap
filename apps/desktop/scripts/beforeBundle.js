@@ -17,6 +17,7 @@ async function main() {
   if (process.platform === "darwin") {
     const dirs = [];
     let releaseDir = path.join(targetDir, "release");
+    if (!(await fileExists(releaseDir))) return;
     const releaseFiles = await fs.readdir(releaseDir);
     let releaseFile = releaseFiles.find((f) => f.startsWith("Cap"));
     dirs.push(releaseDir);
@@ -42,3 +43,10 @@ async function main() {
 }
 
 main();
+
+async function fileExists(path) {
+  return await fs
+    .access(path)
+    .then(() => true)
+    .catch(() => false);
+}
