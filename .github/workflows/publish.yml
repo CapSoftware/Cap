@@ -209,7 +209,7 @@ jobs:
         working-directory: apps/desktop
         run: |
           pnpm -w cap-setup
-          pnpm tauri build --target ${{ matrix.settings.target }} --config src-tauri/tauri.conf.prod.json
+          pnpm tauri build --target ${{ matrix.settings.target }} --config src-tauri/tauri.prod.conf.json
         env:
           # https://github.com/tauri-apps/tauri-action/issues/740
           CI: false
