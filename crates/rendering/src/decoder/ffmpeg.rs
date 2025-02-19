@@ -11,6 +11,7 @@ use ffmpeg::{
 };
 use ffmpeg_hw_device::{CodecContextExt, HwDevice};
 use ffmpeg_sys_next::{avcodec_find_decoder, AVHWDeviceType};
+use tokio::sync::oneshot;
 
 use super::{pts_to_frame, DecodedFrame, VideoDecoderMessage, FRAME_CACHE_SIZE};
 
@@ -78,6 +79,7 @@ impl FfmpegDecoder {
         path: PathBuf,
         fps: u32,
         rx: mpsc::Receiver<VideoDecoderMessage>,
+        ready_tx: oneshot::Sender<Result<(), String>>,
     ) {
         std::thread::spawn(move || {
             let mut input = ffmpeg::format::input(&path).unwrap();
@@ -157,6 +159,8 @@ impl FfmpegDecoder {
             let mut peekable_requests = PeekableReceiver { rx, peeked: None };
 
             let mut packets = input.packets().peekable();
+
+            ready_tx.send(Ok(()));
 
             while let Ok(r) = peekable_requests.recv() {
                 match r {

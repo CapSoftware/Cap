@@ -520,7 +520,6 @@ fn create_screen_capture(
     {
         ScreenCaptureSource::<cap_media::sources::CMSampleBufferCapture>::init(
             &recording_options.capture_target,
-            recording_options.output_resolution.clone(),
             None,
         )
     }
