@@ -4,6 +4,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { spaceInvites, spaceMembers, users } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { nanoId } from "@cap/database/helpers";
+import { getIsUserPro } from "@/utils/instance/functions";
 
 export async function POST(request: NextRequest) {
   const user = await getCurrentUser();
@@ -29,21 +30,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Email mismatch" }, { status: 403 });
     }
 
-    // Get the space owner's subscription ID
-    const [spaceOwner] = await db
-      .select({
-        stripeSubscriptionId: users.stripeSubscriptionId,
-      })
-      .from(users)
-      .where(eq(users.id, invite.invitedByUserId));
-
-    if (!spaceOwner || !spaceOwner.stripeSubscriptionId) {
-      return NextResponse.json(
-        { error: "Space owner not found or has no subscription" },
-        { status: 404 }
-      );
-    }
-
     // Create a new space member
     await db.insert(spaceMembers).values({
       id: nanoId(),
@@ -52,16 +38,11 @@ export async function POST(request: NextRequest) {
       role: invite.role,
     });
 
-    // Update the user's thirdPartyStripeSubscriptionId
-    await db
-      .update(users)
-      .set({
-        thirdPartyStripeSubscriptionId: spaceOwner.stripeSubscriptionId,
-      })
-      .where(eq(users.id, user.id));
-
     // Delete the invite
     await db.delete(spaceInvites).where(eq(spaceInvites.id, inviteId));
+
+    // Refresh user pro status
+    await getIsUserPro({ userId: user.id });
 
     return NextResponse.json({ success: true });
   } catch (error) {

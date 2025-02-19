@@ -8,6 +8,7 @@ import { dub } from "@/utils/dub";
 import { eq } from "drizzle-orm";
 import { getS3Bucket, getS3Config } from "@/utils/s3";
 import { clientEnv, NODE_ENV } from "@cap/env";
+import { getIsUserPro } from "@/utils/instance/functions";
 
 const allowedOrigins = [
   clientEnv.NEXT_PUBLIC_WEB_URL,
@@ -81,7 +82,7 @@ export async function GET(req: NextRequest) {
   }
 
   // Check if user is on free plan and video is over 5 minutes
-  const isUpgraded = user.stripeSubscriptionStatus === "active";
+  const isUpgraded = await getIsUserPro({ userId: user.id });
 
   if (!isUpgraded && duration && duration > 300) {
     return new Response(JSON.stringify({ error: "upgrade_required" }), {

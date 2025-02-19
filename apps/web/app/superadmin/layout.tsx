@@ -10,6 +10,7 @@ import {
   users,
 } from "@cap/database/schema";
 import { eq, inArray, or, and, count, sql } from "drizzle-orm";
+import { addServerSuperAdmin, getServerConfig } from "@/utils/instance";
 
 export default async function SuperAdminLayout({
   children,
@@ -22,8 +23,16 @@ export default async function SuperAdminLayout({
     redirect("/login");
   }
 
-  if (!user.name || user.name.length <= 1) {
-    redirect("/onboarding");
+  const serverConfig = await getServerConfig();
+
+  const serverSuperAdminIds = serverConfig?.superAdminIds;
+
+  if (serverSuperAdminIds && !serverSuperAdminIds.includes(user.id)) {
+    redirect("/dashboard");
+  }
+
+  if (!serverSuperAdminIds) {
+    await addServerSuperAdmin({ userId: user.id });
   }
 
   return (

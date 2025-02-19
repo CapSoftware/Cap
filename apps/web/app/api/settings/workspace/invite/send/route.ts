@@ -7,6 +7,7 @@ import { nanoId } from "@cap/database/helpers";
 import { sendEmail } from "@cap/database/emails/config";
 import { WorkspaceInvite } from "@cap/database/emails/workspace-invite";
 import { clientEnv } from "@cap/env";
+import { updateCloudWorkspaceUserCount } from "@/utils/instance/functions";
 
 export async function POST(request: NextRequest) {
   console.log("POST request received for workspace invite");
@@ -61,6 +62,7 @@ export async function POST(request: NextRequest) {
       }),
     });
   }
+  await updateCloudWorkspaceUserCount({ workspaceId: spaceId });
 
   console.log("Workspace invites created and emails sent successfully");
   return Response.json(true, { status: 200 });

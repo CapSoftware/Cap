@@ -10,6 +10,7 @@ import {
   users,
 } from "@cap/database/schema";
 import { eq, inArray, or, and, count, sql } from "drizzle-orm";
+import { getIsUserPro } from "@/utils/instance/functions";
 
 export type Space = {
   space: typeof spaces.$inferSelect;
@@ -128,10 +129,10 @@ export default async function DashboardLayout({
     findActiveSpace = spaceSelect[0];
   }
 
-  const isSubscribed =
-    (user.stripeSubscriptionId &&
-      user.stripeSubscriptionStatus !== "cancelled") ||
-    !!user.thirdPartyStripeSubscriptionId;
+  const isSubscribed = await getIsUserPro({ userId: user.id });
+  // (user.stripeSubscriptionId &&
+  //   user.stripeSubscriptionStatus !== "cancelled") ||
+  // !!user.thirdPartyStripeSubscriptionId;
 
   return (
     <DynamicSharedLayout

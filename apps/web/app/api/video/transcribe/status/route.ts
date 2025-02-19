@@ -1,7 +1,6 @@
-import { isUserOnProPlan } from "@cap/utils";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { NextRequest } from "next/server";
-import { count, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
 

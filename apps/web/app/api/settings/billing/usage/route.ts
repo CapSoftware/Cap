@@ -1,9 +1,9 @@
-import { isUserOnProPlan } from "@cap/utils";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { NextRequest } from "next/server";
 import { count, eq } from "drizzle-orm";
 import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
+import { getIsUserPro } from "@/utils/instance/functions";
 
 export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
@@ -24,11 +24,9 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  if (
-    isUserOnProPlan({
-      subscriptionStatus: user.stripeSubscriptionStatus as string,
-    })
-  ) {
+  const isPro = await getIsUserPro({ userId: user.id });
+
+  if (isPro) {
     return Response.json(
       {
         subscription: true,

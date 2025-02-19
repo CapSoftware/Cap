@@ -3,6 +3,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { spaces, spaceInvites } from "@cap/database/schema";
 import { db } from "@cap/database";
 import { eq, and } from "drizzle-orm";
+import { updateCloudWorkspaceUserCount } from "@/utils/instance/functions";
 
 export async function POST(request: NextRequest) {
   console.log("POST request received for removing workspace invite");
@@ -44,6 +45,11 @@ export async function POST(request: NextRequest) {
     console.error(`No invite found with id ${inviteId} for space ${spaceId}`);
     return Response.json({ error: true }, { status: 404 });
   }
+
+  // Update workspace user count
+  await updateCloudWorkspaceUserCount({
+    workspaceId: spaceId,
+  });
 
   console.log("Workspace invite removed successfully");
   return Response.json({ success: true }, { status: 200 });

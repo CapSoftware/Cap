@@ -18,19 +18,12 @@ export const getProPlanId = (billingCycle: "yearly" | "monthly") => {
   return planIds[environment]?.[billingCycle] || "";
 };
 
-export const isUserOnProPlan = ({
-  subscriptionStatus,
-}: {
-  subscriptionStatus: string;
-}) => {
+export const getProPlanBillingCycle = (priceId: string) => {
   if (
-    subscriptionStatus === "active" ||
-    subscriptionStatus === "trialing" ||
-    subscriptionStatus === "complete" ||
-    subscriptionStatus === "paid"
+    priceId === planIds.development.yearly ||
+    priceId === planIds.production.yearly
   ) {
-    return true;
+    return "yearly";
   }
-
-  return false;
+  return "monthly";
 };

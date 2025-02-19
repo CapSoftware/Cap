@@ -4,6 +4,7 @@ import { serverConfigTable, spaces, users } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { INSTANCE_SITE_URL, LICENSE_SERVER_URL } from "./constants";
 import {
+  getCloudWorkspaceUserCount,
   getServerUserCount,
   getUserWorkspaceMembershipWorkspaceIds,
 } from "./helpers";
@@ -53,6 +54,7 @@ export const isCapCloud = async (): Promise<boolean> => {
   return serverConfig.isCapCloud;
 };
 
+// Used in self hosted instances to add a user to the server superAdminIds array
 export const addServerSuperAdmin = async ({ userId }: { userId: string }) => {
   const currentUser = await getCurrentUser();
   if (!currentUser) {
@@ -80,6 +82,7 @@ export const addServerSuperAdmin = async ({ userId }: { userId: string }) => {
   return;
 };
 
+// used in all instances to validate the self hosted server license
 export async function validateServerLicense({
   serverConfig,
 }: {
@@ -145,15 +148,14 @@ export async function validateServerLicense({
 }
 
 // check if a single user is a member of a pro workspace
-export async function isUserPro({ userId }: { userId: string }) {
+export async function getIsUserPro({ userId }: { userId: string }) {
   const serverConfig = await getServerConfig();
   if (!serverConfig.licenseKey) {
     return false;
   }
-  const isCapCloud = serverConfig.isCapCloud;
 
   // if self hosting, all users on the server have the same pro status as the server itself
-  if (!isCapCloud) {
+  if (!serverConfig.isCapCloud) {
     return serverConfig.licenseValid;
   }
 
@@ -218,10 +220,9 @@ export async function isWorkspacePro({ workspaceId }: { workspaceId: string }) {
   if (!serverConfig.licenseKey) {
     return false;
   }
-  const isCapCloud = serverConfig.isCapCloud;
 
   // if self hosting, all workspaces on the server have the same pro status as the server itself
-  if (!isCapCloud) {
+  if (!serverConfig.isCapCloud) {
     return serverConfig.licenseValid;
   }
 
@@ -275,4 +276,144 @@ export async function isWorkspacePro({ workspaceId }: { workspaceId: string }) {
     .where(eq(spaces.id, workspaceId));
 
   return licenseServerResponse.isPro;
+}
+
+// Update workspace user counts - This includes both users and invites
+export async function updateCloudWorkspaceUserCount({
+  workspaceId,
+}: {
+  workspaceId: string;
+}) {
+  const serverConfig = await getServerConfig();
+  if (!serverConfig.licenseKey) {
+    return false;
+  }
+
+  // if selfhosting, seats will be updated on next server license check automatically
+  if (!serverConfig.isCapCloud) {
+    return true;
+  }
+
+  const workspaceUserCount = await getCloudWorkspaceUserCount({ workspaceId });
+
+  try {
+    await fetch(
+      `${LICENSE_SERVER_URL}/api/instances/cloudPro/workspace/addUser`,
+      {
+        method: "POST",
+        headers: {
+          licenseKey: serverConfig.licenseKey,
+          siteUrl: INSTANCE_SITE_URL,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          workspaceId: workspaceId,
+          seatCount: workspaceUserCount,
+        }),
+      }
+    );
+    return true;
+  } catch (error) {
+    console.error(error);
+    return false;
+  }
+}
+
+export async function generateCloudProStripeCheckoutSession({
+  cloudWorkspaceId,
+  cloudUserId,
+  email,
+  type,
+}: {
+  cloudWorkspaceId: string;
+  cloudUserId: string;
+  email: string;
+  type: "yearly" | "monthly";
+}) {
+  const serverConfig = await getServerConfig();
+  if (!serverConfig.licenseKey) {
+    return false;
+  }
+
+  if (!serverConfig.isCapCloud) {
+    return false;
+  }
+
+  const seatCount = await getCloudWorkspaceUserCount({
+    workspaceId: cloudWorkspaceId,
+  });
+
+  // refresh workspace pro cache
+  const licenseServerResponse = (await fetch(
+    `${LICENSE_SERVER_URL}/api/instances/cloudPro/workspace/checkout`,
+    {
+      method: "POST",
+      headers: {
+        licenseKey: serverConfig.licenseKey,
+        siteUrl: INSTANCE_SITE_URL,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        cloudWorkspaceId: cloudWorkspaceId,
+        cloudUserId: cloudUserId,
+        email: email,
+        seatCount: seatCount,
+        type: type,
+      }),
+    }
+  ).then((res) => res.json())) as {
+    workspaceId: string;
+    newSeatCount: number;
+    checkoutLink: string;
+  };
+
+  return licenseServerResponse;
+}
+
+export async function generateCloudProStripePortalLink({
+  cloudWorkspaceId,
+}: {
+  cloudWorkspaceId: string;
+}) {
+  const serverConfig = await getServerConfig();
+  if (!serverConfig.licenseKey) {
+    return false;
+  }
+
+  if (!serverConfig.isCapCloud) {
+    return false;
+  }
+
+  const seatCount = await getCloudWorkspaceUserCount({
+    workspaceId: cloudWorkspaceId,
+  });
+
+  // refresh workspace pro cache
+  try {
+    const licenseServerResponse = (await fetch(
+      `${LICENSE_SERVER_URL}/api/instances/cloudPro/workspace/portal`,
+      {
+        method: "POST",
+        headers: {
+          licenseKey: serverConfig.licenseKey,
+          siteUrl: INSTANCE_SITE_URL,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          cloudWorkspaceId: cloudWorkspaceId,
+          seatCount: seatCount,
+        }),
+      }
+    ).then((res) => res.json())) as {
+      workspaceId: string;
+      newSeatCount: number;
+      portalLink: string;
+    };
+
+    return licenseServerResponse;
+  } catch (error) {
+    console.error(error);
+
+    return null;
+  }
 }
