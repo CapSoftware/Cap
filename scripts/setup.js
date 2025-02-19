@@ -103,6 +103,7 @@ async function main() {
     const ffmpegDir = path.join(targetDir, "ffmpeg");
     if (!(await fileExists(ffmpegDir)) || downloadedFfmpeg) {
       await exec(`tar xf ${ffmpegZipPath} -C ${targetDir}`);
+      await fs.rmdir(ffmpegDir, { recursive: true }).catch(() => {});
       await fs.rename(path.join(targetDir, FFMPEG_ZIP_NAME), ffmpegDir);
       console.log("Extracted ffmpeg");
     } else console.log("Using cached ffmpeg");
