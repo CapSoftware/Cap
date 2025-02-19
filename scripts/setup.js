@@ -100,7 +100,7 @@ async function main() {
 
     const ffmpegDir = path.join(targetDir, "ffmpeg");
     if (!(await fileExists(ffmpegDir))) {
-      await exec(`tar xf ${ffmpegZip} -C ${targetDir}`);
+      await exec(`tar xf ${ffmpegZipPath} -C ${targetDir}`);
       await fs.rename(path.join(targetDir, FFMPEG_ZIP_NAME), ffmpegDir);
       console.log("Extracted ffmpeg");
     } else console.log("Using cached ffmpeg");
@@ -150,7 +150,7 @@ async function main() {
       path.join(__root, ".cargo/config.toml"),
       `[env]
 FFMPEG_DIR = { relative = true, force = true, value = "target/native-deps" }
-LIBCLANG_PATH = "${libclangPath}"`
+LIBCLANG_PATH = "${libclangPath.replaceAll("\\", "/")}"`
     );
   }
 }
