@@ -117,24 +117,15 @@ impl FfmpegDecoder {
                 }
             }
 
-            let hw_device: Option<HwDevice> = {
-                #[cfg(target_os = "macos")]
-                {
-                    decoder
-                        .try_use_hw_device(
-                            AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
-                            Pixel::NV12,
-                        )
-                        .ok()
-                }
-                #[cfg(target_os = "windows")]
-                {
-                    decoder
-                        .try_use_hw_device(AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2, Pixel::DXVA2_VLD)
-                        .ok()
-                }
-
-                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            let hw_device: Option<HwDevice> = if cfg!(target_os = "macos") {
+                decoder
+                    .try_use_hw_device(AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX, Pixel::NV12)
+                    .ok()
+            } else if cfg!(target_os = "windows") {
+                decoder
+                    .try_use_hw_device(AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2, Pixel::DXVA2_VLD)
+                    .ok()
+            } else {
                 None
             };
 

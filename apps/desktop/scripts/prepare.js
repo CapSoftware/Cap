@@ -32,19 +32,6 @@ async function exists(filePath) {
 }
 
 /**
- * @param {string} targetPath
- * @param {string} outputPath
- */
-async function unzip(targetPath, outputPath) {
-  console.log(`unzipping \"${targetPath}\" --> \"${outputPath}\"`);
-  if (isWindows) {
-    await exec(`tar -xf ${targetPath} -C ${outputPath}`);
-  } else {
-    await exec(`unzip -o ${targetPath} -d ${outputPath}`);
-  }
-}
-
-/**
  * Creates a Microsoft Windows Installer (TM) compatible version from the provided crate's semver version.
  * `major.minor.patch.build`
  *

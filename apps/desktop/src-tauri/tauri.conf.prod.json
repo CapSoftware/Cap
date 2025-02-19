@@ -3,9 +3,6 @@
   "productName": "Cap",
   "mainBinaryName": "Cap",
   "identifier": "so.cap.desktop",
-  "build": {
-    "beforeBundleCommand": "node scripts/stripDebugSymbols.js"
-  },
   "plugins": {
     "updater": {
       "active": true
