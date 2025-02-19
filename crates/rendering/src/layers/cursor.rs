@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
 use cap_project::*;
@@ -7,18 +7,116 @@ use wgpu::{include_wgsl, util::DeviceExt, FilterMode};
 use crate::{
     frame_pipeline::{FramePipeline, FramePipelineState},
     zoom::InterpolatedZoom,
-    Coord, DecodedSegmentFrames, ProjectUniforms, RawDisplayUVSpace, RenderVideoConstants,
-    STANDARD_CURSOR_HEIGHT,
+    Coord, DecodedSegmentFrames, ProjectUniforms, RawDisplayUVSpace, STANDARD_CURSOR_HEIGHT,
 };
 
 pub struct CursorLayer {
     uniform_buffer: wgpu::Buffer,
     texture_sampler: wgpu::Sampler,
+    bind_group_layout: wgpu::BindGroupLayout,
+    render_pipeline: wgpu::RenderPipeline,
 }
 
 impl CursorLayer {
     pub fn new(device: &wgpu::Device) -> Self {
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cursor Pipeline Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: Some(std::num::NonZeroU64::new(112).unwrap()),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let shader = device.create_shader_module(include_wgsl!("../shaders/cursor.wgsl"));
+
+        let empty_constants: HashMap<String, f64> = HashMap::new();
+
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Cursor Pipeline"),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("Cursor Pipeline Layout"),
+                    bind_group_layouts: &[&bind_group_layout],
+                    push_constant_ranges: &[],
+                }),
+            ),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &empty_constants,
+                    zero_initialize_workgroup_memory: false,
+                    vertex_pulling_transform: false,
+                },
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &empty_constants,
+                    zero_initialize_workgroup_memory: false,
+                    vertex_pulling_transform: false,
+                },
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         Self {
+            bind_group_layout,
+            render_pipeline,
             uniform_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Cursor Uniform Buffer"),
                 contents: bytemuck::cast_slice(&[CursorUniforms::default()]),
@@ -166,7 +264,7 @@ impl CursorLayer {
         let cursor_bind_group = constants
             .device
             .create_bind_group(&wgpu::BindGroupDescriptor {
-                layout: &constants.cursor_pipeline.bind_group_layout,
+                layout: &self.bind_group_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
@@ -190,16 +288,11 @@ impl CursorLayer {
 
         pipeline.encoder.do_render_pass(
             pipeline.state.get_current_texture_view(),
-            &constants.cursor_pipeline.render_pipeline,
+            &self.render_pipeline,
             cursor_bind_group,
             wgpu::LoadOp::Load,
         );
     }
-}
-
-pub struct CursorPipeline {
-    bind_group_layout: wgpu::BindGroupLayout,
-    render_pipeline: wgpu::RenderPipeline,
 }
 
 #[repr(C, align(16))]
@@ -235,110 +328,6 @@ pub fn find_cursor_event(cursor: &CursorEvents, time: f32) -> &CursorMoveEvent {
         .unwrap_or(&cursor.moves[0]);
 
     event
-}
-
-impl CursorPipeline {
-    pub fn new(device: &wgpu::Device) -> Self {
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Cursor Pipeline Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: Some(std::num::NonZeroU64::new(112).unwrap()),
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
-        let shader = device.create_shader_module(include_wgsl!("../shaders/cursor.wgsl"));
-
-        let empty_constants: HashMap<String, f64> = HashMap::new();
-
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Cursor Pipeline"),
-            layout: Some(
-                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("Cursor Pipeline Layout"),
-                    bind_group_layouts: &[&bind_group_layout],
-                    push_constant_ranges: &[],
-                }),
-            ),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: "vs_main",
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &empty_constants,
-                    zero_initialize_workgroup_memory: false,
-                    vertex_pulling_transform: false,
-                },
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: "fs_main",
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &empty_constants,
-                    zero_initialize_workgroup_memory: false,
-                    vertex_pulling_transform: false,
-                },
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                unclipped_depth: false,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-
-        Self {
-            bind_group_layout,
-            render_pipeline,
-        }
-    }
 }
 
 fn interpolate_cursor_position(
@@ -392,66 +381,114 @@ fn get_smoothed_position(
     cursor: &CursorEvents,
     query_time: f64,
     smoothing_time: f64,
-) -> Option<(f32, f32)> {
+) -> Option<XY<f32>> {
     if cursor.moves.is_empty() {
         return None;
     }
 
-    let query_time_ms = query_time * 1000.0;
-    dbg!(smoothing_time, query_time_ms);
+    // let query_time_ms = query_time * 1000.0;
+    // dbg!(smoothing_time, query_time_ms);
 
-    let window_points: Vec<_> = cursor
-        .moves
-        .iter()
-        .filter(|point| {
-            let time_diff = query_time_ms - point.process_time_ms;
+    // let window_points: Vec<_> = cursor
+    //     .moves
+    //     .iter()
+    //     .filter(|point| {
+    //         let time_diff = query_time_ms - point.process_time_ms;
 
-            time_diff >= 0.0 && time_diff <= smoothing_time
+    //         time_diff >= 0.0 && time_diff <= smoothing_time
+    //     })
+    //     .collect();
+
+    // let Some(start_i) = cursor.moves.windows(2).position(|chunk| {
+    //     chunk[0].process_time_ms <= query_time_ms - smoothing_time
+    //         && chunk[1].process_time_ms > query_time_ms - smoothing_time
+    // }) else {
+    //     return None;
+    // };
+
+    // let Some(end_i) = cursor.moves.windows(2).position(|chunk| {
+    //     chunk[0].process_time_ms <= query_time_ms && chunk[1].process_time_ms > query_time_ms
+    // }) else {
+    //     return None;
+    // };
+
+    // let window = cursor.moves[start_i..end_i].to_vec();
+
+    // let min_query_time = query_time_ms - smoothing_time;
+    // let weights = window
+    //     .iter()
+    //     .enumerate()
+    //     .map(|(i, point)| {
+    //         let next_point = window.get(i + 1).unwrap_or(point);
+    //         let clamped_time_ms = (point.process_time_ms - min_query_time).max(0.0);
+    //         let next_clamped_time_ms = (next_point.process_time_ms - min_query_time).max(0.0);
+
+    //         (next_clamped_time_ms - clamped_time_ms) / smoothing_time
+    //     })
+    //     .collect::<Vec<_>>();
+
+    // let weight_sum: f64 = weights.iter().sum();
+    // let weighted_x: f64 = window_points
+    //     .iter()
+    //     .zip(weights.iter())
+    //     .map(|(point, weight)| (point.x * weight))
+    //     .sum();
+    // let weighted_y: f64 = window_points
+    //     .iter()
+    //     .zip(weights.iter())
+    //     .map(|(point, weight)| (point.y * weight))
+    //     .sum();
+
+    // Some((
+    //     (weighted_x / weight_sum) as f32,
+    //     (weighted_y / weight_sum) as f32,
+    // ))
+}
+
+struct SmoothedCursorEvent {
+    time: f32,
+    position: XY<f32>,
+    velocity: XY<f32>,
+}
+
+fn get_smoothed_cursor_events(cursor: &CursorEvents) -> Vec<SmoothedCursorEvent> {
+    let tension: f32 = 100.0;
+    let mass: f32 = 0.2;
+    let friction: f32 = 10.0;
+
+    let mut position = XY::new(cursor.moves[0].x, cursor.moves[0].y).map(|v| v as f32);
+    let mut velocity = XY::new(0.0, 0.0);
+    let mut last_time = 0.0;
+
+    let mut events = vec![SmoothedCursorEvent {
+        time: cursor.moves[0].process_time_ms as f32,
+        position,
+        velocity,
+    }];
+
+    for m in &cursor.moves {
+        let target_point = XY::new(m.x, m.y).map(|v| v as f32);
+
+        let d = target_point - position;
+        let spring_force = d * tension;
+
+        let damping_force = velocity * -friction;
+
+        let total_force = spring_force + damping_force;
+
+        let accel = total_force / mass.max(0.001);
+
+        let dt = (m.process_time_ms - last_time) as f32 / 1000.0;
+
+        velocity = velocity + accel * dt;
+        position = position + velocity * dt;
+
+        events.push(SmoothedCursorEvent {
+            time: m.process_time_ms as f32,
+            position,
+            velocity,
         })
-        .collect();
+    }
 
-    let Some(start_i) = cursor.moves.windows(2).position(|chunk| {
-        chunk[0].process_time_ms <= query_time_ms - smoothing_time
-            && chunk[1].process_time_ms > query_time_ms - smoothing_time
-    }) else {
-        return None;
-    };
-
-    let Some(end_i) = cursor.moves.windows(2).position(|chunk| {
-        chunk[0].process_time_ms <= query_time_ms && chunk[1].process_time_ms > query_time_ms
-    }) else {
-        return None;
-    };
-
-    let window = cursor.moves[start_i..end_i].to_vec();
-
-    let min_query_time = query_time_ms - smoothing_time;
-    let weights = window
-        .iter()
-        .enumerate()
-        .map(|(i, point)| {
-            let next_point = window.get(i + 1).unwrap_or(point);
-            let clamped_time_ms = (point.process_time_ms - min_query_time).max(0.0);
-            let next_clamped_time_ms = (next_point.process_time_ms - min_query_time).max(0.0);
-
-            (next_clamped_time_ms - clamped_time_ms) / smoothing_time
-        })
-        .collect::<Vec<_>>();
-
-    let weight_sum: f64 = weights.iter().sum();
-    let weighted_x: f64 = window_points
-        .iter()
-        .zip(weights.iter())
-        .map(|(point, weight)| (point.x * weight))
-        .sum();
-    let weighted_y: f64 = window_points
-        .iter()
-        .zip(weights.iter())
-        .map(|(point, weight)| (point.y * weight))
-        .sum();
-
-    Some((
-        (weighted_x / weight_sum) as f32,
-        (weighted_y / weight_sum) as f32,
-    ))
+    events
 }
