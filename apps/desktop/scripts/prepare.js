@@ -113,17 +113,8 @@ export async function createTauriPlatformConfigs(
         },
       },
     };
-  } else if (platform === "darwin") {
-    configFileName = "tauri.macos.conf.json";
-    baseConfig = {
-      ...baseConfig,
-      bundle: {
-        icon: ["icons/macos/icon.icns"],
-      },
-    };
-  } else {
-    throw new Error("Unsupported platform!");
   }
+
   const mergedConfig = configOptions
     ? deepMerge(baseConfig, configOptions)
     : baseConfig;
