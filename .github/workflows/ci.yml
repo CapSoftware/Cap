@@ -56,7 +56,15 @@ jobs:
 
   build-desktop:
     name: Build Desktop
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+    runs-on: ${{ matrix.settings.runner }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
