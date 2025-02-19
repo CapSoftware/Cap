@@ -191,12 +191,12 @@ export const HomePage = () => {
               x: [0, "100vw"],
             }}
             transition={{
-              duration: 500,
+              duration: 300,
               repeat: Infinity,
               repeatType: "reverse",
             }}
             className="absolute 
-            top-[180px] w-full max-w-[280px] z-[4] right-[600px] select-none"
+            top-[180px] w-full max-w-[280px] z-[4] right-[60px] md:right-[600px] select-none"
             src="./illustrations/smallcloudthree.webp"
             alt="smallcloudfour"
           />
@@ -213,7 +213,7 @@ export const HomePage = () => {
               repeatType: "reverse",
               ease: "linear",
             }}
-            className="absolute top-[20px] left-[-400px] select-none z-[5]"
+            className="absolute top-[20px] left-[-60px] md:left-[-400px] select-none z-[5]"
             src="./illustrations/bottomcloud.webp"
             alt="bottomcloudthree"
           />
