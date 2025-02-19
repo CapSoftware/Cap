@@ -226,7 +226,7 @@ fn get_cursor_image_data() -> Option<CursorData> {
 }
 
 #[cfg(windows)]
-fn get_cursor_image_data() -> Option<Vec<u8>> {
+fn get_cursor_image_data() -> Option<CursorData> {
     use windows::Win32::Foundation::{HWND, POINT};
     use windows::Win32::Graphics::Gdi::{
         BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, GetObjectA,
@@ -351,6 +351,9 @@ fn get_cursor_image_data() -> Option<Vec<u8>> {
             )
             .ok()?;
 
-        Some(png_data)
+        Some(CursorData {
+            image: png_data,
+            hotspot: XY::new(0.0, 0.0),
+        })
     }
 }
