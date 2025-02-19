@@ -88,6 +88,7 @@ async function main() {
 
     await fs.mkdir(targetDir, { recursive: true });
 
+    let downloadedFfmpeg = false;
     const ffmpegZip = `ffmpeg-${FFMPEG_VERSION}.zip`;
     const ffmpegZipPath = path.join(targetDir, ffmpegZip);
     if (!(await fileExists(ffmpegZipPath))) {
@@ -96,11 +97,13 @@ async function main() {
         .then((b) => b.arrayBuffer());
       await fs.writeFile(ffmpegZipPath, Buffer.from(ffmpegZipBytes));
       console.log(`Downloaded ${ffmpegZip}`);
+      downloadedFfmpeg = true;
     } else console.log(`Using cached ${ffmpegZip}`);
 
     const ffmpegDir = path.join(targetDir, "ffmpeg");
-    if (!(await fileExists(ffmpegDir))) {
-      await exec(`tar xf ${ffmpegZip} -C ${targetDir}`);
+    if (!(await fileExists(ffmpegDir)) || downloadedFfmpeg) {
+      await exec(`tar xf ${ffmpegZipPath} -C ${targetDir}`);
+      await fs.rm(ffmpegDir, { recursive: true, force: true }).catch(() => {});
       await fs.rename(path.join(targetDir, FFMPEG_ZIP_NAME), ffmpegDir);
       console.log("Extracted ffmpeg");
     } else console.log("Using cached ffmpeg");
@@ -150,7 +153,7 @@ async function main() {
       path.join(__root, ".cargo/config.toml"),
       `[env]
 FFMPEG_DIR = { relative = true, force = true, value = "target/native-deps" }
-LIBCLANG_PATH = "${libclangPath}"`
+LIBCLANG_PATH = "${libclangPath.replaceAll("\\", "/")}"`
     );
   }
 }
