@@ -53,3 +53,43 @@ jobs:
         uses: actions-rs-plus/clippy-check@v2
         with:
           args: --workspace --all-features --locked
+
+  build-desktop:
+    name: Build Desktop
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.settings.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.settings.target }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.8.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build macOS apps
+        working-directory: apps/desktop
+        run: |
+          pnpm -w cap-setup
+          pnpm tauri build --debug
+        env:
+          # https://github.com/tauri-apps/tauri-action/issues/740
+          CI: false

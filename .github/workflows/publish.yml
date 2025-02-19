@@ -201,9 +201,6 @@ jobs:
       - name: Output .env file
         run: cat apps/desktop/.env
 
-      - name: Cargo clean
-        run: cargo clean
-
       - name: Build macOS apps
         working-directory: apps/desktop
         run: |
