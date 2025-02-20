@@ -63,6 +63,7 @@ jobs:
 
       - name: Run setup
         run: |
+          touch .env
           pnpm cap-setup
 
       - name: Run Clippy
