@@ -62,8 +62,10 @@ jobs:
         settings:
           - target: aarch64-apple-darwin
             runner: macos-latest
+            arch: aarch64
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
+            arch: x86_64
     runs-on: ${{ matrix.settings.runner }}
     steps:
       - name: Checkout repository
@@ -122,3 +124,4 @@ jobs:
         env:
           # https://github.com/tauri-apps/tauri-action/issues/740
           CI: false
+          RUST_ARCH: ${{ matrix.settings.arch }}

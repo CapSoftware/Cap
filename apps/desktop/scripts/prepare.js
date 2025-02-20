@@ -72,7 +72,7 @@ export async function createTauriPlatformConfigs(
 ) {
   const srcTauri = path.join(__dirname, "../src-tauri/");
   let baseConfig = {};
-  let configFileName = "";
+  let configFileName = null;
 
   console.log(`Updating Platform (${platform}) Tauri config...`);
   if (platform === "win32") {
@@ -90,6 +90,8 @@ export async function createTauriPlatformConfigs(
       },
     };
   }
+
+  if (!configFileName) return;
 
   const mergedConfig = configOptions
     ? deepMerge(baseConfig, configOptions)
