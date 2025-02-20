@@ -143,8 +143,6 @@ jobs:
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
     runs-on: ${{ matrix.settings.runner }}
-    env:
-      RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -200,6 +198,7 @@ jobs:
           echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
           echo "NEXT_PUBLIC_CAP_AWS_REGION=${{ secrets.NEXT_PUBLIC_CAP_AWS_REGION }}" >> .env
           echo "NEXT_PUBLIC_CAP_AWS_BUCKET=${{ secrets.NEXT_PUBLIC_CAP_AWS_BUCKET }}" >> .env
+          echo 'RUST_TARGET_TRIPLE=${{ matrix.settings.target }}' >> .env
 
       - name: Copy .env to apps/desktop
         run: cp .env apps/desktop/.env

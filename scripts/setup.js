@@ -14,6 +14,7 @@ const __dirname = path.dirname(__filename);
 const __root = path.resolve(path.join(__dirname, ".."));
 const targetDir = path.join(__root, "target");
 
+console.log("RUST_TARGET_TRIPLE", process.env.RUST_TARGET_TRIPLE);
 const arch =
   process.env.RUST_TARGET_TRIPLE?.split("-")[0] ?? process.arch === "arm64"
     ? "aarch64"
