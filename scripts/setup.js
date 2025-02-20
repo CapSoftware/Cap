@@ -15,9 +15,8 @@ const __root = path.resolve(path.join(__dirname, ".."));
 const targetDir = path.join(__root, "target");
 
 const arch =
-  process.env.RUST_TARGET_TRIPLE?.split("-")[0] ?? process.arch === "arm64"
-    ? "aarch64"
-    : "x86_64";
+  process.env.RUST_TARGET_TRIPLE?.split("-")[0] ??
+  (process.arch === "arm64" ? "aarch64" : "x86_64");
 
 async function main() {
   await fs.mkdir(targetDir, { recursive: true });
