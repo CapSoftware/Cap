@@ -43,13 +43,13 @@
       "icons/macos/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "assets/backgrounds/macOS/*",
-      "assets/backgrounds/blue/*",
-      "assets/backgrounds/dark/*",
-      "assets/backgrounds/orange/*",
-      "assets/backgrounds/purple/*"
-    ],
+    "resources": {
+      "assets/backgrounds/macOS/*": "assets/backgrounds/macOS/",
+      "assets/backgrounds/blue/*": "assets/backgrounds/blue/",
+      "assets/backgrounds/dark/*": "assets/backgrounds/dark/",
+      "assets/backgrounds/orange/*": "assets/backgrounds/orange/",
+      "assets/backgrounds/purple/*": "assets/backgrounds/purple/"
+    },
     "macOS": {
       "dmg": {
         "background": "assets/dmg-background.png",
