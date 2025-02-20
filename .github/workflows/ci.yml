@@ -50,6 +50,12 @@ jobs:
         with:
           shared-key: ${{ matrix.settings.target }}
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
       - name: Run setup
         run: |
           pnpm cap-setup
