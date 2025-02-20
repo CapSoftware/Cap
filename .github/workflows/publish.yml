@@ -143,6 +143,8 @@ jobs:
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
     runs-on: ${{ matrix.settings.runner }}
+    env:
+      RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -225,7 +227,6 @@ jobs:
           APPLE_KEYCHAIN: ${{ runner.temp }}/build.keychain
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
 
       - name: Upload assets
         uses: crabnebula-dev/cloud-release@v0
