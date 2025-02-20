@@ -138,13 +138,10 @@ jobs:
         settings:
           - target: x86_64-apple-darwin
             runner: macos-latest
-            arch: x86_64
           - target: aarch64-apple-darwin
             runner: macos-latest
-            arch: aarch64
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
-            arch: x86_64
     runs-on: ${{ matrix.settings.runner }}
     steps:
       - name: Checkout repository
@@ -201,6 +198,7 @@ jobs:
           echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
           echo "NEXT_PUBLIC_CAP_AWS_REGION=${{ secrets.NEXT_PUBLIC_CAP_AWS_REGION }}" >> .env
           echo "NEXT_PUBLIC_CAP_AWS_BUCKET=${{ secrets.NEXT_PUBLIC_CAP_AWS_BUCKET }}" >> .env
+          echo 'RUST_TARGET_TRIPLE=${{ matrix.settings.target }}' >> .env
 
       - name: Copy .env to apps/desktop
         run: cp .env apps/desktop/.env
@@ -228,7 +226,6 @@ jobs:
           APPLE_KEYCHAIN: ${{ runner.temp }}/build.keychain
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          RUST_ARCH: ${{ matrix.settings.arch }}
 
       - name: Upload assets
         uses: crabnebula-dev/cloud-release@v0
