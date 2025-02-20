@@ -233,6 +233,7 @@ jobs:
           api-key: ${{ secrets.CN_API_KEY }}
 
       - name: Upload debug symbols to Sentry
+        if: ${{ matrix.settings.runner == 'macos-latest' }}
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         working-directory: target
