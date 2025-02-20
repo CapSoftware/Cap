@@ -15,7 +15,9 @@ const __root = path.resolve(path.join(__dirname, ".."));
 const targetDir = path.join(__root, "target");
 
 const arch =
-  process.env.RUST_ARCH ?? process.arch === "arm64" ? "aarch64" : "x86_64";
+  process.env.RUST_TARGET_TRIPLE?.split("-")[0] ?? process.arch === "arm64"
+    ? "aarch64"
+    : "x86_64";
 
 async function main() {
   await fs.mkdir(targetDir, { recursive: true });
@@ -29,15 +31,13 @@ async function main() {
       aarch64: "native-deps-aarch64-darwin-apple.tar.xz",
     };
 
-    const nativeDepsTar = `native-deps-${NATIVE_DEPS_VERSION}.tar.xz`;
+    const nativeDepsTar = NATIVE_DEPS_ASSETS[arch];
     const nativeDepsTarPath = path.join(targetDir, nativeDepsTar);
     let downloadedNativeDeps = false;
 
     if (!(await fileExists(nativeDepsTarPath))) {
       console.log(`Downloading ${nativeDepsTar}`);
-      const nativeDepsBytes = await fetch(
-        `${NATIVE_DEPS_URL}/${NATIVE_DEPS_ASSETS[arch]}`
-      )
+      const nativeDepsBytes = await fetch(`${NATIVE_DEPS_URL}/${nativeDepsTar}`)
         .then((r) => r.blob())
         .then((b) => b.arrayBuffer());
       await fs.writeFile(nativeDepsTarPath, Buffer.from(nativeDepsBytes));

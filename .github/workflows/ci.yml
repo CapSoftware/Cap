@@ -62,10 +62,8 @@ jobs:
         settings:
           - target: aarch64-apple-darwin
             runner: macos-latest
-            arch: aarch64
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
-            arch: x86_64
     runs-on: ${{ matrix.settings.runner }}
     steps:
       - name: Checkout repository
@@ -120,8 +118,8 @@ jobs:
         working-directory: apps/desktop
         run: |
           pnpm -w cap-setup
-          pnpm tauri build --debug
+          pnpm tauri build --debug --target ${{ matrix.settings.target }}
         env:
           # https://github.com/tauri-apps/tauri-action/issues/740
           CI: false
-          RUST_ARCH: ${{ matrix.settings.arch }}
+          RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
