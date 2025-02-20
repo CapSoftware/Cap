@@ -1,4 +1,4 @@
-import { ApiFetcher, AppRouter, initClient } from "@ts-rest/core";
+import { ApiFetcher, initClient } from "@ts-rest/core";
 import { contract, licenseContract } from "@cap/web-api-contract";
 import { fetch } from "@tauri-apps/plugin-http";
 

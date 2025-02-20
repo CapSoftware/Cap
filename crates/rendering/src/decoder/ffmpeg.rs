@@ -11,6 +11,7 @@ use ffmpeg::{
 };
 use ffmpeg_hw_device::{CodecContextExt, HwDevice};
 use ffmpeg_sys_next::{avcodec_find_decoder, AVHWDeviceType};
+use tokio::sync::oneshot;
 
 use super::{pts_to_frame, DecodedFrame, VideoDecoderMessage, FRAME_CACHE_SIZE};
 
@@ -78,6 +79,7 @@ impl FfmpegDecoder {
         path: PathBuf,
         fps: u32,
         rx: mpsc::Receiver<VideoDecoderMessage>,
+        ready_tx: oneshot::Sender<Result<(), String>>,
     ) {
         std::thread::spawn(move || {
             let mut input = ffmpeg::format::input(&path).unwrap();
@@ -115,24 +117,15 @@ impl FfmpegDecoder {
                 }
             }
 
-            let hw_device: Option<HwDevice> = {
-                #[cfg(target_os = "macos")]
-                {
-                    decoder
-                        .try_use_hw_device(
-                            AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
-                            Pixel::NV12,
-                        )
-                        .ok()
-                }
-                #[cfg(target_os = "windows")]
-                {
-                    decoder
-                        .try_use_hw_device(AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2, Pixel::DXVA2_VLD)
-                        .ok()
-                }
-
-                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            let hw_device: Option<HwDevice> = if cfg!(target_os = "macos") {
+                decoder
+                    .try_use_hw_device(AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX, Pixel::NV12)
+                    .ok()
+            } else if cfg!(target_os = "windows") {
+                decoder
+                    .try_use_hw_device(AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2, Pixel::DXVA2_VLD)
+                    .ok()
+            } else {
                 None
             };
 
@@ -157,6 +150,8 @@ impl FfmpegDecoder {
             let mut peekable_requests = PeekableReceiver { rx, peeked: None };
 
             let mut packets = input.packets().peekable();
+
+            ready_tx.send(Ok(()));
 
             while let Ok(r) = peekable_requests.recv() {
                 match r {

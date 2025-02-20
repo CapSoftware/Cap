@@ -68,12 +68,6 @@ export default function Settings(props: RouteSectionProps) {
                 },
                 {
                   type: "link",
-                  href: "config",
-                  name: "Recording Config",
-                  icon: IconLucideVideo,
-                },
-                {
-                  type: "link",
                   href: "hotkeys",
                   name: "Shortcuts",
                   icon: IconCapHotkeys,

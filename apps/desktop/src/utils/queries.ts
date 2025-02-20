@@ -95,11 +95,6 @@ export function createOptionsQuery() {
     createStore<PartialRecordingOptions>({
       cameraLabel: null,
       audioInputName: null,
-      fps: FPS,
-      outputResolution: {
-        width: 1920,
-        height: 1080,
-      },
     }),
     { name: "recordingOptionsQuery" }
   );

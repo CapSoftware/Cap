@@ -1,4 +1,3 @@
-use cap_project::Resolution;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
@@ -32,8 +31,6 @@ pub struct GeneralSettingsStore {
     #[serde(default)]
     pub theme: AppTheme,
     #[serde(default)]
-    pub recording_config: Option<RecordingConfig>,
-    #[serde(default)]
     pub commercial_license: Option<CommercialLicense>,
     #[serde(default)]
     pub last_version: Option<String>,
@@ -61,7 +58,6 @@ impl Default for GeneralSettingsStore {
             disable_auto_open_links: false,
             has_completed_startup: false,
             theme: AppTheme::System,
-            recording_config: None,
             commercial_license: None,
             last_version: None,
         }
@@ -75,25 +71,6 @@ pub enum AppTheme {
     System,
     Light,
     Dark,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct RecordingConfig {
-    pub fps: u32,
-    pub resolution: Resolution,
-}
-
-impl Default for RecordingConfig {
-    fn default() -> Self {
-        Self {
-            fps: 30,
-            resolution: Resolution {
-                width: 1920,
-                height: 1080,
-            },
-        }
-    }
 }
 
 fn true_b() -> bool {

@@ -14,10 +14,9 @@ const __dirname = path.dirname(__filename);
 const __root = path.resolve(path.join(__dirname, ".."));
 const targetDir = path.join(__root, "target");
 
-const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
-
-// IMPORTANT: Increment this number when the setup script changes
-const SETUP_VERSION_NUMBER = 1;
+const arch =
+  process.env.RUST_TARGET_TRIPLE?.split("-")[0] ??
+  (process.arch === "arm64" ? "aarch64" : "x86_64");
 
 async function main() {
   await fs.mkdir(targetDir, { recursive: true });
@@ -31,15 +30,13 @@ async function main() {
       aarch64: "native-deps-aarch64-darwin-apple.tar.xz",
     };
 
-    const nativeDepsTar = `native-deps-${NATIVE_DEPS_VERSION}.tar.xz`;
+    const nativeDepsTar = NATIVE_DEPS_ASSETS[arch];
     const nativeDepsTarPath = path.join(targetDir, nativeDepsTar);
     let downloadedNativeDeps = false;
 
     if (!(await fileExists(nativeDepsTarPath))) {
       console.log(`Downloading ${nativeDepsTar}`);
-      const nativeDepsBytes = await fetch(
-        `${NATIVE_DEPS_URL}/${NATIVE_DEPS_ASSETS[arch]}`
-      )
+      const nativeDepsBytes = await fetch(`${NATIVE_DEPS_URL}/${nativeDepsTar}`)
         .then((r) => r.blob())
         .then((b) => b.arrayBuffer());
       await fs.writeFile(nativeDepsTarPath, Buffer.from(nativeDepsBytes));
@@ -91,6 +88,7 @@ async function main() {
 
     await fs.mkdir(targetDir, { recursive: true });
 
+    let downloadedFfmpeg = false;
     const ffmpegZip = `ffmpeg-${FFMPEG_VERSION}.zip`;
     const ffmpegZipPath = path.join(targetDir, ffmpegZip);
     if (!(await fileExists(ffmpegZipPath))) {
@@ -99,11 +97,13 @@ async function main() {
         .then((b) => b.arrayBuffer());
       await fs.writeFile(ffmpegZipPath, Buffer.from(ffmpegZipBytes));
       console.log(`Downloaded ${ffmpegZip}`);
+      downloadedFfmpeg = true;
     } else console.log(`Using cached ${ffmpegZip}`);
 
     const ffmpegDir = path.join(targetDir, "ffmpeg");
-    if (!(await fileExists(ffmpegDir))) {
-      await exec(`tar xf ${ffmpegZip} -C ${targetDir}`);
+    if (!(await fileExists(ffmpegDir)) || downloadedFfmpeg) {
+      await exec(`tar xf ${ffmpegZipPath} -C ${targetDir}`);
+      await fs.rm(ffmpegDir, { recursive: true, force: true }).catch(() => {});
       await fs.rename(path.join(targetDir, FFMPEG_ZIP_NAME), ffmpegDir);
       console.log("Extracted ffmpeg");
     } else console.log("Using cached ffmpeg");
@@ -138,6 +138,23 @@ async function main() {
       }
     );
     console.log("Copied ffmpeg/lib and ffmpeg/include to target/native-deps");
+
+    const { stdout: vcInstallDir } = await exec(
+      '$(& "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath)',
+      { shell: "powershell.exe" }
+    );
+
+    const libclangPath = path.join(
+      vcInstallDir.trim(),
+      "VC/Tools/LLVM/x64/bin/libclang.dll"
+    );
+
+    await fs.writeFile(
+      path.join(__root, ".cargo/config.toml"),
+      `[env]
+FFMPEG_DIR = { relative = true, force = true, value = "target/native-deps" }
+LIBCLANG_PATH = "${libclangPath.replaceAll("\\", "/")}"`
+    );
   }
 }
 
