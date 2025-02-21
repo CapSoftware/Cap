@@ -135,8 +135,7 @@ pub async fn start_recording(
     }
 
     if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
-        window.eval("window.location.reload()").unwrap();
-        window.show().unwrap();
+        window.eval("window.location.reload()").ok();
     } else {
         ShowCapWindow::InProgressRecording { position: None }
             .show(&app)
