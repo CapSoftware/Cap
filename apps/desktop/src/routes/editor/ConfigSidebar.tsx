@@ -1357,7 +1357,7 @@ export function ConfigSidebar() {
                       <div class="bg-gray-100 flex-1" />
                     </KTabs.Indicator>
                   </KTabs.List>
-                  <KTabs.Content value="manual">
+                  <KTabs.Content value="manual" tabIndex="">
                     <Show
                       when={(() => {
                         const m = value().segment.mode;
