@@ -1164,6 +1164,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-video-decode"
+version = "0.1.0"
+dependencies = [
+ "ffmpeg-next",
+ "ffmpeg-sys-next",
+]
+
+[[package]]
 name = "cargo-platform"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
