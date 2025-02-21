@@ -241,7 +241,17 @@ impl ShowCapWindow {
                     ))
                     .transparent(true);
 
-                window_builder.build()?
+                let window = window_builder.build()?;
+
+                #[cfg(target_os = "macos")]
+                {
+                    crate::platform::set_window_level(
+                        window.as_ref().window(),
+                        objc2_app_kit::NSScreenSaverWindowLevel,
+                    );
+                }
+
+                window
             }
             Self::WindowCaptureOccluder => {
                 let mut window_builder = self
@@ -334,7 +344,8 @@ impl ShowCapWindow {
 
                 let height = 40.0;
 
-                self.window_builder(app, "/in-progress-recording")
+                let window = self
+                    .window_builder(app, "/in-progress-recording")
                     .maximized(false)
                     .resizable(false)
                     .fullscreen(false)
@@ -349,7 +360,17 @@ impl ShowCapWindow {
                         (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
                     )
                     .skip_taskbar(true)
-                    .build()?
+                    .build()?;
+
+                #[cfg(target_os = "macos")]
+                {
+                    crate::platform::set_window_level(
+                        window.as_ref().window(),
+                        objc2_app_kit::NSScreenSaverWindowLevel,
+                    );
+                }
+
+                window
             }
             Self::PrevRecordings => {
                 let window = self
