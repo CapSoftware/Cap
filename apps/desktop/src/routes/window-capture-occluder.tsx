@@ -9,7 +9,7 @@ export default function () {
 
   getAllWindows().then((w) =>
     w.forEach((w) => {
-      if (w.label === "camera" || w.label === "in-progress-recordings")
+      if (w.label === "camera" || w.label === "in-progress-recording")
         w.setFocus();
     })
   );
@@ -26,7 +26,7 @@ export default function () {
         {(bounds) => {
           getAllWindows().then((w) =>
             w.forEach((w) => {
-              if (w.label === "camera" || w.label === "in-progress-recordings")
+              if (w.label === "camera" || w.label === "in-progress-recording")
                 w.setFocus();
             })
           );
