@@ -135,12 +135,10 @@ jobs:
       - name: Output .env file
         run: cat apps/desktop/.env
 
-      - name: Build macOS apps
+      - name: Build app
         working-directory: apps/desktop
         run: |
           pnpm -w cap-setup
-          pnpm tauri build --debug --target ${{ matrix.settings.target }}
+          pnpm tauri build --debug --target ${{ matrix.settings.target }} --nobundle
         env:
-          # https://github.com/tauri-apps/tauri-action/issues/740
-          CI: false
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}

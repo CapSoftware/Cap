@@ -17,7 +17,7 @@ import {
 import { useEditorContext } from "./context";
 
 export function Field(
-  props: ParentProps<{ name: string; icon?: JSX.Element; value?: string }>
+  props: ParentProps<{ name: string; icon?: JSX.Element; value?: JSX.Element }>
 ) {
   return (
     <div class="flex flex-col gap-[0.75rem]">

@@ -26,6 +26,7 @@ pub mod decoder;
 mod frame_pipeline;
 mod layers;
 mod project_recordings;
+mod spring_mass_damper;
 mod zoom;
 
 pub use coord::*;

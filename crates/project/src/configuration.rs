@@ -307,7 +307,13 @@ pub struct CursorConfiguration {
     pub size: u32,
     r#type: CursorType,
     pub animation_style: CursorAnimationStyle,
-    pub smoothing_time: f32,
+    pub tension: f32,
+    pub mass: f32,
+    pub friction: f32,
+    #[serde(default = "CursorConfiguration::default_raw")]
+    pub raw: bool,
+    #[serde(default)]
+    pub motion_blur: f32,
 }
 
 impl Default for CursorConfiguration {
@@ -317,8 +323,17 @@ impl Default for CursorConfiguration {
             size: 100,
             r#type: CursorType::default(),
             animation_style: CursorAnimationStyle::Regular,
-            smoothing_time: 0.2,
+            tension: 100.0,
+            mass: 1.0,
+            friction: 20.0,
+            raw: false,
+            motion_blur: 0.5,
         }
+    }
+}
+impl CursorConfiguration {
+    fn default_raw() -> bool {
+        true
     }
 }
 
@@ -410,7 +425,6 @@ pub struct ProjectConfiguration {
     pub hotkeys: HotkeysConfiguration,
     #[serde(default)]
     pub timeline: Option<TimelineConfiguration>,
-    pub motion_blur: Option<f32>,
 }
 
 impl ProjectConfiguration {
@@ -447,7 +461,6 @@ impl Default for ProjectConfiguration {
             cursor: CursorConfiguration::default(),
             hotkeys: HotkeysConfiguration::default(),
             timeline: None,
-            motion_blur: None,
         }
     }
 }

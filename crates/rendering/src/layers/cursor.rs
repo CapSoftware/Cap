@@ -6,6 +6,7 @@ use wgpu::{include_wgsl, util::DeviceExt, FilterMode};
 
 use crate::{
     frame_pipeline::{FramePipeline, FramePipelineState},
+    spring_mass_damper::SpringMassDamperSimulation,
     zoom::InterpolatedZoom,
     Coord, DecodedSegmentFrames, ProjectUniforms, RawDisplayUVSpace, STANDARD_CURSOR_HEIGHT,
 };
@@ -147,41 +148,25 @@ impl CursorLayer {
         } = &pipeline.state;
         let segment_time = segment_frames.segment_time;
 
-        let Some(cursor_position) = interpolate_cursor_position(
+        let Some(interpolated_cursor) = interpolate_cursor(
             cursor,
             segment_time,
-            uniforms.project.cursor.smoothing_time,
+            uniforms.project.cursor.tension,
+            uniforms.project.cursor.mass,
+            uniforms.project.cursor.friction,
+            uniforms.project.cursor.raw,
         ) else {
             return;
         };
 
-        // Calculate previous position for velocity
-        // let prev_position = interpolate_cursor_position(
-        //     cursor,
-        //     segment_time - 1.0 / 30.0,
-        //     &uniforms.project.cursor.animation_style,
-        // );
-
-        // Calculate velocity in screen space
         let velocity: [f32; 2] = [0.0, 0.0];
-        // if let Some(prev_pos) = prev_position {
-        //     let curr_frame_pos =
-        //         cursor_position.to_frame_space(&constants.options, &uniforms.project, resolution_base);
-        //     let prev_frame_pos =
-        //         prev_pos.to_frame_space(&constants.options, &uniforms.project, resolution_base);
-        //     let frame_velocity = curr_frame_pos.coord - prev_frame_pos.coord;
+        // let velocity: [f32; 2] = [
+        //     interpolated_cursor.velocity.x * 75.0,
+        //     interpolated_cursor.velocity.y * 75.0,
+        // ];
 
-        //     // Convert to pixels per frame
-        //     [frame_velocity.x as f32, frame_velocity.y as f32]
-        // } else {
-        //     [0.0, 0.0]
-        // };
-
-        // Calculate motion blur amount based on velocity magnitude
         let speed = (velocity[0] * velocity[0] + velocity[1] * velocity[1]).sqrt();
-        let motion_blur_amount =
-            (speed * 0.3).min(1.0) * uniforms.project.motion_blur.unwrap_or(0.8);
-
+        let motion_blur_amount = (speed * 0.3).min(1.0) * 0.0; // uniforms.project.cursor.motion_blur;
         let cursor_event = find_cursor_event(&cursor, segment_time);
 
         let last_click_time = cursor
@@ -210,7 +195,8 @@ impl CursorLayer {
             STANDARD_CURSOR_HEIGHT * cursor_size_percentage,
         ];
 
-        let position = cursor_position
+        let position = interpolated_cursor
+            .position
             .to_frame_space(&constants.options, &uniforms.project, resolution_base)
             .to_zoomed_frame_space(&constants.options, &uniforms.project, resolution_base, zoom);
         let relative_position = [position.x as f32, position.y as f32];
@@ -330,11 +316,19 @@ pub fn find_cursor_event(cursor: &CursorEvents, time: f32) -> &CursorMoveEvent {
     event
 }
 
-fn interpolate_cursor_position(
+struct InterpolatedCursorPosition {
+    position: Coord<RawDisplayUVSpace>,
+    velocity: XY<f32>,
+}
+
+fn interpolate_cursor(
     cursor: &CursorEvents,
     time_secs: f32,
-    smoothing_time: f32,
-) -> Option<Coord<RawDisplayUVSpace>> {
+    tension: f32,
+    mass: f32,
+    friction: f32,
+    raw: bool,
+) -> Option<InterpolatedCursorPosition> {
     let time_ms = (time_secs * 1000.0) as f64;
 
     if cursor.moves.is_empty() {
@@ -344,150 +338,139 @@ fn interpolate_cursor_position(
     if cursor.moves[0].process_time_ms > time_ms.into() {
         let event = &cursor.moves[0];
 
-        return Some(Coord::new(XY {
-            x: event.x,
-            y: event.y,
-        }));
+        return Some(InterpolatedCursorPosition {
+            position: Coord::new(XY {
+                x: event.x,
+                y: event.y,
+            }),
+            velocity: XY::new(0.0, 0.0),
+        });
     }
 
     if let Some(event) = cursor.moves.last() {
         if event.process_time_ms < time_ms.into() {
-            return Some(Coord::new(XY {
-                x: event.x,
-                y: event.y,
-            }));
+            return Some(InterpolatedCursorPosition {
+                position: Coord::new(XY {
+                    x: event.x,
+                    y: event.y,
+                }),
+                velocity: XY::new(0.0, 0.0),
+            });
         }
     }
 
-    let position = get_smoothed_position(cursor, time_secs as f64, smoothing_time as f64)?;
+    if raw {
+        let pos = cursor.moves.windows(2).enumerate().find_map(|(i, chunk)| {
+            if time_ms >= chunk[0].process_time_ms && time_ms < chunk[1].process_time_ms {
+                let c = &chunk[0];
+                Some(XY::new(c.x as f32, c.y as f32))
+            } else {
+                None
+            }
+        })?;
 
-    // let Some(position) = cursor.moves.windows(2).enumerate().find_map(|(i, chunk)| {
-    //     if time_ms >= chunk[0].process_time_ms && time_ms < chunk[1].process_time_ms {
-    //         Some(&chunk[0])
-    //     } else {
-    //         None
-    //     }
-    // }) else {
-    //     return None;
-    // };
-
-    Some(Coord::new(XY {
-        x: position.0 as f64,
-        y: position.1 as f64,
-    }))
+        Some(InterpolatedCursorPosition {
+            position: Coord::new(XY {
+                x: pos.x as f64,
+                y: pos.y as f64,
+            }),
+            velocity: XY::new(0.0, 0.0),
+        })
+    } else {
+        let events = get_smoothed_cursor_events(&cursor.moves, tension, mass, friction);
+        interpolate_smoothed_position(&events, time_secs as f64, tension, mass, friction)
+    }
 }
 
-fn get_smoothed_position(
-    cursor: &CursorEvents,
+fn interpolate_smoothed_position(
+    smoothed_events: &[SmoothedCursorEvent],
     query_time: f64,
-    smoothing_time: f64,
-) -> Option<XY<f32>> {
-    if cursor.moves.is_empty() {
+    tension: f32,
+    mass: f32,
+    friction: f32,
+) -> Option<InterpolatedCursorPosition> {
+    if smoothed_events.is_empty() {
         return None;
     }
 
-    // let query_time_ms = query_time * 1000.0;
-    // dbg!(smoothing_time, query_time_ms);
+    let mut sim = SpringMassDamperSimulation::new(tension, mass, friction);
 
-    // let window_points: Vec<_> = cursor
-    //     .moves
-    //     .iter()
-    //     .filter(|point| {
-    //         let time_diff = query_time_ms - point.process_time_ms;
+    let query_time_ms = (query_time * 1000.0) as f32;
 
-    //         time_diff >= 0.0 && time_diff <= smoothing_time
-    //     })
-    //     .collect();
+    match smoothed_events
+        .windows(2)
+        .find(|chunk| chunk[0].time <= query_time_ms && query_time_ms < chunk[1].time)
+    {
+        Some(c) => {
+            sim.set_position(c[0].position);
+            sim.set_velocity(c[0].velocity);
+            sim.set_target_position(c[0].target_position);
+            sim.run(query_time_ms - c[0].time);
+        }
+        None => {
+            let e = smoothed_events.last().unwrap();
+            sim.set_position(e.position);
+            sim.set_velocity(e.velocity);
+            sim.set_target_position(e.target_position);
+            sim.run(query_time_ms - e.time);
+        }
+    };
 
-    // let Some(start_i) = cursor.moves.windows(2).position(|chunk| {
-    //     chunk[0].process_time_ms <= query_time_ms - smoothing_time
-    //         && chunk[1].process_time_ms > query_time_ms - smoothing_time
-    // }) else {
-    //     return None;
-    // };
-
-    // let Some(end_i) = cursor.moves.windows(2).position(|chunk| {
-    //     chunk[0].process_time_ms <= query_time_ms && chunk[1].process_time_ms > query_time_ms
-    // }) else {
-    //     return None;
-    // };
-
-    // let window = cursor.moves[start_i..end_i].to_vec();
-
-    // let min_query_time = query_time_ms - smoothing_time;
-    // let weights = window
-    //     .iter()
-    //     .enumerate()
-    //     .map(|(i, point)| {
-    //         let next_point = window.get(i + 1).unwrap_or(point);
-    //         let clamped_time_ms = (point.process_time_ms - min_query_time).max(0.0);
-    //         let next_clamped_time_ms = (next_point.process_time_ms - min_query_time).max(0.0);
-
-    //         (next_clamped_time_ms - clamped_time_ms) / smoothing_time
-    //     })
-    //     .collect::<Vec<_>>();
-
-    // let weight_sum: f64 = weights.iter().sum();
-    // let weighted_x: f64 = window_points
-    //     .iter()
-    //     .zip(weights.iter())
-    //     .map(|(point, weight)| (point.x * weight))
-    //     .sum();
-    // let weighted_y: f64 = window_points
-    //     .iter()
-    //     .zip(weights.iter())
-    //     .map(|(point, weight)| (point.y * weight))
-    //     .sum();
-
-    // Some((
-    //     (weighted_x / weight_sum) as f32,
-    //     (weighted_y / weight_sum) as f32,
-    // ))
+    Some(InterpolatedCursorPosition {
+        position: Coord::new(sim.position.map(|v| v as f64)),
+        velocity: sim.velocity,
+    })
 }
 
+#[derive(Debug)]
 struct SmoothedCursorEvent {
     time: f32,
+    target_position: XY<f32>,
     position: XY<f32>,
     velocity: XY<f32>,
 }
 
-fn get_smoothed_cursor_events(cursor: &CursorEvents) -> Vec<SmoothedCursorEvent> {
-    let tension: f32 = 100.0;
-    let mass: f32 = 0.2;
-    let friction: f32 = 10.0;
-
-    let mut position = XY::new(cursor.moves[0].x, cursor.moves[0].y).map(|v| v as f32);
-    let mut velocity = XY::new(0.0, 0.0);
+fn get_smoothed_cursor_events(
+    moves: &[CursorMoveEvent],
+    tension: f32,
+    mass: f32,
+    friction: f32,
+) -> Vec<SmoothedCursorEvent> {
     let mut last_time = 0.0;
 
-    let mut events = vec![SmoothedCursorEvent {
-        time: cursor.moves[0].process_time_ms as f32,
-        position,
-        velocity,
-    }];
+    let mut events = vec![];
 
-    for m in &cursor.moves {
-        let target_point = XY::new(m.x, m.y).map(|v| v as f32);
+    let mut sim = SpringMassDamperSimulation::new(tension, mass, friction);
 
-        let d = target_point - position;
-        let spring_force = d * tension;
+    sim.set_position(XY::new(moves[0].x, moves[0].y).map(|v| v as f32));
+    sim.set_velocity(XY::new(0.0, 0.0));
 
-        let damping_force = velocity * -friction;
+    if moves[0].process_time_ms > 0.0 {
+        events.push(SmoothedCursorEvent {
+            time: 0.0,
+            target_position: sim.position,
+            position: sim.position,
+            velocity: sim.velocity,
+        })
+    }
 
-        let total_force = spring_force + damping_force;
+    for (i, m) in moves.iter().enumerate() {
+        let target_position = moves
+            .get(i + 1)
+            .map(|e| XY::new(e.x, e.y).map(|v| v as f32))
+            .unwrap_or(sim.target_position);
+        sim.set_target_position(target_position);
 
-        let accel = total_force / mass.max(0.001);
+        sim.run(m.process_time_ms as f32 - last_time);
 
-        let dt = (m.process_time_ms - last_time) as f32 / 1000.0;
-
-        velocity = velocity + accel * dt;
-        position = position + velocity * dt;
+        last_time = m.process_time_ms as f32;
 
         events.push(SmoothedCursorEvent {
             time: m.process_time_ms as f32,
-            position,
-            velocity,
-        })
+            target_position,
+            position: sim.position,
+            velocity: sim.velocity,
+        });
     }
 
     events
