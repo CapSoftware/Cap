@@ -156,6 +156,18 @@ FFMPEG_DIR = { relative = true, force = true, value = "target/native-deps" }
 LIBCLANG_PATH = "${libclangPath.replaceAll("\\", "/")}"`
     );
   }
+
+  if (!(await fileExists(path.join(__root, ".env")))) {
+    await fs.copyFile(
+      path.join(__root, ".env"),
+      path.join(__root, ".env.example")
+    );
+  }
+
+  await fs.copyFile(
+    path.join(__root, ".env"),
+    path.join(__root, "apps/desktop/.env")
+  );
 }
 
 main();
