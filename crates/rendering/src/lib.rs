@@ -10,8 +10,8 @@ use frame_pipeline::{FramePipeline, FramePipelineEncoder, FramePipelineState};
 use futures::future::OptionFuture;
 use futures::FutureExt;
 use layers::{
-    Background, BackgroundBlurPipeline, BackgroundLayer, CameraLayer, CursorLayer, CursorPipeline,
-    DisplayLayer, GradientOrColorPipeline, ImageBackgroundPipeline,
+    Background, BackgroundBlurPipeline, BackgroundLayer, CameraLayer, CursorLayer, DisplayLayer,
+    GradientOrColorPipeline, ImageBackgroundPipeline,
 };
 use specta::Type;
 use std::{collections::HashMap, sync::Arc};
@@ -26,6 +26,7 @@ pub mod decoder;
 mod frame_pipeline;
 mod layers;
 mod project_recordings;
+mod spring_mass_damper;
 mod zoom;
 
 pub use coord::*;
@@ -275,7 +276,6 @@ pub struct RenderVideoConstants {
     pub options: RenderOptions,
     composite_video_frame_pipeline: CompositeVideoFramePipeline,
     pub cursor_textures: HashMap<String, CursorTexture>,
-    cursor_pipeline: CursorPipeline,
     gradient_or_color_pipeline: GradientOrColorPipeline,
     image_background_pipeline: ImageBackgroundPipeline,
     pub background_blur_pipeline: BackgroundBlurPipeline,
@@ -304,7 +304,6 @@ impl RenderVideoConstants {
             .await?;
 
         let cursor_textures = Self::load_cursor_textures(&device, &queue, meta);
-        let cursor_pipeline = CursorPipeline::new(&device);
         let composite_video_frame_pipeline = CompositeVideoFramePipeline::new(&device);
         let gradient_or_color_pipeline = GradientOrColorPipeline::new(&device);
 
@@ -373,7 +372,6 @@ impl RenderVideoConstants {
             composite_video_frame_pipeline,
             gradient_or_color_pipeline,
             cursor_textures,
-            cursor_pipeline,
             image_background_pipeline,
             background_textures,
             screen_frame,

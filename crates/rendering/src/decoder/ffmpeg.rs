@@ -173,7 +173,7 @@ impl FfmpegDecoder {
                         let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
                         let cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
 
-                        if requested_frame <= 0
+                        if requested_frame == 0
                             || last_sent_frame
                                 .as_ref()
                                 .map(|last| {

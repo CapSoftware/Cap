@@ -142,6 +142,8 @@ app.post(
 					),
 					headers: { 'Content-Type': 'application/json' },
 				});
+
+				return new Response('Successfully sent message', { status: 200 });
 			}
 			default: {
 				return new Response('Invalid type', { status: 400 });

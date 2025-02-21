@@ -2,6 +2,7 @@ import {
   RadioGroup as KRadioGroup,
   RadioGroup,
 } from "@kobalte/core/radio-group";
+import { Collapsible as KCollapsible } from "@kobalte/core/collapsible";
 import { Tabs as KTabs } from "@kobalte/core/tabs";
 import { cx } from "cva";
 import {
@@ -351,7 +352,7 @@ export function ConfigSidebar() {
           <div class="bg-gray-100 w-full h-full" />
         </KTabs.Indicator>
       </KTabs.List>
-      <div class="p-[0.75rem] overflow-y-auto text-[0.875rem]">
+      <div class="p-[0.75rem] overflow-y-auto text-[0.875rem] h-full">
         <KTabs.Content value="background" class="flex flex-col gap-[1.5rem]">
           <Field name="Background" icon={<IconCapImage />}>
             <KTabs
@@ -1133,6 +1134,62 @@ export function ConfigSidebar() {
                   step={1}
                 />
               </Field>
+              <KCollapsible open={!project.cursor.raw}>
+                <Field
+                  name="Smooth Movement"
+                  icon={<IconHugeiconsEaseCurveControlPoints />}
+                  value={
+                    <Toggle
+                      checked={!project.cursor.raw}
+                      onChange={(value) => {
+                        setProject("cursor", "raw", !value);
+                      }}
+                    />
+                  }
+                />
+                <KCollapsible.Content class="overflow-hidden border-b border-gray-200 animate-collapsible-up ui-expanded:animate-collapsible-down transition-opacity ui-expanded:opacity-100 opacity-0">
+                  {/* if Content has padding or margin the animation doesn't look as good */}
+                  <div class="pt-4 pb-6 flex flex-col gap-4">
+                    <Field name="Tension">
+                      <Slider
+                        value={[project.cursor.tension]}
+                        onChange={(v) => setProject("cursor", "tension", v[0])}
+                        minValue={1}
+                        maxValue={500}
+                        step={1}
+                      />
+                    </Field>
+                    <Field name="Friction">
+                      <Slider
+                        value={[project.cursor.friction]}
+                        onChange={(v) => setProject("cursor", "friction", v[0])}
+                        minValue={0}
+                        maxValue={50}
+                        step={0.1}
+                      />
+                    </Field>
+                    <Field name="Mass">
+                      <Slider
+                        value={[project.cursor.mass]}
+                        onChange={(v) => setProject("cursor", "mass", v[0])}
+                        minValue={0.1}
+                        maxValue={10}
+                        step={0.01}
+                      />
+                    </Field>
+                  </div>
+                </KCollapsible.Content>
+              </KCollapsible>
+
+              {/* <Field name="Motion Blur">
+                <Slider
+                  value={[project.cursor.motionBlur]}
+                  onChange={(v) => setProject("cursor", "motionBlur", v[0])}
+                  minValue={0}
+                  maxValue={1}
+                  step={0.001}
+                />
+              </Field> */}
               {/* <Field name="Animation Style" icon={<IconLucideRabbit />}>
             <RadioGroup
               defaultValue="regular"
