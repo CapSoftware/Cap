@@ -1164,6 +1164,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-video-decode"
+version = "0.1.0"
+dependencies = [
+ "ffmpeg-next",
+ "ffmpeg-sys-next",
+]
+
+[[package]]
 name = "cargo-platform"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4402,7 +4410,7 @@ checksum = "72ef4a56884ca558e5ddb05a1d1e7e1bfd9a68d9ed024c21704cc98872dae1bb"
 [[package]]
 name = "nokhwa"
 version = "0.10.3"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=d37141b1883d#d37141b1883d7250f7d2ccc9bc199ecaee48d51b"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=e309b938ccd6#e309b938ccd6d17afac4017b11e7bda9f6cd9f35"
 dependencies = [
  "flume 0.10.14",
  "image 0.24.9",
@@ -4418,7 +4426,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-bindings-linux"
 version = "0.1.0"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=d37141b1883d#d37141b1883d7250f7d2ccc9bc199ecaee48d51b"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=e309b938ccd6#e309b938ccd6d17afac4017b11e7bda9f6cd9f35"
 dependencies = [
  "nokhwa-core",
  "v4l",
@@ -4428,7 +4436,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-bindings-macos"
 version = "0.2.0"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=d37141b1883d#d37141b1883d7250f7d2ccc9bc199ecaee48d51b"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=e309b938ccd6#e309b938ccd6d17afac4017b11e7bda9f6cd9f35"
 dependencies = [
  "block",
  "cocoa-foundation 0.1.2",
@@ -4443,7 +4451,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-bindings-windows"
 version = "0.4.0"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=d37141b1883d#d37141b1883d7250f7d2ccc9bc199ecaee48d51b"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=e309b938ccd6#e309b938ccd6d17afac4017b11e7bda9f6cd9f35"
 dependencies = [
  "nokhwa-core",
  "once_cell",
@@ -4453,7 +4461,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-core"
 version = "0.1.0"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=d37141b1883d#d37141b1883d7250f7d2ccc9bc199ecaee48d51b"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=e309b938ccd6#e309b938ccd6d17afac4017b11e7bda9f6cd9f35"
 dependencies = [
  "bytes",
  "image 0.24.9",
