@@ -15,8 +15,8 @@ use crate::{
     RecordingStarted, RecordingStopped, UploadMode,
 };
 use cap_flags::FLAGS;
-use cap_media::feeds::CameraFeed;
 use cap_media::sources::{CaptureScreen, CaptureWindow};
+use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
 use cap_project::{
     Content, ProjectConfiguration, TimelineConfiguration, TimelineSegment, ZoomSegment, XY,
 };
@@ -96,6 +96,14 @@ pub async fn start_recording(
             }
         }
     }
+
+    if matches!(
+        state.start_recording_options.capture_target,
+        ScreenCaptureTarget::Window(_) | ScreenCaptureTarget::Area(_)
+    ) {
+        let _ = ShowCapWindow::WindowCaptureOccluder.show(&app);
+    }
+
     let (actor, actor_done_rx) = cap_recording::spawn_recording_actor(
         id,
         recording_dir,
@@ -127,8 +135,7 @@ pub async fn start_recording(
     }
 
     if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
-        window.eval("window.location.reload()").unwrap();
-        window.show().unwrap();
+        window.eval("window.location.reload()").ok();
     } else {
         ShowCapWindow::InProgressRecording { position: None }
             .show(&app)
