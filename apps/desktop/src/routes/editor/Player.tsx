@@ -116,11 +116,14 @@ export function Player() {
   createEventListener(document, "keydown", async (e: KeyboardEvent) => {
     if (e.code === "Space" && e.target === document.body) {
       e.preventDefault();
-      const time = previewTime();
-      if (!playing() && time !== undefined) {
-        setPlaybackTime(time);
-        await commands.seekTo(Math.floor(time * FPS));
+      const prevTime = previewTime();
+
+      if (!playing()) {
+        if (prevTime !== undefined) setPlaybackTime(prevTime);
+
+        await commands.seekTo(Math.floor(playbackTime() * FPS));
       }
+
       await handlePlayPauseClick();
     }
   });
