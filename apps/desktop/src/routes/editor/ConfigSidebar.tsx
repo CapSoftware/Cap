@@ -13,6 +13,9 @@ import {
   For,
   Show,
   onMount,
+  createMemo,
+  createEffect,
+  on,
 } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { createWritableMemo } from "@solid-primitives/memo";
@@ -46,6 +49,7 @@ import { DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO } from "./projectConfig";
 import { generalSettingsStore } from "~/store";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import toast from "solid-toast";
+import { createElementBounds } from "@solid-primitives/bounds";
 
 const BACKGROUND_SOURCES = {
   wallpaper: "Wallpaper",
@@ -1357,7 +1361,7 @@ export function ConfigSidebar() {
                       <div class="bg-gray-100 flex-1" />
                     </KTabs.Indicator>
                   </KTabs.List>
-                  <KTabs.Content value="manual">
+                  <KTabs.Content value="manual" tabIndex="">
                     <Show
                       when={(() => {
                         const m = value().segment.mode;
@@ -1365,10 +1369,109 @@ export function ConfigSidebar() {
                         return m.manual;
                       })()}
                     >
-                      {(mode) => (
-                        <div class="w-full h-52 bg-gray-100 rounded-xl p-1">
+                      {(mode) => {
+                        const start = createMemo<number>((prev) => {
+                          if (history.isPaused()) return prev;
+                          return value().segment.start;
+                        }, 0);
+
+                        const segmentIndex = createMemo<number>(() => {
+                          if (history.isPaused()) return prev;
+
+                          const st = start();
+                          let i = project.timeline?.segments.findIndex(
+                            (s) => s.start <= st && s.end > st
+                          );
+                          if (i === undefined || i === -1) return 0;
+                          return i;
+                        }, 0);
+
+                        const video = document.createElement("video");
+                        createEffect(() => {
+                          video.src = convertFileSrc(
+                            // TODO: this shouldn't be so hardcoded
+                            `${
+                              editorInstance.path
+                            }/content/segments/segment-${segmentIndex()}/display.mp4`
+                          );
+                        });
+
+                        createEffect(() => {
+                          const s = start();
+                          if (s === undefined) return;
+                          video.currentTime = s;
+                        });
+
+                        createEffect(
+                          on(
+                            () => {
+                              croppedPosition();
+                              croppedSize();
+                            },
+                            () => {
+                              render();
+                            }
+                          )
+                        );
+
+                        const render = () => {
+                          const ctx = canvasRef.getContext("2d");
+                          ctx!.imageSmoothingEnabled = false;
+                          console.log(canvasRef.width);
+                          ctx!.drawImage(
+                            video,
+                            croppedPosition().x,
+                            croppedPosition().y,
+                            croppedSize().x,
+                            croppedSize().y,
+                            0,
+                            0,
+                            canvasRef.width!,
+                            canvasRef.height!
+                          );
+                        };
+
+                        const [loaded, setLoaded] = createSignal(false);
+                        video.onloadeddata = () => {
+                          setLoaded(true);
+                          render();
+                        };
+                        video.onseeked = render;
+
+                        let canvasRef!: HTMLCanvasElement;
+
+                        const [ref, setRef] = createSignal<HTMLDivElement>();
+                        const bounds = createElementBounds(ref);
+                        const rawSize = () => {
+                          const raw =
+                            editorInstance.recordings.segments[0].display;
+                          return { x: raw.width, y: raw.height };
+                        };
+
+                        const croppedPosition = () => {
+                          const cropped = project.background.crop?.position;
+                          if (cropped) return cropped;
+
+                          return { x: 0, y: 0 };
+                        };
+
+                        const croppedSize = () => {
+                          const cropped = project.background.crop?.size;
+                          if (cropped) return cropped;
+
+                          return rawSize();
+                        };
+
+                        const visualHeight = () =>
+                          (bounds.width! / croppedSize().x) * croppedSize().y;
+
+                        return (
                           <div
-                            class="w-full h-full bg-blue-400 rounded-lg relative"
+                            ref={setRef}
+                            class="w-full relative"
+                            style={{
+                              height: `calc(${visualHeight()}px + 0.25rem)`,
+                            }}
                             onMouseDown={(downEvent) => {
                               const bounds =
                                 downEvent.currentTarget.getBoundingClientRect();
@@ -1408,15 +1511,28 @@ export function ConfigSidebar() {
                             }}
                           >
                             <div
-                              class="absolute w-6 h-6 rounded-full bg-gray-50 border border-gray-400 -translate-x-1/2 -translate-y-1/2"
+                              class="z-10 absolute w-6 h-6 rounded-full bg-gray-50 border border-gray-400 -translate-x-1/2 -translate-y-1/2"
                               style={{
-                                left: `${mode().x * 100}%`,
-                                top: `${mode().y * 100}%`,
+                                left: `calc(${mode().x * 100}% + ${
+                                  2 + mode().x * -6
+                                }px)`,
+                                top: `calc(${mode().y * 100}% + ${
+                                  2 + mode().y * -6
+                                }px)`,
                               }}
                             />
+                            <div class="border-2 border-gray-300 bg-gray-300 rounded-lg overflow-hidden">
+                              <canvas
+                                ref={canvasRef}
+                                width={croppedSize().x}
+                                height={croppedSize().y}
+                                data-loaded={loaded()}
+                                class="z-10 bg-red-500 opacity-0 transition-opacity data-[loaded='true']:opacity-100 w-full h-full duration-200"
+                              />
+                            </div>
                           </div>
-                        </div>
-                      )}
+                        );
+                      }}
                     </Show>
                   </KTabs.Content>
                 </KTabs>

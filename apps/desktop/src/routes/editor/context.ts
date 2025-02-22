@@ -264,6 +264,7 @@ function createStoreHistory<T extends Static>(
         setPauseCount(pauseCount() - 1);
       };
     },
+    isPaused: () => pauseCount() > 0,
   });
 }
 
