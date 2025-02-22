@@ -1375,7 +1375,7 @@ export function ConfigSidebar() {
                           return value().segment.start;
                         }, 0);
 
-                        const segmentIndex = createMemo<number>(() => {
+                        const segmentIndex = createMemo<number>((prev) => {
                           if (history.isPaused()) return prev;
 
                           const st = start();
