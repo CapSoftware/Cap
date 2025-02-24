@@ -28,7 +28,7 @@ import IconLucideClock from "~icons/lucide/clock";
 import { commands, events, RenderProgress, UploadResult } from "~/utils/tauri";
 import { createPresets } from "~/utils/createPresets";
 import { FPS, OUTPUT_SIZE } from "./editor/context";
-import { authStore } from "~/store";
+import { authStore, generalSettingsStore } from "~/store";
 
 type MediaEntry = {
   path: string;
@@ -284,11 +284,11 @@ export default function () {
                             "background-color": "rgba(0, 0, 0, 0.4)",
                           }}
                           class={cx(
-                            "absolute inset-0 transition-all duration-150 pointer-events-auto rounded-[7.4px]",
+                            "absolute inset-0 transition-all duration-150 pointer-events-auto rounded-[7.4px] dark:text-gray-100",
                             showUpgradeTooltip()
                               ? "opacity-100"
                               : "opacity-0 group-hover:opacity-100",
-                            "backdrop-blur text-white p-2"
+                            "backdrop-blur p-2"
                           )}
                         >
                           <TooltipIconButton
@@ -392,7 +392,7 @@ export default function () {
                                 "border-end-start-radius": "7.4px",
                               }}
                               class={cx(
-                                "absolute bottom-0 left-0 right-0 font-medium text-gray-200 bg-[#00000080] backdrop-blur-lg px-3 py-2 flex justify-between items-center pointer-events-none transition-all max-w-full overflow-hidden",
+                                "absolute bottom-0 left-0 right-0 font-medium text-gray-200 dark:text-gray-500 bg-[#00000080] backdrop-blur-lg px-3 py-2 flex justify-between items-center pointer-events-none transition-all max-w-full overflow-hidden",
                                 isLoading() || showUpgradeTooltip()
                                   ? "opacity-0"
                                   : "group-hover:opacity-0"
