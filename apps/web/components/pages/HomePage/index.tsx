@@ -33,9 +33,9 @@ export const HomePage = () => {
                  hover:opacity-90 mb-[52px] items-center relative z-[20] px-4 py-2
                mx-auto bg-[#2e2e2e] rounded-full border w-fit border-zinc-200"
             >
-              <p className="text-xs sm:text-sm text-white">
+              <p className="text-xs text-white sm:text-sm">
                 Launch Week Day 1:{" "}
-                <span className="text-xs sm:text-sm font-bold text-blue-100">
+                <span className="text-xs font-bold text-blue-100 sm:text-sm">
                   Custom Domains
                 </span>
               </p>
@@ -53,7 +53,7 @@ export const HomePage = () => {
               <br />
               owned by you.
             </h1>
-            <p className="text-md sm:text-xl mx-auto mb-8 max-w-3xl text-zinc-500 fade-in-down animate-delay-1">
+            <p className="mx-auto mb-8 max-w-3xl text-md sm:text-xl text-zinc-500 fade-in-down animate-delay-1">
               Cap is the open source alternative to Loom. Lightweight, powerful,
               and stunning. Record and share securely in seconds with custom S3
               bucket support.
@@ -91,7 +91,7 @@ export const HomePage = () => {
           <motion.div
             whileTap={{ scale: 0.95 }}
             whileHover={{ scale: 1.05 }}
-            onClick={() => setVideoToggled(true)}
+            // onClick={() => setVideoToggled(true)}
             className="absolute cursor-pointer size-[100px] flex items-center justify-center group"
           >
             {/* <div
