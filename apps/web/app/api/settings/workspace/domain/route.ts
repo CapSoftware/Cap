@@ -78,8 +78,43 @@ const addDomain = async (domain: string) => {
 
 const getRequiredConfig = async (domain: string) => {
   console.log(`[Required Config] Fetching required config for domain: ${domain}`);
+  
+  // First try to get the records directly
+  try {
+    const recordsResponse = await fetch(
+      `https://api.vercel.com/v4/domains/${domain.toLowerCase()}/records?limit=10&teamId=${process.env.VERCEL_TEAM_ID}`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${process.env.VERCEL_AUTH_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        cache: "no-store"
+      },
+    ).then((res) => res.json());
+    
+    console.log(`[Required Config] Records Response:`, recordsResponse);
+    
+    if (recordsResponse.records) {
+      const aRecord = recordsResponse.records.find((record: any) => 
+        record.type === 'A' && record.name === ''
+      );
+      
+      if (aRecord) {
+        return {
+          configuredBy: 'vercel',
+          aValues: [aRecord.value],
+          serviceType: 'vercel',
+        };
+      }
+    }
+  } catch (error) {
+    console.error('[Required Config] Error fetching records:', error);
+  }
+
+  // Fallback to the old config endpoint
   const response = await fetch(
-    `https://vercel.com/api/v6/domains/${domain.toLowerCase()}/config?strict=true&teamId=${process.env.VERCEL_TEAM_ID}`,
+    `https://api.vercel.com/v6/domains/${domain.toLowerCase()}/config?teamId=${process.env.VERCEL_TEAM_ID}`,
     {
       method: "GET",
       headers: {
@@ -89,7 +124,30 @@ const getRequiredConfig = async (domain: string) => {
       cache: "no-store"
     },
   ).then((res) => res.json());
-  console.log(`[Required Config] Response:`, response);
+  console.log(`[Required Config] Fallback Response:`, response);
+
+  // If we still don't have the A record, try the project domains endpoint
+  if (!response.aValues || response.aValues.length === 0) {
+    const projectResponse = await fetch(
+      `https://api.vercel.com/v9/projects/${process.env.VERCEL_PROJECT_ID}/domains?teamId=${process.env.VERCEL_TEAM_ID}`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${process.env.VERCEL_AUTH_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        cache: "no-store"
+      },
+    ).then((res) => res.json());
+    
+    if (projectResponse.domains) {
+      const projectDomain = projectResponse.domains.find((d: any) => d.name === domain);
+      if (projectDomain?.apexValue) {
+        response.aValues = [projectDomain.apexValue];
+      }
+    }
+  }
+
   return response;
 };
 
