@@ -4,7 +4,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { classNames } from "@cap/utils";
 
 const buttonVariants = cva(
-  "flex items-center justify-center rounded-full border-[1px] font-normal",
+  "flex items-center justify-center gap-1 rounded-full border-[1px] font-normal",
   {
     defaultVariants: {
       variant: "primary",
@@ -22,6 +22,7 @@ const buttonVariants = cva(
           "bg-white text-gray-500 hover:bg-gray-100 disabled:bg-gray-100 border-black/10",
         gray: "bg-gray-200 text-gray-500 hover:bg-gray-200 disabled:bg-gray-100 border-transparent",
         dark: "bg-[#2e2e2e] text-gray-50 hover:bg-[#383838] disabled:bg-[#383838] border-transparent",
+        radialblue: "text-gray-50 disabled:bg-gray-100 border-0 [background:radial-gradient(90%_100%_at_15%_12%,#9BC4FF_0%,#3588FF_100%)] border-transparent hover:opacity-80",
       },
       size: {
         xs: "font-[400] text-[0.75rem] px-[0.5rem] h-[1.25rem] ",
@@ -39,6 +40,7 @@ export interface ButtonProps
   asChild?: boolean;
   spinner?: boolean;
   href?: string;
+  icon?: React.ReactNode;
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
@@ -50,6 +52,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       asChild = false,
       spinner = false,
       href,
+      icon,
       ...props
     },
     ref
@@ -62,11 +65,12 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         href={href || undefined}
         {...props}
       >
+        {icon && icon}
         {props.children}
         {spinner && (
           <svg
             xmlns="http://www.w3.org/2000/svg"
-            className="w-6 h-6 ml-2"
+            className="ml-2 w-6 h-6"
             viewBox="0 0 24 24"
           >
             <style>

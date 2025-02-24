@@ -232,20 +232,18 @@ export const Workspace = () => {
           Save
         </Button>
       </CardFooter>
-      {user.email === "richie@mcilroy.co" && (
-        <>
-          <CardContent className="pt-6">
-            <CardTitle>Custom Domain</CardTitle>
-            <CardDescription>
-              Configure a custom domain for your workspace's shared caps.
-            </CardDescription>
-            <div className="mt-4">
-              <CustomDomain />
-            </div>
-          </CardContent>
-          <CardFooter className="border-b px-6 pt-0 pb-2"></CardFooter>
-        </>
-      )}
+      <>
+        <CardContent className="pt-6">
+          <CardTitle>Custom Domain</CardTitle>
+          <CardDescription>
+            Configure a custom domain for your workspace's shared caps.
+          </CardDescription>
+          <div className="mt-4">
+            <CustomDomain />
+          </div>
+        </CardContent>
+        <CardFooter className="border-b px-6 pt-0 pb-2"></CardFooter>
+      </>
       <CardHeader>
         <div className="flex items-center justify-between">
           <div>

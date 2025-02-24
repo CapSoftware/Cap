@@ -39,7 +39,7 @@ type VerificationResponse = {
 
 export function CustomDomain() {
   const router = useRouter();
-  const { activeSpace } = useSharedContext();
+  const { activeSpace, isSubscribed } = useSharedContext();
   const [domain, setDomain] = useState(activeSpace?.space.customDomain || "");
   const [loading, setLoading] = useState(false);
   const [verifying, setVerifying] = useState(false);
@@ -168,6 +168,32 @@ export function CustomDomain() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    if (!isSubscribed) {
+      toast.error(
+        (t) => (
+          <span>
+            Please upgrade to{" "}
+            <a
+              href="/pricing"
+              className="text-blue-500 font-medium hover:text-blue-600"
+              onClick={(e) => {
+                e.preventDefault();
+                toast.dismiss(t.id);
+                router.push("/pricing");
+              }}
+            >
+              Cap Pro
+            </a>{" "}
+            to use custom domains
+          </span>
+        ),
+        {
+          duration: 5000,
+        }
+      );
+      return;
+    }
+
     const cleanedDomain = cleanDomain(domain);
     if (!cleanedDomain) {
       toast.error("Please enter a valid domain");
@@ -217,6 +243,32 @@ export function CustomDomain() {
   };
 
   const handleRemoveDomain = async () => {
+    if (!isSubscribed) {
+      toast.error(
+        (t) => (
+          <span>
+            Please upgrade to{" "}
+            <a
+              href="/pricing"
+              className="text-blue-500 font-medium hover:text-blue-600"
+              onClick={(e) => {
+                e.preventDefault();
+                toast.dismiss(t.id);
+                router.push("/pricing");
+              }}
+            >
+              Cap Pro
+            </a>{" "}
+            to use custom domains
+          </span>
+        ),
+        {
+          duration: 5000,
+        }
+      );
+      return;
+    }
+
     if (!confirm("Are you sure you want to remove this custom domain?")) return;
 
     setLoading(true);

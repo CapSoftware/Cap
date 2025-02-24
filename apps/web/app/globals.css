@@ -65,6 +65,7 @@ body,
 html {
   color: #000000;
   font-family: var(--primary-font) !important;
+  background-color: white;
 }
 
 .wrapper {
@@ -120,7 +121,7 @@ a.bg-primary:hover {
 }
 
 .bg-gradient {
-  @apply bg-gradient-to-r from-secondary-2 to-secondary-3 transition-all duration-300;
+  @apply bg-gradient-to-r transition-all duration-300 from-secondary-2 to-secondary-3;
 }
 
 .bg-gradient:hover {
@@ -184,7 +185,49 @@ nav.mobile a:not(.button) * {
 }
 
 label {
-  @apply text-left text-sm font-semibold block;
+  @apply block text-sm font-semibold text-left;
+}
+
+.play-button-outer-border::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    padding: 1px;
+    border-radius: 100px;
+    background: linear-gradient(to bottom, #fff, transparent 100%);
+    -webkit-mask:
+      linear-gradient(#fff 0 0) content-box,
+      linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+}
+
+.inner-play-button-border-two::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: 100px;
+  background: linear-gradient(to bottom, #446FAE 20%, transparent 90%);
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+.inner-play-button-border::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: 100px;
+  background: linear-gradient(to bottom, #fff 10%, transparent 50%);
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
 }
 
 .custom-bg {
@@ -283,11 +326,11 @@ label {
 }
 
 .page-intro p {
-  @apply fade-in-down animate-delay-1 text-base sm:text-xl max-w-2xl mx-auto;
+  @apply mx-auto max-w-2xl text-base fade-in-down animate-delay-1 sm:text-xl;
 }
 
 ul {
-  @apply list-disc pl-5;
+  @apply pl-5 list-disc;
 }
 
 .embossed {
@@ -299,7 +342,7 @@ ul {
 }
 
 .dashboard-page {
-  @apply flex flex-col py-4 px-2;
+  @apply flex flex-col px-2 py-4;
 }
 
 .dashboard-page .inner {
@@ -311,7 +354,7 @@ ul {
 }
 
 .dashboard-header {
-  @apply mb-4 flex items-center justify-between space-y-2;
+  @apply flex justify-between items-center mb-4 space-y-2;
 }
 
 .dashboard-header.has-title {
@@ -378,7 +421,7 @@ body.react-draggable-transparent-selection .crosshair {
 }
 
 footer ul {
-  @apply list-none p-0;
+  @apply p-0 list-none;
 }
 
 footer h3 {
@@ -395,7 +438,7 @@ footer a {
 }
 
 .legal-body h3 {
-  @apply text-2xl font-semibold mt-6;
+  @apply mt-6 text-2xl font-semibold;
 }
 
 .prose p, .prose li, .prose a {
