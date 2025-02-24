@@ -25,6 +25,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO, IDC_PERSON, IDC_PIN, IDC_SIZEALL,
     IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_UPARROW, IDC_WAIT,
 };
+use windows::Win32::UI::WindowsAndMessaging::{DrawIconEx, GetIconInfo, ICONINFO, DI_NORMAL};
+use tracing::debug;
 
 #[inline]
 pub fn bring_window_to_focus(window_id: u32) {
@@ -268,6 +270,10 @@ pub fn monitor_bounds(id: u32) -> Bounds {
 
         if id == *target_id {
             let rect = minfo.monitorInfo.rcMonitor;
+            debug!(
+                "Found monitor with ID {}: bounds: left={}, top={}, right={}, bottom={}",
+                id, rect.left, rect.top, rect.right, rect.bottom
+            );
             *bounds = Some(Bounds {
                 x: rect.left as f64,
                 y: rect.top as f64,
@@ -289,7 +295,18 @@ pub fn monitor_bounds(id: u32) -> Bounds {
         )
     };
 
-    bounds.unwrap_or_default()
+    // If we didn't find the monitor with the given ID, log a warning and return a default bounds
+    if lparams.1.is_none() {
+        debug!("Could not find monitor with ID: {}", id);
+        return Bounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0, // Default to a common resolution
+            height: 1080.0,
+        };
+    }
+
+    lparams.1.unwrap()
 }
 
 pub fn display_names() -> HashMap<u32, String> {
