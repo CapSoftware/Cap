@@ -50,6 +50,7 @@ import { generalSettingsStore } from "~/store";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import toast from "solid-toast";
 import { createElementBounds } from "@solid-primitives/bounds";
+import { TextInput } from "./TextInput";
 
 const BACKGROUND_SOURCES = {
   wallpaper: "Wallpaper",
@@ -1417,7 +1418,6 @@ export function ConfigSidebar() {
                         const render = () => {
                           const ctx = canvasRef.getContext("2d");
                           ctx!.imageSmoothingEnabled = false;
-                          console.log(canvasRef.width);
                           ctx!.drawImage(
                             video,
                             croppedPosition().x,
@@ -1573,7 +1573,7 @@ function RgbInput(props: {
           if (value) props.onChange(value);
         }}
       />
-      <input
+      <TextInput
         class="w-[5rem] p-[0.375rem] border text-gray-400 rounded-[0.5rem] bg-gray-50"
         value={text()}
         onFocus={() => {
