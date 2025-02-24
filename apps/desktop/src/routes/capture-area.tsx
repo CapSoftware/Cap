@@ -1,4 +1,4 @@
-import { createSignal, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { createOptionsQuery } from "~/utils/queries";
 import {
   getCurrentWebviewWindow,
@@ -38,10 +38,20 @@ export default function CaptureArea() {
     y: window.innerHeight,
   });
 
+  
+  const [crop, setCrop] = makePersisted(
+    createStore<Crop>({
+      size: { x: 0, y: 0 },
+      position: { x: 0, y: 0 },
+    }),
+    { name: "crop" }
+  );
+
+    
   onMount(() => {
     createEventListenerMap(window, {
       resize: () =>
-        setWindowSize({ x: window.innerWidth, y: window.innerHeight }),
+      setWindowSize({ x: window.innerWidth, y: window.innerHeight }),
       keydown: (e) => {
         if (e.key === "Escape") close();
         else if (e.key === "Enter") handleConfirm();
@@ -49,17 +59,14 @@ export default function CaptureArea() {
     });
   });
 
-  const [crop, setCrop] = createStore<Crop>({
-    size: { x: 0, y: 0 },
-    position: { x: 0, y: 0 },
-  });
 
-  async function handleConfirm() {
+
+  function handleConfirm() {
     const target = options.data?.captureTarget;
     if (!options.data || !target || target.variant !== "screen") return;
     setPendingState(false);
 
-    setOptions.mutate({
+   setOptions.mutate({
       ...options.data,
       captureTarget: {
         variant: "area",
@@ -87,8 +94,8 @@ export default function CaptureArea() {
   }
 
   return (
-    <div class="w-screen h-screen overflow-hidden bg-black bg-opacity-25">
-      <div class="fixed w-full z-50 flex items-center justify-center">
+    <div class="overflow-hidden w-screen h-screen bg-black bg-opacity-25">
+      <div class="flex fixed z-50 justify-center items-center w-full">
         <Transition
           appear
           enterActiveClass="fade-in animate-in slide-in-from-top-6"
@@ -118,13 +125,13 @@ export default function CaptureArea() {
                   </button>
                 </Tooltip.Trigger>
                 <Tooltip.Portal>
-                  <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in delay-1000 duration-500">
+                  <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-500 delay-1000 animate-in fade-in">
                     Rule of Thirds
                     <Tooltip.Arrow class="fill-gray-500" />
                   </Tooltip.Content>
                 </Tooltip.Portal>
               </Tooltip.Root>
-              <div class="flex flex-row flex-grow justify-center gap-2">
+              <div class="flex flex-row flex-grow gap-2 justify-center">
                 <button
                   class="text-blue-300 px-2 dark:text-blue-300 gap-[0.25rem] hover:bg-blue-50 flex flex-row items-center rounded-[8px] grow justify-center transition-colors duration-200"
                   type="button"
@@ -150,6 +157,10 @@ export default function CaptureArea() {
           <Cropper
             class="transition-all duration-300"
             value={crop}
+            initialSize={{
+              x: crop.size.x,
+              y: crop.size.y,
+            }}
             onCropChange={setCrop}
             showGuideLines={state.showGrid}
             mappedSize={{ x: windowSize().x, y: windowSize().y }}

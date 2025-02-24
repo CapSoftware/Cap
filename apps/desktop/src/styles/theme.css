@@ -9,6 +9,17 @@
   --gray-400: #8991a3;
   --gray-500: #12161f;
 
+  --zinc-50: #f5f5f5;
+  --zinc-100: #e4e4e7;
+  --zinc-200: #d4d4d8;
+  --zinc-300: #a1a1aa;
+  --zinc-400: #71717a;
+  --zinc-500: #52525b;
+  --zinc-600: #3f3f46;
+  --zinc-700: #27272a;
+  --zinc-800: #1f1f23;
+  --zinc-900: #18181b;
+
   --text-primary: rgba(18, 22, 31, 0.95); /* Section titles, headings */
   --text-secondary: rgba(18, 22, 31, 0.85); /* Important labels */
   --text-tertiary: rgba(18, 22, 31, 0.65); /* Descriptions */

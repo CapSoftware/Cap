@@ -7,21 +7,17 @@ import {
 import { commands, RecordingOptions } from "./tauri";
 import { createQueryInvalidate } from "./events";
 import { createStore, reconcile } from "solid-js/store";
-import { createEffect, createMemo } from "solid-js";
+import { createMemo } from "solid-js";
 import { makePersisted } from "@solid-primitives/storage";
-import { FPS } from "~/routes/editor/context";
 import { authStore, generalSettingsStore } from "~/store";
 
 function debugFetch<T>(name: string, doFetch: () => Promise<T>) {
   return () => {
-    console.log(`fetching '${name}'`);
     return doFetch()
       .then((s) => {
-        console.log(`fetched '${name}'`);
         return s;
       })
       .catch((e) => {
-        console.log(`failed to fetch '${name}'`);
         throw e;
       });
   };

@@ -92,6 +92,7 @@ export default function Cropper(
     mappedSize?: XY<number>;
     minSize?: XY<number>;
     initialSize?: XY<number>;
+    initialPosition?: XY<number>;
     aspectRatio?: number;
     showGuideLines?: boolean;
   }>
@@ -550,28 +551,27 @@ export default function Cropper(
           const scaleMultiplier = event.altKey ? 2 : 1;
           const currentBox = box.toBounds();
 
-          let newWidth = currentBox.size.x;
-          let newHeight = currentBox.size.y;
+          let newWidth =
+            dir.includes("e") || dir.includes("w")
+              ? clamp(
+                  dir.includes("w")
+                    ? currentBox.size.x - moveDelta * scaleMultiplier
+                    : currentBox.size.x + moveDelta * scaleMultiplier,
+                  minSize().x,
+                  mapped.x
+                )
+              : currentBox.size.x;
 
-          if (isLeftKey || isRightKey) {
-            newWidth = clamp(
-              isLeftKey
-                ? currentBox.size.x - moveDelta * scaleMultiplier
-                : currentBox.size.x + moveDelta * scaleMultiplier,
-              minSize().x,
-              mapped.x
-            );
-          }
-
-          if (isUpKey || isDownKey) {
-            newHeight = clamp(
-              isUpKey
-                ? currentBox.size.y - moveDelta * scaleMultiplier
-                : currentBox.size.y + moveDelta * scaleMultiplier,
-              minSize().y,
-              mapped.y
-            );
-          }
+          let newHeight =
+            dir.includes("n") || dir.includes("s")
+              ? clamp(
+                  dir.includes("n")
+                    ? currentBox.size.y - moveDelta * scaleMultiplier
+                    : currentBox.size.y + moveDelta * scaleMultiplier,
+                  minSize().y,
+                  mapped.y
+                )
+              : currentBox.size.y;
 
           box.resize(newWidth, newHeight, origin);
         } else {
