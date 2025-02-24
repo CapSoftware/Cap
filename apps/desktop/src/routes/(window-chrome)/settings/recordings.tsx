@@ -1,9 +1,10 @@
 import { createQuery } from "@tanstack/solid-query";
-import { For, Show, Suspense, createSignal } from "solid-js";
+import { For, ParentProps, Show, Suspense, createSignal } from "solid-js";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 import { commands, events, type RecordingMeta } from "~/utils/tauri";
 import { trackEvent } from "~/utils/analytics";
+import Tooltip from "@corvu/tooltip";
 
 type MediaEntry = {
   id: string;
@@ -114,37 +115,48 @@ function RecordingItem(props: {
         <span>{props.recording.prettyName}</span>
       </div>
       <div class="flex items-center">
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            props.onOpenFolder();
-          }}
-          class="p-2 hover:bg-gray-200 rounded-full mr-2"
+        <TooltipIconButton
+          tooltipText="Open project files"
+          onClick={() => props.onOpenFolder()}
         >
           <IconLucideFolder class="size-5" />
-        </button>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            props.onOpenEditor();
-          }}
-          class="p-2 hover:bg-gray-200 rounded-full mr-2"
+        </TooltipIconButton>
+        <TooltipIconButton
+          tooltipText="Open in editor"
+          onClick={() => props.onOpenEditor()}
         >
           <IconLucideEdit class="size-5" />
-        </button>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            props.onClick();
-          }}
-          class="p-2 hover:bg-gray-200 rounded-full"
+        </TooltipIconButton>
+        <TooltipIconButton
+          tooltipText="Show in recordings overlay"
+          onClick={() => props.onClick()}
         >
           <IconLucideEye class="size-5" />
-        </button>
+        </TooltipIconButton>
       </div>
     </li>
+  );
+}
+
+function TooltipIconButton(
+  props: ParentProps<{ onClick: () => void; tooltipText: string }>
+) {
+  return (
+    <Tooltip>
+      <Tooltip.Trigger
+        onClick={(e) => {
+          e.stopPropagation();
+          props.onClick();
+        }}
+        class="p-2 hover:bg-gray-200 rounded-full mr-2"
+      >
+        {props.children}
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content class="py-1 px-2 font-medium bg-gray-100 text-gray-400 border border-gray-300 text-xs rounded-lg animate-in fade-in slide-in-from-top-0.5">
+          {props.tooltipText}
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip>
   );
 }

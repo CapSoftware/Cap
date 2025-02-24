@@ -269,7 +269,7 @@ export function Player() {
               setPlaybackTime(totalDuration());
             }}
           >
-            <IconCapFrameLast class="size-[1rem]" />
+            <IconCapFrameLast class="size-[1.2rem]" />
           </button>
         </div>
         <div class="flex-1 flex flex-row justify-end items-center gap-2">
@@ -280,6 +280,8 @@ export function Player() {
           ) : (
             <ComingSoonTooltip>{splitButton()}</ComingSoonTooltip>
           )}
+          <div class="w-[0.5px] h-7 bg-gray-300 mx-1" />
+          <IconIcRoundSearch class="mt-0.5" />
           <Slider
             class="w-24"
             minValue={0}

@@ -3,14 +3,10 @@ import { createElementBounds } from "@solid-primitives/bounds";
 import {
   ComponentProps,
   For,
-  Index,
-  Setter,
   Show,
   batch,
-  createEffect,
   createRoot,
   createSignal,
-  on,
   onMount,
 } from "solid-js";
 import {
@@ -22,9 +18,8 @@ import { produce } from "solid-js/store";
 import { mergeRefs } from "@solid-primitives/refs";
 import { createMemo } from "solid-js";
 
-import { commands, TimelineSegment } from "~/utils/tauri";
+import { TimelineSegment } from "~/utils/tauri";
 import {
-  FPS,
   SegmentContextProvider,
   TimelineContextProvider,
   TrackContextProvider,
@@ -34,6 +29,7 @@ import {
   useTrackContext,
 } from "./context";
 import { formatTime } from "./utils";
+import { platform } from "@tauri-apps/plugin-os";
 
 type ZoomSegmentDragState =
   | { type: "idle" }
@@ -121,6 +117,21 @@ export function Timeline() {
     }
   }
 
+  createEventListener(window, "keydown", (e) => {
+    if (e.code === "Backspace" || e.code === "Delete") {
+      if (state.timelineSelection?.type !== "zoom") return;
+      const selection = state.timelineSelection;
+
+      batch(() => {
+        setProject(
+          produce((project) => {
+            project.timeline?.zoomSegments.splice(selection.index, 1);
+          })
+        );
+      });
+    }
+  });
+
   return (
     <TimelineContextProvider
       duration={duration()}
@@ -158,7 +169,6 @@ export function Timeline() {
         onWheel={(e) => {
           // pinch zoom or ctrl + scroll
           if (e.ctrlKey) {
-            console.log(e);
             batch(() => {
               const zoomDelta =
                 (e.deltaY * Math.sqrt(state.timelineTransform.zoom)) / 30;
@@ -173,8 +183,13 @@ export function Timeline() {
           }
           // scroll
           else {
+            let delta: number = 0;
+
+            if (platform() === "macos" && e.shiftKey) delta = e.deltaX;
+            else if (platform() === "windows" && e.shiftKey) delta = e.deltaY;
+
             state.timelineTransform.setPosition(
-              state.timelineTransform.position + secsPerPixel() * e.deltaX
+              state.timelineTransform.position + secsPerPixel() * delta
             );
           }
         }}
@@ -643,10 +658,14 @@ function ZoomTrack(props: {
                   resumeHistory();
                   if (!moved) {
                     e.stopPropagation();
-                    setState("timelineSelection", {
-                      type: "zoom",
-                      index: i(),
-                    });
+                    if (
+                      state.timelineSelection?.type !== "zoom" &&
+                      state.timelineSelection?.index !== i()
+                    )
+                      setState("timelineSelection", {
+                        type: "zoom",
+                        index: i(),
+                      });
                     props.handleUpdatePlayhead(e);
                   }
                   props.onDragStateChanged({ type: "idle" });
