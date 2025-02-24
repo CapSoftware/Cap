@@ -27,12 +27,17 @@ export const HomePage = () => {
         <div className="relative z-10 px-5 w-full">
           <div className="mx-auto text-center wrapper wrapper-sm">
             <Link
-              href="/"
+              href="#"
               className="flex gap-3 transition-opacity duration-300
                  hover:opacity-90 mb-[52px] items-center relative z-[20] px-4 py-2
                mx-auto bg-[#2e2e2e] rounded-full border w-fit border-zinc-200"
             >
-              <p className="text-sm text-white">Launch week day 1</p>
+              <p className="text-xs sm:text-sm text-white">
+                Launch Week Day 1:{" "}
+                <span className="text-xs sm:text-sm font-bold text-blue-100">
+                  Custom Domains
+                </span>
+              </p>
               <FontAwesomeIcon
                 fontWeight="light"
                 className="w-2 text-white"
@@ -47,7 +52,7 @@ export const HomePage = () => {
               <br />
               owned by you.
             </h1>
-            <p className="mx-auto mb-8 max-w-3xl text-xl text-zinc-500 fade-in-down animate-delay-1">
+            <p className="text-md sm:text-xl mx-auto mb-8 max-w-3xl text-zinc-500 fade-in-down animate-delay-1">
               Cap is the open source alternative to Loom. Lightweight, powerful,
               and stunning. Record and share securely in seconds with custom S3
               bucket support.
@@ -56,23 +61,23 @@ export const HomePage = () => {
           <div className="flex flex-col justify-center items-center mb-5 space-y-2 fade-in-up animate-delay-2 sm:flex-row sm:space-y-0 sm:space-x-2">
             <Button
               variant="white"
-              href="/pricing"
+              href="/download"
               size="lg"
               className="w-full font-medium text-md sm:w-auto"
             >
-              Get Started
+              Download App
             </Button>
             <Button
               variant="radialblue"
-              href="/download"
+              href="/pricing"
               size="lg"
               className="relative z-[20] w-full font-medium text-md sm:w-auto"
             >
-              Download App
+              Buy Now
             </Button>
           </div>
           <p className="text-sm text-center text-zinc-400">
-            No credit card required.
+            Free version available. No credit card required.
           </p>
         </div>
         <AnimatePresence>
@@ -88,7 +93,7 @@ export const HomePage = () => {
             onClick={() => setVideoToggled(true)}
             className="absolute cursor-pointer size-[100px] flex items-center justify-center group"
           >
-            <div
+            {/* <div
               style={{
                 background:
                   "linear-gradient(180deg, rgba(255, 255, 255, 0.10) 30%, #3B7BFA 100%)",
@@ -110,11 +115,11 @@ export const HomePage = () => {
                   icon={faPlay}
                 />
               </div>
-            </div>
+            </div> */}
           </motion.div>
           <img
             src="/illustrations/app.webp"
-            className="mx-auto w-full max-w-[540px] select-none h-auto rounded-xl pointer-events-none"
+            className="mx-auto w-full max-w-[540px] pointer-events-none h-auto rounded-xl"
             alt="Landing Page Screenshot Banner"
           />
         </Parallax>
@@ -213,13 +218,13 @@ export const HomePage = () => {
               repeatType: "reverse",
               ease: "linear",
             }}
-            className="absolute top-[20px] left-[-60px] md:left-[-400px] select-none z-[5]"
+            className="absolute top-[20px] left-[-60px] md:left-[-400px] select-none z-[5] pointer-events-none"
             src="./illustrations/bottomcloud.webp"
             alt="bottomcloudthree"
           />
           <img
             className="absolute 
-            top-[180px] w-full max-w-[400px] z-0 select-none right-[60px] opacity-30"
+            top-[180px] w-full max-w-[400px] z-0 select-none right-[60px] opacity-30 pointer-events-none"
             src="./illustrations/smallcloudthree.webp"
             alt="smallcloudthree"
           />
@@ -237,7 +242,7 @@ export const HomePage = () => {
               ease: "linear",
             }}
             className="absolute 
-        bottom-[240px] w-full max-w-[430px] z-[1] right-[40px] select-none  opacity-80 brightness-125"
+        bottom-[240px] w-full max-w-[430px] z-[1] right-[40px] select-none  opacity-80 brightness-125 pointer-events-none"
             src="./illustrations/smallcloudtwo.webp"
             alt="smallcloudtwo"
           />
@@ -246,7 +251,7 @@ export const HomePage = () => {
               mixBlendMode: "screen",
             }}
             className="absolute 
-         w-full max-w-[500px] top-[210px] right-[300px] z-[2] select-none  brightness-125"
+         w-full max-w-[500px] top-[210px] right-[300px] z-[2] select-none  brightness-125 pointer-events-none"
             src="./illustrations/chipcloud.webp"
             alt="chipcloudtwo"
           />
@@ -268,23 +273,23 @@ export const HomePage = () => {
               ease: "linear",
             }}
             className="absolute 
-         w-full max-w-[500px] bottom-[15px] select-none left-[-200px] lg:left-[30px] z-[10]"
+         w-full max-w-[500px] bottom-[15px] select-none left-[-200px] lg:left-[30px] z-[10] pointer-events-none"
             src="./illustrations/chipcloud.webp"
             alt="chipcloudfour"
           />
           <img
             className="absolute 
-         w-full max-w-[500px] top-[160px] select-none mix-blend-screen left-[-200px] lg:left-[30px] z-[10]"
+         w-full max-w-[500px] top-[160px] select-none mix-blend-screen left-[-200px] lg:left-[30px] z-[10] pointer-events-none"
             src="./illustrations/chipcloud.webp"
             alt="chipcloud"
           />
           <img
-            className="absolute bottom-[-200px] -left-[500px] select-none z-[5]"
+            className="absolute bottom-[-200px] -left-[500px] select-none z-[5] pointer-events-none"
             src="./illustrations/bottomcloud.webp"
             alt="bottomcloud"
           />
           <img
-            className="absolute bottom-[-90px] right-[-400px] select-none z-[5]"
+            className="absolute bottom-[-90px] right-[-400px] select-none z-[5] pointer-events-none"
             src="./illustrations/bottomcloud.webp"
             alt="bottomcloudtwo"
           />
