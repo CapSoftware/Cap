@@ -33,7 +33,6 @@ import {
 import { formatTime } from "./utils";
 
 export function Player() {
-  const [auth] = createResource(() => authStore.get());
   const {
     project,
     videoId,
@@ -117,11 +116,14 @@ export function Player() {
   createEventListener(document, "keydown", async (e: KeyboardEvent) => {
     if (e.code === "Space" && e.target === document.body) {
       e.preventDefault();
-      const time = previewTime();
-      if (!playing() && time !== undefined) {
-        setPlaybackTime(time);
-        await commands.seekTo(Math.floor(time * FPS));
+      const prevTime = previewTime();
+
+      if (!playing()) {
+        if (prevTime !== undefined) setPlaybackTime(prevTime);
+
+        await commands.seekTo(Math.floor(playbackTime() * FPS));
       }
+
       await handlePlayPauseClick();
     }
   });
@@ -402,7 +404,7 @@ function PresetsDropdown() {
               class="flex-1 overflow-y-auto scrollbar-none"
             >
               <For
-                each={presets.query()?.presets ?? []}
+                each={presets.query.data?.presets ?? []}
                 fallback={
                   <div class="w-full text-sm text-gray-400 text-center py-1">
                     No Presets
@@ -420,7 +422,7 @@ function PresetsDropdown() {
                         onClick={() => setShowSettings(false)}
                       >
                         <span class="mr-auto">{preset.name}</span>
-                        <Show when={presets.query()?.default === i()}>
+                        <Show when={presets.query.data?.default === i()}>
                           <span class="px-[0.375rem] h-[1.25rem] rounded-full bg-gray-100 text-gray-400 text-[0.75rem]">
                             Default
                           </span>

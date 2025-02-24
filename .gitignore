@@ -35,6 +35,6 @@ pnpm-lock.yaml
 .vinxi
 native-deps*
 apps/storybook/storybook-static
-tauri.*.conf.json
 
 *.tsbuildinfo
+.cargo/config.toml

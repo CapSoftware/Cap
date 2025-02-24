@@ -1,6 +1,6 @@
 import { Button } from "@cap/ui-solid";
 import { Select as KSelect, SelectRootProps } from "@kobalte/core/select";
-import { cache, createAsync, redirect, useNavigate } from "@solidjs/router";
+import { useNavigate } from "@solidjs/router";
 import {
   createMutation,
   createQuery,
@@ -27,7 +27,6 @@ import { createStore } from "solid-js/store";
 import { Tooltip } from "@kobalte/core";
 import { trackEvent } from "~/utils/analytics";
 
-import { authStore } from "~/store";
 import {
   createCurrentRecordingQuery,
   createOptionsQuery,
@@ -36,6 +35,7 @@ import {
   getPermissions,
   createVideoDevicesQuery,
   listScreens,
+  createLicenseQuery,
 } from "~/utils/queries";
 import {
   CaptureScreen,
@@ -51,28 +51,7 @@ import {
   topRightAnimateClasses,
 } from "../editor/ui";
 
-const getAuth = cache(async () => {
-  const value = await authStore.get();
-  const local = import.meta.env.VITE_ENVIRONMENT === "development";
-
-  const res = await apiClient.desktop.getUserPlan({
-    headers: await protectedHeaders(),
-  });
-  if (res.status !== 200 && !local) return redirect("/signin");
-
-  return value;
-}, "getAuth");
-
-export const route = {
-  load: () => getAuth(),
-};
-
 export default function () {
-  const [isLoading, setIsLoading] = createSignal(true);
-  const [loadError, setLoadError] = createSignal(false);
-  const [retryCount, setRetryCount] = createSignal(0);
-  const MAX_RETRIES = 3;
-
   const { options, setOptions } = createOptionsQuery();
   const currentRecording = createCurrentRecordingQuery();
 
@@ -88,229 +67,197 @@ export default function () {
     },
   }));
 
-  const [isUpgraded] = createResource(() => commands.checkUpgradedAndUpdate());
-
-  createAsync(() => getAuth());
+  const license = createLicenseQuery();
 
   createUpdateCheck();
 
-  const initializeWindow = async () => {
-    try {
-      setIsLoading(true);
-      setLoadError(false);
+  let unlistenFn: UnlistenFn;
+  onCleanup(() => unlistenFn?.());
+  const [initialize] = createResource(async () => {
+    const version = await getVersion();
 
-      if (
-        options.data?.cameraLabel &&
-        options.data.cameraLabel !== "No Camera"
-      ) {
-        const cameraWindowActive = await commands.isCameraWindowOpen();
+    if (options.data?.cameraLabel && options.data.cameraLabel !== "No Camera") {
+      const cameraWindowActive = await commands.isCameraWindowOpen();
 
-        if (!cameraWindowActive) {
-          console.log("cameraWindow not found");
-          await setOptions.mutate({
-            ...options.data,
-          });
-        }
-      }
-
-      // Enforce window size with multiple safeguards
-      const currentWindow = await getCurrentWindow();
-      const MAIN_WINDOW_SIZE = { width: 300, height: 360 };
-
-      // Set initial size
-      await currentWindow.setSize(
-        new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height)
-      );
-
-      // Check size when app regains focus
-      const unlistenFocus = await currentWindow.onFocusChanged(
-        ({ payload: focused }) => {
-          if (focused) {
-            currentWindow.setSize(
-              new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height)
-            );
-          }
-        }
-      );
-
-      // Listen for resize events
-      const unlistenResize = await currentWindow.onResized(() => {
-        currentWindow.setSize(
-          new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height)
-        );
-      });
-
-      setTitlebar("hideMaximize", true);
-      setTitlebar(
-        "items",
-        <div
-          dir={ostype() === "windows" ? "rtl" : "rtl"}
-          class="flex mx-2 items-center gap-[0.3rem]"
-        >
-          <Button
-            variant="secondary"
-            size="xs"
-            onClick={() => {
-              commands.showWindow({ Settings: { page: "feedback" } });
-            }}
-          >
-            Feedback
-          </Button>
-          <ChangelogButton />
-          <GiftButton />
-        </div>
-      );
-
-      onCleanup(() => {
-        unlistenFocus();
-        unlistenResize();
-      });
-
-      setIsLoading(false);
-    } catch (error) {
-      console.error("Failed to initialize window:", error);
-      setLoadError(true);
-
-      if (retryCount() < MAX_RETRIES) {
-        setTimeout(() => {
-          setRetryCount((c) => c + 1);
-          initializeWindow();
-        }, 2000 * Math.pow(2, retryCount())); // Exponential backoff
+      if (!cameraWindowActive) {
+        console.log("cameraWindow not found");
+        setOptions.mutate({
+          ...options.data,
+        });
       }
     }
-  };
 
-  onMount(() => {
-    initializeWindow();
+    // Enforce window size with multiple safeguards
+    const currentWindow = getCurrentWindow();
+    const MAIN_WINDOW_SIZE = { width: 300, height: 360 };
+
+    // Set initial size
+    await currentWindow.setSize(
+      new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height)
+    );
+
+    // Check size when app regains focus
+    const unlistenFocus = await currentWindow.onFocusChanged(
+      ({ payload: focused }) => {
+        if (focused) {
+          currentWindow.setSize(
+            new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height)
+          );
+        }
+      }
+    );
+
+    // Listen for resize events
+    const unlistenResize = await currentWindow.onResized(() => {
+      currentWindow.setSize(
+        new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height)
+      );
+    });
+
+    unlistenFn = () => {
+      unlistenFocus();
+      unlistenResize();
+    };
+
+    setTitlebar("hideMaximize", true);
+    setTitlebar(
+      "items",
+      <div
+        dir={ostype() === "windows" ? "rtl" : "rtl"}
+        class="flex mx-2 items-center gap-[0.3rem]"
+      >
+        <Button
+          variant="secondary"
+          size="xs"
+          onClick={() => {
+            commands.showWindow({ Settings: { page: "feedback" } });
+          }}
+        >
+          Feedback
+        </Button>
+        <ChangelogButton />
+        <Show when={!license.isLoading && license.data?.type === "personal"}>
+          <button
+            type="button"
+            onClick={() => commands.showWindow("Upgrade")}
+            class="relative"
+          >
+            <IconLucideGift class="size-[1.10rem] text-gray-400 hover:text-gray-500" />
+            <div
+              style={{ "background-color": "#FF4747" }}
+              class="block z-10 absolute top-0 right-0 size-1.5 rounded-full animate-bounce"
+            />
+          </button>
+        </Show>
+      </div>
+    );
+
+    return null;
   });
 
   return (
-    <Show
-      when={!isLoading() && !loadError()}
-      fallback={
-        <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-[--gray-50] h-full text-[--text-primary]">
-          <div class="flex items-center justify-center h-full">
-            {loadError() ? (
-              <div class="text-center">
-                <p class="text-red-500 mb-2">Failed to load window content</p>
-                <Show when={retryCount() >= MAX_RETRIES}>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => {
-                      setRetryCount(0);
-                      initializeWindow();
-                    }}
-                  >
-                    Retry
-                  </Button>
-                </Show>
-              </div>
-            ) : (
-              <div class="animate-pulse">Loading...</div>
-            )}
+    <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-[--gray-50] h-full text-[--text-primary]">
+      {initialize()}
+      <div class="flex items-center justify-between pb-[0.25rem]">
+        <div class="flex items-center space-x-1">
+          <div class="*:w-[92px] *:h-auto text-[--text-primary] ">
+            <IconCapLogoFullDark class="dark:block hidden" />
+            <IconCapLogoFull class="dark:hidden block" />
           </div>
-        </div>
-      }
-    >
-      <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-[--gray-50] h-full text-[--text-primary]">
-        <div class="flex items-center justify-between pb-[0.25rem]">
-          <div class="flex items-center space-x-1">
-            <div class="*:w-[92px] *:h-auto text-[--text-primary] ">
-              <IconCapLogoFullDark class="dark:block hidden" />
-              <IconCapLogoFull class="dark:hidden block" />
-            </div>
-            <ErrorBoundary fallback={<></>}>
-              <Suspense>
-                <span
-                  onClick={async () => {
-                    if (!isUpgraded()) {
-                      await commands.showWindow("Upgrade");
-                    }
-                  }}
-                  class={`text-[0.6rem] ${
-                    isUpgraded()
-                      ? "bg-[--blue-400] text-gray-50 dark:text-gray-500"
-                      : "bg-gray-200 cursor-pointer hover:bg-gray-300"
-                  } rounded-lg px-1.5 py-0.5`}
-                >
-                  {isUpgraded() ? "Pro" : "Upgrade to Pro"}
-                </span>
-              </Suspense>
-            </ErrorBoundary>
-          </div>
-          <div class="flex items-center space-x-2">
-            <Tooltip.Root openDelay={0}>
-              <Tooltip.Trigger>
-                <button
-                  type="button"
-                  onClick={() =>
-                    commands.showWindow({ Settings: { page: "recordings" } })
+          <ErrorBoundary fallback={<></>}>
+            <Suspense>
+              <span
+                onClick={async () => {
+                  if (license.data?.type !== "pro") {
+                    await commands.showWindow("Upgrade");
                   }
-                >
-                  <IconLucideSquarePlay class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
-                </button>
-              </Tooltip.Trigger>
-              <Tooltip.Portal>
-                <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
-                  Previous Recordings
-                  <Tooltip.Arrow class="fill-gray-500" />
-                </Tooltip.Content>
-              </Tooltip.Portal>
-            </Tooltip.Root>
+                }}
+                class={`text-[0.6rem] ${
+                  license.data?.type === "pro"
+                    ? "bg-[--blue-400] text-gray-50 dark:text-gray-500"
+                    : "bg-gray-200 cursor-pointer hover:bg-gray-300"
+                } rounded-lg px-1.5 py-0.5`}
+              >
+                {license.data?.type === "commercial"
+                  ? "Commercial License"
+                  : license.data?.type === "pro"
+                  ? "Pro"
+                  : "Personal License"}
+              </span>
+            </Suspense>
+          </ErrorBoundary>
+        </div>
+        <div class="flex items-center space-x-2">
+          <Tooltip.Root openDelay={0}>
+            <Tooltip.Trigger>
+              <button
+                type="button"
+                onClick={() =>
+                  commands.showWindow({ Settings: { page: "recordings" } })
+                }
+              >
+                <IconLucideSquarePlay class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
+              </button>
+            </Tooltip.Trigger>
+            <Tooltip.Portal>
+              <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+                Previous Recordings
+                <Tooltip.Arrow class="fill-gray-500" />
+              </Tooltip.Content>
+            </Tooltip.Portal>
+          </Tooltip.Root>
 
-            <Tooltip.Root openDelay={0}>
-              <Tooltip.Trigger>
-                <button
-                  type="button"
-                  onClick={() =>
-                    commands.showWindow({ Settings: { page: "general" } })
-                  }
-                >
-                  <IconCapSettings class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
-                </button>
-              </Tooltip.Trigger>
-              <Tooltip.Portal>
-                <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
-                  Settings
-                  <Tooltip.Arrow class="fill-gray-500" />
-                </Tooltip.Content>
-              </Tooltip.Portal>
-            </Tooltip.Root>
-          </div>
+          <Tooltip.Root openDelay={0}>
+            <Tooltip.Trigger>
+              <button
+                type="button"
+                onClick={() =>
+                  commands.showWindow({ Settings: { page: "general" } })
+                }
+              >
+                <IconCapSettings class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
+              </button>
+            </Tooltip.Trigger>
+            <Tooltip.Portal>
+              <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+                Settings
+                <Tooltip.Arrow class="fill-gray-500" />
+              </Tooltip.Content>
+            </Tooltip.Portal>
+          </Tooltip.Root>
         </div>
-        <TargetSelects options={options.data} />
-        <CameraSelect options={options.data} setOptions={setOptions} />
-        <MicrophoneSelect options={options.data} setOptions={setOptions} />
-        <div class="w-full flex items-center space-x-1">
-          <Button
-            disabled={toggleRecording.isPending}
-            variant={isRecording() ? "destructive" : "primary"}
-            size="md"
-            onClick={() => toggleRecording.mutate()}
-            class="flex-grow"
-          >
-            {isRecording() ? "Stop Recording" : "Start Recording"}
-          </Button>
-          <Button
-            disabled={isRecording()}
-            variant="secondary"
-            size="md"
-            onClick={() => commands.takeScreenshot()}
-          >
-            <IconLucideCamera class="w-[1rem] h-[1rem]" />
-          </Button>
-        </div>
-        <a
-          href={`${import.meta.env.VITE_SERVER_URL}/dashboard`}
-          target="_blank"
-          rel="noreferrer"
-          class="text-[--text-tertiary] text-[0.875rem] mx-auto hover:text-[--text-primary] hover:underline"
-        >
-          Open Cap on Web
-        </a>
       </div>
-    </Show>
+      <TargetSelects options={options.data} />
+      <CameraSelect options={options.data} setOptions={setOptions} />
+      <MicrophoneSelect options={options.data} setOptions={setOptions} />
+      <div class="w-full flex items-center space-x-1">
+        <Button
+          disabled={toggleRecording.isPending}
+          variant={isRecording() ? "destructive" : "primary"}
+          size="md"
+          onClick={() => toggleRecording.mutate()}
+          class="flex-grow"
+        >
+          {isRecording() ? "Stop Recording" : "Start Recording"}
+        </Button>
+        <Button
+          disabled={isRecording()}
+          variant="secondary"
+          size="md"
+          onClick={() => commands.takeScreenshot()}
+        >
+          <IconLucideCamera class="w-[1rem] h-[1rem]" />
+        </Button>
+      </div>
+      <a
+        href={`${import.meta.env.VITE_SERVER_URL}/dashboard`}
+        target="_blank"
+        rel="noreferrer"
+        class="text-[--text-tertiary] text-[0.875rem] mx-auto hover:text-[--text-primary] hover:underline"
+      >
+        Open Cap on Web
+      </a>
+    </div>
   );
 }
 
@@ -346,6 +293,7 @@ import {
   getCurrentWebviewWindow,
   WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
+import { UnlistenFn } from "@tauri-apps/api/event";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -1106,25 +1054,5 @@ function ChangelogButton() {
         />
       )}
     </button>
-  );
-}
-
-function GiftButton() {
-  const [isUpgraded] = createResource(() => commands.checkUpgradedAndUpdate());
-
-  return (
-    <Show when={!isUpgraded()}>
-      <button
-        type="button"
-        onClick={() => commands.showWindow("Upgrade")}
-        class="relative"
-      >
-        <IconLucideGift class="size-[1.10rem] text-gray-400 hover:text-gray-500" />
-        <div
-          style={{ "background-color": "#FF4747" }}
-          class="block z-10 absolute top-0 right-0 size-1.5 rounded-full animate-bounce"
-        />
-      </button>
-    </Show>
   );
 }

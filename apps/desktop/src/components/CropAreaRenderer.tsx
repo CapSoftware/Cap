@@ -282,7 +282,7 @@ export default function CropAreaRenderer(
   });
 
   return (
-    <div class="*:h-full *:w-full">
+    <div class="*:h-full *:w-full animate-in fade-in">
       <canvas ref={canvasRef} class="pointer-events-none absolute" />
       <div>{props.children}</div>
     </div>

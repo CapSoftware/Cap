@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{CursorData, CursorEvents, CursorImages, ProjectConfiguration};
+use crate::{CursorEvents, CursorImage, CursorImages, ProjectConfiguration, XY};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct Display {
@@ -85,7 +85,7 @@ impl RecordingMeta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(untagged)]
+#[serde(untagged, rename_all = "camelCase")]
 pub enum Content {
     SingleSegment {
         #[serde(flatten)]
@@ -128,6 +128,7 @@ impl Content {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
 pub struct SingleSegment {
     pub display: Display,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -139,60 +140,43 @@ pub struct SingleSegment {
     pub cursor: Option<RelativePathBuf>,
 }
 
-impl SingleSegment {
-    pub fn cursor_data(&self, meta: &RecordingMeta) -> CursorData {
-        let Some(cursor_path) = &self.cursor else {
-            return CursorData::default();
-        };
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MultipleSegments {
+    pub segments: Vec<MultipleSegment>,
+    #[serde(default, skip_serializing_if = "Cursors::is_empty")]
+    pub cursors: Cursors,
+}
 
-        let full_path = meta.path(cursor_path);
-        println!("Loading cursor data from: {:?}", full_path);
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(untagged, rename_all = "camelCase")]
+pub enum Cursors {
+    // needed for backwards compat as i wasn't strict enough with feature flagging 🤦
+    Old(HashMap<String, String>),
+    Correct(HashMap<String, CursorMeta>),
+}
 
-        // Try to load the cursor data
-        let mut data = match CursorData::load_from_file(&full_path) {
-            Ok(data) => data,
-            Err(e) => {
-                eprintln!("Failed to load cursor data: {}", e);
-                return CursorData::default();
-            }
-        };
-
-        // If cursor_images is empty but cursor files exist, populate it
-        let cursors_dir = meta.path(&RelativePathBuf::from("./cursors"));
-        if data.cursor_images.0.is_empty() && cursors_dir.exists() {
-            println!("Scanning cursors directory: {:?}", cursors_dir);
-            if let Ok(entries) = std::fs::read_dir(&cursors_dir) {
-                for entry in entries {
-                    let Ok(entry) = entry else {
-                        continue;
-                    };
-
-                    let filename = entry.file_name();
-                    let filename_str = filename.to_string_lossy();
-                    if filename_str.starts_with("cursor_") && filename_str.ends_with(".png") {
-                        // Extract cursor ID from filename (cursor_X.png -> X)
-                        if let Some(id) = filename_str
-                            .strip_prefix("cursor_")
-                            .and_then(|s| s.strip_suffix(".png"))
-                        {
-                            println!("Found cursor image: {} -> {}", id, filename_str);
-                            data.cursor_images.0.insert(id.to_string(), entry.path());
-                        }
-                    }
-                }
-            }
-            println!("Found {} cursor images", data.cursor_images.0.len());
+impl Cursors {
+    fn is_empty(&self) -> bool {
+        match self {
+            Cursors::Old(map) => map.is_empty(),
+            Cursors::Correct(map) => map.is_empty(),
         }
-        data
+    }
+}
+
+impl Default for Cursors {
+    fn default() -> Self {
+        Self::Correct(Default::default())
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct MultipleSegments {
-    pub segments: Vec<MultipleSegment>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    #[specta(type = HashMap<String, String>)]
-    pub cursors: HashMap<String, RelativePathBuf>,
+#[serde(rename_all = "camelCase")]
+pub struct CursorMeta {
+    #[specta(type = String)]
+    pub image_path: RelativePathBuf,
+    pub hotspot: XY<f64>,
 }
 
 impl MultipleSegments {
@@ -200,13 +184,22 @@ impl MultipleSegments {
         meta.project_path.join(path)
     }
 
-    pub fn cursor_images(&self, meta: &RecordingMeta) -> Result<CursorImages, String> {
-        Ok(CursorImages(
-            self.cursors
+    pub fn cursor_images(&self, meta: &RecordingMeta) -> Result<CursorImages, CursorImage> {
+        Ok(CursorImages(match &self.cursors {
+            Cursors::Old(_) => Default::default(),
+            Cursors::Correct(map) => map
                 .iter()
-                .map(|(k, v)| (k.clone(), meta.path(v)))
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        CursorImage {
+                            path: meta.path(&v.image_path),
+                            hotspot: v.hotspot,
+                        },
+                    )
+                })
                 .collect::<_>(),
-        ))
+        }))
     }
 }
 

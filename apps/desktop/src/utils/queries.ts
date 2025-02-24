@@ -10,6 +10,7 @@ import { createStore, reconcile } from "solid-js/store";
 import { createEffect, createMemo } from "solid-js";
 import { makePersisted } from "@solid-primitives/storage";
 import { FPS } from "~/routes/editor/context";
+import { authStore, generalSettingsStore } from "~/store";
 
 function debugFetch<T>(name: string, doFetch: () => Promise<T>) {
   return () => {
@@ -94,11 +95,6 @@ export function createOptionsQuery() {
     createStore<PartialRecordingOptions>({
       cameraLabel: null,
       audioInputName: null,
-      fps: FPS,
-      outputResolution: {
-        width: 1920,
-        height: 1080,
-      },
     }),
     { name: "recordingOptionsQuery" }
   );
@@ -130,4 +126,28 @@ export function createCurrentRecordingQuery() {
   createQueryInvalidate(currentRecording, "currentRecordingChanged");
 
   return currentRecording;
+}
+
+export function createLicenseQuery() {
+  const query = createQuery(() => ({
+    queryKey: ["bruh"],
+    queryFn: async () => {
+      const settings = await generalSettingsStore.get();
+      const auth = await authStore.get();
+
+      if (auth?.plan?.upgraded) return { type: "pro" as const, ...auth.plan };
+      if (settings?.commercialLicense)
+        return {
+          type: "commercial" as const,
+          ...settings.commercialLicense,
+          instanceId: settings.instanceId,
+        };
+      return { type: "personal" as const };
+    },
+  }));
+
+  generalSettingsStore.listen(() => query.refetch());
+  authStore.listen(() => query.refetch());
+
+  return query;
 }

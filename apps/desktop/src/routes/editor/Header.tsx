@@ -9,6 +9,8 @@ import {
   createSignal,
   onCleanup,
   onMount,
+  ErrorBoundary,
+  Suspense,
 } from "solid-js";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { Tooltip } from "@kobalte/core";
@@ -34,6 +36,7 @@ import {
 import Titlebar from "~/components/titlebar/Titlebar";
 import { initializeTitlebar, setTitlebar } from "~/utils/titlebar-state";
 import { Channel } from "@tauri-apps/api/core";
+import { createLicenseQuery } from "~/utils/queries";
 
 type ResolutionOption = {
   label: string;
@@ -60,7 +63,7 @@ export interface ExportEstimates {
 }
 
 export function Header() {
-  const currentWindow = getCurrentWindow();
+  const license = createLicenseQuery();
 
   const [selectedFps, setSelectedFps] = createSignal(
     Number(localStorage.getItem("cap-export-fps")) || 30
@@ -93,11 +96,10 @@ export function Header() {
       <div
         data-tauri-drag-region
         class={cx(
-          "flex flex-row justify-between items-center w-full cursor-default pr-5",
+          "flex flex-row justify-end items-center w-full cursor-default pr-5",
           ostype() === "windows" ? "pl-[4.3rem]" : "pl-[1.25rem]"
         )}
       >
-        <div class="flex flex-row items-center gap-[0.5rem] text-[0.875rem]"></div>
         <div class="flex flex-row gap-2 font-medium items-center">
           <ShareButton
             selectedResolution={selectedResolution}
@@ -114,7 +116,35 @@ export function Header() {
     );
   });
 
-  return <Titlebar />;
+  return (
+    <div class="relative">
+      <div class="absolute left-[6rem] top-[1.25rem] z-10">
+        <ErrorBoundary fallback={<></>}>
+          <Suspense>
+            <span
+              onClick={async () => {
+                if (license.data?.type !== "pro") {
+                  await commands.showWindow("Upgrade");
+                }
+              }}
+              class={`text-[0.8rem] ${
+                license.data?.type === "pro"
+                  ? "bg-[--blue-400] text-gray-50 dark:text-gray-500"
+                  : "bg-gray-200 cursor-pointer hover:bg-gray-300"
+              } rounded-[0.55rem] px-2 py-1`}
+            >
+              {license.data?.type === "commercial"
+                ? "Commercial License"
+                : license.data?.type === "pro"
+                ? "Pro"
+                : "Personal License"}
+            </span>
+          </Suspense>
+        </ErrorBoundary>
+      </div>
+      <Titlebar />
+    </div>
+  );
 }
 
 function ExportButton(props: {
@@ -180,7 +210,6 @@ function ExportButton(props: {
       try {
         const videoPath = await commands.exportVideo(
           videoId,
-          project,
           progress,
           true,
           props.selectedFps,
@@ -543,7 +572,6 @@ function ShareButton(props: {
 
         await commands.exportVideo(
           videoId,
-          project,
           progress,
           true,
           props.selectedFps(),

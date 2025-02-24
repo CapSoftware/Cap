@@ -9,6 +9,10 @@
   --gray-400: #8991a3;
   --gray-500: #12161f;
 
+  --text-primary: rgba(18, 22, 31, 0.95); /* Section titles, headings */
+  --text-secondary: rgba(18, 22, 31, 0.85); /* Important labels */
+  --text-tertiary: rgba(18, 22, 31, 0.65); /* Descriptions */
+
   --black-transparent-5: rgba(18, 22, 31, 0.05);
   --black-transparent-10: rgba(18, 22, 31, 0.1);
   --black-transparent-20: rgba(18, 22, 31, 0.2);

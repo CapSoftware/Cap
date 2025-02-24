@@ -1,6 +1,7 @@
 import { Router, useCurrentMatches } from "@solidjs/router";
 import { FileRoutes } from "@solidjs/start/router";
 import {
+  createEffect,
   createResource,
   ErrorBoundary,
   onCleanup,
@@ -16,7 +17,6 @@ import "unfonts.css";
 import "./styles/theme.css";
 import { generalSettingsStore } from "./store";
 import { commands, type AppTheme } from "./utils/tauri";
-import type { UnlistenFn } from "@tauri-apps/api/event";
 import {
   getCurrentWebviewWindow,
   WebviewWindow,
@@ -37,9 +37,11 @@ const queryClient = new QueryClient({
 
 export default function App() {
   return (
-    <Suspense>
-      <Inner />
-    </Suspense>
+    <QueryClientProvider client={queryClient}>
+      <Suspense>
+        <Inner />
+      </Suspense>
+    </QueryClientProvider>
   );
 }
 
@@ -68,13 +70,15 @@ function Inner() {
         fallback={(e: Error) => {
           console.error(e);
           return (
-            <div class="w-screen h-screen flex flex-col justify-center items-center bg-gray-100 border-gray-200 max-h-screen overflow-hidden transition-[border-radius] duration-200 text-[--text-secondary] gap-y-4">
-              <IconCapLogo />
-              <h1 class="text-[--text-primary] text-3xl font-bold">
+            <div class="w-screen h-screen flex flex-col justify-center items-center bg-gray-100 border-gray-200 max-h-screen overflow-hidden transition-[border-radius] duration-200 text-[--text-secondary] gap-y-4 max-sm:gap-y-2 px-8 text-center">
+              <IconCapLogo class="max-sm:size-16" />
+              <h1 class="text-[--text-primary] text-3xl max-sm:text-xl font-bold">
                 An Error Occured
               </h1>
-              <p>We're very sorry, but something has gone wrong.</p>
-              <div class="flex flex-row gap-x-4">
+              <p class="max-sm:text-sm mb-2">
+                We're very sorry, but something has gone wrong.
+              </p>
+              <div class="flex max-sm:flex-col flex-row max-sm:gap-2 gap-4">
                 <Button
                   onClick={() => {
                     writeText(`${e.toString()}\n\n${e.stack}`);
@@ -95,58 +99,51 @@ function Inner() {
           );
         }}
       >
-        <QueryClientProvider client={queryClient}>
-          <Router
-            root={(props) => {
-              const matches = useCurrentMatches();
+        <Router
+          root={(props) => {
+            const matches = useCurrentMatches();
 
-              onMount(() => {
-                for (const match of matches()) {
-                  if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
+            onMount(() => {
+              for (const match of matches()) {
+                if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
+              }
+
+              currentWindow.show();
+            });
+
+            return (
+              <Suspense
+                fallback={
+                  (() => {
+                    console.log("Root suspense fallback showing");
+                  }) as any
                 }
-
-                currentWindow.show();
-              });
-
-              return (
-                <Suspense
-                  fallback={
-                    (() => {
-                      console.log("Root suspense fallback showing");
-                    }) as any
-                  }
-                >
-                  {props.children}
-                </Suspense>
-              );
-            }}
-          >
-            <FileRoutes />
-          </Router>
-        </QueryClientProvider>
+              >
+                {props.children}
+              </Suspense>
+            );
+          }}
+        >
+          <FileRoutes />
+        </Router>
       </ErrorBoundary>
     </>
   );
 }
 
 function createThemeListener(currentWindow: WebviewWindow) {
-  const [theme, themeActions] = createResource<AppTheme | null>(() =>
-    generalSettingsStore.get().then((s) => {
-      const t = s?.theme ?? null;
-      update(t);
-      return t;
-    })
-  );
-  generalSettingsStore.listen((s) => {
-    themeActions.mutate(s?.theme ?? null);
-    update(theme());
+  const generalSettings = generalSettingsStore.createQuery();
+
+  createEffect(() => {
+    update(generalSettings.data?.theme ?? null);
   });
 
-  let unlisten: UnlistenFn | undefined;
   onMount(async () => {
-    unlisten = await currentWindow.onThemeChanged((_) => update(theme()));
+    const unlisten = await currentWindow.onThemeChanged((_) =>
+      update(generalSettings.data?.theme)
+    );
+    onCleanup(() => unlisten?.());
   });
-  onCleanup(() => unlisten?.());
 
   function update(appTheme: AppTheme | null | undefined) {
     if (appTheme === undefined || appTheme === null) return;

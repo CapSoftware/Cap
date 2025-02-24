@@ -7,13 +7,20 @@ use std::{
 };
 
 use cap_media::platform::Bounds;
-use cap_project::{CursorClickEvent, CursorMoveEvent};
+use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
 use cap_utils::spawn_actor;
 use device_query::{DeviceQuery, DeviceState};
+use image::GenericImageView;
 use tokio::sync::oneshot;
 use tracing::{debug, error, info};
 
-pub type Cursors = HashMap<u64, (String, u32)>;
+pub struct Cursor {
+    pub file_name: String,
+    pub id: u32,
+    pub hotspot: XY<f64>,
+}
+
+pub type Cursors = HashMap<u64, Cursor>;
 
 pub struct CursorActorResponse {
     // pub cursor_images: HashMap<String, Vec<u8>>,
@@ -71,29 +78,35 @@ pub fn spawn_cursor_recorder(
                 let cursor_data = get_cursor_image_data();
                 let cursor_id = if let Some(data) = cursor_data {
                     let mut hasher = DefaultHasher::default();
-                    data.hash(&mut hasher);
+                    data.image.hash(&mut hasher);
                     let id = hasher.finish();
 
                     // Check if we've seen this cursor data before
                     if let Some(existing_id) = response.cursors.get(&id) {
-                        existing_id.1.to_string()
+                        existing_id.id.to_string()
                     } else {
                         // New cursor data - save it
                         let cursor_id = response.next_cursor_id.to_string();
-                        let filename = format!("cursor_{}.png", cursor_id);
-                        let cursor_path = cursors_dir.join(&filename);
+                        let file_name = format!("cursor_{}.png", cursor_id);
+                        let cursor_path = cursors_dir.join(&file_name);
 
-                        if let Ok(image) = image::load_from_memory(&data) {
+                        if let Ok(image) = image::load_from_memory(&data.image) {
+                            dbg!(image.dimensions());
                             // Convert to RGBA
                             let rgba_image = image.into_rgba8();
 
                             if let Err(e) = rgba_image.save(&cursor_path) {
                                 error!("Failed to save cursor image: {}", e);
                             } else {
-                                info!("Saved cursor {cursor_id} image to: {:?}", filename);
-                                response
-                                    .cursors
-                                    .insert(id, (filename.clone(), response.next_cursor_id));
+                                info!("Saved cursor {cursor_id} image to: {:?}", file_name);
+                                response.cursors.insert(
+                                    id,
+                                    Cursor {
+                                        file_name,
+                                        id: response.next_cursor_id,
+                                        hotspot: data.hotspot,
+                                    },
+                                );
                                 response.next_cursor_id += 1;
                             }
                         }
@@ -149,10 +162,16 @@ pub fn spawn_cursor_recorder(
     CursorActor { rx, stop_signal }
 }
 
+#[derive(Debug)]
+struct CursorData {
+    image: Vec<u8>,
+    hotspot: XY<f64>,
+}
+
 #[cfg(target_os = "macos")]
-fn get_cursor_image_data() -> Option<Vec<u8>> {
+fn get_cursor_image_data() -> Option<CursorData> {
     use cocoa::base::{id, nil};
-    use cocoa::foundation::NSUInteger;
+    use cocoa::foundation::{NSPoint, NSSize, NSUInteger};
     use objc::rc::autoreleasepool;
     use objc::runtime::Class;
     use objc::*;
@@ -176,6 +195,9 @@ fn get_cursor_image_data() -> Option<Vec<u8>> {
                 return None;
             }
 
+            let cursor_size: NSSize = msg_send![cursor_image, size];
+            let cursor_hotspot: NSPoint = msg_send![current_cursor, hotSpot];
+
             // Get the TIFF representation of the image
             let image_data: id = msg_send![cursor_image, TIFFRepresentation];
             if image_data == nil {
@@ -192,13 +214,19 @@ fn get_cursor_image_data() -> Option<Vec<u8>> {
             let slice = std::slice::from_raw_parts(bytes, length as usize);
             let data = slice.to_vec();
 
-            Some(data)
+            Some(CursorData {
+                image: data,
+                hotspot: XY::new(
+                    cursor_hotspot.x / cursor_size.width,
+                    cursor_hotspot.y / cursor_size.height,
+                ),
+            })
         }
     })
 }
 
 #[cfg(windows)]
-fn get_cursor_image_data() -> Option<Vec<u8>> {
+fn get_cursor_image_data() -> Option<CursorData> {
     use windows::Win32::Foundation::{HWND, POINT};
     use windows::Win32::Graphics::Gdi::{
         BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, GetObjectA,
@@ -323,6 +351,9 @@ fn get_cursor_image_data() -> Option<Vec<u8>> {
             )
             .ok()?;
 
-        Some(png_data)
+        Some(CursorData {
+            image: png_data,
+            hotspot: XY::new(0.0, 0.0),
+        })
     }
 }

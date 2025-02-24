@@ -98,15 +98,15 @@ export const PricingPage = () => {
 
   const proList = [
     {
-      text: "No watermark on videos",
-      available: true,
-    },
-    {
       text: "Unlimited cloud storage & Shareable links",
       available: true,
     },
     {
       text: "Connect custom S3 storage bucket",
+      available: true,
+    },
+    {
+      text: "Desktop app commercial license included",
       available: true,
     },
     {
@@ -287,10 +287,9 @@ export const PricingPage = () => {
                       </p>
                     </div>
                     <p className="pl-8">
-                      Watermark on video, Screen & Window recording, Local video
-                      export, 5 min shareable links, Powerful video editor
-                      (custom background gradients, transitions, etc) + many
-                      more.
+                      Screen & Window recording, Local video export, 5 min
+                      shareable links, Powerful video editor (custom background
+                      gradients, transitions, etc) + many more.
                     </p>
                   </div>
                 </CardFooter>

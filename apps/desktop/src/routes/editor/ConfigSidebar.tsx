@@ -2,6 +2,7 @@ import {
   RadioGroup as KRadioGroup,
   RadioGroup,
 } from "@kobalte/core/radio-group";
+import { Collapsible as KCollapsible } from "@kobalte/core/collapsible";
 import { Tabs as KTabs } from "@kobalte/core/tabs";
 import { cx } from "cva";
 import {
@@ -12,6 +13,9 @@ import {
   For,
   Show,
   onMount,
+  createMemo,
+  createEffect,
+  on,
 } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { createWritableMemo } from "@solid-primitives/memo";
@@ -41,14 +45,11 @@ import {
   Toggle,
   Slider,
 } from "./ui";
-import {
-  DEFAULT_GRADIENT_FROM,
-  DEFAULT_GRADIENT_TO,
-  DEFAULT_PROJECT_CONFIG,
-} from "./projectConfig";
+import { DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO } from "./projectConfig";
 import { generalSettingsStore } from "~/store";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import toast from "solid-toast";
+import { createElementBounds } from "@solid-primitives/bounds";
 
 const BACKGROUND_SOURCES = {
   wallpaper: "Wallpaper",
@@ -355,7 +356,7 @@ export function ConfigSidebar() {
           <div class="bg-gray-100 w-full h-full" />
         </KTabs.Indicator>
       </KTabs.List>
-      <div class="p-[0.75rem] overflow-y-auto text-[0.875rem]">
+      <div class="p-[0.75rem] overflow-y-auto text-[0.875rem] h-full">
         <KTabs.Content value="background" class="flex flex-col gap-[1.5rem]">
           <Field name="Background" icon={<IconCapImage />}>
             <KTabs
@@ -806,7 +807,7 @@ export function ConfigSidebar() {
           <Field name="Shadow" icon={<IconCapShadow />}>
             <div class="space-y-3">
               <Slider
-                value={[project.background.shadow]}
+                value={[project.background.shadow!]}
                 onChange={(v) => {
                   batch(() => {
                     setProject("background", "shadow", v[0]);
@@ -978,16 +979,10 @@ export function ConfigSidebar() {
           <Field
             name="Size During Zoom"
             icon={<IconCapEnlarge />}
-            value={`${
-              project.camera.zoom_size ??
-              DEFAULT_PROJECT_CONFIG.camera.zoom_size
-            }%`}
+            value={`${project.camera.zoom_size}%`}
           >
             <Slider
-              value={[
-                project.camera.zoom_size ??
-                  DEFAULT_PROJECT_CONFIG.camera.zoom_size,
-              ]}
+              value={[project.camera.zoom_size ?? 60]}
               onChange={(v) => setProject("camera", "zoom_size", v[0])}
               minValue={10}
               maxValue={60}
@@ -996,10 +991,7 @@ export function ConfigSidebar() {
           </Field>
           <Field name="Rounded Corners" icon={<IconCapCorners />}>
             <Slider
-              value={[
-                project.camera.rounding ??
-                  DEFAULT_PROJECT_CONFIG.camera.rounding,
-              ]}
+              value={[project.camera.rounding!]}
               onChange={(v) => setProject("camera", "rounding", v[0])}
               minValue={0}
               maxValue={100}
@@ -1009,7 +1001,7 @@ export function ConfigSidebar() {
           <Field name="Shadow" icon={<IconCapShadow />}>
             <div class="space-y-3">
               <Slider
-                value={[project.camera.shadow]}
+                value={[project.camera.shadow!]}
                 onChange={(v) => setProject("camera", "shadow", v[0])}
                 minValue={0}
                 maxValue={100}
@@ -1146,6 +1138,62 @@ export function ConfigSidebar() {
                   step={1}
                 />
               </Field>
+              <KCollapsible open={!project.cursor.raw}>
+                <Field
+                  name="Smooth Movement"
+                  icon={<IconHugeiconsEaseCurveControlPoints />}
+                  value={
+                    <Toggle
+                      checked={!project.cursor.raw}
+                      onChange={(value) => {
+                        setProject("cursor", "raw", !value);
+                      }}
+                    />
+                  }
+                />
+                <KCollapsible.Content class="overflow-hidden border-b border-gray-200 animate-collapsible-up ui-expanded:animate-collapsible-down transition-opacity ui-expanded:opacity-100 opacity-0">
+                  {/* if Content has padding or margin the animation doesn't look as good */}
+                  <div class="pt-4 pb-6 flex flex-col gap-4">
+                    <Field name="Tension">
+                      <Slider
+                        value={[project.cursor.tension]}
+                        onChange={(v) => setProject("cursor", "tension", v[0])}
+                        minValue={1}
+                        maxValue={500}
+                        step={1}
+                      />
+                    </Field>
+                    <Field name="Friction">
+                      <Slider
+                        value={[project.cursor.friction]}
+                        onChange={(v) => setProject("cursor", "friction", v[0])}
+                        minValue={0}
+                        maxValue={50}
+                        step={0.1}
+                      />
+                    </Field>
+                    <Field name="Mass">
+                      <Slider
+                        value={[project.cursor.mass]}
+                        onChange={(v) => setProject("cursor", "mass", v[0])}
+                        minValue={0.1}
+                        maxValue={10}
+                        step={0.01}
+                      />
+                    </Field>
+                  </div>
+                </KCollapsible.Content>
+              </KCollapsible>
+
+              {/* <Field name="Motion Blur">
+                <Slider
+                  value={[project.cursor.motionBlur]}
+                  onChange={(v) => setProject("cursor", "motionBlur", v[0])}
+                  minValue={0}
+                  maxValue={1}
+                  step={0.001}
+                />
+              </Field> */}
               {/* <Field name="Animation Style" icon={<IconLucideRabbit />}>
             <RadioGroup
               defaultValue="regular"
@@ -1313,7 +1361,7 @@ export function ConfigSidebar() {
                       <div class="bg-gray-100 flex-1" />
                     </KTabs.Indicator>
                   </KTabs.List>
-                  <KTabs.Content value="manual">
+                  <KTabs.Content value="manual" tabIndex="">
                     <Show
                       when={(() => {
                         const m = value().segment.mode;
@@ -1321,10 +1369,109 @@ export function ConfigSidebar() {
                         return m.manual;
                       })()}
                     >
-                      {(mode) => (
-                        <div class="w-full h-52 bg-gray-100 rounded-xl p-1">
+                      {(mode) => {
+                        const start = createMemo<number>((prev) => {
+                          if (history.isPaused()) return prev;
+                          return value().segment.start;
+                        }, 0);
+
+                        const segmentIndex = createMemo<number>((prev) => {
+                          if (history.isPaused()) return prev;
+
+                          const st = start();
+                          let i = project.timeline?.segments.findIndex(
+                            (s) => s.start <= st && s.end > st
+                          );
+                          if (i === undefined || i === -1) return 0;
+                          return i;
+                        }, 0);
+
+                        const video = document.createElement("video");
+                        createEffect(() => {
+                          video.src = convertFileSrc(
+                            // TODO: this shouldn't be so hardcoded
+                            `${
+                              editorInstance.path
+                            }/content/segments/segment-${segmentIndex()}/display.mp4`
+                          );
+                        });
+
+                        createEffect(() => {
+                          const s = start();
+                          if (s === undefined) return;
+                          video.currentTime = s;
+                        });
+
+                        createEffect(
+                          on(
+                            () => {
+                              croppedPosition();
+                              croppedSize();
+                            },
+                            () => {
+                              render();
+                            }
+                          )
+                        );
+
+                        const render = () => {
+                          const ctx = canvasRef.getContext("2d");
+                          ctx!.imageSmoothingEnabled = false;
+                          console.log(canvasRef.width);
+                          ctx!.drawImage(
+                            video,
+                            croppedPosition().x,
+                            croppedPosition().y,
+                            croppedSize().x,
+                            croppedSize().y,
+                            0,
+                            0,
+                            canvasRef.width!,
+                            canvasRef.height!
+                          );
+                        };
+
+                        const [loaded, setLoaded] = createSignal(false);
+                        video.onloadeddata = () => {
+                          setLoaded(true);
+                          render();
+                        };
+                        video.onseeked = render;
+
+                        let canvasRef!: HTMLCanvasElement;
+
+                        const [ref, setRef] = createSignal<HTMLDivElement>();
+                        const bounds = createElementBounds(ref);
+                        const rawSize = () => {
+                          const raw =
+                            editorInstance.recordings.segments[0].display;
+                          return { x: raw.width, y: raw.height };
+                        };
+
+                        const croppedPosition = () => {
+                          const cropped = project.background.crop?.position;
+                          if (cropped) return cropped;
+
+                          return { x: 0, y: 0 };
+                        };
+
+                        const croppedSize = () => {
+                          const cropped = project.background.crop?.size;
+                          if (cropped) return cropped;
+
+                          return rawSize();
+                        };
+
+                        const visualHeight = () =>
+                          (bounds.width! / croppedSize().x) * croppedSize().y;
+
+                        return (
                           <div
-                            class="w-full h-full bg-blue-400 rounded-lg relative"
+                            ref={setRef}
+                            class="w-full relative"
+                            style={{
+                              height: `calc(${visualHeight()}px + 0.25rem)`,
+                            }}
                             onMouseDown={(downEvent) => {
                               const bounds =
                                 downEvent.currentTarget.getBoundingClientRect();
@@ -1364,15 +1511,28 @@ export function ConfigSidebar() {
                             }}
                           >
                             <div
-                              class="absolute w-6 h-6 rounded-full bg-gray-50 border border-gray-400 -translate-x-1/2 -translate-y-1/2"
+                              class="z-10 absolute w-6 h-6 rounded-full bg-gray-50 border border-gray-400 -translate-x-1/2 -translate-y-1/2"
                               style={{
-                                left: `${mode().x * 100}%`,
-                                top: `${mode().y * 100}%`,
+                                left: `calc(${mode().x * 100}% + ${
+                                  2 + mode().x * -6
+                                }px)`,
+                                top: `calc(${mode().y * 100}% + ${
+                                  2 + mode().y * -6
+                                }px)`,
                               }}
                             />
+                            <div class="border-2 border-gray-300 bg-gray-300 rounded-lg overflow-hidden">
+                              <canvas
+                                ref={canvasRef}
+                                width={croppedSize().x}
+                                height={croppedSize().y}
+                                data-loaded={loaded()}
+                                class="z-10 bg-red-500 opacity-0 transition-opacity data-[loaded='true']:opacity-100 w-full h-full duration-200"
+                              />
+                            </div>
                           </div>
-                        </div>
-                      )}
+                        );
+                      }}
                     </Show>
                   </KTabs.Content>
                 </KTabs>

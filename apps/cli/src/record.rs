@@ -76,8 +76,6 @@ impl RecordStart {
                 capture_target: target_info,
                 camera_label: camera.as_ref().map(|c| c.camera_info.human_name()),
                 audio_input_name: None,
-                fps: 30,
-                output_resolution: None,
             },
             camera.map(|c| Arc::new(Mutex::new(c))),
             None,

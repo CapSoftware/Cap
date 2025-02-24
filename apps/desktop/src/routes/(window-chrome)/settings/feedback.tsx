@@ -60,7 +60,6 @@ export default function FeedbackTab() {
 
           <Button
             type="submit"
-            onClick={() => console.log("bruh")}
             disabled={!feedback().trim() || feedback().trim().length < 0}
             class="w-full bg-[--blue-400] text-[--text-primary]"
           >
