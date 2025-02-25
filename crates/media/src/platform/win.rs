@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use super::{Bounds, CursorShape, Window};
 
+use tracing::debug;
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, BOOL, FALSE, HWND, LPARAM, RECT, TRUE};
 use windows::Win32::Graphics::Dwm::{
@@ -19,14 +20,13 @@ use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::WindowsAndMessaging::{DrawIconEx, GetIconInfo, DI_NORMAL, ICONINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetCursorInfo, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
     IsWindowVisible, LoadCursorW, SetForegroundWindow, CURSORINFO, IDC_APPSTARTING, IDC_ARROW,
     IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO, IDC_PERSON, IDC_PIN, IDC_SIZEALL,
     IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_UPARROW, IDC_WAIT,
 };
-use windows::Win32::UI::WindowsAndMessaging::{DrawIconEx, GetIconInfo, ICONINFO, DI_NORMAL};
-use tracing::debug;
 
 #[inline]
 pub fn bring_window_to_focus(window_id: u32) {
