@@ -18,8 +18,14 @@ const arch =
   process.env.RUST_TARGET_TRIPLE?.split("-")[0] ??
   (process.arch === "arm64" ? "aarch64" : "x86_64");
 
+const BASE_CARGO_TOML = `[env]
+FFMPEG_DIR = { relative = true, force = true, value = "target/native-deps" }
+`;
+
 async function main() {
   await fs.mkdir(targetDir, { recursive: true });
+
+  let cargoConfigContents = BASE_CARGO_TOML;
 
   if (process.platform === "darwin") {
     const NATIVE_DEPS_VERSION = "v0.25";
@@ -149,13 +155,17 @@ async function main() {
       "VC/Tools/LLVM/x64/bin/libclang.dll"
     );
 
-    await fs.writeFile(
-      path.join(__root, ".cargo/config.toml"),
-      `[env]
-FFMPEG_DIR = { relative = true, force = true, value = "target/native-deps" }
-LIBCLANG_PATH = "${libclangPath.replaceAll("\\", "/")}"`
-    );
+    cargoConfigContents += `LIBCLANG_PATH = "${libclangPath.replaceAll(
+      "\\",
+      "/"
+    )}"\n`;
   }
+
+  await fs.mkdir(path.join(__root, ".cargo"), { recursive: true });
+  await fs.writeFile(
+    path.join(__root, ".cargo/config.toml"),
+    cargoConfigContents
+  );
 
   if (!(await fileExists(path.join(__root, ".env")))) {
     await fs.copyFile(

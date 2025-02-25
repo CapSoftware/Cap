@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use super::{Bounds, CursorShape, Window};
 
+use tracing::debug;
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, BOOL, FALSE, HWND, LPARAM, RECT, TRUE};
 use windows::Win32::Graphics::Dwm::{
@@ -19,6 +20,7 @@ use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::WindowsAndMessaging::{DrawIconEx, GetIconInfo, DI_NORMAL, ICONINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetCursorInfo, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
     IsWindowVisible, LoadCursorW, SetForegroundWindow, CURSORINFO, IDC_APPSTARTING, IDC_ARROW,
@@ -289,7 +291,18 @@ pub fn monitor_bounds(id: u32) -> Bounds {
         )
     };
 
-    bounds.unwrap_or_default()
+    // If we didn't find the monitor with the given ID, log a warning and return a default bounds
+    if lparams.1.is_none() {
+        debug!("Could not find monitor with ID: {}", id);
+        return Bounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0, // Default to a common resolution
+            height: 1080.0,
+        };
+    }
+
+    lparams.1.unwrap()
 }
 
 pub fn display_names() -> HashMap<u32, String> {

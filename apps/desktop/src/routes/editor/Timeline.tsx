@@ -185,8 +185,9 @@ export function Timeline() {
           else {
             let delta: number = 0;
 
-            if (platform() === "macos" && e.shiftKey) delta = e.deltaX;
-            else if (platform() === "windows" && e.shiftKey) delta = e.deltaY;
+            if (platform() === "macos")
+              delta = e.shiftKey ? e.deltaX : e.deltaY;
+            else delta = e.deltaY;
 
             state.timelineTransform.setPosition(
               state.timelineTransform.position + secsPerPixel() * delta
