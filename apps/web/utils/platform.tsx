@@ -182,7 +182,7 @@ export const PlatformIcons: React.FC = () => {
       </div>
       <div>
         <a
-          href="/download/windows"
+          href="/download"
           className="focus:outline-none"
           aria-label="Download for Windows"
         >

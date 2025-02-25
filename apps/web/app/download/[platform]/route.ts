@@ -20,8 +20,8 @@ export async function GET(
     "apple-silicon": "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-aarch64",
     aarch64: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-aarch64",
     x86_64: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-x86_64",
-    windows: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/wix-x86_64",
-    win: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/wix-x86_64",
+    windows: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/nsis-x86_64",
+    win: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/nsis-x86_64",
   };
 
   // Get the download URL for the requested platform

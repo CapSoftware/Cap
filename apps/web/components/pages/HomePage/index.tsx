@@ -3,24 +3,49 @@
 "use client";
 
 import { Parallax } from "react-scroll-parallax";
-import toast from "react-hot-toast";
 import { ParallaxProvider } from "react-scroll-parallax";
 import { Button } from "@cap/ui";
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { LogoSection } from "../_components/LogoSection";
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faAngleRight, faPlay } from "@fortawesome/free-solid-svg-icons";
+import { faAngleRight } from "@fortawesome/free-solid-svg-icons";
 import PowerfulFeaturesSVG from "./PowerfulFeaturesSVG";
 import LeftBlueHue from "./LeftBlueHue";
 import { AnimatePresence, motion } from "framer-motion";
 import Link from "next/link";
-import { useState } from "react";
 import { useClickAway } from "@uidotdev/usehooks";
 import MuxPlayer from "@mux/mux-player-react";
+import {
+  detectPlatform,
+  getDownloadButtonText,
+  getDownloadUrl,
+  getPlatformIcon,
+  PlatformIcons,
+} from "@/utils/platform";
 
 export const HomePage = () => {
   const [videoToggled, setVideoToggled] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [platform, setPlatform] = useState<string | null>(null);
+  const [isIntel, setIsIntel] = useState(false);
+
+  useEffect(() => {
+    const detectUserPlatform = async () => {
+      try {
+        const { platform, isIntel } = await detectPlatform();
+        setPlatform(platform);
+        setIsIntel(isIntel);
+      } catch (error) {
+        console.error("Error detecting platform:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    detectUserPlatform();
+  }, []);
+
   return (
     <ParallaxProvider>
       <div className="mt-[120px]">
@@ -34,9 +59,9 @@ export const HomePage = () => {
                mx-auto bg-[#2e2e2e] rounded-full border w-fit border-zinc-200"
             >
               <p className="text-xs text-white sm:text-sm">
-                Launch Week Day 1:{" "}
+                Launch Week Day 2:{" "}
                 <span className="text-xs font-bold text-blue-100 sm:text-sm">
-                  Custom Domains
+                  Windows Support
                 </span>
               </p>
               <FontAwesomeIcon
@@ -62,11 +87,16 @@ export const HomePage = () => {
           <div className="flex flex-col justify-center items-center mb-5 space-y-2 fade-in-up animate-delay-2 sm:flex-row sm:space-y-0 sm:space-x-2">
             <Button
               variant="white"
-              href="/download"
+              href={
+                platform === "windows"
+                  ? "/download"
+                  : getDownloadUrl(platform, isIntel)
+              }
               size="lg"
-              className="w-full font-medium text-md sm:w-auto"
+              className="w-full font-medium text-md sm:w-auto flex items-center justify-center"
             >
-              Download App
+              {!loading && getPlatformIcon(platform)}
+              {getDownloadButtonText(platform, loading, isIntel)}
             </Button>
             <Button
               variant="radialblue"
@@ -77,9 +107,22 @@ export const HomePage = () => {
               Buy Now
             </Button>
           </div>
-          <p className="text-sm text-center text-zinc-400">
+          <p className="text-sm text-center text-zinc-400 animate-delay-2 fade-in-up">
             Free version available. No credit card required.
           </p>
+
+          {/* Platform icons */}
+          <PlatformIcons />
+
+          {/* See other options button */}
+          <div className="flex justify-center mt-2">
+            <Link
+              href="/download"
+              className="text-sm text-center text-zinc-400 underline animate-delay-2 fade-in-up hover:text-zinc-500"
+            >
+              See other options
+            </Link>
+          </div>
         </div>
         <AnimatePresence>
           {videoToggled && <VideoModal setVideoToggled={setVideoToggled} />}
