@@ -96,12 +96,12 @@ export default function Settings(props: RouteSectionProps) {
                   name: "Feedback",
                   icon: IconLucideMessageSquarePlus,
                 },
-                {
-                  type: "button",
-                  name: "Live Chat",
-                  icon: IconLucideMessageCircle,
-                  onClick: handleLiveChat,
-                },
+                // {
+                //   type: "button",
+                //   name: "Live Chat",
+                //   icon: IconLucideMessageCircle,
+                //   onClick: handleLiveChat,
+                // },
                 {
                   type: "link",
                   href: "changelog",
