@@ -1,3 +1,0 @@
-[env]
-FFMPEG_DIR = { relative = true, force = true, value = "target/native-deps" }
-LIBCLANG_PATH = "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/LLVM/x64/bin/libclang.dll"
