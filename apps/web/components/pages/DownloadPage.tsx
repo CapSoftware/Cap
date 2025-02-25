@@ -15,7 +15,7 @@ export const DownloadPage = () => {
   const [loading, setLoading] = useState(true);
   const [platform, setPlatform] = useState<string | null>(null);
   const [isIntel, setIsIntel] = useState(false);
-  const [showDebug, setShowDebug] = useState(true);
+  const [showDebug, setShowDebug] = useState(false);
 
   useEffect(() => {
     const detectUserPlatform = async () => {
