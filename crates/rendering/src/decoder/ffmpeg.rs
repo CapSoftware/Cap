@@ -9,7 +9,7 @@ use ffmpeg::{
     codec::{self, Capabilities},
     format, frame, rescale, software, Codec, Rescale,
 };
-use ffmpeg_hw_device::{CodecContextExt, HwDevice};
+use ffmpeg_hw_device::{CodecContextExt, CodecExt, HwDevice};
 use ffmpeg_sys_next::{avcodec_find_decoder, AVHWDeviceType};
 use tokio::sync::oneshot;
 
@@ -117,6 +117,12 @@ impl FfmpegDecoder {
                 }
             }
 
+            for config in decoder.codec().unwrap().hw_configs() {
+                unsafe {
+                    dbg!((*config).device_type);
+                }
+            }
+
             let hw_device: Option<HwDevice> = if cfg!(target_os = "macos") {
                 decoder
                     .try_use_hw_device(AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX, Pixel::NV12)
@@ -125,14 +131,14 @@ impl FfmpegDecoder {
                 // For now, disable hardware acceleration on Windows as it's causing issues
                 // This ensures reliable playback while we debug the hardware acceleration issues
                 None
-                
+
                 // Uncomment the below code once hardware acceleration issues are resolved
                 /*
                 // Try D3D11VA first - most widely supported on modern Windows
                 let d3d11va = decoder
                     .try_use_hw_device(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA, Pixel::D3D11)
                     .ok();
-                
+
                 if d3d11va.is_some() {
                     println!("Using D3D11VA hardware acceleration");
                     d3d11va
@@ -141,7 +147,7 @@ impl FfmpegDecoder {
                     let cuda = decoder
                         .try_use_hw_device(AVHWDeviceType::AV_HWDEVICE_TYPE_CUDA, Pixel::CUDA)
                         .ok();
-                    
+
                     if cuda.is_some() {
                         println!("Using CUDA hardware acceleration");
                         cuda
@@ -150,7 +156,7 @@ impl FfmpegDecoder {
                         let qsv = decoder
                             .try_use_hw_device(AVHWDeviceType::AV_HWDEVICE_TYPE_QSV, Pixel::QSV)
                             .ok();
-                        
+
                         if qsv.is_some() {
                             println!("Using QSV hardware acceleration");
                             qsv

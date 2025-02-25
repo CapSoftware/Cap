@@ -10,8 +10,8 @@ use ffmpeg::{
 };
 use ffmpeg_sys_next::{
     av_buffer_ref, av_buffer_unref, av_hwdevice_ctx_create, av_hwframe_transfer_data,
-    avcodec_get_hw_config, AVBufferRef, AVCodecContext, AVHWDeviceType, AVPixelFormat,
-    AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX,
+    avcodec_get_hw_config, AVBufferRef, AVCodecContext, AVCodecHWConfig, AVHWDeviceType,
+    AVPixelFormat, AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX,
 };
 
 thread_local! {
@@ -119,6 +119,25 @@ impl CodecContextExt for codec::decoder::decoder::Decoder {
                 pix_fmt,
             })
         }
+    }
+}
+
+pub trait CodecExt {
+    fn hw_configs(&self) -> impl Iterator<Item = *const AVCodecHWConfig>;
+}
+
+impl CodecExt for codec::codec::Codec {
+    fn hw_configs(&self) -> impl Iterator<Item = *const AVCodecHWConfig> {
+        let mut i = 0;
+
+        std::iter::from_fn(move || {
+            let config = unsafe { avcodec_get_hw_config(self.as_ptr(), i) };
+            if config.is_null() {
+                return None;
+            }
+            i += 1;
+            Some(config)
+        })
     }
 }
 
