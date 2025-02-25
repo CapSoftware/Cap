@@ -61,7 +61,7 @@ export const HomePage = () => {
               <p className="text-xs text-white sm:text-sm">
                 Launch Week Day 2:{" "}
                 <span className="text-xs font-bold text-blue-100 sm:text-sm">
-                  Windows Support
+                  Cap for Windows
                 </span>
               </p>
               <FontAwesomeIcon
