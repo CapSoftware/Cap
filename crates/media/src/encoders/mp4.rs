@@ -56,17 +56,19 @@ impl MP4File {
     }
 
     pub fn finish(&mut self) {
-        println!("MP4Encoder: Finishing encoding");
+        tracing::info!("MP4Encoder: Finishing encoding");
 
         self.video.finish(&mut self.output);
 
         if let Some(audio) = &mut self.audio {
-            println!("MP4Encoder: Flushing audio encoder");
+            tracing::info!("MP4Encoder: Flushing audio encoder");
             audio.finish(&mut self.output);
         }
 
-        println!("MP4Encoder: Writing trailer");
-        self.output.write_trailer().unwrap();
+        tracing::info!("MP4Encoder: Writing trailer");
+        if let Err(e) = self.output.write_trailer() {
+            tracing::error!("Failed to write MP4 trailer: {:?}", e);
+        }
     }
 }
 

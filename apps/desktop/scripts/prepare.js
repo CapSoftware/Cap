@@ -33,9 +33,8 @@ async function semverToWIXCompatibleVersion(cargoFilePath) {
     const numMatch = buildOrPrerelease.match(/\d+$/);
     build = numMatch ? parseInt(numMatch[0]) : 0;
   }
-  const wixVersion = `${major}.${minor}.${patch}${
-    build === 0 ? "" : `.${build}`
-  }`;
+  const wixVersion = `${major}.${minor}.${patch}${build === 0 ? "" : `.${build}`
+    }`;
   if (wixVersion !== ver)
     console.log(`Using wix-compatible version ${ver} --> ${wixVersion}`);
   return wixVersion;
@@ -80,6 +79,9 @@ export async function createTauriPlatformConfigs(
     baseConfig = {
       ...baseConfig,
       bundle: {
+        resources: {
+          "../../../target/ffmpeg/bin/*.dll": "./",
+        },
         windows: {
           wix: {
             version: await semverToWIXCompatibleVersion(

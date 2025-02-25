@@ -9,8 +9,9 @@ use ffmpeg::{
     codec::{self, Capabilities},
     format, frame, rescale, software, Codec, Rescale,
 };
-use ffmpeg_hw_device::{CodecContextExt, HwDevice};
+use ffmpeg_hw_device::{CodecContextExt, CodecExt, HwDevice};
 use ffmpeg_sys_next::{avcodec_find_decoder, AVHWDeviceType};
+use log::debug;
 use tokio::sync::oneshot;
 
 use super::{pts_to_frame, DecodedFrame, VideoDecoderMessage, FRAME_CACHE_SIZE};
@@ -117,26 +118,43 @@ impl FfmpegDecoder {
                 }
             }
 
-            let hw_device: Option<HwDevice> = if cfg!(target_os = "macos") {
-                decoder
-                    .try_use_hw_device(AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX, Pixel::NV12)
-                    .ok()
-            } else if cfg!(target_os = "windows") {
-                decoder
-                    .try_use_hw_device(AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2, Pixel::DXVA2_VLD)
-                    .ok()
-            } else {
-                None
-            };
+            let width = decoder.width();
+            let height = decoder.height();
 
-            use ffmpeg::format::Pixel;
+            let exceeds_common_hw_limits = width > 4096 || height > 4096;
+
+            let mut hw_device = if exceeds_common_hw_limits {
+                debug!("Video dimensions {width}x{height} exceed common hardware decoder limits (4096x4096), not using hardware acceleration");
+                None
+            } else {
+                let hw_device_types = if cfg!(target_os = "macos") {
+                    [AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX].as_slice()
+                } else {
+                    [
+                        AVHWDeviceType::AV_HWDEVICE_TYPE_CUDA,
+                        AVHWDeviceType::AV_HWDEVICE_TYPE_D3D12VA,
+                        AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA,
+                        AVHWDeviceType::AV_HWDEVICE_TYPE_VAAPI,
+                        AVHWDeviceType::AV_HWDEVICE_TYPE_VULKAN,
+                        AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2,
+                    ]
+                    .as_slice()
+                };
+
+                hw_device_types
+                    .iter()
+                    .find_map(|&typ| decoder.try_use_hw_device(typ).ok())
+            };
+            let hw_device = hw_device.as_ref();
+
+            if hw_device.is_none() && !exceeds_common_hw_limits {
+                debug!("No hardware acceleration available, falling back to software decoding");
+            }
 
             let mut temp_frame = ffmpeg::frame::Video::empty();
 
             // let mut packets = input.packets().peekable();
 
-            let width = decoder.width();
-            let height = decoder.height();
             let black_frame = LazyCell::new(|| Arc::new(vec![0; (width * height * 4) as usize]));
 
             let mut cache = BTreeMap::<u32, CachedFrame>::new();
@@ -151,7 +169,7 @@ impl FfmpegDecoder {
 
             let mut packets = input.packets().peekable();
 
-            ready_tx.send(Ok(()));
+            let _ = ready_tx.send(Ok(()));
 
             while let Ok(r) = peekable_requests.recv() {
                 match r {
@@ -188,6 +206,7 @@ impl FfmpegDecoder {
                                     * 1_000_000.0) as i64;
                             let position = timestamp_us.rescale((1, 1_000_000), rescale::TIME_BASE);
 
+                            debug!("seeking to {}", position);
                             decoder.flush();
                             input.seek(position, ..position).unwrap();
                             last_decoded_frame = None;
@@ -216,7 +235,7 @@ impl FfmpegDecoder {
                             if stream.index() == input_stream_index {
                                 let start_offset = stream.start_time();
 
-                                decoder.send_packet(&packet).ok(); // decode failures are ok, we just fail to return a frame
+                                let _ = decoder.send_packet(&packet);
 
                                 let mut exit = false;
 
@@ -249,13 +268,12 @@ impl FfmpegDecoder {
                                     let exceeds_cache_bounds = current_frame > cache_max;
                                     let too_small_for_cache_bounds = current_frame < cache_min;
 
-                                    let hw_frame =
-                                        hw_device.as_ref().and_then(|d| d.get_hwframe(&temp_frame));
-
-                                    let frame = hw_frame.unwrap_or(std::mem::replace(
-                                        &mut temp_frame,
-                                        frame::Video::empty(),
-                                    ));
+                                    let frame = hw_device
+                                        .and_then(|d| d.get_hwframe(&temp_frame))
+                                        .unwrap_or(std::mem::replace(
+                                            &mut temp_frame,
+                                            frame::Video::empty(),
+                                        ));
 
                                     if !too_small_for_cache_bounds {
                                         let mut cache_frame = CachedFrame {

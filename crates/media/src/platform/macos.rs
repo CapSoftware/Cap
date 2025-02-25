@@ -8,7 +8,7 @@ use core_foundation::{
 };
 use core_graphics::{
     base::boolean_t,
-    display::{CFArrayGetValueAtIndex, CFDictionaryRef, CGRect},
+    display::{CFArrayGetValueAtIndex, CFDictionaryRef, CGDisplay, CGDisplayBounds, CGRect},
     window::{
         kCGNullWindowID, kCGWindowBounds, kCGWindowLayer, kCGWindowListExcludeDesktopElements,
         kCGWindowListOptionOnScreenOnly, kCGWindowName, kCGWindowNumber, kCGWindowOwnerName,
@@ -369,4 +369,18 @@ pub fn display_for_window(
     }
 
     None
+}
+
+pub fn primary_monitor_bounds() -> Bounds {
+    let display = CGDisplay::main();
+    let height = display.pixels_high();
+    let width = display.pixels_wide();
+    let bounds = unsafe { CGDisplayBounds(display.id) };
+
+    Bounds {
+        x: bounds.origin.x,
+        y: bounds.origin.y,
+        width: width as f64,
+        height: height as f64,
+    }
 }

@@ -10,8 +10,8 @@ use ffmpeg::{
 };
 use ffmpeg_sys_next::{
     av_buffer_ref, av_buffer_unref, av_hwdevice_ctx_create, av_hwframe_transfer_data,
-    avcodec_get_hw_config, AVBufferRef, AVCodecContext, AVHWDeviceType, AVPixelFormat,
-    AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX,
+    avcodec_get_hw_config, AVBufferRef, AVCodecContext, AVCodecHWConfig, AVHWDeviceType,
+    AVPixelFormat, AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX,
 };
 
 thread_local! {
@@ -41,7 +41,6 @@ unsafe extern "C" fn get_format(
 
 pub struct HwDevice {
     pub device_type: AVHWDeviceType,
-    pub pix_fmt: Pixel,
     ctx: *mut AVBufferRef,
 }
 
@@ -70,40 +69,20 @@ impl Drop for HwDevice {
 }
 
 pub trait CodecContextExt {
-    fn try_use_hw_device(
-        &mut self,
-        device_type: AVHWDeviceType,
-        pix_fmt: Pixel,
-    ) -> Result<HwDevice, &'static str>;
+    fn try_use_hw_device(&mut self, device_type: AVHWDeviceType) -> Result<HwDevice, &'static str>;
 }
 
 impl CodecContextExt for codec::decoder::decoder::Decoder {
-    fn try_use_hw_device(
-        &mut self,
-        device_type: AVHWDeviceType,
-        pix_fmt: Pixel,
-    ) -> Result<HwDevice, &'static str> {
+    fn try_use_hw_device(&mut self, device_type: AVHWDeviceType) -> Result<HwDevice, &'static str> {
         let codec = self.codec().ok_or("no codec")?;
 
         unsafe {
-            let mut i = 0;
-            loop {
-                let config = avcodec_get_hw_config(codec.as_ptr(), i);
-                if config.is_null() {
-                    return Err("no hw config");
-                }
-
-                if (*config).methods & (AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX as i32) == 1 {
-                    HW_PIX_FMT.set((*config).pix_fmt);
-                    break;
-                }
-
-                i += 1;
-            }
-
-            let context = self.as_mut_ptr();
-
-            (*context).get_format = Some(get_format);
+            let Some(hw_config) = codec.hw_configs().find(|&config| {
+                (*config).device_type == device_type
+                    && (*config).methods & (AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX as i32) == 1
+            }) else {
+                return Err("no hw config");
+            };
 
             let mut hw_device_ctx = null_mut();
 
@@ -111,14 +90,37 @@ impl CodecContextExt for codec::decoder::decoder::Decoder {
                 return Err("failed to create hw device context");
             }
 
+            HW_PIX_FMT.set((*hw_config).pix_fmt);
+
+            let context = self.as_mut_ptr();
+
+            (*context).get_format = Some(get_format);
             (*context).hw_device_ctx = av_buffer_ref(hw_device_ctx);
 
             Ok(HwDevice {
                 device_type,
                 ctx: hw_device_ctx,
-                pix_fmt,
             })
         }
+    }
+}
+
+pub trait CodecExt {
+    fn hw_configs(&self) -> impl Iterator<Item = *const AVCodecHWConfig>;
+}
+
+impl CodecExt for codec::codec::Codec {
+    fn hw_configs(&self) -> impl Iterator<Item = *const AVCodecHWConfig> {
+        let mut i = 0;
+
+        std::iter::from_fn(move || {
+            let config = unsafe { avcodec_get_hw_config(self.as_ptr(), i) };
+            if config.is_null() {
+                return None;
+            }
+            i += 1;
+            Some(config)
+        })
     }
 }
 
