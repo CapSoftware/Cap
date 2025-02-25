@@ -368,12 +368,19 @@ fn buffer_to_ffvideo(buffer: nokhwa::Buffer) -> FFVideo {
                 }
             }),
             FrameFormat::YUYV => {
-                // let bytes = buffer.buffer().len() as f32;
-                // let ratio = bytes / (buffer.resolution().x() * buffer.resolution().y()) as f32;
-                // if ratio == 2.0
+                // nokhwa moment
+                let pix_fmt = if cfg!(windows) {
+                    Pixel::YUYV422
+                } else {
+                    // let bytes = buffer.buffer().len() as f32;
+                    // let ratio = bytes / (buffer.resolution().x() * buffer.resolution().y()) as f32;
+                    // if ratio == 2.0
 
-                // nokhwa merges yuvu420 and uyvy422 into the same format, we should probably distinguish them with the frame size
-                (Pixel::UYVY422, |frame, buffer| {
+                    // nokhwa merges yuvu420 and uyvy422 into the same format, we should probably distinguish them with the frame size
+                    Pixel::UYVY422
+                };
+
+                (pix_fmt, |frame, buffer| {
                     let width = frame.width() as usize;
                     let height = frame.height() as usize;
 

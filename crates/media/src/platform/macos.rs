@@ -377,8 +377,6 @@ pub fn primary_monitor_bounds() -> Bounds {
     let width = display.pixels_wide();
     let bounds = unsafe { CGDisplayBounds(display.id) };
 
-    dbg!(bounds);
-
     Bounds {
         x: bounds.origin.x,
         y: bounds.origin.y,

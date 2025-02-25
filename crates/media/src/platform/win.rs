@@ -270,10 +270,6 @@ pub fn monitor_bounds(id: u32) -> Bounds {
 
         if id == *target_id {
             let rect = minfo.monitorInfo.rcMonitor;
-            debug!(
-                "Found monitor with ID {}: bounds: left={}, top={}, right={}, bottom={}",
-                id, rect.left, rect.top, rect.right, rect.bottom
-            );
             *bounds = Some(Bounds {
                 x: rect.left as f64,
                 y: rect.top as f64,
