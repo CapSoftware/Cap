@@ -12,6 +12,7 @@ use ffmpeg::{
 use ffmpeg_hw_device::{CodecContextExt, CodecExt, HwDevice};
 use ffmpeg_sys_next::{avcodec_find_decoder, AVHWDeviceType};
 use tokio::sync::oneshot;
+use log::debug;
 
 use super::{pts_to_frame, DecodedFrame, VideoDecoderMessage, FRAME_CACHE_SIZE};
 
@@ -121,23 +122,56 @@ impl FfmpegDecoder {
             let width = decoder.width();
             let height = decoder.height();
 
-            let hw_device_types = if cfg!(target_os = "macos") {
-                [AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX].as_slice()
-            } else {
-                [
-                    AVHWDeviceType::AV_HWDEVICE_TYPE_CUDA,
-                    AVHWDeviceType::AV_HWDEVICE_TYPE_D3D12VA,
-                    AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA,
-                    AVHWDeviceType::AV_HWDEVICE_TYPE_VAAPI,
-                    AVHWDeviceType::AV_HWDEVICE_TYPE_VULKAN,
-                    AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2,
-                ]
-                .as_slice()
-            };
+            // Check if dimensions exceed common hardware decoder limits
+            let exceeds_common_hw_limits = width > 4096 || height > 4096;
 
-            let hw_device = hw_device_types
-                .iter()
-                .find_map(|&typ| decoder.try_use_hw_device(typ).ok());
+            debug!("Video dimensions: {}x{}", width, height);
+            let mut hw_device = if exceeds_common_hw_limits {
+                debug!("Video dimensions {}x{} exceed common hardware decoder limits (4096x4096), disabling hardware acceleration", width, height);
+                None
+            } else {
+                let hw_device_types = if cfg!(target_os = "macos") {
+                    [AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX].as_slice()
+                } else {
+                    [
+                        AVHWDeviceType::AV_HWDEVICE_TYPE_CUDA,
+                        AVHWDeviceType::AV_HWDEVICE_TYPE_D3D12VA,
+                        AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA,
+                        AVHWDeviceType::AV_HWDEVICE_TYPE_VAAPI,
+                        AVHWDeviceType::AV_HWDEVICE_TYPE_VULKAN,
+                        AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2,
+                    ]
+                    .as_slice()
+                };
+
+                hw_device_types
+                    .iter()
+                    .find_map(|&typ| {
+                        let type_name = match typ {
+                            AVHWDeviceType::AV_HWDEVICE_TYPE_CUDA => "CUDA",
+                            AVHWDeviceType::AV_HWDEVICE_TYPE_D3D12VA => "D3D12VA",
+                            AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA => "D3D11VA", 
+                            AVHWDeviceType::AV_HWDEVICE_TYPE_VAAPI => "VAAPI",
+                            AVHWDeviceType::AV_HWDEVICE_TYPE_VULKAN => "VULKAN",
+                            AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2 => "DXVA2",
+                            AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX => "VIDEOTOOLBOX",
+                            _ => "Unknown",
+                        };
+                        
+                        debug!("Trying hardware acceleration: {}", type_name);
+                        let result = decoder.try_use_hw_device(typ);
+                        if result.is_err() {
+                            debug!("Failed to initialize {} hardware acceleration", type_name);
+                        } else {
+                            debug!("Successfully initialized {} hardware acceleration", type_name);
+                        }
+                        result.ok()
+                    })
+            };
+            
+            if hw_device.is_none() && !exceeds_common_hw_limits {
+                debug!("No hardware acceleration available, falling back to software decoding");
+            }
 
             let mut temp_frame = ffmpeg::frame::Video::empty();
 
@@ -156,6 +190,11 @@ impl FfmpegDecoder {
             let mut peekable_requests = PeekableReceiver { rx, peeked: None };
 
             let mut packets = input.packets().peekable();
+            
+            // Track hardware acceleration failures to detect when we need to fall back
+            let mut hw_failure_count = 0;
+            let max_hw_failures = 5; // Maximum number of consecutive failures before falling back to software
+            let mut using_hw_acceleration = hw_device.is_some();
 
             ready_tx.send(Ok(()));
 
@@ -194,10 +233,11 @@ impl FfmpegDecoder {
                                     * 1_000_000.0) as i64;
                             let position = timestamp_us.rescale((1, 1_000_000), rescale::TIME_BASE);
 
-                            println!("seeking to {}", position);
+                            debug!("seeking to {}", position);
                             decoder.flush();
                             input.seek(position, ..position).unwrap();
                             last_decoded_frame = None;
+                            hw_failure_count = 0; // Reset failure count on seek
 
                             packets = input.packets().peekable();
                         }
@@ -223,14 +263,48 @@ impl FfmpegDecoder {
                             if stream.index() == input_stream_index {
                                 let start_offset = stream.start_time();
 
-                                // Try to send packet and log if it fails
-                                if let Err(e) = decoder.send_packet(&packet) {
-                                    println!("Warning: Failed to decode packet: {:?}", e);
+                                // Try to send packet and detect repeated failures
+                                let packet_result = decoder.send_packet(&packet);
+                                if let Err(e) = packet_result {
+                                    debug!("Warning: Failed to decode packet: {:?}", e);
+                                    
+                                    // If we're using hardware acceleration and getting repeated errors
+                                    if using_hw_acceleration {
+                                        hw_failure_count += 1;
+                                        
+                                        // If we've hit our threshold of failures, disable hardware acceleration
+                                        if hw_failure_count >= max_hw_failures {
+                                            debug!("Detected repeated hardware acceleration failures. Falling back to software decoding.");
+                                            
+                                            // Disable hardware acceleration
+                                            using_hw_acceleration = false;
+                                            hw_device = None;
+                                            
+                                            // Recreate decoder with software-only
+                                            decoder.flush();
+                                            
+                                            // Reset counters and try again
+                                            hw_failure_count = 0;
+                                            
+                                            // Seek back to reset the stream
+                                            let timestamp_us = ((requested_frame as f32 / frame_rate.numerator() as f32) * 1_000_000.0) as i64;
+                                            let position = timestamp_us.rescale((1, 1_000_000), rescale::TIME_BASE);
+                                            input.seek(position, ..position).unwrap();
+                                            packets = input.packets().peekable();
+                                            continue;
+                                        }
+                                    }
+                                } else {
+                                    // Successful packet decode, reset failure counter
+                                    hw_failure_count = 0;
                                 }
 
                                 let mut exit = false;
 
                                 while decoder.receive_frame(&mut temp_frame).is_ok() {
+                                    // Successful frame received, reset failure counter
+                                    hw_failure_count = 0;
+                                    
                                     let current_frame = pts_to_frame(
                                         temp_frame.pts().unwrap() - start_offset,
                                         time_base,
@@ -260,7 +334,11 @@ impl FfmpegDecoder {
                                     let too_small_for_cache_bounds = current_frame < cache_min;
 
                                     let hw_frame =
-                                        hw_device.as_ref().and_then(|d| d.get_hwframe(&temp_frame));
+                                        if using_hw_acceleration {
+                                            hw_device.as_ref().and_then(|d| d.get_hwframe(&temp_frame))
+                                        } else {
+                                            None
+                                        };
 
                                     let frame = hw_frame.unwrap_or(std::mem::replace(
                                         &mut temp_frame,
