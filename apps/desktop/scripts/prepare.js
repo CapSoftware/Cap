@@ -80,6 +80,7 @@ export async function createTauriPlatformConfigs(
     baseConfig = {
       ...baseConfig,
       bundle: {
+        "../../../target/ffmpeg/bin/*.dll": "./",
         windows: {
           wix: {
             version: await semverToWIXCompatibleVersion(
