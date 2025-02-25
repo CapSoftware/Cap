@@ -123,30 +123,39 @@ impl FfmpegDecoder {
                 }
             }
 
-            let hw_device_types = if cfg!(target_os = "macos") {
-                [AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX].as_slice()
-            } else {
-                [
-                    AVHWDeviceType::AV_HWDEVICE_TYPE_CUDA,
-                    AVHWDeviceType::AV_HWDEVICE_TYPE_D3D12VA,
-                    AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA,
-                    AVHWDeviceType::AV_HWDEVICE_TYPE_VAAPI,
-                    AVHWDeviceType::AV_HWDEVICE_TYPE_VULKAN,
-                    AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2,
-                ]
-                .as_slice()
-            };
+            // Get video dimensions to check against hardware acceleration limits
+            let width = decoder.width();
+            let height = decoder.height();
+            
+            // Hardware acceleration has dimension limits (typically 4096x4096 for h264)
+            // Only attempt to use hardware acceleration if the video dimensions are within these limits
+            let hw_device = if width <= 4096 && height <= 4096 {
+                let hw_device_types = if cfg!(target_os = "macos") {
+                    [AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX].as_slice()
+                } else {
+                    [
+                        AVHWDeviceType::AV_HWDEVICE_TYPE_CUDA,
+                        AVHWDeviceType::AV_HWDEVICE_TYPE_D3D12VA,
+                        AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA,
+                        AVHWDeviceType::AV_HWDEVICE_TYPE_VAAPI,
+                        AVHWDeviceType::AV_HWDEVICE_TYPE_VULKAN,
+                        AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2,
+                    ]
+                    .as_slice()
+                };
 
-            let hw_device = hw_device_types
-                .iter()
-                .find_map(|&typ| decoder.try_use_hw_device(typ).ok());
+                hw_device_types
+                    .iter()
+                    .find_map(|&typ| decoder.try_use_hw_device(typ).ok())
+            } else {
+                println!("Video dimensions ({width}x{height}) exceed hardware acceleration limits, using software decoding");
+                None
+            };
 
             let mut temp_frame = ffmpeg::frame::Video::empty();
 
             // let mut packets = input.packets().peekable();
 
-            let width = decoder.width();
-            let height = decoder.height();
             let black_frame = LazyCell::new(|| Arc::new(vec![0; (width * height * 4) as usize]));
 
             let mut cache = BTreeMap::<u32, CachedFrame>::new();
@@ -227,7 +236,10 @@ impl FfmpegDecoder {
                             if stream.index() == input_stream_index {
                                 let start_offset = stream.start_time();
 
-                                decoder.send_packet(&packet).ok(); // decode failures are ok, we just fail to return a frame
+                                // Try to send packet and log if it fails
+                                if let Err(e) = decoder.send_packet(&packet) {
+                                    println!("Warning: Failed to decode packet: {:?}", e);
+                                }
 
                                 let mut exit = false;
 
