@@ -41,7 +41,6 @@ unsafe extern "C" fn get_format(
 
 pub struct HwDevice {
     pub device_type: AVHWDeviceType,
-    pub pix_fmt: Pixel,
     ctx: *mut AVBufferRef,
 }
 
@@ -70,36 +69,22 @@ impl Drop for HwDevice {
 }
 
 pub trait CodecContextExt {
-    fn try_use_hw_device(
-        &mut self,
-        device_type: AVHWDeviceType,
-        pix_fmt: Pixel,
-    ) -> Result<HwDevice, &'static str>;
+    fn try_use_hw_device(&mut self, device_type: AVHWDeviceType) -> Result<HwDevice, &'static str>;
 }
 
 impl CodecContextExt for codec::decoder::decoder::Decoder {
-    fn try_use_hw_device(
-        &mut self,
-        device_type: AVHWDeviceType,
-        pix_fmt: Pixel,
-    ) -> Result<HwDevice, &'static str> {
+    fn try_use_hw_device(&mut self, device_type: AVHWDeviceType) -> Result<HwDevice, &'static str> {
         let codec = self.codec().ok_or("no codec")?;
 
         unsafe {
-            let mut i = 0;
-            loop {
-                let config = avcodec_get_hw_config(codec.as_ptr(), i);
-                if config.is_null() {
-                    return Err("no hw config");
-                }
+            let Some(hw_config) = codec.hw_configs().find(|&config| {
+                (*config).device_type == device_type
+                    && (*config).methods & (AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX as i32) == 1
+            }) else {
+                return Err("no hw config");
+            };
 
-                if (*config).methods & (AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX as i32) == 1 {
-                    HW_PIX_FMT.set((*config).pix_fmt);
-                    break;
-                }
-
-                i += 1;
-            }
+            HW_PIX_FMT.set((*hw_config).pix_fmt);
 
             let context = self.as_mut_ptr();
 
@@ -116,7 +101,6 @@ impl CodecContextExt for codec::decoder::decoder::Decoder {
             Ok(HwDevice {
                 device_type,
                 ctx: hw_device_ctx,
-                pix_fmt,
             })
         }
     }

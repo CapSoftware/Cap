@@ -1,7 +1,9 @@
 {
   "bundle": {
+    "resources": {
+      "../../../target/ffmpeg/bin/*.dll": "./"
+    },
     "windows": {
-      "../../../target/ffmpeg/bin/*.dll": "./",
       "wix": {
         "version": "0.3.26"
       }

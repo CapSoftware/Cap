@@ -123,55 +123,23 @@ impl FfmpegDecoder {
                 }
             }
 
-            let hw_device: Option<HwDevice> = if cfg!(target_os = "macos") {
-                decoder
-                    .try_use_hw_device(AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX, Pixel::NV12)
-                    .ok()
-            } else if cfg!(target_os = "windows") {
-                // For now, disable hardware acceleration on Windows as it's causing issues
-                // This ensures reliable playback while we debug the hardware acceleration issues
-                None
-
-                // Uncomment the below code once hardware acceleration issues are resolved
-                /*
-                // Try D3D11VA first - most widely supported on modern Windows
-                let d3d11va = decoder
-                    .try_use_hw_device(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA, Pixel::D3D11)
-                    .ok();
-
-                if d3d11va.is_some() {
-                    println!("Using D3D11VA hardware acceleration");
-                    d3d11va
-                } else {
-                    // Try CUDA for NVIDIA GPUs
-                    let cuda = decoder
-                        .try_use_hw_device(AVHWDeviceType::AV_HWDEVICE_TYPE_CUDA, Pixel::CUDA)
-                        .ok();
-
-                    if cuda.is_some() {
-                        println!("Using CUDA hardware acceleration");
-                        cuda
-                    } else {
-                        // Try QSV for Intel GPUs
-                        let qsv = decoder
-                            .try_use_hw_device(AVHWDeviceType::AV_HWDEVICE_TYPE_QSV, Pixel::QSV)
-                            .ok();
-
-                        if qsv.is_some() {
-                            println!("Using QSV hardware acceleration");
-                            qsv
-                        } else {
-                            println!("Falling back to software decoding");
-                            None
-                        }
-                    }
-                }
-                */
+            let hw_device_types = if cfg!(target_os = "macos") {
+                [AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX].as_slice()
             } else {
-                None
+                [
+                    AVHWDeviceType::AV_HWDEVICE_TYPE_CUDA,
+                    AVHWDeviceType::AV_HWDEVICE_TYPE_D3D12VA,
+                    AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA,
+                    AVHWDeviceType::AV_HWDEVICE_TYPE_VAAPI,
+                    AVHWDeviceType::AV_HWDEVICE_TYPE_VULKAN,
+                    AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2,
+                ]
+                .as_slice()
             };
 
-            use ffmpeg::format::Pixel;
+            let hw_device = hw_device_types
+                .iter()
+                .find_map(|&typ| decoder.try_use_hw_device(typ).ok());
 
             let mut temp_frame = ffmpeg::frame::Video::empty();
 
@@ -230,6 +198,7 @@ impl FfmpegDecoder {
                                     * 1_000_000.0) as i64;
                             let position = timestamp_us.rescale((1, 1_000_000), rescale::TIME_BASE);
 
+                            println!("seeking to {}", position);
                             decoder.flush();
                             input.seek(position, ..position).unwrap();
                             last_decoded_frame = None;
