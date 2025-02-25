@@ -1,8 +1,8 @@
-import { createStore } from "solid-js/store";
-import type { JSX } from "solid-js";
+import type { UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type as ostype } from "@tauri-apps/plugin-os";
-import type { UnlistenFn } from "@tauri-apps/api/event";
+import type { JSX } from "solid-js";
+import { createStore } from "solid-js/store";
 
 export interface TitlebarState {
   height: string;
@@ -54,5 +54,5 @@ async function initializeTitlebar(): Promise<UnlistenFn | undefined> {
   });
 }
 
-export { setState as setTitlebar, initializeTitlebar };
+export { initializeTitlebar, setState as setTitlebar };
 export default state;

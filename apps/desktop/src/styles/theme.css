@@ -11,7 +11,7 @@
 
   --zinc-50: #f5f5f5;
   --zinc-100: #e4e4e7;
-  --zinc-200: #d4d4d8;
+  --zinc-200: #f0f0f0;
   --zinc-300: #a1a1aa;
   --zinc-400: #71717a;
   --zinc-500: #52525b;
@@ -35,6 +35,9 @@
   --white-transparent-10: rgba(255, 255, 255, 0.1);
   --white-transparent-20: rgba(255, 255, 255, 0.2);
   --white-transparent-40: rgba(255, 255, 255, 0.4);
+
+  --white: #ffffff;
+  --black: #000000;
 
   --blue-50: #ebf1ff;
   --blue-100: #adc9ff;
@@ -66,6 +69,13 @@
   --gray-400: #ebebf0; /* Secondary text - descriptions */
   --gray-500: #ffffff; /* Primary text - titles/headings (back to white) */
 
+  --zinc-50: #1e1e1e;
+  --zinc-100: #242424;
+  --zinc-200: #2a2a2a;
+  --zinc-300: #6c6c6c;
+  --zinc-400: #8b8b8b;
+  --zinc-500: #ffffff;
+
   /* Add new variables for text hierarchy */
   --text-primary: rgba(255, 255, 255, 0.95); /* Section titles, headings */
   --text-secondary: rgba(255, 255, 255, 0.85); /* Important labels */
@@ -84,6 +94,8 @@
   --white-transparent-10: rgba(18, 22, 31, 0.1);
   --white-transparent-20: rgba(18, 22, 31, 0.2);
   --white-transparent-40: rgba(18, 22, 31, 0.4);
+  --white: #ffffff;
+  --black: #000000;
 
   /* Accent colors remain mostly the same but adjusted for dark theme */
   --blue-50: #1a2438;

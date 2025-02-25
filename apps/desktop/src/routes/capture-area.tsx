@@ -1,16 +1,16 @@
-import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
-import { createOptionsQuery } from "~/utils/queries";
+import { Tooltip } from "@kobalte/core";
+import { createEventListenerMap } from "@solid-primitives/event-listener";
+import { makePersisted } from "@solid-primitives/storage";
 import {
   getCurrentWebviewWindow,
   WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
-import Cropper from "~/components/Cropper";
+import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { createStore } from "solid-js/store";
-import { type Crop } from "~/utils/tauri";
-import { makePersisted } from "@solid-primitives/storage";
-import { Tooltip } from "@kobalte/core";
-import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { Transition } from "solid-transition-group";
+import Cropper from "~/components/Cropper";
+import { createOptionsQuery } from "~/utils/queries";
+import { type Crop } from "~/utils/tauri";
 
 export default function CaptureArea() {
   const { options, setOptions } = createOptionsQuery();
@@ -24,7 +24,11 @@ export default function CaptureArea() {
   );
 
   const setPendingState = (pending: boolean) =>
-    webview.emitTo("main", "cap-window://capture-area/state/pending", pending);
+    webview.emitTo(
+      "main-new",
+      "cap-window://capture-area/state/pending",
+      pending
+    );
 
   let unlisten: () => void | undefined;
   onMount(async () => {
@@ -38,20 +42,10 @@ export default function CaptureArea() {
     y: window.innerHeight,
   });
 
-  
-  const [crop, setCrop] = makePersisted(
-    createStore<Crop>({
-      size: { x: 0, y: 0 },
-      position: { x: 0, y: 0 },
-    }),
-    { name: "crop" }
-  );
-
-    
   onMount(() => {
     createEventListenerMap(window, {
       resize: () =>
-      setWindowSize({ x: window.innerWidth, y: window.innerHeight }),
+        setWindowSize({ x: window.innerWidth, y: window.innerHeight }),
       keydown: (e) => {
         if (e.key === "Escape") close();
         else if (e.key === "Enter") handleConfirm();
@@ -59,18 +53,37 @@ export default function CaptureArea() {
     });
   });
 
+  const [crop, setCrop] = makePersisted(
+    createStore<Crop>({
+      position: { x: 0, y: 0 },
+      size: { x: 0, y: 0 },
+    }),
+    { name: "crop" }
+  );
 
-
-  function handleConfirm() {
+  async function handleConfirm() {
     const target = options.data?.captureTarget;
-    if (!options.data || !target || target.variant !== "screen") return;
+
+    // Exit if no options data
+    if (!options.data) return;
+
+    // Get screen reference - either direct (for screen targets) or from area targets
+    const screenTarget =
+      target?.variant === "screen"
+        ? target
+        : target?.variant === "area" && target.screen
+        ? target.screen
+        : null;
+
+    if (!screenTarget) return;
+
     setPendingState(false);
 
-   setOptions.mutate({
+    setOptions.mutate({
       ...options.data,
       captureTarget: {
         variant: "area",
-        screen: target,
+        screen: screenTarget,
         bounds: {
           x: crop.position.x,
           y: crop.position.y,
@@ -87,14 +100,14 @@ export default function CaptureArea() {
   function close() {
     setVisible(false);
     setTimeout(async () => {
-      (await WebviewWindow.getByLabel("main"))?.unminimize();
+      (await WebviewWindow.getByLabel("main-new"))?.unminimize();
       setPendingState(false);
       webview.close();
     }, 250);
   }
 
   return (
-    <div class="overflow-hidden w-screen h-screen bg-black bg-opacity-25">
+    <div class="overflow-hidden w-screen h-screen bg-black/25">
       <div class="flex fixed z-50 justify-center items-center w-full">
         <Transition
           appear
@@ -157,10 +170,6 @@ export default function CaptureArea() {
           <Cropper
             class="transition-all duration-300"
             value={crop}
-            initialSize={{
-              x: crop.size.x,
-              y: crop.size.y,
-            }}
             onCropChange={setCrop}
             showGuideLines={state.showGrid}
             mappedSize={{ x: windowSize().x, y: windowSize().y }}

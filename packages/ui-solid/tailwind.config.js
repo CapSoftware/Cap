@@ -8,6 +8,8 @@ module.exports = {
   theme: {
     colors: {
       transparent: "rgba(0,0,0,0)",
+      white: "var(--white)",
+      black: "var(--black)",
       gray: {
         50: "var(--gray-50)",
         100: "var(--gray-100)",
@@ -15,6 +17,14 @@ module.exports = {
         300: "var(--gray-300)",
         400: "var(--gray-400)",
         500: "var(--gray-500)",
+      },
+      zinc: {
+        50: "var(--zinc-50)",
+        100: "var(--zinc-100)",
+        200: "var(--zinc-200)",
+        300: "var(--zinc-300)",
+        400: "var(--zinc-400)",
+        500: "var(--zinc-500)",
       },
       "black-transparent": {
         5: "var(--black-transparent-5)",

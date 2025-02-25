@@ -1,12 +1,12 @@
-import type { Bounds } from "~/utils/tauri";
 import {
-  onMount,
-  onCleanup,
   createEffect,
-  type ParentProps,
   createSignal,
+  onCleanup,
+  onMount,
+  type ParentProps,
 } from "solid-js";
 import { createHiDPICanvasContext } from "~/utils/canvas";
+import type { Bounds } from "~/utils/tauri";
 
 type DrawContext = {
   ctx: CanvasRenderingContext2D;
@@ -283,7 +283,7 @@ export default function CropAreaRenderer(
 
   return (
     <div class="*:h-full *:w-full animate-in fade-in">
-      <canvas ref={canvasRef} class="pointer-events-none absolute" />
+      <canvas ref={canvasRef} class="absolute pointer-events-none" />
       <div>{props.children}</div>
     </div>
   );

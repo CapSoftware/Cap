@@ -37,7 +37,7 @@ impl FromStr for CapWindowId {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
             "setup" => Self::Setup,
-            "main" => Self::Main,
+            "main-new" => Self::Main,
             "settings" => Self::Settings,
             "camera" => Self::Camera,
             "window-capture-occluder" => Self::WindowCaptureOccluder,
@@ -58,7 +58,7 @@ impl std::fmt::Display for CapWindowId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Setup => write!(f, "setup"),
-            Self::Main => write!(f, "main"),
+            Self::Main => write!(f, "main-new"),
             Self::Settings => write!(f, "settings"),
             Self::Camera => write!(f, "camera"),
             Self::WindowCaptureOccluder => write!(f, "window-capture-occluder"),
@@ -172,7 +172,7 @@ impl ShowCapWindow {
                 .build()?,
             Self::Main => {
                 if permissions::do_permissions_check(false).necessary_granted() {
-                    self.window_builder(app, "/")
+                    self.window_builder(app, "/main-new")
                         .resizable(false)
                         .maximized(false)
                         .maximizable(false)

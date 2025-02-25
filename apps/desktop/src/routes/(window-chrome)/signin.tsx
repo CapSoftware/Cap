@@ -1,17 +1,17 @@
 import { Button } from "@cap/ui-solid";
-import * as shell from "@tauri-apps/plugin-shell";
-import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
-import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
-import { Window } from "@tauri-apps/api/window";
 import { createMutation } from "@tanstack/solid-query";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { Window } from "@tauri-apps/api/window";
+import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
+import * as shell from "@tauri-apps/plugin-shell";
 
-import callbackTemplate from "./callback.template";
-import { authStore } from "~/store";
-import { clientEnv } from "~/utils/env";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { commands } from "~/utils/tauri";
+import { authStore } from "~/store";
 import { identifyUser, trackEvent } from "~/utils/analytics";
+import { clientEnv } from "~/utils/env";
+import { commands } from "~/utils/tauri";
+import callbackTemplate from "./callback.template";
 
 export default function Page() {
   const signIn = createMutation(() => ({
@@ -33,7 +33,7 @@ export default function Page() {
       // Add a small delay to ensure window is ready
       await new Promise((resolve) => setTimeout(resolve, 500));
 
-      const mainWindow = await Window.getByLabel("main");
+      const mainWindow = await Window.getByLabel("main-new");
       mainWindow?.setFocus();
 
       getCurrentWindow().close();

@@ -1,4 +1,7 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
+import { makePersisted } from "@solid-primitives/storage";
+import { type CheckMenuItemOptions, Menu } from "@tauri-apps/api/menu";
+import { type as ostype } from "@tauri-apps/plugin-os";
 import {
   type ParentProps,
   batch,
@@ -13,15 +16,12 @@ import {
   onMount,
   Show,
 } from "solid-js";
-import CropAreaRenderer from "./CropAreaRenderer";
-import Box from "~/utils/box";
-import { type XY, type Crop, commands } from "~/utils/tauri";
 import { createStore } from "solid-js/store";
-import { type as ostype } from "@tauri-apps/plugin-os";
-import { generalSettingsStore } from "~/store";
-import { type CheckMenuItemOptions, Menu } from "@tauri-apps/api/menu";
-import { makePersisted } from "@solid-primitives/storage";
 import { Transition } from "solid-transition-group";
+import { generalSettingsStore } from "~/store";
+import Box from "~/utils/box";
+import { type Crop, type XY, commands } from "~/utils/tauri";
+import CropAreaRenderer from "./CropAreaRenderer";
 
 type Direction = "n" | "e" | "s" | "w" | "nw" | "ne" | "se" | "sw";
 type HandleSide = {
@@ -92,7 +92,6 @@ export default function Cropper(
     mappedSize?: XY<number>;
     minSize?: XY<number>;
     initialSize?: XY<number>;
-    initialPosition?: XY<number>;
     aspectRatio?: number;
     showGuideLines?: boolean;
   }>
@@ -146,27 +145,51 @@ export default function Cropper(
     onCleanup(() => resizeObserver.disconnect());
 
     const mapped = mappedSize();
-    const initial = props.initialSize || {
-      x: mapped.x / 2,
-      y: mapped.y / 2,
-    };
 
-    let width = clamp(initial.x, minSize().x, mapped.x);
-    let height = clamp(initial.y, minSize().y, mapped.y);
+    // Check if we have an existing crop size before creating defaults
+    const hasExistingCrop = crop.size.x > 0 && crop.size.y > 0;
 
-    const box = Box.from(
-      { x: (mapped.x - width) / 2, y: (mapped.y - height) / 2 },
-      { x: width, y: height }
-    );
-    box.constrainAll(box, containerSize(), ORIGIN_CENTER, props.aspectRatio);
+    if (!hasExistingCrop) {
+      // Only set initial defaults if we don't have a valid size
+      const initial = props.initialSize || {
+        x: mapped.x / 2,
+        y: mapped.y / 2,
+      };
 
-    setCrop({
-      size: { x: width, y: height },
-      position: {
-        x: (mapped.x - width) / 2,
-        y: (mapped.y - height) / 2,
-      },
-    });
+      let width = clamp(initial.x, minSize().x, mapped.x);
+      let height = clamp(initial.y, minSize().y, mapped.y);
+
+      const box = Box.from(
+        { x: (mapped.x - width) / 2, y: (mapped.y - height) / 2 },
+        { x: width, y: height }
+      );
+      box.constrainAll(box, containerSize(), ORIGIN_CENTER, props.aspectRatio);
+
+      setCrop({
+        size: { x: width, y: height },
+        position: {
+          x: (mapped.x - width) / 2,
+          y: (mapped.y - height) / 2,
+        },
+      });
+    } else {
+      // If we have existing crop values, just validate them
+      const box = Box.from(crop.position, crop.size);
+
+      // Make sure the crop is within bounds
+      box.constrainToBoundary(mapped.x, mapped.y, ORIGIN_CENTER);
+
+      // Update if needed
+      const bounds = box.toBounds();
+      if (
+        bounds.position.x !== crop.position.x ||
+        bounds.position.y !== crop.position.y ||
+        bounds.size.x !== crop.size.x ||
+        bounds.size.y !== crop.size.y
+      ) {
+        setCrop(bounds);
+      }
+    }
   });
 
   createEffect(
@@ -551,27 +574,28 @@ export default function Cropper(
           const scaleMultiplier = event.altKey ? 2 : 1;
           const currentBox = box.toBounds();
 
-          let newWidth =
-            dir.includes("e") || dir.includes("w")
-              ? clamp(
-                  dir.includes("w")
-                    ? currentBox.size.x - moveDelta * scaleMultiplier
-                    : currentBox.size.x + moveDelta * scaleMultiplier,
-                  minSize().x,
-                  mapped.x
-                )
-              : currentBox.size.x;
+          let newWidth = currentBox.size.x;
+          let newHeight = currentBox.size.y;
 
-          let newHeight =
-            dir.includes("n") || dir.includes("s")
-              ? clamp(
-                  dir.includes("n")
-                    ? currentBox.size.y - moveDelta * scaleMultiplier
-                    : currentBox.size.y + moveDelta * scaleMultiplier,
-                  minSize().y,
-                  mapped.y
-                )
-              : currentBox.size.y;
+          if (isLeftKey || isRightKey) {
+            newWidth = clamp(
+              isLeftKey
+                ? currentBox.size.x - moveDelta * scaleMultiplier
+                : currentBox.size.x + moveDelta * scaleMultiplier,
+              minSize().x,
+              mapped.x
+            );
+          }
+
+          if (isUpKey || isDownKey) {
+            newHeight = clamp(
+              isUpKey
+                ? currentBox.size.y - moveDelta * scaleMultiplier
+                : currentBox.size.y + moveDelta * scaleMultiplier,
+              minSize().y,
+              mapped.y
+            );
+          }
 
           box.resize(newWidth, newHeight, origin);
         } else {
