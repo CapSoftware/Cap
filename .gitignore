@@ -38,3 +38,4 @@ apps/storybook/storybook-static
 
 *.tsbuildinfo
 .cargo/config.toml
+tauri.windows.conf.json
