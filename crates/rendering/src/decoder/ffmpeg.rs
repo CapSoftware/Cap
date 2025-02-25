@@ -117,40 +117,27 @@ impl FfmpegDecoder {
                 }
             }
 
-            for config in decoder.codec().unwrap().hw_configs() {
-                unsafe {
-                    dbg!((*config).device_type);
-                }
-            }
-
             // Get video dimensions to check against hardware acceleration limits
             let width = decoder.width();
             let height = decoder.height();
-            
-            // Hardware acceleration has dimension limits (typically 4096x4096 for h264)
-            // Only attempt to use hardware acceleration if the video dimensions are within these limits
-            let hw_device = if width <= 4096 && height <= 4096 {
-                let hw_device_types = if cfg!(target_os = "macos") {
-                    [AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX].as_slice()
-                } else {
-                    [
-                        AVHWDeviceType::AV_HWDEVICE_TYPE_CUDA,
-                        AVHWDeviceType::AV_HWDEVICE_TYPE_D3D12VA,
-                        AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA,
-                        AVHWDeviceType::AV_HWDEVICE_TYPE_VAAPI,
-                        AVHWDeviceType::AV_HWDEVICE_TYPE_VULKAN,
-                        AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2,
-                    ]
-                    .as_slice()
-                };
 
-                hw_device_types
-                    .iter()
-                    .find_map(|&typ| decoder.try_use_hw_device(typ).ok())
+            let hw_device_types = if cfg!(target_os = "macos") {
+                [AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX].as_slice()
             } else {
-                println!("Video dimensions ({width}x{height}) exceed hardware acceleration limits, using software decoding");
-                None
+                [
+                    AVHWDeviceType::AV_HWDEVICE_TYPE_CUDA,
+                    AVHWDeviceType::AV_HWDEVICE_TYPE_D3D12VA,
+                    AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA,
+                    AVHWDeviceType::AV_HWDEVICE_TYPE_VAAPI,
+                    AVHWDeviceType::AV_HWDEVICE_TYPE_VULKAN,
+                    AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2,
+                ]
+                .as_slice()
             };
+
+            let hw_device = hw_device_types
+                .iter()
+                .find_map(|&typ| decoder.try_use_hw_device(typ).ok());
 
             let mut temp_frame = ffmpeg::frame::Video::empty();
 

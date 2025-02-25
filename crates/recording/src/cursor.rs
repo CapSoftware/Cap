@@ -116,77 +116,105 @@ pub fn spawn_cursor_recorder(
                 } else {
                     "default".to_string()
                 };
+                // dbg!(&mouse_state, &screen_bounds);
 
                 if mouse_state.coords != last_mouse_state.coords {
                     // Get the actual mouse coordinates
                     let (mouse_x, mouse_y) = mouse_state.coords;
-                    
+
                     #[cfg(windows)]
                     let (mouse_x, mouse_y) = {
                         // On Windows, ensure we're using the correct coordinate system
                         // by getting the virtual screen metrics
                         use windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics;
                         use windows::Win32::UI::WindowsAndMessaging::{
-                            SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN
+                            SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+                            SM_YVIRTUALSCREEN,
                         };
-                        
+
                         let virtual_screen_x = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
                         let virtual_screen_y = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
                         let virtual_screen_width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
                         let virtual_screen_height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
-                        
+
                         // If screen_bounds doesn't match the virtual screen, adjust the coordinates
-                        if (screen_bounds.x as i32 != virtual_screen_x || 
-                            screen_bounds.y as i32 != virtual_screen_y ||
-                            screen_bounds.width as i32 != virtual_screen_width ||
-                            screen_bounds.height as i32 != virtual_screen_height) &&
-                           screen_bounds.width > 0.0 && screen_bounds.height > 0.0 {
-                            
+                        if (screen_bounds.x as i32 != virtual_screen_x
+                            || screen_bounds.y as i32 != virtual_screen_y
+                            || screen_bounds.width as i32 != virtual_screen_width
+                            || screen_bounds.height as i32 != virtual_screen_height)
+                            && screen_bounds.width > 0.0
+                            && screen_bounds.height > 0.0
+                        {
                             // Convert to normalized coordinates in the virtual screen space first
-                            let norm_x = (mouse_x as f64 - virtual_screen_x as f64) / virtual_screen_width as f64;
-                            let norm_y = (mouse_y as f64 - virtual_screen_y as f64) / virtual_screen_height as f64;
-                            
+                            let norm_x = (mouse_x as f64 - virtual_screen_x as f64)
+                                / virtual_screen_width as f64;
+                            let norm_y = (mouse_y as f64 - virtual_screen_y as f64)
+                                / virtual_screen_height as f64;
+
                             // Then convert to the target screen coordinates
-                            let adjusted_x = (norm_x * screen_bounds.width + screen_bounds.x) as i32;
-                            let adjusted_y = (norm_y * screen_bounds.height + screen_bounds.y) as i32;
+                            let adjusted_x =
+                                (norm_x * screen_bounds.width + screen_bounds.x) as i32;
+                            let adjusted_y =
+                                (norm_y * screen_bounds.height + screen_bounds.y) as i32;
 
                             (adjusted_x, adjusted_y)
                         } else {
                             (mouse_x, mouse_y)
                         }
                     };
-                    
+
+                    #[cfg(target_os = "macos")]
+                    let (mouse_x, mouse_y) = {
+                        let primary_bounds = cap_media::platform::primary_monitor_bounds();
+                        dbg!(primary_bounds);
+
+                        let mouse_x = mouse_x - screen_bounds.x as i32;
+                        let mouse_y = mouse_y
+                            + (screen_bounds.y + screen_bounds.height - primary_bounds.height)
+                                as i32;
+
+                        (mouse_x, mouse_y)
+                    };
+
+                    #[cfg(not(any(windows, target_os = "macos")))]
+                    let (mouse_x, mouse_y) = {
+                        (
+                            mouse_x - screen_bounds.x as i32,
+                            mouse_y - screen_bounds.y as i32,
+                        )
+                    };
+
                     // Calculate normalized coordinates (0.0 to 1.0) within the screen bounds
                     // Check if screen_bounds dimensions are valid to avoid division by zero
                     let x = if screen_bounds.width > 0.0 {
-                        (mouse_x as f64 - screen_bounds.x) / screen_bounds.width
+                        mouse_x as f64 / screen_bounds.width
                     } else {
                         0.5 // Fallback if width is invalid
                     };
-                    
+
                     let y = if screen_bounds.height > 0.0 {
-                        (mouse_y as f64 - screen_bounds.y) / screen_bounds.height
+                        mouse_y as f64 / screen_bounds.height
                     } else {
                         0.5 // Fallback if height is invalid
                     };
-                    
+
                     // Clamp values to ensure they're within valid range
-                    let x = if x.is_nan() || x.is_infinite() { 
+                    let x = if x.is_nan() || x.is_infinite() {
                         debug!("X coordinate is invalid: {}", x);
-                        0.5 
-                    } else { 
-                        x.max(0.0).min(1.0) 
+                        0.5
+                    } else {
+                        x.max(0.0).min(1.0)
                     };
-                    
-                    let y = if y.is_nan() || y.is_infinite() { 
+
+                    let y = if y.is_nan() || y.is_infinite() {
                         debug!("Y coordinate is invalid: {}", y);
-                        0.5 
-                    } else { 
-                        y.max(0.0).min(1.0) 
+                        0.5
+                    } else {
+                        y.max(0.0).min(1.0)
                     };
-                    
+
                     debug!("Normalized coords: ({}, {})", x, y);
-                    
+
                     let mouse_event = CursorMoveEvent {
                         active_modifiers: vec![],
                         cursor_id: cursor_id.clone(),
@@ -209,42 +237,48 @@ pub fn spawn_cursor_recorder(
 
                     // Get the actual mouse coordinates
                     let (mouse_x, mouse_y) = mouse_state.coords;
-                    
+
                     #[cfg(windows)]
                     let (mouse_x, mouse_y) = {
                         // On Windows, ensure we're using the correct coordinate system
                         // by getting the virtual screen metrics
                         use windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics;
                         use windows::Win32::UI::WindowsAndMessaging::{
-                            SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN
+                            SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+                            SM_YVIRTUALSCREEN,
                         };
-                        
+
                         let virtual_screen_x = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
                         let virtual_screen_y = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
                         let virtual_screen_width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
                         let virtual_screen_height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
-                        
+
                         // If screen_bounds doesn't match the virtual screen, adjust the coordinates
-                        if (screen_bounds.x as i32 != virtual_screen_x || 
-                            screen_bounds.y as i32 != virtual_screen_y ||
-                            screen_bounds.width as i32 != virtual_screen_width ||
-                            screen_bounds.height as i32 != virtual_screen_height) &&
-                           screen_bounds.width > 0.0 && screen_bounds.height > 0.0 {
-                            
+                        if (screen_bounds.x as i32 != virtual_screen_x
+                            || screen_bounds.y as i32 != virtual_screen_y
+                            || screen_bounds.width as i32 != virtual_screen_width
+                            || screen_bounds.height as i32 != virtual_screen_height)
+                            && screen_bounds.width > 0.0
+                            && screen_bounds.height > 0.0
+                        {
                             // Convert to normalized coordinates in the virtual screen space first
-                            let norm_x = (mouse_x as f64 - virtual_screen_x as f64) / virtual_screen_width as f64;
-                            let norm_y = (mouse_y as f64 - virtual_screen_y as f64) / virtual_screen_height as f64;
-                            
+                            let norm_x = (mouse_x as f64 - virtual_screen_x as f64)
+                                / virtual_screen_width as f64;
+                            let norm_y = (mouse_y as f64 - virtual_screen_y as f64)
+                                / virtual_screen_height as f64;
+
                             // Then convert to the target screen coordinates
-                            let adjusted_x = (norm_x * screen_bounds.width + screen_bounds.x) as i32;
-                            let adjusted_y = (norm_y * screen_bounds.height + screen_bounds.y) as i32;
-                            
+                            let adjusted_x =
+                                (norm_x * screen_bounds.width + screen_bounds.x) as i32;
+                            let adjusted_y =
+                                (norm_y * screen_bounds.height + screen_bounds.y) as i32;
+
                             (adjusted_x, adjusted_y)
                         } else {
                             (mouse_x, mouse_y)
                         }
                     };
-                    
+
                     // Calculate normalized coordinates (0.0 to 1.0) within the screen bounds
                     // Check if screen_bounds dimensions are valid to avoid division by zero
                     let x = if screen_bounds.width > 0.0 {
@@ -252,16 +286,24 @@ pub fn spawn_cursor_recorder(
                     } else {
                         0.5 // Fallback if width is invalid
                     };
-                    
+
                     let y = if screen_bounds.height > 0.0 {
                         (mouse_y as f64 - screen_bounds.y) / screen_bounds.height
                     } else {
                         0.5 // Fallback if height is invalid
                     };
-                    
+
                     // Clamp values to ensure they're within valid range
-                    let x = if x.is_nan() || x.is_infinite() { 0.5 } else { x.max(0.0).min(1.0) };
-                    let y = if y.is_nan() || y.is_infinite() { 0.5 } else { y.max(0.0).min(1.0) };
+                    let x = if x.is_nan() || x.is_infinite() {
+                        0.5
+                    } else {
+                        x.max(0.0).min(1.0)
+                    };
+                    let y = if y.is_nan() || y.is_infinite() {
+                        0.5
+                    } else {
+                        y.max(0.0).min(1.0)
+                    };
 
                     let mouse_event = CursorClickEvent {
                         down: pressed,
@@ -354,11 +396,11 @@ fn get_cursor_image_data() -> Option<CursorData> {
 fn get_cursor_image_data() -> Option<CursorData> {
     use windows::Win32::Foundation::{HWND, POINT};
     use windows::Win32::Graphics::Gdi::{
-        CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, 
-        GetObjectA, ReleaseDC, SelectObject, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
+        CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, GetObjectA, ReleaseDC,
+        SelectObject, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
     };
+    use windows::Win32::UI::WindowsAndMessaging::{DrawIconEx, GetIconInfo, DI_NORMAL, ICONINFO};
     use windows::Win32::UI::WindowsAndMessaging::{GetCursorInfo, CURSORINFO, CURSORINFO_FLAGS};
-    use windows::Win32::UI::WindowsAndMessaging::{DrawIconEx, GetIconInfo, ICONINFO, DI_NORMAL};
 
     unsafe {
         // Get cursor info
@@ -410,7 +452,7 @@ fn get_cursor_image_data() -> Option<CursorData> {
         // Create DCs
         let screen_dc = GetDC(HWND::default());
         let mem_dc = CreateCompatibleDC(screen_dc);
-        
+
         // Get cursor dimensions
         let width = bitmap.bmWidth;
         let height = if icon_info.hbmColor.is_invalid() && bitmap.bmHeight > 0 {
@@ -426,7 +468,7 @@ fn get_cursor_image_data() -> Option<CursorData> {
             biWidth: width,
             biHeight: -height, // Negative for top-down DIB
             biPlanes: 1,
-            biBitCount: 32,    // 32-bit RGBA
+            biBitCount: 32, // 32-bit RGBA
             biCompression: 0,
             biSizeImage: 0,
             biXPelsPerMeter: 0,
@@ -468,12 +510,14 @@ fn get_cursor_image_data() -> Option<CursorData> {
             0,
             0,
             cursor_info.hCursor,
-            0,          // Use actual size
-            0,          // Use actual size
+            0, // Use actual size
+            0, // Use actual size
             0,
             None,
             DI_NORMAL,
-        ).is_err() {
+        )
+        .is_err()
+        {
             // Clean up
             SelectObject(mem_dc, old_bitmap);
             DeleteObject(dib);
@@ -494,16 +538,16 @@ fn get_cursor_image_data() -> Option<CursorData> {
         std::ptr::copy_nonoverlapping(bits, image_data.as_mut_ptr() as *mut _, size);
 
         // Calculate hotspot
-        let mut hotspot_x = if icon_info.fIcon.as_bool() == false { 
-            icon_info.xHotspot as f64 / width as f64 
-        } else { 
-            0.5 
+        let mut hotspot_x = if icon_info.fIcon.as_bool() == false {
+            icon_info.xHotspot as f64 / width as f64
+        } else {
+            0.5
         };
-        
-        let mut hotspot_y = if icon_info.fIcon.as_bool() == false { 
-            icon_info.yHotspot as f64 / height as f64 
-        } else { 
-            0.5 
+
+        let mut hotspot_y = if icon_info.fIcon.as_bool() == false {
+            icon_info.yHotspot as f64 / height as f64
+        } else {
+            0.5
         };
 
         // Cleanup
@@ -524,40 +568,46 @@ fn get_cursor_image_data() -> Option<CursorData> {
             // 1. Swap B and R channels
             let b = image_data[i];
             image_data[i] = image_data[i + 2]; // B <- R
-            image_data[i + 2] = b;             // R <- B
-            
+            image_data[i + 2] = b; // R <- B
+
             // 2. Pre-multiply alpha if needed
             // This is already handled by DrawIconEx
         }
 
         // Convert to RGBA image
         let mut rgba_image = image::RgbaImage::from_raw(width as u32, height as u32, image_data)?;
-        
+
         // For text cursor (I-beam), enhance visibility by adding a shadow/outline
         // Check if this is likely a text cursor by examining dimensions and pixels
         let is_text_cursor = width <= 20 && height >= 20 && width <= height / 2;
-        
+
         if is_text_cursor {
             // Add a subtle shadow/outline to make it visible on white backgrounds
             for y in 0..height as u32 {
                 for x in 0..width as u32 {
                     let pixel = rgba_image.get_pixel(x, y);
                     // If this is a solid pixel of the cursor
-                    if pixel[3] > 200 {  // If alpha is high (visible pixel)
+                    if pixel[3] > 200 {
+                        // If alpha is high (visible pixel)
                         // Add shadow pixels around it
                         for dx in [-1, 0, 1].iter() {
                             for dy in [-1, 0, 1].iter() {
                                 let nx = x as i32 + dx;
                                 let ny = y as i32 + dy;
-                                
+
                                 // Skip if out of bounds or same pixel
-                                if nx < 0 || ny < 0 || nx >= width as i32 || ny >= height as i32 || (*dx == 0 && *dy == 0) {
+                                if nx < 0
+                                    || ny < 0
+                                    || nx >= width as i32
+                                    || ny >= height as i32
+                                    || (*dx == 0 && *dy == 0)
+                                {
                                     continue;
                                 }
-                                
+
                                 let nx = nx as u32;
                                 let ny = ny as u32;
-                                
+
                                 let shadow_pixel = rgba_image.get_pixel(nx, ny);
                                 // Only add shadow where there isn't already content
                                 if shadow_pixel[3] < 100 {
@@ -569,19 +619,20 @@ fn get_cursor_image_data() -> Option<CursorData> {
                 }
             }
         }
-        
+
         // Find the bounds of non-transparent pixels to trim whitespace
         let mut min_x = width as u32;
         let mut min_y = height as u32;
         let mut max_x = 0u32;
         let mut max_y = 0u32;
-        
+
         let mut has_content = false;
-        
+
         for y in 0..height as u32 {
             for x in 0..width as u32 {
                 let pixel = rgba_image.get_pixel(x, y);
-                if pixel[3] > 0 {  // If pixel has any opacity
+                if pixel[3] > 0 {
+                    // If pixel has any opacity
                     has_content = true;
                     min_x = min_x.min(x);
                     min_y = min_y.min(y);
@@ -590,22 +641,24 @@ fn get_cursor_image_data() -> Option<CursorData> {
                 }
             }
         }
-        
+
         // Only trim if we found content and there's actually whitespace to trim
-        let trimmed_image = if has_content && (min_x > 0 || min_y > 0 || max_x < width as u32 - 1 || max_y < height as u32 - 1) {
+        let trimmed_image = if has_content
+            && (min_x > 0 || min_y > 0 || max_x < width as u32 - 1 || max_y < height as u32 - 1)
+        {
             // Add a small padding (2 pixels) around the content
             let padding = 2u32;
             let trim_min_x = min_x.saturating_sub(padding);
             let trim_min_y = min_y.saturating_sub(padding);
             let trim_max_x = (max_x + padding).min(width as u32 - 1);
             let trim_max_y = (max_y + padding).min(height as u32 - 1);
-            
+
             let trim_width = trim_max_x - trim_min_x + 1;
             let trim_height = trim_max_y - trim_min_y + 1;
-            
+
             // Create a new image with the trimmed dimensions
             let mut trimmed = image::RgbaImage::new(trim_width, trim_height);
-            
+
             // Copy the content to the new image
             for y in 0..trim_height {
                 for x in 0..trim_width {
@@ -615,16 +668,16 @@ fn get_cursor_image_data() -> Option<CursorData> {
                     trimmed.put_pixel(x, y, *pixel);
                 }
             }
-            
+
             // Adjust hotspot coordinates for the trimmed image
             hotspot_x = (hotspot_x * width as f64 - trim_min_x as f64) / trim_width as f64;
             hotspot_y = (hotspot_y * height as f64 - trim_min_y as f64) / trim_height as f64;
-            
+
             trimmed
         } else {
             rgba_image
         };
-        
+
         // Convert to PNG format
         let mut png_data = Vec::new();
         trimmed_image

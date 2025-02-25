@@ -84,18 +84,17 @@ impl CodecContextExt for codec::decoder::decoder::Decoder {
                 return Err("no hw config");
             };
 
-            HW_PIX_FMT.set((*hw_config).pix_fmt);
-
-            let context = self.as_mut_ptr();
-
-            (*context).get_format = Some(get_format);
-
             let mut hw_device_ctx = null_mut();
 
             if av_hwdevice_ctx_create(&mut hw_device_ctx, device_type, null(), null_mut(), 0) < 0 {
                 return Err("failed to create hw device context");
             }
 
+            HW_PIX_FMT.set((*hw_config).pix_fmt);
+
+            let context = self.as_mut_ptr();
+
+            (*context).get_format = Some(get_format);
             (*context).hw_device_ctx = av_buffer_ref(hw_device_ctx);
 
             Ok(HwDevice {
