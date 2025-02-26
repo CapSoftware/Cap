@@ -12,7 +12,7 @@
   --zinc-50: #f5f5f5;
   --zinc-100: #e4e4e7;
   --zinc-200: #f0f0f0;
-  --zinc-300: #a1a1aa;
+  --zinc-300: #e2e2e2;
   --zinc-400: #71717a;
   --zinc-500: #52525b;
   --zinc-600: #3f3f46;
@@ -70,9 +70,9 @@
   --gray-500: #ffffff; /* Primary text - titles/headings (back to white) */
 
   --zinc-50: #1e1e1e;
-  --zinc-100: #242424;
+  --zinc-100: #1f1f1f;
   --zinc-200: #2a2a2a;
-  --zinc-300: #6c6c6c;
+  --zinc-300: #383838;
   --zinc-400: #8b8b8b;
   --zinc-500: #ffffff;
 

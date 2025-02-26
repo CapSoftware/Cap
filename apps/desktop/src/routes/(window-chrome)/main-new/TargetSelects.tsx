@@ -34,6 +34,9 @@ function TargetSelects(props: {
   const isTargetCaptureArea = createMemo(
     () => props.options?.captureTarget.variant === "area"
   );
+  const isTargetScreen = createMemo(
+    () => props.options?.captureTarget.variant === "screen"
+  );
 
   const [areaSelection, setAreaSelection] = createStore({
     pending: false,
@@ -98,120 +101,122 @@ function TargetSelects(props: {
   }
 
   return (
-    <div class="grid grid-cols-3 gap-3 w-full h-[56px]">
-      <button
-        type="button"
-        onClick={handleAreaSelectButtonClick}
-        class={cx(
-          "flex flex-col flex-1 gap-1 justify-center items-center rounded-lg transition-all duration-200 bg-zinc-200",
-          isTargetCaptureArea()
-            ? "ring-2 ring-blue-300 ring-offset-2 ring-offset-zinc-50"
-            : ""
-        )}
-      >
-        <IconCapScan
+    <>
+      <div class="grid grid-cols-3 gap-3 w-full h-[56px]">
+        <button
+          type="button"
+          onClick={handleAreaSelectButtonClick}
           class={cx(
-            "w-5",
+            "flex flex-col flex-1 gap-1 justify-center items-center rounded-lg transition-shadow duration-200",
             isTargetCaptureArea()
-              ? "text-black dark:text-white"
-              : "text-zinc-400"
+              ? "ring-2 ring-blue-300 ring-offset-2 ring-offset-zinc-50 bg-zinc-300"
+              : "bg-zinc-200"
           )}
+        >
+          <IconCapScan
+            class={cx(
+              "w-5",
+              isTargetCaptureArea()
+                ? "text-black dark:text-white"
+                : "text-zinc-400"
+            )}
+          />
+          <p class="text-[13px] font-medium text-black dark:text-white">Area</p>
+        </button>
+        <TargetSelect<CaptureScreen>
+          options={screens.data ?? []}
+          isTargetCaptureArea={isTargetCaptureArea()}
+          icon={
+            <IconCapMonitor
+              class={cx(
+                "size-5",
+                isTargetScreen()
+                  ? "text-black dark:text-white"
+                  : "text-zinc-400"
+              )}
+            />
+          }
+          areaSelectionPending={areaSelection.pending}
+          onChange={(value) => {
+            if (!value || !props.options) return;
+
+            trackEvent("display_selected", {
+              display_id: value.id,
+              display_name: value.name,
+              refresh_rate: value.refresh_rate,
+            });
+
+            commands.setRecordingOptions({
+              ...props.options,
+              captureTarget: { ...value, variant: "screen" },
+            });
+          }}
+          value={
+            props.options?.captureTarget.variant === "screen"
+              ? props.options.captureTarget
+              : null
+          }
+          placeholder={
+            <p class="text-[13px] font-medium text-black dark:text-white">
+              Screen
+            </p>
+          }
+          class={cx(
+            "flex flex-1 justify-center items-center rounded-lg",
+            isTargetScreen() ? "bg-zinc-300" : "bg-zinc-200"
+          )}
+          optionsEmptyText="No screens found"
+          selected={isTargetScreen()}
         />
-        <p class="text-[13px] font-medium text-black dark:text-white">Area</p>
-      </button>
-      <TargetSelect<CaptureScreen>
-        options={screens.data ?? []}
-        isTargetCaptureArea={isTargetCaptureArea()}
-        icon={
-          <IconCapMonitor
-            class={cx(
-              "size-5",
-              props.options?.captureTarget.variant === "screen"
-                ? "text-black dark:text-white"
-                : "text-zinc-400"
-            )}
-          />
-        }
-        areaSelectionPending={areaSelection.pending}
-        onChange={(value) => {
-          if (!value || !props.options) return;
+        <TargetSelect<CaptureWindow>
+          options={windows.data ?? []}
+          isTargetCaptureArea={isTargetCaptureArea()}
+          onChange={(value) => {
+            if (!value || !props.options) return;
 
-          trackEvent("display_selected", {
-            display_id: value.id,
-            display_name: value.name,
-            refresh_rate: value.refresh_rate,
-          });
+            trackEvent("window_selected", {
+              window_id: value.id,
+              window_name: value.name,
+              owner_name: value.owner_name,
+              refresh_rate: value.refresh_rate,
+            });
 
-          commands.setRecordingOptions({
-            ...props.options,
-            captureTarget: { ...value, variant: "screen" },
-          });
-        }}
-        value={
-          props.options?.captureTarget.variant === "screen"
-            ? props.options.captureTarget
-            : null
-        }
-        placeholder={
-          <p class="text-[13px] font-medium text-black dark:text-white">
-            Screen
-          </p>
-        }
-        class="flex flex-1 justify-center items-center rounded-lg bg-zinc-200"
-        optionsEmptyText="No screens found"
-        selected={isTargetScreenOrArea()}
-      />
-      <TargetSelect<CaptureWindow>
-        options={windows.data ?? []}
-        isTargetCaptureArea={isTargetCaptureArea()}
-        onChange={(value) => {
-          if (!value || !props.options) return;
-
-          trackEvent("window_selected", {
-            window_id: value.id,
-            window_name: value.name,
-            owner_name: value.owner_name,
-            refresh_rate: value.refresh_rate,
-          });
-
-          commands.setRecordingOptions({
-            ...props.options,
-            captureTarget: { ...value, variant: "window" },
-          });
-        }}
-        value={
-          props.options?.captureTarget.variant === "window"
-            ? props.options.captureTarget
-            : null
-        }
-        icon={
-          <IconCapAppWindowMac
-            class={cx(
-              "size-5",
-              props.options?.captureTarget.variant === "window"
-                ? "text-black dark:text-white"
-                : "text-zinc-400"
-            )}
-          />
-        }
-        placeholder={
-          <p class="text-[13px] font-medium text-black dark:text-white">
-            Window
-          </p>
-        }
-        optionsEmptyText="No windows found"
-        class="flex flex-1 justify-center items-center rounded-lg bg-zinc-200"
-        selected={props.options?.captureTarget.variant === "window"}
-        itemComponent={(props) => (
-          <div class="flex overflow-x-hidden flex-col flex-1">
-            <div class="w-full truncate">{props.item.rawValue?.name}</div>
-            <div class="w-full text-[13px]">
-              {props.item.rawValue?.owner_name}
-            </div>
-          </div>
-        )}
-      />
-    </div>
+            commands.setRecordingOptions({
+              ...props.options,
+              captureTarget: { ...value, variant: "window" },
+            });
+          }}
+          value={
+            props.options?.captureTarget.variant === "window"
+              ? props.options.captureTarget
+              : null
+          }
+          icon={
+            <IconCapAppWindowMac
+              class={cx(
+                "size-5",
+                props.options?.captureTarget.variant === "window"
+                  ? "text-black dark:text-white"
+                  : "text-zinc-400"
+              )}
+            />
+          }
+          placeholder={
+            <p class="text-[13px] font-medium text-black dark:text-white">
+              Window
+            </p>
+          }
+          optionsEmptyText="No windows found"
+          class={cx(
+            "flex flex-1 justify-center items-center rounded-lg",
+            props.options?.captureTarget.variant === "window"
+              ? "bg-zinc-300"
+              : "bg-zinc-200"
+          )}
+          selected={props.options?.captureTarget.variant === "window"}
+        />
+      </div>
+    </>
   );
 }
 

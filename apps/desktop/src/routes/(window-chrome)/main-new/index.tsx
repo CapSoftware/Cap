@@ -2,11 +2,13 @@ import { createMutation } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
 import { Menu } from "@tauri-apps/api/menu";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-import { createResource, onCleanup } from "solid-js";
+import { createResource, createSignal, onCleanup } from "solid-js";
 
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import { ErrorBoundary, Suspense } from "solid-js";
 import {
   createCurrentRecordingQuery,
+  createLicenseQuery,
   createOptionsQuery,
 } from "~/utils/queries";
 import { commands } from "~/utils/tauri";
@@ -17,6 +19,7 @@ import TargetSelects from "./TargetSelects";
 export default function () {
   const { options, setOptions } = createOptionsQuery();
   const currentRecording = createCurrentRecordingQuery();
+  const [toggleInstantMode, setToggleInstantMode] = createSignal(false);
 
   const isRecording = () => !!currentRecording.data;
 
@@ -29,6 +32,8 @@ export default function () {
       }
     },
   }));
+
+  const license = createLicenseQuery();
 
   createUpdateCheck();
 
@@ -50,7 +55,7 @@ export default function () {
 
     // Enforce window size with multiple safeguards
     const currentWindow = getCurrentWindow();
-    const MAIN_WINDOW_SIZE = { width: 300, height: 272 };
+    const MAIN_WINDOW_SIZE = { width: 300, height: 296 };
 
     // Set initial size
     await currentWindow.setSize(
@@ -96,9 +101,53 @@ export default function () {
   return (
     <div class="flex justify-center flex-col p-3 gap-2 text-[0.875rem] font-[400] bg-[--gray-50] h-full text-[--text-primary]">
       {initialize()}
-      <div class="*:h-auto mb-3 text-[--text-primary] ">
-        <IconCapDarkLogoNoBox class="hidden dark:block" />
-        <IconCapLogoNobox class="block dark:hidden" />
+      <div class="flex flex-1 gap-2 justify-between items-center">
+        <div class="*:h-auto flex flex-col gap-2 mb-2 text-[--text-primary] ">
+          <IconCapDarkLogoNoBox class="hidden dark:block" />
+          <IconCapLogoNobox class="block dark:hidden" />
+          <ErrorBoundary fallback={<></>}>
+            <Suspense>
+              <span
+                onClick={async () => {
+                  if (license.data?.type !== "pro") {
+                    await commands.showWindow("Upgrade");
+                  }
+                }}
+                class={`text-[0.6rem] w-fit ${
+                  license.data?.type === "pro"
+                    ? "bg-[--blue-400] text-zinc-400"
+                    : "bg-zinc-300 cursor-pointer hover:bg-zinc-400 transition-colors duration-200"
+                } rounded-full px-2 py-1`}
+              >
+                {license.data?.type === "commercial"
+                  ? "Commercial License"
+                  : license.data?.type === "pro"
+                  ? "Pro"
+                  : "Personal License"}
+              </span>
+            </Suspense>
+          </ErrorBoundary>
+        </div>
+        <div class="flex gap-2 justify-end items-center p-1.5 rounded-full bg-zinc-200 w-fit">
+          <div
+            onClick={() => setToggleInstantMode(p => !p)}
+            class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
+              toggleInstantMode()
+                ? "ring-2 ring-offset-1 ring-offset-gray-50 bg-zinc-300 ring-[--blue-300]"
+                : "bg-zinc-200 hover:bg-zinc-400"}`}
+          >
+            <IconCapInstant class="size-4" />
+          </div>
+          <div
+            onClick={() => setToggleInstantMode(false)}
+            class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
+                    !toggleInstantMode()
+                ? "ring-2 ring-offset-1 ring-offset-gray-50 bg-zinc-300 ring-[--blue-300]"
+                : "bg-zinc-200 hover:bg-zinc-400"}`}
+          >
+            <IconCapFilmCut class="size-3.5" />
+          </div>
+        </div>
       </div>
       <TargetSelects options={options.data} />
       <CameraSelect options={options.data} setOptions={setOptions} />
@@ -144,14 +193,15 @@ async function showMenu(event: MouseEvent) {
   const menu = await Menu.new({
     items: [
       {
-        id: "settings",
-        text: "Settings",
-        action: () => commands.showWindow({ Settings: { page: "general" } }),
-      },
-      {
         id: "prevRecordings",
         text: "Previous Recordings",
         action: () => commands.showWindow({ Settings: { page: "recordings" } }),
+      },
+      {
+        id: "prevScreenshots",
+        text: "Previous Screenshots",
+        action: () =>
+          commands.showWindow({ Settings: { page: "screenshots" } }),
       },
       {
         id: "changelog",
@@ -159,9 +209,14 @@ async function showMenu(event: MouseEvent) {
         action: () => commands.showWindow({ Settings: { page: "changelog" } }),
       },
       {
-        id: "help",
-        text: "Help",
-        action: () => commands.showWindow({ Settings: { page: "live" } }),
+        id: "settings",
+        text: "Settings",
+        action: () => commands.showWindow({ Settings: { page: "general" } }),
+      },
+      {
+        id: "feedback",
+        text: "Feedback",
+        action: () => commands.showWindow({ Settings: { page: "feedback" } }),
       },
     ],
   });
