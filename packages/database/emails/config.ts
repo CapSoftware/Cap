@@ -1,9 +1,9 @@
 import { clientEnv, serverEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
-import { db } from "index";
+import { db } from "../index";
 import { JSXElementConstructor, ReactElement } from "react";
 import { Resend } from "resend";
-import { serverConfig } from "schema";
+import { serverConfigTable } from "../schema";
 
 export const resend = serverEnv.RESEND_API_KEY
   ? new Resend(serverEnv.RESEND_API_KEY)
@@ -36,8 +36,8 @@ export const sendEmail = async ({
       return "Cap Auth <no-reply@auth.cap.so>";
     }
 
-    const serverConfigResponse = await db.query.serverConfig.findFirst({
-      where: eq(serverConfig.id, 1),
+    const serverConfigResponse = await db.query.serverConfigTable.findFirst({
+      where: eq(serverConfigTable.id, 1),
     });
 
     if (

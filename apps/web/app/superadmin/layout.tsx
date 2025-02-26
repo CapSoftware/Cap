@@ -10,7 +10,10 @@ import {
   users,
 } from "@cap/database/schema";
 import { eq, inArray, or, and, count, sql } from "drizzle-orm";
-import { addServerSuperAdmin, getServerConfig } from "@/utils/instance";
+import {
+  addServerSuperAdmin,
+  getServerConfig,
+} from "@/utils/instance/functions";
 
 export default async function SuperAdminLayout({
   children,

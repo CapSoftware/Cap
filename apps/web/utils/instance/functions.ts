@@ -12,12 +12,17 @@ import {
 export const getServerConfig = async (): Promise<
   typeof serverConfigTable.$inferSelect
 > => {
+  console.log("[function call: getServerConfig");
   const serverConfig = await db.query.serverConfigTable.findFirst({
     where: eq(serverConfigTable.id, 1),
   });
 
+  console.log("[function call: getServerConfig: serverConfig", {
+    serverConfig,
+  });
   // create server config object if it doesn't exist
   if (!serverConfig) {
+    console.log("[function call: getServerConfig: serverConfig not found");
     const newServerConfig = {
       id: 1,
       licenseKey: null,
@@ -29,8 +34,11 @@ export const getServerConfig = async (): Promise<
       emailSendFromName: null,
       emailSendFromEmail: null,
     };
+    console.log("[function call: getServerConfig: newServerConfig", {
+      newServerConfig,
+    });
     await db.insert(serverConfigTable).values(newServerConfig);
-
+    console.log("[function call: getServerConfig returning newServerConfig");
     return newServerConfig;
   }
 
@@ -39,8 +47,16 @@ export const getServerConfig = async (): Promise<
     (serverConfig.licenseValidityCache === null ||
       serverConfig.licenseValidityCache.getTime() < Date.now())
   ) {
+    console.log("[function call: getServerConfig: ifStatement", {
+      licenseKey: serverConfig.licenseKey,
+      licenseValidityCache: serverConfig.licenseValidityCache,
+      dateNow: Date.now(),
+    });
     const validationResult = await validateServerLicense({
       serverConfig,
+    });
+    console.log("[function call: getServerConfig: validationResult", {
+      validationResult,
     });
     return validationResult;
   }
@@ -50,25 +66,39 @@ export const getServerConfig = async (): Promise<
 
 // check if the server is a Cap Cloud server
 export const isCapCloud = async (): Promise<boolean> => {
+  console.log("[function call: isCapCloud");
   const serverConfig = await getServerConfig();
+  console.log("[function call: isCapCloud: serverConfig", { serverConfig });
   return serverConfig.isCapCloud;
 };
 
 // Used in self hosted instances to add a user to the server superAdminIds array
 export const addServerSuperAdmin = async ({ userId }: { userId: string }) => {
+  console.log("[function call: addServerSuperAdmin input", { userId });
   const currentUser = await getCurrentUser();
+  console.log("[function call: addServerSuperAdmin: currentUser", {
+    currentUser,
+  });
   if (!currentUser) {
+    console.log("[function call: addServerSuperAdmin: currentUser not found");
     throw new Error("Not authorized");
   }
 
   const serverConfig = await getServerConfig();
-
+  console.log("[function call: addServerSuperAdmin: serverConfig", {
+    serverConfig,
+  });
   const existingSuperAdminIds = serverConfig.superAdminIds;
-
+  console.log("[function call: addServerSuperAdmin: existingSuperAdminIds", {
+    existingSuperAdminIds,
+  });
   if (
     existingSuperAdminIds.length > 0 &&
     !existingSuperAdminIds.includes(currentUser.id)
   ) {
+    console.log(
+      "[function call: addServerSuperAdmin if not in admin array: not authorized"
+    );
     throw new Error("Not authorized");
   }
 
@@ -79,6 +109,7 @@ export const addServerSuperAdmin = async ({ userId }: { userId: string }) => {
       superAdminIds: [...existingSuperAdminIds, userId],
     })
     .where(eq(serverConfigTable.id, 1));
+  console.log("[function call: addServerSuperAdmin: updated server config");
   return;
 };
 
@@ -88,10 +119,14 @@ export async function validateServerLicense({
 }: {
   serverConfig: typeof serverConfigTable.$inferSelect;
 }): Promise<typeof serverConfigTable.$inferSelect> {
+  console.log("[function call: validateServerLicense input", { serverConfig });
   if (!serverConfig?.licenseKey) {
+    console.log("[function call: validateServerLicense: licenseKey not found");
     return serverConfig;
   }
-
+  console.log("[function call: validateServerLicense: licenseKey", {
+    licenseKey: serverConfig.licenseKey,
+  });
   const licenseServerResponse = await fetch(
     `${LICENSE_SERVER_URL}/api/instances/validate`,
     {
@@ -106,9 +141,18 @@ export async function validateServerLicense({
       }),
     }
   );
+  console.log("[function call: validateServerLicense: licenseServerResponse", {
+    licenseServerResponse,
+  });
 
   const licenseServerResponseCode = await licenseServerResponse.status;
   const licenseServerResponseJson = await licenseServerResponse.json();
+  console.log(
+    "[function call: validateServerLicense: licenseServerResponseJson",
+    {
+      licenseServerResponseJson,
+    }
+  );
 
   let newPartialServerConfig: Partial<
     typeof serverConfigTable.$inferInsert
@@ -121,26 +165,52 @@ export async function validateServerLicense({
     licenseServerResponseCode === 402 ||
     licenseServerResponseCode === 409
   ) {
+    console.log(
+      "[function call: validateServerLicense: licenseServerResponseCode",
+      {
+        licenseServerResponseCode,
+      }
+    );
     newPartialServerConfig = {
       licenseValid: false,
       licenseValidityCache: null,
       isCapCloud: false,
     };
+    console.log(
+      "[function call: validateServerLicense: newPartialServerConfig",
+      {
+        newPartialServerConfig,
+      }
+    );
   }
   // handle 200: license is valid
   if (licenseServerResponseCode === 200) {
+    console.log("[function call: validateServerLicense: 200: license is valid");
     newPartialServerConfig = {
       licenseValid: true,
       licenseValidityCache: licenseServerResponseJson.refresh,
       isCapCloud: licenseServerResponseJson.isCapCloudLicense,
     };
+    console.log(
+      "[function call: validateServerLicense: newPartialServerConfig",
+      {
+        newPartialServerConfig,
+      }
+    );
   }
+  console.log("[function call: validateServerLicense: updating server config");
   newPartialServerConfig &&
     (await db
       .update(serverConfigTable)
       .set(newPartialServerConfig)
       .where(eq(serverConfigTable.id, 1)));
-
+  console.log(
+    "[function call: validateServerLicense: returning server config",
+    {
+      ...serverConfig,
+      ...newPartialServerConfig,
+    }
+  );
   return {
     ...serverConfig,
     ...newPartialServerConfig,
@@ -149,13 +219,22 @@ export async function validateServerLicense({
 
 // check if a single user is a member of a pro workspace
 export async function getIsUserPro({ userId }: { userId: string }) {
+  console.log("[function call: getIsUserPro input", { userId });
   const serverConfig = await getServerConfig();
+  console.log("[function call: getIsUserPro: serverConfig", { serverConfig });
   if (!serverConfig.licenseKey) {
+    console.log("[function call: getIsUserPro: licenseKey not found");
     return false;
   }
-
+  console.log("[function call: getIsUserPro: ifStatement", {
+    licenseKey: serverConfig.licenseKey,
+    isCapCloud: serverConfig.isCapCloud,
+  });
   // if self hosting, all users on the server have the same pro status as the server itself
   if (!serverConfig.isCapCloud) {
+    console.log(
+      "[function call: getIsUserPro: ifStatement: self hosting: returning licenseValid"
+    );
     return serverConfig.licenseValid;
   }
 
@@ -163,8 +242,9 @@ export async function getIsUserPro({ userId }: { userId: string }) {
   const userResponse = await db.query.users.findFirst({
     where: eq(users.id, userId),
   });
-
+  console.log("[function call: getIsUserPro: userResponse", { userResponse });
   if (!userResponse) {
+    console.log("[function call: getIsUserPro: userResponse not found");
     return false;
   }
 
@@ -174,13 +254,19 @@ export async function getIsUserPro({ userId }: { userId: string }) {
     userResponse.proExpiresAt &&
     userResponse.proExpiresAt > new Date()
   ) {
+    console.log("[function call: getIsUserPro: user is pro: returning true");
     return true;
   }
 
   // refresh user pro cache
   const userWorkspaceMembershipWorkspaceIds =
     await getUserWorkspaceMembershipWorkspaceIds();
-
+  console.log(
+    "[function call: getIsUserPro: userWorkspaceMembershipWorkspaceIds",
+    {
+      userWorkspaceMembershipWorkspaceIds,
+    }
+  );
   const licenseServerResponse = (await fetch(
     `${LICENSE_SERVER_URL}/api/instances/cloudPro/user`,
     {
@@ -199,6 +285,9 @@ export async function getIsUserPro({ userId }: { userId: string }) {
     viaWorkspaceId: string | null;
     cacheRefresh: number | null;
   };
+  console.log("[function call: getIsUserPro: licenseServerResponse", {
+    licenseServerResponse,
+  });
 
   await db
     .update(users)
@@ -210,19 +299,31 @@ export async function getIsUserPro({ userId }: { userId: string }) {
       proWorkspaceId: licenseServerResponse.viaWorkspaceId,
     })
     .where(eq(users.id, userId));
-
+  console.log("[function call: getIsUserPro: updated user");
+  console.log(
+    "[function call: getIsUserPro: returning licenseServerResponse.isPro",
+    {
+      licenseServerResponse,
+    }
+  );
   return licenseServerResponse.isPro;
 }
 
 // check if a single workspace is a pro workspace
 export async function isWorkspacePro({ workspaceId }: { workspaceId: string }) {
+  console.log("[function call: isWorkspacePro input", { workspaceId });
   const serverConfig = await getServerConfig();
+  console.log("[function call: isWorkspacePro: serverConfig", { serverConfig });
   if (!serverConfig.licenseKey) {
+    console.log("[function call: isWorkspacePro: licenseKey not found");
     return false;
   }
 
   // if self hosting, all workspaces on the server have the same pro status as the server itself
   if (!serverConfig.isCapCloud) {
+    console.log(
+      "[function call: isWorkspacePro: ifStatement: self hosting: returning licenseValid"
+    );
     return serverConfig.licenseValid;
   }
 
@@ -230,8 +331,11 @@ export async function isWorkspacePro({ workspaceId }: { workspaceId: string }) {
   const workspaceResponse = await db.query.spaces.findFirst({
     where: eq(spaces.id, workspaceId),
   });
-
+  console.log("[function call: isWorkspacePro: workspaceResponse", {
+    workspaceResponse,
+  });
   if (!workspaceResponse) {
+    console.log("[function call: isWorkspacePro: workspaceResponse not found");
     return false;
   }
 
@@ -241,6 +345,9 @@ export async function isWorkspacePro({ workspaceId }: { workspaceId: string }) {
     workspaceResponse.proExpiresAt &&
     workspaceResponse.proExpiresAt > new Date()
   ) {
+    console.log(
+      "[function call: isWorkspacePro: workspace is pro: returning true"
+    );
     return true;
   }
 
@@ -263,6 +370,9 @@ export async function isWorkspacePro({ workspaceId }: { workspaceId: string }) {
     workspaceId: string;
     cacheRefresh: number | null;
   };
+  console.log("[function call: isWorkspacePro: licenseServerResponse", {
+    licenseServerResponse,
+  });
 
   await db
     .update(spaces)
@@ -274,7 +384,13 @@ export async function isWorkspacePro({ workspaceId }: { workspaceId: string }) {
       proWorkspaceId: licenseServerResponse.workspaceId,
     })
     .where(eq(spaces.id, workspaceId));
-
+  console.log("[function call: isWorkspacePro: updated workspace");
+  console.log(
+    "[function call: isWorkspacePro: returning licenseServerResponse.isPro",
+    {
+      licenseServerResponse,
+    }
+  );
   return licenseServerResponse.isPro;
 }
 
@@ -284,18 +400,35 @@ export async function updateCloudWorkspaceUserCount({
 }: {
   workspaceId: string;
 }) {
+  console.log("[function call: updateCloudWorkspaceUserCount input", {
+    workspaceId,
+  });
   const serverConfig = await getServerConfig();
+  console.log("[function call: updateCloudWorkspaceUserCount: serverConfig", {
+    serverConfig,
+  });
   if (!serverConfig.licenseKey) {
+    console.log(
+      "[function call: updateCloudWorkspaceUserCount: licenseKey not found"
+    );
     return false;
   }
 
   // if selfhosting, seats will be updated on next server license check automatically
   if (!serverConfig.isCapCloud) {
+    console.log(
+      "[function call: updateCloudWorkspaceUserCount: ifStatement: self hosting: returning true"
+    );
     return true;
   }
 
   const workspaceUserCount = await getCloudWorkspaceUserCount({ workspaceId });
-
+  console.log(
+    "[function call: updateCloudWorkspaceUserCount: workspaceUserCount",
+    {
+      workspaceUserCount,
+    }
+  );
   try {
     await fetch(
       `${LICENSE_SERVER_URL}/api/instances/cloudPro/workspace/addUser`,
@@ -312,8 +445,14 @@ export async function updateCloudWorkspaceUserCount({
         }),
       }
     );
+    console.log(
+      "[function call: updateCloudWorkspaceUserCount: updated workspace"
+    );
     return true;
   } catch (error) {
+    console.log("[function call: updateCloudWorkspaceUserCount: error", {
+      error,
+    });
     console.error(error);
     return false;
   }
@@ -330,19 +469,42 @@ export async function generateCloudProStripeCheckoutSession({
   email: string;
   type: "yearly" | "monthly";
 }) {
+  console.log("[function call: generateCloudProStripeCheckoutSession input", {
+    cloudWorkspaceId,
+    cloudUserId,
+    email,
+    type,
+  });
   const serverConfig = await getServerConfig();
+  console.log(
+    "[function call: generateCloudProStripeCheckoutSession: serverConfig",
+    {
+      serverConfig,
+    }
+  );
   if (!serverConfig.licenseKey) {
+    console.log(
+      "[function call: generateCloudProStripeCheckoutSession: licenseKey not found"
+    );
     return false;
   }
 
   if (!serverConfig.isCapCloud) {
+    console.log(
+      "[function call: generateCloudProStripeCheckoutSession: ifStatement: self hosting: returning false"
+    );
     return false;
   }
 
   const seatCount = await getCloudWorkspaceUserCount({
     workspaceId: cloudWorkspaceId,
   });
-
+  console.log(
+    "[function call: generateCloudProStripeCheckoutSession: seatCount",
+    {
+      seatCount,
+    }
+  );
   // refresh workspace pro cache
   const licenseServerResponse = (await fetch(
     `${LICENSE_SERVER_URL}/api/instances/cloudPro/workspace/checkout`,
@@ -366,7 +528,12 @@ export async function generateCloudProStripeCheckoutSession({
     newSeatCount: number;
     checkoutLink: string;
   };
-
+  console.log(
+    "[function call: generateCloudProStripeCheckoutSession: licenseServerResponse",
+    {
+      licenseServerResponse,
+    }
+  );
   return licenseServerResponse;
 }
 
@@ -375,21 +542,41 @@ export async function generateCloudProStripePortalLink({
 }: {
   cloudWorkspaceId: string;
 }) {
+  console.log("[function call: generateCloudProStripePortalLink input", {
+    cloudWorkspaceId,
+  });
   const serverConfig = await getServerConfig();
+  console.log(
+    "[function call: generateCloudProStripePortalLink: serverConfig",
+    {
+      serverConfig,
+    }
+  );
   if (!serverConfig.licenseKey) {
+    console.log(
+      "[function call: generateCloudProStripePortalLink: licenseKey not found"
+    );
     return false;
   }
 
   if (!serverConfig.isCapCloud) {
+    console.log(
+      "[function call: generateCloudProStripePortalLink: ifStatement: self hosting: returning false"
+    );
     return false;
   }
 
   const seatCount = await getCloudWorkspaceUserCount({
     workspaceId: cloudWorkspaceId,
   });
-
+  console.log("[function call: generateCloudProStripePortalLink: seatCount", {
+    seatCount,
+  });
   // refresh workspace pro cache
   try {
+    console.log(
+      "[function call: generateCloudProStripePortalLink: trying to fetch licenseServerResponse"
+    );
     const licenseServerResponse = (await fetch(
       `${LICENSE_SERVER_URL}/api/instances/cloudPro/workspace/portal`,
       {
@@ -410,10 +597,21 @@ export async function generateCloudProStripePortalLink({
       portalLink: string;
     };
 
+    console.log(
+      "[function call: generateCloudProStripePortalLink: licenseServerResponse",
+      {
+        licenseServerResponse,
+      }
+    );
+    console.log(
+      "[function call: generateCloudProStripePortalLink: returning licenseServerResponse"
+    );
     return licenseServerResponse;
   } catch (error) {
     console.error(error);
-
+    console.log("[function call: generateCloudProStripePortalLink: error", {
+      error,
+    });
     return null;
   }
 }

@@ -155,6 +155,9 @@ export const spaces = mysqlTable(
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
     workosOrganizationId: varchar("workosOrganizationId", { length: 255 }),
     workosConnectionId: varchar("workosConnectionId", { length: 255 }),
+    pro: boolean("pro").notNull().default(false),
+    proExpiresAt: timestamp("proExpiresAt"),
+    proWorkspaceId: nanoIdNullable("proWorkspaceId"),
   },
   (table) => ({
     ownerIdIndex: index("owner_id_idx").on(table.ownerId),

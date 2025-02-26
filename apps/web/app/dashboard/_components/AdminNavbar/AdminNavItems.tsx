@@ -11,6 +11,7 @@ import {
   Share2,
   Check,
   Building,
+  Star,
 } from "lucide-react";
 import Link from "next/link";
 import { classNames } from "@cap/utils";
@@ -76,7 +77,8 @@ const Download = ({ className }: { className: string }) => (
 export const AdminNavItems = () => {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
-  const { spaceData, activeSpace, user, isSubscribed } = useSharedContext();
+  const { spaceData, activeSpace, user, isSubscribed, isSuperAdmin } =
+    useSharedContext();
   const [menuOpen, setMenuOpen] = useState(false);
   const router = useRouter();
 
@@ -105,10 +107,10 @@ export const AdminNavItems = () => {
       icon: Building,
       subNav: [],
     },
-    user.email.endsWith("@cap.so") && {
+    isSuperAdmin && {
       name: "Admin",
       href: "/dashboard/admin",
-      icon: () => {},
+      icon: Star,
       subNav: [],
     },
   ].filter(Boolean);
