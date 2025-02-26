@@ -63,6 +63,21 @@ impl CursorEvents {
         let file = File::open(path).map_err(|e| format!("Failed to open cursor file: {}", e))?;
         serde_json::from_reader(file).map_err(|e| format!("Failed to parse cursor data: {}", e))
     }
+
+    pub fn cursor_position_at(&self, time: f64) -> Option<XY<f64>> {
+        // Find the move event closest to the given time, preferring events that happened before
+        let pos = self.moves.iter()
+            .filter(|event| event.process_time_ms <= time)
+            .max_by_key(|event| (event.process_time_ms * 1000.0) as i64)
+            .or_else(|| {
+                // If no events happened before, find the earliest one
+                self.moves.iter()
+                    .min_by_key(|event| (event.process_time_ms * 1000.0) as i64)
+            })
+            .map(|event| XY::new(event.x, event.y));
+        
+        pos
+    }
 }
 
 impl From<CursorData> for CursorEvents {
