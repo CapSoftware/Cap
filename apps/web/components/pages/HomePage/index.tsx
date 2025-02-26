@@ -52,16 +52,16 @@ export const HomePage = () => {
         <div className="relative z-10 px-5 w-full">
           <div className="mx-auto text-center wrapper wrapper-sm">
             <Link
-              href="https://x.com/richiemcilroy/status/1894409302619689292"
+              href="https://x.com/cap/status/1894752320250053036"
               target="_blank"
               className="flex gap-3 transition-opacity duration-300
                  hover:opacity-90 mb-[52px] items-center relative z-[20] px-4 py-2
                mx-auto bg-[#2e2e2e] rounded-full border w-fit border-zinc-200"
             >
               <p className="text-xs text-white sm:text-sm">
-                Launch Week Day 2:{" "}
+                Launch Week Day 3:{" "}
                 <span className="text-xs font-bold text-blue-100 sm:text-sm">
-                  Cap for Windows
+                  Pause & Resume
                 </span>
               </p>
               <FontAwesomeIcon
