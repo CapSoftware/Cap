@@ -57,7 +57,11 @@ impl H264Encoder {
                         format,
                     )
                     .map_err(|e| {
-                        tracing::error!("Failed to create converter from {:?} to YUV420P: {:?}", config.pixel_format, e);
+                        tracing::error!(
+                            "Failed to create converter from {:?} to YUV420P: {:?}",
+                            config.pixel_format,
+                            e
+                        );
                         MediaError::Any("Failed to create frame converter")
                     })?,
                 ),
@@ -105,9 +109,13 @@ impl H264Encoder {
                 Ok(_) => {
                     new_frame.set_pts(frame.pts());
                     new_frame
-                },
+                }
                 Err(e) => {
-                    tracing::error!("Failed to convert frame: {:?} from format {:?} to YUV420P", e, frame.format());
+                    tracing::error!(
+                        "Failed to convert frame: {:?} from format {:?} to YUV420P",
+                        e,
+                        frame.format()
+                    );
                     // Return early as we can't process this frame
                     return;
                 }
