@@ -1,5 +1,7 @@
 use cap_project::{ZoomSegment, XY};
 
+use crate::layers::InterpolatedCursorPosition;
+
 pub const ZOOM_DURATION: f64 = 1.0;
 
 #[derive(Debug, Clone, Copy)]
@@ -41,6 +43,10 @@ impl<'a> SegmentsCursor<'a> {
             }
         }
     }
+
+    pub fn segment(&self) -> Option<&ZoomSegment> {
+        self.segment
+    }
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -50,9 +56,27 @@ pub struct SegmentBounds {
 }
 
 impl SegmentBounds {
-    fn from_segment(segment: &ZoomSegment) -> Self {
+    fn from_segment(
+        segment: &ZoomSegment,
+        prev_cursor_position: Option<&InterpolatedCursorPosition>,
+        cursor_position: Option<&InterpolatedCursorPosition>,
+    ) -> Self {
         let position = match segment.mode {
-            cap_project::ZoomMode::Auto => (0.0, 0.0),
+            cap_project::ZoomMode::Auto => {
+                if let Some(cursor_position) = cursor_position {
+                    if let Some(prev_cursor_position) = prev_cursor_position {
+                        if prev_cursor_position.position.x {
+                            todo!()
+                        } else {
+                            let coord = cursor_position.position.coord;
+                            (coord.x as f32, coord.y as f32)
+                        }
+                    }
+                    todo!()
+                } else {
+                    (0.0, 0.0)
+                }
+            }
             cap_project::ZoomMode::Manual { x, y } => (x, y),
         };
 
@@ -94,11 +118,14 @@ pub struct InterpolatedZoom {
 }
 
 impl InterpolatedZoom {
-    pub fn new(cursor: SegmentsCursor) -> Self {
+    pub fn new(
+        segments_cursor: SegmentsCursor,
+        cursor_position: Option<&InterpolatedCursorPosition>,
+    ) -> Self {
         let ease_in = bezier_easing::bezier_easing(0.1, 0.0, 0.3, 1.0).unwrap();
         let ease_out = bezier_easing::bezier_easing(0.5, 0.0, 0.5, 1.0).unwrap();
 
-        Self::new_with_easing(cursor, ease_in, ease_out)
+        Self::new_with_easing(segments_cursor, ease_in, ease_out, cursor_position)
     }
 
     // the multiplier applied to the display width/height
@@ -107,21 +134,23 @@ impl InterpolatedZoom {
     }
 
     pub(self) fn new_with_easing(
-        cursor: SegmentsCursor,
+        segments_cursor: SegmentsCursor,
         ease_in: impl Fn(f32) -> f32,
         ease_out: impl Fn(f32) -> f32,
+        cursor_position: Option<&InterpolatedCursorPosition>,
     ) -> InterpolatedZoom {
         let default = SegmentBounds::default();
-        match (cursor.prev_segment, cursor.segment) {
+        match (segments_cursor.prev_segment, segments_cursor.segment) {
             (Some(prev_segment), None) => {
-                let zoom_t =
-                    ease_out(t_clamp((cursor.time - prev_segment.end) / ZOOM_DURATION) as f32)
-                        as f64;
+                let zoom_t = ease_out(t_clamp(
+                    (segments_cursor.time - prev_segment.end) / ZOOM_DURATION,
+                ) as f32) as f64;
 
                 Self {
                     t: 1.0 - zoom_t,
                     bounds: {
-                        let prev_segment_bounds = SegmentBounds::from_segment(prev_segment);
+                        let prev_segment_bounds =
+                            SegmentBounds::from_segment(prev_segment, cursor_position);
 
                         SegmentBounds::new(
                             prev_segment_bounds.top_left * (1.0 - zoom_t)
@@ -134,12 +163,13 @@ impl InterpolatedZoom {
             }
             (None, Some(segment)) => {
                 let t =
-                    ease_in(t_clamp((cursor.time - segment.start) / ZOOM_DURATION) as f32) as f64;
+                    ease_in(t_clamp((segments_cursor.time - segment.start) / ZOOM_DURATION) as f32)
+                        as f64;
 
                 Self {
                     t,
                     bounds: {
-                        let segment_bounds = SegmentBounds::from_segment(segment);
+                        let segment_bounds = SegmentBounds::from_segment(segment, cursor_position);
 
                         SegmentBounds::new(
                             default.top_left * (1.0 - t) + segment_bounds.top_left * t,
@@ -149,11 +179,13 @@ impl InterpolatedZoom {
                 }
             }
             (Some(prev_segment), Some(segment)) => {
-                let prev_segment_bounds = SegmentBounds::from_segment(prev_segment);
-                let segment_bounds = SegmentBounds::from_segment(segment);
+                let prev_segment_bounds =
+                    SegmentBounds::from_segment(prev_segment, cursor_position);
+                let segment_bounds = SegmentBounds::from_segment(segment, cursor_position);
 
                 let zoom_t =
-                    ease_in(t_clamp((cursor.time - segment.start) / ZOOM_DURATION) as f32) as f64;
+                    ease_in(t_clamp((segments_cursor.time - segment.start) / ZOOM_DURATION) as f32)
+                        as f64;
 
                 // no gap
                 if segment.start == prev_segment.end {
@@ -173,9 +205,10 @@ impl InterpolatedZoom {
                     // from the previous value that the zoom out got interrupted at by the current segment
 
                     let min = InterpolatedZoom::new_with_easing(
-                        SegmentsCursor::new(segment.start, cursor.segments),
+                        SegmentsCursor::new(segment.start, segments_cursor.segments),
                         ease_in,
                         ease_out,
+                        cursor_position,
                     );
 
                     Self {
@@ -219,6 +252,8 @@ fn t_clamp(v: f64) -> f64 {
 mod test {
     use cap_project::ZoomMode;
 
+    use crate::Coord;
+
     use super::*;
 
     // Custom macro for floating-point near equality
@@ -244,7 +279,7 @@ mod test {
     }
 
     fn test_interp((time, segments): (f64, &[ZoomSegment]), expected: InterpolatedZoom) {
-        let actual = InterpolatedZoom::new_with_easing(c(time, segments), |t| t, |t| t);
+        let actual = InterpolatedZoom::new_with_easing(c(time, segments), |t| t, |t| t, None);
 
         assert_f64_near!(actual.t, expected.t, "t");
 
@@ -491,5 +526,28 @@ mod test {
                 bounds: SegmentBounds::new(XY::new(0.0, 0.0), XY::new(4.0, 4.0)),
             },
         );
+    }
+
+    #[test]
+    fn zoom_origin() {
+        let segments = vec![ZoomSegment {
+            start: 1.0,
+            end: 4.0,
+            amount: 2.0,
+            mode: ZoomMode::Auto,
+        }];
+
+        let zoom = InterpolatedZoom::new_with_easing(
+            SegmentsCursor::new(4.0, &segments),
+            |t| t,
+            |t| t,
+            Some(&InterpolatedCursorPosition {
+                position: Coord::new(XY::new(0.5, 0.5)),
+                velocity: XY::new(0.0, 0.0),
+            }),
+        );
+
+        assert_eq!(zoom.bounds.top_left, XY::new(-0.5, -0.5));
+        assert_eq!(zoom.bounds.bottom_right, XY::new(1.5, 1.5));
     }
 }

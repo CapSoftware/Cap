@@ -71,12 +71,6 @@ pub async fn export_video(
         }
     }
 
-    let is_upgraded = AuthStore::get(&app)
-        .ok()
-        .flatten()
-        .map(|auth| auth.is_upgraded())
-        .unwrap_or(false);
-
     let exporter = cap_export::Exporter::new(
         modified_project,
         output_path.clone(),
@@ -93,7 +87,6 @@ pub async fn export_video(
         &editor_instance.segments,
         fps,
         resolution_base,
-        is_upgraded,
     )
     .await
     .map_err(|e| {

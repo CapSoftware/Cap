@@ -50,7 +50,6 @@ pub struct Exporter<TOnProgress> {
     render_constants: Arc<RenderVideoConstants>,
     fps: u32,
     resolution_base: XY<u32>,
-    is_upgraded: bool,
 }
 
 impl<TOnProgress> Exporter<TOnProgress>
@@ -67,7 +66,6 @@ where
         segments: &[Segment],
         fps: u32,
         resolution_base: XY<u32>,
-        is_upgraded: bool,
     ) -> Result<Self, ExportError> {
         let output_folder = output_path.parent().unwrap();
         std::fs::create_dir_all(output_folder)?;
@@ -114,7 +112,6 @@ where
             output_size,
             fps,
             resolution_base,
-            is_upgraded,
         })
     }
 
@@ -312,7 +309,6 @@ where
             self.render_segments,
             self.fps,
             self.resolution_base,
-            self.is_upgraded,
         )
         .then(|f| async { f.map_err(Into::into) });
 

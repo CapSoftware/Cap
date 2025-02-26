@@ -1341,20 +1341,30 @@ export function ConfigSidebar() {
                 />
               </Field>
               <Field name="Zoom Mode" icon={<IconCapSettings />}>
-                <KTabs class="space-y-6">
+                <KTabs
+                  class="space-y-6"
+                  onChange={(v) => {
+                    const val = v as "auto" | "manual";
+
+                    setProject(
+                      "timeline",
+                      "zoomSegments",
+                      value().selection.index,
+                      "mode",
+                      val === "auto" ? "auto" : { manual: { x: 0.5, y: 0.5 } }
+                    );
+                  }}
+                >
                   <KTabs.List class="flex flex-row items-center rounded-[0.5rem] relative border">
                     <KTabs.Trigger
                       value="auto"
                       class="flex-1 text-gray-400 py-1 z-10 ui-selected:text-gray-500 peer outline-none transition-colors duration-100"
-                      // onClick={() => setSelectedTab(item.id)}
-                      disabled
                     >
                       Auto
                     </KTabs.Trigger>
                     <KTabs.Trigger
                       value="manual"
                       class="flex-1 text-gray-400 py-1 z-10 ui-selected:text-gray-500 peer outline-none transition-colors duration-100"
-                      // onClick={() => setSelectedTab(item.id)}
                     >
                       Manual
                     </KTabs.Trigger>

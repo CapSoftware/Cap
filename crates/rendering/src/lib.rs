@@ -11,7 +11,8 @@ use futures::future::OptionFuture;
 use futures::FutureExt;
 use layers::{
     Background, BackgroundBlurPipeline, BackgroundLayer, CameraLayer, CursorLayer, DisplayLayer,
-    GradientOrColorPipeline, ImageBackgroundPipeline,
+    GradientOrColorPipeline, ImageBackgroundPipeline, InterpolatedCursorPosition,
+    SmoothedCursorEvents,
 };
 use specta::Type;
 use std::{collections::HashMap, sync::Arc};
@@ -136,7 +137,6 @@ pub async fn render_video_to_channel(
     segments: Vec<RenderSegment>,
     fps: u32,
     resolution_base: XY<u32>,
-    is_upgraded: bool,
 ) -> Result<(), RenderingError> {
     let constants = RenderVideoConstants::new(options, meta).await?;
     let recordings = ProjectRecordings::new(meta);
@@ -189,8 +189,8 @@ pub async fn render_video_to_channel(
                 frame_number,
                 fps,
                 resolution_base,
-                is_upgraded,
                 &segment.cursor,
+                &segment_frames,
             );
             let frame = frame_renderer
                 .render(
@@ -493,10 +493,10 @@ impl RenderVideoConstants {
 pub struct ProjectUniforms {
     pub output_size: (u32, u32),
     pub cursor_size: f32,
+    pub cursor_position: Option<InterpolatedCursorPosition>,
     display: CompositeVideoFrameUniforms,
     camera: Option<CompositeVideoFrameUniforms>,
     pub project: ProjectConfiguration,
-    pub is_upgraded: bool,
     pub zoom: InterpolatedZoom,
 }
 
@@ -664,8 +664,8 @@ impl ProjectUniforms {
         frame_number: u32,
         fps: u32,
         resolution_base: XY<u32>,
-        is_upgraded: bool,
         cursor_events: &CursorEvents,
+        segment_frames: &DecodedSegmentFrames,
     ) -> Self {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project, resolution_base);
@@ -696,7 +696,7 @@ impl ProjectUniforms {
 
         let crop = Self::get_crop(options, project);
 
-        let segment_cursor = SegmentsCursor::new(
+        let zoom_segment_cursor = SegmentsCursor::new(
             frame_time as f64,
             project
                 .timeline
@@ -705,7 +705,17 @@ impl ProjectUniforms {
                 .unwrap_or(&[]),
         );
 
-        let zoom = InterpolatedZoom::new(segment_cursor);
+        let smoothed_cursor = SmoothedCursorEvents::new(
+            &cursor_events.moves,
+            project.cursor.tension,
+            project.cursor.mass,
+            project.cursor.friction,
+        );
+
+        let cursor_position =
+            CursorLayer::interpolate(&smoothed_cursor, segment_frames.segment_time, project);
+
+        let zoom = InterpolatedZoom::new(zoom_segment_cursor, cursor_position.as_ref());
 
         let display = {
             let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
@@ -862,10 +872,10 @@ impl ProjectUniforms {
         Self {
             output_size,
             cursor_size: project.cursor.size as f32,
+            cursor_position,
             display,
             camera,
             project: project.clone(),
-            is_upgraded,
             zoom,
         }
     }
@@ -979,13 +989,16 @@ async fn produce_frame(
 
         DisplayLayer::render(&mut pipeline, &segment_frames);
 
-        constants.cursor_layer.render(
-            &mut pipeline,
-            &segment_frames,
-            resolution_base,
-            &cursor,
-            &uniforms.zoom,
-        );
+        if let Some(cursor_position) = &uniforms.cursor_position {
+            constants.cursor_layer.render(
+                &mut pipeline,
+                &segment_frames,
+                resolution_base,
+                &cursor,
+                &uniforms.zoom,
+                cursor_position,
+            );
+        }
 
         if let (
             Some(camera_size),

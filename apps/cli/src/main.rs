@@ -178,7 +178,6 @@ impl Export {
             &segments,
             fps,
             XY::new(1920, 1080),
-            true,
         )
         .await
         .unwrap();

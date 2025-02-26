@@ -133,6 +133,63 @@ impl CursorLayer {
         }
     }
 
+    pub fn interpolate(
+        smoothed_cursor: &SmoothedCursorEvents,
+        segment_time: f32,
+        project: &ProjectConfiguration,
+    ) -> Option<InterpolatedCursorPosition> {
+        let time_ms = (segment_time * 1000.0) as f64;
+
+        let smoothed_moves = smoothed_cursor.events();
+
+        if smoothed_moves.is_empty() {
+            return None;
+        }
+
+        if smoothed_moves[0].time > time_ms as f32 {
+            let event = &smoothed_moves[0];
+
+            return Some(InterpolatedCursorPosition {
+                position: Coord::new(event.position.map(|v| v as f64)),
+                velocity: XY::new(0.0, 0.0),
+            });
+        }
+
+        if let Some(event) = smoothed_moves.last() {
+            if event.time < time_ms as f32 {
+                return Some(InterpolatedCursorPosition {
+                    position: Coord::new(event.position.map(|v| v as f64)),
+                    velocity: XY::new(0.0, 0.0),
+                });
+            }
+        }
+
+        if project.cursor.raw {
+            let pos = smoothed_cursor
+                .raw
+                .windows(2)
+                .enumerate()
+                .find_map(|(i, chunk)| {
+                    if time_ms >= chunk[0].process_time_ms && time_ms < chunk[1].process_time_ms {
+                        let c = &chunk[0];
+                        Some(XY::new(c.x as f32, c.y as f32))
+                    } else {
+                        None
+                    }
+                })?;
+
+            Some(InterpolatedCursorPosition {
+                position: Coord::new(XY {
+                    x: pos.x as f64,
+                    y: pos.y as f64,
+                }),
+                velocity: XY::new(0.0, 0.0),
+            })
+        } else {
+            interpolate_smoothed_position(&smoothed_cursor, segment_time as f64)
+        }
+    }
+
     pub fn render(
         &self,
         pipeline: &mut FramePipeline,
@@ -140,6 +197,7 @@ impl CursorLayer {
         resolution_base: XY<u32>,
         cursor: &CursorEvents,
         zoom: &InterpolatedZoom,
+        interpolated_cursor: &InterpolatedCursorPosition,
     ) {
         let FramePipelineState {
             uniforms,
@@ -147,17 +205,6 @@ impl CursorLayer {
             ..
         } = &pipeline.state;
         let segment_time = segment_frames.segment_time;
-
-        let Some(interpolated_cursor) = interpolate_cursor(
-            cursor,
-            segment_time,
-            uniforms.project.cursor.tension,
-            uniforms.project.cursor.mass,
-            uniforms.project.cursor.friction,
-            uniforms.project.cursor.raw,
-        ) else {
-            return;
-        };
 
         let velocity: [f32; 2] = [0.0, 0.0];
         // let velocity: [f32; 2] = [
@@ -316,84 +363,23 @@ pub fn find_cursor_event(cursor: &CursorEvents, time: f32) -> &CursorMoveEvent {
     event
 }
 
-struct InterpolatedCursorPosition {
-    position: Coord<RawDisplayUVSpace>,
-    velocity: XY<f32>,
-}
-
-fn interpolate_cursor(
-    cursor: &CursorEvents,
-    time_secs: f32,
-    tension: f32,
-    mass: f32,
-    friction: f32,
-    raw: bool,
-) -> Option<InterpolatedCursorPosition> {
-    let time_ms = (time_secs * 1000.0) as f64;
-
-    if cursor.moves.is_empty() {
-        return None;
-    }
-
-    if cursor.moves[0].process_time_ms > time_ms.into() {
-        let event = &cursor.moves[0];
-
-        return Some(InterpolatedCursorPosition {
-            position: Coord::new(XY {
-                x: event.x,
-                y: event.y,
-            }),
-            velocity: XY::new(0.0, 0.0),
-        });
-    }
-
-    if let Some(event) = cursor.moves.last() {
-        if event.process_time_ms < time_ms.into() {
-            return Some(InterpolatedCursorPosition {
-                position: Coord::new(XY {
-                    x: event.x,
-                    y: event.y,
-                }),
-                velocity: XY::new(0.0, 0.0),
-            });
-        }
-    }
-
-    if raw {
-        let pos = cursor.moves.windows(2).enumerate().find_map(|(i, chunk)| {
-            if time_ms >= chunk[0].process_time_ms && time_ms < chunk[1].process_time_ms {
-                let c = &chunk[0];
-                Some(XY::new(c.x as f32, c.y as f32))
-            } else {
-                None
-            }
-        })?;
-
-        Some(InterpolatedCursorPosition {
-            position: Coord::new(XY {
-                x: pos.x as f64,
-                y: pos.y as f64,
-            }),
-            velocity: XY::new(0.0, 0.0),
-        })
-    } else {
-        let events = get_smoothed_cursor_events(&cursor.moves, tension, mass, friction);
-        interpolate_smoothed_position(&events, time_secs as f64, tension, mass, friction)
-    }
+#[derive(Debug, Clone)]
+pub struct InterpolatedCursorPosition {
+    pub position: Coord<RawDisplayUVSpace>,
+    pub velocity: XY<f32>,
 }
 
 fn interpolate_smoothed_position(
-    smoothed_events: &[SmoothedCursorEvent],
+    smoothed_cursor: &SmoothedCursorEvents,
     query_time: f64,
-    tension: f32,
-    mass: f32,
-    friction: f32,
 ) -> Option<InterpolatedCursorPosition> {
+    let smoothed_events = smoothed_cursor.events();
+
     if smoothed_events.is_empty() {
         return None;
     }
 
-    let mut sim = SpringMassDamperSimulation::new(tension, mass, friction);
+    let mut sim = smoothed_cursor.physics_sim();
 
     let query_time_ms = (query_time * 1000.0) as f32;
 
@@ -422,56 +408,95 @@ fn interpolate_smoothed_position(
     })
 }
 
+pub struct SmoothedCursorEvents<'a> {
+    pub raw: &'a [CursorMoveEvent],
+    tension: f32,
+    mass: f32,
+    friction: f32,
+    cached: Vec<SmoothedCursorEvent>,
+}
+
+impl<'a> SmoothedCursorEvents<'a> {
+    pub fn new(raw: &'a [CursorMoveEvent], tension: f32, mass: f32, friction: f32) -> Self {
+        let mut this = Self {
+            raw,
+            tension,
+            mass,
+            friction,
+            cached: vec![],
+        };
+
+        this.cached = this.generate();
+
+        this
+    }
+
+    pub fn update_properties(&mut self, tension: f32, mass: f32, friction: f32) {
+        if self.tension == tension && self.mass == mass && self.friction == friction {
+            return;
+        }
+
+        self.tension = tension;
+        self.mass = mass;
+        self.friction = friction;
+        self.cached = self.generate();
+    }
+
+    pub fn events(&self) -> &[SmoothedCursorEvent] {
+        &self.cached
+    }
+
+    pub fn physics_sim(&self) -> SpringMassDamperSimulation {
+        SpringMassDamperSimulation::new(self.tension, self.mass, self.friction)
+    }
+
+    fn generate(&self) -> Vec<SmoothedCursorEvent> {
+        let mut last_time = 0.0;
+
+        let mut events = vec![];
+
+        let mut sim = SpringMassDamperSimulation::new(self.tension, self.mass, self.friction);
+
+        sim.set_position(XY::new(self.raw[0].x, self.raw[0].y).map(|v| v as f32));
+        sim.set_velocity(XY::new(0.0, 0.0));
+
+        if self.raw[0].process_time_ms > 0.0 {
+            events.push(SmoothedCursorEvent {
+                time: 0.0,
+                target_position: sim.position,
+                position: sim.position,
+                velocity: sim.velocity,
+            })
+        }
+
+        for (i, m) in self.raw.iter().enumerate() {
+            let target_position = self
+                .raw
+                .get(i + 1)
+                .map(|e| XY::new(e.x, e.y).map(|v| v as f32))
+                .unwrap_or(sim.target_position);
+            sim.set_target_position(target_position);
+
+            sim.run(m.process_time_ms as f32 - last_time);
+
+            last_time = m.process_time_ms as f32;
+
+            events.push(SmoothedCursorEvent {
+                time: m.process_time_ms as f32,
+                target_position,
+                position: sim.position,
+                velocity: sim.velocity,
+            });
+        }
+
+        events
+    }
+}
+
 #[derive(Debug)]
 struct SmoothedCursorEvent {
     time: f32,
     target_position: XY<f32>,
     position: XY<f32>,
     velocity: XY<f32>,
-}
-
-fn get_smoothed_cursor_events(
-    moves: &[CursorMoveEvent],
-    tension: f32,
-    mass: f32,
-    friction: f32,
-) -> Vec<SmoothedCursorEvent> {
-    let mut last_time = 0.0;
-
-    let mut events = vec![];
-
-    let mut sim = SpringMassDamperSimulation::new(tension, mass, friction);
-
-    sim.set_position(XY::new(moves[0].x, moves[0].y).map(|v| v as f32));
-    sim.set_velocity(XY::new(0.0, 0.0));
-
-    if moves[0].process_time_ms > 0.0 {
-        events.push(SmoothedCursorEvent {
-            time: 0.0,
-            target_position: sim.position,
-            position: sim.position,
-            velocity: sim.velocity,
-        })
-    }
-
-    for (i, m) in moves.iter().enumerate() {
-        let target_position = moves
-            .get(i + 1)
-            .map(|e| XY::new(e.x, e.y).map(|v| v as f32))
-            .unwrap_or(sim.target_position);
-        sim.set_target_position(target_position);
-
-        sim.run(m.process_time_ms as f32 - last_time);
-
-        last_time = m.process_time_ms as f32;
-
-        events.push(SmoothedCursorEvent {
-            time: m.process_time_ms as f32,
-            target_position,
-            position: sim.position,
-            velocity: sim.velocity,
-        });
-    }
-
-    events
 }

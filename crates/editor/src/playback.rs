@@ -103,8 +103,8 @@ impl Playback {
                                     frame_number,
                                     fps,
                                     resolution_base,
-                                    is_upgraded,
-                                    &segment.cursor
+                                    &segment.cursor,
+                                    &segment_frames
                                 );
 
                                 self
