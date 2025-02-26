@@ -164,6 +164,12 @@ async performHapticFeedback(pattern: HapticPattern | null, time: HapticPerforman
 async getWallpaperPath(filename: string) : Promise<string> {
     return await TAURI_INVOKE("get_wallpaper_path", { filename });
 },
+async listFails() : Promise<{ [key in string]: boolean }> {
+    return await TAURI_INVOKE("list_fails");
+},
+async setFail(name: string, value: boolean) : Promise<void> {
+    await TAURI_INVOKE("set_fail", { name, value });
+},
 async updateAuthPlan() : Promise<void> {
     await TAURI_INVOKE("update_auth_plan");
 }

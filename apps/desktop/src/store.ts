@@ -1,4 +1,4 @@
-import { createQuery, queryOptions } from "@tanstack/solid-query";
+import { createQuery } from "@tanstack/solid-query";
 import { Store } from "@tauri-apps/plugin-store";
 import { onCleanup } from "solid-js";
 
@@ -7,6 +7,7 @@ import {
   type PresetsStore,
   type HotkeysStore,
   type GeneralSettingsStore,
+  commands,
 } from "~/utils/tauri";
 
 let _store: Promise<Store> | undefined;

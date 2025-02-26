@@ -1,3 +1,4 @@
+use cap_fail::{fail, fail_err};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, InputCallbackInfo, SampleFormat, StreamConfig, SupportedStreamConfig};
 use flume::{Receiver, Sender, TrySendError};
@@ -59,6 +60,8 @@ impl AudioInputFeed {
     pub async fn init(selected_input: &str) -> Result<Self, MediaError> {
         trace!("Initializing audio input feed with device");
         debug!(selected_input);
+
+        fail_err!("media::feeds::audio_input::init", MediaError::Any(""));
 
         let (device, config) = Self::list_devices()
             .swap_remove_entry(selected_input)
@@ -157,6 +160,11 @@ impl AudioInputFeed {
     }
 
     pub async fn switch_input(&mut self, name: &str) -> Result<(), MediaError> {
+        fail_err!(
+            "media::feeds::audio_input::switch_input",
+            MediaError::Any("")
+        );
+
         let (tx, rx) = flume::bounded(1);
 
         self.control_tx

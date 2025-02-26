@@ -40,9 +40,9 @@ pub struct GeneralSettingsStore {
 #[serde(rename_all = "camelCase")]
 pub struct CommercialLicense {
     license_key: String,
-    expiry_date: Option<u32>,
-    refresh: u32,
-    activated_on: u32,
+    expiry_date: Option<f64>,
+    refresh: f64,
+    activated_on: f64,
 }
 
 impl Default for GeneralSettingsStore {
@@ -84,7 +84,7 @@ impl GeneralSettingsStore {
                 // Handle potential deserialization errors gracefully
                 match serde_json::from_value(store) {
                     Ok(settings) => Ok(Some(settings)),
-                    Err(_) => Err("Failed to deserialize general settings store".to_string()),
+                    Err(e) => Err(format!("Failed to deserialize general settings store: {e}")),
                 }
             }
             _ => Ok(None),
