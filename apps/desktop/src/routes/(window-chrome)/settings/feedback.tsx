@@ -1,6 +1,6 @@
-import { createSignal } from "solid-js";
 import { Button } from "@cap/ui-solid";
 import { action, useAction, useSubmission } from "@solidjs/router";
+import { createSignal } from "solid-js";
 
 import { apiClient, protectedHeaders } from "~/utils/web-api";
 
@@ -22,9 +22,7 @@ export default function FeedbackTab() {
 
   return (
     <div class="p-6 max-w-2xl">
-      <h2 class="text-[--text-primary] text-lg font-medium mb-2">
-        Send Feedback
-      </h2>
+      <h2 class="mb-2 text-lg font-medium text-primary">Send Feedback</h2>
       <p class="text-[--text-tertiary] mb-[1rem]">
         Help us improve Cap by submitting feedback or reporting bugs. We'll get
         right on it.
@@ -44,24 +42,24 @@ export default function FeedbackTab() {
               placeholder="Tell us what you think about Cap..."
               required
               minLength={10}
-              class="w-full h-32 p-2 border border-[--gray-500] bg-[--gray-100] text-[--text-primary] rounded-md resize-none focus:outline-none focus:ring-2 focus:ring-[--blue-400]"
+              class="p-2 w-full h-32 bg-gray-100 rounded-md border transition-shadow duration-200 resize-none placeholder:text-zinc-400 border-zinc-200 text-primary focus:outline-none focus:ring-2 focus:ring-blue-300"
             />
           </div>
 
           {submission.error && (
-            <p class="text-red-500 text-sm">{submission.error.toString()}</p>
+            <p class="mt-2 text-sm text-red-400">
+              {submission.error.toString()}
+            </p>
           )}
 
           {submission.result?.success && (
-            <p class="text-[--text-primary] text-sm">
-              Thank you for your feedback!
-            </p>
+            <p class="text-sm text-primary">Thank you for your feedback!</p>
           )}
 
           <Button
             type="submit"
             disabled={!feedback().trim() || feedback().trim().length < 0}
-            class="w-full bg-[--blue-400] text-[--text-primary]"
+            class="mt-2 w-full bg-primary text-primary"
           >
             {submission.pending ? "Submitting..." : "Submit Feedback"}
           </Button>
