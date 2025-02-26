@@ -59,7 +59,7 @@ export default function FeedbackTab() {
           <Button
             type="submit"
             disabled={!feedback().trim() || feedback().trim().length < 0}
-            class="mt-4 w-full bg-primary text-primary"
+            class="mt-2 w-full bg-primary text-primary"
           >
             {submission.pending ? "Submitting..." : "Submit Feedback"}
           </Button>
