@@ -1110,6 +1110,7 @@ dependencies = [
  "image 0.25.5",
  "objc",
  "relative-path",
+ "screencapturekit",
  "serde",
  "serde_json",
  "specta",
@@ -1301,8 +1302,8 @@ dependencies = [
 
 [[package]]
 name = "cidre"
-version = "0.5.0"
-source = "git+https://github.com/yury/cidre?rev=3479c18b9ac81dbb15d0acb3a75edd6b42d044b1#3479c18b9ac81dbb15d0acb3a75edd6b42d044b1"
+version = "0.6.0"
+source = "git+https://github.com/yury/cidre?rev=ef04aaabe14ffbbce4a330973a74b6d797d073ff#ef04aaabe14ffbbce4a330973a74b6d797d073ff"
 dependencies = [
  "cidre-macros",
  "parking_lot",
@@ -1312,7 +1313,7 @@ dependencies = [
 [[package]]
 name = "cidre-macros"
 version = "0.1.0"
-source = "git+https://github.com/yury/cidre?rev=3479c18b9ac81dbb15d0acb3a75edd6b42d044b1#3479c18b9ac81dbb15d0acb3a75edd6b42d044b1"
+source = "git+https://github.com/yury/cidre?rev=ef04aaabe14ffbbce4a330973a74b6d797d073ff#ef04aaabe14ffbbce4a330973a74b6d797d073ff"
 
 [[package]]
 name = "clang-sys"

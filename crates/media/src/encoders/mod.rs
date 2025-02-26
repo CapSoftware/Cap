@@ -1,13 +1,11 @@
-use std::path::PathBuf;
-
 mod h264;
-#[cfg(target_os = "macos")]
-mod h264_avassetwriter;
 mod mp4;
+#[cfg(target_os = "macos")]
+mod mp4_avassetwriter;
 mod opus;
 
 pub use h264::*;
-#[cfg(target_os = "macos")]
-pub use h264_avassetwriter::*;
 pub use mp4::*;
+#[cfg(target_os = "macos")]
+pub use mp4_avassetwriter::*;
 pub use opus::*;

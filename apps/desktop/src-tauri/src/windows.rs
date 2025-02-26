@@ -224,7 +224,7 @@ impl ShowCapWindow {
                     .shadow(false)
                     .fullscreen(false)
                     .always_on_top(true)
-                    .content_protected(true)
+                    // .content_protected(true)
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)
                     .position(

@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::RecordingMeta;
+use cap_project::StudioRecordingMeta;
 use serde::Serialize;
 use specta::Type;
 
@@ -75,18 +76,19 @@ pub struct ProjectRecordings {
 }
 
 impl ProjectRecordings {
-    pub fn new(meta: &RecordingMeta) -> Self {
-        let segments = match &meta.content {
-            crate::Content::SingleSegment { segment } => {
-                let display = Video::new(&meta.path(&segment.display.path))
+    pub fn new(recording_meta: &RecordingMeta, meta: &StudioRecordingMeta) -> Self {
+        let segments = match &meta {
+            StudioRecordingMeta::SingleSegment { segment } => {
+                let display = Video::new(&recording_meta.path(&segment.display.path))
                     .expect("Failed to read display video");
                 let camera = segment.camera.as_ref().map(|camera| {
-                    Video::new(&meta.path(&camera.path)).expect("Failed to read camera video")
+                    Video::new(&recording_meta.path(&camera.path))
+                        .expect("Failed to read camera video")
                 });
                 let audio = segment
                     .audio
                     .as_ref()
-                    .map(|audio| Audio::new(&meta.path(&audio.path)));
+                    .map(|audio| Audio::new(&recording_meta.path(&audio.path)));
 
                 vec![SegmentRecordings {
                     display,
@@ -94,19 +96,20 @@ impl ProjectRecordings {
                     audio,
                 }]
             }
-            crate::Content::MultipleSegments { inner } => inner
+            StudioRecordingMeta::MultipleSegments { inner } => inner
                 .segments
                 .iter()
                 .map(|s| {
-                    let display = Video::new(&meta.path(&s.display.path))
+                    let display = Video::new(&recording_meta.path(&s.display.path))
                         .expect("Failed to read display video");
                     let camera = s.camera.as_ref().map(|camera| {
-                        Video::new(&meta.path(&camera.path)).expect("Failed to read camera video")
+                        Video::new(&recording_meta.path(&camera.path))
+                            .expect("Failed to read camera video")
                     });
                     let audio = s
                         .audio
                         .as_ref()
-                        .map(|audio| Audio::new(&meta.path(&audio.path)));
+                        .map(|audio| Audio::new(&recording_meta.path(&audio.path)));
 
                     SegmentRecordings {
                         display,

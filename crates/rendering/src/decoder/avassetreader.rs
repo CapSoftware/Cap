@@ -29,7 +29,12 @@ impl CachedFrame {
                 let format = pixel_format_to_pixel(image_buf.pixel_format());
 
                 let data = if matches!(format, format::Pixel::RGBA) {
-                    let _lock = image_buf.base_address_lock(LockFlags::READ_ONLY).unwrap();
+                    let _lock = unsafe {
+                        image_buf
+                            .lock_base_addr(LockFlags::READ_ONLY)
+                            .result()
+                            .unwrap()
+                    };
 
                     let bytes_per_row = image_buf.plane_bytes_per_row(0);
                     let width = image_buf.width() as usize;
@@ -53,6 +58,8 @@ impl CachedFrame {
                             )
                     }
 
+                    unsafe { image_buf.unlock_lock_base_addr(LockFlags::READ_ONLY) };
+
                     bytes
                 } else {
                     let mut ffmpeg_frame = ffmpeg::frame::Video::new(
@@ -61,10 +68,15 @@ impl CachedFrame {
                         image_buf.height() as u32,
                     );
 
+                    let _lock = unsafe {
+                        image_buf
+                            .lock_base_addr(LockFlags::READ_ONLY)
+                            .result()
+                            .unwrap()
+                    };
+
                     match ffmpeg_frame.format() {
                         format::Pixel::NV12 => {
-                            let _lock = image_buf.base_address_lock(LockFlags::READ_ONLY).unwrap();
-
                             for plane_i in 0..image_buf.plane_count() {
                                 let bytes_per_row = image_buf.plane_bytes_per_row(plane_i);
                                 let height = image_buf.plane_height(plane_i);
@@ -90,8 +102,6 @@ impl CachedFrame {
                             }
                         }
                         format::Pixel::YUV420P => {
-                            let _lock = image_buf.base_address_lock(LockFlags::READ_ONLY).unwrap();
-
                             for plane_i in 0..image_buf.plane_count() {
                                 let bytes_per_row = image_buf.plane_bytes_per_row(plane_i);
                                 let height = image_buf.plane_height(plane_i);
@@ -118,6 +128,8 @@ impl CachedFrame {
                         }
                         format => todo!("implement {:?}", format),
                     }
+
+                    unsafe { image_buf.unlock_lock_base_addr(LockFlags::READ_ONLY) };
 
                     let mut converter = ffmpeg::software::converter(
                         (ffmpeg_frame.width(), ffmpeg_frame.height()),

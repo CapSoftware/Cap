@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Instant};
+use std::{path::PathBuf, sync::Arc, time::Instant};
 
 use crate::{
     audio::AppSounds,
@@ -18,7 +18,8 @@ use cap_flags::FLAGS;
 use cap_media::sources::{CaptureScreen, CaptureWindow};
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
 use cap_project::{
-    Content, ProjectConfiguration, TimelineConfiguration, TimelineSegment, ZoomSegment, XY,
+    ProjectConfiguration, StudioRecordingMeta, TimelineConfiguration, TimelineSegment, ZoomSegment,
+    XY,
 };
 use cap_recording::CompletedRecording;
 use cap_rendering::ProjectRecordings;
@@ -208,131 +209,155 @@ async fn handle_recording_finished(
         let screenshots_dir = completed_recording.recording_dir.join("screenshots");
         std::fs::create_dir_all(&screenshots_dir).ok();
 
-        let meta = &completed_recording.meta;
-        let display_output_path = match &meta.content {
-            Content::SingleSegment { segment } => meta.path(&segment.display.path),
-            Content::MultipleSegments { inner } => meta.path(&inner.segments[0].display.path),
-        };
-
-        let display_screenshot = screenshots_dir.join("display.jpg");
-        create_screenshot(display_output_path, display_screenshot.clone(), None).await?;
+        let recording_meta = &completed_recording.meta;
 
         let recording_dir = completed_recording.recording_dir.clone();
 
-        ShowCapWindow::PrevRecordings.show(&app).ok();
+        let fire_events = || {
+            ShowCapWindow::PrevRecordings.show(&app).ok();
 
-        NewRecordingAdded {
-            path: recording_dir.clone(),
-        }
-        .emit(&app)
-        .ok();
+            NewRecordingAdded {
+                path: recording_dir.clone(),
+            }
+            .emit(&app)
+            .ok();
 
-        RecordingStopped {
-            path: recording_dir,
-        }
-        .emit(&app)
-        .ok();
+            RecordingStopped {
+                path: recording_dir,
+            }
+            .emit(&app)
+            .ok();
+        };
 
-        let recordings = ProjectRecordings::new(&completed_recording.meta);
+        match &recording_meta.inner {
+            cap_project::RecordingMetaInner::Studio(meta) => {
+                let display_output_path = match &meta {
+                    StudioRecordingMeta::SingleSegment { segment } => {
+                        recording_meta.path(&segment.display.path)
+                    }
+                    StudioRecordingMeta::MultipleSegments { inner } => {
+                        recording_meta.path(&inner.segments[0].display.path)
+                    }
+                };
 
-        let config = project_config_from_recording(
-            &completed_recording,
-            &recordings,
-            PresetsStore::get_default_preset(&app)?.map(|p| p.config),
-        );
+                let display_screenshot = screenshots_dir.join("display.jpg");
+                create_screenshot(display_output_path, display_screenshot.clone(), None).await?;
 
-        config
-            .write(&completed_recording.recording_dir)
-            .map_err(|e| e.to_string())?;
+                fire_events();
 
-        if let Some(pre_created_video) = state.pre_created_video.take() {
-            spawn_actor({
-                let app = app.clone();
-                async move {
-                    if let Some((settings, auth)) = GeneralSettingsStore::get(&app)
-                        .ok()
-                        .flatten()
-                        .zip(AuthStore::get(&app).ok().flatten())
-                    {
-                        if auth.is_upgraded() && settings.auto_create_shareable_link {
-                            // Copy link to clipboard
-                            let _ = app
-                                .state::<MutableState<'_, ClipboardContext>>()
-                                .write()
-                                .await
-                                .set_text(pre_created_video.link.clone());
+                let recordings = ProjectRecordings::new(&completed_recording.meta, meta);
 
-                            // Send notification for shareable link
-                            notifications::send_notification(
-                                &app,
-                                notifications::NotificationType::ShareableLinkCopied,
-                            );
+                let config = project_config_from_recording(
+                    &completed_recording,
+                    &recordings,
+                    PresetsStore::get_default_preset(&app)?.map(|p| p.config),
+                );
 
-                            // Open the pre-created shareable link
-                            open_external_link(app.clone(), pre_created_video.link.clone()).ok();
+                config
+                    .write(&completed_recording.recording_dir)
+                    .map_err(|e| e.to_string())?;
 
-                            // Start the upload process in the background with retry mechanism
-                            let app = app.clone();
+                if let Some(pre_created_video) = state.pre_created_video.take() {
+                    let max_fps = meta.max_fps();
+                    spawn_actor({
+                        let app = app.clone();
+                        async move {
+                            if let Some((settings, auth)) = GeneralSettingsStore::get(&app)
+                                .ok()
+                                .flatten()
+                                .zip(AuthStore::get(&app).ok().flatten())
+                            {
+                                if auth.is_upgraded() && settings.auto_create_shareable_link {
+                                    // Copy link to clipboard
+                                    let _ = app
+                                        .state::<MutableState<'_, ClipboardContext>>()
+                                        .write()
+                                        .await
+                                        .set_text(pre_created_video.link.clone());
 
-                            tauri::async_runtime::spawn(async move {
-                                let max_retries = 3;
-                                let mut retry_count = 0;
+                                    // Send notification for shareable link
+                                    notifications::send_notification(
+                                        &app,
+                                        notifications::NotificationType::ShareableLinkCopied,
+                                    );
 
-                                export_video(
-                                    app.clone(),
-                                    completed_recording.id.clone(),
-                                    tauri::ipc::Channel::new(|_| Ok(())),
-                                    true,
-                                    completed_recording.meta.content.max_fps(),
-                                    XY::new(1920, 1080),
-                                )
-                                .await
-                                .ok();
+                                    // Open the pre-created shareable link
+                                    open_external_link(app.clone(), pre_created_video.link.clone())
+                                        .ok();
 
-                                while retry_count < max_retries {
-                                    match upload_exported_video(
-                                        app.clone(),
-                                        completed_recording.id.clone(),
-                                        UploadMode::Initial {
-                                            pre_created_video: Some(pre_created_video.clone()),
-                                        },
-                                    )
-                                    .await
-                                    {
-                                        Ok(_) => {
-                                            println!("Video uploaded successfully");
-                                            // Don't send notification here since we already did it above
-                                            break;
-                                        }
-                                        Err(e) => {
-                                            retry_count += 1;
-                                            println!(
-                                                "Error during auto-upload (attempt {}/{}): {}",
-                                                retry_count, max_retries, e
-                                            );
+                                    // Start the upload process in the background with retry mechanism
+                                    let app = app.clone();
 
-                                            if retry_count < max_retries {
-                                                tokio::time::sleep(std::time::Duration::from_secs(
-                                                    5,
-                                                ))
-                                                .await;
-                                            } else {
-                                                println!("Max retries reached. Upload failed.");
-                                                notifications::send_notification(
-                                                    &app,
-                                                    notifications::NotificationType::UploadFailed,
-                                                );
+                                    tauri::async_runtime::spawn(async move {
+                                        let max_retries = 3;
+                                        let mut retry_count = 0;
+
+                                        export_video(
+                                            app.clone(),
+                                            completed_recording.id.clone(),
+                                            tauri::ipc::Channel::new(|_| Ok(())),
+                                            true,
+                                            max_fps,
+                                            XY::new(1920, 1080),
+                                        )
+                                        .await
+                                        .ok();
+
+                                        while retry_count < max_retries {
+                                            match upload_exported_video(
+                                                app.clone(),
+                                                completed_recording.id.clone(),
+                                                UploadMode::Initial {
+                                                    pre_created_video: Some(
+                                                        pre_created_video.clone(),
+                                                    ),
+                                                },
+                                            )
+                                            .await
+                                            {
+                                                Ok(_) => {
+                                                    println!("Video uploaded successfully");
+                                                    // Don't send notification here since we already did it above
+                                                    break;
+                                                }
+                                                Err(e) => {
+                                                    retry_count += 1;
+                                                    println!(
+                                                        "Error during auto-upload (attempt {}/{}): {}",
+                                                        retry_count, max_retries, e
+                                                    );
+
+                                                    if retry_count < max_retries {
+                                                        tokio::time::sleep(
+                                                            std::time::Duration::from_secs(5),
+                                                        )
+                                                        .await;
+                                                    } else {
+                                                        println!(
+                                                            "Max retries reached. Upload failed."
+                                                        );
+                                                        notifications::send_notification(
+                                                            &app,
+                                                            notifications::NotificationType::UploadFailed,
+                                                        );
+                                                    }
+                                                }
                                             }
                                         }
-                                    }
+                                    });
+                                } else if settings.open_editor_after_recording {
+                                    open_editor(app.clone(), completed_recording.id);
                                 }
-                            });
-                        } else if settings.open_editor_after_recording {
-                            open_editor(app.clone(), completed_recording.id);
+                            }
                         }
-                    }
+                    });
                 }
-            });
+            }
+            cap_project::RecordingMetaInner::Instant(meta) => {
+                fire_events();
+
+                dbg!(meta);
+            }
         }
     };
 

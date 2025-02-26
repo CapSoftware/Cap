@@ -5,7 +5,9 @@ use cap_media::{
     feeds::{AudioData, AudioFrameBuffer},
     MediaError,
 };
-use cap_project::{ProjectConfiguration, RecordingMeta, XY};
+use cap_project::{
+    ProjectConfiguration, RecordingMeta, RecordingMetaInner, StudioRecordingMeta, XY,
+};
 use cap_rendering::{
     ProjectUniforms, RecordingSegmentDecoders, RenderSegment, RenderVideoConstants, RenderedFrame,
     SegmentVideoPaths,
@@ -46,7 +48,7 @@ pub struct Exporter<TOnProgress> {
     project: ProjectConfiguration,
     project_path: PathBuf,
     on_progress: TOnProgress,
-    meta: RecordingMeta,
+    recording_meta: RecordingMeta,
     render_constants: Arc<RenderVideoConstants>,
     fps: u32,
     resolution_base: XY<u32>,
@@ -62,13 +64,19 @@ where
         output_path: PathBuf,
         on_progress: TOnProgress,
         project_path: PathBuf,
-        meta: RecordingMeta,
+        recording_meta: RecordingMeta,
         render_constants: Arc<RenderVideoConstants>,
         segments: &[Segment],
         fps: u32,
         resolution_base: XY<u32>,
         is_upgraded: bool,
     ) -> Result<Self, ExportError> {
+        let RecordingMetaInner::Studio(meta) = &recording_meta.inner else {
+            return Err(ExportError::Other(
+                "Cannot export non-studio recordings".to_string(),
+            ));
+        };
+
         let output_folder = output_path.parent().unwrap();
         std::fs::create_dir_all(output_folder)?;
 
@@ -79,23 +87,25 @@ where
         let mut audio_segments = vec![];
 
         for (i, s) in segments.iter().enumerate() {
-            let segment_paths = match &meta.content {
-                cap_project::Content::SingleSegment { segment: s } => SegmentVideoPaths {
-                    display: meta.path(&s.display.path),
-                    camera: s.camera.as_ref().map(|c| meta.path(&c.path)),
-                },
-                cap_project::Content::MultipleSegments { inner } => {
+            let segment_paths = match &meta {
+                cap_project::StudioRecordingMeta::SingleSegment { segment: s } => {
+                    SegmentVideoPaths {
+                        display: recording_meta.path(&s.display.path),
+                        camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
+                    }
+                }
+                cap_project::StudioRecordingMeta::MultipleSegments { inner } => {
                     let s = &inner.segments[i];
 
                     SegmentVideoPaths {
-                        display: meta.path(&s.display.path),
-                        camera: s.camera.as_ref().map(|c| meta.path(&c.path)),
+                        display: recording_meta.path(&s.display.path),
+                        camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                     }
                 }
             };
             render_segments.push(RenderSegment {
                 cursor: s.cursor.clone(),
-                decoders: RecordingSegmentDecoders::new(&meta, segment_paths)
+                decoders: RecordingSegmentDecoders::new(&recording_meta, meta, segment_paths)
                     .await
                     .map_err(ExportError::Other)?,
             });
@@ -107,7 +117,7 @@ where
             output_path,
             on_progress,
             project_path,
-            meta,
+            recording_meta,
             render_constants,
             render_segments,
             audio_segments,
@@ -122,6 +132,11 @@ where
         struct AudioRender {
             buffer: AudioFrameBuffer,
         }
+
+        let meta = match &self.recording_meta.inner {
+            RecordingMetaInner::Studio(meta) => meta,
+            _ => panic!("Not a studio recording"),
+        };
 
         println!("Exporting with custom muxer");
 
@@ -308,7 +323,8 @@ where
             self.render_constants.options,
             self.project,
             tx_image_data,
-            &self.meta,
+            &self.recording_meta,
+            meta,
             self.render_segments,
             self.fps,
             self.resolution_base,

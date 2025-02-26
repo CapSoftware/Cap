@@ -4,8 +4,8 @@ use cap_media::data::RawVideoFormat;
 use cap_media::data::VideoInfo;
 use cap_media::feeds::AudioData;
 use cap_media::frame_ws::create_frame_ws;
-use cap_project::RecordingConfig;
-use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, XY};
+use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, XY};
+use cap_project::{RecordingConfig, StudioRecordingMeta};
 use cap_rendering::{
     get_duration, DecodedSegmentFrames, ProjectRecordings, ProjectUniforms,
     RecordingSegmentDecoders, RenderOptions, RenderVideoConstants, SegmentVideoPaths,
@@ -74,9 +74,12 @@ impl EditorInstance {
             panic!("Video path {} not found!", project_path.display());
         }
 
-        let meta = cap_project::RecordingMeta::load_for_project(&project_path).unwrap();
-        let project = meta.project_config();
-        let recordings = ProjectRecordings::new(&meta);
+        let recording_meta = cap_project::RecordingMeta::load_for_project(&project_path).unwrap();
+        let RecordingMetaInner::Studio(meta) = &recording_meta.inner else {
+            return Err("Cannot edit non-studio recordings".to_string());
+        };
+        let project = recording_meta.project_config();
+        let recordings = ProjectRecordings::new(&recording_meta, meta);
 
         let render_options = RenderOptions {
             screen_size: XY::new(
@@ -89,14 +92,14 @@ impl EditorInstance {
                 .map(|c| XY::new(c.width, c.height)),
         };
 
-        let segments = create_segments(&meta).await?;
+        let segments = create_segments(&recording_meta, meta).await?;
 
         let (frame_tx, frame_rx) = flume::bounded(4);
 
         let (ws_port, ws_shutdown) = create_frame_ws(frame_rx).await;
 
         let render_constants = Arc::new(
-            RenderVideoConstants::new(render_options, &meta)
+            RenderVideoConstants::new(render_options, &recording_meta, meta)
                 .await
                 .unwrap(),
         );
@@ -104,7 +107,8 @@ impl EditorInstance {
         let renderer = Arc::new(editor::Renderer::spawn(
             render_constants.clone(),
             frame_tx,
-            &meta,
+            &recording_meta,
+            meta,
         ));
 
         let (preview_tx, preview_rx) = watch::channel(None);
@@ -126,7 +130,7 @@ impl EditorInstance {
             project_config: watch::channel(project),
             ws_shutdown: Arc::new(StdMutex::new(Some(ws_shutdown))),
             segments: Arc::new(segments),
-            meta,
+            meta: recording_meta,
         });
 
         this.state.lock().await.preview_task = Some(
@@ -138,7 +142,7 @@ impl EditorInstance {
     }
 
     pub fn meta(&self) -> RecordingMeta {
-        RecordingMeta::load_for_project(&self.project_path).unwrap()
+        self.meta.clone()
     }
 
     pub async fn dispose(&self) {
@@ -293,11 +297,19 @@ impl EditorInstance {
         })
     }
 
+    fn get_studio_meta(&self) -> &StudioRecordingMeta {
+        match &self.meta.inner {
+            RecordingMetaInner::Studio(meta) => &meta,
+            _ => panic!("Not a studio recording"),
+        }
+    }
+
     pub fn get_total_frames(&self, fps: u32) -> u32 {
         // Calculate total frames based on actual video duration and fps
         let duration = get_duration(
             &self.recordings,
             &self.meta,
+            self.get_studio_meta(),
             &self.project_config.1.borrow(),
         );
 
@@ -327,20 +339,22 @@ pub struct Segment {
     pub decoders: RecordingSegmentDecoders,
 }
 
-pub async fn create_segments(meta: &RecordingMeta) -> Result<Vec<Segment>, String> {
-    match &meta.content {
-        cap_project::Content::SingleSegment { segment: s } => {
-            let audio = Arc::new(
-                s.audio
-                    .as_ref()
-                    .map(|audio_meta| AudioData::from_file(meta.path(&audio_meta.path)).unwrap()),
-            );
+pub async fn create_segments(
+    recording_meta: &RecordingMeta,
+    meta: &StudioRecordingMeta,
+) -> Result<Vec<Segment>, String> {
+    match &meta {
+        cap_project::StudioRecordingMeta::SingleSegment { segment: s } => {
+            let audio = Arc::new(s.audio.as_ref().map(|audio_meta| {
+                AudioData::from_file(recording_meta.path(&audio_meta.path)).unwrap()
+            }));
 
             let decoders = RecordingSegmentDecoders::new(
-                &meta,
+                &recording_meta,
+                meta,
                 SegmentVideoPaths {
-                    display: meta.path(&s.display.path),
-                    camera: s.camera.as_ref().map(|c| meta.path(&c.path)),
+                    display: recording_meta.path(&s.display.path),
+                    camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                 },
             )
             .await
@@ -352,22 +366,22 @@ pub async fn create_segments(meta: &RecordingMeta) -> Result<Vec<Segment>, Strin
                 decoders,
             }])
         }
-        cap_project::Content::MultipleSegments { inner } => {
+        cap_project::StudioRecordingMeta::MultipleSegments { inner } => {
             let mut segments = vec![];
 
             for (i, s) in inner.segments.iter().enumerate() {
-                let audio =
-                    Arc::new(s.audio.as_ref().map(|audio_meta| {
-                        AudioData::from_file(meta.path(&audio_meta.path)).unwrap()
-                    }));
+                let audio = Arc::new(s.audio.as_ref().map(|audio_meta| {
+                    AudioData::from_file(recording_meta.path(&audio_meta.path)).unwrap()
+                }));
 
-                let cursor = Arc::new(s.cursor_events(&meta));
+                let cursor = Arc::new(s.cursor_events(&recording_meta));
 
                 let decoders = RecordingSegmentDecoders::new(
-                    &meta,
+                    &recording_meta,
+                    meta,
                     SegmentVideoPaths {
-                        display: meta.path(&s.display.path),
-                        camera: s.camera.as_ref().map(|c| meta.path(&c.path)),
+                        display: recording_meta.path(&s.display.path),
+                        camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                     },
                 )
                 .await

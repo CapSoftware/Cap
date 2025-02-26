@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Instant};
 
 use cap_media::{feeds::RawCameraFrame, frame_ws::WSFrame};
-use cap_project::{BackgroundSource, CursorEvents, RecordingMeta, XY};
+use cap_project::{BackgroundSource, CursorEvents, RecordingMeta, StudioRecordingMeta, XY};
 use cap_rendering::{
     decoder::DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectRecordings, ProjectUniforms,
     RenderVideoConstants,
@@ -40,14 +40,17 @@ impl Renderer {
     pub fn spawn(
         render_constants: Arc<RenderVideoConstants>,
         frame_tx: flume::Sender<WSFrame>,
-        meta: &RecordingMeta,
+        recording_meta: &RecordingMeta,
+        meta: &StudioRecordingMeta,
     ) -> RendererHandle {
-        let recordings = ProjectRecordings::new(meta);
+        let recordings = ProjectRecordings::new(recording_meta, meta);
         let mut max_duration = recordings.duration();
 
         // Check camera duration if it exists
-        if let Some(camera_path) = meta.content.camera_path() {
-            if let Ok(camera_duration) = recordings.get_source_duration(&meta.path(&camera_path)) {
+        if let Some(camera_path) = meta.camera_path() {
+            if let Ok(camera_duration) =
+                recordings.get_source_duration(&recording_meta.path(&camera_path))
+            {
                 max_duration = max_duration.max(camera_duration);
             }
         }

@@ -29,8 +29,11 @@ use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::frame_ws::WSFrame;
 use cap_media::sources::CaptureScreen;
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
+use cap_project::RecordingMetaInner;
 use cap_project::XY;
-use cap_project::{Content, ProjectConfiguration, RecordingMeta, Resolution, SharingMeta};
+use cap_project::{
+    ProjectConfiguration, RecordingMeta, Resolution, SharingMeta, StudioRecordingMeta,
+};
 use cap_recording::RecordingOptions;
 use cap_rendering::ProjectRecordings;
 use clipboard_rs::common::RustImage;
@@ -958,7 +961,10 @@ async fn get_video_metadata(
         .join("recordings")
         .join(format!("{}.cap", video_id));
 
-    let meta = RecordingMeta::load_for_project(&project_path)?;
+    let recording_meta = RecordingMeta::load_for_project(&project_path)?;
+    let meta = recording_meta
+        .studio_meta()
+        .ok_or_else(|| "Not a studio recording".to_string())?;
 
     fn get_duration_for_path(path: PathBuf) -> Result<f64, String> {
         let reader = BufReader::new(
@@ -983,14 +989,14 @@ async fn get_video_metadata(
         Ok(current_duration)
     }
 
-    let display_paths = match &meta.content {
-        Content::SingleSegment { segment } => {
-            vec![meta.path(&segment.display.path)]
+    let display_paths = match &meta {
+        StudioRecordingMeta::SingleSegment { segment } => {
+            vec![recording_meta.path(&segment.display.path)]
         }
-        Content::MultipleSegments { inner } => inner
+        StudioRecordingMeta::MultipleSegments { inner } => inner
             .segments
             .iter()
-            .map(|s| meta.path(&s.display.path))
+            .map(|s| recording_meta.path(&s.display.path))
             .collect(),
     };
 
@@ -1413,7 +1419,7 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
             project_path: recording_dir.clone(),
             sharing: None,
             pretty_name: screenshot_name,
-            content: cap_project::Content::SingleSegment {
+            inner: RecordingMetaInner::Studio(cap_project::StudioRecordingMeta::SingleSegment {
                 segment: cap_project::SingleSegment {
                     display: Display {
                         path: RelativePathBuf::from_path(
@@ -1426,7 +1432,7 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
                     audio: None,
                     cursor: None,
                 },
-            },
+            }),
         }
         .save_for_project()
         .unwrap();

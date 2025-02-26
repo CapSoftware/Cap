@@ -145,8 +145,9 @@ impl Export {
         )
         .unwrap();
 
-        let meta = RecordingMeta::load_for_project(&self.project_path).unwrap();
-        let recordings = cap_rendering::ProjectRecordings::new(&meta);
+        let recording_meta = RecordingMeta::load_for_project(&self.project_path).unwrap();
+        let meta = recording_meta.studio_meta().unwrap();
+        let recordings = cap_rendering::ProjectRecordings::new(&recording_meta, meta);
 
         let render_options = cap_rendering::RenderOptions {
             screen_size: XY::new(
@@ -159,21 +160,21 @@ impl Export {
                 .map(|c| XY::new(c.width, c.height)),
         };
         let render_constants = Arc::new(
-            RenderVideoConstants::new(render_options, &meta)
+            RenderVideoConstants::new(render_options, &recording_meta, meta)
                 .await
                 .unwrap(),
         );
 
-        let segments = create_segments(&meta).await.unwrap();
+        let segments = create_segments(&recording_meta, meta).await.unwrap();
 
-        let fps = meta.content.max_fps();
+        let fps = meta.max_fps();
         let project_output_path = self.project_path.join("output/result.mp4");
         let exporter = cap_export::Exporter::new(
             project,
             project_output_path.clone(),
             |_| {},
             self.project_path.clone(),
-            meta,
+            recording_meta,
             render_constants,
             &segments,
             fps,
