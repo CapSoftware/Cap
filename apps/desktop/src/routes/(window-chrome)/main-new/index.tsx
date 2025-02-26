@@ -148,7 +148,6 @@ async function showMenu(event: MouseEvent) {
         text: "Settings",
         action: () => commands.showWindow({ Settings: { page: "general" } }),
       },
-      { id: "notifications", text: "Notifications", action: () => console.log("to-do") },
       {
         id: "prevRecordings",
         text: "Previous Recordings",
@@ -159,7 +158,11 @@ async function showMenu(event: MouseEvent) {
         text: "Changelog",
         action: () => commands.showWindow({ Settings: { page: "changelog" } }),
       },
-      { id: "help", text: "Help" },
+      {
+        id: "help",
+        text: "Help",
+        action: () => commands.showWindow({ Settings: { page: "live" } }),
+      },
     ],
   });
 
