@@ -1,7 +1,13 @@
 name: "publish"
 
 # change this when ready to release if you want CI/CD
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      interactionId:
+        description: "Discord Interaction ID"
+        required: false
+        type: string
 
 env:
   CN_APPLICATION: cap/cap
@@ -15,8 +21,11 @@ jobs:
     outputs:
       version: ${{ steps.read_version.outputs.value }}
       needs_release: ${{ steps.create_tag.outputs.tag_existed != 'true' }}
+      cn_release_stdout: ${{ steps.create_cn_release.outputs.stdout }}
+      gh_release_url: ${{ steps.create_gh_release.outputs.url }}
     permissions:
       contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -37,6 +46,9 @@ jobs:
             const tagRef = `tags/${tag}`;
 
             const TAG_EXISTED = "tag_existed";
+            const TAG_NAME = "tag_name";
+
+            core.setOutput(TAG_NAME, tag);
 
             async function main() {
               let tagExisted = true;
@@ -69,32 +81,68 @@ jobs:
             main();
 
       - name: Create draft CN release
+        id: create_cn_release
         uses: crabnebula-dev/cloud-release@v0
         with:
           command: release draft ${{ env.CN_APPLICATION }} ${{ steps.read_version.outputs.value }} --framework tauri
           api-key: ${{ secrets.CN_API_KEY }}
 
       - name: Create draft GH release
+        id: create_gh_release
         # TODO: Change to stable version when available
         uses: softprops/action-gh-release@v2
         with:
+          name: ${{ steps.read_version.outputs.value }}
+          tag_name: ${{ steps.create_tag.outputs.tag_name }}
           draft: true
           generate_release_notes: true
+
+      - name: Update Discord interaction
+        if: ${{ inputs.interactionId != '' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            async function main() {
+              const token = await core.getIDToken("cap-discord-bot");
+              const cnReleaseId = JSON.parse(`${{ steps.create_cn_release.outputs.stdout }}`).id;
+
+              const resp = await fetch("https://cap-discord-bot.brendonovich.workers.dev/github-workflow", {
+                method: "POST",
+                body: JSON.stringify({
+                  type: "release-ready",
+                  tag: "${{ steps.create_tag.outputs.tag_name }}",
+                  version: "${{ steps.read_version.outputs.value }}",
+                  releaseUrl: "${{ steps.create_gh_release.outputs.url }}",
+                  interactionId: "${{ inputs.interactionId }}",
+                  cnReleaseId
+                }),
+                headers: {
+                	"Content-Type": "application/json",
+                  Authorization: `Bearer ${token}`,
+                }
+              });
+
+              if(resp.status !== 200) throw new Error(await resp.text());
+            }
+
+            main();
 
   build:
     needs: draft
     if: ${{ needs.draft.outputs.needs_release == 'true' }}
     permissions:
       contents: write
-    runs-on: macos-latest
     strategy:
       fail-fast: false
       matrix:
         settings:
           - target: x86_64-apple-darwin
-            prebuild: x86_64
+            runner: macos-latest
           - target: aarch64-apple-darwin
-            prebuild: aarch64
+            runner: macos-latest
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+    runs-on: ${{ matrix.settings.runner }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -103,11 +151,13 @@ jobs:
         run: echo "${{ secrets.APPLE_API_KEY_FILE }}" > api.p8
 
       - uses: apple-actions/import-codesign-certs@v2
+        if: ${{ matrix.settings.runner == 'macos-latest' }}
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
       - name: Verify certificate
+        if: ${{ matrix.settings.runner == 'macos-latest' }}
         run: security find-identity -v -p codesigning ${{ runner.temp }}/build.keychain
 
       - name: Rust setup
@@ -148,6 +198,7 @@ jobs:
           echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
           echo "NEXT_PUBLIC_CAP_AWS_REGION=${{ secrets.NEXT_PUBLIC_CAP_AWS_REGION }}" >> .env
           echo "NEXT_PUBLIC_CAP_AWS_BUCKET=${{ secrets.NEXT_PUBLIC_CAP_AWS_BUCKET }}" >> .env
+          echo 'RUST_TARGET_TRIPLE=${{ matrix.settings.target }}' >> .env
 
       - name: Copy .env to apps/desktop
         run: cp .env apps/desktop/.env
@@ -155,15 +206,11 @@ jobs:
       - name: Output .env file
         run: cat apps/desktop/.env
 
-      - name: Cargo clean
-        run: cargo clean
-
-      - name: Build macOS apps
+      - name: Build app
         working-directory: apps/desktop
         run: |
-          export TARGET_TRIPLE=${{ matrix.settings.target }}
-          node ${{ github.workspace }}/.github/prebuild.js darwin ${{ matrix.settings.prebuild }}
-          pnpm tauri build --target ${{ matrix.settings.target }} --config src-tauri/tauri.conf.prod.json
+          pnpm -w cap-setup
+          pnpm tauri build --target ${{ matrix.settings.target }} --config src-tauri/tauri.prod.conf.json
         env:
           # https://github.com/tauri-apps/tauri-action/issues/740
           CI: false
@@ -187,9 +234,46 @@ jobs:
           api-key: ${{ secrets.CN_API_KEY }}
 
       - name: Upload debug symbols to Sentry
+        if: ${{ matrix.settings.runner == 'macos-latest' }}
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         working-directory: target
         run: |
           curl -sL https://sentry.io/get-cli/ | bash
           sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} Cap.dSYM
+
+  done:
+    needs: [draft, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Send Discord notification
+        if: ${{ inputs.interactionId != '' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            async function main() {
+              const token = await core.getIDToken("cap-discord-bot");
+              const cnReleaseId = JSON.parse(`${{ needs.draft.outputs.cn_release_stdout }}`).id;
+
+              const resp = await fetch("https://cap-discord-bot.brendonovich.workers.dev/github-workflow", {
+                method: "POST",
+                body: JSON.stringify({
+                  type: "release-done",
+                  interactionId: "${{ inputs.interactionId }}",
+                  version: "${{ steps.read_version.outputs.value }}",
+                  releaseUrl: "${{ needs.draft.outputs.gh_release_url }}",
+                  cnReleaseId
+                }),
+                headers: {
+                	"Content-Type": "application/json",
+                  Authorization: `Bearer ${token}`,
+                }
+              });
+
+              if(resp.status !== 200) throw new Error(await resp.text());
+            }
+
+            main();

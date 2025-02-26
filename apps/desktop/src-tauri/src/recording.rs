@@ -7,6 +7,7 @@ use crate::{
     export::export_video,
     general_settings::GeneralSettingsStore,
     notifications, open_editor, open_external_link,
+    presets::PresetsStore,
     upload::get_s3_config,
     upload_exported_video, web_api,
     windows::{CapWindowId, ShowCapWindow},
@@ -15,8 +16,8 @@ use crate::{
 };
 use cap_fail::fail;
 use cap_flags::FLAGS;
-use cap_media::feeds::CameraFeed;
 use cap_media::sources::{CaptureScreen, CaptureWindow};
+use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
 use cap_project::{
     Content, ProjectConfiguration, TimelineConfiguration, TimelineSegment, ZoomSegment, XY,
 };
@@ -59,14 +60,6 @@ pub async fn start_recording(
 ) -> Result<(), String> {
     let mut state = state_mtx.write().await;
 
-    // Get the recording config
-    let config = GeneralSettingsStore::get(&app)?
-        .and_then(|s| s.recording_config)
-        .unwrap_or_default();
-
-    // Update the recording options with the configured FPS
-    state.start_recording_options.fps = config.fps;
-
     let id = uuid::Uuid::new_v4().to_string();
 
     let recording_dir = app
@@ -97,6 +90,13 @@ pub async fn start_recording(
                 println!("Pre-created shareable link: {}", link);
             };
         }
+    }
+
+    if matches!(
+        state.start_recording_options.capture_target,
+        ScreenCaptureTarget::Window(_) | ScreenCaptureTarget::Area(_)
+    ) {
+        let _ = ShowCapWindow::WindowCaptureOccluder.show(&app);
     }
 
     let (actor, actor_done_rx) = cap_recording::spawn_recording_actor(
@@ -130,8 +130,7 @@ pub async fn start_recording(
     }
 
     if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
-        window.eval("window.location.reload()").unwrap();
-        window.show().unwrap();
+        window.eval("window.location.reload()").ok();
     } else {
         ShowCapWindow::InProgressRecording { position: None }
             .show(&app)
@@ -231,7 +230,11 @@ async fn handle_recording_finished(
 
         let recordings = ProjectRecordings::new(&completed_recording.meta);
 
-        let config = project_config_from_recording(&completed_recording, &recordings);
+        let config = project_config_from_recording(
+            &completed_recording,
+            &recordings,
+            PresetsStore::get_default_preset(&app)?.map(|p| p.config),
+        );
 
         config
             .write(&completed_recording.recording_dir)
@@ -273,7 +276,6 @@ async fn handle_recording_finished(
                                 export_video(
                                     app.clone(),
                                     completed_recording.id.clone(),
-                                    config,
                                     tauri::ipc::Channel::new(|_| Ok(())),
                                     true,
                                     completed_recording.meta.content.max_fps(),
@@ -383,6 +385,7 @@ fn generate_zoom_segments_from_clicks(
 fn project_config_from_recording(
     completed_recording: &CompletedRecording,
     recordings: &ProjectRecordings,
+    default_config: Option<ProjectConfiguration>,
 ) -> ProjectConfiguration {
     ProjectConfiguration {
         timeline: Some(TimelineConfiguration {
@@ -399,6 +402,6 @@ fn project_config_from_recording(
                 .collect(),
             zoom_segments: generate_zoom_segments_from_clicks(&completed_recording, &recordings),
         }),
-        ..Default::default()
+        ..default_config.unwrap_or_default()
     }
 }

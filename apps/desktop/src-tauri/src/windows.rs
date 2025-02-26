@@ -1,7 +1,7 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
-use crate::{fake_window, general_settings::AppTheme};
+use crate::{fake_window, general_settings::AppTheme, permissions};
 use cap_flags::FLAGS;
 use cap_media::sources::CaptureScreen;
 use serde::Deserialize;
@@ -129,6 +129,7 @@ impl CapWindowId {
             Self::Editor { .. } => (900.0, 800.0),
             Self::Settings => (600.0, 450.0),
             Self::Camera => (460.0, 920.0),
+            Self::Upgrade => (850.0, 850.0),
             _ => return None,
         })
     }
@@ -169,13 +170,18 @@ impl ShowCapWindow {
                 .maximizable(false)
                 .shadow(true)
                 .build()?,
-            Self::Main => self
-                .window_builder(app, "/")
-                .resizable(false)
-                .maximized(false)
-                .maximizable(false)
-                .center()
-                .build()?,
+            Self::Main => {
+                if permissions::do_permissions_check(false).necessary_granted() {
+                    self.window_builder(app, "/")
+                        .resizable(false)
+                        .maximized(false)
+                        .maximizable(false)
+                        .center()
+                        .build()?
+                } else {
+                    Self::Setup.show(app)?
+                }
+            }
             Self::SignIn => self
                 .window_builder(app, "/signin")
                 .resizable(false)
@@ -200,11 +206,11 @@ impl ShowCapWindow {
                 .build()?,
             Self::Upgrade => self
                 .window_builder(app, "/upgrade")
-                .inner_size(800.0, 800.0)
                 .resizable(false)
                 .focused(true)
                 .always_on_top(true)
                 .maximized(false)
+                .shadow(true)
                 .transparent(true)
                 .center()
                 .build()?,
@@ -235,7 +241,14 @@ impl ShowCapWindow {
                     ))
                     .transparent(true);
 
-                window_builder.build()?
+                let window = window_builder.build()?;
+
+                #[cfg(target_os = "macos")]
+                {
+                    crate::platform::set_window_level(window.as_ref().window(), 1000);
+                }
+
+                window
             }
             Self::WindowCaptureOccluder => {
                 let mut window_builder = self
@@ -261,10 +274,7 @@ impl ShowCapWindow {
 
                 #[cfg(target_os = "macos")]
                 {
-                    crate::platform::set_window_level(
-                        window.as_ref().window(),
-                        objc2_app_kit::NSScreenSaverWindowLevel,
-                    );
+                    crate::platform::set_window_level(window.as_ref().window(), 900);
                 }
 
                 window
@@ -328,7 +338,8 @@ impl ShowCapWindow {
 
                 let height = 40.0;
 
-                self.window_builder(app, "/in-progress-recording")
+                let window = self
+                    .window_builder(app, "/in-progress-recording")
                     .maximized(false)
                     .resizable(false)
                     .fullscreen(false)
@@ -343,7 +354,14 @@ impl ShowCapWindow {
                         (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
                     )
                     .skip_taskbar(true)
-                    .build()?
+                    .build()?;
+
+                #[cfg(target_os = "macos")]
+                {
+                    crate::platform::set_window_level(window.as_ref().window(), 1000);
+                }
+
+                window
             }
             Self::PrevRecordings => {
                 let window = self

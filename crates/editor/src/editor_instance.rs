@@ -336,8 +336,6 @@ pub async fn create_segments(meta: &RecordingMeta) -> Result<Vec<Segment>, Strin
                     .map(|audio_meta| AudioData::from_file(meta.path(&audio_meta.path)).unwrap()),
             );
 
-            let cursor = Arc::new(s.cursor_data(&meta).into());
-
             let decoders = RecordingSegmentDecoders::new(
                 &meta,
                 SegmentVideoPaths {
@@ -350,7 +348,7 @@ pub async fn create_segments(meta: &RecordingMeta) -> Result<Vec<Segment>, Strin
 
             Ok(vec![Segment {
                 audio,
-                cursor,
+                cursor: Default::default(),
                 decoders,
             }])
         }

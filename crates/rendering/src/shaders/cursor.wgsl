@@ -12,6 +12,7 @@ struct Uniforms {
     last_click_time: f32,
     velocity: vec2<f32>,
     motion_blur_amount: f32,
+    hotspot: vec2<f32>,
     _alignment: vec4<f32>,
 };
 
@@ -40,12 +41,9 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
         vec2<f32>(1.0, 1.0)
     );
 
-    let pos = positions[vertex_index];
+    let pos = positions[vertex_index] - uniforms.hotspot;
     let size = uniforms.size.xy;
     let screen_pos = uniforms.position.xy;
-
-    // Calculate click animation scale factor
-    let time_since_click = uniforms.last_click_time;
 
     let scaled_size = size * uniforms.cursor_size;
 
@@ -65,7 +63,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Increase samples for higher quality blur
-    let num_samples = 16;
+    let num_samples = 20;
     var color_sum = vec4<f32>(0.0);
     var weight_sum = 0.0;
 
@@ -74,35 +72,28 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let adaptive_blur = uniforms.motion_blur_amount * smoothstep(0.0, 50.0, velocity_mag);
 
     // Calculate blur direction from velocity
-    var blur_dir = vec2<f32>(0.0);
-    if (velocity_mag > 0.0) {
-        blur_dir = uniforms.velocity / velocity_mag;
-    }
+    var blur_dir = uniforms.velocity;
 
     // Enhanced blur trail
     let max_blur_offset = 3.0 * adaptive_blur;
 
     for (var i = 0; i < num_samples; i++) {
         // Non-linear sampling for better blur distribution
-        let t = pow(f32(i) / f32(num_samples - 1), 1.5) * 2.0 - 1.0;
-
-        // Gaussian-like weight distribution
-        let weight = exp(-3.0 * t * t);
+        let t = i / num_samples;
 
         // Calculate sample offset with velocity-based scaling
-        let offset = blur_dir * max_blur_offset * t;
+        let offset = blur_dir * max_blur_offset * (f32(i) / f32(num_samples));
         let sample_uv = input.uv + offset / uniforms.output_size.xy;
 
         // Sample with bilinear filtering
         let sample = textureSample(t_cursor, s_cursor, sample_uv);
 
         // Accumulate weighted sample
-        color_sum += sample * weight;
-        weight_sum += weight;
+        color_sum += sample;
     }
 
     // Normalize the result
-    var final_color = color_sum / weight_sum;
+    var final_color = color_sum / f32(num_samples);
 
     // Enhance contrast slightly for fast movements
     if (velocity_mag > 30.0) {
@@ -115,5 +106,5 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         );
     }
 
-    return final_color;
+    return final_color * vec4<f32>(1.0, 1.0, 1.0, 1.0 - uniforms.motion_blur_amount * 0.2);
 }

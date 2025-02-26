@@ -237,13 +237,30 @@ fn run_camera_feed(
                 FrameFormat::RAWRGB => Pixel::RGB24,
                 FrameFormat::NV12 => Pixel::NV12,
                 FrameFormat::GRAY => Pixel::GRAY8,
-                FrameFormat::YUYV => Pixel::UYVY422,
+                FrameFormat::YUYV => {
+                    let pix_fmt = if cfg!(windows) {
+                        tracing::debug!("Using YUYV422 format for Windows camera in buffer_to_ffvideo");
+                        Pixel::YUYV422  // This is correct for Windows
+                    } else {
+                        // let bytes = buffer.buffer().len() as f32;
+                        // let ratio = bytes / (buffer.resolution().x() * buffer.resolution().y()) as f32;
+                        // if ratio == 2.0
+
+                        // nokhwa merges yuvu420 and uyvy422 into the same format, we should probably distinguish them with the frame size
+                        tracing::debug!("Using UYVY422 format for non-Windows camera in buffer_to_ffvideo");
+                        Pixel::UYVY422
+                    };
+
+                    pix_fmt
+                },
             },
             camera_format.width(),
             camera_format.height(),
             camera_format.frame_rate(),
         )
     };
+
+    debug!("Camera video info: {:?}", video_info);
 
     let mut senders: Vec<Sender<RawCameraFrame>> = vec![];
 
@@ -280,7 +297,16 @@ fn run_camera_feed(
                                     FrameFormat::RAWRGB => Pixel::RGB24,
                                     FrameFormat::NV12 => Pixel::NV12,
                                     FrameFormat::GRAY => Pixel::GRAY8,
-                                    FrameFormat::YUYV => Pixel::UYVY422,
+                                    FrameFormat::YUYV => {
+                                        let pix_fmt = if cfg!(windows) {
+                                            tracing::debug!("Using YUYV422 format for Windows camera in buffer_to_ffvideo");
+                                            Pixel::YUYV422  // This is correct for Windows
+                                        } else {
+                                            tracing::debug!("Using UYVY422 format for non-Windows camera in buffer_to_ffvideo");
+                                            Pixel::UYVY422
+                                        };
+                                        pix_fmt
+                                    },
                                 },
                                 camera_format.width(),
                                 camera_format.height(),
@@ -376,12 +402,21 @@ fn buffer_to_ffvideo(buffer: nokhwa::Buffer) -> FFVideo {
                 }
             }),
             FrameFormat::YUYV => {
-                // let bytes = buffer.buffer().len() as f32;
-                // let ratio = bytes / (buffer.resolution().x() * buffer.resolution().y()) as f32;
-                // if ratio == 2.0
+                // nokhwa moment
+                let pix_fmt = if cfg!(windows) {
+                    tracing::debug!("Using YUYV422 format for Windows camera in buffer_to_ffvideo");
+                    Pixel::YUYV422  // This is correct for Windows
+                } else {
+                    // let bytes = buffer.buffer().len() as f32;
+                    // let ratio = bytes / (buffer.resolution().x() * buffer.resolution().y()) as f32;
+                    // if ratio == 2.0
 
-                // nokhwa merges yuvu420 and uyvy422 into the same format, we should probably distinguish them with the frame size
-                (Pixel::UYVY422, |frame, buffer| {
+                    // nokhwa merges yuvu420 and uyvy422 into the same format, we should probably distinguish them with the frame size
+                    tracing::debug!("Using UYVY422 format for non-Windows camera in buffer_to_ffvideo");
+                    Pixel::UYVY422
+                };
+
+                (pix_fmt, |frame, buffer| {
                     let width = frame.width() as usize;
                     let height = frame.height() as usize;
 

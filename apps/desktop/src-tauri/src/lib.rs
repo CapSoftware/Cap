@@ -13,7 +13,8 @@ mod audio_meter;
 mod editor_window;
 mod export;
 mod fake_window;
-mod live_state;
+// mod live_state;
+mod presets;
 mod tray;
 mod upload;
 mod web_api;
@@ -38,11 +39,12 @@ use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
 use editor_window::EditorInstances;
 use editor_window::WindowEditorInstance;
-use general_settings::{GeneralSettingsStore, RecordingConfig};
+use general_settings::GeneralSettingsStore;
 use mp4::Mp4Reader;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use notifications::NotificationType;
 use png::{ColorType, Encoder};
+use presets::PresetsStore;
 use relative_path::RelativePathBuf;
 use scap::capturer::Capturer;
 use scap::frame::Frame;
@@ -60,11 +62,9 @@ use std::{
     process::Command,
     str::FromStr,
     sync::Arc,
-    time::Duration,
 };
 use tauri::Window;
-use tauri::{AppHandle, Emitter, Manager, Runtime, State, WindowEvent};
-use tauri_plugin_deep_link::DeepLinkExt;
+use tauri::{AppHandle, Manager, State, WindowEvent};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_shell::ShellExt;
@@ -411,14 +411,6 @@ async fn get_recording_options(
 ) -> Result<RecordingOptions, ()> {
     let mut state = state.write().await;
 
-    // Load settings from disk if they exist
-    if let Ok(Some(settings)) = GeneralSettingsStore::get(&app) {
-        if let Some(config) = settings.recording_config {
-            state.start_recording_options.fps = config.fps;
-            state.start_recording_options.output_resolution = Some(config.resolution);
-        }
-    }
-
     // If there's a saved audio input but no feed, initialize it
     if let Some(audio_input_name) = state.start_recording_options.audio_input_name() {
         if state.audio_input_feed.is_none() {
@@ -450,17 +442,6 @@ async fn set_recording_options(
         .await
         .set_start_recording_options(options.clone())
         .await?;
-
-    // Update persistent settings
-    GeneralSettingsStore::update(&app, |settings| {
-        settings.recording_config = Some(RecordingConfig {
-            fps: options.fps,
-            resolution: options.output_resolution.unwrap_or_else(|| Resolution {
-                width: 1920,
-                height: 1080,
-            }),
-        });
-    })?;
 
     Ok(())
 }
@@ -1140,17 +1121,6 @@ async fn list_audio_devices() -> Result<Vec<String>, ()> {
     Ok(AudioInputFeed::list_devices().keys().cloned().collect())
 }
 
-#[tauri::command(async)]
-#[specta::specta]
-fn open_main_window(app: AppHandle) {
-    let permissions = permissions::do_permissions_check(false);
-    if !permissions.screen_recording.permitted() || !permissions.accessibility.permitted() {
-        return;
-    }
-
-    ShowCapWindow::Main.show(&app).ok();
-}
-
 #[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
 pub struct UploadProgress {
     progress: f64,
@@ -1302,28 +1272,8 @@ async fn upload_screenshot(
     };
 
     if !auth.is_upgraded() {
-        match AuthStore::fetch_and_update_plan(&app).await {
-            Ok(_) => match AuthStore::get(&app) {
-                Ok(Some(updated_auth)) => {
-                    auth = updated_auth;
-                }
-                Ok(None) => {
-                    return Ok(UploadResult::NotAuthenticated);
-                }
-                Err(e) => return Err(format!("Failed to refresh auth: {}", e)),
-            },
-            Err(e) => {
-                if e.contains("Authentication expired") {
-                    return Ok(UploadResult::NotAuthenticated);
-                }
-                return Ok(UploadResult::PlanCheckFailed);
-            }
-        }
-
-        if !auth.is_upgraded() {
-            ShowCapWindow::Upgrade.show(&app).ok();
-            return Ok(UploadResult::UpgradeRequired);
-        }
+        ShowCapWindow::Upgrade.show(&app).ok();
+        return Ok(UploadResult::UpgradeRequired);
     }
 
     println!("Uploading screenshot: {:?}", screenshot_path);
@@ -1641,7 +1591,7 @@ fn list_recordings(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMeta
             // Try to get recording meta, skip if it fails
             match get_recording_meta(app.clone(), id.clone(), "recording".to_string()) {
                 Ok(meta) => Some((id, path.clone(), meta)),
-                Err(_) => None,
+                Err(e) => None,
             }
         })
         .collect::<Vec<_>>();
@@ -1715,6 +1665,14 @@ fn list_screenshots(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMet
 #[specta::specta]
 async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
     println!("Checking upgraded status and updating...");
+
+    // Check for commercial license first
+    if let Ok(Some(settings)) = GeneralSettingsStore::get(&app) {
+        if settings.commercial_license.is_some() {
+            return Ok(true);
+        }
+    }
+
     let Ok(Some(mut auth)) = AuthStore::get(&app) else {
         println!("No auth found, clearing auth store");
         AuthStore::set(&app, None).map_err(|e| e.to_string())?;
@@ -1788,30 +1746,6 @@ fn open_external_link(app: tauri::AppHandle, url: String) -> Result<(), String> 
     app.shell()
         .open(&url, None)
         .map_err(|e| format!("Failed to open URL: {}", e))?;
-    Ok(())
-}
-
-#[tauri::command]
-#[specta::specta]
-async fn delete_auth_open_signin(app: AppHandle) -> Result<(), String> {
-    AuthStore::set(&app, None).map_err(|e| e.to_string())?;
-
-    if let Some(window) = CapWindowId::Settings.get(&app) {
-        window.close().ok();
-    }
-
-    if let Some(window) = CapWindowId::Camera.get(&app) {
-        window.close().ok();
-    }
-    if let Some(window) = CapWindowId::Main.get(&app) {
-        window.close().ok();
-    }
-
-    // Show the signin window
-    ShowCapWindow::SignIn
-        .show(&app)
-        .map_err(|e| e.to_string())?;
-
     Ok(())
 }
 
@@ -1973,6 +1907,12 @@ async fn get_wallpaper_path(app: AppHandle, filename: String) -> Result<String, 
     }
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn update_auth_plan(app: AppHandle) {
+    AuthStore::update_auth_plan(&app).await.ok();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run() {
     let tauri_context = tauri::generate_context!();
@@ -2015,7 +1955,6 @@ pub async fn run() {
             set_playhead_position,
             set_project_config,
             open_editor,
-            open_main_window,
             permissions::open_permission_settings,
             permissions::do_permissions_check,
             permissions::request_permission,
@@ -2028,7 +1967,6 @@ pub async fn run() {
             check_upgraded_and_update,
             open_external_link,
             hotkeys::set_hotkey,
-            delete_auth_open_signin,
             reset_camera_permissions,
             reset_microphone_permissions,
             is_camera_window_open,
@@ -2043,8 +1981,7 @@ pub async fn run() {
             get_wallpaper_path,
             list_fails,
             set_fail,
-            live_state::get_live_data,
-            live_state::subscribe_live_data
+            update_auth_plan
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2069,6 +2006,7 @@ pub async fn run() {
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
         .typ::<AuthStore>()
+        .typ::<presets::PresetsStore>()
         .typ::<hotkeys::HotkeysStore>()
         .typ::<general_settings::GeneralSettingsStore>()
         .typ::<cap_flags::Flags>();
@@ -2127,6 +2065,7 @@ pub async fn run() {
                     CapWindowId::Camera.label().as_str(),
                     CapWindowId::RecordingsOverlay.label().as_str(),
                     CapWindowId::InProgressRecording.label().as_str(),
+                    CapWindowId::Upgrade.label().as_str(),
                 ])
                 .map_label(|label| match label {
                     label if label.starts_with("editor-") => "editor",
@@ -2168,8 +2107,6 @@ pub async fn run() {
                         }),
                         camera_label: None,
                         audio_input_name: None,
-                        fps: 30,
-                        output_resolution: None,
                     },
                     current_recording: None,
                     pre_created_video: None,
@@ -2188,9 +2125,7 @@ pub async fn run() {
 
             if !permissions.screen_recording.permitted()
                 || !permissions.accessibility.permitted()
-                || GeneralSettingsStore::get(&app)
-                    .ok()
-                    .flatten()
+                || dbg!(GeneralSettingsStore::get(&app).ok().flatten())
                     .map(|s| !s.has_completed_startup)
                     .unwrap_or(false)
             {
@@ -2265,10 +2200,6 @@ pub async fn run() {
                 }
                 .show(&app)
                 .ok();
-            });
-
-            AuthenticationInvalid::listen_any_spawn(&app, |_, app| async move {
-                delete_auth_open_signin(app).await.ok();
             });
 
             Ok(())
@@ -2348,8 +2279,7 @@ pub async fn run() {
                         window.set_focus().ok();
                     }
                 } else {
-                    // No editor, settings or signin window open, show main window
-                    open_main_window(handle.clone());
+                    ShowCapWindow::Main.show(handle).ok();
                 }
             }
             _ => {}

@@ -177,6 +177,7 @@ pub struct BackgroundConfiguration {
     pub rounding: f64,
     pub inset: u32,
     pub crop: Option<Crop>,
+    #[serde(default)]
     pub shadow: f32,
     #[serde(default)]
     pub advanced_shadow: Option<ShadowConfiguration>,
@@ -228,10 +229,22 @@ pub struct Camera {
     pub position: CameraPosition,
     pub size: f32,
     pub zoom_size: Option<f32>,
+    #[serde(default = "Camera::default_rounding")]
     pub rounding: f32,
+    #[serde(default)]
     pub shadow: f32,
     #[serde(default)]
     pub advanced_shadow: Option<ShadowConfiguration>,
+}
+
+impl Camera {
+    pub fn default_zoom_size() -> f32 {
+        60.0
+    }
+
+    fn default_rounding() -> f32 {
+        30.0
+    }
 }
 
 impl Default for Camera {
@@ -241,8 +254,8 @@ impl Default for Camera {
             mirror: false,
             position: CameraPosition::default(),
             size: 30.0,
-            zoom_size: None,
-            rounding: 100.0,
+            zoom_size: Some(Self::default_zoom_size()),
+            rounding: Self::default_rounding(),
             shadow: 62.5,
             advanced_shadow: Some(ShadowConfiguration {
                 size: 33.9,
@@ -294,6 +307,13 @@ pub struct CursorConfiguration {
     pub size: u32,
     r#type: CursorType,
     pub animation_style: CursorAnimationStyle,
+    pub tension: f32,
+    pub mass: f32,
+    pub friction: f32,
+    #[serde(default = "CursorConfiguration::default_raw")]
+    pub raw: bool,
+    #[serde(default)]
+    pub motion_blur: f32,
 }
 
 impl Default for CursorConfiguration {
@@ -303,7 +323,17 @@ impl Default for CursorConfiguration {
             size: 100,
             r#type: CursorType::default(),
             animation_style: CursorAnimationStyle::Regular,
+            tension: 100.0,
+            mass: 1.0,
+            friction: 20.0,
+            raw: false,
+            motion_blur: 0.5,
         }
+    }
+}
+impl CursorConfiguration {
+    fn default_raw() -> bool {
+        true
     }
 }
 
@@ -395,7 +425,6 @@ pub struct ProjectConfiguration {
     pub hotkeys: HotkeysConfiguration,
     #[serde(default)]
     pub timeline: Option<TimelineConfiguration>,
-    pub motion_blur: Option<f32>,
 }
 
 impl ProjectConfiguration {
@@ -432,7 +461,6 @@ impl Default for ProjectConfiguration {
             cursor: CursorConfiguration::default(),
             hotkeys: HotkeysConfiguration::default(),
             timeline: None,
-            motion_blur: None,
         }
     }
 }

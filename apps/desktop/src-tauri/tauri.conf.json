@@ -7,13 +7,12 @@
     "beforeDevCommand": "pnpm localdev",
     "devUrl": "http://localhost:3001",
     "beforeBuildCommand": "pnpm turbo build --filter @cap/desktop",
-    "beforeBundleCommand": "node scripts/stripDebugSymbols.js",
     "frontendDist": "../.output/public"
   },
   "app": {
     "macOSPrivateApi": true,
     "security": {
-      "csp": "default-src 'self' ws: ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost",
+      "csp": "default-src 'self' ws: ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost; media-src 'self' asset: http://asset.localhost",
       "assetProtocol": {
         "enable": true,
         "scope": ["$APPDATA/**", "**/*.jpg", "$RESOURCE/**", "$HOME/**"]
@@ -21,14 +20,7 @@
     }
   },
   "plugins": {
-    "updater": {
-      "active": false,
-      "endpoints": [
-        "https://cdn.crabnebula.app/update/cap/cap/{{target}}-{{arch}}/{{current_version}}"
-      ],
-      "dialog": true,
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUyOTAzOTdFNzJFQkRFOTMKUldTVDN1dHlmam1RNHFXb1VYTXlrQk1iMFFkcjN0YitqZlA5WnZNY0ZtQ1dvM1dxK211M3VIYUQK"
-    },
+    "updater": { "active": false, "pubkey": "" },
     "deep-link": {
       "desktop": {
         "schemes": ["cap-desktop"]
@@ -43,8 +35,8 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
     "createUpdaterArtifacts": true,
+    "targets": "all",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -52,13 +44,13 @@
       "icons/macos/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "assets/backgrounds/macOS/*",
-      "assets/backgrounds/blue/*",
-      "assets/backgrounds/dark/*",
-      "assets/backgrounds/orange/*",
-      "assets/backgrounds/purple/*"
-    ],
+    "resources": {
+      "assets/backgrounds/macOS/*": "assets/backgrounds/macOS/",
+      "assets/backgrounds/blue/*": "assets/backgrounds/blue/",
+      "assets/backgrounds/dark/*": "assets/backgrounds/dark/",
+      "assets/backgrounds/orange/*": "assets/backgrounds/orange/",
+      "assets/backgrounds/purple/*": "assets/backgrounds/purple/"
+    },
     "macOS": {
       "dmg": {
         "background": "assets/dmg-background.png",

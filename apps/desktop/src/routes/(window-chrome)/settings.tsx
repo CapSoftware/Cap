@@ -5,9 +5,9 @@ import { getVersion } from "@tauri-apps/api/app";
 import "@total-typescript/ts-reset/filter-boolean";
 import toast from "solid-toast";
 
-import { commands } from "~/utils/tauri";
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
+import { commands } from "~/utils/tauri";
 
 type MenuItem =
   | { type?: "link"; href: string; name: string; icon: any }
@@ -16,15 +16,15 @@ type MenuItem =
 let intercomInitialized = false;
 
 export default function Settings(props: RouteSectionProps) {
-  const [auth] = createResource(() => authStore.get());
+  const auth = authStore.createQuery();
   const [version] = createResource(() => getVersion());
 
   const handleAuth = async () => {
-    if (auth()) {
+    if (auth.data) {
       trackEvent("user_signed_out", { platform: "desktop" });
-      await commands.deleteAuthOpenSignin();
+      authStore.set(undefined);
     } else {
-      await commands.deleteAuthOpenSignin();
+      commands.showWindow("SignIn");
     }
   };
 
@@ -34,8 +34,8 @@ export default function Settings(props: RouteSectionProps) {
       Intercom({
         app_id: "efxq71cv",
         hide_default_launcher: true,
-        user_id: auth()?.user_id ?? "",
-        user_hash: auth()?.intercom_hash ?? "",
+        user_id: auth.data?.user_id ?? "",
+        user_hash: auth.data?.intercom_hash ?? "",
         utm_source: "desktop",
       });
       intercomInitialized = true;
@@ -43,7 +43,7 @@ export default function Settings(props: RouteSectionProps) {
   };
 
   const handleLiveChat = async () => {
-    if (!auth()) {
+    if (!auth.data) {
       toast.error("Please sign in to access live chat support");
       return;
     }
@@ -65,12 +65,6 @@ export default function Settings(props: RouteSectionProps) {
                   href: "general",
                   name: "General",
                   icon: IconCapSettings,
-                },
-                {
-                  type: "link",
-                  href: "config",
-                  name: "Recording Config",
-                  icon: IconLucideVideo,
                 },
                 {
                   type: "link",
@@ -102,12 +96,12 @@ export default function Settings(props: RouteSectionProps) {
                   name: "Feedback",
                   icon: IconLucideMessageSquarePlus,
                 },
-                {
-                  type: "button",
-                  name: "Live Chat",
-                  icon: IconLucideMessageCircle,
-                  onClick: handleLiveChat,
-                },
+                // {
+                //   type: "button",
+                //   name: "Live Chat",
+                //   icon: IconLucideMessageCircle,
+                //   onClick: handleLiveChat,
+                // },
                 {
                   type: "link",
                   href: "changelog",
@@ -147,7 +141,7 @@ export default function Settings(props: RouteSectionProps) {
             {(v) => <p class="text-xs text-gray-400 mb-1">v{v()}</p>}
           </Show>
           <Button onClick={handleAuth} variant="secondary" class="w-full">
-            {auth() ? "Sign Out" : "Sign In"}
+            {auth.data ? "Sign Out" : "Sign In"}
           </Button>
         </div>
       </div>

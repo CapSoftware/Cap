@@ -3,14 +3,10 @@ import { createElementBounds } from "@solid-primitives/bounds";
 import {
   ComponentProps,
   For,
-  Index,
-  Setter,
   Show,
   batch,
-  createEffect,
   createRoot,
   createSignal,
-  on,
   onMount,
 } from "solid-js";
 import {
@@ -22,9 +18,8 @@ import { produce } from "solid-js/store";
 import { mergeRefs } from "@solid-primitives/refs";
 import { createMemo } from "solid-js";
 
-import { commands, TimelineSegment } from "~/utils/tauri";
+import { TimelineSegment } from "~/utils/tauri";
 import {
-  FPS,
   SegmentContextProvider,
   TimelineContextProvider,
   TrackContextProvider,
@@ -34,6 +29,7 @@ import {
   useTrackContext,
 } from "./context";
 import { formatTime } from "./utils";
+import { platform } from "@tauri-apps/plugin-os";
 
 type ZoomSegmentDragState =
   | { type: "idle" }
@@ -121,6 +117,21 @@ export function Timeline() {
     }
   }
 
+  createEventListener(window, "keydown", (e) => {
+    if (e.code === "Backspace" || e.code === "Delete") {
+      if (state.timelineSelection?.type !== "zoom") return;
+      const selection = state.timelineSelection;
+
+      batch(() => {
+        setProject(
+          produce((project) => {
+            project.timeline?.zoomSegments.splice(selection.index, 1);
+          })
+        );
+      });
+    }
+  });
+
   return (
     <TimelineContextProvider
       duration={duration()}
@@ -158,7 +169,6 @@ export function Timeline() {
         onWheel={(e) => {
           // pinch zoom or ctrl + scroll
           if (e.ctrlKey) {
-            console.log(e);
             batch(() => {
               const zoomDelta =
                 (e.deltaY * Math.sqrt(state.timelineTransform.zoom)) / 30;
@@ -173,8 +183,14 @@ export function Timeline() {
           }
           // scroll
           else {
+            let delta: number = 0;
+
+            if (platform() === "macos")
+              delta = e.shiftKey ? e.deltaX : e.deltaY;
+            else delta = e.deltaY;
+
             state.timelineTransform.setPosition(
-              state.timelineTransform.position + secsPerPixel() * e.deltaX
+              state.timelineTransform.position + secsPerPixel() * delta
             );
           }
         }}
@@ -253,7 +269,7 @@ function TimelineMarkings() {
       <For each={timelineMarkings()}>
         {(second) => (
           <div
-            class="absolute bottom-1 left-0 text-center rounded-full w-1 h-1 bg-gray-400 text-gray-400"
+            class="absolute bottom-1 left-0 text-center rounded-full w-1 h-1 bg-[--text-tertiary] text-[--text-tertiary]"
             style={{
               left: `${
                 (second - state.timelineTransform.position) / secsPerPixel() - 1
@@ -262,7 +278,7 @@ function TimelineMarkings() {
           >
             <Show when={second % 1 === 0}>
               <div class="absolute -top-4 -translate-x-1/2">
-                0:{second.toString().padStart(2, "0")}
+                {formatTime(second)}
               </div>
             </Show>
           </div>
@@ -643,10 +659,14 @@ function ZoomTrack(props: {
                   resumeHistory();
                   if (!moved) {
                     e.stopPropagation();
-                    setState("timelineSelection", {
-                      type: "zoom",
-                      index: i(),
-                    });
+                    if (
+                      state.timelineSelection?.type !== "zoom" &&
+                      state.timelineSelection?.index !== i()
+                    )
+                      setState("timelineSelection", {
+                        type: "zoom",
+                        index: i(),
+                      });
                     props.handleUpdatePlayhead(e);
                   }
                   props.onDragStateChanged({ type: "idle" });

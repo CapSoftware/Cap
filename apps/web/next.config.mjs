@@ -36,6 +36,12 @@ const nextConfig = {
         port: "",
         pathname: "**",
       },
+      {
+        protocol: "https",
+        hostname: "l.cap.so",
+        port: "",
+        pathname: "**",
+      },
       process.env.NODE_ENV === "development" && {
         protocol: "http",
         hostname: "localhost",
@@ -49,6 +55,10 @@ const nextConfig = {
       {
         source: "/r/:path*",
         destination: "https://dub.cap.link/:path*",
+      },
+      {
+        source: "/api/commercial/:path*",
+        destination: "https://l.cap.so/api/commercial/:path*",
       },
       {
         source: '/s/:videoId',

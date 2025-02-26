@@ -83,7 +83,12 @@ export default function Page() {
                         Version {entry.version} -{" "}
                         {new Date(entry.publishedAt).toLocaleDateString()}
                       </div>
-                      <SolidMarkdown class="prose prose-sm max-w-none text-[--text-tertiary]">
+                      <SolidMarkdown
+                        components={{
+                          a: (props) => <a {...props} target="_blank" />,
+                        }}
+                        class="prose dark:prose-invert prose-sm max-w-none text-[--text-tertiary]"
+                      >
                         {entry.content}
                       </SolidMarkdown>
                     </li>

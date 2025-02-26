@@ -9,31 +9,26 @@ export async function GET(req: NextRequest) {
   const searchParams = req.nextUrl.searchParams;
   const session = await getServerSession(authOptions);
   const port = searchParams.get("port") || "";
+
   const platform = searchParams.get("platform") || "web";
 
   const secret = serverEnv.NEXTAUTH_SECRET;
 
-  const loginRedirectUrl = `${clientEnv.NEXT_PUBLIC_WEB_URL}/login?next=${clientEnv.NEXT_PUBLIC_WEB_URL}/api/desktop/session/request?port=${port}`;
-  if (!session) {
-    return Response.redirect(loginRedirectUrl);
-  }
+  const loginRedirectUrl = `${clientEnv.NEXT_PUBLIC_WEB_URL}/login?next=${clientEnv.NEXT_PUBLIC_WEB_URL}${req.nextUrl.pathname}${req.nextUrl.search}`;
+  if (!session) return Response.redirect(loginRedirectUrl);
 
   const token = req.cookies.get("next-auth.session-token") ?? null;
   const tokenValue = token?.value ?? null;
   const user = await getCurrentUser();
 
-  if (!tokenValue || !user) {
-    return Response.redirect(loginRedirectUrl);
-  }
+  if (!tokenValue || !user) return Response.redirect(loginRedirectUrl);
 
   const decodedToken = await decode({
     token: tokenValue,
     secret: secret as string,
   });
 
-  if (!decodedToken) {
-    return Response.redirect(loginRedirectUrl);
-  }
+  if (!decodedToken) return Response.redirect(loginRedirectUrl);
 
   const params = `token=${tokenValue}&expires=${decodedToken?.exp}&user_id=${user.id}`;
 

@@ -1,10 +1,16 @@
-import { createSignal, onCleanup, onMount } from "solid-js";
+import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { Button } from "@cap/ui-solid";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as shell from "@tauri-apps/plugin-shell";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { action, useAction, useSubmission, redirect } from "@solidjs/router";
+import {
+  action,
+  useAction,
+  useSubmission,
+  redirect,
+  useNavigate,
+} from "@solidjs/router";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { Window } from "@tauri-apps/api/window";
 
@@ -15,6 +21,13 @@ import { apiClient, protectedHeaders } from "~/utils/web-api";
 import { clientEnv } from "~/utils/env";
 import { identifyUser, trackEvent } from "~/utils/analytics";
 import callbackTemplate from "./callback.template";
+import { Input } from "../editor/ui";
+import { licenseApiClient } from "~/utils/web-api";
+import { generalSettingsStore } from "~/store";
+import { createMutation } from "@tanstack/solid-query";
+import { ClientInferResponseBody } from "@ts-rest/core";
+import { licenseContract } from "@cap/web-api-contract";
+import { createLicenseQuery } from "~/utils/queries";
 
 const signInAction = action(async (planType: "yearly" | "monthly") => {
   console.log("Starting sign in action");
@@ -71,7 +84,7 @@ const signInAction = action(async (planType: "yearly" | "monthly") => {
     console.log("Hiding upgrade window");
     const currentUpgradeWindow = await Window.getByLabel("upgrade");
     if (currentUpgradeWindow) {
-      await currentUpgradeWindow.hide();
+      await currentUpgradeWindow.minimize();
     }
 
     console.log("Opening auth URL in browser");
@@ -147,8 +160,9 @@ const signInAction = action(async (planType: "yearly" | "monthly") => {
       console.log("Opening checkout URL in external browser");
       commands.openExternalLink(response.body.url);
       console.log("Minimizing upgrade window");
-      if (focusedUpgradeWindow) {
-        await focusedUpgradeWindow.minimize();
+      const window = await Window.getByLabel("upgrade");
+      if (window) {
+        await window.minimize();
       }
     }
   } catch (error) {
@@ -158,29 +172,61 @@ const signInAction = action(async (planType: "yearly" | "monthly") => {
   }
 });
 
-export default function Page() {
-  console.log("Rendering upgrade page");
-  const proFeatures = [
-    "Unlimited cloud storage & Shareable links",
-    "Connect custom S3 storage bucket",
-    "Advanced teams features",
-    "Unlimited views",
-    "Password protected videos",
-    "Advanced analytics",
-    "Priority support",
-  ];
+const proFeatures = [
+  "Commercial License Included",
+  "Unlimited cloud storage & Shareable links",
+  "Connect custom S3 storage bucket",
+  "Advanced teams features",
+  "Unlimited views",
+  "Password protected videos",
+  "Advanced analytics",
+  "Priority support",
+];
 
+export default function Page() {
   const [isAnnual, setIsAnnual] = createSignal(true);
+  const [isCommercialAnnual, setIsCommercialAnnual] = createSignal(true);
   const [upgradeComplete, setUpgradeComplete] = createSignal(false);
   const [loading, setLoading] = createSignal(false);
-  const [isAuthenticated, setIsAuthenticated] = createSignal(true);
   const signIn = useAction(signInAction);
-  const submission = useSubmission(signInAction);
+  const license = createLicenseQuery();
 
-  const togglePricing = () => {
-    console.log("Toggling pricing plan");
-    setIsAnnual(!isAnnual());
-  };
+  const resetLicense = createMutation(() => ({
+    mutationFn: async () => {
+      const generalSettings = await generalSettingsStore.get();
+      if (
+        !generalSettings?.instanceId ||
+        !license.data ||
+        license.data.type !== "commercial"
+      ) {
+        throw new Error("No instance ID or valid commercial license found");
+      }
+
+      const resp = await licenseApiClient.activateCommercialLicense({
+        headers: {
+          licensekey: license.data.licenseKey,
+          instanceid: generalSettings.instanceId,
+        },
+        body: { reset: true },
+      });
+
+      if (resp.status !== 200) {
+        if (
+          typeof resp.body === "object" &&
+          resp.body &&
+          "message" in resp.body
+        )
+          throw resp.body.message;
+        throw new Error((resp.body as any).toString());
+      }
+    },
+    onSuccess: async () => {
+      await generalSettingsStore.set({
+        commercialLicense: undefined,
+      });
+      license.refetch();
+    },
+  }));
 
   const openCheckoutInExternalBrowser = async () => {
     console.log("Opening checkout in external browser");
@@ -207,9 +253,9 @@ export default function Page() {
         console.log("Opening checkout URL in external browser");
         commands.openExternalLink(response.body.url);
         console.log("Minimizing upgrade window");
-        const focusedUpgradeWindow = await Window.getByLabel("upgrade");
-        if (focusedUpgradeWindow) {
-          await focusedUpgradeWindow.minimize();
+        const window = await Window.getByLabel("upgrade");
+        if (window) {
+          await window.minimize();
         }
       } else {
         console.error("Failed to get checkout URL, status:", response.status);
@@ -221,14 +267,25 @@ export default function Page() {
     }
   };
 
-  const checkUpgradeStatus = async () => {
-    console.log("Checking upgrade status");
-    const result = await commands.checkUpgradedAndUpdate();
-    if (result) {
-      console.log("Upgrade complete");
-      setUpgradeComplete(true);
-    }
-  };
+  const openCommercialCheckout = createMutation(() => ({
+    mutationFn: async () => {
+      const resp = await licenseApiClient.createCommercialCheckoutUrl({
+        body: { type: isCommercialAnnual() ? "yearly" : "lifetime" },
+      });
+
+      if (resp.status === 200) {
+        console.log("Opening checkout URL in external browser");
+        commands.openExternalLink(resp.body.url);
+        console.log("Minimizing upgrade window");
+        const window = await Window.getByLabel("upgrade");
+        if (window) {
+          await window.minimize();
+        }
+      } else {
+        throw resp.body;
+      }
+    },
+  }));
 
   onMount(async () => {
     console.log("Component mounted");
@@ -318,7 +375,14 @@ export default function Page() {
     });
 
     console.log("Setting up upgrade status check interval");
-    const interval = setInterval(checkUpgradeStatus, 5000);
+    const interval = setInterval(async () => {
+      console.log("Checking upgrade status");
+      const result = await commands.checkUpgradedAndUpdate();
+      if (result) {
+        console.log("Upgrade complete");
+        setUpgradeComplete(true);
+      }
+    }, 5000);
     onCleanup(() => {
       console.log("Cleaning up upgrade status check interval");
       clearInterval(interval);
@@ -326,17 +390,14 @@ export default function Page() {
   });
 
   return (
-    <div
-      class={`py-5 max-w-[700px] mx-auto relative ${
-        upgradeComplete() ? "h-full" : ""
-      }`}
-    >
+    <div class="p-5 w-full h-full mx-auto relative items-center justify-center flex flex-col">
       {upgradeComplete() && (
         <div class="flex justify-center items-center h-full bg-gray-800 bg-opacity-75">
           <div class="relative z-10 p-6 text-center bg-white rounded-lg shadow-lg">
-            <h2 class="mb-4 text-2xl font-bold">
-              Upgrade complete - Welcome to Cap Pro!
-            </h2>
+            <h2 class="mb-4 text-2xl font-bold">Upgrade complete</h2>
+            <p class="mb-4 text-sm text-[--text-tertiary]">
+              You can now close this window - thank you for upgrading!
+            </p>
             <Button
               onClick={() => {
                 console.log("Closing window after upgrade");
@@ -353,113 +414,328 @@ export default function Page() {
       )}
       {!upgradeComplete() && (
         <>
-          <div class="text-center">
-            <h1 class="text-4xl md:text-4xl mb-3 tracking-[-.05em] font-medium text-[--text-primary]">
-              Upgrade to Cap Pro
-            </h1>
-            <p class="text-base font-normal leading-6 text-gray-400 dark:text-[--black-transparent-60]">
-              Cap is currently in public beta, and we're offering special early
-              adopter pricing to our first users.{" "}
-              <span class="text-gray-500 dark:text-[--text-primary]">
-                This pricing will be locked in for the lifetime of your
-                subscription.
-              </span>
-            </p>
-          </div>
-          <div class="flex flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] flex-1 bg-gray-100">
-            <div class="flex-grow p-3 bg-blue-300 rounded-xl border shadow-sm text-card-foreground md:p-3 border-blue-500/20">
-              <div class="space-y-3">
-                <div class="flex flex-col space-y-1.5 pt-6 px-6 pb-3">
-                  <h3 class="text-2xl font-medium tracking-tight text-gray-50 dark:text-[--text-primary]">
-                    Cap Pro — Early Adopter Pricing
+          {license.data?.type === "commercial" ? (
+            <div class="bg-[--gray-50] dark:bg-[--gray-900] rounded-xl shadow-sm border border-gray-200 dark:border-[--gray-700] p-8 w-full">
+              <div class="space-y-6">
+                <div class="border-b border-gray-200 dark:border-[--gray-700] pb-6">
+                  <h3 class="text-2xl font-semibold tracking-tight text-[--text-primary]">
+                    Your Commercial License
                   </h3>
-                  <p class="text-[0.875rem] leading-[1.25rem] text-gray-50 dark:text-[--text-primary]">
-                    For professional use and teams.
+                  <p class="mt-2 text-sm text-[--text-tertiary]">
+                    License details for Cap commercial use
                   </p>
-                  <div>
-                    <div class="flex items-center space-x-3">
-                      <h3 class="text-4xl text-gray-50 dark:text-[--text-primary]">
-                        {isAnnual() ? "$6/mo" : "$9/mo"}
-                      </h3>
-                      <div>
-                        <p class="text-sm font-medium text-gray-50 dark:text-[--text-primary]">
-                          {isAnnual()
-                            ? "per user, billed annually."
-                            : "per user, billed monthly."}
-                        </p>
-                        {isAnnual() && (
-                          <p class="text-sm text-gray-50 dark:text-[--text-primary]">
-                            or, $9/month, billed monthly.
-                          </p>
-                        )}
+                </div>
+
+                <div class="space-y-6">
+                  <div class="space-y-2">
+                    <label class="text-sm font-medium text-[--text-primary]">
+                      License Key
+                    </label>
+                    <pre class="w-full p-3 bg-gray-50 dark:bg-[--gray-800] rounded-lg border border-gray-200 dark:border-[--gray-700] font-mono text-sm text-[--text-secondary] break-all whitespace-pre-wrap">
+                      {license.data.licenseKey}
+                    </pre>
+                  </div>
+
+                  <Show when={license.data.expiryDate}>
+                    {(expiryDate) => (
+                      <div class="space-y-2">
+                        <label class="text-sm font-medium text-[--text-primary]">
+                          Expiration Date
+                        </label>
+                        <div class="w-full p-3 bg-gray-50 dark:bg-[--gray-800] rounded-lg border border-gray-200 dark:border-[--gray-700] text-sm text-[--text-secondary]">
+                          {new Date(expiryDate()).toLocaleDateString(
+                            undefined,
+                            {
+                              year: "numeric",
+                              month: "long",
+                              day: "numeric",
+                            }
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  </div>
-                </div>
-                <div class="px-3 mt-3 md:px-8">
-                  <div class="flex items-center pt-4 pb-1 mt-3 border-t-2 border-[--white-transparent-20] dark:border-[--black-transparent-20]">
-                    <span class="mr-2 text-xs text-gray-50 dark:text-[--text-primary]">
-                      Switch to {isAnnual() ? "monthly" : "annually"}
-                    </span>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={isAnnual()}
-                      data-state={isAnnual() ? "unchecked" : "checked"}
-                      value={isAnnual() ? "on" : "off"}
-                      class="peer inline-flex h-4 w-8 shrink-0
-                       cursor-pointer items-center rounded-full border-2 border-transparent
-                       dark:bg-[#3F75E0]
-                        transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2
-                      focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 bg-[--blue-400]"
-                      onClick={togglePricing}
+                    )}
+                  </Show>
+
+                  <div class="pt-4 border-t border-gray-200 dark:border-[--gray-700]">
+                    <Button
+                      variant="destructive"
+                      class="w-fit mx-auto"
+                      disabled={resetLicense.isPending}
+                      onClick={() => {
+                        resetLicense.mutate();
+                      }}
                     >
-                      <span
-                        data-state={isAnnual() ? "unchecked" : "checked"}
-                        class={`pointer-events-none block h-4 w-4 rounded-full dark:bg-gray-500
-                           bg-gray-50 shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4
-                            data-[state=unchecked]:translate-x-0 border-2 ${
-                              isAnnual()
-                                ? "border-blue-400 dark:border-[#3F75E0]"
-                                : "border-gray-300 dark:border-[--white-transparent-20]"
-                            }`}
-                      />
-                    </button>
-                  </div>
-                </div>
-                <div class="px-6 pt-0 pb-4">
-                  <button
-                    onClick={openCheckoutInExternalBrowser}
-                    class="flex items-center justify-center hover:opacity-90 transition-opacity duration-200 rounded-full bg-[--gray-50] dark:bg-[--gray-500] hover:bg-[--gray-200] disabled:bg-[--gray-100]
-                     font-medium text-lg px-6 h-12 w-full no-underline text-gray-500 dark:text-gray-50"
-                    disabled={loading()}
-                  >
-                    {loading() ? "Loading..." : "Upgrade to Cap Pro"}
-                  </button>
-                </div>
-                <div class="flex items-center px-6 pt-0 pb-6">
-                  <div class="space-y-6">
-                    <div>
-                      <ul class="p-0 space-y-3 list-none">
-                        {proFeatures.map((feature) => (
-                          <li class="flex justify-start items-center">
-                            <div class="w-6 h-6 m-0 p-0 flex items-center border-[2px] border-[--gray-50] dark:border-[--gray-500] justify-center rounded-full">
-                              <IconLucideCheck class="w-4 h-4  text-gray-50 dark:text-[--text-primary]" />
-                            </div>
-                            <span class="ml-2 text-[0.9rem] text-gray-50 dark:text-[--text-primary]">
-                              {feature}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
+                      {resetLicense.isPending
+                        ? "Detaching..."
+                        : "Detach License"}
+                    </Button>
+                    <p class="mt-2 text-xs text-[--text-tertiary]">
+                      This will remove the license key from this device.
+                    </p>
                   </div>
                 </div>
               </div>
             </div>
-          </div>
+          ) : (
+            <>
+              <div class="text-center">
+                <h1 class="text-4xl md:text-4xl mb-3 tracking-[-.05em] font-medium text-[--text-primary]">
+                  Early Adopter Pricing
+                </h1>
+              </div>
+              <div class="flex gap-4 w-full">
+                <div class="flex-grow p-3 bg-gray-200 rounded-xl border shadow-sm text-card-foreground md:p-3 border-gray-300/20">
+                  <div class="space-y-3">
+                    <div class="flex flex-col space-y-1.5 pt-6 px-6">
+                      <h3 class="text-2xl font-medium tracking-tight text-[--text-primary]">
+                        Commercial License
+                      </h3>
+                      <p class="text-[0.875rem] leading-[1.25rem] text-[--text-primary]">
+                        For professional use without cloud features.
+                      </p>
+                      <div>
+                        <div class="flex items-center space-x-3">
+                          <h3 class="text-4xl text-[--text-primary]">
+                            {isCommercialAnnual() ? "$29" : "$58"}
+                          </h3>
+                          <div>
+                            {isCommercialAnnual() && (
+                              <p class="text-sm font-medium text-[--text-primary]">
+                                billed annually
+                              </p>
+                            )}
+                            {!isCommercialAnnual() && (
+                              <p class="text-sm font-medium text-[--text-primary]">
+                                one-time payment
+                              </p>
+                            )}
+                            {isCommercialAnnual() && (
+                              <p class="text-sm text-[--text-primary]">
+                                or, $58 one-time payment.
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="px-3 md:px-8">
+                      <div class="flex items-center pt-4 pb-1 mt-3 border-t-2 border-[--black-transparent-20]">
+                        <span class="mr-2 text-xs text-[--text-primary]">
+                          Switch to{" "}
+                          {isCommercialAnnual() ? "lifetime" : "yearly"}
+                        </span>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={!isCommercialAnnual()}
+                          data-state={
+                            isCommercialAnnual() ? "unchecked" : "checked"
+                          }
+                          value={!isCommercialAnnual() ? "on" : "off"}
+                          class="peer inline-flex h-4 w-8 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent bg-[--gray-400] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"
+                          onClick={() => setIsCommercialAnnual((v) => !v)}
+                        >
+                          <span
+                            data-state={
+                              isCommercialAnnual() ? "unchecked" : "checked"
+                            }
+                            class={`pointer-events-none block h-4 w-4 rounded-full bg-gray-50 shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0 border-2 ${
+                              !isCommercialAnnual()
+                                ? "border-gray-400"
+                                : "border-gray-300"
+                            }`}
+                          />
+                        </button>
+                      </div>
+                    </div>
+                    <div class="px-6 pt-0 pb-4">
+                      <button
+                        onClick={() => openCommercialCheckout.mutate()}
+                        disabled={openCommercialCheckout.isPending}
+                        class="flex items-center justify-center transition-opacity duration-200 rounded-full bg-[--gray-500] hover:opacity-90 disabled:bg-[--gray-400] font-medium text-lg px-6 h-12 w-full no-underline text-gray-50"
+                      >
+                        {openCommercialCheckout.isPending
+                          ? "Loading..."
+                          : "Purchase License"}
+                      </button>
+                    </div>
+                    <LicenseKeyActivation />
+
+                    <div class="flex items-center px-6 pt-0 pb-6">
+                      <div class="space-y-6">
+                        <div>
+                          <ul class="p-0 space-y-3 list-none">
+                            {[
+                              "Commercial Use of Cap Recorder + Editor",
+                              "Community Support",
+                              "Local-only features",
+                              "Perpetual license option",
+                            ].map((feature) => (
+                              <li class="flex justify-start items-center">
+                                <div class="w-6 h-6 m-0 p-0 flex items-center border-[2px] border-[--gray-500] justify-center rounded-full">
+                                  <IconLucideCheck class="w-4 h-4 text-[--text-primary]" />
+                                </div>
+                                <span class="ml-2 text-[0.9rem] text-[--text-primary]">
+                                  {feature}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="flex-grow p-3 bg-blue-300 rounded-xl border shadow-sm text-card-foreground md:p-3 border-blue-500/20">
+                  <div class="space-y-3">
+                    <div class="flex flex-col space-y-1.5 pt-6 px-6">
+                      <h3 class="text-2xl font-medium tracking-tight text-gray-50 dark:text-[--text-primary]">
+                        Cap Pro
+                      </h3>
+                      <p class="text-[0.875rem] leading-[1.25rem] text-gray-50 dark:text-[--text-primary]">
+                        For professional use and teams.
+                      </p>
+                      <div>
+                        <div class="flex items-center space-x-3">
+                          <h3 class="text-4xl text-gray-50 dark:text-[--text-primary]">
+                            {isAnnual() ? "$6/mo" : "$9/mo"}
+                          </h3>
+                          <div>
+                            <p class="text-sm font-medium text-gray-50 dark:text-[--text-primary]">
+                              {isAnnual()
+                                ? "per user, billed annually."
+                                : "per user, billed monthly."}
+                            </p>
+                            {isAnnual() && (
+                              <p class="text-sm text-gray-50 dark:text-[--text-primary]">
+                                or, $9/month, billed monthly.
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="px-3 mt-3 md:px-8">
+                      <div class="flex items-center pt-4 pb-1 mt-3 border-t-2 border-[--white-transparent-20] dark:border-[--black-transparent-20]">
+                        <span class="mr-2 text-xs text-gray-50 dark:text-[--text-primary]">
+                          Switch to {isAnnual() ? "monthly" : "annually"}
+                        </span>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={isAnnual()}
+                          data-state={isAnnual() ? "unchecked" : "checked"}
+                          value={isAnnual() ? "on" : "off"}
+                          class="peer inline-flex h-4 w-8 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent dark:bg-[#3F75E0] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 bg-[--blue-400]"
+                          onClick={() => setIsAnnual((v) => !v)}
+                        >
+                          <span
+                            data-state={isAnnual() ? "unchecked" : "checked"}
+                            class={`pointer-events-none block h-4 w-4 rounded-full dark:bg-gray-500 bg-gray-50 shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0 border-2 ${
+                              isAnnual()
+                                ? "border-blue-400 dark:border-[#3F75E0]"
+                                : "border-gray-300 dark:border-[--white-transparent-20]"
+                            }`}
+                          />
+                        </button>
+                      </div>
+                    </div>
+                    <div class="px-6 pt-0 pb-4">
+                      <button
+                        onClick={openCheckoutInExternalBrowser}
+                        class="flex items-center justify-center hover:opacity-90 transition-opacity duration-200 rounded-full bg-[--gray-50] dark:bg-[--gray-500] hover:bg-[--gray-200] disabled:bg-[--gray-100] font-medium text-lg px-6 h-12 w-full no-underline text-gray-500 dark:text-gray-50"
+                        disabled={loading()}
+                      >
+                        {loading() ? "Loading..." : "Upgrade to Cap Pro"}
+                      </button>
+                    </div>
+                    <div class="flex items-center px-6 pt-0 pb-6">
+                      <div class="space-y-6">
+                        <div>
+                          <ul class="p-0 space-y-3 list-none">
+                            {proFeatures.map((feature) => (
+                              <li class="flex justify-start items-center">
+                                <div class="w-6 h-6 m-0 p-0 flex items-center border-[2px] border-[--gray-50] dark:border-[--gray-500] justify-center rounded-full">
+                                  <IconLucideCheck class="w-4 h-4 text-gray-50 dark:text-[--text-primary]" />
+                                </div>
+                                <span class="ml-2 text-[0.9rem] text-gray-50 dark:text-[--text-primary]">
+                                  {feature}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
         </>
       )}
+    </div>
+  );
+}
+
+function LicenseKeyActivation() {
+  const [licenseKey, setLicenseKey] = createSignal("");
+
+  const activateLicenseKey = createMutation(() => ({
+    mutationFn: async (vars: { licenseKey: string }) => {
+      const generalSettings = await generalSettingsStore.get();
+      if (!generalSettings?.instanceId) {
+        throw new Error("No instance ID found");
+      }
+      const resp = await licenseApiClient.activateCommercialLicense({
+        headers: {
+          licensekey: vars.licenseKey,
+          instanceid: generalSettings.instanceId,
+        },
+        body: { reset: false },
+      });
+
+      if (resp.status === 200)
+        return { ...resp.body, licenseKey: vars.licenseKey };
+      if (typeof resp.body === "object" && resp.body && "message" in resp.body)
+        throw resp.body.message;
+      throw new Error((resp.body as any).toString());
+    },
+    onSuccess: async (value) => {
+      await generalSettingsStore.set({
+        commercialLicense: {
+          activatedOn: Date.now(),
+          expiryDate: value.expiryDate ?? null,
+          refresh: value.refresh,
+          licenseKey: value.licenseKey,
+        },
+      });
+    },
+  }));
+
+  return (
+    <div class="px-6 pt-0">
+      <p class="text-[--text-primary] text-sm mb-2">
+        Already have a license key?
+      </p>
+      <div class="h-[76px]">
+        <Input
+          placeholder="Enter license key"
+          value={licenseKey()}
+          onInput={(e) => setLicenseKey(e.currentTarget.value)}
+        />
+        <Button
+          class="mt-2 w-full relative"
+          disabled={activateLicenseKey.isPending}
+          onClick={() =>
+            activateLicenseKey.mutate({
+              licenseKey: licenseKey(),
+            })
+          }
+        >
+          <div class="w-full flex justify-center">Activate License</div>
+        </Button>
+      </div>
     </div>
   );
 }

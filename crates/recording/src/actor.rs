@@ -476,15 +476,21 @@ async fn stop_recording(
                         })
                         .collect()
                 },
-                cursors: cursors
-                    .into_values()
-                    .map(|(file_name, id)| {
-                        (
-                            id.to_string(),
-                            RelativePathBuf::from("content/cursors").join(&file_name),
-                        )
-                    })
-                    .collect(),
+                cursors: cap_project::Cursors::Correct(
+                    cursors
+                        .into_values()
+                        .map(|cursor| {
+                            (
+                                cursor.id.to_string(),
+                                CursorMeta {
+                                    image_path: RelativePathBuf::from("content/cursors")
+                                        .join(&cursor.file_name),
+                                    hotspot: cursor.hotspot,
+                                },
+                            )
+                        })
+                        .collect(),
+                ),
             },
         },
     };
@@ -514,7 +520,6 @@ fn create_screen_capture(
     {
         ScreenCaptureSource::<cap_media::sources::CMSampleBufferCapture>::init(
             &recording_options.capture_target,
-            recording_options.output_resolution.clone(),
             None,
         )
     }
@@ -522,7 +527,6 @@ fn create_screen_capture(
     {
         ScreenCaptureSource::<cap_media::sources::AVFrameCapture>::init(
             &recording_options.capture_target,
-            recording_options.output_resolution.clone(),
             None,
         )
     }

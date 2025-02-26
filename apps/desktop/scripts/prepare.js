@@ -3,46 +3,9 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { exec as execCb, execSync } from "node:child_process";
-import { promisify } from "node:util";
-
-const exec = promisify(execCb);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-const binariesDir = path.join(__dirname, "../../../target/binaries");
-const ffmpegUnzippedPath = path.join(binariesDir, "ffmpeg-unzipped");
-
-const isWindows = process.platform === "win32";
-const fileExtension = isWindows ? ".exe" : "";
-const rustInfo = execSync("rustc -vV");
-const rsTargetTriple =
-  process.env.TARGET_TRIPLE || /host: (\S+)/.exec(rustInfo.toString())?.[1];
-
-/**
- * @param {string} filePath
- * @returns {Promise<boolean>}
- */
-async function exists(filePath) {
-  return fs
-    .access(filePath)
-    .then(() => true)
-    .catch(() => false);
-}
-
-/**
- * @param {string} targetPath
- * @param {string} outputPath
- */
-async function unzip(targetPath, outputPath) {
-  console.log(`unzipping \"${targetPath}\" --> \"${outputPath}\"`);
-  if (isWindows) {
-    await exec(`tar -xf ${targetPath} -C ${outputPath}`);
-  } else {
-    await exec(`unzip -o ${targetPath} -d ${outputPath}`);
-  }
-}
 
 /**
  * Creates a Microsoft Windows Installer (TM) compatible version from the provided crate's semver version.
@@ -70,9 +33,8 @@ async function semverToWIXCompatibleVersion(cargoFilePath) {
     const numMatch = buildOrPrerelease.match(/\d+$/);
     build = numMatch ? parseInt(numMatch[0]) : 0;
   }
-  const wixVersion = `${major}.${minor}.${patch}${
-    build === 0 ? "" : `.${build}`
-  }`;
+  const wixVersion = `${major}.${minor}.${patch}${build === 0 ? "" : `.${build}`
+    }`;
   if (wixVersion !== ver)
     console.log(`Using wix-compatible version ${ver} --> ${wixVersion}`);
   return wixVersion;
@@ -109,7 +71,7 @@ export async function createTauriPlatformConfigs(
 ) {
   const srcTauri = path.join(__dirname, "../src-tauri/");
   let baseConfig = {};
-  let configFileName = "";
+  let configFileName = null;
 
   console.log(`Updating Platform (${platform}) Tauri config...`);
   if (platform === "win32") {
@@ -117,6 +79,9 @@ export async function createTauriPlatformConfigs(
     baseConfig = {
       ...baseConfig,
       bundle: {
+        resources: {
+          "../../../target/ffmpeg/bin/*.dll": "./",
+        },
         windows: {
           wix: {
             version: await semverToWIXCompatibleVersion(
@@ -126,17 +91,10 @@ export async function createTauriPlatformConfigs(
         },
       },
     };
-  } else if (platform === "darwin") {
-    configFileName = "tauri.macos.conf.json";
-    baseConfig = {
-      ...baseConfig,
-      bundle: {
-        icon: ["icons/macos/icon.icns"],
-      },
-    };
-  } else {
-    throw new Error("Unsupported platform!");
   }
+
+  if (!configFileName) return;
+
   const mergedConfig = configOptions
     ? deepMerge(baseConfig, configOptions)
     : baseConfig;
@@ -148,9 +106,6 @@ export async function createTauriPlatformConfigs(
 
 async function main() {
   console.log("--- Preparing sidecars and configs...");
-  const targetTripleEnv = process.env.TARGET_TRIPLE || rsTargetTriple;
-  console.log(`Target is ${targetTripleEnv}`);
-
   await createTauriPlatformConfigs(process.platform);
   console.log("--- Preparation finished");
 }

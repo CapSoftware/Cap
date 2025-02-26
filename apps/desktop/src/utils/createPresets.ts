@@ -1,8 +1,5 @@
-import { createResource, onCleanup } from "solid-js";
-
-import type { ProjectConfiguration } from "~/utils/tauri";
-import { presetsStore, type PresetsStore } from "~/store";
-import { DEFAULT_PROJECT_CONFIG } from "~/routes/editor/projectConfig";
+import type { PresetsStore, ProjectConfiguration } from "~/utils/tauri";
+import { presetsStore } from "~/store";
 
 export type CreatePreset = {
   name: string;
@@ -11,20 +8,13 @@ export type CreatePreset = {
 };
 
 export function createPresets() {
-  const [query, queryActions] = createResource(async () => {
-    return (await presetsStore.get()) ?? ({ presets: [] } as PresetsStore);
-  });
-
-  const [cleanup] = createResource(() =>
-    presetsStore.listen((data) => {
-      if (data) queryActions.mutate(data);
-    })
-  );
-  onCleanup(() => cleanup()?.());
+  const query = presetsStore.createQuery();
 
   async function updatePresets(fn: (prev: PresetsStore) => PresetsStore) {
-    const p = query();
-    if (!p) throw new Error("Presets not loaded");
+    if (query.isLoading) throw new Error("Presets not loaded");
+
+    let p = query.data;
+    if (!p) await presetsStore.set((p = { presets: [], default: null }));
 
     const newValue = fn(p);
 
@@ -55,19 +45,6 @@ export function createPresets() {
               : prev.default,
         };
       }),
-    getDefaultConfig: () => {
-      const p = query();
-      if (!p) return DEFAULT_PROJECT_CONFIG;
-
-      const config = p.presets[p.default ?? 0]?.config;
-      if (!config) return DEFAULT_PROJECT_CONFIG;
-
-      console.log("Config:", config);
-
-      // @ts-ignore we reeeally don't want the timeline in the preset
-      config.timeline = undefined;
-      return config;
-    },
     setDefault: (index: number) =>
       updatePresets((prev) => ({
         presets: [...prev.presets],

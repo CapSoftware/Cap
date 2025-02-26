@@ -10,8 +10,8 @@ use frame_pipeline::{FramePipeline, FramePipelineEncoder, FramePipelineState};
 use futures::future::OptionFuture;
 use futures::FutureExt;
 use layers::{
-    Background, BackgroundBlurPipeline, BackgroundLayer, CameraLayer, CursorLayer, CursorPipeline,
-    DisplayLayer, GradientOrColorPipeline, ImageBackgroundPipeline,
+    Background, BackgroundBlurPipeline, BackgroundLayer, CameraLayer, CursorLayer, DisplayLayer,
+    GradientOrColorPipeline, ImageBackgroundPipeline,
 };
 use specta::Type;
 use std::{collections::HashMap, sync::Arc};
@@ -26,6 +26,7 @@ pub mod decoder;
 mod frame_pipeline;
 mod layers;
 mod project_recordings;
+mod spring_mass_damper;
 mod zoom;
 
 pub use coord::*;
@@ -262,6 +263,11 @@ pub fn get_duration(
     }
 }
 
+pub struct CursorTexture {
+    inner: wgpu::Texture,
+    hotspot: XY<f64>,
+}
+
 pub struct RenderVideoConstants {
     pub _instance: wgpu::Instance,
     pub _adapter: wgpu::Adapter,
@@ -269,14 +275,14 @@ pub struct RenderVideoConstants {
     pub device: wgpu::Device,
     pub options: RenderOptions,
     composite_video_frame_pipeline: CompositeVideoFramePipeline,
-    pub cursor_textures: HashMap<String, wgpu::Texture>,
-    cursor_pipeline: CursorPipeline,
+    pub cursor_textures: HashMap<String, CursorTexture>,
     gradient_or_color_pipeline: GradientOrColorPipeline,
     image_background_pipeline: ImageBackgroundPipeline,
     pub background_blur_pipeline: BackgroundBlurPipeline,
     background_textures: std::sync::Arc<tokio::sync::RwLock<HashMap<String, wgpu::Texture>>>,
     screen_frame: (wgpu::Texture, wgpu::TextureView),
     camera_frame: Option<(wgpu::Texture, wgpu::TextureView)>,
+    cursor_layer: CursorLayer,
 }
 
 impl RenderVideoConstants {
@@ -298,7 +304,6 @@ impl RenderVideoConstants {
             .await?;
 
         let cursor_textures = Self::load_cursor_textures(&device, &queue, meta);
-        let cursor_pipeline = CursorPipeline::new(&device);
         let composite_video_frame_pipeline = CompositeVideoFramePipeline::new(&device);
         let gradient_or_color_pipeline = GradientOrColorPipeline::new(&device);
 
@@ -360,13 +365,13 @@ impl RenderVideoConstants {
         Ok(Self {
             _instance: instance,
             _adapter: adapter,
+            cursor_layer: CursorLayer::new(&device),
             device,
             queue,
             options,
             composite_video_frame_pipeline,
             gradient_or_color_pipeline,
             cursor_textures,
-            cursor_pipeline,
             image_background_pipeline,
             background_textures,
             screen_frame,
@@ -379,7 +384,7 @@ impl RenderVideoConstants {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         meta: &RecordingMeta,
-    ) -> HashMap<String, wgpu::Texture> {
+    ) -> HashMap<String, CursorTexture> {
         println!("Starting to load cursor textures");
         println!("Project path: {:?}", meta.project_path);
         // println!("Cursor images to load: {:?}", cursor.cursor_images);
@@ -391,21 +396,25 @@ impl RenderVideoConstants {
         println!("Cursors directory: {:?}", cursors_dir);
 
         let cursor_images = match &meta.content {
-            Content::SingleSegment { segment } => segment.cursor_data(meta).cursor_images,
+            Content::SingleSegment { .. } => Default::default(),
             Content::MultipleSegments { inner } => inner.cursor_images(meta).unwrap_or_default(),
         };
 
-        for (cursor_id, path) in &cursor_images.0 {
-            println!("Loading cursor image: {} -> {}", cursor_id, path.display());
+        for (cursor_id, cursor) in &cursor_images.0 {
+            println!(
+                "Loading cursor image: {} -> {}",
+                cursor_id,
+                cursor.path.display()
+            );
 
-            println!("Full cursor path: {:?}", path);
+            println!("Full cursor path: {:?}", cursor);
 
-            if !path.exists() {
-                println!("Cursor image file does not exist: {:?}", path);
+            if !cursor.path.exists() {
+                println!("Cursor image file does not exist: {:?}", cursor);
                 continue;
             }
 
-            match image::open(&path) {
+            match image::open(&cursor.path) {
                 Ok(img) => {
                     let dimensions = img.dimensions();
                     println!(
@@ -451,11 +460,21 @@ impl RenderVideoConstants {
                         },
                     );
 
-                    textures.insert(cursor_id.clone(), texture);
+                    textures.insert(
+                        cursor_id.clone(),
+                        CursorTexture {
+                            inner: texture,
+                            hotspot: cursor.hotspot,
+                        },
+                    );
                     println!("Successfully loaded cursor texture: {}", cursor_id);
                 }
                 Err(e) => {
-                    println!("Failed to load cursor image {}: {}", path.display(), e);
+                    println!(
+                        "Failed to load cursor image {}: {}",
+                        cursor.path.display(),
+                        e
+                    );
                     // Don't return error, just skip this cursor image
                     continue;
                 }
@@ -763,7 +782,11 @@ impl ProjectUniforms {
 
                 // Calculate camera size based on zoom
                 let base_size = project.camera.size / 100.0;
-                let zoom_size = project.camera.zoom_size.unwrap_or(60.0) / 100.0;
+                let zoom_size = project
+                    .camera
+                    .zoom_size
+                    .unwrap_or(cap_project::Camera::default_zoom_size())
+                    / 100.0;
 
                 let zoomed_size =
                     (zoom.t as f32) * zoom_size * base_size + (1.0 - zoom.t as f32) * base_size;
@@ -930,6 +953,8 @@ impl<'a> FrameRenderer<'a> {
     }
 }
 
+// TODO: reuse as many resources as possible
+// https://github.com/gfx-rs/wgpu/wiki/Encapsulating-Graphics-Work
 async fn produce_frame(
     constants: &RenderVideoConstants,
     segment_frames: DecodedSegmentFrames,
@@ -954,7 +979,7 @@ async fn produce_frame(
 
         DisplayLayer::render(&mut pipeline, &segment_frames);
 
-        CursorLayer::render(
+        constants.cursor_layer.render(
             &mut pipeline,
             &segment_frames,
             resolution_base,

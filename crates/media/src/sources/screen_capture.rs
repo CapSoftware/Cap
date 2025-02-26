@@ -112,29 +112,10 @@ impl<TCaptureFormat> Clone for ScreenCaptureSource<TCaptureFormat> {
 const MAX_FPS: u32 = 60;
 
 impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
-    pub fn init(
-        target: &ScreenCaptureTarget,
-        output_resolution: Option<cap_project::Resolution>,
-        output_type: Option<FrameType>,
-    ) -> Self {
+    pub fn init(target: &ScreenCaptureTarget, output_type: Option<FrameType>) -> Self {
         let mut this = Self {
             target: target.clone(),
-            output_resolution: output_resolution.map(|r| {
-                // Choose the closest resolution based on height
-                if r.height <= 480 {
-                    ScapResolution::_480p
-                } else if r.height <= 720 {
-                    ScapResolution::_720p
-                } else if r.height <= 1080 {
-                    ScapResolution::_1080p
-                } else if r.height <= 1440 {
-                    ScapResolution::_1440p
-                } else if r.height <= 2160 {
-                    ScapResolution::_2160p
-                } else {
-                    ScapResolution::_4320p
-                }
-            }),
+            output_resolution: None,
             output_type,
             fps: target.recording_fps(),
             video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, 0, 0, MAX_FPS),
