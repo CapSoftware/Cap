@@ -15,6 +15,8 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import "@cap/ui-solid/main.css";
 import "unfonts.css";
 import "./styles/theme.css";
+
+import titlebar from "./utils/titlebar-state";
 import { generalSettingsStore } from "./store";
 import { commands, type AppTheme } from "./utils/tauri";
 import {
@@ -24,6 +26,7 @@ import {
 import { Button } from "@cap/ui-solid";
 import { Toaster } from "solid-toast";
 import { initAnonymousUser } from "./utils/analytics";
+import { initializeTitlebar } from "./utils/titlebar-state";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -57,6 +60,9 @@ function Inner() {
     <>
       <Toaster
         position="top-right"
+        containerStyle={{
+          "margin-top": titlebar.height,
+        }}
         toastOptions={{
           duration: 3500,
           style: {

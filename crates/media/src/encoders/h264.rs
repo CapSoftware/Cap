@@ -43,6 +43,11 @@ impl H264Encoder {
             .any(|f| f == config.pixel_format)
         {
             let format = ffmpeg::format::Pixel::YUV420P;
+            tracing::debug!(
+                "Converting from {:?} to {:?} for H264 encoding",
+                config.pixel_format,
+                format
+            );
             (
                 format,
                 Some(
@@ -51,7 +56,10 @@ impl H264Encoder {
                         config.pixel_format,
                         format,
                     )
-                    .expect("Failed to create frame converter"),
+                    .map_err(|e| {
+                        tracing::error!("Failed to create converter from {:?} to YUV420P: {:?}", config.pixel_format, e);
+                        MediaError::Any("Failed to create frame converter")
+                    })?,
                 ),
             )
         } else {
@@ -93,14 +101,25 @@ impl H264Encoder {
     pub fn queue_frame(&mut self, frame: FFVideo, output: &mut format::context::Output) {
         let frame = if let Some(converter) = &mut self.converter {
             let mut new_frame = FFVideo::empty();
-            converter.run(&frame, &mut new_frame).unwrap();
-            new_frame.set_pts(frame.pts());
-            new_frame
+            match converter.run(&frame, &mut new_frame) {
+                Ok(_) => {
+                    new_frame.set_pts(frame.pts());
+                    new_frame
+                },
+                Err(e) => {
+                    tracing::error!("Failed to convert frame: {:?} from format {:?} to YUV420P", e, frame.format());
+                    // Return early as we can't process this frame
+                    return;
+                }
+            }
         } else {
             frame
         };
 
-        self.encoder.send_frame(&frame).unwrap();
+        if let Err(e) = self.encoder.send_frame(&frame) {
+            tracing::error!("Failed to send frame to encoder: {:?}", e);
+            return;
+        }
 
         self.process_frame(output);
     }
@@ -112,12 +131,18 @@ impl H264Encoder {
                 self.config.time_base,
                 output.stream(self.stream_index).unwrap().time_base(),
             );
-            self.packet.write_interleaved(output).unwrap();
+            if let Err(e) = self.packet.write_interleaved(output) {
+                tracing::error!("Failed to write packet: {:?}", e);
+                break;
+            }
         }
     }
 
     pub fn finish(&mut self, output: &mut format::context::Output) {
-        self.encoder.send_eof().unwrap();
+        if let Err(e) = self.encoder.send_eof() {
+            tracing::error!("Failed to send EOF to encoder: {:?}", e);
+            return;
+        }
         self.process_frame(output);
     }
 }

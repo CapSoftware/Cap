@@ -39,7 +39,7 @@ type VerificationResponse = {
 
 export function CustomDomain() {
   const router = useRouter();
-  const { activeSpace } = useSharedContext();
+  const { activeSpace, isSubscribed } = useSharedContext();
   const [domain, setDomain] = useState(activeSpace?.space.customDomain || "");
   const [loading, setLoading] = useState(false);
   const [verifying, setVerifying] = useState(false);
@@ -168,6 +168,32 @@ export function CustomDomain() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    if (!isSubscribed) {
+      toast.error(
+        (t) => (
+          <span>
+            Please upgrade to{" "}
+            <a
+              href="/pricing"
+              className="text-blue-500 font-medium hover:text-blue-600"
+              onClick={(e) => {
+                e.preventDefault();
+                toast.dismiss(t.id);
+                router.push("/pricing");
+              }}
+            >
+              Cap Pro
+            </a>{" "}
+            to use custom domains
+          </span>
+        ),
+        {
+          duration: 5000,
+        }
+      );
+      return;
+    }
+
     const cleanedDomain = cleanDomain(domain);
     if (!cleanedDomain) {
       toast.error("Please enter a valid domain");
@@ -217,6 +243,32 @@ export function CustomDomain() {
   };
 
   const handleRemoveDomain = async () => {
+    if (!isSubscribed) {
+      toast.error(
+        (t) => (
+          <span>
+            Please upgrade to{" "}
+            <a
+              href="/pricing"
+              className="text-blue-500 font-medium hover:text-blue-600"
+              onClick={(e) => {
+                e.preventDefault();
+                toast.dismiss(t.id);
+                router.push("/pricing");
+              }}
+            >
+              Cap Pro
+            </a>{" "}
+            to use custom domains
+          </span>
+        ),
+        {
+          duration: 5000,
+        }
+      );
+      return;
+    }
+
     if (!confirm("Are you sure you want to remove this custom domain?")) return;
 
     setLoading(true);
@@ -431,11 +483,26 @@ export function CustomDomain() {
                                 (value, index) => (
                                   <div
                                     key={index}
-                                    className="flex items-center gap-2"
+                                    className={
+                                      value === domainConfig.requiredAValue
+                                        ? "flex items-center gap-2 text-green-600"
+                                        : "flex items-center gap-2 text-red-600"
+                                    }
                                   >
-                                    <code className="bg-gray-50 px-2 py-1 rounded">
+                                    <code
+                                      className={
+                                        value === domainConfig.requiredAValue
+                                          ? "px-2 py-1 rounded bg-green-50"
+                                          : "px-2 py-1 rounded bg-red-50"
+                                      }
+                                    >
                                       {value}
                                     </code>
+                                    {value === domainConfig.requiredAValue && (
+                                      <span className="text-xs text-green-600">
+                                        (Correct)
+                                      </span>
+                                    )}
                                   </div>
                                 )
                               )}
@@ -448,24 +515,29 @@ export function CustomDomain() {
                         </dt>
                         <dd className="flex items-center gap-2">
                           <div className="flex items-center gap-1.5 bg-gray-50 px-2 py-1 rounded flex-1 min-w-0">
-                            <code className="text-sm text-green-600">
-                              {domainConfig.requiredAValue}
+                            <code className="text-sm text-gray-900">
+                              {domainConfig.requiredAValue || "Loading..."}
                             </code>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                domainConfig.requiredAValue &&
-                                handleCopy(domainConfig.requiredAValue, "value")
-                              }
-                              className="p-1 hover:bg-gray-100 rounded-md transition-colors shrink-0"
-                              title="Copy to clipboard"
-                            >
-                              {copiedField === "value" ? (
-                                <Check className="h-4 w-4 text-green-500" />
-                              ) : (
-                                <Copy className="h-4 w-4 text-gray-500" />
-                              )}
-                            </button>
+                            {domainConfig.requiredAValue && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  domainConfig.requiredAValue &&
+                                  handleCopy(
+                                    domainConfig.requiredAValue,
+                                    "value"
+                                  )
+                                }
+                                className="p-1 hover:bg-gray-100 rounded-md transition-colors shrink-0"
+                                title="Copy to clipboard"
+                              >
+                                {copiedField === "value" ? (
+                                  <Check className="h-4 w-4 text-green-500" />
+                                ) : (
+                                  <Copy className="h-4 w-4 text-gray-500" />
+                                )}
+                              </button>
+                            )}
                           </div>
                         </dd>
                       </div>

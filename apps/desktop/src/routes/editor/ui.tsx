@@ -15,6 +15,7 @@ import {
   splitProps,
 } from "solid-js";
 import { useEditorContext } from "./context";
+import { TextInput } from "./TextInput";
 
 export function Field(
   props: ParentProps<{ name: string; icon?: JSX.Element; value?: JSX.Element }>
@@ -96,7 +97,7 @@ export function Slider(props: ComponentProps<typeof KSlider>) {
 
 export function Input(props: ComponentProps<"input">) {
   return (
-    <input
+    <TextInput
       {...props}
       class={cx(
         "rounded-[0.5rem] h-[2rem] p-[0.375rem] border w-full text-[0.875rem] focus:border-blue-300 outline-none text-gray-500 dark:text-gray-50 placeholder:text-black-transparent-20",

@@ -206,7 +206,7 @@ where
 
                 loop {
                     let Some((frame, frame_number)) =
-                        tokio::time::timeout(Duration::from_secs(3), rx_image_data.recv()).await?
+                        tokio::time::timeout(Duration::from_secs(6), rx_image_data.recv()).await?
                     else {
                         break;
                     };

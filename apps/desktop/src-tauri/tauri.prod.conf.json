@@ -17,7 +17,6 @@
     }
   },
   "bundle": {
-    "createUpdaterArtifacts": true,
     "macOS": {
       "entitlements": "Entitlements.plist"
     },
