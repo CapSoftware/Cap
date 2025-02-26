@@ -202,16 +202,24 @@ export default function () {
             />
           </button>
         </Show>
+<<<<<<< HEAD
 
+=======
+>>>>>>> aee39a6c (fail injection (#344))
         {import.meta.env.DEV && (
           <button
             type="button"
             onClick={() => {
               new WebviewWindow("debug", { url: "/debug" });
             }}
+<<<<<<< HEAD
             class="flex items-center justify-center w-5 h-5"
           >
             <IconLucideBug class="size-5 text-gray-400 hover:text-gray-500" />
+=======
+          >
+            <IconLucideBug class="text-gray-400 hover:text-gray-500" />
+>>>>>>> aee39a6c (fail injection (#344))
           </button>
         )}
       </div>
@@ -956,11 +964,16 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
     const v = props.value;
     if (!v) return null;
 
+<<<<<<< HEAD
     const o = props.options.find((o) => o.id === v.id);
     if (o) return props.value;
 
     props.onChange(props.options[0]);
     return props.options[0];
+=======
+    if (props.options.some((o) => o.id === v.id)) return props.value;
+    else return props.options[0];
+>>>>>>> aee39a6c (fail injection (#344))
   };
 
   return (

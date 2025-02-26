@@ -15,6 +15,11 @@ use crate::{
     RecordingStarted, RecordingStopped, UploadMode,
 };
 use cap_fail::fail;
+<<<<<<< HEAD
+=======
+use cap_flags::FLAGS;
+use cap_media::sources::{CaptureScreen, CaptureWindow};
+>>>>>>> aee39a6c (fail injection (#344))
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
 use cap_media::{
     platform::Bounds,
@@ -154,6 +159,7 @@ pub async fn start_recording(
                     if let Ok(s3_config) = get_s3_config(&app, false, None).await {
                         let link = web_api::make_url(format!("/s/{}", s3_config.id()));
 
+<<<<<<< HEAD
                         state.pre_created_video = Some(PreCreatedVideo {
                             id: s3_config.id().to_string(),
                             link: link.clone(),
@@ -178,6 +184,22 @@ pub async fn start_recording(
             if let Some(window) = camera_window {
                 let _ = window.set_content_protected(true);
             }
+=======
+    if let Ok(Some(auth)) = AuthStore::get(&app) {
+        if auto_create_shareable_link && auth.is_upgraded() {
+            // Pre-create the video and get the shareable link
+            if let Ok(s3_config) = get_s3_config(&app, false, None).await {
+                let link = web_api::make_url(format!("/s/{}", s3_config.id()));
+
+                state.pre_created_video = Some(PreCreatedVideo {
+                    id: s3_config.id().to_string(),
+                    link: link.clone(),
+                    config: s3_config,
+                });
+
+                println!("Pre-created shareable link: {}", link);
+            };
+>>>>>>> aee39a6c (fail injection (#344))
         }
     }
 

@@ -226,7 +226,11 @@ impl App {
             }
         }
         .inspect(|_| {
+<<<<<<< HEAD
             self.recording_options.camera_label = new_options.camera_label.clone();
+=======
+            self.start_recording_options.camera_label = new_options.camera_label.clone();
+>>>>>>> aee39a6c (fail injection (#344))
         });
 
         // try update microphone
@@ -252,11 +256,19 @@ impl App {
             }
         }
         .inspect(|_| {
+<<<<<<< HEAD
             self.recording_options.audio_input_name = new_options.audio_input_name.clone();
         });
 
         if camera.is_ok() || microphone.is_ok() {
             self.recording_options.capture_target = new_options.capture_target;
+=======
+            self.start_recording_options.audio_input_name = new_options.audio_input_name.clone();
+        });
+
+        if camera.is_ok() || microphone.is_ok() {
+            self.start_recording_options.capture_target = new_options.capture_target;
+>>>>>>> aee39a6c (fail injection (#344))
 
             RecordingOptionsChanged.emit(&self.handle).ok();
         }
