@@ -720,7 +720,7 @@ impl ProjectUniforms {
                 .unwrap_or(&[]),
         );
 
-        let zoom = InterpolatedZoom::new(segment_cursor);
+        let zoom = InterpolatedZoom::new(segment_cursor, Some(cursor_events));
 
         let display = {
             let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
