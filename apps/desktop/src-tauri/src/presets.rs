@@ -22,7 +22,7 @@ pub struct Preset {
 impl PresetsStore {
     fn get(app: &AppHandle<Wry>) -> Result<Option<Self>, String> {
         match app.store("store").map(|s| s.get("presets")) {
-            Some(Some(store)) => {
+            Ok(Some(store)) => {
                 // Handle potential deserialization errors gracefully
                 match serde_json::from_value(store) {
                     Ok(settings) => Ok(Some(settings)),
@@ -46,7 +46,7 @@ impl PresetsStore {
     }
 
     pub fn update(app: &AppHandle, update: impl FnOnce(&mut Self)) -> Result<(), String> {
-        let Some(store) = app.store("store") else {
+        let Ok(store) = app.store("store") else {
             return Err("Store not found".to_string());
         };
 

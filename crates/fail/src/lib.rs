@@ -74,12 +74,3 @@ pub fn get_state() -> BTreeMap<String, bool> {
 pub fn set_fail(name: impl Into<String>, should_fail: bool) {
     FAILS.write().unwrap().insert(name.into(), should_fail);
 }
-
-pub fn demo() -> Result<(), String> {
-    fail!("will panic if enabled in UI");
-    fail_err!(
-        "will return Err(...) if enabled in UI",
-        "the value to go inside Err(...)"
-    );
-    Ok(())
-}

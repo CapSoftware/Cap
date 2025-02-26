@@ -38,7 +38,7 @@ impl AuthStore {
     }
 
     pub fn get<R: Runtime>(app: &AppHandle<R>) -> Result<Option<Self>, String> {
-        let Some(Some(store)) = app.store("store").map(|s| s.get("auth")) else {
+        let Ok(Some(store)) = app.store("store").map(|s| s.get("auth")) else {
             return Ok(None);
         };
 
@@ -104,7 +104,7 @@ impl AuthStore {
     }
 
     pub fn set(app: &AppHandle, value: Option<Self>) -> Result<(), String> {
-        let Some(store) = app.store("store") else {
+        let Ok(store) = app.store("store") else {
             return Err("Store not found".to_string());
         };
 

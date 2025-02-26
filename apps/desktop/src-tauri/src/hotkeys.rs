@@ -58,7 +58,7 @@ pub struct HotkeysStore {
 
 impl HotkeysStore {
     pub fn get(app: &AppHandle) -> Result<Option<Self>, String> {
-        let Some(Some(store)) = app.store("store").map(|s| s.get("hotkeys")) else {
+        let Ok(Some(store)) = app.store("store").map(|s| s.get("hotkeys")) else {
             return Ok(None);
         };
 

@@ -220,8 +220,6 @@ impl App {
         }
         .inspect(|_| {
             self.start_recording_options.camera_label = new_options.camera_label.clone();
-
-            RecordingOptionsChanged.emit(&self.handle).ok();
         });
 
         // try update microphone
@@ -251,6 +249,8 @@ impl App {
         });
 
         if camera.is_ok() || microphone.is_ok() {
+            self.start_recording_options.capture_target = new_options.capture_target;
+
             RecordingOptionsChanged.emit(&self.handle).ok();
         }
 

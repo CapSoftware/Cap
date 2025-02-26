@@ -149,6 +149,16 @@ export default function () {
             />
           </button>
         </Show>
+        {import.meta.env.DEV && (
+          <button
+            type="button"
+            onClick={() => {
+              new WebviewWindow("debug", { url: "/debug" });
+            }}
+          >
+            <IconLucideBug class="text-gray-400 hover:text-gray-500" />
+          </button>
+        )}
       </div>
     );
 
@@ -227,7 +237,7 @@ export default function () {
           </Tooltip.Root>
         </div>
       </div>
-      <TargetSelects options={options.data} />
+      <TargetSelects options={options.data} setOptions={setOptions} />
       <CameraSelect options={options.data} setOptions={setOptions} />
       <MicrophoneSelect options={options.data} setOptions={setOptions} />
       <div class="w-full flex items-center space-x-1">
@@ -295,6 +305,7 @@ import {
 } from "@tauri-apps/api/webviewWindow";
 import { Webview } from "@tauri-apps/api/webview";
 import { UnlistenFn } from "@tauri-apps/api/event";
+import { isDev } from "solid-js/web";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -323,6 +334,7 @@ function createUpdateCheck() {
 
 function TargetSelects(props: {
   options: ReturnType<typeof createOptionsQuery>["options"]["data"];
+  setOptions: ReturnType<typeof createOptionsQuery>["setOptions"];
 }) {
   const screens = createQuery(() => listScreens);
   const windows = createQuery(() => listWindows);
@@ -534,8 +546,10 @@ function TargetSelects(props: {
           placeholder="Screen"
           optionsEmptyText="No screens found"
           selected={isTargetScreenOrArea()}
+          disabled={props.setOptions.isPending}
         />
         <TargetSelect<CaptureWindow>
+          disabled={props.setOptions.isPending}
           options={windows.data ?? []}
           onChange={(value) => {
             if (!value || !props.options) return;
@@ -862,15 +876,15 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
       NonNullable<SelectRootProps<T | null>["itemComponent"]>
     >[0]
   ) => JSX.Element;
+  disabled?: boolean;
 }) {
-  createEffect(() => {
+  const value = () => {
     const v = props.value;
-    if (!v) return;
+    if (!v) return null;
 
-    if (!props.options.some((o) => o.id === v.id)) {
-      props.onChange(props.options[0] ?? null);
-    }
-  });
+    if (props.options.some((o) => o.id === v.id)) return props.value;
+    else return props.options[0];
+  };
 
   return (
     <KSelect<T | null>
@@ -886,13 +900,13 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
         </MenuItem>
       )}
       placement="bottom"
-      class="max-w-[50%] w-full z-10"
+      class="max-w-[50%] w-full z-10 disabled:text-opacity-80"
       placeholder={props.placeholder}
       onChange={(value) => {
         if (!value) return;
         props.onChange(value);
       }}
-      value={props.value}
+      value={value()}
     >
       <KSelect.Trigger<ValidComponent>
         as={
@@ -910,7 +924,8 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
               )
             : undefined
         }
-        class="flex-1 text-gray-400 py-1 z-10 data-[selected='true']:text-gray-500 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
+        class="flex-1 text-gray-400 py-1 z-10 data-[selected='true']:text-gray-500 disabled:text-gray-400 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
+        disabled={props.disabled}
         data-selected={props.selected}
         onClick={(e) => {
           if (props.options.length === 1) {

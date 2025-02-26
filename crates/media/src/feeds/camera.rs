@@ -209,6 +209,8 @@ fn run_camera_feed(
     control: Receiver<CameraControl>,
     ready_signal: Sender<Result<VideoInfo, MediaError>>,
 ) {
+    fail!("media::feeds::camera::run panic");
+
     let mut camera = match create_camera(&camera_info) {
         Ok(cam) => cam,
         Err(error) => {
@@ -239,20 +241,24 @@ fn run_camera_feed(
                 FrameFormat::GRAY => Pixel::GRAY8,
                 FrameFormat::YUYV => {
                     let pix_fmt = if cfg!(windows) {
-                        tracing::debug!("Using YUYV422 format for Windows camera in buffer_to_ffvideo");
-                        Pixel::YUYV422  // This is correct for Windows
+                        tracing::debug!(
+                            "Using YUYV422 format for Windows camera in buffer_to_ffvideo"
+                        );
+                        Pixel::YUYV422 // This is correct for Windows
                     } else {
                         // let bytes = buffer.buffer().len() as f32;
                         // let ratio = bytes / (buffer.resolution().x() * buffer.resolution().y()) as f32;
                         // if ratio == 2.0
 
                         // nokhwa merges yuvu420 and uyvy422 into the same format, we should probably distinguish them with the frame size
-                        tracing::debug!("Using UYVY422 format for non-Windows camera in buffer_to_ffvideo");
+                        tracing::debug!(
+                            "Using UYVY422 format for non-Windows camera in buffer_to_ffvideo"
+                        );
                         Pixel::UYVY422
                     };
 
                     pix_fmt
-                },
+                }
             },
             camera_format.width(),
             camera_format.height(),
@@ -300,13 +306,13 @@ fn run_camera_feed(
                                     FrameFormat::YUYV => {
                                         let pix_fmt = if cfg!(windows) {
                                             tracing::debug!("Using YUYV422 format for Windows camera in buffer_to_ffvideo");
-                                            Pixel::YUYV422  // This is correct for Windows
+                                            Pixel::YUYV422 // This is correct for Windows
                                         } else {
                                             tracing::debug!("Using UYVY422 format for non-Windows camera in buffer_to_ffvideo");
                                             Pixel::UYVY422
                                         };
                                         pix_fmt
-                                    },
+                                    }
                                 },
                                 camera_format.width(),
                                 camera_format.height(),
@@ -405,14 +411,16 @@ fn buffer_to_ffvideo(buffer: nokhwa::Buffer) -> FFVideo {
                 // nokhwa moment
                 let pix_fmt = if cfg!(windows) {
                     tracing::debug!("Using YUYV422 format for Windows camera in buffer_to_ffvideo");
-                    Pixel::YUYV422  // This is correct for Windows
+                    Pixel::YUYV422 // This is correct for Windows
                 } else {
                     // let bytes = buffer.buffer().len() as f32;
                     // let ratio = bytes / (buffer.resolution().x() * buffer.resolution().y()) as f32;
                     // if ratio == 2.0
 
                     // nokhwa merges yuvu420 and uyvy422 into the same format, we should probably distinguish them with the frame size
-                    tracing::debug!("Using UYVY422 format for non-Windows camera in buffer_to_ffvideo");
+                    tracing::debug!(
+                        "Using UYVY422 format for non-Windows camera in buffer_to_ffvideo"
+                    );
                     Pixel::UYVY422
                 };
 
