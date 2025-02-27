@@ -111,8 +111,15 @@ export function createOptionsQuery() {
   const options = createQuery(() => ({
     ...getOptions,
     select: (data) => {
-      setState(data);
-      return { ...state, ...data };
+      const ret = { ...data };
+
+      if (state.cameraLabel) ret.cameraLabel = state.cameraLabel;
+      if (state.audioInputName) ret.audioInputName = state.audioInputName;
+      if (state.mode) ret.mode = state.mode;
+
+      setState(ret);
+
+      return ret;
     },
   }));
 
