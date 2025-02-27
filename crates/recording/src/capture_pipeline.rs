@@ -1,7 +1,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use cap_media::{
-    encoders::{H264Encoder, MP4AVAssetWriterEncoder, MP4File, OpusEncoder},
+    encoders::{H264Encoder, MP4File, OpusEncoder},
     pipeline::{builder::PipelineBuilder, RealTimeClock},
     sources::{AudioInputSource, ScreenCaptureSource, ScreenCaptureTarget},
     MediaError,
@@ -57,13 +57,15 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
         audio: Option<AudioInputSource>,
         output_path: impl Into<PathBuf>,
     ) -> Result<CapturePipelineBuilder, MediaError> {
-        let mp4 = Arc::new(std::sync::Mutex::new(MP4AVAssetWriterEncoder::init(
-            "mp4",
-            source.info(),
-            audio.as_ref().map(|f| f.info()),
-            output_path.into(),
-            Some(1080),
-        )?));
+        let mp4 = Arc::new(std::sync::Mutex::new(
+            cap_media::encoders::MP4AVAssetWriterEncoder::init(
+                "mp4",
+                source.info(),
+                audio.as_ref().map(|f| f.info()),
+                output_path.into(),
+                Some(1080),
+            )?,
+        ));
 
         let mut builder = builder
             .source("screen_capture", source)
