@@ -11,7 +11,7 @@ use cap_media::{sources::*, MediaError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
+#[derive(specta::Type, Serialize, Deserialize, Clone, Debug, Copy)]
 #[serde(rename_all = "camelCase")]
 pub enum RecordingMode {
     Studio,

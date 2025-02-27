@@ -1,9 +1,10 @@
 import { createSignal } from "solid-js";
 import Tooltip from "~/components/Tooltip";
+import { createOptionsQuery } from "~/utils/queries";
 import { commands } from "~/utils/tauri";
 
 const Mode = () => {
-  const [toggleInstantMode, setToggleInstantMode] = createSignal(false);
+  const { options, setOptions } = createOptionsQuery();
   const [isInfoHovered, setIsInfoHovered] = createSignal(false);
 
   const openModeSelectWindow = async () => {
@@ -33,9 +34,12 @@ const Mode = () => {
           closeDelay={0}
         >
           <div
-            onClick={() => setToggleInstantMode((p) => !p)}
+            onClick={() => {
+              if (!options.data) return;
+              setOptions.mutate({ ...options.data, mode: "instant" });
+            }}
             class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
-              toggleInstantMode()
+              options.data?.mode === "instant"
                 ? "ring-2 ring-offset-1 ring-offset-gray-50 bg-gray-300 hover:bg-[--gray-300] ring-[--blue-300]"
                 : "bg-gray-200 hover:bg-[--gray-300]"
             }`}
@@ -53,9 +57,12 @@ const Mode = () => {
           closeDelay={0}
         >
           <div
-            onClick={() => setToggleInstantMode(false)}
+            onClick={() => {
+              if (!options.data) return;
+              setOptions.mutate({ ...options.data, mode: "studio" });
+            }}
             class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
-              !toggleInstantMode()
+              options.data?.mode === "studio"
                 ? "ring-2 ring-offset-1 ring-offset-gray-50 bg-gray-300 hover:bg-[--gray-300] ring-[--blue-300]"
                 : "bg-gray-200 hover:bg-[--gray-300]"
             }`}
@@ -68,9 +75,12 @@ const Mode = () => {
       {isInfoHovered() && (
         <>
           <div
-            onClick={() => setToggleInstantMode((p) => !p)}
+            onClick={() => {
+              if (!options.data) return;
+              setOptions.mutate({ ...options.data, mode: "instant" });
+            }}
             class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
-              toggleInstantMode()
+              options.data?.mode === "instant"
                 ? "ring-2 ring-offset-1 ring-offset-gray-50 bg-gray-300 hover:bg-[--gray-300] ring-[--blue-300]"
                 : "bg-gray-200 hover:bg-[--gray-300]"
             }`}
@@ -79,9 +89,12 @@ const Mode = () => {
           </div>
 
           <div
-            onClick={() => setToggleInstantMode(false)}
+            onClick={() => {
+              if (!options.data) return;
+              setOptions.mutate({ ...options.data, mode: "studio" });
+            }}
             class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
-              !toggleInstantMode()
+              options.data?.mode === "studio"
                 ? "ring-2 ring-offset-1 ring-offset-gray-50 bg-gray-300 hover:bg-[--gray-300] ring-[--blue-300]"
                 : "bg-gray-200 hover:bg-[--gray-300]"
             }`}

@@ -91,7 +91,6 @@ pub fn spawn_cursor_recorder(
                         let cursor_path = cursors_dir.join(&file_name);
 
                         if let Ok(image) = image::load_from_memory(&data.image) {
-                            dbg!(image.dimensions());
                             // Convert to RGBA
                             let rgba_image = image.into_rgba8();
 

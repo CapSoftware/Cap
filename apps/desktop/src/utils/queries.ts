@@ -14,14 +14,14 @@ import { authStore, generalSettingsStore } from "~/store";
 
 function debugFetch<T>(name: string, doFetch: () => Promise<T>) {
   return () => {
-    console.log(`fetching '${name}'`);
+    // console.log(`fetching '${name}'`);
     return doFetch()
       .then((s) => {
-        console.log(`fetched '${name}'`);
+        // console.log(`fetched '${name}'`);
         return s;
       })
       .catch((e) => {
-        console.log(`failed to fetch '${name}'`);
+        // console.log(`failed to fetch '${name}'`);
         throw e;
       });
   };
@@ -95,6 +95,7 @@ export function createOptionsQuery() {
     createStore<PartialRecordingOptions>({
       cameraLabel: null,
       audioInputName: null,
+      mode: "studio",
     }),
     { name: "recordingOptionsQuery" }
   );

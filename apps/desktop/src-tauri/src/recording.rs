@@ -116,9 +116,7 @@ pub async fn start_recording(
     app: AppHandle,
     state_mtx: MutableState<'_, App>,
 ) -> Result<(), String> {
-    println!("start_recording");
     let mut state = state_mtx.write().await;
-    println!("state lock acquired");
 
     let id = uuid::Uuid::new_v4().to_string();
 
@@ -153,7 +151,7 @@ pub async fn start_recording(
     }
 
     if matches!(
-        state.start_recording_options.capture_target,
+        state.recording_options.capture_target,
         ScreenCaptureTarget::Window(_) | ScreenCaptureTarget::Area(_)
     ) {
         let _ = ShowCapWindow::WindowCaptureOccluder.show(&app);
@@ -170,12 +168,12 @@ pub async fn start_recording(
             fail!("recording::spawn_actor");
             let mut state = state_mtx.write().await;
 
-            let (actor, actor_done_rx) = match state.start_recording_options.mode {
+            let (actor, actor_done_rx) = match state.recording_options.mode {
                 RecordingMode::Studio => {
                     let (actor, actor_done_rx) = cap_recording::spawn_studio_recording_actor(
                         id,
                         recording_dir,
-                        state.start_recording_options.clone(),
+                        state.recording_options.clone(),
                         state.camera_feed.clone(),
                         state.audio_input_feed.clone(),
                     )
@@ -189,7 +187,7 @@ pub async fn start_recording(
                         cap_recording::instant_recording::spawn_instant_recording_actor(
                             id,
                             recording_dir,
-                            state.start_recording_options.clone(),
+                            state.recording_options.clone(),
                             state.audio_input_feed.clone(),
                         )
                         .await
@@ -206,8 +204,6 @@ pub async fn start_recording(
     })
     .await
     .map_err(|e| format!("Failed to spawn recording actor: {}", e))??;
-
-    println!("spawning actor");
 
     spawn_actor({
         let app = app.clone();
@@ -427,7 +423,7 @@ async fn handle_recording_finish(
         CompletedRecording::Instant(recording) => RecordingMetaInner::Instant(recording.meta),
     };
 
-    ShowCapWindow::PrevRecordings.show(&app).ok();
+    ShowCapWindow::RecordingsOverlay.show(&app).ok();
 
     let _ = NewRecordingAdded {
         path: recording_dir.clone(),

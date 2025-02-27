@@ -1,19 +1,14 @@
-import { createSignal, JSX } from "solid-js";
-
-interface ModeSelectProps {
-  initialMode: "instant" | "studio";
-  onModeChange: (mode: "instant" | "studio") => void;
-}
-
-type ModeType = "instant" | "studio";
+import { JSX } from "solid-js";
+import { createOptionsQuery } from "~/utils/queries";
+import { RecordingMode } from "~/utils/tauri";
 
 interface ModeOptionProps {
-  mode: ModeType;
+  mode: RecordingMode;
   title: string;
   description: string;
   icon: (props: { class: string }) => JSX.Element;
   isSelected: boolean;
-  onSelect: (mode: ModeType) => void;
+  onSelect: (mode: RecordingMode) => void;
 }
 
 const ModeOption = (props: ModeOptionProps) => {
@@ -58,14 +53,12 @@ const ModeOption = (props: ModeOptionProps) => {
   );
 };
 
-const ModeSelect = (props: ModeSelectProps) => {
-  const [selectedMode, setSelectedMode] = createSignal<ModeType>(
-    props.initialMode || "studio"
-  );
+const ModeSelect = () => {
+  const { options, setOptions } = createOptionsQuery();
 
-  const handleModeChange = (mode: ModeType) => {
-    setSelectedMode(mode);
-    props.onModeChange(mode);
+  const handleModeChange = (mode: RecordingMode) => {
+    if (!options.data) return;
+    setOptions.mutate({ ...options.data, mode });
   };
 
   const modeOptions = [
@@ -94,7 +87,7 @@ const ModeSelect = (props: ModeSelectProps) => {
             title={option.title}
             description={option.description}
             icon={option.icon}
-            isSelected={selectedMode() === option.mode}
+            isSelected={options.data?.mode === option.mode}
             onSelect={handleModeChange}
           />
         ))}

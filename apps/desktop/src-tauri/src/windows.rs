@@ -147,7 +147,7 @@ pub enum ShowCapWindow {
     Main,
     Settings { page: Option<String> },
     Editor { project_id: String },
-    PrevRecordings,
+    RecordingsOverlay,
     WindowCaptureOccluder,
     CaptureArea { screen: CaptureScreen },
     Camera { ws_port: u16 },
@@ -379,7 +379,7 @@ impl ShowCapWindow {
 
                 window
             }
-            Self::PrevRecordings => {
+            Self::RecordingsOverlay => {
                 let window = self
                     .window_builder(app, "/recordings-overlay")
                     .maximized(false)
@@ -402,31 +402,30 @@ impl ShowCapWindow {
                 #[cfg(target_os = "macos")]
                 {
                     app.run_on_main_thread({
-		                    let window = window.clone();
-		                    move || {
-		                        use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-		                        use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
+                        let window = window.clone();
+                        move || {
+                            use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+                            use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
 
-		                        let panel = window.to_panel().unwrap();
+                            let panel = window.to_panel().unwrap();
 
-		                        panel.set_level(cocoa::appkit::NSMainMenuWindowLevel);
+                            panel.set_level(cocoa::appkit::NSMainMenuWindowLevel);
 
-		                        panel.set_collection_behaviour(
-		                            NSWindowCollectionBehavior::NSWindowCollectionBehaviorTransient
-		                                | NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace
-		                                | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
-		                                | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle,
-		                        );
+                            panel.set_collection_behaviour(
+                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorTransient
+                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace
+                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle,
+                            );
 
-		                        // seems like this doesn't work properly -_-
-		                        #[allow(non_upper_case_globals)]
-		                        const NSWindowStyleMaskNonActivatingPanel: i32 = 1 << 7;
-		                        panel.set_style_mask(NSWindowStyleMaskNonActivatingPanel);
-		                    }
-		                }).ok();
+                            // seems like this doesn't work properly -_-
+                            #[allow(non_upper_case_globals)]
+                            const NSWindowStyleMaskNonActivatingPanel: i32 = 1 << 7;
+                            panel.set_style_mask(NSWindowStyleMaskNonActivatingPanel);
+                        }
+                    })
+                    .ok();
                 }
-
-                println!("about to spawn fake window listener");
 
                 fake_window::spawn_fake_window_listener(app.clone(), window.clone());
 
@@ -490,7 +489,7 @@ impl ShowCapWindow {
             ShowCapWindow::Editor { project_id } => CapWindowId::Editor {
                 project_id: project_id.clone(),
             },
-            ShowCapWindow::PrevRecordings => CapWindowId::RecordingsOverlay,
+            ShowCapWindow::RecordingsOverlay => CapWindowId::RecordingsOverlay,
             ShowCapWindow::WindowCaptureOccluder => CapWindowId::WindowCaptureOccluder,
             ShowCapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
             ShowCapWindow::Camera { .. } => CapWindowId::Camera,

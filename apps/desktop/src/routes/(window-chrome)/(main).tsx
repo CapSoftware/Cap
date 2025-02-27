@@ -877,8 +877,12 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
     const v = props.value;
     if (!v) return null;
 
-    if (props.options.some((o) => o.id === v.id)) return props.value;
-    else return props.options[0];
+    const o = props.options.find((o) => o.id === v.id);
+    if (o) return props.value;
+    else {
+      props.onChange(props.options[0]);
+      return props.options[0];
+    }
   };
 
   return (
@@ -889,9 +893,7 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
       gutter={8}
       itemComponent={(itemProps) => (
         <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={itemProps.item}>
-          {/* <KSelect.ItemLabel class="flex-1"> */}
           {props?.itemComponent?.(itemProps) ?? itemProps.item.rawValue?.name}
-          {/* </KSelect.ItemLabel> */}
         </MenuItem>
       )}
       placement="bottom"

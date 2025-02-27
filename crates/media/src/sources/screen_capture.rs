@@ -130,9 +130,9 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             _phantom: std::marker::PhantomData,
         };
 
-        let options = this.create_options()?;
+        this.options = Arc::new(this.create_options()?);
 
-        let [frame_width, frame_height] = get_output_frame_size(&options);
+        let [frame_width, frame_height] = get_output_frame_size(&this.options);
         this.video_info =
             VideoInfo::from_raw(RawVideoFormat::Bgra, frame_width, frame_height, MAX_FPS);
 
@@ -360,6 +360,9 @@ fn inner<T>(
         ScreenCaptureTarget::Window(window) => Some(window.id),
         _ => None,
     };
+
+    assert!(source.options.fps > 0);
+
     let mut capturer = match Capturer::build(source.options.as_ref().clone()) {
         Ok(capturer) => capturer,
         Err(e) => {
@@ -379,7 +382,6 @@ fn inner<T>(
     let t = std::time::Instant::now();
 
     loop {
-        println!("plz");
         match control_signal.last() {
             Some(Control::Shutdown) | None => {
                 trace!("Received shutdown signal");
@@ -431,11 +433,12 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         control_signal: crate::pipeline::control::PipelineControlSignal,
         output: Sender<Self::Output>,
     ) {
-        inner(self, ready_signal, control_signal, |capturer| {
-            println!("pixel buffer");
-            match capturer.raw().get_next_pixel_buffer() {
+        inner(
+            self,
+            ready_signal,
+            control_signal,
+            |capturer| match capturer.raw().get_next_pixel_buffer() {
                 Ok(pixel_buffer) => {
-                    println!("got pixel buffer");
                     if pixel_buffer.height() == 0 || pixel_buffer.width() == 0 {
                         return Some(ControlFlow::Continue(()));
                     }
@@ -451,8 +454,8 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                     eprintln!("Capture error: {error}");
                     Some(ControlFlow::Break(()))
                 }
-            }
-        })
+            },
+        )
     }
 }
 

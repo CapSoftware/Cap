@@ -105,7 +105,7 @@ pub async fn export_video(
 
     match result {
         Ok(_) => {
-            ShowCapWindow::PrevRecordings.show(&app).ok();
+            ShowCapWindow::RecordingsOverlay.show(&app).ok();
             Ok(output_path)
         }
         Err(e) => {

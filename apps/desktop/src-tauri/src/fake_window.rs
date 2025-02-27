@@ -52,6 +52,7 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
             sleep(Duration::from_millis(1000 / 20)).await;
 
             let map = state.0.read().await;
+
             let Some(windows) = map.get(window.label()) else {
                 window.set_ignore_cursor_events(true).ok();
                 continue;

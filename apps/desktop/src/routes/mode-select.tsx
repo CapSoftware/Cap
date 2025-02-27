@@ -1,18 +1,7 @@
-import { createSignal } from "solid-js";
 import ModeSelect from "~/components/ModeSelect";
 import InstantToggleBg from "~/assets/instant-toggle.jpg";
 
 const ModeSelectWindow = () => {
-  const [currentMode, setCurrentMode] = createSignal<"instant" | "studio">(
-    "studio"
-  );
-
-  const handleModeChange = (mode: "instant" | "studio") => {
-    setCurrentMode(mode);
-    // We'll implement this later with a proper state management solution
-    console.log("Mode changed to:", mode);
-  };
-
   return (
     <div
       data-tauri-drag-region
@@ -28,10 +17,7 @@ const ModeSelectWindow = () => {
         <h2 class="text-xl font-semibold mb-8 text-center text-[--gray-500] dark:text-[--gray-50]">
           Select your recording mode
         </h2>
-        <ModeSelect
-          initialMode={currentMode()}
-          onModeChange={handleModeChange}
-        />
+        <ModeSelect />
       </div>
     </div>
   );

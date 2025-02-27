@@ -29,6 +29,7 @@ import { commands, events, RenderProgress, UploadResult } from "~/utils/tauri";
 import { createPresets } from "~/utils/createPresets";
 import { FPS, OUTPUT_SIZE } from "./editor/context";
 import { authStore, generalSettingsStore } from "~/store";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 type MediaEntry = {
   path: string;

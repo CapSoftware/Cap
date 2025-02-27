@@ -39,7 +39,6 @@ use cap_project::{
 use cap_recording::instant_recording::InstantRecordingHandle;
 use cap_recording::RecordingMode;
 use cap_recording::RecordingOptions;
-use cap_recording::StudioRecordingHandle;
 use cap_rendering::ProjectRecordings;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
@@ -50,7 +49,6 @@ use mp4::Mp4Reader;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use notifications::NotificationType;
 use png::{ColorType, Encoder};
-use presets::PresetsStore;
 use recording::RecordingActor;
 use relative_path::RelativePathBuf;
 use scap::capturer::Capturer;
@@ -60,7 +58,6 @@ use serde_json::json;
 use specta::Type;
 use std::collections::BTreeMap;
 use std::{
-    collections::HashMap,
     fs::File,
     future::Future,
     io::{BufReader, BufWriter},
@@ -81,13 +78,13 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
 use upload::{get_s3_config, upload_image, upload_video, S3UploadMeta};
-use web_api::ManagerExt;
+use web_api::ManagerExt as WebManagerExt;
 use windows::{CapWindowId, ShowCapWindow};
 
 #[derive(specta::Type, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct App {
-    start_recording_options: RecordingOptions,
+    recording_options: RecordingOptions,
     #[serde(skip)]
     camera_tx: flume::Sender<RawCameraFrame>,
     camera_ws_port: u16,
@@ -189,6 +186,8 @@ impl App {
             scope.set_context("recording_options", sentry::protocol::Context::Other(ctx));
         });
 
+        self.recording_options.mode = new_options.mode;
+
         match CapWindowId::Camera.get(&self.handle) {
             Some(window) if new_options.camera_label().is_none() => {
                 println!("closing camera window");
@@ -226,7 +225,7 @@ impl App {
             }
         }
         .inspect(|_| {
-            self.start_recording_options.camera_label = new_options.camera_label.clone();
+            self.recording_options.camera_label = new_options.camera_label.clone();
         });
 
         // try update microphone
@@ -252,11 +251,11 @@ impl App {
             }
         }
         .inspect(|_| {
-            self.start_recording_options.audio_input_name = new_options.audio_input_name.clone();
+            self.recording_options.audio_input_name = new_options.audio_input_name.clone();
         });
 
         if camera.is_ok() || microphone.is_ok() {
-            self.start_recording_options.capture_target = new_options.capture_target;
+            self.recording_options.capture_target = new_options.capture_target;
 
             RecordingOptionsChanged.emit(&self.handle).ok();
         }
@@ -419,7 +418,7 @@ async fn get_recording_options(
     let mut state = state.write().await;
 
     // If there's a saved audio input but no feed, initialize it
-    if let Some(audio_input_name) = state.start_recording_options.audio_input_name() {
+    if let Some(audio_input_name) = state.recording_options.audio_input_name() {
         if state.audio_input_feed.is_none() {
             state.audio_input_feed = if let Ok(feed) = AudioInputFeed::init(audio_input_name)
                 .await
@@ -433,7 +432,7 @@ async fn get_recording_options(
         }
     }
 
-    Ok(state.start_recording_options.clone())
+    Ok(state.recording_options.clone())
 }
 
 #[tauri::command]
@@ -1057,9 +1056,9 @@ fn open_editor(app: AppHandle, id: String) {
     ShowCapWindow::Editor { project_id: id }.show(&app).unwrap();
 }
 
-#[tauri::command(async)]
+#[tauri::command]
 #[specta::specta]
-fn close_previous_recordings_window(app: AppHandle) {
+fn close_recordings_overlay_window(app: AppHandle) {
     #[cfg(target_os = "macos")]
     {
         use tauri_nspanel::ManagerExt;
@@ -1947,7 +1946,7 @@ pub async fn run() {
             recording::list_capture_screens,
             take_screenshot,
             list_audio_devices,
-            close_previous_recordings_window,
+            close_recordings_overlay_window,
             fake_window::set_fake_window_bounds,
             fake_window::remove_fake_window,
             focus_captures_panel,
@@ -2109,7 +2108,7 @@ pub async fn run() {
                     camera_feed: None,
                     audio_input_tx,
                     audio_input_feed: None,
-                    start_recording_options: RecordingOptions {
+                    recording_options: RecordingOptions {
                         capture_target: ScreenCaptureTarget::Screen(CaptureScreen {
                             id: 0,
                             name: String::new(),
@@ -2147,7 +2146,7 @@ pub async fn run() {
                 ShowCapWindow::Main.show(&app).ok();
             }
 
-            ShowCapWindow::PrevRecordings.show(&app).ok();
+            ShowCapWindow::RecordingsOverlay.show(&app).ok();
 
             audio_meter::spawn_event_emitter(app.clone(), audio_input_rx);
 
