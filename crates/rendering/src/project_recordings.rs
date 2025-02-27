@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::RecordingMeta;
 use cap_project::StudioRecordingMeta;
@@ -14,29 +14,33 @@ pub struct Video {
 }
 
 impl Video {
-    pub fn new(path: &PathBuf) -> Result<Self, String> {
-        let input =
-            ffmpeg::format::input(path).map_err(|e| format!("Failed to open video: {}", e))?;
-        let stream = input
-            .streams()
-            .best(ffmpeg::media::Type::Video)
-            .ok_or_else(|| "No video stream found".to_string())?;
+    pub fn new(path: impl AsRef<Path>) -> Result<Self, String> {
+        fn inner(path: &Path) -> Result<Video, String> {
+            let input =
+                ffmpeg::format::input(path).map_err(|e| format!("Failed to open video: {}", e))?;
+            let stream = input
+                .streams()
+                .best(ffmpeg::media::Type::Video)
+                .ok_or_else(|| "No video stream found".to_string())?;
 
-        let video_decoder = ffmpeg::codec::Context::from_parameters(stream.parameters())
-            .map_err(|e| format!("Failed to create decoder: {}", e))?
-            .decoder()
-            .video()
-            .map_err(|e| format!("Failed to get video decoder: {}", e))?;
+            let video_decoder = ffmpeg::codec::Context::from_parameters(stream.parameters())
+                .map_err(|e| format!("Failed to create decoder: {}", e))?
+                .decoder()
+                .video()
+                .map_err(|e| format!("Failed to get video decoder: {}", e))?;
 
-        let rate = stream.avg_frame_rate();
-        let fps = rate.numerator() as f64 / rate.denominator() as f64;
+            let rate = stream.avg_frame_rate();
+            let fps = rate.numerator() as f64 / rate.denominator() as f64;
 
-        Ok(Video {
-            width: video_decoder.width(),
-            height: video_decoder.height(),
-            duration: input.duration() as f64 / 1_000_000.0,
-            fps: fps.round() as u32,
-        })
+            Ok(Video {
+                width: video_decoder.width(),
+                height: video_decoder.height(),
+                duration: input.duration() as f64 / 1_000_000.0,
+                fps: fps.round() as u32,
+            })
+        }
+
+        inner(path.as_ref())
     }
 
     pub fn fps(&self) -> u32 {
@@ -52,21 +56,29 @@ pub struct Audio {
 }
 
 impl Audio {
-    pub fn new(path: &PathBuf) -> Self {
-        let input = ffmpeg::format::input(path).unwrap();
-        let stream = input.streams().best(ffmpeg::media::Type::Audio).unwrap();
+    pub fn new(path: impl AsRef<Path>) -> Result<Self, String> {
+        fn inner(path: &Path) -> Result<Audio, String> {
+            let input =
+                ffmpeg::format::input(path).map_err(|e| format!("Failed to open audio: {}", e))?;
+            let stream = input
+                .streams()
+                .best(ffmpeg::media::Type::Audio)
+                .ok_or_else(|| "No audio stream found".to_string())?;
 
-        let audio_decoder = ffmpeg::codec::Context::from_parameters(stream.parameters())
-            .unwrap()
-            .decoder()
-            .audio()
-            .unwrap();
+            let audio_decoder = ffmpeg::codec::Context::from_parameters(stream.parameters())
+                .map_err(|e| format!("Failed to create decoder: {}", e))?
+                .decoder()
+                .audio()
+                .map_err(|e| format!("Failed to get audio decoder: {}", e))?;
 
-        Audio {
-            duration: input.duration() as f64 / 1_000_000.0,
-            sample_rate: audio_decoder.rate(),
-            channels: audio_decoder.channels(),
+            Ok(Audio {
+                duration: input.duration() as f64 / 1_000_000.0,
+                sample_rate: audio_decoder.rate(),
+                channels: audio_decoder.channels(),
+            })
         }
+
+        inner(path.as_ref())
     }
 }
 
@@ -76,19 +88,21 @@ pub struct ProjectRecordings {
 }
 
 impl ProjectRecordings {
-    pub fn new(recording_meta: &RecordingMeta, meta: &StudioRecordingMeta) -> Self {
+    pub fn new(recording_path: &PathBuf, meta: &StudioRecordingMeta) -> Self {
         let segments = match &meta {
             StudioRecordingMeta::SingleSegment { segment } => {
-                let display = Video::new(&recording_meta.path(&segment.display.path))
+                let display = Video::new(segment.display.path.to_path(recording_path))
                     .expect("Failed to read display video");
                 let camera = segment.camera.as_ref().map(|camera| {
-                    Video::new(&recording_meta.path(&camera.path))
+                    Video::new(&camera.path.to_path(recording_path))
                         .expect("Failed to read camera video")
                 });
                 let audio = segment
                     .audio
                     .as_ref()
-                    .map(|audio| Audio::new(&recording_meta.path(&audio.path)));
+                    .map(|audio| Audio::new(audio.path.to_path(recording_path)))
+                    .transpose()
+                    .expect("Failed to read audio");
 
                 vec![SegmentRecordings {
                     display,
@@ -100,16 +114,18 @@ impl ProjectRecordings {
                 .segments
                 .iter()
                 .map(|s| {
-                    let display = Video::new(&recording_meta.path(&s.display.path))
+                    let display = Video::new(s.display.path.to_path(recording_path))
                         .expect("Failed to read display video");
                     let camera = s.camera.as_ref().map(|camera| {
-                        Video::new(&recording_meta.path(&camera.path))
+                        Video::new(&camera.path.to_path(recording_path))
                             .expect("Failed to read camera video")
                     });
                     let audio = s
                         .audio
                         .as_ref()
-                        .map(|audio| Audio::new(&recording_meta.path(&audio.path)));
+                        .map(|audio| Audio::new(audio.path.to_path(recording_path)))
+                        .transpose()
+                        .expect("Failed to read audio");
 
                     SegmentRecordings {
                         display,

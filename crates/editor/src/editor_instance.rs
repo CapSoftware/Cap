@@ -79,7 +79,7 @@ impl EditorInstance {
             return Err("Cannot edit non-studio recordings".to_string());
         };
         let project = recording_meta.project_config();
-        let recordings = ProjectRecordings::new(&recording_meta, meta);
+        let recordings = ProjectRecordings::new(&recording_meta.project_path, meta);
 
         let render_options = RenderOptions {
             screen_size: XY::new(

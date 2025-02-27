@@ -166,7 +166,6 @@ pub fn spawn_cursor_recorder(
                     #[cfg(target_os = "macos")]
                     let (mouse_x, mouse_y) = {
                         let primary_bounds = cap_media::platform::primary_monitor_bounds();
-                        dbg!(primary_bounds);
 
                         let mouse_x = mouse_x - screen_bounds.x as i32;
                         let mouse_y = mouse_y
@@ -212,8 +211,6 @@ pub fn spawn_cursor_recorder(
                     } else {
                         y.max(0.0).min(1.0)
                     };
-
-                    debug!("Normalized coords: ({}, {})", x, y);
 
                     let mouse_event = CursorMoveEvent {
                         active_modifiers: vec![],

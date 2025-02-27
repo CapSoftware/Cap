@@ -7,29 +7,23 @@ use std::{
 
 use cap_flags::FLAGS;
 use cap_media::{
-    data::Pixel,
-    encoders::{H264Encoder, MP4AVAssetWriterEncoder, MP4File, OggFile, OpusEncoder},
+    encoders::{H264Encoder, MP4File, OggFile, OpusEncoder},
     feeds::{AudioInputFeed, CameraFeed},
-    pipeline::{builder::PipelineBuilder, Pipeline, RealTimeClock},
+    pipeline::{Pipeline, RealTimeClock},
     sources::{AudioInputSource, CameraSource, ScreenCaptureSource, ScreenCaptureTarget},
     MediaError,
 };
-use cap_project::{CursorEvents, RecordingMeta};
+use cap_project::{CursorEvents, StudioRecordingMeta};
 use cap_utils::spawn_actor;
-use either::Either;
-use relative_path::{RelativePath, RelativePathBuf};
-use thiserror::Error;
+use relative_path::RelativePathBuf;
 use tokio::sync::{oneshot, Mutex};
-use tracing::{
-    debug, info,
-    instrument::{self, WithSubscriber},
-    trace, Instrument,
-};
-use tracing_subscriber::{fmt::FormatFields, layer::SubscriberExt, Layer};
+use tracing::{debug, error, info, instrument::WithSubscriber, trace, Instrument};
+use tracing_subscriber::{layer::SubscriberExt, Layer};
 
 use crate::{
+    capture_pipeline::{create_screen_capture, MakeCapturePipeline},
     cursor::{spawn_cursor_recorder, CursorActor, Cursors},
-    RecordingOptions,
+    ActorError, RecordingError, RecordingOptions,
 };
 
 enum StudioRecordingActorState {
@@ -85,34 +79,13 @@ pub struct StudioRecordingHandle {
     pub options: RecordingOptions,
 }
 
-#[derive(Error, Debug)]
-pub enum ActorError {
-    #[error("Actor has stopped")]
-    ActorStopped,
-
-    #[error("Failed to send to actor")]
-    SendFailed(#[from] flume::SendError<StudioRecordingActorControlMessage>),
-}
-
-#[derive(Error, Debug)]
-pub enum RecordingError {
-    #[error("Media error: {0}")]
-    Media(#[from] MediaError),
-
-    #[error("Actor error: {0}")]
-    Actor(#[from] ActorError),
-
-    #[error("Serde/{0}")]
-    Serde(#[from] serde_json::Error),
-
-    #[error("IO/{0}")]
-    Io(#[from] std::io::Error),
-}
-
 macro_rules! send_message {
     ($ctrl_tx:expr, $variant:path) => {{
         let (tx, rx) = oneshot::channel();
-        $ctrl_tx.send($variant(tx)).map_err(ActorError::from)?;
+        $ctrl_tx
+            .send($variant(tx))
+            .map_err(|_| flume::SendError(()))
+            .map_err(ActorError::from)?;
         rx.await.map_err(|_| ActorError::ActorStopped)?
     }};
 }
@@ -131,7 +104,7 @@ impl StudioRecordingHandle {
     }
 }
 
-pub async fn spawn_stuido_recording_actor(
+pub async fn spawn_studio_recording_actor(
     id: String,
     recording_dir: PathBuf,
     options: RecordingOptions,
@@ -167,7 +140,7 @@ pub async fn spawn_stuido_recording_actor(
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
 
     async {
-        async {
+        let run = async || {
             trace!("creating recording actor");
 
             let content_dir = ensure_dir(&recording_dir.join("content"))?;
@@ -175,7 +148,7 @@ pub async fn spawn_stuido_recording_actor(
             let segments_dir = ensure_dir(&content_dir.join("segments"))?;
             let cursors_dir = ensure_dir(&content_dir.join("cursors"))?;
 
-            let screen_source = create_screen_capture(&options);
+            let screen_source = create_screen_capture(&options.capture_target)?;
 
             debug!("screen capture: {screen_source:#?}");
 
@@ -401,10 +374,17 @@ pub async fn spawn_stuido_recording_actor(
             });
 
             Ok(StudioRecordingHandle { ctrl_tx, options })
+        };
+
+        match run().await {
+            Ok(a) => Ok(a),
+            Err(e) => {
+                error!("Failed to start recording actor: {}", e);
+                Err(e)
+            }
         }
-        .instrument(tracing::info_span!("recording"))
-        .await
     }
+    .instrument(tracing::info_span!("recording"))
     .with_subscriber(collector)
     .await
     .map(|a| (a, done_rx))
@@ -412,9 +392,9 @@ pub async fn spawn_stuido_recording_actor(
 
 pub struct CompletedStudioRecording {
     pub id: String,
-    pub recording_dir: PathBuf,
+    pub project_path: PathBuf,
     pub display_source: ScreenCaptureTarget,
-    pub meta: RecordingMeta,
+    pub meta: StudioRecordingMeta,
     pub cursor_data: cap_project::CursorImages,
     pub segments: Vec<StudioRecordingSegment>,
 }
@@ -425,85 +405,70 @@ async fn stop_recording(
 ) -> Result<CompletedStudioRecording, RecordingError> {
     use cap_project::*;
 
-    let meta = RecordingMeta {
-        project_path: actor.recording_dir.clone(),
-        sharing: None,
-        pretty_name: format!(
-            "Cap {}",
-            chrono::Local::now().format("%Y-%m-%d at %H.%M.%S")
-        ),
-        inner: RecordingMetaInner::Instant(InstantRecordingMeta {
-            fps: actor.options.capture_target.recording_fps(),
-            sample_rate: None,
-        }),
-        // inner: RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments {
-        //     inner: MultipleSegments {
-        //         segments: {
-        //             actor
-        //                 .segments
-        //                 .iter()
-        //                 .map(|s| MultipleSegment {
-        //                     display: Display {
-        //                         path: RelativePathBuf::from_path(
-        //                             s.pipeline
-        //                                 .display_output_path
-        //                                 .strip_prefix(&actor.recording_dir)
-        //                                 .unwrap(),
-        //                         )
-        //                         .unwrap(),
-        //                         fps: actor.options.capture_target.recording_fps(),
-        //                     },
-        //                     camera: s.pipeline.camera.as_ref().map(|camera| CameraMeta {
-        //                         path: RelativePathBuf::from_path(
-        //                             camera
-        //                                 .output_path
-        //                                 .strip_prefix(&actor.recording_dir)
-        //                                 .unwrap()
-        //                                 .to_owned(),
-        //                         )
-        //                         .unwrap(),
-        //                         fps: camera.fps,
-        //                     }),
-        //                     audio: s.pipeline.audio_output_path.as_ref().map(|path| AudioMeta {
-        //                         path: RelativePathBuf::from_path(
-        //                             path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
-        //                         )
-        //                         .unwrap(),
-        //                     }),
-        //                     cursor: s.pipeline.cursor.as_ref().map(|cursor| {
-        //                         RelativePathBuf::from_path(
-        //                             cursor
-        //                                 .output_path
-        //                                 .strip_prefix(&actor.recording_dir)
-        //                                 .unwrap()
-        //                                 .to_owned(),
-        //                         )
-        //                         .unwrap()
-        //                     }),
-        //                 })
-        //                 .collect()
-        //         },
-        //         cursors: cap_project::Cursors::Correct(
-        //             cursors
-        //                 .into_values()
-        //                 .map(|cursor| {
-        //                     (
-        //                         cursor.id.to_string(),
-        //                         CursorMeta {
-        //                             image_path: RelativePathBuf::from("content/cursors")
-        //                                 .join(&cursor.file_name),
-        //                             hotspot: cursor.hotspot,
-        //                         },
-        //                     )
-        //                 })
-        //                 .collect(),
-        //         ),
-        //     },
-        // }),
+    let meta = StudioRecordingMeta::MultipleSegments {
+        inner: MultipleSegments {
+            segments: {
+                actor
+                    .segments
+                    .iter()
+                    .map(|s| MultipleSegment {
+                        display: Display {
+                            path: RelativePathBuf::from_path(
+                                s.pipeline
+                                    .display_output_path
+                                    .strip_prefix(&actor.recording_dir)
+                                    .unwrap(),
+                            )
+                            .unwrap(),
+                            fps: actor.options.capture_target.recording_fps(),
+                        },
+                        camera: s.pipeline.camera.as_ref().map(|camera| CameraMeta {
+                            path: RelativePathBuf::from_path(
+                                camera
+                                    .output_path
+                                    .strip_prefix(&actor.recording_dir)
+                                    .unwrap()
+                                    .to_owned(),
+                            )
+                            .unwrap(),
+                            fps: camera.fps,
+                        }),
+                        audio: s.pipeline.audio_output_path.as_ref().map(|path| AudioMeta {
+                            path: RelativePathBuf::from_path(
+                                path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
+                            )
+                            .unwrap(),
+                        }),
+                        cursor: s.pipeline.cursor.as_ref().map(|cursor| {
+                            RelativePathBuf::from_path(
+                                cursor
+                                    .output_path
+                                    .strip_prefix(&actor.recording_dir)
+                                    .unwrap()
+                                    .to_owned(),
+                            )
+                            .unwrap()
+                        }),
+                    })
+                    .collect()
+            },
+            cursors: cap_project::Cursors::Correct(
+                cursors
+                    .into_values()
+                    .map(|cursor| {
+                        (
+                            cursor.id.to_string(),
+                            CursorMeta {
+                                image_path: RelativePathBuf::from("content/cursors")
+                                    .join(&cursor.file_name),
+                                hotspot: cursor.hotspot,
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+        },
     };
-
-    meta.save_for_project()
-        .map_err(Either::either_into::<RecordingError>)?;
 
     let project_config = cap_project::ProjectConfiguration::default();
     project_config
@@ -512,31 +477,12 @@ async fn stop_recording(
 
     Ok(CompletedStudioRecording {
         id: actor.id,
+        project_path: actor.recording_dir.clone(),
         meta,
         cursor_data: Default::default(),
-        recording_dir: actor.recording_dir,
         display_source: actor.options.capture_target,
         segments: actor.segments,
     })
-}
-
-fn create_screen_capture(
-    recording_options: &RecordingOptions,
-) -> ScreenCaptureSource<impl MakeCapturePipeline> {
-    #[cfg(target_os = "macos")]
-    {
-        ScreenCaptureSource::<cap_media::sources::CMSampleBufferCapture>::init(
-            &recording_options.capture_target,
-            None,
-        )
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        ScreenCaptureSource::<cap_media::sources::AVFrameCapture>::init(
-            &recording_options.capture_target,
-            None,
-        )
-    }
 }
 
 #[tracing::instrument(skip_all, name = "segment", fields(index = index))]
@@ -670,110 +616,6 @@ struct CameraPipelineInfo {
 fn ensure_dir(path: &PathBuf) -> Result<PathBuf, MediaError> {
     std::fs::create_dir_all(&path)?;
     Ok(path.clone())
-}
-
-type CapturePipelineBuilder = PipelineBuilder<RealTimeClock<()>>;
-
-trait MakeCapturePipeline: std::fmt::Debug + 'static {
-    fn make_capture_pipeline(
-        builder: CapturePipelineBuilder,
-        source: ScreenCaptureSource<Self>,
-        output_path: impl Into<PathBuf>,
-    ) -> Result<CapturePipelineBuilder, MediaError>
-    where
-        Self: Sized;
-
-    fn make_instant_mode_pipeline(
-        builder: CapturePipelineBuilder,
-        source: ScreenCaptureSource<Self>,
-        audio: Option<AudioInputSource>,
-        output_path: impl Into<PathBuf>,
-    ) -> Result<CapturePipelineBuilder, MediaError>
-    where
-        Self: Sized;
-}
-
-#[cfg(target_os = "macos")]
-impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
-    fn make_capture_pipeline(
-        builder: CapturePipelineBuilder,
-        source: ScreenCaptureSource<Self>,
-        output_path: impl Into<PathBuf>,
-    ) -> Result<CapturePipelineBuilder, MediaError> {
-        let screen_config = source.info();
-        let screen_encoder = cap_media::encoders::MP4AVAssetWriterEncoder::init(
-            "screen",
-            screen_config,
-            None,
-            output_path.into(),
-            None,
-        )?;
-
-        Ok(builder
-            .source("screen_capture", source)
-            .sink("screen_capture_encoder", screen_encoder))
-    }
-
-    fn make_instant_mode_pipeline(
-        builder: CapturePipelineBuilder,
-        source: ScreenCaptureSource<Self>,
-        audio: Option<AudioInputSource>,
-        output_path: impl Into<PathBuf>,
-    ) -> Result<CapturePipelineBuilder, MediaError> {
-        let mp4 = Arc::new(std::sync::Mutex::new(MP4AVAssetWriterEncoder::init(
-            "mp4",
-            source.info(),
-            audio.as_ref().map(|f| f.info()),
-            output_path.into(),
-            Some(1080),
-        )?));
-
-        let mut builder = builder
-            .source("screen_capture", source)
-            .sink("screen_encoder", mp4.clone());
-
-        if let Some(audio) = audio {
-            builder = builder
-                .source("microphone_capture", audio)
-                .sink("mic_encoder", mp4.clone());
-        }
-
-        Ok(builder)
-    }
-}
-
-impl MakeCapturePipeline for cap_media::sources::AVFrameCapture {
-    fn make_capture_pipeline(
-        builder: CapturePipelineBuilder,
-        source: ScreenCaptureSource<Self>,
-        output_path: impl Into<PathBuf>,
-    ) -> Result<CapturePipelineBuilder, MediaError>
-    where
-        Self: Sized,
-    {
-        let screen_config = source.info();
-        let screen_encoder = MP4File::init(
-            "screen",
-            output_path.into(),
-            H264Encoder::factory("screen", screen_config),
-            |_| None,
-        )?;
-        Ok(builder
-            .source("screen_capture", source)
-            .sink("screen_capture_encoder", screen_encoder))
-    }
-
-    fn make_instant_mode_pipeline(
-        builder: CapturePipelineBuilder,
-        source: ScreenCaptureSource<Self>,
-        audio: Option<AudioInputSource>,
-        output_path: impl Into<PathBuf>,
-    ) -> Result<CapturePipelineBuilder, MediaError>
-    where
-        Self: Sized,
-    {
-        todo!()
-    }
 }
 
 fn current_time_f64() -> f64 {

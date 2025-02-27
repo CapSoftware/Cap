@@ -36,7 +36,10 @@ use cap_project::XY;
 use cap_project::{
     ProjectConfiguration, RecordingMeta, Resolution, SharingMeta, StudioRecordingMeta,
 };
+use cap_recording::instant_recording::InstantRecordingHandle;
+use cap_recording::RecordingMode;
 use cap_recording::RecordingOptions;
+use cap_recording::StudioRecordingHandle;
 use cap_rendering::ProjectRecordings;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
@@ -48,6 +51,7 @@ use mp4::Mp4Reader;
 use notifications::NotificationType;
 use png::{ColorType, Encoder};
 use presets::PresetsStore;
+use recording::RecordingActor;
 use relative_path::RelativePathBuf;
 use scap::capturer::Capturer;
 use scap::frame::Frame;
@@ -96,7 +100,7 @@ pub struct App {
     #[serde(skip)]
     handle: AppHandle,
     #[serde(skip)]
-    current_recording: Option<cap_recording::ActorHandle>,
+    current_recording: Option<RecordingActor>,
     #[serde(skip)]
     pre_created_video: Option<PreCreatedVideo>,
 }
@@ -131,13 +135,13 @@ pub struct PreCreatedVideo {
 }
 
 impl App {
-    pub fn set_current_recording(&mut self, actor: cap_recording::ActorHandle) {
+    pub fn set_current_recording(&mut self, actor: RecordingActor) {
         let current_recording = self.current_recording.insert(actor);
 
         CurrentRecordingChanged.emit(&self.handle).ok();
 
         if matches!(
-            current_recording.options.capture_target,
+            current_recording.capture_target(),
             ScreenCaptureTarget::Window(_) | ScreenCaptureTarget::Area(_)
         ) {
             let _ = ShowCapWindow::WindowCaptureOccluder.show(&self.handle);
@@ -146,7 +150,7 @@ impl App {
         }
     }
 
-    pub fn clear_current_recording(&mut self) -> Option<cap_recording::ActorHandle> {
+    pub fn clear_current_recording(&mut self) -> Option<RecordingActor> {
         self.close_occluder_window();
 
         self.current_recording.take()
@@ -483,7 +487,7 @@ async fn get_current_recording(
     let state = state.read().await;
     Ok(JsonValue::new(&state.current_recording.as_ref().map(|r| {
         RecordingInfo {
-            capture_target: r.options.capture_target.clone(),
+            capture_target: r.capture_target().clone(),
         }
     })))
 }
@@ -2113,6 +2117,7 @@ pub async fn run() {
                         }),
                         camera_label: None,
                         audio_input_name: None,
+                        mode: RecordingMode::Studio,
                     },
                     current_recording: None,
                     pre_created_video: None,
@@ -2182,8 +2187,6 @@ pub async fn run() {
                             .ok();
 
                         recording.stop().await.ok();
-
-                        // recording.stop_and_discard();
                     }
                 }
 

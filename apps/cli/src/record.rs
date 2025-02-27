@@ -1,7 +1,7 @@
 use std::{env::current_dir, hash::Hash, path::PathBuf, sync::Arc};
 
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
-use cap_recording::RecordingOptions;
+use cap_recording::{RecordingMode, RecordingOptions};
 use clap::Args;
 use nokhwa::utils::{ApiBackend, CameraIndex};
 use tokio::{io::AsyncBufReadExt, sync::Mutex};
@@ -69,13 +69,14 @@ impl RecordStart {
             .path
             .unwrap_or_else(|| current_dir().unwrap().join(format!("{id}.cap")));
 
-        let actor = cap_recording::spawn_recording_actor(
+        let actor = cap_recording::spawn_studio_recording_actor(
             id,
             path,
             RecordingOptions {
                 capture_target: target_info,
                 camera_label: camera.as_ref().map(|c| c.camera_info.human_name()),
                 audio_input_name: None,
+                mode: RecordingMode::Studio,
             },
             camera.map(|c| Arc::new(Mutex::new(c))),
             None,

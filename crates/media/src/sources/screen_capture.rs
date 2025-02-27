@@ -9,8 +9,8 @@ use scap::{
 };
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::{collections::HashMap, ops::ControlFlow};
-use tracing::{error, info, trace, warn};
+use std::{collections::HashMap, ops::ControlFlow, sync::Arc};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     data::{FFVideo, RawVideoFormat, VideoInfo},
@@ -93,6 +93,7 @@ pub struct ScreenCaptureSource<TCaptureFormat> {
     output_type: Option<FrameType>,
     fps: u32,
     video_info: VideoInfo,
+    options: Arc<Options>,
     _phantom: std::marker::PhantomData<TCaptureFormat>,
 }
 
@@ -104,6 +105,7 @@ impl<TCaptureFormat> Clone for ScreenCaptureSource<TCaptureFormat> {
             output_type: self.output_type,
             fps: self.fps,
             video_info: self.video_info.clone(),
+            options: self.options.clone(),
             _phantom: std::marker::PhantomData,
         }
     }
@@ -112,23 +114,29 @@ impl<TCaptureFormat> Clone for ScreenCaptureSource<TCaptureFormat> {
 const MAX_FPS: u32 = 60;
 
 impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
-    pub fn init(target: &ScreenCaptureTarget, output_type: Option<FrameType>) -> Self {
+    pub fn init(
+        target: &ScreenCaptureTarget,
+        output_type: Option<FrameType>,
+    ) -> Result<Self, String> {
+        cap_fail::fail!("media::screen_capture::init");
+
         let mut this = Self {
             target: target.clone(),
             output_resolution: None,
             output_type,
             fps: target.recording_fps(),
             video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, 0, 0, MAX_FPS),
+            options: Arc::new(Options::default()),
             _phantom: std::marker::PhantomData,
         };
 
-        let options = this.create_options();
+        let options = this.create_options()?;
 
         let [frame_width, frame_height] = get_output_frame_size(&options);
         this.video_info =
             VideoInfo::from_raw(RawVideoFormat::Bgra, frame_width, frame_height, MAX_FPS);
 
-        this
+        Ok(this)
     }
 
     pub fn get_bounds(&self) -> Bounds {
@@ -141,7 +149,7 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         }
     }
 
-    fn create_options(&self) -> Options {
+    fn create_options(&self) -> Result<Options, String> {
         let targets = scap::get_all_targets();
 
         let excluded_targets: Vec<scap::Target> = targets
@@ -176,6 +184,8 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                 },
             }),
         };
+
+        debug!("configured target: {:#?}", self.target);
 
         let target = match &self.target {
             ScreenCaptureTarget::Window(w) => {
@@ -223,9 +233,9 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                 })
                 .cloned(),
         }
-        .expect("Capture target not found");
+        .ok_or_else(|| format!("Capture target not found"))?;
 
-        Options {
+        Ok(Options {
             fps: self.fps,
             show_cursor: !FLAGS.record_mouse_state,
             show_highlight: true,
@@ -233,9 +243,8 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             crop_area,
             output_type: self.output_type.unwrap_or(FrameType::BGRAFrame),
             output_resolution: self.output_resolution.unwrap_or(ScapResolution::Captured),
-            excluded_targets: None,
-            // excluded_targets: Some(excluded_targets),
-        }
+            excluded_targets: Some(excluded_targets),
+        })
     }
 
     pub fn info(&self) -> VideoInfo {
@@ -351,7 +360,7 @@ fn inner<T>(
         ScreenCaptureTarget::Window(window) => Some(window.id),
         _ => None,
     };
-    let mut capturer = match Capturer::build(source.create_options()) {
+    let mut capturer = match Capturer::build(source.options.as_ref().clone()) {
         Ok(capturer) => capturer,
         Err(e) => {
             error!("Failed to build capturer: {e}");
@@ -370,6 +379,7 @@ fn inner<T>(
     let t = std::time::Instant::now();
 
     loop {
+        println!("plz");
         match control_signal.last() {
             Some(Control::Shutdown) | None => {
                 trace!("Received shutdown signal");
@@ -421,12 +431,11 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         control_signal: crate::pipeline::control::PipelineControlSignal,
         output: Sender<Self::Output>,
     ) {
-        inner(
-            self,
-            ready_signal,
-            control_signal,
-            |capturer| match capturer.raw().get_next_pixel_buffer() {
+        inner(self, ready_signal, control_signal, |capturer| {
+            println!("pixel buffer");
+            match capturer.raw().get_next_pixel_buffer() {
                 Ok(pixel_buffer) => {
+                    println!("got pixel buffer");
                     if pixel_buffer.height() == 0 || pixel_buffer.width() == 0 {
                         return Some(ControlFlow::Continue(()));
                     }
@@ -442,8 +451,8 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                     eprintln!("Capture error: {error}");
                     Some(ControlFlow::Break(()))
                 }
-            },
-        )
+            }
+        })
     }
 }
 

@@ -43,7 +43,7 @@ impl Renderer {
         recording_meta: &RecordingMeta,
         meta: &StudioRecordingMeta,
     ) -> RendererHandle {
-        let recordings = ProjectRecordings::new(recording_meta, meta);
+        let recordings = ProjectRecordings::new(&recording_meta.project_path, meta);
         let mut max_duration = recordings.duration();
 
         // Check camera duration if it exists

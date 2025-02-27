@@ -147,7 +147,7 @@ impl Export {
 
         let recording_meta = RecordingMeta::load_for_project(&self.project_path).unwrap();
         let meta = recording_meta.studio_meta().unwrap();
-        let recordings = cap_rendering::ProjectRecordings::new(&recording_meta, meta);
+        let recordings = cap_rendering::ProjectRecordings::new(&recording_meta.project_path, meta);
 
         let render_options = cap_rendering::RenderOptions {
             screen_size: XY::new(

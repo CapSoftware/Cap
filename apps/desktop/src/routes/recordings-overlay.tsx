@@ -189,7 +189,7 @@ export default function () {
                             alt="media preview"
                             src={`${convertFileSrc(
                               isRecording
-                                ? `${media.path}/screenshots/display.jpg`
+                                ? `${media.path}/content/segments/segment-0/display.mp4`
                                 : `${media.path}`
                             )}?t=${Date.now()}`}
                             onError={() => setImageExists(false)}

@@ -146,7 +146,7 @@ pub async fn render_video_to_channel(
     is_upgraded: bool,
 ) -> Result<(), RenderingError> {
     let constants = RenderVideoConstants::new(options, recording_meta, meta).await?;
-    let recordings = ProjectRecordings::new(recording_meta, meta);
+    let recordings = ProjectRecordings::new(&recording_meta.project_path, meta);
 
     ffmpeg::init().unwrap();
 
