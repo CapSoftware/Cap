@@ -50,24 +50,25 @@ pub struct SegmentBounds {
 }
 
 impl SegmentBounds {
-    fn from_segment(segment: &ZoomSegment, cursor_events: Option<&CursorEvents>) -> Self {
-        println!("Zoom mode: {:?}, time: {}", segment.mode, segment.start);
-
+    // Add current_time parameter to from_segment 
+    fn from_segment(segment: &ZoomSegment, current_time: f64, cursor_events: Option<&CursorEvents>) -> Self {
+        println!("Zoom mode: {:?}, segment time: {}, current time: {}", segment.mode, segment.start, current_time);
+        
         // Add debug info about cursor_events availability
         println!("Cursor events available: {}", cursor_events.is_some());
-
+        
         let position = match segment.mode {
             cap_project::ZoomMode::Auto => {
-                // Find the cursor position at the segment start time
+                // Use current_time instead of segment.start to get continuously changing cursor positions
                 if let Some(events) = cursor_events {
-                    println!("Looking for cursor position at time: {}", segment.start);
-                    if let Some(pos) = events.cursor_position_at(segment.start) {
+                    println!("Looking for cursor position at time: {}", current_time);
+                    if let Some(pos) = events.cursor_position_at(current_time) {
                         println!("Found cursor position: ({}, {})", pos.x, pos.y);
                         (pos.x, pos.y)
                     } else {
                         println!(
                             "No cursor position found at time: {}, defaulting to center",
-                            segment.start
+                            current_time
                         );
                         (0.5, 0.5) // Fall back to center if no cursor data available
                     }
@@ -145,7 +146,7 @@ impl InterpolatedZoom {
                     t: 1.0 - zoom_t,
                     bounds: {
                         let prev_segment_bounds =
-                            SegmentBounds::from_segment(prev_segment, cursor_events);
+                            SegmentBounds::from_segment(prev_segment, cursor.time, cursor_events);
 
                         SegmentBounds::new(
                             prev_segment_bounds.top_left * (1.0 - zoom_t)
@@ -163,7 +164,7 @@ impl InterpolatedZoom {
                 Self {
                     t,
                     bounds: {
-                        let segment_bounds = SegmentBounds::from_segment(segment, cursor_events);
+                        let segment_bounds = SegmentBounds::from_segment(segment, cursor.time, cursor_events);
 
                         SegmentBounds::new(
                             default.top_left * (1.0 - t) + segment_bounds.top_left * t,
@@ -173,8 +174,8 @@ impl InterpolatedZoom {
                 }
             }
             (Some(prev_segment), Some(segment)) => {
-                let prev_segment_bounds = SegmentBounds::from_segment(prev_segment, cursor_events);
-                let segment_bounds = SegmentBounds::from_segment(segment, cursor_events);
+                let prev_segment_bounds = SegmentBounds::from_segment(prev_segment, cursor.time, cursor_events);
+                let segment_bounds = SegmentBounds::from_segment(segment, cursor.time, cursor_events);
 
                 let zoom_t =
                     ease_in(t_clamp((cursor.time - segment.start) / ZOOM_DURATION) as f32) as f64;
