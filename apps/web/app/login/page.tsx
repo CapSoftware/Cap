@@ -3,13 +3,20 @@ import { Suspense } from "react";
 import { LoginForm } from "./form";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { redirect } from "next/navigation";
+import Loading from "../dashboard/loading";
 
-export default async function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: { error?: string };
+}) {
   const session = await getCurrentUser();
 
   if (session) {
     redirect("/dashboard");
   }
+
+  const showSignupDisabledError = searchParams.error === "signupDisabled";
 
   return (
     <div className="muted-custom-bg w-full h-screen flex items-center justify-center">
@@ -25,14 +32,19 @@ export default async function LoginPage() {
             Beautiful screen recordings, owned by you.
           </p>
         </div>
+        {showSignupDisabledError && (
+          <div className="mb-4 px-6 py-4 bg-red-600 rounded-lg flex flex-col gap-2">
+            <p className="font-bold text-gray-50">Sign-ups are disabled</p>
+            <p className=" text-gray-50">
+              Only existing users can sign in at this time.
+            </p>
+          </div>
+        )}
         <div className="flex flex-col space-y-3">
           <Suspense
             fallback={
               <>
-                <Button disabled={true} variant="primary" />
-                <Button disabled={true} variant="secondary" />
-                <Button disabled={true} variant="destructive" />
-                <div className="mx-auto h-5 w-3/4 rounded-lg bg-gray-100" />
+                <Loading />
               </>
             }
           >
