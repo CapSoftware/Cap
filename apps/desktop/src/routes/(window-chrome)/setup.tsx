@@ -112,7 +112,7 @@ export default function () {
 
         <Show when={currentStep() === "permissions"}>
           <div class="flex flex-col items-center">
-            <IconCapLogo class="size-18 mb-3" />
+            <IconCapLogo class="size-14 mb-3" />
             <h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">
               Permissions Required
             </h1>
@@ -172,7 +172,7 @@ export default function () {
 
         <Show when={currentStep() === "mode"}>
           <div class="flex flex-col items-center">
-            <IconCapLogo class="size-18 mb-3" />
+            <IconCapLogo class="size-14 mb-3" />
             <h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">
               Select Recording Mode
             </h1>

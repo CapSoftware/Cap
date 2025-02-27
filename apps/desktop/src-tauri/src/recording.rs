@@ -132,9 +132,9 @@ pub async fn start_recording(
 
     if matches!(state.recording_options.mode, RecordingMode::Instant) {
         match AuthStore::get(&app) {
-            Ok(Some(auth)) if auth.is_upgraded() => {
-                // Pre-create the video and get the shareable link
-                if let Ok(s3_config) = get_s3_config(&app, false, None).await {
+            Ok(Some(auth)) => {
+                if auth.is_upgraded() && get_s3_config(&app, false, None).await.is_ok() {
+                    let s3_config = get_s3_config(&app, false, None).await.unwrap();
                     let link = web_api::make_url(format!("/s/{}", s3_config.id()));
 
                     state.pre_created_video = Some(PreCreatedVideo {
@@ -144,10 +144,13 @@ pub async fn start_recording(
                     });
 
                     info!("Pre-created shareable link: {}", link);
-                };
+                }
+                // Allow the recording to proceed without error for any signed-in user
             }
             _ => {
-                Err("Instant recording requires Cap Pro")?;
+                // User is not signed in
+                ShowCapWindow::SignIn.show(&app).ok();
+                Err("Please sign in to use instant recording")?;
             }
         }
     }
