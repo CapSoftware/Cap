@@ -28,8 +28,7 @@ import IconLucideClock from "~icons/lucide/clock";
 import { commands, events, RenderProgress, UploadResult } from "~/utils/tauri";
 import { createPresets } from "~/utils/createPresets";
 import { FPS, OUTPUT_SIZE } from "./editor/context";
-import { authStore, generalSettingsStore } from "~/store";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { authStore } from "~/store";
 
 type MediaEntry = {
   path: string;
@@ -79,7 +78,7 @@ export default function () {
     }, 3000);
   };
 
-  events.newRecordingAdded.listen((event) => {
+  events.newStudioRecordingAdded.listen((event) => {
     addMediaEntry(event.payload.path, "recording");
   });
 
@@ -190,7 +189,7 @@ export default function () {
                             alt="media preview"
                             src={`${convertFileSrc(
                               isRecording
-                                ? `${media.path}/content/segments/segment-0/display.mp4`
+                                ? `${media.path}/screenshots/display.jpg`
                                 : `${media.path}`
                             )}?t=${Date.now()}`}
                             onError={() => setImageExists(false)}
