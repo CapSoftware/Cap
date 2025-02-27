@@ -32,6 +32,10 @@ Before anything else, make sure you have the following installed:
 - Rust 1.84.0+
 - pnpm 8.10.5+
 - Docker ([OrbStack](https://orbstack.dev/) recommended)
+- For MacOS
+  - Xcode 15.4 (Build version 15F31d)
+  - Clang: Apple clang version 15.0.0 (clang-1500.3.9.4)
+  - Target: arm64-apple-darwin23.0.0
 
 ### General Setup
 
