@@ -2,7 +2,7 @@
   "name": "@cap/desktop",
   "type": "module",
   "scripts": {
-    "dev": "pnpm -w cap-setup && cross-env RUST_BACKTRACE=1 dotenv -e ../../.env -- pnpm run preparescript && tauri dev",
+    "dev": "pnpm -w cap-setup && cross-env RUST_BACKTRACE=1 dotenv -e ../../.env -- pnpm run preparescript && echo kikouuuu && echo $MACOSX_DEPLOYMENT_TARGET && echo $CFLAGS   && RUST_BACKTRACE=1 RUST_LOG=trace tauri dev",
     "build:tauri": "dotenv -e ../../.env -- pnpm run preparescript && tauri build",
     "preparescript": "node scripts/prepare.js",
     "localdev": "dotenv -e ../../.env -- vinxi dev --port 3001",
