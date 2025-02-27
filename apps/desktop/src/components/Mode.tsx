@@ -1,11 +1,56 @@
-import { createSignal } from "solid-js";
+import { createEffect, createSignal, onMount } from "solid-js";
 import Tooltip from "~/components/Tooltip";
 import { createOptionsQuery } from "~/utils/queries";
 import { commands } from "~/utils/tauri";
+import { trackEvent } from "~/utils/analytics";
+import { createStore } from "solid-js/store";
+
+// Create a global store for mode state that all components can access
+const [modeState, setModeState] = createStore({
+  current: "studio" as "instant" | "studio",
+  initialized: false,
+});
+
+// Export this so other components can directly access the current mode
+export const getModeState = () => modeState.current;
+export const setApplicationMode = (mode: "instant" | "studio") => {
+  setModeState({ current: mode, initialized: true });
+  // Also dispatch an event for components that might be listening
+  window.dispatchEvent(new CustomEvent("cap:mode-change", { detail: mode }));
+};
 
 const Mode = () => {
   const { options, setOptions } = createOptionsQuery();
   const [isInfoHovered, setIsInfoHovered] = createSignal(false);
+
+  // Initialize the mode from options when data is available
+  createEffect(() => {
+    if (options.data?.mode) {
+      if (!modeState.initialized || options.data.mode !== modeState.current) {
+        console.log("Initializing mode state from options:", options.data.mode);
+        setModeState({ current: options.data.mode, initialized: true });
+      }
+    }
+  });
+
+  // Listen for mode change events
+  onMount(() => {
+    const handleModeChange = (e: CustomEvent) => {
+      console.log("Mode change event received:", e.detail);
+    };
+
+    window.addEventListener(
+      "cap:mode-change",
+      handleModeChange as EventListener
+    );
+
+    return () => {
+      window.removeEventListener(
+        "cap:mode-change",
+        handleModeChange as EventListener
+      );
+    };
+  });
 
   const openModeSelectWindow = async () => {
     try {
@@ -13,6 +58,25 @@ const Mode = () => {
     } catch (error) {
       console.error("Failed to open mode select window:", error);
     }
+  };
+
+  const handleModeChange = (mode: "instant" | "studio") => {
+    if (!options.data) return;
+    if (mode === modeState.current) return;
+
+    console.log("Mode changing from", modeState.current, "to", mode);
+
+    // Update global state immediately for responsive UI
+    setApplicationMode(mode);
+
+    // Track the mode change event
+    trackEvent("mode_changed", { from: modeState.current, to: mode });
+
+    // Update the backend options while preserving camera/microphone settings
+    setOptions.mutate({
+      ...options.data,
+      mode,
+    });
   };
 
   return (
@@ -35,11 +99,10 @@ const Mode = () => {
         >
           <div
             onClick={() => {
-              if (!options.data) return;
-              setOptions.mutate({ ...options.data, mode: "instant" });
+              handleModeChange("instant");
             }}
             class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
-              options.data?.mode === "instant"
+              modeState.current === "instant"
                 ? "ring-2 ring-offset-1 ring-offset-gray-50 bg-gray-300 hover:bg-[--gray-300] ring-[--blue-300]"
                 : "bg-gray-200 hover:bg-[--gray-300]"
             }`}
@@ -58,11 +121,10 @@ const Mode = () => {
         >
           <div
             onClick={() => {
-              if (!options.data) return;
-              setOptions.mutate({ ...options.data, mode: "studio" });
+              handleModeChange("studio");
             }}
             class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
-              options.data?.mode === "studio"
+              modeState.current === "studio"
                 ? "ring-2 ring-offset-1 ring-offset-gray-50 bg-gray-300 hover:bg-[--gray-300] ring-[--blue-300]"
                 : "bg-gray-200 hover:bg-[--gray-300]"
             }`}
@@ -76,11 +138,10 @@ const Mode = () => {
         <>
           <div
             onClick={() => {
-              if (!options.data) return;
-              setOptions.mutate({ ...options.data, mode: "instant" });
+              handleModeChange("instant");
             }}
             class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
-              options.data?.mode === "instant"
+              modeState.current === "instant"
                 ? "ring-2 ring-offset-1 ring-offset-gray-50 bg-gray-300 hover:bg-[--gray-300] ring-[--blue-300]"
                 : "bg-gray-200 hover:bg-[--gray-300]"
             }`}
@@ -90,11 +151,10 @@ const Mode = () => {
 
           <div
             onClick={() => {
-              if (!options.data) return;
-              setOptions.mutate({ ...options.data, mode: "studio" });
+              handleModeChange("studio");
             }}
             class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
-              options.data?.mode === "studio"
+              modeState.current === "studio"
                 ? "ring-2 ring-offset-1 ring-offset-gray-50 bg-gray-300 hover:bg-[--gray-300] ring-[--blue-300]"
                 : "bg-gray-200 hover:bg-[--gray-300]"
             }`}

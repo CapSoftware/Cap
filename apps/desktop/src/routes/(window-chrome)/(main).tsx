@@ -50,13 +50,71 @@ import {
   topLeftAnimateClasses,
   topRightAnimateClasses,
 } from "../editor/ui";
-import Mode from "~/components/Mode";
+import Mode, { getModeState, setApplicationMode } from "~/components/Mode";
 
 export default function () {
   const { options, setOptions } = createOptionsQuery();
   const currentRecording = createCurrentRecordingQuery();
+  const queryClient = useQueryClient();
 
   const isRecording = () => !!currentRecording.data;
+
+  // Initialize application mode from options when available
+  createEffect(() => {
+    if (options.data?.mode) {
+      // Set the global application mode to match the options
+      setApplicationMode(options.data.mode);
+    }
+  });
+
+  // Use getModeState for direct access to the current mode
+  // This will be more reliable than tracking local state
+  const currentMode = createMemo(() => {
+    // Get the mode from our global store
+    return getModeState();
+  });
+
+  // Listen for mode changes via event for components that need to respond
+  onMount(() => {
+    const handleModeChange = (e: CustomEvent) => {
+      // Force re-rendering by notifying the reactive system
+      // This isn't strictly necessary since currentMode() uses getModeState()
+      // But it ensures the UI updates in case there are any reactivity issues
+      console.log(`Mode changed to: ${e.detail}`);
+    };
+
+    window.addEventListener(
+      "cap:mode-change",
+      handleModeChange as EventListener
+    );
+    onCleanup(() =>
+      window.removeEventListener(
+        "cap:mode-change",
+        handleModeChange as EventListener
+      )
+    );
+  });
+
+  // Track if we've already handled camera initialization to prevent reopening on mode changes
+  const [cameraInitialized, setCameraInitialized] = createSignal(false);
+
+  // Handle camera window initialization separately from mode changes
+  createEffect(() => {
+    if (!options.data || cameraInitialized()) return;
+
+    // Only initialize camera if a valid camera is selected
+    if (options.data.cameraLabel && options.data.cameraLabel !== "No Camera") {
+      commands.isCameraWindowOpen().then((cameraWindowActive) => {
+        if (!cameraWindowActive) {
+          console.log("Initializing camera window");
+          setCameraInitialized(true);
+        }
+      });
+    } else {
+      // Mark as initialized even if no camera is selected
+      setCameraInitialized(true);
+    }
+  });
 
   const toggleRecording = createMutation(() => ({
     mutationFn: async () => {
@@ -76,17 +134,6 @@ export default function () {
   onCleanup(() => unlistenFn?.());
   const [initialize] = createResource(async () => {
     const version = await getVersion();
-
-    if (options.data?.cameraLabel && options.data.cameraLabel !== "No Camera") {
-      const cameraWindowActive = await commands.isCameraWindowOpen();
-
-      if (!cameraWindowActive) {
-        console.log("cameraWindow not found");
-        setOptions.mutate({
-          ...options.data,
-        });
-      }
-    }
 
     // Enforce window size with multiple safeguards
     const currentWindow = getCurrentWindow();
@@ -247,11 +294,14 @@ export default function () {
             "Stop Recording"
           ) : (
             <>
-              {options.data?.mode === "instant" ? (
+              <Show
+                when={currentMode() === "instant"}
+                fallback={
+                  <IconCapFilmCut class="w-[0.8rem] h-[0.8rem] mr-2 -mt-[1.5px]" />
+                }
+              >
                 <IconCapInstant class="w-[0.8rem] h-[0.8rem] mr-1.5" />
-              ) : (
-                <IconCapFilmCut class="w-[0.8rem] h-[0.8rem] mr-2 -mt-[1.5px]" />
-              )}
+              </Show>
               Start Recording
             </>
           )}
@@ -622,12 +672,15 @@ function CameraSelect(props: {
 
     setLoading(true);
     await props.setOptions
-      .mutateAsync({ ...props.options, cameraLabel })
+      .mutateAsync({
+        ...props.options,
+        cameraLabel: cameraLabel === "No Camera" ? null : cameraLabel,
+      })
       .finally(() => setLoading(false));
 
     trackEvent("camera_selected", {
       camera_name: cameraLabel,
-      enabled: !!cameraLabel,
+      enabled: !!cameraLabel && cameraLabel !== "No Camera",
     });
   };
 
@@ -737,15 +790,18 @@ function MicrophoneSelect(props: {
   const handleMicrophoneChange = async (item: Option | null) => {
     if (!item || !props.options) return;
 
+    // If "No Microphone" is selected, set audioInputName to null
+    const audioInputName = item.deviceId !== "" ? item.name : null;
+
     await props.setOptions.mutateAsync({
       ...props.options,
-      audioInputName: item.deviceId !== "" ? item.name : null,
+      audioInputName,
     });
-    if (!item.deviceId) setDbs();
+    if (!audioInputName) setDbs();
 
     trackEvent("microphone_selected", {
-      microphone_name: item.deviceId !== "" ? item.name : null,
-      enabled: item.deviceId !== "",
+      microphone_name: audioInputName,
+      enabled: !!audioInputName,
     });
   };
 

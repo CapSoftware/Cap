@@ -11,6 +11,7 @@ import { createEffect, createMemo } from "solid-js";
 import { makePersisted } from "@solid-primitives/storage";
 import { FPS } from "~/routes/editor/context";
 import { authStore, generalSettingsStore } from "~/store";
+import { setApplicationMode } from "~/components/Mode";
 
 function debugFetch<T>(name: string, doFetch: () => Promise<T>) {
   return () => {
@@ -102,9 +103,24 @@ export function createOptionsQuery() {
 
   const setOptions = createMutation(() => ({
     mutationFn: async (newOptions: RecordingOptions) => {
+      // Capture current mode
+      const prevMode = state.mode;
+      // Update backend first
       await commands.setRecordingOptions(newOptions);
+      // Extract options minus target
       const { captureTarget: _, ...partialOptions } = newOptions;
+      
+      // If mode changed, update global app mode state
+      if (prevMode !== partialOptions.mode && partialOptions.mode) {
+        // This will trigger UI updates immediately
+        setApplicationMode(partialOptions.mode);
+      }
+      
+      // Update persisted state
       setState(partialOptions);
+      
+      // Force a refetch to ensure everything is in sync
+      return commands.getRecordingOptions();
     },
   }));
 
@@ -116,9 +132,13 @@ export function createOptionsQuery() {
       if (state.cameraLabel) ret.cameraLabel = state.cameraLabel;
       if (state.audioInputName) ret.audioInputName = state.audioInputName;
       if (state.mode) ret.mode = state.mode;
+      
+      // If we have a mode from backend that differs from our store, update global app mode
+      if (data.mode && state.mode !== data.mode) {
+        setApplicationMode(data.mode);
+      }
 
       setState(ret);
-
       return ret;
     },
   }));

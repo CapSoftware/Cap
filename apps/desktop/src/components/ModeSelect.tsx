@@ -1,10 +1,11 @@
-import { JSX } from "solid-js";
+import { JSX, createEffect, createMemo } from "solid-js";
 import { createOptionsQuery } from "~/utils/queries";
 import { RecordingMode } from "~/utils/tauri";
 import InstantModeDark from "../assets/illustrations/instant-mode-dark.png";
 import InstantModeLight from "../assets/illustrations/instant-mode-light.png";
 import StudioModeDark from "../assets/illustrations/studio-mode-dark.png";
 import StudioModeLight from "../assets/illustrations/studio-mode-light.png";
+import { getModeState, setApplicationMode } from "./Mode";
 
 interface ModeOptionProps {
   mode: RecordingMode;
@@ -63,11 +64,32 @@ interface ModeSelectProps {
 const ModeSelect = (props: ModeSelectProps) => {
   const { options, setOptions } = createOptionsQuery();
 
+  // Use createMemo to make the mode state reactive
+  const currentGlobalMode = createMemo(() => getModeState());
+
+  // If there's an initialMode prop, we should use that
+  const selectedMode = createMemo(() =>
+    props.initialMode ? props.initialMode : currentGlobalMode()
+  );
+
+  // For debugging
+  createEffect(() => {
+    console.log("Current mode in ModeSelect:", selectedMode());
+  });
+
   const handleModeChange = (mode: RecordingMode) => {
     if (props.onModeChange) {
       props.onModeChange(mode);
     } else if (options.data) {
-      setOptions.mutate({ ...options.data, mode });
+      // Update global state for immediate UI response
+      setApplicationMode(mode);
+
+      // Keep existing settings while changing the mode
+      // This keeps camera and microphone settings as they were
+      setOptions.mutate({
+        ...options.data,
+        mode,
+      });
     }
   };
 
@@ -102,11 +124,7 @@ const ModeSelect = (props: ModeSelectProps) => {
           darkimg={option.darkimg}
           lightimg={option.lightimg}
           icon={option.icon}
-          isSelected={
-            props.initialMode
-              ? props.initialMode === option.mode
-              : options.data?.mode === option.mode
-          }
+          isSelected={selectedMode() === option.mode}
           onSelect={handleModeChange}
         />
       ))}
