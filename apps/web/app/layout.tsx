@@ -7,8 +7,7 @@ import crypto from "crypto";
 import { GeistSans } from "geist/font/sans";
 import type { Metadata } from "next";
 import { Toaster } from "react-hot-toast";
-import { AuthProvider } from "./AuthProvider";
-import { PostHogProvider, Providers } from "./providers";
+import { Providers } from "./providers";
 
 export const metadata: Metadata = {
   title: "Cap — Beautiful screen recordings, owned by you.",
@@ -65,24 +64,19 @@ export default async function RootLayout({
         <meta name="theme-color" content="#ffffff" />
       </head>
       <body>
-        <PostHogProvider>
-          <AuthProvider>
-            <Providers
-              userId={user?.id}
-              intercomHash={intercomHash}
-              name={`${user?.name ?? ""} ${user?.lastName ?? ""}`}
-              email={user?.email ?? ""}
-            >
-              <Toaster />
-              <main className="overflow-hidden w-full">
-                <Navbar auth={user ? true : false} />
-                {children}
-                <Footer />
-              </main>
-              <BentoScript user={user} />
-            </Providers>
-          </AuthProvider>
-        </PostHogProvider>
+        <Providers
+          userId={user?.id}
+          intercomHash={intercomHash}
+          name={`${user?.name ?? ""} ${user?.lastName ?? ""}`}
+          email={user?.email ?? ""}
+        >
+          <Toaster />
+          <main className="w-full overflow-hidden">
+            <Navbar auth={user ? true : false} />
+            {children}
+            <Footer />
+          </main>
+        </Providers>
       </body>
     </html>
   );
