@@ -124,7 +124,7 @@ pub struct VideoRecordingMetadata {
     pub size: f64,
 }
 
-#[derive(Clone, Serialize, Deserialize, specta::Type)]
+#[derive(Clone, Serialize, Deserialize, specta::Type, Debug)]
 pub struct PreCreatedVideo {
     id: String,
     link: String,
@@ -974,9 +974,6 @@ async fn get_video_metadata(
         .join(format!("{}.cap", video_id));
 
     let recording_meta = RecordingMeta::load_for_project(&project_path)?;
-    let meta = recording_meta
-        .studio_meta()
-        .ok_or_else(|| "Not a studio recording".to_string())?;
 
     fn get_duration_for_path(path: PathBuf) -> Result<f64, String> {
         let reader = BufReader::new(
@@ -1001,15 +998,20 @@ async fn get_video_metadata(
         Ok(current_duration)
     }
 
-    let display_paths = match &meta {
-        StudioRecordingMeta::SingleSegment { segment } => {
-            vec![recording_meta.path(&segment.display.path)]
+    let display_paths = match &recording_meta.inner {
+        RecordingMetaInner::Instant(_) => {
+            vec![project_path.join("content/output.mp4")]
         }
-        StudioRecordingMeta::MultipleSegments { inner } => inner
-            .segments
-            .iter()
-            .map(|s| recording_meta.path(&s.display.path))
-            .collect(),
+        RecordingMetaInner::Studio(meta) => match meta {
+            StudioRecordingMeta::SingleSegment { segment } => {
+                vec![recording_meta.path(&segment.display.path)]
+            }
+            StudioRecordingMeta::MultipleSegments { inner } => inner
+                .segments
+                .iter()
+                .map(|s| recording_meta.path(&s.display.path))
+                .collect(),
+        },
     };
 
     // Use the shorter duration
@@ -1151,7 +1153,7 @@ async fn upload_exported_video(
     video_id: String,
     mode: UploadMode,
 ) -> Result<UploadResult, String> {
-    let Ok(Some(mut auth)) = AuthStore::get(&app) else {
+    let Ok(Some(auth)) = AuthStore::get(&app) else {
         AuthStore::set(&app, None).map_err(|e| e.to_string())?;
         return Ok(UploadResult::NotAuthenticated);
     };
@@ -1234,7 +1236,7 @@ async fn upload_exported_video(
     }
     .await?;
 
-    match upload_video(&app, video_id.clone(), output_path, false, Some(s3_config)).await {
+    match upload_video(&app, video_id.clone(), output_path, Some(s3_config)).await {
         Ok(uploaded_video) => {
             // Emit upload complete
             UploadProgress {

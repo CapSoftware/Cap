@@ -16,7 +16,7 @@ use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-#[derive(Deserialize, Serialize, Clone, Type)]
+#[derive(Deserialize, Serialize, Clone, Type, Debug)]
 pub struct S3UploadMeta {
     id: String,
     user_id: String,
@@ -180,7 +180,6 @@ pub async fn upload_video(
     app: &AppHandle,
     video_id: String,
     file_path: PathBuf,
-    is_individual: bool,
     existing_config: Option<S3UploadMeta>,
 ) -> Result<UploadedVideo, String> {
     println!("Uploading video {video_id}...");
@@ -197,16 +196,12 @@ pub async fn upload_video(
         None => get_s3_config(app, false, Some(video_id)).await?,
     };
 
-    let file_key = if is_individual {
-        format!(
-            "{}/{}/individual/{}",
-            s3_config.user_id(),
-            s3_config.id(),
-            file_name
-        )
-    } else {
-        format!("{}/{}/{}", s3_config.user_id(), s3_config.id(), file_name)
-    };
+    let file_key = format!(
+        "{}/{}/{}",
+        s3_config.user_id(),
+        s3_config.id(),
+        "result.mp4"
+    );
 
     let body = build_video_upload_body(
         &file_path,

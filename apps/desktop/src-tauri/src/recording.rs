@@ -29,7 +29,9 @@ use cap_rendering::ProjectRecordings;
 use cap_utils::spawn_actor;
 use clipboard_rs::{Clipboard, ClipboardContext};
 use tauri::{AppHandle, Manager};
+use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_specta::Event;
+use tracing::info;
 
 pub enum RecordingActor {
     Instant(InstantRecordingHandle),
@@ -128,14 +130,8 @@ pub async fn start_recording(
         .join("recordings")
         .join(format!("{id}.cap"));
 
-    // Check if auto_create_shareable_link is true and user is upgraded
-    let general_settings = GeneralSettingsStore::get(&app)?;
-    let auto_create_shareable_link = general_settings
-        .map(|settings| settings.auto_create_shareable_link)
-        .unwrap_or(false);
-
     if let Ok(Some(auth)) = AuthStore::get(&app) {
-        if auto_create_shareable_link && auth.is_upgraded() {
+        if matches!(state.recording_options.mode, RecordingMode::Instant) && auth.is_upgraded() {
             // Pre-create the video and get the shareable link
             if let Ok(s3_config) = get_s3_config(&app, false, None).await {
                 let link = web_api::make_url(format!("/s/{}", s3_config.id()));
@@ -146,7 +142,7 @@ pub async fn start_recording(
                     config: s3_config,
                 });
 
-                println!("Pre-created shareable link: {}", link);
+                info!("Pre-created shareable link: {}", link);
             };
         }
     }
@@ -342,23 +338,31 @@ async fn handle_recording_finish(
 
             config.write(&recording_dir).map_err(|e| e.to_string())?;
 
+            if let Some(settings) = GeneralSettingsStore::get(&app).ok().flatten() {
+                if settings.open_editor_after_recording {
+                    open_editor(app.clone(), id.clone());
+                }
+            };
+
+            ShowCapWindow::RecordingsOverlay.show(&app).ok();
+
+            let _ = NewStudioRecordingAdded {
+                path: recording_dir.clone(),
+            }
+            .emit(app);
+
+            RecordingMetaInner::Studio(recording.meta)
+        }
+        CompletedRecording::Instant(recording) => {
+            dbg!(&state.pre_created_video);
             if let Some(pre_created_video) = state.pre_created_video.take() {
-                let max_fps = recording.meta.max_fps();
                 spawn_actor({
                     let app = app.clone();
                     async move {
-                        if let Some((settings, auth)) = GeneralSettingsStore::get(&app)
-                            .ok()
-                            .flatten()
-                            .zip(AuthStore::get(&app).ok().flatten())
-                        {
-                            if auth.is_upgraded() && settings.auto_create_shareable_link {
+                        if let Some(auth) = AuthStore::get(&app).ok().flatten() {
+                            if auth.is_upgraded() {
                                 // Copy link to clipboard
-                                let _ = app
-                                    .state::<MutableState<'_, ClipboardContext>>()
-                                    .write()
-                                    .await
-                                    .set_text(pre_created_video.link.clone());
+                                let _ = app.clipboard().write_text(pre_created_video.link.clone());
 
                                 // Send notification for shareable link
                                 notifications::send_notification(
@@ -376,17 +380,6 @@ async fn handle_recording_finish(
                                 tauri::async_runtime::spawn(async move {
                                     let max_retries = 3;
                                     let mut retry_count = 0;
-
-                                    export_video(
-                                        app.clone(),
-                                        id.clone(),
-                                        tauri::ipc::Channel::new(|_| Ok(())),
-                                        true,
-                                        max_fps,
-                                        XY::new(1920, 1080),
-                                    )
-                                    .await
-                                    .ok();
 
                                     while retry_count < max_retries {
                                         match upload_exported_video(
@@ -418,32 +411,22 @@ async fn handle_recording_finish(
                                                 } else {
                                                     println!("Max retries reached. Upload failed.");
                                                     notifications::send_notification(
-                                                            &app,
-                                                            notifications::NotificationType::UploadFailed,
-                                                        );
+                                                                    &app,
+                                                                    notifications::NotificationType::UploadFailed,
+                                                                );
                                                 }
                                             }
                                         }
                                     }
                                 });
-                            } else if settings.open_editor_after_recording {
-                                open_editor(app.clone(), id);
                             }
                         }
                     }
                 });
             }
 
-            ShowCapWindow::RecordingsOverlay.show(&app).ok();
-
-            let _ = NewStudioRecordingAdded {
-                path: recording_dir.clone(),
-            }
-            .emit(app);
-
-            RecordingMetaInner::Studio(recording.meta)
+            RecordingMetaInner::Instant(recording.meta)
         }
-        CompletedRecording::Instant(recording) => RecordingMetaInner::Instant(recording.meta),
     };
 
     let _ = RecordingStopped {

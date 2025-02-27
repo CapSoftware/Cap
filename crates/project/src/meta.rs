@@ -95,7 +95,10 @@ impl RecordingMeta {
     }
 
     pub fn output_path(&self) -> PathBuf {
-        self.project_path.join("output").join("result.mp4")
+        match &self.inner {
+            RecordingMetaInner::Instant(_) => self.project_path.join("content/output.mp4"),
+            RecordingMetaInner::Studio(_) => self.project_path.join("output").join("result.mp4"),
+        }
     }
 
     pub fn studio_meta(&self) -> Option<&StudioRecordingMeta> {
