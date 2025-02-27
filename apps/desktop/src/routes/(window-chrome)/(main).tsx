@@ -181,7 +181,7 @@ export default function () {
           </button>
         </Show>
 
-        {/* {import.meta.env.DEV && (
+        {import.meta.env.DEV && (
           <button
             type="button"
             onClick={() => {
@@ -191,7 +191,7 @@ export default function () {
           >
             <IconLucideBug class="size-5 text-gray-400 hover:text-gray-500" />
           </button>
-        )} */}
+        )}
       </div>
     );
 
