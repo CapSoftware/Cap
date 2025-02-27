@@ -87,10 +87,6 @@ const ModeSelect = (props: ModeSelectProps) => {
 
   return (
     <div class="p-6">
-      <h2 class="text-xl font-semibold mb-8 text-center text-[--gray-500] dark:text-[--gray-50]">
-        Select your recording mode
-      </h2>
-
       <div class="grid grid-cols-2 gap-6 text-center">
         {modeOptions.map((option) => (
           <ModeOption

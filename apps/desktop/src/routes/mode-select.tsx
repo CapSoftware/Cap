@@ -25,6 +25,9 @@ const ModeSelectWindow = () => {
       }}
     >
       <div class="w-full max-w-3xl relative z-10">
+        <h2 class="text-xl font-semibold mb-8 text-center text-[--gray-500] dark:text-[--gray-50]">
+          Select your recording mode
+        </h2>
         <ModeSelect
           initialMode={currentMode()}
           onModeChange={handleModeChange}

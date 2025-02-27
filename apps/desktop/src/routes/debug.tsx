@@ -12,6 +12,16 @@ export default function Debug() {
 
   return (
     <main class="w-full h-full bg-gray-100 text-[--text-primary] p-4">
+      <h2 class="text-2xl font-bold">Debug Windows</h2>
+      <div class="p-2 mb-4">
+        <button
+          class="bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded"
+          onClick={() => commands.showWindow("Setup")}
+        >
+          Show Setup Window
+        </button>
+      </div>
+
       <h2 class="text-2xl font-bold">Fail Points</h2>
       <ul class="p-2">
         <For each={orderedFails()}>
