@@ -29,6 +29,7 @@ pub enum CapWindowId {
     InProgressRecording,
     Upgrade,
     SignIn,
+    ModeSelect,
 }
 
 impl FromStr for CapWindowId {
@@ -46,6 +47,7 @@ impl FromStr for CapWindowId {
             "recordings-overlay" => Self::RecordingsOverlay,
             "upgrade" => Self::Upgrade,
             "signin" => Self::SignIn,
+            "mode-select" => Self::ModeSelect,
             s if s.starts_with("editor-") => Self::Editor {
                 project_id: s.replace("editor-", ""),
             },
@@ -67,6 +69,7 @@ impl std::fmt::Display for CapWindowId {
             Self::RecordingsOverlay => write!(f, "recordings-overlay"),
             Self::Upgrade => write!(f, "upgrade"),
             Self::SignIn => write!(f, "signin"),
+            Self::ModeSelect => write!(f, "mode-select"),
             Self::Editor { project_id } => write!(f, "editor-{}", project_id),
         }
     }
@@ -86,6 +89,7 @@ impl CapWindowId {
             Self::InProgressRecording => "Cap In Progress Recording".to_string(),
             Self::Editor { .. } => "Cap Editor".to_string(),
             Self::SignIn => "Cap Sign In".to_string(),
+            Self::ModeSelect => "Cap Mode Selection".to_string(),
             _ => "Cap".to_string(),
         }
     }
@@ -99,6 +103,7 @@ impl CapWindowId {
                 | Self::Settings
                 | Self::Upgrade
                 | Self::SignIn
+                | Self::ModeSelect
         )
     }
 
@@ -130,6 +135,7 @@ impl CapWindowId {
             Self::Settings => (600.0, 450.0),
             Self::Camera => (460.0, 920.0),
             Self::Upgrade => (850.0, 850.0),
+            Self::ModeSelect => (900.0, 500.0),
             _ => return None,
         })
     }
@@ -148,6 +154,7 @@ pub enum ShowCapWindow {
     InProgressRecording { position: Option<(f64, f64)> },
     Upgrade,
     SignIn,
+    ModeSelect,
 }
 
 impl ShowCapWindow {
@@ -213,6 +220,15 @@ impl ShowCapWindow {
                 .shadow(true)
                 .transparent(true)
                 .center()
+                .build()?,
+            Self::ModeSelect => self
+                .window_builder(app, "/mode-select")
+                .resizable(false)
+                .maximized(false)
+                .maximizable(false)
+                .center()
+                .focused(true)
+                .shadow(true)
                 .build()?,
             Self::Camera { ws_port } => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
@@ -481,6 +497,7 @@ impl ShowCapWindow {
             ShowCapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
             ShowCapWindow::Upgrade => CapWindowId::Upgrade,
             ShowCapWindow::SignIn => CapWindowId::SignIn,
+            ShowCapWindow::ModeSelect => CapWindowId::ModeSelect,
         }
     }
 }

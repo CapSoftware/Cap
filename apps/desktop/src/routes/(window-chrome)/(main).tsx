@@ -50,6 +50,7 @@ import {
   topLeftAnimateClasses,
   topRightAnimateClasses,
 } from "../editor/ui";
+import Mode from "~/components/Mode";
 
 export default function () {
   const { options, setOptions } = createOptionsQuery();
@@ -118,47 +119,79 @@ export default function () {
       unlistenFocus();
       unlistenResize();
     };
-
     setTitlebar("hideMaximize", true);
     setTitlebar(
       "items",
       <div
         dir={ostype() === "windows" ? "rtl" : "rtl"}
-        class="flex mx-2 items-center gap-[0.3rem]"
+        class="flex mx-2 items-center gap-1"
       >
-        <Button
-          variant="secondary"
-          size="xs"
-          onClick={() => {
-            commands.showWindow({ Settings: { page: "feedback" } });
-          }}
-        >
-          Feedback
-        </Button>
+        <Tooltip.Root openDelay={0}>
+          <Tooltip.Trigger>
+            <button
+              type="button"
+              onClick={() =>
+                commands.showWindow({ Settings: { page: "general" } })
+              }
+              class="flex items-center justify-center w-5 h-5 -ml-[1.5px]"
+            >
+              <IconCapSettings class="size-5 text-gray-400 hover:text-gray-500" />
+            </button>
+          </Tooltip.Trigger>
+          <Tooltip.Portal>
+            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+              Settings
+              <Tooltip.Arrow class="fill-gray-500" />
+            </Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
+        <Tooltip.Root openDelay={0}>
+          <Tooltip.Trigger>
+            <button
+              type="button"
+              onClick={() =>
+                commands.showWindow({ Settings: { page: "recordings" } })
+              }
+              class="flex items-center justify-center w-5 h-5"
+            >
+              <IconLucideSquarePlay class="size-5 text-gray-400 hover:text-gray-500" />
+            </button>
+          </Tooltip.Trigger>
+          <Tooltip.Portal>
+            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+              Previous Recordings
+              <Tooltip.Arrow class="fill-gray-500" />
+            </Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
+
         <ChangelogButton />
+
         <Show when={!license.isLoading && license.data?.type === "personal"}>
           <button
             type="button"
             onClick={() => commands.showWindow("Upgrade")}
-            class="relative"
+            class="relative flex items-center justify-center w-5 h-5"
           >
-            <IconLucideGift class="size-[1.10rem] text-gray-400 hover:text-gray-500" />
+            <IconLucideGift class="size-5 text-gray-400 hover:text-gray-500" />
             <div
               style={{ "background-color": "#FF4747" }}
               class="block z-10 absolute top-0 right-0 size-1.5 rounded-full animate-bounce"
             />
           </button>
         </Show>
-        {import.meta.env.DEV && (
+
+        {/* {import.meta.env.DEV && (
           <button
             type="button"
             onClick={() => {
               new WebviewWindow("debug", { url: "/debug" });
             }}
+            class="flex items-center justify-center w-5 h-5"
           >
-            <IconLucideBug class="text-gray-400 hover:text-gray-500" />
+            <IconLucideBug class="size-5 text-gray-400 hover:text-gray-500" />
           </button>
-        )}
+        )} */}
       </div>
     );
 
@@ -197,45 +230,7 @@ export default function () {
             </Suspense>
           </ErrorBoundary>
         </div>
-        <div class="flex items-center space-x-2">
-          <Tooltip.Root openDelay={0}>
-            <Tooltip.Trigger>
-              <button
-                type="button"
-                onClick={() =>
-                  commands.showWindow({ Settings: { page: "recordings" } })
-                }
-              >
-                <IconLucideSquarePlay class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
-              </button>
-            </Tooltip.Trigger>
-            <Tooltip.Portal>
-              <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
-                Previous Recordings
-                <Tooltip.Arrow class="fill-gray-500" />
-              </Tooltip.Content>
-            </Tooltip.Portal>
-          </Tooltip.Root>
-
-          <Tooltip.Root openDelay={0}>
-            <Tooltip.Trigger>
-              <button
-                type="button"
-                onClick={() =>
-                  commands.showWindow({ Settings: { page: "general" } })
-                }
-              >
-                <IconCapSettings class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
-              </button>
-            </Tooltip.Trigger>
-            <Tooltip.Portal>
-              <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
-                Settings
-                <Tooltip.Arrow class="fill-gray-500" />
-              </Tooltip.Content>
-            </Tooltip.Portal>
-          </Tooltip.Root>
-        </div>
+        <Mode />
       </div>
       <TargetSelects options={options.data} setOptions={setOptions} />
       <CameraSelect options={options.data} setOptions={setOptions} />
@@ -1057,14 +1052,28 @@ function ChangelogButton() {
   });
 
   return (
-    <button type="button" onClick={handleChangelogClick} class="relative">
-      <IconLucideBell class="size-[1.10rem] text-gray-400 hover:text-gray-500" />
-      {changelogState.hasUpdate && (
-        <div
-          style={{ "background-color": "#FF4747" }}
-          class="block z-10 absolute top-0 right-0 size-1.5 rounded-full animate-bounce"
-        />
-      )}
-    </button>
+    <Tooltip.Root openDelay={0}>
+      <Tooltip.Trigger>
+        <button
+          type="button"
+          onClick={handleChangelogClick}
+          class="relative flex items-center justify-center w-5 h-5"
+        >
+          <IconLucideBell class="size-5 text-gray-400 hover:text-gray-500" />
+          {changelogState.hasUpdate && (
+            <div
+              style={{ "background-color": "#FF4747" }}
+              class="block z-10 absolute top-0 right-0 size-1.5 rounded-full animate-bounce"
+            />
+          )}
+        </button>
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+          Changelog
+          <Tooltip.Arrow class="fill-gray-500" />
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
   );
 }
