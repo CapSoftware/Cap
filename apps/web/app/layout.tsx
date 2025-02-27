@@ -8,6 +8,7 @@ import { GeistSans } from "geist/font/sans";
 import type { Metadata } from "next";
 import { Toaster } from "react-hot-toast";
 import { Providers } from "./providers";
+import { getServerConfig } from "@/utils/instance/functions";
 
 export const metadata: Metadata = {
   title: "Cap — Beautiful screen recordings, owned by you.",
@@ -29,6 +30,8 @@ export default async function RootLayout({
   children: React.ReactNode;
 }) {
   const user = await getCurrentUser();
+  const serverConfig = await getServerConfig();
+
   let intercomHash = "";
   if (process.env.INTERCOM_SECRET) {
     intercomHash = crypto
@@ -69,6 +72,7 @@ export default async function RootLayout({
           intercomHash={intercomHash}
           name={`${user?.name ?? ""} ${user?.lastName ?? ""}`}
           email={user?.email ?? ""}
+          initialIsCapCloud={serverConfig.isCapCloud}
         >
           <Toaster />
           <main className="w-full overflow-hidden">

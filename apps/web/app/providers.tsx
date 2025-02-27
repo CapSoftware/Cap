@@ -7,9 +7,9 @@ import { PostHogProvider as PHProvider } from "posthog-js/react";
 import { clientEnv } from "@cap/env";
 import PostHogPageView from "./PosthogPageView";
 import Intercom from "@intercom/messenger-js-sdk";
-import { getServerConfig } from "@/utils/instance/functions";
 import { AuthProvider } from "./AuthProvider";
 import { BentoScript } from "@/components/BentoScript";
+import { getServerConfigAction } from "./actions";
 
 // Internal PostHog provider component
 function PostHogWrapper({ children }: { children: React.ReactNode }) {
@@ -35,20 +35,30 @@ export function Providers({
   intercomHash,
   name,
   email,
+  initialIsCapCloud,
 }: {
   children: React.ReactNode;
   userId?: string;
   intercomHash?: string;
   name?: string;
   email?: string;
+  initialIsCapCloud?: boolean;
 }) {
-  const [isCapCloud, setIsCapCloud] = useState<boolean | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isCapCloud, setIsCapCloud] = useState<boolean | null>(
+    initialIsCapCloud ?? null
+  );
+  const [isLoading, setIsLoading] = useState(
+    initialIsCapCloud !== undefined ? false : true
+  );
 
   useEffect(() => {
     const checkIsCapCloud = async () => {
+      if (initialIsCapCloud !== undefined) {
+        return; // Skip fetching if we already have the value
+      }
+
       try {
-        const serverConfig = await getServerConfig();
+        const serverConfig = await getServerConfigAction();
         setIsCapCloud(serverConfig.isCapCloud);
       } catch (error) {
         console.error("Failed to get server config:", error);
@@ -59,7 +69,7 @@ export function Providers({
     };
 
     checkIsCapCloud();
-  }, []);
+  }, [initialIsCapCloud]);
 
   // Initialize Intercom and analytics if isCapCloud is true
   useEffect(() => {
@@ -100,10 +110,8 @@ export function Providers({
     <AuthProvider>
       {isCapCloud ? (
         <>
-          <PostHogWrapper>
-            {children}
-            {email && <BentoScript userEmail={email} />}
-          </PostHogWrapper>
+          <PostHogWrapper>{children}</PostHogWrapper>
+          {email && <BentoScript userEmail={email} />}
         </>
       ) : (
         children
