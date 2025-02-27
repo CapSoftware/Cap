@@ -99,6 +99,9 @@ pub struct ScreenCaptureSource<TCaptureFormat> {
     _phantom: std::marker::PhantomData<TCaptureFormat>,
 }
 
+unsafe impl<T> Send for ScreenCaptureSource<T> {}
+unsafe impl<T> Sync for ScreenCaptureSource<T> {}
+
 impl<TCaptureFormat> Clone for ScreenCaptureSource<TCaptureFormat> {
     fn clone(&self) -> Self {
         Self {
