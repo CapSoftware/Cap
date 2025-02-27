@@ -241,9 +241,20 @@ export default function () {
           variant={isRecording() ? "destructive" : "primary"}
           size="md"
           onClick={() => toggleRecording.mutate()}
-          class="flex-grow"
+          class="flex-grow flex items-center justify-center"
         >
-          {isRecording() ? "Stop Recording" : "Start Recording"}
+          {isRecording() ? (
+            "Stop Recording"
+          ) : (
+            <>
+              {options.data?.mode === "instant" ? (
+                <IconCapInstant class="w-[0.8rem] h-[0.8rem] mr-1.5" />
+              ) : (
+                <IconCapFilmCut class="w-[0.8rem] h-[0.8rem] mr-2 -mt-[1.5px]" />
+              )}
+              Start Recording
+            </>
+          )}
         </Button>
         <Button
           disabled={isRecording()}
