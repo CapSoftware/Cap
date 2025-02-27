@@ -1,5 +1,6 @@
 use std::{collections::VecDeque, path::PathBuf};
 
+use cap_fail::fail;
 use ffmpeg::{
     codec::{context, encoder},
     format::{self, sample::Type, Sample},
@@ -254,6 +255,8 @@ impl PipelineSinkTask<FFAudio> for OggFile {
         ready_signal.send(Ok(())).unwrap();
 
         while let Ok(frame) = input.recv() {
+            fail!("media::encoder::opus::run");
+
             self.queue_frame(frame);
         }
     }

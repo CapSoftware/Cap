@@ -17,5 +17,4 @@ image = "0.25.2"
 mp4 = "0.14.0"
 thiserror.workspace = true
 futures = "0.3.31"
-# tauri = { workspace = true }
 ffmpeg = { workspace = true }

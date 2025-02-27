@@ -13,6 +13,7 @@ mod audio_meter;
 mod editor_window;
 mod export;
 mod fake_window;
+// mod live_state;
 mod presets;
 mod tray;
 mod upload;
@@ -24,6 +25,7 @@ use auth::{AuthStore, AuthenticationInvalid, Plan};
 use camera::create_camera_preview_ws;
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
+use cap_fail::fail;
 use cap_media::feeds::RawCameraFrame;
 use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::frame_ws::WSFrame;
@@ -52,6 +54,7 @@ use scap::frame::Frame;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
+use std::collections::BTreeMap;
 use std::{
     collections::HashMap,
     fs::File,
@@ -198,57 +201,63 @@ impl App {
             _ => {}
         }
 
-        match new_options.camera_label() {
-            Some(camera_label) => {
-                if let Some(camera_feed) = self.camera_feed.as_ref() {
-                    camera_feed
-                        .lock()
-                        .await
-                        .switch_cameras(camera_label)
-                        .await
-                        .map_err(|e| e.to_string())?;
-                } else {
-                    let feed = CameraFeed::init(camera_label)
-                        .await
-                        .map_err(|e| e.to_string())?;
-
+        // try update camera
+        let camera = match (new_options.camera_label(), self.camera_feed.as_ref()) {
+            (Some(camera_label), Some(camera_feed)) => camera_feed
+                .lock()
+                .await
+                .switch_cameras(camera_label)
+                .await
+                .map_err(|e| e.to_string()),
+            (Some(camera_label), None) => CameraFeed::init(camera_label)
+                .await
+                .map(|feed| {
                     feed.attach(self.camera_tx.clone());
-
                     self.camera_feed = Some(Arc::new(Mutex::new(feed)));
-                }
-            }
-            None => {
+                })
+                .map_err(|e| e.to_string()),
+            (None, _) => {
                 self.camera_feed = None;
+                Ok(())
             }
         }
+        .inspect(|_| {
+            self.start_recording_options.camera_label = new_options.camera_label.clone();
+        });
 
-        self.audio_input_feed = match new_options.audio_input_name() {
-            Some(audio_input_name) => Some(match self.audio_input_feed.take() {
-                Some(mut feed) => {
-                    feed.switch_input(audio_input_name)
-                        .await
-                        .map_err(|e| e.to_string())?;
+        // try update microphone
+        let microphone = match (new_options.audio_input_name(), &mut self.audio_input_feed) {
+            (Some(new_input_name), v @ None) => {
+                AudioInputFeed::init(new_input_name)
+                    .await
+                    .map_err(|e| e.to_string())
+                    .map(|feed| async {
+                        feed.add_sender(self.audio_input_tx.clone()).await.unwrap();
+                        *v = Some(feed);
+                    })
+                    .transpose_async()
+                    .await
+            }
+            (Some(new_input_name), Some(feed)) => feed
+                .switch_input(new_input_name)
+                .await
+                .map_err(|e| e.to_string()),
+            (None, v) => {
+                v.take();
+                Ok(())
+            }
+        }
+        .inspect(|_| {
+            self.start_recording_options.audio_input_name = new_options.audio_input_name.clone();
+        });
 
-                    feed
-                }
-                None => {
-                    let feed = AudioInputFeed::init(audio_input_name)
-                        .await
-                        .map_err(|e| e.to_string())?;
+        if camera.is_ok() || microphone.is_ok() {
+            self.start_recording_options.capture_target = new_options.capture_target;
 
-                    feed.add_sender(self.audio_input_tx.clone()).await.unwrap();
+            RecordingOptionsChanged.emit(&self.handle).ok();
+        }
 
-                    feed
-                }
-            }),
-            None => None,
-        };
-
-        self.start_recording_options = new_options;
-
-        RecordingOptionsChanged.emit(&self.handle).ok();
-
-        Ok(())
+        camera.and(microphone)
     }
 }
 
@@ -440,12 +449,12 @@ async fn set_recording_options(
     Ok(())
 }
 
-type Bruh<T> = (T,);
+type SingleTuple<T> = (T,);
 
 #[derive(Serialize, Type)]
 struct JsonValue<T>(
     #[serde(skip)] PhantomData<T>,
-    #[specta(type = Bruh<T>)] serde_json::Value,
+    #[specta(type = SingleTuple<T>)] serde_json::Value,
 );
 
 impl<T> Clone for JsonValue<T> {
@@ -1811,6 +1820,18 @@ fn show_window(app: AppHandle, window: ShowCapWindow) {
     window.show(&app).ok();
 }
 
+#[tauri::command(async)]
+#[specta::specta]
+fn list_fails() -> Result<BTreeMap<String, bool>, ()> {
+    Ok(cap_fail::get_state())
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+fn set_fail(name: String, value: bool) {
+    cap_fail::set_fail(&name, value)
+}
+
 async fn check_notification_permissions(app: AppHandle) {
     // Check if we've already requested permissions
     let Ok(Some(settings)) = GeneralSettingsStore::get(&app) else {
@@ -1964,6 +1985,8 @@ pub async fn run() {
             write_clipboard_string,
             platform::perform_haptic_feedback,
             get_wallpaper_path,
+            list_fails,
+            set_fail,
             update_auth_plan
         ])
         .events(tauri_specta::collect_events![
@@ -2056,17 +2079,7 @@ pub async fn run() {
                 })
                 .build(),
         )
-        .invoke_handler({
-            let handler = specta_builder.invoke_handler();
-
-            move |invoke| {
-                sentry::configure_scope(|scope| {
-                    scope.set_tag("cmd", invoke.message.command());
-                });
-
-                handler(invoke)
-            }
-        })
+        .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             let app = app.handle().clone();
             specta_builder.mount_events(&app);
@@ -2432,3 +2445,27 @@ trait EventExt: tauri_specta::Event {
 }
 
 impl<T: tauri_specta::Event> EventExt for T {}
+
+trait TransposeAsync {
+    type Output;
+
+    fn transpose_async(self) -> impl Future<Output = Self::Output>
+    where
+        Self: Sized;
+}
+
+impl<F: Future<Output = T>, T, E> TransposeAsync for Result<F, E> {
+    type Output = Result<T, E>;
+
+    fn transpose_async(self) -> impl Future<Output = Self::Output>
+    where
+        Self: Sized,
+    {
+        async {
+            match self {
+                Ok(f) => Ok(f.await),
+                Err(e) => Err(e),
+            }
+        }
+    }
+}

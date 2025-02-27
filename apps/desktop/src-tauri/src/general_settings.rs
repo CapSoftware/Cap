@@ -40,9 +40,9 @@ pub struct GeneralSettingsStore {
 #[serde(rename_all = "camelCase")]
 pub struct CommercialLicense {
     license_key: String,
-    expiry_date: Option<u32>,
-    refresh: u32,
-    activated_on: u32,
+    expiry_date: Option<f64>,
+    refresh: f64,
+    activated_on: f64,
 }
 
 impl Default for GeneralSettingsStore {
@@ -79,12 +79,12 @@ fn true_b() -> bool {
 
 impl GeneralSettingsStore {
     pub fn get(app: &AppHandle<Wry>) -> Result<Option<Self>, String> {
-        match app.get_store("store").map(|s| s.get("general_settings")) {
-            Some(Some(store)) => {
+        match app.store("store").map(|s| s.get("general_settings")) {
+            Ok(Some(store)) => {
                 // Handle potential deserialization errors gracefully
                 match serde_json::from_value(store) {
                     Ok(settings) => Ok(Some(settings)),
-                    Err(_) => Err("Failed to deserialize general settings store".to_string()),
+                    Err(e) => Err(format!("Failed to deserialize general settings store: {e}")),
                 }
             }
             _ => Ok(None),
@@ -93,7 +93,7 @@ impl GeneralSettingsStore {
 
     // i don't trust anyone to not overwrite the whole store lols
     pub fn update(app: &AppHandle, update: impl FnOnce(&mut Self)) -> Result<(), String> {
-        let Some(store) = app.get_store("store") else {
+        let Ok(store) = app.store("store") else {
             return Err("Store not found".to_string());
         };
 
@@ -102,16 +102,30 @@ impl GeneralSettingsStore {
         store.set("general_settings", json!(settings));
         store.save().map_err(|e| e.to_string())
     }
-}
 
-pub type GeneralSettingsState = Mutex<GeneralSettingsStore>;
+    fn save(&self, app: &AppHandle) -> Result<(), String> {
+        let Ok(store) = app.store("store") else {
+            return Err("Store not found".to_string());
+        };
+
+        store.set("general_settings", json!(self));
+        store.save().map_err(|e| e.to_string())
+    }
+}
 
 pub fn init(app: &AppHandle) {
     println!("Initializing GeneralSettingsStore");
-    // Use unwrap_or_default() to handle potential errors gracefully
-    let store = GeneralSettingsStore::get(app)
-        .unwrap_or(None)
-        .unwrap_or_default();
-    app.manage(GeneralSettingsState::new(store));
+
+    let store = match GeneralSettingsStore::get(app) {
+        Ok(Some(store)) => store,
+        Ok(None) => GeneralSettingsStore::default(),
+        e => {
+            e.unwrap();
+            return;
+        }
+    };
+
+    store.save(app).unwrap();
+
     println!("GeneralSettingsState managed");
 }

@@ -1,3 +1,4 @@
+use cap_fail::fail;
 use cpal::{Device, StreamInstant, SupportedStreamConfig};
 use flume::{Receiver, Sender};
 use indexmap::IndexMap;
@@ -93,6 +94,8 @@ impl PipelineSourceTask for AudioInputSource {
 
         let mut samples_rx: Option<Receiver<AudioInputSamples>> = None;
         ready_signal.send(Ok(())).unwrap();
+
+        fail!("media::sources::audio_input::run");
 
         loop {
             match control_signal.last() {
