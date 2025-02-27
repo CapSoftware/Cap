@@ -85,21 +85,19 @@ const ModeSelect = () => {
   ];
 
   return (
-    <div class="p-6">
-      <div class="grid grid-cols-2 gap-6 text-center">
-        {modeOptions.map((option) => (
-          <ModeOption
-            mode={option.mode}
-            title={option.title}
-            description={option.description}
-            darkimg={option.darkimg}
-            lightimg={option.lightimg}
-            icon={option.icon}
-            isSelected={options.data?.mode === option.mode}
-            onSelect={handleModeChange}
-          />
-        ))}
-      </div>
+    <div class="grid grid-cols-2 gap-8 text-center">
+      {modeOptions.map((option) => (
+        <ModeOption
+          mode={option.mode}
+          title={option.title}
+          description={option.description}
+          darkimg={option.darkimg}
+          lightimg={option.lightimg}
+          icon={option.icon}
+          isSelected={options.data?.mode === option.mode}
+          onSelect={handleModeChange}
+        />
+      ))}
     </div>
   );
 };
