@@ -240,15 +240,20 @@ pub async fn spawn_instant_recording_actor(
 
                                         break match msg {
                                             InstantRecordingActorControlMessage::Pause(tx) => {
-                                                let res = shutdown(
+                                                InstantRecordingActorState::Recording {
                                                     pipeline,
-                                                    &mut actor,
+                                                    pipeline_done_rx,
                                                     segment_start_time,
-                                                )
-                                                .await;
+                                                }
+                                                // let res = shutdown(
+                                                //     pipeline,
+                                                //     &mut actor,
+                                                //     segment_start_time,
+                                                // )
+                                                // .await;
 
-                                                tx.send(res.map_err(Into::into)).ok();
-                                                InstantRecordingActorState::Paused
+                                                // tx.send(res.map_err(Into::into)).ok();
+                                                // InstantRecordingActorState::Paused
                                             }
                                             InstantRecordingActorControlMessage::Stop(tx) => {
                                                 let res = shutdown(

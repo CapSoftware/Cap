@@ -1,7 +1,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use cap_media::{
-    encoders::{H264Encoder, MP4AVAssetWriterEncoder, MP4File},
+    encoders::{H264Encoder, MP4AVAssetWriterEncoder, MP4File, OpusEncoder},
     pipeline::{builder::PipelineBuilder, RealTimeClock},
     sources::{AudioInputSource, ScreenCaptureSource, ScreenCaptureTarget},
     MediaError,
@@ -109,7 +109,26 @@ impl MakeCapturePipeline for cap_media::sources::AVFrameCapture {
     where
         Self: Sized,
     {
-        todo!()
+        let screen_config = source.info();
+        let audio_info = audio.as_ref().map(|f| f.info());
+        let mp4 = Arc::new(std::sync::Mutex::new(MP4File::init(
+            "screen",
+            output_path.into(),
+            H264Encoder::factory("screen", screen_config),
+            |o| audio_info.map(|a| OpusEncoder::init("mic_audio", a, o)),
+        )?));
+
+        let mut builder = builder
+            .source("screen_capture", source)
+            .sink("screen_encoder", mp4.clone());
+
+        if let Some(audio) = audio {
+            builder = builder
+                .source("microphone_capture", audio)
+                .sink("mic_encoder", mp4.clone());
+        }
+
+        Ok(builder)
     }
 }
 
@@ -132,6 +151,13 @@ pub fn create_screen_capture(
     }
     #[cfg(not(target_os = "macos"))]
     {
-        ScreenCaptureSource::<cap_media::sources::AVFrameCapture>::init(capture_target, None)
+        ScreenCaptureSource::<cap_media::sources::AVFrameCapture>::init(
+            capture_target,
+            None,
+            show_camera,
+            force_show_cursor,
+            max_fps,
+        )
+        .map_err(|e| RecordingError::Media(MediaError::TaskLaunch(e)))
     }
 }
