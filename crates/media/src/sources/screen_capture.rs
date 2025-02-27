@@ -164,7 +164,7 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             .iter()
             .filter(|target| match target {
                 Target::Window(scap_window) => {
-                    if scap_window.title == "Cap Window" && self.show_camera {
+                    if scap_window.title == "Cap Camera" && self.show_camera {
                         false
                     } else {
                         EXCLUDED_WINDOWS.contains(&scap_window.title.as_str())
