@@ -365,7 +365,7 @@ impl App {
 pub struct RecordingOptionsChanged;
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
-pub struct NewRecordingAdded {
+pub struct NewStudioRecordingAdded {
     path: PathBuf,
 }
 
@@ -1994,7 +1994,7 @@ pub async fn run() {
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
-            NewRecordingAdded,
+            NewStudioRecordingAdded,
             NewScreenshotAdded,
             RenderFrameEvent,
             EditorStateChanged,
