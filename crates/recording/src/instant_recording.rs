@@ -1,32 +1,20 @@
 use std::{
     fs::File,
     path::PathBuf,
-    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use cap_flags::FLAGS;
 use cap_media::{
-    data::Pixel,
-    encoders::{H264Encoder, MP4AVAssetWriterEncoder, MP4File, OggFile, OpusEncoder},
-    feeds::{AudioInputFeed, CameraFeed},
-    pipeline::{builder::PipelineBuilder, Pipeline, RealTimeClock},
-    sources::{AudioInputSource, CameraSource, ScreenCaptureSource, ScreenCaptureTarget},
+    feeds::AudioInputFeed,
+    pipeline::{Pipeline, RealTimeClock},
+    sources::{AudioInputSource, ScreenCaptureSource, ScreenCaptureTarget},
     MediaError,
 };
-use cap_project::{CursorEvents, InstantRecordingMeta, RecordingMeta};
+use cap_project::InstantRecordingMeta;
 use cap_utils::spawn_actor;
-use either::Either;
-use futures::{future, FutureExt};
-use relative_path::{RelativePath, RelativePathBuf};
-use thiserror::Error;
-use tokio::sync::{oneshot, Mutex};
-use tracing::{
-    debug, error, info,
-    instrument::{self, WithSubscriber},
-    trace, Instrument,
-};
-use tracing_subscriber::{fmt::FormatFields, layer::SubscriberExt, Layer};
+use tokio::sync::oneshot;
+use tracing::{debug, error, info, instrument::WithSubscriber, trace, Instrument};
+use tracing_subscriber::{layer::SubscriberExt, Layer};
 
 use crate::{
     capture_pipeline::{create_screen_capture, MakeCapturePipeline},

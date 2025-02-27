@@ -1,37 +1,13 @@
-use std::{
-    fs::File,
-    path::PathBuf,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{path::PathBuf, sync::Arc};
 
-use cap_flags::FLAGS;
 use cap_media::{
-    data::Pixel,
-    encoders::{H264Encoder, MP4AVAssetWriterEncoder, MP4File, OggFile, OpusEncoder},
-    feeds::{AudioInputFeed, CameraFeed},
-    pipeline::{builder::PipelineBuilder, Pipeline, RealTimeClock},
-    sources::{AudioInputSource, CameraSource, ScreenCaptureSource, ScreenCaptureTarget},
+    encoders::{H264Encoder, MP4AVAssetWriterEncoder, MP4File},
+    pipeline::{builder::PipelineBuilder, RealTimeClock},
+    sources::{AudioInputSource, ScreenCaptureSource, ScreenCaptureTarget},
     MediaError,
 };
-use cap_project::{CursorEvents, RecordingMeta};
-use cap_utils::spawn_actor;
-use either::Either;
-use futures::future;
-use relative_path::{RelativePath, RelativePathBuf};
-use thiserror::Error;
-use tokio::sync::{oneshot, Mutex};
-use tracing::{
-    debug, info,
-    instrument::{self, WithSubscriber},
-    trace, Instrument,
-};
-use tracing_subscriber::{fmt::FormatFields, layer::SubscriberExt, Layer};
 
-use crate::{
-    cursor::{spawn_cursor_recorder, CursorActor, Cursors},
-    RecordingError, RecordingOptions,
-};
+use crate::RecordingError;
 
 pub type CapturePipelineBuilder = PipelineBuilder<RealTimeClock<()>>;
 

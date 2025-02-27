@@ -10,7 +10,7 @@ use crate::{
 };
 
 use arc::Retained;
-use cidre::{cm::FormatDesc, objc::Obj, *};
+use cidre::{objc::Obj, *};
 
 pub struct MP4AVAssetWriterEncoder {
     tag: &'static str,
@@ -21,6 +21,7 @@ pub struct MP4AVAssetWriterEncoder {
     audio_input: Option<Retained<av::AssetWriterInput>>,
     first_timestamp: Option<cm::Time>,
     last_timestamp: Option<cm::Time>,
+    is_writing: bool,
 }
 
 impl MP4AVAssetWriterEncoder {
@@ -142,6 +143,7 @@ impl MP4AVAssetWriterEncoder {
             video_input,
             first_timestamp: None,
             last_timestamp: None,
+            is_writing: true,
         })
     }
 
@@ -234,16 +236,25 @@ impl MP4AVAssetWriterEncoder {
     fn process_frame(&mut self) {}
 
     fn finish(&mut self) {
+        if !self.is_writing {
+            return;
+        }
+
+        self.is_writing = false;
+
         self.asset_writer
             .end_session_at_src_time(self.last_timestamp.take().unwrap_or(cm::Time::zero()));
         self.video_input.mark_as_finished();
         self.audio_input.as_mut().map(|i| i.mark_as_finished());
+
         self.asset_writer.finish_writing();
+
+        info!("Finished writing");
     }
 }
 
 use screencapturekit::cm_sample_buffer::CMSampleBuffer;
-use tracing::debug;
+use tracing::{debug, info};
 
 impl PipelineSinkTask<CMSampleBuffer> for MP4AVAssetWriterEncoder {
     fn run(
