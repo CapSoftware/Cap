@@ -42,7 +42,7 @@ export default function Recordings() {
 
   const handleRecordingClick = (recording: MediaEntry) => {
     trackEvent("recording_view_clicked", { recording_id: recording.id });
-    events.newRecordingAdded.emit({ path: recording.path });
+    events.newStudioRecordingAdded.emit({ path: recording.path });
   };
 
   const handleOpenFolder = (path: string) => {

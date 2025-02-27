@@ -3,6 +3,7 @@ use std::{path::PathBuf, sync::Arc};
 use crate::{
     audio::AppSounds,
     auth::AuthStore,
+    create_screenshot,
     export::export_video,
     general_settings::GeneralSettingsStore,
     notifications, open_editor, open_external_link,
@@ -10,15 +11,15 @@ use crate::{
     upload::get_s3_config,
     upload_exported_video, web_api,
     windows::{CapWindowId, ShowCapWindow},
-    App, CurrentRecordingChanged, MutableState, NewRecordingAdded, PreCreatedVideo,
+    App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, PreCreatedVideo,
     RecordingStarted, RecordingStopped, UploadMode,
 };
 use cap_fail::fail;
 use cap_media::sources::{CaptureScreen, CaptureWindow};
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
 use cap_project::{
-    ProjectConfiguration, RecordingMeta, RecordingMetaInner, TimelineConfiguration,
-    TimelineSegment, ZoomSegment, XY,
+    ProjectConfiguration, RecordingMeta, RecordingMetaInner, StudioRecordingMeta,
+    TimelineConfiguration, TimelineSegment, ZoomSegment, XY,
 };
 use cap_recording::{
     instant_recording::{CompletedInstantRecording, InstantRecordingHandle},
@@ -316,6 +317,21 @@ async fn handle_recording_finish(
 
     let meta_inner = match completed_recording {
         CompletedRecording::Studio(recording) => {
+            let screenshots_dir = recording_dir.join("screenshots");
+            std::fs::create_dir_all(&screenshots_dir).ok();
+
+            let display_output_path = match &recording.meta {
+                StudioRecordingMeta::SingleSegment { segment } => {
+                    segment.display.path.to_path(&recording_dir)
+                }
+                StudioRecordingMeta::MultipleSegments { inner } => {
+                    inner.segments[0].display.path.to_path(&recording_dir)
+                }
+            };
+
+            let display_screenshot = screenshots_dir.join("display.jpg");
+            create_screenshot(display_output_path, display_screenshot.clone(), None).await?;
+
             let recordings = ProjectRecordings::new(&recording_dir, &recording.meta);
 
             let config = project_config_from_recording(
@@ -418,17 +434,17 @@ async fn handle_recording_finish(
                 });
             }
 
+            ShowCapWindow::RecordingsOverlay.show(&app).ok();
+
+            let _ = NewStudioRecordingAdded {
+                path: recording_dir.clone(),
+            }
+            .emit(app);
+
             RecordingMetaInner::Studio(recording.meta)
         }
         CompletedRecording::Instant(recording) => RecordingMetaInner::Instant(recording.meta),
     };
-
-    ShowCapWindow::RecordingsOverlay.show(&app).ok();
-
-    let _ = NewRecordingAdded {
-        path: recording_dir.clone(),
-    }
-    .emit(app);
 
     let _ = RecordingStopped {
         path: recording_dir.clone(),

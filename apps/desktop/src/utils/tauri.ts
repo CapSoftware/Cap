@@ -184,8 +184,8 @@ authenticationInvalid: AuthenticationInvalid,
 currentRecordingChanged: CurrentRecordingChanged,
 editorStateChanged: EditorStateChanged,
 newNotification: NewNotification,
-newRecordingAdded: NewRecordingAdded,
 newScreenshotAdded: NewScreenshotAdded,
+newStudioRecordingAdded: NewStudioRecordingAdded,
 recordingMetaChanged: RecordingMetaChanged,
 recordingOptionsChanged: RecordingOptionsChanged,
 recordingStarted: RecordingStarted,
@@ -203,8 +203,8 @@ authenticationInvalid: "authentication-invalid",
 currentRecordingChanged: "current-recording-changed",
 editorStateChanged: "editor-state-changed",
 newNotification: "new-notification",
-newRecordingAdded: "new-recording-added",
 newScreenshotAdded: "new-screenshot-added",
+newStudioRecordingAdded: "new-studio-recording-added",
 recordingMetaChanged: "recording-meta-changed",
 recordingOptionsChanged: "recording-options-changed",
 recordingStarted: "recording-started",
@@ -267,8 +267,8 @@ export type JsonValue<T> = [T]
 export type MultipleSegment = { display: Display; camera?: CameraMeta | null; audio?: AudioMeta | null; cursor?: string | null }
 export type MultipleSegments = { segments: MultipleSegment[]; cursors: Cursors }
 export type NewNotification = { title: string; body: string; is_error: boolean }
-export type NewRecordingAdded = { path: string }
 export type NewScreenshotAdded = { path: string }
+export type NewStudioRecordingAdded = { path: string }
 export type OSPermission = "screenRecording" | "camera" | "microphone" | "accessibility"
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; camera: OSPermissionStatus; accessibility: OSPermissionStatus }
