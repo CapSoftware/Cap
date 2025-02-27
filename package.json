@@ -6,7 +6,7 @@
     "dev": "(pnpm run docker:up > /dev/null &) && sleep 5 && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
     "dev:windows": "start /b cmd /c \"pnpm run docker:up > nul\" && timeout /t 5 /nobreak > nul && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
     "dev:web": "pnpm dev --filter=!@cap/desktop",
-    "dev:desktop": "pnpm run --filter=@cap/desktop dev",
+    "dev:desktop": "RUST_BACKTRACE=1 && pnpm run --filter=@cap/desktop dev",
     "dev:manual": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/storybook --no-cache --concurrency 1",
     "lint": "turbo run lint",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",

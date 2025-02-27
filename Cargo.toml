@@ -41,3 +41,7 @@ cidre = { git = "https://github.com/yury/cidre", rev = "3479c18b9ac81dbb15d0acb3
 windows = "0.58.0"
 windows-sys = "0.59.0"
 windows-capture = "=1.3.6"
+
+
+[profile.dev]
+panic = "unwind"

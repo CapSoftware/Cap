@@ -1,4 +1,4 @@
-use cap_project::{ZoomSegment, XY, cursor::CursorEvents};
+use cap_project::{cursor::CursorEvents, ZoomSegment, XY};
 
 pub const ZOOM_DURATION: f64 = 1.0;
 
@@ -51,30 +51,41 @@ pub struct SegmentBounds {
 
 impl SegmentBounds {
     fn from_segment(segment: &ZoomSegment, cursor_events: Option<&CursorEvents>) -> Self {
+        println!("Zoom mode: {:?}, time: {}", segment.mode, segment.start);
+
+        // Add debug info about cursor_events availability
+        println!("Cursor events available: {}", cursor_events.is_some());
+
         let position = match segment.mode {
             cap_project::ZoomMode::Auto => {
                 // Find the cursor position at the segment start time
                 if let Some(events) = cursor_events {
+                    println!("Looking for cursor position at time: {}", segment.start);
                     if let Some(pos) = events.cursor_position_at(segment.start) {
+                        println!("Found cursor position: ({}, {})", pos.x, pos.y);
                         (pos.x, pos.y)
                     } else {
-                        (0.0, 0.0) // Fall back to center if no cursor data available
+                        println!(
+                            "No cursor position found at time: {}, defaulting to center",
+                            segment.start
+                        );
+                        (0.5, 0.5) // Fall back to center if no cursor data available
                     }
                 } else {
-                    (0.0, 0.0) // Fall back to center if no cursor events provided
+                    println!("No cursor events provided, defaulting to center");
+                    (0.5, 0.5) // Fall back to center if no cursor events provided
                 }
-            },
+            }
             cap_project::ZoomMode::Manual { x, y } => (x as f64, y as f64),
         };
 
-        let scaled_center = [
-            position.0 * segment.amount,
-            position.1 * segment.amount,
-        ];
-        let center_diff = [
-            scaled_center[0] - position.0,
-            scaled_center[1] - position.1,
-        ];
+        println!("Final position: ({}, {})", position.0, position.1);
+
+        // Fix: Instead of defaulting to (0.0, 0.0), use (0.5, 0.5) as center
+        // The rest of the function remains the same
+
+        let scaled_center = [position.0 * segment.amount, position.1 * segment.amount];
+        let center_diff = [scaled_center[0] - position.0, scaled_center[1] - position.1];
 
         SegmentBounds::new(
             XY::new(0.0 - center_diff[0], 0.0 - center_diff[1]),
@@ -133,7 +144,8 @@ impl InterpolatedZoom {
                 Self {
                     t: 1.0 - zoom_t,
                     bounds: {
-                        let prev_segment_bounds = SegmentBounds::from_segment(prev_segment, cursor_events);
+                        let prev_segment_bounds =
+                            SegmentBounds::from_segment(prev_segment, cursor_events);
 
                         SegmentBounds::new(
                             prev_segment_bounds.top_left * (1.0 - zoom_t)
