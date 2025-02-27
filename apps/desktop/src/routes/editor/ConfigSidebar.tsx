@@ -1351,7 +1351,6 @@ export function ConfigSidebar() {
                       value().selection.index,
                       "mode",
                       mode === "auto" ? "auto" : {
-                        // type: "manual",
                         manual: { x: 0.5, y: 0.5 }
                       }
                     );
@@ -1376,7 +1375,7 @@ export function ConfigSidebar() {
                   </KTabs.List>
                   <KTabs.Content value="auto" tabIndex="">
                     <div class="text-gray-500 text-sm">
-                      Auto zoom will intelligently focus on important content.
+                      Auto zoom will follow the cursor.
                     </div>
                   </KTabs.Content>
                   <KTabs.Content value="manual" tabIndex="">
