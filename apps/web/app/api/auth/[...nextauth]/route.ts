@@ -5,7 +5,7 @@ import type { User, Account, Profile } from "next-auth";
 import { getServerConfig } from "@/utils/instance/functions";
 import { db } from "@cap/database";
 import { eq } from "drizzle-orm";
-import { users } from "@cap/database/schema";
+import { spaceInvites, users } from "@cap/database/schema";
 
 // Create a modified version of authOptions with additional signIn callback to disable signups if the server is not CapCloud or signups are disabled
 const extendedAuthOptions: NextAuthOptions = {
@@ -33,18 +33,23 @@ const extendedAuthOptions: NextAuthOptions = {
         return false;
       }
 
-      // If signups are disabled, only allow users who already exist to sign in
       const existingUser = await db.query.users.findFirst({
         where: eq(users.email, params.user.email),
       });
 
-      // If user exists, allow sign-in
       if (existingUser) {
         return true;
       }
 
-      console.log("🔥 redirecting");
-      // If user doesn't exist and signups are disabled, redirect to login page with error
+      const matchedInvitedUser = await db.query.spaceInvites.findFirst({
+        where: eq(spaceInvites.invitedEmail, params.user.email),
+      });
+
+      if (matchedInvitedUser) {
+        return true;
+      }
+
+      // If user doesn't exist, isnt invited and signups are disabled, redirect to login page with error
       return `/login?error=signupDisabled`;
     },
   },
