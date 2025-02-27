@@ -330,23 +330,28 @@ async fn handle_recording_finish(
     let recording_dir = completed_recording.project_path().clone();
     let id = completed_recording.id().clone();
 
+    let screenshots_dir = recording_dir.join("screenshots");
+    std::fs::create_dir_all(&screenshots_dir).ok();
+
+    let display_output_path = match &completed_recording {
+        CompletedRecording::Studio(recording) => match &recording.meta {
+            StudioRecordingMeta::SingleSegment { segment } => {
+                segment.display.path.to_path(&recording_dir)
+            }
+            StudioRecordingMeta::MultipleSegments { inner } => {
+                inner.segments[0].display.path.to_path(&recording_dir)
+            }
+        },
+        CompletedRecording::Instant(recording) => {
+            recording.project_path.join("./content/output.mp4")
+        }
+    };
+
+    let display_screenshot = screenshots_dir.join("display.jpg");
+    create_screenshot(display_output_path, display_screenshot.clone(), None).await?;
+
     let meta_inner = match completed_recording {
         CompletedRecording::Studio(recording) => {
-            let screenshots_dir = recording_dir.join("screenshots");
-            std::fs::create_dir_all(&screenshots_dir).ok();
-
-            let display_output_path = match &recording.meta {
-                StudioRecordingMeta::SingleSegment { segment } => {
-                    segment.display.path.to_path(&recording_dir)
-                }
-                StudioRecordingMeta::MultipleSegments { inner } => {
-                    inner.segments[0].display.path.to_path(&recording_dir)
-                }
-            };
-
-            let display_screenshot = screenshots_dir.join("display.jpg");
-            create_screenshot(display_output_path, display_screenshot.clone(), None).await?;
-
             let recordings = ProjectRecordings::new(&recording_dir, &recording.meta);
 
             let config = project_config_from_recording(
