@@ -265,7 +265,6 @@ pub async fn upload_video(
 
     let form = form.part("file", file_part);
 
-    dbg!(&screenshot_path);
     let screenshot_upload = match screenshot_path {
         Some(screenshot_path) if screenshot_path.exists() => {
             Some(prepare_screenshot_upload(app, &s3_config, screenshot_path).await?)

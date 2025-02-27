@@ -123,15 +123,17 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         output_type: Option<FrameType>,
         show_camera: bool,
         force_show_cursor: bool,
+        max_fps: u32,
     ) -> Result<Self, String> {
         cap_fail::fail!("media::screen_capture::init");
+        let fps = target.recording_fps().min(max_fps);
 
         let mut this = Self {
             target: target.clone(),
             output_resolution: None,
             output_type,
-            fps: target.recording_fps(),
-            video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, 0, 0, MAX_FPS),
+            fps,
+            video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, 0, 0, fps),
             options: Arc::new(Options::default()),
             show_camera,
             force_show_cursor,
@@ -141,8 +143,7 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         this.options = Arc::new(this.create_options()?);
 
         let [frame_width, frame_height] = get_output_frame_size(&this.options);
-        this.video_info =
-            VideoInfo::from_raw(RawVideoFormat::Bgra, frame_width, frame_height, MAX_FPS);
+        this.video_info = VideoInfo::from_raw(RawVideoFormat::Bgra, frame_width, frame_height, fps);
 
         Ok(this)
     }

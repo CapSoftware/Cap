@@ -167,7 +167,7 @@ pub async fn spawn_instant_recording_actor(
 
                 let content_dir = ensure_dir(&recording_dir.join("content"))?;
 
-                let screen_source = create_screen_capture(&options.capture_target, true, true)?;
+                let screen_source = create_screen_capture(&options.capture_target, true, true, 30)?;
 
                 debug!("screen capture: {screen_source:#?}");
 

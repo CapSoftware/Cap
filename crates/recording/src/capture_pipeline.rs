@@ -117,6 +117,7 @@ pub fn create_screen_capture(
     capture_target: &ScreenCaptureTarget,
     show_camera: bool,
     force_show_cursor: bool,
+    max_fps: u32,
 ) -> Result<ScreenCaptureSource<impl MakeCapturePipeline>, RecordingError> {
     #[cfg(target_os = "macos")]
     {
@@ -125,6 +126,7 @@ pub fn create_screen_capture(
             None,
             show_camera,
             force_show_cursor,
+            max_fps,
         )
         .map_err(|e| RecordingError::Media(MediaError::TaskLaunch(e)))
     }

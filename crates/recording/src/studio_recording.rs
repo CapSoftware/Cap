@@ -148,7 +148,7 @@ pub async fn spawn_studio_recording_actor(
             let segments_dir = ensure_dir(&content_dir.join("segments"))?;
             let cursors_dir = ensure_dir(&content_dir.join("cursors"))?;
 
-            let screen_source = create_screen_capture(&options.capture_target, false, false)?;
+            let screen_source = create_screen_capture(&options.capture_target, false, false, 120)?;
 
             debug!("screen capture: {screen_source:#?}");
 
