@@ -130,20 +130,25 @@ pub async fn start_recording(
         .join("recordings")
         .join(format!("{id}.cap"));
 
-    if let Ok(Some(auth)) = AuthStore::get(&app) {
-        if matches!(state.recording_options.mode, RecordingMode::Instant) && auth.is_upgraded() {
-            // Pre-create the video and get the shareable link
-            if let Ok(s3_config) = get_s3_config(&app, false, None).await {
-                let link = web_api::make_url(format!("/s/{}", s3_config.id()));
+    if matches!(state.recording_options.mode, RecordingMode::Instant) {
+        match AuthStore::get(&app) {
+            Ok(Some(auth)) if auth.is_upgraded() => {
+                // Pre-create the video and get the shareable link
+                if let Ok(s3_config) = get_s3_config(&app, false, None).await {
+                    let link = web_api::make_url(format!("/s/{}", s3_config.id()));
 
-                state.pre_created_video = Some(PreCreatedVideo {
-                    id: s3_config.id().to_string(),
-                    link: link.clone(),
-                    config: s3_config,
-                });
+                    state.pre_created_video = Some(PreCreatedVideo {
+                        id: s3_config.id().to_string(),
+                        link: link.clone(),
+                        config: s3_config,
+                    });
 
-                info!("Pre-created shareable link: {}", link);
-            };
+                    info!("Pre-created shareable link: {}", link);
+                };
+            }
+            _ => {
+                Err("Instant recording requires Cap Pro")?;
+            }
         }
     }
 
@@ -354,7 +359,6 @@ async fn handle_recording_finish(
             RecordingMetaInner::Studio(recording.meta)
         }
         CompletedRecording::Instant(recording) => {
-            dbg!(&state.pre_created_video);
             if let Some(pre_created_video) = state.pre_created_video.take() {
                 spawn_actor({
                     let app = app.clone();
