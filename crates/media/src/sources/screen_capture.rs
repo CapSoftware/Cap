@@ -94,6 +94,8 @@ pub struct ScreenCaptureSource<TCaptureFormat> {
     fps: u32,
     video_info: VideoInfo,
     options: Arc<Options>,
+    show_camera: bool,
+    force_show_cursor: bool,
     _phantom: std::marker::PhantomData<TCaptureFormat>,
 }
 
@@ -106,6 +108,8 @@ impl<TCaptureFormat> Clone for ScreenCaptureSource<TCaptureFormat> {
             fps: self.fps,
             video_info: self.video_info.clone(),
             options: self.options.clone(),
+            show_camera: self.show_camera,
+            force_show_cursor: self.force_show_cursor,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -117,6 +121,8 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
     pub fn init(
         target: &ScreenCaptureTarget,
         output_type: Option<FrameType>,
+        show_camera: bool,
+        force_show_cursor: bool,
     ) -> Result<Self, String> {
         cap_fail::fail!("media::screen_capture::init");
 
@@ -127,6 +133,8 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             fps: target.recording_fps(),
             video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, 0, 0, MAX_FPS),
             options: Arc::new(Options::default()),
+            show_camera,
+            force_show_cursor,
             _phantom: std::marker::PhantomData,
         };
 
@@ -154,9 +162,15 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 
         let excluded_targets: Vec<scap::Target> = targets
             .iter()
-            .filter(|target| {
-                matches!(target, Target::Window(scap_window)
-                if EXCLUDED_WINDOWS.contains(&scap_window.title.as_str()))
+            .filter(|target| match target {
+                Target::Window(scap_window) => {
+                    if scap_window.title == "Cap Window" && self.show_camera {
+                        false
+                    } else {
+                        EXCLUDED_WINDOWS.contains(&scap_window.title.as_str())
+                    }
+                }
+                Target::Display(_) => false,
             })
             .cloned()
             .collect();
@@ -237,7 +251,7 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 
         Ok(Options {
             fps: self.fps,
-            show_cursor: !FLAGS.record_mouse_state,
+            show_cursor: self.force_show_cursor || !FLAGS.record_mouse_state,
             show_highlight: true,
             target: Some(target),
             crop_area,

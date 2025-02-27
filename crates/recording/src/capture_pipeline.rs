@@ -115,11 +115,18 @@ impl MakeCapturePipeline for cap_media::sources::AVFrameCapture {
 
 pub fn create_screen_capture(
     capture_target: &ScreenCaptureTarget,
+    show_camera: bool,
+    force_show_cursor: bool,
 ) -> Result<ScreenCaptureSource<impl MakeCapturePipeline>, RecordingError> {
     #[cfg(target_os = "macos")]
     {
-        ScreenCaptureSource::<cap_media::sources::CMSampleBufferCapture>::init(capture_target, None)
-            .map_err(|e| RecordingError::Media(MediaError::TaskLaunch(e)))
+        ScreenCaptureSource::<cap_media::sources::CMSampleBufferCapture>::init(
+            capture_target,
+            None,
+            show_camera,
+            force_show_cursor,
+        )
+        .map_err(|e| RecordingError::Media(MediaError::TaskLaunch(e)))
     }
     #[cfg(not(target_os = "macos"))]
     {

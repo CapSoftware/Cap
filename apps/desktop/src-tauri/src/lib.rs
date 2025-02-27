@@ -1236,7 +1236,15 @@ async fn upload_exported_video(
     }
     .await?;
 
-    match upload_video(&app, video_id.clone(), output_path, Some(s3_config)).await {
+    match upload_video(
+        &app,
+        video_id.clone(),
+        output_path,
+        Some(s3_config),
+        Some(meta.project_path.join("screenshots/display.jpg")),
+    )
+    .await
+    {
         Ok(uploaded_video) => {
             // Emit upload complete
             UploadProgress {

@@ -130,27 +130,38 @@ pub async fn start_recording(
         .join("recordings")
         .join(format!("{id}.cap"));
 
-    if matches!(state.recording_options.mode, RecordingMode::Instant) {
-        match AuthStore::get(&app) {
-            Ok(Some(auth)) => {
-                if auth.is_upgraded() && get_s3_config(&app, false, None).await.is_ok() {
-                    let s3_config = get_s3_config(&app, false, None).await.unwrap();
-                    let link = web_api::make_url(format!("/s/{}", s3_config.id()));
+    let camera_window = CapWindowId::Camera.get(&app);
+    match state.recording_options.mode {
+        RecordingMode::Instant => {
+            match AuthStore::get(&app) {
+                Ok(Some(_)) => {
+                    // Pre-create the video and get the shareable link
+                    if let Ok(s3_config) = get_s3_config(&app, false, None).await {
+                        let link = web_api::make_url(format!("/s/{}", s3_config.id()));
 
-                    state.pre_created_video = Some(PreCreatedVideo {
-                        id: s3_config.id().to_string(),
-                        link: link.clone(),
-                        config: s3_config,
-                    });
-
-                    info!("Pre-created shareable link: {}", link);
+                        state.pre_created_video = Some(PreCreatedVideo {
+                            id: s3_config.id().to_string(),
+                            link: link.clone(),
+                            config: s3_config,
+                        });
+                        info!("Pre-created shareable link: {}", link);
+                    }
                 }
                 // Allow the recording to proceed without error for any signed-in user
+                _ => {
+                    // User is not signed in
+                    ShowCapWindow::SignIn.show(&app).ok();
+                    Err("Please sign in to use instant recording")?;
+                }
             }
-            _ => {
-                // User is not signed in
-                ShowCapWindow::SignIn.show(&app).ok();
-                Err("Please sign in to use instant recording")?;
+
+            if let Some(window) = camera_window {
+                let _ = window.set_content_protected(false);
+            }
+        }
+        RecordingMode::Studio => {
+            if let Some(window) = camera_window {
+                let _ = window.set_content_protected(true);
             }
         }
     }
@@ -366,68 +377,61 @@ async fn handle_recording_finish(
                 spawn_actor({
                     let app = app.clone();
                     async move {
-                        if let Some(auth) = AuthStore::get(&app).ok().flatten() {
-                            if auth.is_upgraded() {
-                                // Copy link to clipboard
-                                let _ = app.clipboard().write_text(pre_created_video.link.clone());
+                        // Copy link to clipboard
+                        let _ = app.clipboard().write_text(pre_created_video.link.clone());
 
-                                // Send notification for shareable link
-                                notifications::send_notification(
-                                    &app,
-                                    notifications::NotificationType::ShareableLinkCopied,
-                                );
+                        // Send notification for shareable link
+                        notifications::send_notification(
+                            &app,
+                            notifications::NotificationType::ShareableLinkCopied,
+                        );
 
-                                // Open the pre-created shareable link
-                                open_external_link(app.clone(), pre_created_video.link.clone())
-                                    .ok();
+                        // Open the pre-created shareable link
+                        open_external_link(app.clone(), pre_created_video.link.clone()).ok();
 
-                                // Start the upload process in the background with retry mechanism
-                                let app = app.clone();
+                        // Start the upload process in the background with retry mechanism
+                        let app = app.clone();
 
-                                tauri::async_runtime::spawn(async move {
-                                    let max_retries = 3;
-                                    let mut retry_count = 0;
+                        tauri::async_runtime::spawn(async move {
+                            let max_retries = 3;
+                            let mut retry_count = 0;
 
-                                    while retry_count < max_retries {
-                                        match upload_exported_video(
-                                            app.clone(),
-                                            id.clone(),
-                                            UploadMode::Initial {
-                                                pre_created_video: Some(pre_created_video.clone()),
-                                            },
-                                        )
-                                        .await
-                                        {
-                                            Ok(_) => {
-                                                println!("Video uploaded successfully");
-                                                // Don't send notification here since we already did it above
-                                                break;
-                                            }
-                                            Err(e) => {
-                                                retry_count += 1;
-                                                println!(
-                                                    "Error during auto-upload (attempt {}/{}): {}",
-                                                    retry_count, max_retries, e
-                                                );
+                            while retry_count < max_retries {
+                                match upload_exported_video(
+                                    app.clone(),
+                                    id.clone(),
+                                    UploadMode::Initial {
+                                        pre_created_video: Some(pre_created_video.clone()),
+                                    },
+                                )
+                                .await
+                                {
+                                    Ok(_) => {
+                                        println!("Video uploaded successfully");
+                                        // Don't send notification here since we already did it above
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        retry_count += 1;
+                                        println!(
+                                            "Error during auto-upload (attempt {}/{}): {}",
+                                            retry_count, max_retries, e
+                                        );
 
-                                                if retry_count < max_retries {
-                                                    tokio::time::sleep(
-                                                        std::time::Duration::from_secs(5),
-                                                    )
-                                                    .await;
-                                                } else {
-                                                    println!("Max retries reached. Upload failed.");
-                                                    notifications::send_notification(
-                                                                    &app,
-                                                                    notifications::NotificationType::UploadFailed,
-                                                                );
-                                                }
-                                            }
+                                        if retry_count < max_retries {
+                                            tokio::time::sleep(std::time::Duration::from_secs(5))
+                                                .await;
+                                        } else {
+                                            println!("Max retries reached. Upload failed.");
+                                            notifications::send_notification(
+                                                &app,
+                                                notifications::NotificationType::UploadFailed,
+                                            );
                                         }
                                     }
-                                });
+                                }
                             }
-                        }
+                        });
                     }
                 });
             }

@@ -181,6 +181,7 @@ pub async fn upload_video(
     video_id: String,
     file_path: PathBuf,
     existing_config: Option<S3UploadMeta>,
+    screenshot_path: Option<PathBuf>,
 ) -> Result<UploadedVideo, String> {
     println!("Uploading video {video_id}...");
 
@@ -264,19 +265,12 @@ pub async fn upload_video(
 
     let form = form.part("file", file_part);
 
-    // Prepare screenshot upload
-    let screenshot_path = file_path
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("screenshots")
-        .join("display.jpg");
-
-    let screenshot_upload = if screenshot_path.exists() {
-        Some(prepare_screenshot_upload(app, &s3_config, screenshot_path).await?)
-    } else {
-        None
+    dbg!(&screenshot_path);
+    let screenshot_upload = match screenshot_path {
+        Some(screenshot_path) if screenshot_path.exists() => {
+            Some(prepare_screenshot_upload(app, &s3_config, screenshot_path).await?)
+        }
+        _ => None,
     };
 
     let (video_upload, screenshot_result): (
