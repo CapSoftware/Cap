@@ -1,7 +1,7 @@
 import CropAreaRenderer from "./CropAreaRenderer";
 import Cropper from "./Cropper";
 import { Switch } from "./Switch";
-import TargetSelect from "./TargetSelect";
+import TargetSelect from "./TargetSelectDropdown";
 import TargetSelectInfoPill from "./TargetSelectInfoPill";
 import Tooltip from "./Tooltip";
 

@@ -1,15 +1,19 @@
 import { Tooltip as CapTooltip } from "@kobalte/core";
+import { TooltipRootProps } from "@kobalte/core/tooltip";
+import { cx } from "cva";
 import { JSX } from "solid-js";
 
 interface Props {
   children: JSX.Element;
   content: JSX.Element;
+  placement?: TooltipRootProps["placement"];
+  childClass?: string;
 }
 
 export default function Tooltip(props: Props) {
   return (
-    <CapTooltip.Root openDelay={500}>
-      <CapTooltip.Trigger class="flex fixed flex-row items-center w-8 h-8">
+    <CapTooltip.Root placement={props.placement} openDelay={500}>
+      <CapTooltip.Trigger class={cx(props.childClass)}>
         {props.children}
       </CapTooltip.Trigger>
       <CapTooltip.Portal>

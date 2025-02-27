@@ -128,26 +128,7 @@ export default function () {
             </Suspense>
           </ErrorBoundary>
         </div>
-        <div class="flex gap-2 justify-end items-center p-1.5 rounded-full bg-zinc-200 w-fit">
-          <div
-            onClick={() => setToggleInstantMode(p => !p)}
-            class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
-              toggleInstantMode()
-                ? "ring-2 ring-offset-1 ring-offset-gray-50 bg-zinc-300 ring-[--blue-300]"
-                : "bg-zinc-200 hover:bg-zinc-400"}`}
-          >
-            <IconCapInstant class="size-4" />
-          </div>
-          <div
-            onClick={() => setToggleInstantMode(false)}
-            class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
-                    !toggleInstantMode()
-                ? "ring-2 ring-offset-1 ring-offset-gray-50 bg-zinc-300 ring-[--blue-300]"
-                : "bg-zinc-200 hover:bg-zinc-400"}`}
-          >
-            <IconCapFilmCut class="size-3.5" />
-          </div>
-        </div>
+        <Mode/>
       </div>
       <TargetSelects options={options.data} />
       <CameraSelect options={options.data} setOptions={setOptions} />
@@ -160,6 +141,7 @@ import { useNavigate } from "@solidjs/router";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import * as updater from "@tauri-apps/plugin-updater";
 import { onMount } from "solid-js";
+import Mode from "./Mode";
 
 let hasChecked = false;
 function createUpdateCheck() {

@@ -1,6 +1,7 @@
 import { Tooltip } from "@kobalte/core";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { makePersisted } from "@solid-primitives/storage";
+import { createQuery } from "@tanstack/solid-query";
 import {
   getCurrentWebviewWindow,
   WebviewWindow,
@@ -9,7 +10,7 @@ import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { createStore } from "solid-js/store";
 import { Transition } from "solid-transition-group";
 import Cropper from "~/components/Cropper";
-import { createOptionsQuery } from "~/utils/queries";
+import { createOptionsQuery, listScreens } from "~/utils/queries";
 import { type Crop } from "~/utils/tauri";
 
 export default function CaptureArea() {
@@ -61,20 +62,17 @@ export default function CaptureArea() {
     { name: "crop" }
   );
 
+  const screens = createQuery(() => listScreens);
+
   async function handleConfirm() {
-    const target = options.data?.captureTarget;
 
     // Exit if no options data
     if (!options.data) return;
 
-    // Get screen reference - either direct (for screen targets) or from area targets
-    const screenTarget =
-      target?.variant === "screen"
-        ? target
-        : target?.variant === "area" && target.screen
-        ? target.screen
-        : null;
+    // Get screen 
+    let screenTarget = screens.data?.[0];
 
+    // Still no screen target, can't proceed
     if (!screenTarget) return;
 
     setPendingState(false);

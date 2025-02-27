@@ -13,12 +13,12 @@
   --zinc-100: #e4e4e7;
   --zinc-200: #f0f0f0;
   --zinc-300: #e2e2e2;
-  --zinc-400: #71717a;
-  --zinc-500: #52525b;
-  --zinc-600: #3f3f46;
-  --zinc-700: #27272a;
-  --zinc-800: #1f1f23;
-  --zinc-900: #18181b;
+  --zinc-400: #a5a5a5;
+  --zinc-500: #9c9c9c;
+  --zinc-600: #757575;
+  --zinc-700: #4d4d4d;
+  --zinc-800: #333333;
+  --zinc-900: #1a1a1a;
 
   --text-primary: rgba(18, 22, 31, 0.95); /* Section titles, headings */
   --text-secondary: rgba(18, 22, 31, 0.85); /* Important labels */
@@ -73,7 +73,8 @@
   --zinc-100: #1f1f1f;
   --zinc-200: #2a2a2a;
   --zinc-300: #383838;
-  --zinc-400: #8b8b8b;
+  --zinc-350: #444444;
+  --zinc-400: #636363;
   --zinc-500: #ffffff;
 
   /* Add new variables for text hierarchy */
@@ -103,9 +104,13 @@
   --blue-200: #2e426b;
   --blue-300: #4785ff;
   --blue-400: #5c8fff;
+  --blue-500: #71a5ff;
 
   --blue-transparent-10: rgba(71, 133, 255, 0.1);
   --blue-transparent-20: rgba(71, 133, 255, 0.2);
+  --blue-transparent-30: rgba(71, 133, 255, 0.3);
+  --blue-transparent-40: rgba(71, 133, 255, 0.4);
+  --blue-transparent-50: rgba(71, 133, 255, 0.5);
 
   --red-50: #2c1a1e;
   --red-100: #52232c;

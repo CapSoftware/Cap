@@ -25,6 +25,7 @@ pub enum CapWindowId {
     RecordingsOverlay,
     WindowCaptureOccluder,
     CaptureArea,
+    TargetOverlay,
     Camera,
     InProgressRecording,
     Upgrade,
@@ -42,6 +43,7 @@ impl FromStr for CapWindowId {
             "camera" => Self::Camera,
             "window-capture-occluder" => Self::WindowCaptureOccluder,
             "capture-area" => Self::CaptureArea,
+            "target-overlay" => Self::TargetOverlay,
             "in-progress-recording" => Self::InProgressRecording,
             "recordings-overlay" => Self::RecordingsOverlay,
             "upgrade" => Self::Upgrade,
@@ -63,6 +65,7 @@ impl std::fmt::Display for CapWindowId {
             Self::Camera => write!(f, "camera"),
             Self::WindowCaptureOccluder => write!(f, "window-capture-occluder"),
             Self::CaptureArea => write!(f, "capture-area"),
+            Self::TargetOverlay => write!(f, "target-overlay"),
             Self::InProgressRecording => write!(f, "in-progress-recording"),
             Self::RecordingsOverlay => write!(f, "recordings-overlay"),
             Self::Upgrade => write!(f, "upgrade"),
@@ -83,6 +86,7 @@ impl CapWindowId {
             Self::Settings => "Cap Settings".to_string(),
             Self::WindowCaptureOccluder => "Cap Window Capture Occluder".to_string(),
             Self::CaptureArea => "Cap Capture Area".to_string(),
+            Self::TargetOverlay => "Cap Target Overlay".to_string(),
             Self::InProgressRecording => "Cap In Progress Recording".to_string(),
             Self::Editor { .. } => "Cap Editor".to_string(),
             Self::SignIn => "Cap Sign In".to_string(),
@@ -116,6 +120,7 @@ impl CapWindowId {
             Self::Camera
             | Self::WindowCaptureOccluder
             | Self::CaptureArea
+            | Self::TargetOverlay
             | Self::RecordingsOverlay => None,
             _ => Some(None),
         }
@@ -144,6 +149,7 @@ pub enum ShowCapWindow {
     PrevRecordings,
     WindowCaptureOccluder,
     CaptureArea { screen: CaptureScreen },
+    TargetOverlay,
     Camera { ws_port: u16 },
     InProgressRecording { position: Option<(f64, f64)> },
     Upgrade,
@@ -279,6 +285,51 @@ impl ShowCapWindow {
 
                 window
             }
+
+            Self::TargetOverlay => {
+                let mut window_builder = self
+                    .window_builder(app, "/target-overlay")
+                    .maximized(false)
+                    .fullscreen(false)
+                    .shadow(false)
+                    .always_on_top(true)
+                    .content_protected(true)
+                    .skip_taskbar(true)
+                    .closable(true)
+                    .decorations(false)
+                    .transparent(true)
+                    .inner_size(
+                        (monitor.size().width as f64) / monitor.scale_factor(),
+                        (monitor.size().height as f64) / monitor.scale_factor(),
+                    )
+                    .position(0.0, 0.0)
+                    .transparent(true);
+
+                let target_monitor = app
+                    .monitor_from_point(monitor.position().x as f64, monitor.position().y as f64)
+                    .ok()
+                    .flatten()
+                    .unwrap_or(monitor);
+                let size = target_monitor.size();
+                let scale_factor = target_monitor.scale_factor();
+                let pos = target_monitor.position();
+                window_builder = window_builder
+                    .inner_size(
+                        (size.width as f64) / scale_factor,
+                        (size.height as f64) / scale_factor,
+                    )
+                    .position(pos.x as f64, pos.y as f64);
+
+                let window = window_builder.build()?;
+
+                #[cfg(target_os = "macos")]
+                {
+                    crate::platform::set_window_level(window.as_ref().window(), 900);
+                }
+
+                window
+            }
+
             Self::CaptureArea { screen } => {
                 let mut window_builder = self
                     .window_builder(app, "/capture-area")
@@ -294,7 +345,7 @@ impl ShowCapWindow {
 
                 let screen_bounds = cap_media::platform::monitor_bounds(screen.id);
                 let target_monitor = app
-                    .monitor_from_point(screen_bounds.x, screen_bounds.y)
+                    .monitor_from_point(monitor.position().x as f64, monitor.position().y as f64)
                     .ok()
                     .flatten()
                     .unwrap_or(monitor);
@@ -477,6 +528,7 @@ impl ShowCapWindow {
             ShowCapWindow::PrevRecordings => CapWindowId::RecordingsOverlay,
             ShowCapWindow::WindowCaptureOccluder => CapWindowId::WindowCaptureOccluder,
             ShowCapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
+            ShowCapWindow::TargetOverlay => CapWindowId::TargetOverlay,
             ShowCapWindow::Camera { .. } => CapWindowId::Camera,
             ShowCapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
             ShowCapWindow::Upgrade => CapWindowId::Upgrade,

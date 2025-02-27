@@ -23,6 +23,7 @@ module.exports = {
         100: "var(--zinc-100)",
         200: "var(--zinc-200)",
         300: "var(--zinc-300)",
+        350: "var(--zinc-350)",
         400: "var(--zinc-400)",
         500: "var(--zinc-500)",
       },
@@ -46,10 +47,14 @@ module.exports = {
         200: "var(--blue-200)",
         300: "var(--blue-300)",
         400: "var(--blue-400)",
+        500: "var(--blue-500)",
       },
       "blue-transparent": {
         10: "var(--blue-transparent-10)",
         20: "var(--blue-transparent-20)",
+        30: "var(--blue-transparent-30)",
+        40: "var(--blue-transparent-40)",
+        50: "var(--blue-transparent-50)",
       },
       red: {
         50: "var(--red-50)",

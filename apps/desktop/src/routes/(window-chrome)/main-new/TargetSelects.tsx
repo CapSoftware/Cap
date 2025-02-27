@@ -12,10 +12,9 @@ import {
   onMount,
 } from "solid-js";
 import { createStore } from "solid-js/store";
-import { TargetSelect } from "~/components";
 import { trackEvent } from "~/utils/analytics";
 import { createOptionsQuery, listScreens, listWindows } from "~/utils/queries";
-import type { CaptureScreen, CaptureWindow } from "~/utils/tauri";
+import type { CaptureScreen } from "~/utils/tauri";
 import { commands } from "~/utils/tauri";
 
 function TargetSelects(props: {
@@ -81,15 +80,6 @@ function TargetSelects(props: {
 
     closeAreaSelection();
 
-    // if (isTargetCaptureArea() && props.options) {
-    //   trackEvent("crop_area_disabled");
-    //   commands.setRecordingOptions({
-    //     ...props.options,
-    //     captureTarget: { ...targetScreen, variant: "screen" },
-    //   });
-    //   return;
-    // }
-
     trackEvent("crop_area_enabled", {
       screen_id: targetScreen.id,
       screen_name: targetScreen.name,
@@ -100,6 +90,11 @@ function TargetSelects(props: {
     });
   }
 
+  const ScreenWindowHandler = async () => {
+    (await WebviewWindow.getByLabel("main-new"))?.minimize();
+    await commands.showWindow("TargetOverlay");
+  };
+
   return (
     <>
       <div class="grid grid-cols-3 gap-3 w-full h-[56px]">
@@ -108,6 +103,7 @@ function TargetSelects(props: {
           onClick={handleAreaSelectButtonClick}
           class={cx(
             "flex flex-col flex-1 gap-1 justify-center items-center rounded-lg transition-shadow duration-200",
+            "hover:ring-2 hover:ring-blue-300 hover:ring-offset-2 hover:ring-offset-zinc-50",
             isTargetCaptureArea()
               ? "ring-2 ring-blue-300 ring-offset-2 ring-offset-zinc-50 bg-zinc-300"
               : "bg-zinc-200"
@@ -123,98 +119,32 @@ function TargetSelects(props: {
           />
           <p class="text-[13px] font-medium text-black dark:text-white">Area</p>
         </button>
-        <TargetSelect<CaptureScreen>
-          options={screens.data ?? []}
-          isTargetCaptureArea={isTargetCaptureArea()}
-          icon={
-            <IconCapMonitor
-              class={cx(
-                "size-5",
-                isTargetScreen()
-                  ? "text-black dark:text-white"
-                  : "text-zinc-400"
-              )}
-            />
-          }
-          areaSelectionPending={areaSelection.pending}
-          onChange={(value) => {
-            if (!value || !props.options) return;
-
-            trackEvent("display_selected", {
-              display_id: value.id,
-              display_name: value.name,
-              refresh_rate: value.refresh_rate,
-            });
-
-            commands.setRecordingOptions({
-              ...props.options,
-              captureTarget: { ...value, variant: "screen" },
-            });
-          }}
-          value={
-            props.options?.captureTarget.variant === "screen"
-              ? props.options.captureTarget
-              : null
-          }
-          placeholder={
-            <p class="text-[13px] font-medium text-black dark:text-white">
-              Screen
-            </p>
-          }
+        <button
+          onClick={ScreenWindowHandler}
+          type="button"
           class={cx(
-            "flex flex-1 justify-center items-center rounded-lg",
-            isTargetScreen() ? "bg-zinc-300" : "bg-zinc-200"
+            "flex flex-col flex-1 gap-1 justify-center items-center rounded-lg transition-shadow duration-200 bg-zinc-200",
+            "hover:ring-2 hover:ring-blue-300 hover:ring-offset-2 hover:ring-offset-zinc-50"
           )}
-          optionsEmptyText="No screens found"
-          selected={isTargetScreen()}
-        />
-        <TargetSelect<CaptureWindow>
-          options={windows.data ?? []}
-          isTargetCaptureArea={isTargetCaptureArea()}
-          onChange={(value) => {
-            if (!value || !props.options) return;
-
-            trackEvent("window_selected", {
-              window_id: value.id,
-              window_name: value.name,
-              owner_name: value.owner_name,
-              refresh_rate: value.refresh_rate,
-            });
-
-            commands.setRecordingOptions({
-              ...props.options,
-              captureTarget: { ...value, variant: "window" },
-            });
-          }}
-          value={
-            props.options?.captureTarget.variant === "window"
-              ? props.options.captureTarget
-              : null
-          }
-          icon={
-            <IconCapAppWindowMac
-              class={cx(
-                "size-5",
-                props.options?.captureTarget.variant === "window"
-                  ? "text-black dark:text-white"
-                  : "text-zinc-400"
-              )}
-            />
-          }
-          placeholder={
-            <p class="text-[13px] font-medium text-black dark:text-white">
-              Window
-            </p>
-          }
-          optionsEmptyText="No windows found"
+        >
+          <IconCapMonitor class={cx("w-5 text-zinc-400")} />
+          <p class="text-[13px] font-medium text-black dark:text-white">
+            Screen
+          </p>
+        </button>
+        <button
+          onClick={ScreenWindowHandler}
+          type="button"
           class={cx(
-            "flex flex-1 justify-center items-center rounded-lg",
-            props.options?.captureTarget.variant === "window"
-              ? "bg-zinc-300"
-              : "bg-zinc-200"
+            "flex flex-col flex-1 gap-1 justify-center items-center rounded-lg transition-shadow duration-200 bg-zinc-200",
+            "hover:ring-2 hover:ring-blue-300 hover:ring-offset-2 hover:ring-offset-zinc-50"
           )}
-          selected={props.options?.captureTarget.variant === "window"}
-        />
+        >
+          <IconCapWindow class={cx("w-5 text-zinc-400")} />
+          <p class="text-[13px] font-medium text-black dark:text-white">
+            Window
+          </p>
+        </button>
       </div>
     </>
   );
