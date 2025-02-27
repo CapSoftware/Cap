@@ -222,10 +222,10 @@ export default function () {
                 } rounded-lg px-1.5 py-0.5`}
               >
                 {license.data?.type === "commercial"
-                  ? "Commercial License"
+                  ? "Commercial"
                   : license.data?.type === "pro"
                   ? "Pro"
-                  : "Personal License"}
+                  : "Personal"}
               </span>
             </Suspense>
           </ErrorBoundary>
