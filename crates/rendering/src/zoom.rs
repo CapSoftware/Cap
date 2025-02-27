@@ -54,8 +54,29 @@ impl SegmentBounds {
     fn from_segment(segment: &ZoomSegment, current_time: f64, cursor_events: Option<&CursorEvents>) -> Self {
         println!("Zoom mode: {:?}, segment time: {}, current time: {}", segment.mode, segment.start, current_time);
         
-        // Add debug info about cursor_events availability
-        println!("Cursor events available: {}", cursor_events.is_some());
+        // Add detailed debug info about cursor_events
+        if let Some(events) = cursor_events {
+            println!("Cursor events available: {} move events", events.moves.len());
+            // Print first 3 move events to check timestamps
+            if !events.moves.is_empty() {
+                for i in 0..std::cmp::min(3, events.moves.len()) {
+                    println!(
+                        "Sample move event {}: time={}, pos=({}, {})", 
+                        i, events.moves[i].process_time_ms, events.moves[i].x, events.moves[i].y
+                    );
+                }
+                // Print last event
+                if events.moves.len() > 3 {
+                    let last = &events.moves[events.moves.len() - 1];
+                    println!(
+                        "Last move event: time={}, pos=({}, {})", 
+                        last.process_time_ms, last.x, last.y
+                    );
+                }
+            }
+        } else {
+            println!("No cursor events provided");
+        }
         
         let position = match segment.mode {
             cap_project::ZoomMode::Auto => {
