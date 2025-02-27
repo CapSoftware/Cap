@@ -1,6 +1,8 @@
 use cap_project::{cursor::CursorEvents, ZoomSegment, XY};
 
 pub const ZOOM_DURATION: f64 = 1.0;
+// Added constant for cursor smoothing
+pub const CURSOR_SMOOTHING_WINDOW: f64 = 0.15; // 150ms window for smoothing
 
 #[derive(Debug, Clone, Copy)]
 pub struct SegmentsCursor<'a> {
@@ -50,18 +52,28 @@ pub struct SegmentBounds {
 }
 
 impl SegmentBounds {
-    // Add current_time parameter to from_segment 
-    fn from_segment(segment: &ZoomSegment, current_time: f64, cursor_events: Option<&CursorEvents>) -> Self {
-        println!("Zoom mode: {:?}, segment time: {}, current time: {}", segment.mode, segment.start, current_time);
-        
+    // Add current_time parameter to from_segment
+    fn from_segment(
+        segment: &ZoomSegment,
+        current_time: f64,
+        cursor_events: Option<&CursorEvents>,
+    ) -> Self {
+        println!(
+            "Zoom mode: {:?}, segment time: {}, current time: {}",
+            segment.mode, segment.start, current_time
+        );
+
         // Add detailed debug info about cursor_events
         if let Some(events) = cursor_events {
-            println!("Cursor events available: {} move events", events.moves.len());
+            println!(
+                "Cursor events available: {} move events",
+                events.moves.len()
+            );
             // Print first 3 move events to check timestamps
             if !events.moves.is_empty() {
                 for i in 0..std::cmp::min(3, events.moves.len()) {
                     println!(
-                        "Sample move event {}: time={}, pos=({}, {})", 
+                        "Sample move event {}: time={}, pos=({}, {})",
                         i, events.moves[i].process_time_ms, events.moves[i].x, events.moves[i].y
                     );
                 }
@@ -69,7 +81,7 @@ impl SegmentBounds {
                 if events.moves.len() > 3 {
                     let last = &events.moves[events.moves.len() - 1];
                     println!(
-                        "Last move event: time={}, pos=({}, {})", 
+                        "Last move event: time={}, pos=({}, {})",
                         last.process_time_ms, last.x, last.y
                     );
                 }
@@ -77,15 +89,19 @@ impl SegmentBounds {
         } else {
             println!("No cursor events provided");
         }
-        
+
         let position = match segment.mode {
             cap_project::ZoomMode::Auto => {
                 // Use current_time instead of segment.start to get continuously changing cursor positions
                 if let Some(events) = cursor_events {
                     println!("Looking for cursor position at time: {}", current_time);
-                    if let Some(pos) = events.cursor_position_at(current_time) {
-                        println!("Found cursor position: ({}, {})", pos.x, pos.y);
-                        (pos.x, pos.y)
+
+                    // Get smoothed cursor position instead of exact position
+                    if let Some(pos) =
+                        get_smoothed_cursor_position(events, current_time, CURSOR_SMOOTHING_WINDOW)
+                    {
+                        println!("Found smoothed cursor position: ({}, {})", pos.0, pos.1);
+                        pos
                     } else {
                         println!(
                             "No cursor position found at time: {}, defaulting to center",
@@ -127,6 +143,104 @@ impl SegmentBounds {
 
     pub fn default() -> Self {
         SegmentBounds::new(XY::new(0.0, 0.0), XY::new(1.0, 1.0))
+    }
+}
+
+// New helper function to get smoothed cursor position
+fn get_smoothed_cursor_position(
+    events: &CursorEvents,
+    time: f64,
+    window: f64,
+) -> Option<(f64, f64)> {
+    // First try to get the exact position at the current time
+    if let Some(pos) = events.cursor_position_at(time) {
+        // Try to find positions within the smoothing window
+        let start_time = time - window / 2.0;
+        let end_time = time + window / 2.0;
+
+        // Collect cursor positions within the time window
+        let mut positions = Vec::new();
+        let mut total_weight = 0.0;
+        let mut weighted_x = 0.0;
+        let mut weighted_y = 0.0;
+
+        // Find positions in the time window
+        for event in &events.moves {
+            let event_time = event.process_time_ms / 1000.0; // Convert to seconds
+
+            if event_time >= start_time && event_time <= end_time {
+                // Calculate weight based on time proximity (closer to current time = higher weight)
+                let time_diff = (time - event_time).abs();
+                let weight = 1.0 - (time_diff / (window / 2.0)).min(1.0);
+
+                positions.push((event.x, event.y, weight));
+                total_weight += weight;
+                weighted_x += event.x * weight;
+                weighted_y += event.y * weight;
+            }
+        }
+
+        // If we found positions in the window, return weighted average
+        if !positions.is_empty() && total_weight > 0.0 {
+            return Some((weighted_x / total_weight, weighted_y / total_weight));
+        }
+
+        // If no positions in window, use the exact position
+        return Some((pos.x, pos.y));
+    }
+
+    // Try to interpolate between closest positions if exact position not found
+    let mut before = None;
+    let mut after = None;
+
+    for event in &events.moves {
+        let event_time = event.process_time_ms / 1000.0;
+
+        if event_time <= time {
+            // Find the closest event before the target time
+            if let Some((prev_time, _, _)) = before {
+                if event_time > prev_time {
+                    before = Some((event_time, event.x, event.y));
+                }
+            } else {
+                before = Some((event_time, event.x, event.y));
+            }
+        } else {
+            // Find the closest event after the target time
+            if let Some((next_time, _, _)) = after {
+                if event_time < next_time {
+                    after = Some((event_time, event.x, event.y));
+                }
+            } else {
+                after = Some((event_time, event.x, event.y));
+            }
+        }
+    }
+
+    match (before, after) {
+        // Interpolate between two points
+        (Some((t1, x1, y1)), Some((t2, x2, y2))) => {
+            // Calculate interpolation factor
+            let t_diff = t2 - t1;
+            if t_diff > 0.0 {
+                let factor = (time - t1) / t_diff;
+
+                // Linearly interpolate between the two positions
+                let x = x1 + (x2 - x1) * factor;
+                let y = y1 + (y2 - y1) * factor;
+
+                Some((x, y))
+            } else {
+                // If timestamps are identical, just use one of the positions
+                Some((x1, y1))
+            }
+        }
+        // If we only have a position before the time
+        (Some((_, x, y)), None) => Some((x, y)),
+        // If we only have a position after the time
+        (None, Some((_, x, y))) => Some((x, y)),
+        // No positions at all
+        (None, None) => None,
     }
 }
 
@@ -185,7 +299,8 @@ impl InterpolatedZoom {
                 Self {
                     t,
                     bounds: {
-                        let segment_bounds = SegmentBounds::from_segment(segment, cursor.time, cursor_events);
+                        let segment_bounds =
+                            SegmentBounds::from_segment(segment, cursor.time, cursor_events);
 
                         SegmentBounds::new(
                             default.top_left * (1.0 - t) + segment_bounds.top_left * t,
@@ -195,8 +310,10 @@ impl InterpolatedZoom {
                 }
             }
             (Some(prev_segment), Some(segment)) => {
-                let prev_segment_bounds = SegmentBounds::from_segment(prev_segment, cursor.time, cursor_events);
-                let segment_bounds = SegmentBounds::from_segment(segment, cursor.time, cursor_events);
+                let prev_segment_bounds =
+                    SegmentBounds::from_segment(prev_segment, cursor.time, cursor_events);
+                let segment_bounds =
+                    SegmentBounds::from_segment(segment, cursor.time, cursor_events);
 
                 let zoom_t =
                     ease_in(t_clamp((cursor.time - segment.start) / ZOOM_DURATION) as f32) as f64;
