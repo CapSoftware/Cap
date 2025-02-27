@@ -2,17 +2,6 @@ import { createSignal } from "solid-js";
 import Tooltip from "~/components/Tooltip";
 import { commands } from "~/utils/tauri";
 
-// Declare the TAURI global for TypeScript
-declare global {
-  interface Window {
-    __TAURI__: {
-      commands: {
-        showWindow: (windowLabel: string) => Promise<void>;
-      };
-    };
-  }
-}
-
 const Mode = () => {
   const [toggleInstantMode, setToggleInstantMode] = createSignal(false);
   const [isInfoHovered, setIsInfoHovered] = createSignal(false);
