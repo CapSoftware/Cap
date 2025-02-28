@@ -623,7 +623,7 @@ fn display_for_target<'a>(
             #[cfg(windows)]
             {
                 let id = platform::display_for_window(window.raw_handle)?;
-                targets.iter().find_map(|t| match t {
+                targets.iter().find(|t| match t {
                     scap::Target::Display(d) => d.raw_handle == id,
                     _ => false,
                 })
