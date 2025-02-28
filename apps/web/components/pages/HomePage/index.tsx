@@ -58,9 +58,9 @@ export const HomePage = () => {
                mx-auto bg-[#2e2e2e] rounded-full border w-fit border-zinc-200"
             >
               <p className="text-xs text-white sm:text-sm">
-                Launch Week Day 4:{" "}
+                Launch Week Day 5:{" "}
                 <span className="text-xs font-bold text-blue-100 sm:text-sm">
-                  Instant Mode
+                  Self-host Cap
                 </span>
               </p>
               <FontAwesomeIcon
@@ -79,8 +79,8 @@ export const HomePage = () => {
             </h1>
             <p className="mx-auto mb-8 max-w-3xl text-md sm:text-xl text-zinc-500 fade-in-down animate-delay-1">
               Cap is the open source alternative to Loom. Lightweight, powerful,
-              and stunning. Record and share securely in seconds with custom S3
-              bucket support.
+              and cross-platform. Record and share securely in seconds with
+              custom S3 bucket support.
             </p>
           </div>
           <div className="flex flex-col justify-center items-center mb-5 space-y-2 fade-in-up animate-delay-2 sm:flex-row sm:space-y-0 sm:space-x-2">
