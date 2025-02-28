@@ -1,7 +1,7 @@
 use anyhow::Result;
 use cap_project::{
-    AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Content, Crop, CursorEvents,
-    ProjectConfiguration, RecordingMeta, XY,
+    AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Crop, CursorEvents,
+    ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY,
 };
 use composite_frame::{CompositeVideoFramePipeline, CompositeVideoFrameUniforms};
 use core::f64;
@@ -55,13 +55,17 @@ pub struct SegmentVideoPaths {
 }
 
 impl RecordingSegmentDecoders {
-    pub async fn new(meta: &RecordingMeta, segment: SegmentVideoPaths) -> Result<Self, String> {
+    pub async fn new(
+        recording_meta: &RecordingMeta,
+        meta: &StudioRecordingMeta,
+        segment: SegmentVideoPaths,
+    ) -> Result<Self, String> {
         let screen = spawn_decoder(
             "screen",
-            meta.project_path.join(segment.display),
-            match &meta.content {
-                Content::SingleSegment { segment } => segment.display.fps,
-                Content::MultipleSegments { inner } => inner.segments[0].display.fps,
+            recording_meta.project_path.join(segment.display),
+            match &meta {
+                StudioRecordingMeta::SingleSegment { segment } => segment.display.fps,
+                StudioRecordingMeta::MultipleSegments { inner } => inner.segments[0].display.fps,
             },
         )
         .await
@@ -69,10 +73,12 @@ impl RecordingSegmentDecoders {
         let camera = OptionFuture::from(segment.camera.map(|camera| {
             spawn_decoder(
                 "camera",
-                meta.project_path.join(camera),
-                match &meta.content {
-                    Content::SingleSegment { segment } => segment.camera.as_ref().unwrap().fps,
-                    Content::MultipleSegments { inner } => {
+                recording_meta.project_path.join(camera),
+                match &meta {
+                    StudioRecordingMeta::SingleSegment { segment } => {
+                        segment.camera.as_ref().unwrap().fps
+                    }
+                    StudioRecordingMeta::MultipleSegments { inner } => {
                         inner.segments[0].camera.as_ref().unwrap().fps
                     }
                 },
@@ -132,21 +138,22 @@ pub async fn render_video_to_channel(
     options: RenderOptions,
     project: ProjectConfiguration,
     sender: mpsc::Sender<(RenderedFrame, u32)>,
-    meta: &RecordingMeta,
+    recording_meta: &RecordingMeta,
+    meta: &StudioRecordingMeta,
     segments: Vec<RenderSegment>,
     fps: u32,
     resolution_base: XY<u32>,
     is_upgraded: bool,
 ) -> Result<(), RenderingError> {
-    let constants = RenderVideoConstants::new(options, meta).await?;
-    let recordings = ProjectRecordings::new(meta);
+    let constants = RenderVideoConstants::new(options, recording_meta, meta).await?;
+    let recordings = ProjectRecordings::new(&recording_meta.project_path, meta);
 
     ffmpeg::init().unwrap();
 
     let start_time = Instant::now();
 
     // Get the duration from the timeline if it exists, otherwise use the longest source duration
-    let duration = get_duration(&recordings, meta, &project);
+    let duration = get_duration(&recordings, recording_meta, meta, &project);
 
     let total_frames = (fps as f64 * duration).ceil() as u32;
     println!(
@@ -221,16 +228,17 @@ pub async fn render_video_to_channel(
 
 pub fn get_duration(
     recordings: &ProjectRecordings,
-    meta: &RecordingMeta,
+    recording_meta: &RecordingMeta,
+    meta: &StudioRecordingMeta,
     project: &ProjectConfiguration,
 ) -> f64 {
     let mut max_duration = recordings.duration();
     println!("Initial screen recording duration: {}", max_duration);
 
     // Check camera duration if it exists
-    if let Some(camera_path) = meta.content.camera_path() {
+    if let Some(camera_path) = meta.camera_path() {
         if let Ok(camera_duration) =
-            recordings.get_source_duration(&camera_path.to_path(&meta.project_path))
+            recordings.get_source_duration(&recording_meta.path(&camera_path))
         {
             println!("Camera recording duration: {}", camera_duration);
             max_duration = max_duration.max(camera_duration);
@@ -286,7 +294,11 @@ pub struct RenderVideoConstants {
 }
 
 impl RenderVideoConstants {
-    pub async fn new(options: RenderOptions, meta: &RecordingMeta) -> Result<Self, RenderingError> {
+    pub async fn new(
+        options: RenderOptions,
+        recording_meta: &RecordingMeta,
+        meta: &StudioRecordingMeta,
+    ) -> Result<Self, RenderingError> {
         println!("Initializing wgpu...");
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
         let adapter = instance
@@ -303,7 +315,7 @@ impl RenderVideoConstants {
             )
             .await?;
 
-        let cursor_textures = Self::load_cursor_textures(&device, &queue, meta);
+        let cursor_textures = Self::load_cursor_textures(&device, &queue, recording_meta, meta);
         let composite_video_frame_pipeline = CompositeVideoFramePipeline::new(&device);
         let gradient_or_color_pipeline = GradientOrColorPipeline::new(&device);
 
@@ -383,21 +395,24 @@ impl RenderVideoConstants {
     fn load_cursor_textures(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        meta: &RecordingMeta,
+        recording_meta: &RecordingMeta,
+        meta: &StudioRecordingMeta,
     ) -> HashMap<String, CursorTexture> {
         println!("Starting to load cursor textures");
-        println!("Project path: {:?}", meta.project_path);
+        println!("Project path: {:?}", recording_meta.project_path);
         // println!("Cursor images to load: {:?}", cursor.cursor_images);
 
         let mut textures = HashMap::new();
 
         // Create the full path to the cursors directory
-        let cursors_dir = meta.project_path.join("content").join("cursors");
+        let cursors_dir = recording_meta.project_path.join("content").join("cursors");
         println!("Cursors directory: {:?}", cursors_dir);
 
-        let cursor_images = match &meta.content {
-            Content::SingleSegment { .. } => Default::default(),
-            Content::MultipleSegments { inner } => inner.cursor_images(meta).unwrap_or_default(),
+        let cursor_images = match &meta {
+            StudioRecordingMeta::SingleSegment { .. } => Default::default(),
+            StudioRecordingMeta::MultipleSegments { inner } => {
+                inner.cursor_images(recording_meta).unwrap_or_default()
+            }
         };
 
         for (cursor_id, cursor) in &cursor_images.0 {

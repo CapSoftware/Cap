@@ -13,6 +13,7 @@ mod audio_meter;
 mod editor_window;
 mod export;
 mod fake_window;
+// mod live_state;
 mod presets;
 mod tray;
 mod upload;
@@ -24,13 +25,20 @@ use auth::{AuthStore, AuthenticationInvalid, Plan};
 use camera::create_camera_preview_ws;
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
+use cap_fail::fail;
 use cap_media::feeds::RawCameraFrame;
 use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::frame_ws::WSFrame;
+use cap_media::platform::Bounds;
 use cap_media::sources::CaptureScreen;
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
+use cap_project::RecordingMetaInner;
 use cap_project::XY;
-use cap_project::{Content, ProjectConfiguration, RecordingMeta, Resolution, SharingMeta};
+use cap_project::{
+    ProjectConfiguration, RecordingMeta, Resolution, SharingMeta, StudioRecordingMeta,
+};
+use cap_recording::instant_recording::InstantRecordingHandle;
+use cap_recording::RecordingMode;
 use cap_recording::RecordingOptions;
 use cap_rendering::ProjectRecordings;
 use clipboard_rs::common::RustImage;
@@ -42,15 +50,15 @@ use mp4::Mp4Reader;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use notifications::NotificationType;
 use png::{ColorType, Encoder};
-use presets::PresetsStore;
+use recording::RecordingActor;
 use relative_path::RelativePathBuf;
 use scap::capturer::Capturer;
 use scap::frame::Frame;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
+use std::collections::BTreeMap;
 use std::{
-    collections::HashMap,
     fs::File,
     future::Future,
     io::{BufReader, BufWriter},
@@ -71,13 +79,13 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
 use upload::{get_s3_config, upload_image, upload_video, S3UploadMeta};
-use web_api::ManagerExt;
+use web_api::ManagerExt as WebManagerExt;
 use windows::{CapWindowId, ShowCapWindow};
 
 #[derive(specta::Type, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct App {
-    start_recording_options: RecordingOptions,
+    recording_options: RecordingOptions,
     #[serde(skip)]
     camera_tx: flume::Sender<RawCameraFrame>,
     camera_ws_port: u16,
@@ -90,7 +98,7 @@ pub struct App {
     #[serde(skip)]
     handle: AppHandle,
     #[serde(skip)]
-    current_recording: Option<cap_recording::ActorHandle>,
+    current_recording: Option<RecordingActor>,
     #[serde(skip)]
     pre_created_video: Option<PreCreatedVideo>,
 }
@@ -117,7 +125,7 @@ pub struct VideoRecordingMetadata {
     pub size: f64,
 }
 
-#[derive(Clone, Serialize, Deserialize, specta::Type)]
+#[derive(Clone, Serialize, Deserialize, specta::Type, Debug)]
 pub struct PreCreatedVideo {
     id: String,
     link: String,
@@ -125,14 +133,14 @@ pub struct PreCreatedVideo {
 }
 
 impl App {
-    pub fn set_current_recording(&mut self, actor: cap_recording::ActorHandle) {
+    pub fn set_current_recording(&mut self, actor: RecordingActor) {
         let current_recording = self.current_recording.insert(actor);
 
         CurrentRecordingChanged.emit(&self.handle).ok();
 
         if matches!(
-            current_recording.options.capture_target,
-            ScreenCaptureTarget::Window(_) | ScreenCaptureTarget::Area(_)
+            current_recording.capture_target(),
+            ScreenCaptureTarget::Window { .. } | ScreenCaptureTarget::Area { .. }
         ) {
             let _ = ShowCapWindow::WindowCaptureOccluder.show(&self.handle);
         } else {
@@ -140,7 +148,7 @@ impl App {
         }
     }
 
-    pub fn clear_current_recording(&mut self) -> Option<cap_recording::ActorHandle> {
+    pub fn clear_current_recording(&mut self) -> Option<RecordingActor> {
         self.close_occluder_window();
 
         self.current_recording.take()
@@ -157,17 +165,15 @@ impl App {
         new_options: RecordingOptions,
     ) -> Result<(), String> {
         let options = new_options.clone();
+        let capture_target_title = options
+            .capture_target
+            .get_title()
+            .ok_or_else(|| "Failed to get capture target name".to_string())?;
+
         sentry::configure_scope(move |scope| {
+            dbg!(options.capture_target.get_title());
             let mut ctx = std::collections::BTreeMap::new();
-            ctx.insert(
-                "capture_target".into(),
-                match options.capture_target {
-                    ScreenCaptureTarget::Screen(screen) => screen.name,
-                    ScreenCaptureTarget::Window(window) => window.owner_name,
-                    ScreenCaptureTarget::Area(area) => area.screen.name,
-                }
-                .into(),
-            );
+            ctx.insert("capture_target".into(), capture_target_title.into());
             ctx.insert(
                 "camera".into(),
                 options.camera_label.unwrap_or("None".into()).into(),
@@ -177,7 +183,11 @@ impl App {
                 options.audio_input_name.unwrap_or("None".into()).into(),
             );
             scope.set_context("recording_options", sentry::protocol::Context::Other(ctx));
+
+            Some(())
         });
+
+        self.recording_options.mode = new_options.mode;
 
         match CapWindowId::Camera.get(&self.handle) {
             Some(window) if new_options.camera_label().is_none() => {
@@ -195,57 +205,63 @@ impl App {
             _ => {}
         }
 
-        match new_options.camera_label() {
-            Some(camera_label) => {
-                if let Some(camera_feed) = self.camera_feed.as_ref() {
-                    camera_feed
-                        .lock()
-                        .await
-                        .switch_cameras(camera_label)
-                        .await
-                        .map_err(|e| e.to_string())?;
-                } else {
-                    let feed = CameraFeed::init(camera_label)
-                        .await
-                        .map_err(|e| e.to_string())?;
-
+        // try update camera
+        let camera = match (new_options.camera_label(), self.camera_feed.as_ref()) {
+            (Some(camera_label), Some(camera_feed)) => camera_feed
+                .lock()
+                .await
+                .switch_cameras(camera_label)
+                .await
+                .map_err(|e| e.to_string()),
+            (Some(camera_label), None) => CameraFeed::init(camera_label)
+                .await
+                .map(|feed| {
                     feed.attach(self.camera_tx.clone());
-
                     self.camera_feed = Some(Arc::new(Mutex::new(feed)));
-                }
-            }
-            None => {
+                })
+                .map_err(|e| e.to_string()),
+            (None, _) => {
                 self.camera_feed = None;
+                Ok(())
             }
         }
+        .inspect(|_| {
+            self.recording_options.camera_label = new_options.camera_label.clone();
+        });
 
-        self.audio_input_feed = match new_options.audio_input_name() {
-            Some(audio_input_name) => Some(match self.audio_input_feed.take() {
-                Some(mut feed) => {
-                    feed.switch_input(audio_input_name)
-                        .await
-                        .map_err(|e| e.to_string())?;
+        // try update microphone
+        let microphone = match (new_options.audio_input_name(), &mut self.audio_input_feed) {
+            (Some(new_input_name), v @ None) => {
+                AudioInputFeed::init(new_input_name)
+                    .await
+                    .map_err(|e| e.to_string())
+                    .map(|feed| async {
+                        feed.add_sender(self.audio_input_tx.clone()).await.unwrap();
+                        *v = Some(feed);
+                    })
+                    .transpose_async()
+                    .await
+            }
+            (Some(new_input_name), Some(feed)) => feed
+                .switch_input(new_input_name)
+                .await
+                .map_err(|e| e.to_string()),
+            (None, v) => {
+                v.take();
+                Ok(())
+            }
+        }
+        .inspect(|_| {
+            self.recording_options.audio_input_name = new_options.audio_input_name.clone();
+        });
 
-                    feed
-                }
-                None => {
-                    let feed = AudioInputFeed::init(audio_input_name)
-                        .await
-                        .map_err(|e| e.to_string())?;
+        if camera.is_ok() || microphone.is_ok() {
+            self.recording_options.capture_target = new_options.capture_target;
 
-                    feed.add_sender(self.audio_input_tx.clone()).await.unwrap();
+            RecordingOptionsChanged.emit(&self.handle).ok();
+        }
 
-                    feed
-                }
-            }),
-            None => None,
-        };
-
-        self.start_recording_options = new_options;
-
-        RecordingOptionsChanged.emit(&self.handle).ok();
-
-        Ok(())
+        camera.and(microphone)
     }
 }
 
@@ -350,7 +366,7 @@ impl App {
 pub struct RecordingOptionsChanged;
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
-pub struct NewRecordingAdded {
+pub struct NewStudioRecordingAdded {
     path: PathBuf,
 }
 
@@ -403,7 +419,7 @@ async fn get_recording_options(
     let mut state = state.write().await;
 
     // If there's a saved audio input but no feed, initialize it
-    if let Some(audio_input_name) = state.start_recording_options.audio_input_name() {
+    if let Some(audio_input_name) = state.recording_options.audio_input_name() {
         if state.audio_input_feed.is_none() {
             state.audio_input_feed = if let Ok(feed) = AudioInputFeed::init(audio_input_name)
                 .await
@@ -417,7 +433,7 @@ async fn get_recording_options(
         }
     }
 
-    Ok(state.start_recording_options.clone())
+    Ok(state.recording_options.clone())
 }
 
 #[tauri::command]
@@ -437,12 +453,12 @@ async fn set_recording_options(
     Ok(())
 }
 
-type Bruh<T> = (T,);
+type SingleTuple<T> = (T,);
 
 #[derive(Serialize, Type)]
 struct JsonValue<T>(
     #[serde(skip)] PhantomData<T>,
-    #[specta(type = Bruh<T>)] serde_json::Value,
+    #[specta(type = SingleTuple<T>)] serde_json::Value,
 );
 
 impl<T> Clone for JsonValue<T> {
@@ -463,15 +479,33 @@ pub struct RecordingInfo {
     capture_target: ScreenCaptureTarget,
 }
 
+#[derive(Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+enum CurrentRecordingTarget {
+    Window { id: u32, bounds: Bounds },
+    Screen { id: u32 },
+    Area { screen: u32, bounds: Bounds },
+}
+
 #[tauri::command]
 #[specta::specta]
 async fn get_current_recording(
     state: MutableState<'_, App>,
-) -> Result<JsonValue<Option<RecordingInfo>>, ()> {
+) -> Result<JsonValue<Option<CurrentRecordingTarget>>, ()> {
     let state = state.read().await;
     Ok(JsonValue::new(&state.current_recording.as_ref().map(|r| {
-        RecordingInfo {
-            capture_target: r.options.capture_target.clone(),
+        let bounds = r.bounds();
+
+        match r.capture_target() {
+            ScreenCaptureTarget::Screen { id } => CurrentRecordingTarget::Screen { id: *id },
+            ScreenCaptureTarget::Window { id } => CurrentRecordingTarget::Window {
+                id: *id,
+                bounds: bounds.clone(),
+            },
+            ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {
+                screen: *screen,
+                bounds: bounds.clone(),
+            },
         }
     })))
 }
@@ -958,7 +992,7 @@ async fn get_video_metadata(
         .join("recordings")
         .join(format!("{}.cap", video_id));
 
-    let meta = RecordingMeta::load_for_project(&project_path)?;
+    let recording_meta = RecordingMeta::load_for_project(&project_path)?;
 
     fn get_duration_for_path(path: PathBuf) -> Result<f64, String> {
         let reader = BufReader::new(
@@ -983,15 +1017,20 @@ async fn get_video_metadata(
         Ok(current_duration)
     }
 
-    let display_paths = match &meta.content {
-        Content::SingleSegment { segment } => {
-            vec![meta.path(&segment.display.path)]
+    let display_paths = match &recording_meta.inner {
+        RecordingMetaInner::Instant(_) => {
+            vec![project_path.join("content/output.mp4")]
         }
-        Content::MultipleSegments { inner } => inner
-            .segments
-            .iter()
-            .map(|s| meta.path(&s.display.path))
-            .collect(),
+        RecordingMetaInner::Studio(meta) => match meta {
+            StudioRecordingMeta::SingleSegment { segment } => {
+                vec![recording_meta.path(&segment.display.path)]
+            }
+            StudioRecordingMeta::MultipleSegments { inner } => inner
+                .segments
+                .iter()
+                .map(|s| recording_meta.path(&s.display.path))
+                .collect(),
+        },
     };
 
     // Use the shorter duration
@@ -1038,9 +1077,9 @@ fn open_editor(app: AppHandle, id: String) {
     ShowCapWindow::Editor { project_id: id }.show(&app).unwrap();
 }
 
-#[tauri::command(async)]
+#[tauri::command]
 #[specta::specta]
-fn close_previous_recordings_window(app: AppHandle) {
+fn close_recordings_overlay_window(app: AppHandle) {
     #[cfg(target_os = "macos")]
     {
         use tauri_nspanel::ManagerExt;
@@ -1133,7 +1172,7 @@ async fn upload_exported_video(
     video_id: String,
     mode: UploadMode,
 ) -> Result<UploadResult, String> {
-    let Ok(Some(mut auth)) = AuthStore::get(&app) else {
+    let Ok(Some(auth)) = AuthStore::get(&app) else {
         AuthStore::set(&app, None).map_err(|e| e.to_string())?;
         return Ok(UploadResult::NotAuthenticated);
     };
@@ -1216,7 +1255,15 @@ async fn upload_exported_video(
     }
     .await?;
 
-    match upload_video(&app, video_id.clone(), output_path, false, Some(s3_config)).await {
+    match upload_video(
+        &app,
+        video_id.clone(),
+        output_path,
+        Some(s3_config),
+        Some(meta.project_path.join("screenshots/display.jpg")),
+    )
+    .await
+    {
         Ok(uploaded_video) => {
             // Emit upload complete
             UploadProgress {
@@ -1413,7 +1460,7 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
             project_path: recording_dir.clone(),
             sharing: None,
             pretty_name: screenshot_name,
-            content: cap_project::Content::SingleSegment {
+            inner: RecordingMetaInner::Studio(cap_project::StudioRecordingMeta::SingleSegment {
                 segment: cap_project::SingleSegment {
                     display: Display {
                         path: RelativePathBuf::from_path(
@@ -1426,7 +1473,7 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
                     audio: None,
                     cursor: None,
                 },
-            },
+            }),
         }
         .save_for_project()
         .unwrap();
@@ -1805,6 +1852,18 @@ fn show_window(app: AppHandle, window: ShowCapWindow) {
     window.show(&app).ok();
 }
 
+#[tauri::command(async)]
+#[specta::specta]
+fn list_fails() -> Result<BTreeMap<String, bool>, ()> {
+    Ok(cap_fail::get_state())
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+fn set_fail(name: String, value: bool) {
+    cap_fail::set_fail(&name, value)
+}
+
 async fn check_notification_permissions(app: AppHandle) {
     // Check if we've already requested permissions
     let Ok(Some(settings)) = GeneralSettingsStore::get(&app) else {
@@ -1916,7 +1975,7 @@ pub async fn run() {
             recording::list_capture_screens,
             take_screenshot,
             list_audio_devices,
-            close_previous_recordings_window,
+            close_recordings_overlay_window,
             fake_window::set_fake_window_bounds,
             fake_window::remove_fake_window,
             focus_captures_panel,
@@ -1958,11 +2017,13 @@ pub async fn run() {
             write_clipboard_string,
             platform::perform_haptic_feedback,
             get_wallpaper_path,
+            list_fails,
+            set_fail,
             update_auth_plan
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
-            NewRecordingAdded,
+            NewStudioRecordingAdded,
             NewScreenshotAdded,
             RenderFrameEvent,
             EditorStateChanged,
@@ -2050,17 +2111,7 @@ pub async fn run() {
                 })
                 .build(),
         )
-        .invoke_handler({
-            let handler = specta_builder.invoke_handler();
-
-            move |invoke| {
-                sentry::configure_scope(|scope| {
-                    scope.set_tag("cmd", invoke.message.command());
-                });
-
-                handler(invoke)
-            }
-        })
+        .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             let app = app.handle().clone();
             specta_builder.mount_events(&app);
@@ -2086,14 +2137,11 @@ pub async fn run() {
                     camera_feed: None,
                     audio_input_tx,
                     audio_input_feed: None,
-                    start_recording_options: RecordingOptions {
-                        capture_target: ScreenCaptureTarget::Screen(CaptureScreen {
-                            id: 0,
-                            name: String::new(),
-                            refresh_rate: 0,
-                        }),
+                    recording_options: RecordingOptions {
+                        capture_target: ScreenCaptureTarget::Screen { id: 0 },
                         camera_label: None,
                         audio_input_name: None,
+                        mode: RecordingMode::Studio,
                     },
                     current_recording: None,
                     pre_created_video: None,
@@ -2123,7 +2171,7 @@ pub async fn run() {
                 ShowCapWindow::Main.show(&app).ok();
             }
 
-            ShowCapWindow::PrevRecordings.show(&app).ok();
+            ShowCapWindow::RecordingsOverlay.show(&app).ok();
 
             audio_meter::spawn_event_emitter(app.clone(), audio_input_rx);
 
@@ -2140,7 +2188,9 @@ pub async fn run() {
                     if let Err(e) = recording::stop_recording(app.clone(), app.state()).await {
                         eprintln!("Failed to stop recording: {}", e);
                     }
-                } else if let Err(e) = recording::start_recording(app.clone(), app.state()).await {
+                } else if let Err(e) =
+                    recording::start_recording(app.clone(), app.state(), None).await
+                {
                     eprintln!("Failed to start recording: {}", e);
                 }
             });
@@ -2163,12 +2213,10 @@ pub async fn run() {
                             .ok();
 
                         recording.stop().await.ok();
-
-                        // recording.stop_and_discard();
                     }
                 }
 
-                if let Err(e) = recording::start_recording(app.clone(), state).await {
+                if let Err(e) = recording::start_recording(app.clone(), state, None).await {
                     eprintln!("Failed to start new recording: {}", e);
                 } else {
                     println!("New recording started successfully");
@@ -2426,3 +2474,27 @@ trait EventExt: tauri_specta::Event {
 }
 
 impl<T: tauri_specta::Event> EventExt for T {}
+
+trait TransposeAsync {
+    type Output;
+
+    fn transpose_async(self) -> impl Future<Output = Self::Output>
+    where
+        Self: Sized;
+}
+
+impl<F: Future<Output = T>, T, E> TransposeAsync for Result<F, E> {
+    type Output = Result<T, E>;
+
+    fn transpose_async(self) -> impl Future<Output = Self::Output>
+    where
+        Self: Sized,
+    {
+        async {
+            match self {
+                Ok(f) => Ok(f.await),
+                Err(e) => Err(e),
+            }
+        }
+    }
+}

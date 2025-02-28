@@ -241,7 +241,7 @@ impl VideoInfo {
             width,
             height,
             time_base: FFRational(1, 1_000_000),
-            frame_rate: FFRational(fps.try_into().unwrap(), 1),
+            frame_rate: FFRational(fps as i32, 1),
         }
     }
 
@@ -251,8 +251,12 @@ impl VideoInfo {
             width,
             height,
             time_base: FFRational(1, 1_000_000),
-            frame_rate: FFRational(fps.try_into().unwrap(), 1),
+            frame_rate: FFRational(fps as i32, 1),
         }
+    }
+
+    pub fn fps(&self) -> u32 {
+        self.frame_rate.0 as u32
     }
 
     pub fn scaled(&self, width: u32, fps: u32) -> Self {

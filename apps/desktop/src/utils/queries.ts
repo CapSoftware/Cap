@@ -4,20 +4,23 @@ import {
   queryOptions,
 } from "@tanstack/solid-query";
 
-import { commands, RecordingOptions } from "./tauri";
-import { createQueryInvalidate } from "./events";
-import { createStore, reconcile } from "solid-js/store";
-import { createMemo } from "solid-js";
 import { makePersisted } from "@solid-primitives/storage";
+import { createMemo, createSignal } from "solid-js";
+import { createStore, reconcile } from "solid-js/store";
 import { authStore, generalSettingsStore } from "~/store";
+import { createQueryInvalidate } from "./events";
+import { commands, events, RecordingOptions } from "./tauri";
 
 function debugFetch<T>(name: string, doFetch: () => Promise<T>) {
   return () => {
+    // console.log(`fetching '${name}'`);
     return doFetch()
       .then((s) => {
+        // console.log(`fetched '${name}'`);
         return s;
       })
       .catch((e) => {
+        // console.log(`failed to fetch '${name}'`);
         throw e;
       });
   };
@@ -85,33 +88,37 @@ export const getPermissions = queryOptions({
   refetchInterval: 1000,
 });
 
-type PartialRecordingOptions = Omit<RecordingOptions, "captureTarget">;
 export function createOptionsQuery() {
   const [state, setState] = makePersisted(
-    createStore<PartialRecordingOptions>({
-      cameraLabel: null,
-      audioInputName: null,
-    }),
-    { name: "recordingOptionsQuery" }
+    createSignal<RecordingOptions | null>(),
+    { name: "recording-options-query" }
   );
 
   const setOptions = createMutation(() => ({
     mutationFn: async (newOptions: RecordingOptions) => {
       await commands.setRecordingOptions(newOptions);
-      const { captureTarget: _, ...partialOptions } = newOptions;
-      setState(partialOptions);
     },
   }));
 
+  const initialData = state() ?? undefined;
   const options = createQuery(() => ({
     ...getOptions,
+    ...(initialData ? { initialData, staleTime: 1000 } : ({} as any)),
     select: (data) => {
       setState(data);
-      return { ...state, ...data };
+
+      return data;
     },
   }));
 
   createQueryInvalidate(options, "recordingOptionsChanged");
+
+  events.recordingOptionsChanged.listen(() => {
+    commands.getRecordingOptions().then((options) => {
+      console.log("setting state", options);
+      setState(options);
+    });
+  });
 
   return { options, setOptions };
 }

@@ -7,34 +7,29 @@ use std::{
 
 use cap_flags::FLAGS;
 use cap_media::{
-    data::Pixel,
     encoders::{H264Encoder, MP4File, OggFile, OpusEncoder},
     feeds::{AudioInputFeed, CameraFeed},
-    pipeline::{builder::PipelineBuilder, Pipeline, RealTimeClock},
+    pipeline::{Pipeline, RealTimeClock},
+    platform::Bounds,
     sources::{AudioInputSource, CameraSource, ScreenCaptureSource, ScreenCaptureTarget},
     MediaError,
 };
-use cap_project::{CursorEvents, RecordingMeta};
+use cap_project::{CursorEvents, StudioRecordingMeta};
 use cap_utils::spawn_actor;
-use either::Either;
-use relative_path::{RelativePath, RelativePathBuf};
-use thiserror::Error;
+use relative_path::RelativePathBuf;
 use tokio::sync::{oneshot, Mutex};
-use tracing::{
-    debug, info,
-    instrument::{self, WithSubscriber},
-    trace, Instrument,
-};
-use tracing_subscriber::{fmt::FormatFields, layer::SubscriberExt, Layer};
+use tracing::{debug, error, info, instrument::WithSubscriber, trace, Instrument};
+use tracing_subscriber::{layer::SubscriberExt, Layer};
 
 use crate::{
+    capture_pipeline::{create_screen_capture, MakeCapturePipeline},
     cursor::{spawn_cursor_recorder, CursorActor, Cursors},
-    RecordingOptions,
+    ActorError, RecordingError, RecordingOptions,
 };
 
-enum ActorState {
+enum StudioRecordingActorState {
     Recording {
-        pipeline: RecordingPipeline,
+        pipeline: StudioRecordingPipeline,
         pipeline_done_rx: oneshot::Receiver<()>,
         index: u32,
         segment_start_time: f64,
@@ -47,26 +42,27 @@ enum ActorState {
     Stopped,
 }
 
-pub enum ActorControlMessage {
+pub enum StudioRecordingActorControlMessage {
     Pause(oneshot::Sender<Result<(), RecordingError>>),
     Resume(oneshot::Sender<Result<(), RecordingError>>),
-    Stop(oneshot::Sender<Result<CompletedRecording, RecordingError>>),
+    Stop(oneshot::Sender<Result<CompletedStudioRecording, RecordingError>>),
 }
 
-pub struct Actor {
+pub struct StudioRecordingActor {
     id: String,
     recording_dir: PathBuf,
+    fps: u32,
     options: RecordingOptions,
-    segments: Vec<RecordingSegment>,
+    segments: Vec<StudioRecordingSegment>,
 }
 
-pub struct RecordingSegment {
+pub struct StudioRecordingSegment {
     pub start: f64,
     pub end: f64,
-    pipeline: RecordingPipeline,
+    pipeline: StudioRecordingPipeline,
 }
 
-struct RecordingPipeline {
+struct StudioRecordingPipeline {
     pub inner: Pipeline<RealTimeClock<()>>,
     pub display_output_path: PathBuf,
     pub audio_output_path: Option<PathBuf>,
@@ -80,64 +76,44 @@ struct CursorPipeline {
 }
 
 #[derive(Clone)]
-pub struct ActorHandle {
-    ctrl_tx: flume::Sender<ActorControlMessage>,
+pub struct StudioRecordingHandle {
+    ctrl_tx: flume::Sender<StudioRecordingActorControlMessage>,
     pub options: RecordingOptions,
-}
-
-#[derive(Error, Debug)]
-pub enum ActorError {
-    #[error("Actor has stopped")]
-    ActorStopped,
-
-    #[error("Failed to send to actor")]
-    SendFailed(#[from] flume::SendError<ActorControlMessage>),
-}
-
-#[derive(Error, Debug)]
-pub enum RecordingError {
-    #[error("Media error: {0}")]
-    Media(#[from] MediaError),
-
-    #[error("Actor error: {0}")]
-    Actor(#[from] ActorError),
-
-    #[error("Serde/{0}")]
-    Serde(#[from] serde_json::Error),
-
-    #[error("IO/{0}")]
-    Io(#[from] std::io::Error),
+    pub bounds: Bounds,
 }
 
 macro_rules! send_message {
     ($ctrl_tx:expr, $variant:path) => {{
         let (tx, rx) = oneshot::channel();
-        $ctrl_tx.send($variant(tx)).map_err(ActorError::from)?;
+        $ctrl_tx
+            .send($variant(tx))
+            .map_err(|_| flume::SendError(()))
+            .map_err(ActorError::from)?;
         rx.await.map_err(|_| ActorError::ActorStopped)?
     }};
 }
 
-impl ActorHandle {
-    pub async fn stop(&self) -> Result<CompletedRecording, RecordingError> {
-        send_message!(self.ctrl_tx, ActorControlMessage::Stop)
+impl StudioRecordingHandle {
+    pub async fn stop(&self) -> Result<CompletedStudioRecording, RecordingError> {
+        send_message!(self.ctrl_tx, StudioRecordingActorControlMessage::Stop)
     }
 
     pub async fn pause(&self) -> Result<(), RecordingError> {
-        send_message!(self.ctrl_tx, ActorControlMessage::Pause)
+        send_message!(self.ctrl_tx, StudioRecordingActorControlMessage::Pause)
     }
 
     pub async fn resume(&self) -> Result<(), RecordingError> {
-        send_message!(self.ctrl_tx, ActorControlMessage::Resume)
+        send_message!(self.ctrl_tx, StudioRecordingActorControlMessage::Resume)
     }
 }
 
-pub async fn spawn_recording_actor(
+pub async fn spawn_studio_recording_actor(
     id: String,
     recording_dir: PathBuf,
     options: RecordingOptions,
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
     audio_input_feed: Option<AudioInputFeed>,
-) -> Result<(ActorHandle, tokio::sync::oneshot::Receiver<()>), RecordingError> {
+) -> Result<(StudioRecordingHandle, tokio::sync::oneshot::Receiver<()>), RecordingError> {
     ensure_dir(&recording_dir)?;
     let logfile = File::create(recording_dir.join("recording-logs.log"))?;
 
@@ -167,7 +143,7 @@ pub async fn spawn_recording_actor(
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
 
     async {
-        async {
+        let run = async || {
             trace!("creating recording actor");
 
             let content_dir = ensure_dir(&recording_dir.join("content"))?;
@@ -175,7 +151,8 @@ pub async fn spawn_recording_actor(
             let segments_dir = ensure_dir(&content_dir.join("segments"))?;
             let cursors_dir = ensure_dir(&content_dir.join("cursors"))?;
 
-            let screen_source = create_screen_capture(&options);
+            let screen_source = create_screen_capture(&options.capture_target, false, false, 120)?;
+            let bounds = screen_source.get_bounds().clone();
 
             debug!("screen capture: {screen_source:#?}");
 
@@ -210,15 +187,17 @@ pub async fn spawn_recording_actor(
 
             spawn_actor({
                 let options = options.clone();
+                let fps = screen_source.info().fps();
                 async move {
-                    let mut actor = Actor {
+                    let mut actor = StudioRecordingActor {
                         id,
                         recording_dir,
                         options,
+                        fps,
                         segments: Vec::new(),
                     };
 
-                    let mut state = ActorState::Recording {
+                    let mut state = StudioRecordingActorState::Recording {
                         pipeline,
                         pipeline_done_rx,
                         index,
@@ -227,7 +206,7 @@ pub async fn spawn_recording_actor(
 
                     'outer: loop {
                         state = match state {
-                            ActorState::Recording {
+                            StudioRecordingActorState::Recording {
                                 mut pipeline,
                                 mut pipeline_done_rx,
                                 index,
@@ -255,8 +234,8 @@ pub async fn spawn_recording_actor(
                                     };
 
                                     async fn shutdown(
-                                        mut pipeline: RecordingPipeline,
-                                        actor: &mut Actor,
+                                        mut pipeline: StudioRecordingPipeline,
+                                        actor: &mut StudioRecordingActor,
                                         segment_start_time: f64,
                                     ) -> Result<(Cursors, u32), RecordingError>
                                     {
@@ -284,7 +263,7 @@ pub async fn spawn_recording_actor(
                                             Default::default()
                                         };
 
-                                        actor.segments.push(RecordingSegment {
+                                        actor.segments.push(StudioRecordingSegment {
                                             start: segment_start_time,
                                             end: segment_stop_time,
                                             pipeline,
@@ -294,7 +273,7 @@ pub async fn spawn_recording_actor(
                                     }
 
                                     break match msg {
-                                        ActorControlMessage::Pause(tx) => {
+                                        StudioRecordingActorControlMessage::Pause(tx) => {
                                             let (res, cursors, next_cursor_id) = match shutdown(
                                                 pipeline,
                                                 &mut actor,
@@ -309,13 +288,13 @@ pub async fn spawn_recording_actor(
                                             };
 
                                             tx.send(res.map_err(Into::into)).ok();
-                                            ActorState::Paused {
+                                            StudioRecordingActorState::Paused {
                                                 next_index: index + 1,
                                                 cursors,
                                                 next_cursor_id,
                                             }
                                         }
-                                        ActorControlMessage::Stop(tx) => {
+                                        StudioRecordingActorControlMessage::Stop(tx) => {
                                             let res =
                                                 shutdown(pipeline, &mut actor, segment_start_time)
                                                     .await;
@@ -334,7 +313,7 @@ pub async fn spawn_recording_actor(
                                     };
                                 }
                             }
-                            ActorState::Paused {
+                            StudioRecordingActorState::Paused {
                                 next_index,
                                 cursors,
                                 next_cursor_id,
@@ -346,11 +325,11 @@ pub async fn spawn_recording_actor(
                                     };
 
                                     break match msg {
-                                        ActorControlMessage::Stop(tx) => {
+                                        StudioRecordingActorControlMessage::Stop(tx) => {
                                             tx.send(stop_recording(actor, cursors).await).ok();
                                             break 'outer;
                                         }
-                                        ActorControlMessage::Resume(tx) => {
+                                        StudioRecordingActorControlMessage::Resume(tx) => {
                                             let (state, res) = match create_segment_pipeline(
                                                 &segments_dir,
                                                 &cursors_dir,
@@ -364,7 +343,7 @@ pub async fn spawn_recording_actor(
                                             .await
                                             {
                                                 Ok((pipeline, pipeline_done_rx)) => (
-                                                    ActorState::Recording {
+                                                    StudioRecordingActorState::Recording {
                                                         pipeline,
                                                         pipeline_done_rx,
                                                         index: next_index,
@@ -372,7 +351,10 @@ pub async fn spawn_recording_actor(
                                                     },
                                                     Ok(()),
                                                 ),
-                                                Err(e) => (ActorState::Stopped, Err(e.into())),
+                                                Err(e) => (
+                                                    StudioRecordingActorState::Stopped,
+                                                    Err(e.into()),
+                                                ),
                                             };
 
                                             tx.send(res).ok();
@@ -383,7 +365,7 @@ pub async fn spawn_recording_actor(
                                     };
                                 }
                             }
-                            ActorState::Stopped => {
+                            StudioRecordingActorState::Stopped => {
                                 info!("recording actor paused");
                                 break;
                             }
@@ -397,139 +379,120 @@ pub async fn spawn_recording_actor(
                 .in_current_span()
             });
 
-            Ok(ActorHandle { ctrl_tx, options })
+            Ok(StudioRecordingHandle {
+                ctrl_tx,
+                options,
+                bounds,
+            })
+        };
+
+        match run().await {
+            Ok(a) => Ok(a),
+            Err(e) => {
+                error!("Failed to start recording actor: {}", e);
+                Err(e)
+            }
         }
-        .instrument(tracing::info_span!("recording"))
-        .await
     }
+    .instrument(tracing::info_span!("recording"))
     .with_subscriber(collector)
     .await
     .map(|a| (a, done_rx))
 }
 
-pub struct CompletedRecording {
+pub struct CompletedStudioRecording {
     pub id: String,
-    pub recording_dir: PathBuf,
+    pub project_path: PathBuf,
     pub display_source: ScreenCaptureTarget,
-    pub meta: RecordingMeta,
+    pub meta: StudioRecordingMeta,
     pub cursor_data: cap_project::CursorImages,
-    pub segments: Vec<RecordingSegment>,
+    pub segments: Vec<StudioRecordingSegment>,
 }
 
 async fn stop_recording(
-    actor: Actor,
+    actor: StudioRecordingActor,
     cursors: Cursors,
-) -> Result<CompletedRecording, RecordingError> {
+) -> Result<CompletedStudioRecording, RecordingError> {
     use cap_project::*;
 
-    let meta = RecordingMeta {
-        project_path: actor.recording_dir.clone(),
-        sharing: None,
-        pretty_name: format!(
-            "Cap {}",
-            chrono::Local::now().format("%Y-%m-%d at %H.%M.%S")
-        ),
-        content: Content::MultipleSegments {
-            inner: MultipleSegments {
-                segments: {
-                    actor
-                        .segments
-                        .iter()
-                        .map(|s| MultipleSegment {
-                            display: Display {
-                                path: RelativePathBuf::from_path(
-                                    s.pipeline
-                                        .display_output_path
-                                        .strip_prefix(&actor.recording_dir)
-                                        .unwrap(),
-                                )
-                                .unwrap(),
-                                fps: actor.options.capture_target.recording_fps(),
-                            },
-                            camera: s.pipeline.camera.as_ref().map(|camera| CameraMeta {
-                                path: RelativePathBuf::from_path(
-                                    camera
-                                        .output_path
-                                        .strip_prefix(&actor.recording_dir)
-                                        .unwrap()
-                                        .to_owned(),
-                                )
-                                .unwrap(),
-                                fps: camera.fps,
-                            }),
-                            audio: s.pipeline.audio_output_path.as_ref().map(|path| AudioMeta {
-                                path: RelativePathBuf::from_path(
-                                    path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
-                                )
-                                .unwrap(),
-                            }),
-                            cursor: s.pipeline.cursor.as_ref().map(|cursor| {
-                                RelativePathBuf::from_path(
-                                    cursor
-                                        .output_path
-                                        .strip_prefix(&actor.recording_dir)
-                                        .unwrap()
-                                        .to_owned(),
-                                )
-                                .unwrap()
-                            }),
-                        })
-                        .collect()
-                },
-                cursors: cap_project::Cursors::Correct(
-                    cursors
-                        .into_values()
-                        .map(|cursor| {
-                            (
-                                cursor.id.to_string(),
-                                CursorMeta {
-                                    image_path: RelativePathBuf::from("content/cursors")
-                                        .join(&cursor.file_name),
-                                    hotspot: cursor.hotspot,
-                                },
+    let meta = StudioRecordingMeta::MultipleSegments {
+        inner: MultipleSegments {
+            segments: {
+                actor
+                    .segments
+                    .iter()
+                    .map(|s| MultipleSegment {
+                        display: Display {
+                            path: RelativePathBuf::from_path(
+                                s.pipeline
+                                    .display_output_path
+                                    .strip_prefix(&actor.recording_dir)
+                                    .unwrap(),
                             )
-                        })
-                        .collect(),
-                ),
+                            .unwrap(),
+                            fps: actor.fps,
+                        },
+                        camera: s.pipeline.camera.as_ref().map(|camera| CameraMeta {
+                            path: RelativePathBuf::from_path(
+                                camera
+                                    .output_path
+                                    .strip_prefix(&actor.recording_dir)
+                                    .unwrap()
+                                    .to_owned(),
+                            )
+                            .unwrap(),
+                            fps: camera.fps,
+                        }),
+                        audio: s.pipeline.audio_output_path.as_ref().map(|path| AudioMeta {
+                            path: RelativePathBuf::from_path(
+                                path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
+                            )
+                            .unwrap(),
+                        }),
+                        cursor: s.pipeline.cursor.as_ref().map(|cursor| {
+                            RelativePathBuf::from_path(
+                                cursor
+                                    .output_path
+                                    .strip_prefix(&actor.recording_dir)
+                                    .unwrap()
+                                    .to_owned(),
+                            )
+                            .unwrap()
+                        }),
+                    })
+                    .collect()
             },
+            cursors: cap_project::Cursors::Correct(
+                cursors
+                    .into_values()
+                    .map(|cursor| {
+                        (
+                            cursor.id.to_string(),
+                            CursorMeta {
+                                image_path: RelativePathBuf::from("content/cursors")
+                                    .join(&cursor.file_name),
+                                hotspot: cursor.hotspot,
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
         },
     };
-
-    meta.save_for_project()
-        .map_err(Either::either_into::<RecordingError>)?;
 
     let project_config = cap_project::ProjectConfiguration::default();
     project_config
         .write(&actor.recording_dir)
         .map_err(RecordingError::from)?;
 
-    Ok(CompletedRecording {
+    Ok(CompletedStudioRecording {
         id: actor.id,
+        project_path: actor.recording_dir.clone(),
         meta,
         cursor_data: Default::default(),
-        recording_dir: actor.recording_dir,
         display_source: actor.options.capture_target,
         segments: actor.segments,
     })
-}
-
-fn create_screen_capture(
-    recording_options: &RecordingOptions,
-) -> ScreenCaptureSource<impl MakeCapturePipeline> {
-    #[cfg(target_os = "macos")]
-    {
-        ScreenCaptureSource::<cap_media::sources::CMSampleBufferCapture>::init(
-            &recording_options.capture_target,
-            None,
-        )
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        ScreenCaptureSource::<cap_media::sources::AVFrameCapture>::init(
-            &recording_options.capture_target,
-            None,
-        )
-    }
 }
 
 #[tracing::instrument(skip_all, name = "segment", fields(index = index))]
@@ -542,7 +505,7 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
     audio_input_feed: Option<&AudioInputFeed>,
     prev_cursors: Cursors,
     next_cursors_id: u32,
-) -> Result<(RecordingPipeline, oneshot::Receiver<()>), MediaError> {
+) -> Result<(StudioRecordingPipeline, oneshot::Receiver<()>), MediaError> {
     let camera_feed = match camera_feed.as_ref() {
         Some(camera_feed) => Some(camera_feed.lock().await),
         None => None,
@@ -558,7 +521,7 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
 
     trace!("preparing segment pipeline {index}");
 
-    let screen_bounds = screen_source.get_bounds();
+    let screen_bounds = screen_source.get_bounds().clone();
     pipeline_builder = TCaptureFormat::make_capture_pipeline(
         pipeline_builder,
         screen_source,
@@ -572,7 +535,6 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
             .unwrap()
             .display()
     );
-
     let audio_output_path = if let Some(mic_source) = audio_input_feed.map(AudioInputSource::init) {
         let mic_config = mic_source.info();
         let output_path = dir.join("audio-input.ogg");
@@ -628,7 +590,7 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
 
     let cursor = FLAGS.record_mouse_state.then(|| {
         let cursor = spawn_cursor_recorder(
-            screen_bounds,
+            screen_bounds.clone(),
             cursors_dir.clone(),
             prev_cursors,
             next_cursors_id,
@@ -645,7 +607,7 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
     info!("pipeline playing");
 
     Ok((
-        RecordingPipeline {
+        StudioRecordingPipeline {
             inner: pipeline,
             display_output_path,
             audio_output_path,
@@ -664,60 +626,6 @@ struct CameraPipelineInfo {
 fn ensure_dir(path: &PathBuf) -> Result<PathBuf, MediaError> {
     std::fs::create_dir_all(&path)?;
     Ok(path.clone())
-}
-
-type CapturePipelineBuilder = PipelineBuilder<RealTimeClock<()>>;
-
-trait MakeCapturePipeline: std::fmt::Debug + 'static {
-    fn make_capture_pipeline(
-        builder: CapturePipelineBuilder,
-        source: ScreenCaptureSource<Self>,
-        output_path: impl Into<PathBuf>,
-    ) -> Result<CapturePipelineBuilder, MediaError>
-    where
-        Self: Sized;
-}
-
-#[cfg(target_os = "macos")]
-impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
-    fn make_capture_pipeline(
-        builder: CapturePipelineBuilder,
-        source: ScreenCaptureSource<Self>,
-        output_path: impl Into<PathBuf>,
-    ) -> Result<CapturePipelineBuilder, MediaError> {
-        let screen_config = source.info();
-        let screen_encoder = cap_media::encoders::H264AVAssetWriterEncoder::init(
-            "screen",
-            screen_config,
-            output_path.into(),
-        )?;
-
-        Ok(builder
-            .source("screen_capture", source)
-            .sink("screen_capture_encoder", screen_encoder))
-    }
-}
-
-impl MakeCapturePipeline for cap_media::sources::AVFrameCapture {
-    fn make_capture_pipeline(
-        builder: CapturePipelineBuilder,
-        source: ScreenCaptureSource<Self>,
-        output_path: impl Into<PathBuf>,
-    ) -> Result<CapturePipelineBuilder, MediaError>
-    where
-        Self: Sized,
-    {
-        let screen_config = source.info();
-        let screen_encoder = MP4File::init(
-            "screen",
-            output_path.into(),
-            H264Encoder::factory("screen", screen_config),
-            |_| None,
-        )?;
-        Ok(builder
-            .source("screen_capture", source)
-            .sink("screen_capture_encoder", screen_encoder))
-    }
 }
 
 fn current_time_f64() -> f64 {

@@ -8,11 +8,17 @@ interface Props {
   content: JSX.Element;
   placement?: TooltipRootProps["placement"];
   childClass?: string;
+  openDelay?: number;
+  closeDelay?: number;
 }
 
 export default function Tooltip(props: Props) {
   return (
-    <CapTooltip.Root placement={props.placement} openDelay={500}>
+    <CapTooltip.Root
+      placement={props.placement}
+      openDelay={props.openDelay ?? 500}
+      closeDelay={props.closeDelay ?? 0}
+    >
       <CapTooltip.Trigger class={cx(props.childClass)}>
         {props.children}
       </CapTooltip.Trigger>

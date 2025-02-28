@@ -16,7 +16,7 @@ use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-#[derive(Deserialize, Serialize, Clone, Type)]
+#[derive(Deserialize, Serialize, Clone, Type, Debug)]
 pub struct S3UploadMeta {
     id: String,
     user_id: String,
@@ -180,8 +180,8 @@ pub async fn upload_video(
     app: &AppHandle,
     video_id: String,
     file_path: PathBuf,
-    is_individual: bool,
     existing_config: Option<S3UploadMeta>,
+    screenshot_path: Option<PathBuf>,
 ) -> Result<UploadedVideo, String> {
     println!("Uploading video {video_id}...");
 
@@ -197,16 +197,12 @@ pub async fn upload_video(
         None => get_s3_config(app, false, Some(video_id)).await?,
     };
 
-    let file_key = if is_individual {
-        format!(
-            "{}/{}/individual/{}",
-            s3_config.user_id(),
-            s3_config.id(),
-            file_name
-        )
-    } else {
-        format!("{}/{}/{}", s3_config.user_id(), s3_config.id(), file_name)
-    };
+    let file_key = format!(
+        "{}/{}/{}",
+        s3_config.user_id(),
+        s3_config.id(),
+        "result.mp4"
+    );
 
     let body = build_video_upload_body(
         &file_path,
@@ -269,19 +265,11 @@ pub async fn upload_video(
 
     let form = form.part("file", file_part);
 
-    // Prepare screenshot upload
-    let screenshot_path = file_path
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("screenshots")
-        .join("display.jpg");
-
-    let screenshot_upload = if screenshot_path.exists() {
-        Some(prepare_screenshot_upload(app, &s3_config, screenshot_path).await?)
-    } else {
-        None
+    let screenshot_upload = match screenshot_path {
+        Some(screenshot_path) if screenshot_path.exists() => {
+            Some(prepare_screenshot_upload(app, &s3_config, screenshot_path).await?)
+        }
+        _ => None,
     };
 
     let (video_upload, screenshot_result): (

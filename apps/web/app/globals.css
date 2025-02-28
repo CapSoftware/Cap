@@ -23,7 +23,6 @@
   --foreground-rgb: #000000;
   --background-start-rgb: 214, 219, 220;
   --background-end-rgb: 255, 255, 255;
-  --primary-font: "Geist", sans-serif;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -34,37 +33,10 @@
   }
 }
 
-@font-face {
-  font-family: "Geist";
-  src: url("/fonts/Geist-SemiBold.woff2") format("woff2"),
-    url("/fonts/Geist-SemiBold.woff") format("woff");
-  font-weight: 500;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Geist";
-  src: url("/fonts/Geist-Regular.woff2") format("woff2"),
-    url("/fonts/Geist-Regular.woff") format("woff");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Geist";
-  src: url("/fonts/Geist-Light.woff2") format("woff2"),
-    url("/fonts/Geist-Light.woff") format("woff");
-  font-weight: 300;
-  font-style: normal;
-  font-display: swap;
-}
-
 body,
 html {
   color: #000000;
-  font-family: var(--primary-font) !important;
+  font-family: var(--font-geist-sans) !important;
   background-color: white;
 }
 

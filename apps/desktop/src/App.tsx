@@ -2,7 +2,6 @@ import { Router, useCurrentMatches } from "@solidjs/router";
 import { FileRoutes } from "@solidjs/start/router";
 import {
   createEffect,
-  createResource,
   ErrorBoundary,
   onCleanup,
   onMount,
@@ -26,7 +25,6 @@ import {
 import { Button } from "@cap/ui-solid";
 import { Toaster } from "solid-toast";
 import { initAnonymousUser } from "./utils/analytics";
-import { initializeTitlebar } from "./utils/titlebar-state";
 
 const queryClient = new QueryClient({
   defaultOptions: {

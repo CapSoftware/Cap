@@ -18,7 +18,13 @@ pub async fn create_camera_preview_ws() -> (
 
             if frame.format() != Pixel::RGBA {
                 let converter = match &mut converter {
-                    Some((format, converter)) if *format == frame.format() => converter,
+                    Some((format, converter))
+                        if *format == frame.format()
+                            && converter.input().width == frame.width()
+                            && converter.input().height == frame.height() =>
+                    {
+                        converter
+                    }
                     _ => {
                         &mut converter
                             .insert((

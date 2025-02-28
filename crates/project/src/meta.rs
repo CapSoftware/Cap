@@ -51,7 +51,22 @@ pub struct RecordingMeta {
     #[serde(default)]
     pub sharing: Option<SharingMeta>,
     #[serde(flatten)]
-    pub content: Content,
+    pub inner: RecordingMetaInner,
+}
+
+impl specta::Flatten for RecordingMetaInner {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(untagged, rename_all = "camelCase")]
+pub enum RecordingMetaInner {
+    Studio(StudioRecordingMeta),
+    Instant(InstantRecordingMeta),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct InstantRecordingMeta {
+    pub fps: u32,
+    pub sample_rate: Option<u32>,
 }
 
 impl RecordingMeta {
@@ -80,13 +95,23 @@ impl RecordingMeta {
     }
 
     pub fn output_path(&self) -> PathBuf {
-        self.project_path.join("output").join("result.mp4")
+        match &self.inner {
+            RecordingMetaInner::Instant(_) => self.project_path.join("content/output.mp4"),
+            RecordingMetaInner::Studio(_) => self.project_path.join("output").join("result.mp4"),
+        }
+    }
+
+    pub fn studio_meta(&self) -> Option<&StudioRecordingMeta> {
+        match &self.inner {
+            RecordingMetaInner::Studio(meta) => Some(&meta),
+            _ => None,
+        }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(untagged, rename_all = "camelCase")]
-pub enum Content {
+pub enum StudioRecordingMeta {
     SingleSegment {
         #[serde(flatten)]
         segment: SingleSegment,
@@ -97,11 +122,13 @@ pub enum Content {
     },
 }
 
-impl Content {
+impl StudioRecordingMeta {
     pub fn camera_path(&self) -> Option<RelativePathBuf> {
         match self {
-            Content::SingleSegment { segment } => segment.camera.as_ref().map(|c| c.path.clone()),
-            Content::MultipleSegments { inner } => inner
+            StudioRecordingMeta::SingleSegment { segment } => {
+                segment.camera.as_ref().map(|c| c.path.clone())
+            }
+            StudioRecordingMeta::MultipleSegments { inner } => inner
                 .segments
                 .first()
                 .and_then(|s| s.camera.as_ref().map(|c| c.path.clone())),
@@ -110,8 +137,8 @@ impl Content {
 
     pub fn min_fps(&self) -> u32 {
         match self {
-            Content::SingleSegment { segment } => segment.display.fps,
-            Content::MultipleSegments { inner } => {
+            StudioRecordingMeta::SingleSegment { segment } => segment.display.fps,
+            StudioRecordingMeta::MultipleSegments { inner } => {
                 inner.segments.iter().map(|s| s.display.fps).min().unwrap()
             }
         }
@@ -119,8 +146,8 @@ impl Content {
 
     pub fn max_fps(&self) -> u32 {
         match self {
-            Content::SingleSegment { segment } => segment.display.fps,
-            Content::MultipleSegments { inner } => {
+            StudioRecordingMeta::SingleSegment { segment } => segment.display.fps,
+            StudioRecordingMeta::MultipleSegments { inner } => {
                 inner.segments.iter().map(|s| s.display.fps).max().unwrap()
             }
         }

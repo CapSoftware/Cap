@@ -14,15 +14,19 @@ export default function () {
     })
   );
 
+  const bounds = () => {
+    if (!currentRecording.data) return;
+    if ("window" in currentRecording.data) {
+      return currentRecording.data.window.bounds;
+    }
+    if ("area" in currentRecording.data) {
+      return currentRecording.data.area.bounds;
+    }
+  };
+
   return (
     <Suspense>
-      <Show
-        when={
-          currentRecording.data &&
-          currentRecording.data.captureTarget.variant !== "screen" &&
-          currentRecording.data.captureTarget.bounds
-        }
-      >
+      <Show when={bounds()}>
         {(bounds) => {
           getAllWindows().then((w) =>
             w.forEach((w) => {

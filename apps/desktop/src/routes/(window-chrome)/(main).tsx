@@ -16,7 +16,7 @@ import {
   createResource,
   createSignal,
   ErrorBoundary,
-  JSX,
+  type JSX,
   onCleanup,
   onMount,
   Show,
@@ -26,6 +26,7 @@ import {
 import { createStore } from "solid-js/store";
 import { trackEvent } from "~/utils/analytics";
 
+import Mode from "~/components/Mode";
 import {
   createCurrentRecordingQuery,
   createLicenseQuery,
@@ -37,7 +38,7 @@ import {
   listWindows,
 } from "~/utils/queries";
 import {
-  CaptureScreen,
+  type CaptureScreen,
   type CaptureWindow,
   commands,
   events,
@@ -56,10 +57,32 @@ export default function () {
 
   const isRecording = () => !!currentRecording.data;
 
+  const screens = createQuery(() => listScreens);
+  const windows = createQuery(() => listWindows);
   const toggleRecording = createMutation(() => ({
     mutationFn: async () => {
       if (!isRecording()) {
-        await commands.startRecording();
+        let captureTarget = options.data?.captureTarget ?? {
+          variant: "screen",
+          id: screens.data?.[0]?.id ?? 1,
+        };
+
+        if (captureTarget.variant === "screen") {
+          const id = captureTarget.id;
+          if (!screens.data?.some((s) => s.id === id))
+            captureTarget = { variant: "screen", id: captureTarget.id };
+        } else if (captureTarget.variant === "window") {
+          const id = captureTarget.id;
+          if (!windows.data?.some((w) => w.id === id))
+            captureTarget = { variant: "window", id: captureTarget.id };
+        }
+
+        await commands.startRecording({
+          captureTarget,
+          mode: options.data?.mode ?? "studio",
+          cameraLabel: options.data?.cameraLabel ?? null,
+          audioInputName: options.data?.audioInputName ?? null,
+        });
       } else {
         await commands.stopRecording();
       }
@@ -117,37 +140,79 @@ export default function () {
       unlistenFocus();
       unlistenResize();
     };
-
     setTitlebar("hideMaximize", true);
     setTitlebar(
       "items",
       <div
         dir={ostype() === "windows" ? "rtl" : "rtl"}
-        class="flex mx-2 items-center gap-[0.3rem]"
+        class="flex mx-2 items-center gap-1"
       >
-        <Button
-          variant="secondary"
-          size="xs"
-          onClick={() => {
-            commands.showWindow({ Settings: { page: "feedback" } });
-          }}
-        >
-          Feedback
-        </Button>
+        <Tooltip.Root openDelay={0}>
+          <Tooltip.Trigger>
+            <button
+              type="button"
+              onClick={() =>
+                commands.showWindow({ Settings: { page: "general" } })
+              }
+              class="flex items-center justify-center w-5 h-5 -ml-[1.5px]"
+            >
+              <IconCapSettings class="size-5 text-gray-400 hover:text-gray-500" />
+            </button>
+          </Tooltip.Trigger>
+          <Tooltip.Portal>
+            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+              Settings
+              <Tooltip.Arrow class="fill-gray-500" />
+            </Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
+        <Tooltip.Root openDelay={0}>
+          <Tooltip.Trigger>
+            <button
+              type="button"
+              onClick={() =>
+                commands.showWindow({ Settings: { page: "recordings" } })
+              }
+              class="flex items-center justify-center w-5 h-5"
+            >
+              <IconLucideSquarePlay class="size-5 text-gray-400 hover:text-gray-500" />
+            </button>
+          </Tooltip.Trigger>
+          <Tooltip.Portal>
+            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+              Previous Recordings
+              <Tooltip.Arrow class="fill-gray-500" />
+            </Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
+
         <ChangelogButton />
+
         <Show when={!license.isLoading && license.data?.type === "personal"}>
           <button
             type="button"
             onClick={() => commands.showWindow("Upgrade")}
-            class="relative"
+            class="relative flex items-center justify-center w-5 h-5"
           >
-            <IconLucideGift class="size-[1.10rem] text-gray-400 hover:text-gray-500" />
+            <IconLucideGift class="size-5 text-gray-400 hover:text-gray-500" />
             <div
               style={{ "background-color": "#FF4747" }}
               class="block absolute top-0 right-0 z-10 rounded-full animate-bounce size-1.5"
             />
           </button>
         </Show>
+
+        {import.meta.env.DEV && (
+          <button
+            type="button"
+            onClick={() => {
+              new WebviewWindow("debug", { url: "/debug" });
+            }}
+            class="flex items-center justify-center w-5 h-5"
+          >
+            <IconLucideBug class="size-5 text-gray-400 hover:text-gray-500" />
+          </button>
+        )}
       </div>
     );
 
@@ -178,55 +243,17 @@ export default function () {
                 } rounded-lg px-1.5 py-0.5`}
               >
                 {license.data?.type === "commercial"
-                  ? "Commercial License"
+                  ? "Commercial"
                   : license.data?.type === "pro"
                   ? "Pro"
-                  : "Personal License"}
+                  : "Personal"}
               </span>
             </Suspense>
           </ErrorBoundary>
         </div>
-        <div class="flex items-center space-x-2">
-          <Tooltip.Root openDelay={0}>
-            <Tooltip.Trigger>
-              <button
-                type="button"
-                onClick={() =>
-                  commands.showWindow({ Settings: { page: "recordings" } })
-                }
-              >
-                <IconLucideSquarePlay class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
-              </button>
-            </Tooltip.Trigger>
-            <Tooltip.Portal>
-              <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
-                Previous Recordings
-                <Tooltip.Arrow class="fill-gray-500" />
-              </Tooltip.Content>
-            </Tooltip.Portal>
-          </Tooltip.Root>
-
-          <Tooltip.Root openDelay={0}>
-            <Tooltip.Trigger>
-              <button
-                type="button"
-                onClick={() =>
-                  commands.showWindow({ Settings: { page: "general" } })
-                }
-              >
-                <IconCapSettings class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
-              </button>
-            </Tooltip.Trigger>
-            <Tooltip.Portal>
-              <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
-                Settings
-                <Tooltip.Arrow class="fill-gray-500" />
-              </Tooltip.Content>
-            </Tooltip.Portal>
-          </Tooltip.Root>
-        </div>
+        <Mode />
       </div>
-      <TargetSelects options={options.data} />
+      <TargetSelects options={options.data} setOptions={setOptions} />
       <CameraSelect options={options.data} setOptions={setOptions} />
       <MicrophoneSelect options={options.data} setOptions={setOptions} />
       <div class="flex items-center space-x-1 w-full">
@@ -235,9 +262,20 @@ export default function () {
           variant={isRecording() ? "destructive" : "primary"}
           size="md"
           onClick={() => toggleRecording.mutate()}
-          class="flex-grow"
+          class="flex-grow flex items-center justify-center"
         >
-          {isRecording() ? "Stop Recording" : "Start Recording"}
+          {isRecording() ? (
+            "Stop Recording"
+          ) : (
+            <>
+              {options.data?.mode === "instant" ? (
+                <IconCapInstant class="w-[0.8rem] h-[0.8rem] mr-1.5" />
+              ) : (
+                <IconCapFilmCut class="w-[0.8rem] h-[0.8rem] mr-2 -mt-[1.5px]" />
+              )}
+              Start Recording
+            </>
+          )}
         </Button>
         <Button
           disabled={isRecording()}
@@ -287,12 +325,6 @@ import {
   getCurrentWebviewWindow,
   WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
-import * as dialog from "@tauri-apps/plugin-dialog";
-import { type as ostype } from "@tauri-apps/plugin-os";
-import * as updater from "@tauri-apps/plugin-updater";
-import { Transition } from "solid-transition-group";
-import { setTitlebar } from "~/utils/titlebar-state";
-import { apiClient } from "~/utils/web-api";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -321,11 +353,13 @@ function createUpdateCheck() {
 
 function TargetSelects(props: {
   options: ReturnType<typeof createOptionsQuery>["options"]["data"];
+  setOptions: ReturnType<typeof createOptionsQuery>["setOptions"];
 }) {
   const screens = createQuery(() => listScreens);
   const windows = createQuery(() => listWindows);
-  const [selectedScreen, setSelectedScreen] =
-    createSignal<CaptureScreen | null>(screens?.data?.[0] ?? null);
+  const [selectedScreen, setSelectedScreen] = createSignal<{
+    id: number;
+  } | null>(screens?.data?.[0] ?? null);
 
   const isTargetScreenOrArea = createMemo(
     () =>
@@ -361,9 +395,8 @@ function TargetSelects(props: {
     if (!target) return;
 
     if (target.variant === "screen") {
-      if (target.id !== areaSelection.screen?.id) {
-        closeAreaSelection();
-      }
+      if (target.id !== areaSelection.screen?.id) closeAreaSelection();
+
       setSelectedScreen(target);
     } else if (target.variant === "window") {
       if (areaSelection.screen) closeAreaSelection();
@@ -373,6 +406,7 @@ function TargetSelects(props: {
 
   async function handleAreaSelectButtonClick() {
     const targetScreen = selectedScreen() ?? screens.data?.[0];
+    console.log({ targetScreen });
     if (!targetScreen) return;
 
     closeAreaSelection();
@@ -385,15 +419,72 @@ function TargetSelects(props: {
       return;
     }
 
+    const screen = screens.data?.find((s) => s.id === targetScreen.id);
+    if (!screen) return;
     trackEvent("crop_area_enabled", {
-      screen_id: targetScreen.id,
-      screen_name: targetScreen.name,
+      screen_id: screen.id,
+      screen_name: screen.name,
     });
-    setAreaSelection({ pending: false, screen: targetScreen });
+    setAreaSelection({ pending: false, screen: { id: screen.id } });
     commands.showWindow({
-      CaptureArea: { screen: targetScreen },
+      CaptureArea: { screen_id: screen.id },
     });
   }
+
+  const screenValue = () => {
+    const captureTarget = props.options?.captureTarget;
+    if (
+      captureTarget?.variant !== "screen" &&
+      captureTarget?.variant !== "area"
+    )
+      return null;
+
+    const screenId =
+      captureTarget.variant === "screen"
+        ? captureTarget.id
+        : captureTarget.screen;
+
+    const value =
+      screens.data?.find((d) => d.id === screenId) ?? screens.data?.[0] ?? null;
+
+    if (
+      value &&
+      screenId !== value.id &&
+      props.options &&
+      !props.setOptions.isPending
+    ) {
+      props.setOptions.mutate({
+        ...props.options,
+        captureTarget: { variant: "screen", id: value.id },
+      });
+    }
+
+    return value;
+  };
+
+  const windowValue = () => {
+    const captureTarget = props.options?.captureTarget;
+    if (captureTarget?.variant !== "window") return null;
+
+    const value =
+      windows.data?.find((d) => d.id === captureTarget.id) ??
+      windows.data?.[0] ??
+      null;
+
+    if (
+      value &&
+      captureTarget.id !== value.id &&
+      props.options &&
+      !props.setOptions.isPending
+    ) {
+      props.setOptions.mutate({
+        ...props.options,
+        captureTarget: { variant: "window", id: value.id },
+      });
+    }
+
+    return value;
+  };
 
   return (
     <div>
@@ -524,16 +615,14 @@ function TargetSelects(props: {
               captureTarget: { ...value, variant: "screen" },
             });
           }}
-          value={
-            props.options?.captureTarget.variant === "screen"
-              ? props.options.captureTarget
-              : null
-          }
+          value={screenValue()}
           placeholder="Screen"
           optionsEmptyText="No screens found"
           selected={isTargetScreenOrArea()}
+          disabled={props.setOptions.isPending}
         />
         <TargetSelect<CaptureWindow>
+          disabled={props.setOptions.isPending}
           options={windows.data ?? []}
           onChange={(value) => {
             if (!value || !props.options) return;
@@ -550,11 +639,7 @@ function TargetSelects(props: {
               captureTarget: { ...value, variant: "window" },
             });
           }}
-          value={
-            props.options?.captureTarget.variant === "window"
-              ? props.options.captureTarget
-              : null
-          }
+          value={windowValue()}
           placeholder="Window"
           optionsEmptyText="No windows found"
           selected={props.options?.captureTarget.variant === "window"}
@@ -589,19 +674,15 @@ function CameraSelect(props: {
 
   type Option = { isCamera: boolean; name: string };
 
-  const [loading, setLoading] = createSignal(false);
   const onChange = async (item: Option | null) => {
     if (!item && permissions?.data?.camera !== "granted") {
       return requestPermission("camera");
     }
     if (!props.options) return;
 
-    let cameraLabel = !item || !item.isCamera ? null : item.name;
+    const cameraLabel = !item || !item.isCamera ? null : item.name;
 
-    setLoading(true);
-    await props.setOptions
-      .mutateAsync({ ...props.options, cameraLabel })
-      .finally(() => setLoading(false));
+    await props.setOptions.mutateAsync({ ...props.options, cameraLabel });
 
     trackEvent("camera_selected", {
       camera_name: cameraLabel,
@@ -646,7 +727,7 @@ function CameraSelect(props: {
         }}
       >
         <KSelect.Trigger
-          disabled={loading()}
+          disabled={props.setOptions.isPending}
           class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect"
         >
           <IconCapCamera class="text-gray-400 size-[1.25rem]" />
@@ -699,7 +780,7 @@ function MicrophoneSelect(props: {
   const value = createMemo(() => {
     if (!props.options?.audioInputName) return null;
     return (
-      devices.data?.find((d) => d.name === props.options!.audioInputName) ??
+      devices.data?.find((d) => d.name === props.options?.audioInputName) ??
       null
     );
   });
@@ -712,17 +793,13 @@ function MicrophoneSelect(props: {
 
   type Option = { name: string; deviceId: string };
 
-  const [loading, setLoading] = createSignal(false);
   const handleMicrophoneChange = async (item: Option | null) => {
     if (!item || !props.options) return;
 
-    setLoading(true);
-    await props.setOptions
-      .mutateAsync({
-        ...props.options,
-        audioInputName: item.deviceId !== "" ? item.name : null,
-      })
-      .finally(() => setLoading(false));
+    await props.setOptions.mutateAsync({
+      ...props.options,
+      audioInputName: item.deviceId !== "" ? item.name : null,
+    });
     if (!item.deviceId) setDbs();
 
     trackEvent("microphone_selected", {
@@ -797,7 +874,7 @@ function MicrophoneSelect(props: {
         }}
       >
         <KSelect.Trigger
-          disabled={loading()}
+          disabled={props.setOptions.isPending}
           class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10"
         >
           <Show when={dbs()}>
@@ -864,15 +941,18 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
       NonNullable<SelectRootProps<T | null>["itemComponent"]>
     >[0]
   ) => JSX.Element;
+  disabled?: boolean;
 }) {
-  createEffect(() => {
+  const value = () => {
     const v = props.value;
-    if (!v) return;
+    if (!v) return null;
 
-    if (!props.options.some((o) => o.id === v.id)) {
-      props.onChange(props.options[0] ?? null);
-    }
-  });
+    const o = props.options.find((o) => o.id === v.id);
+    if (o) return props.value;
+
+    props.onChange(props.options[0]);
+    return props.options[0];
+  };
 
   return (
     <KSelect<T | null>
@@ -882,19 +962,17 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
       gutter={8}
       itemComponent={(itemProps) => (
         <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={itemProps.item}>
-          {/* <KSelect.ItemLabel class="flex-1"> */}
           {props?.itemComponent?.(itemProps) ?? itemProps.item.rawValue?.name}
-          {/* </KSelect.ItemLabel> */}
         </MenuItem>
       )}
       placement="bottom"
-      class="max-w-[50%] w-full z-10"
+      class="max-w-[50%] w-full z-10 disabled:text-opacity-80"
       placeholder={props.placeholder}
       onChange={(value) => {
         if (!value) return;
         props.onChange(value);
       }}
-      value={props.value}
+      value={value()}
     >
       <KSelect.Trigger<ValidComponent>
         as={
@@ -912,7 +990,8 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
               )
             : undefined
         }
-        class="flex-1 text-gray-400 py-1 z-10 data-[selected='true']:text-gray-500 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
+        class="flex-1 text-gray-400 py-1 z-10 data-[selected='true']:text-gray-500 disabled:text-gray-400 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
+        disabled={props.disabled}
         data-selected={props.selected}
         onClick={(e) => {
           if (props.options.length === 1) {
@@ -1044,14 +1123,28 @@ function ChangelogButton() {
   });
 
   return (
-    <button type="button" onClick={handleChangelogClick} class="relative">
-      <IconLucideBell class="size-[1.10rem] text-gray-400 hover:text-gray-500" />
-      {changelogState.hasUpdate && (
-        <div
-          style={{ "background-color": "#FF4747" }}
-          class="block absolute top-0 right-0 z-10 rounded-full animate-bounce size-1.5"
-        />
-      )}
-    </button>
+    <Tooltip.Root openDelay={0}>
+      <Tooltip.Trigger>
+        <button
+          type="button"
+          onClick={handleChangelogClick}
+          class="relative flex items-center justify-center w-5 h-5"
+        >
+          <IconLucideBell class="size-5 text-gray-400 hover:text-gray-500" />
+          {changelogState.hasUpdate && (
+            <div
+              style={{ "background-color": "#FF4747" }}
+              class="block z-10 absolute top-0 right-0 size-1.5 rounded-full animate-bounce"
+            />
+          )}
+        </button>
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+          Changelog
+          <Tooltip.Arrow class="fill-gray-500" />
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
   );
 }

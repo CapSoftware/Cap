@@ -22,19 +22,19 @@ const settingsList: Array<{
   pro?: boolean;
   onChange?: (value: boolean) => Promise<void>;
 }> = [
-  {
-    key: "autoCreateShareableLink",
-    label: "Automatically generate shareable link after recording",
-    description:
-      "When enabled, a shareable link will be created automatically after stopping the recording. You'll be redirected to the URL while the upload continues in the background.",
-    pro: true,
-  },
-  {
-    key: "uploadIndividualFiles",
-    label: "Upload individual recording files when creating shareable link",
-    description:
-      'Warning: this will cause shareable link uploads to become significantly slower, since all individual recording files will be uploaded. Shows "Download Assets" button in Share page.',
-  },
+  // {
+  //   key: "autoCreateShareableLink",
+  //   label: "Automatically generate shareable link after recording",
+  //   description:
+  //     "When enabled, a shareable link will be created automatically after stopping the recording. You'll be redirected to the URL while the upload continues in the background.",
+  //   pro: true,
+  // },
+  // {
+  //   key: "uploadIndividualFiles",
+  //   label: "Upload individual recording files when creating shareable link",
+  //   description:
+  //     'Warning: this will cause shareable link uploads to become significantly slower, since all individual recording files will be uploaded. Shows "Download Assets" button in Share page.',
+  // },
   {
     key: "openEditorAfterRecording",
     label: "Open editor automatically after recording stops",

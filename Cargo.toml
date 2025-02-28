@@ -3,7 +3,7 @@ resolver = "2"
 members = ["apps/cli", "apps/desktop/src-tauri", "crates/*"]
 
 [workspace.dependencies]
-anyhow = "1.0.86"
+anyhow = { version = "1.0.86" }
 # This includes a currently-unreleased fix that ensures the audio stream is actually
 # stopped and released on drop on macOS
 cpal = { git = "https://github.com/RustAudio/cpal", rev = "f43d36e55494993bbbde3299af0c53e5cdf4d4cf" }
@@ -18,8 +18,12 @@ tokio = { version = "1.39.3", features = [
 	"rt-multi-thread",
 	"time",
 ] }
-tauri = { version = "2.2.3", features = ["specta"] }
-specta = { version = "=2.0.0-rc.20", features = ["derive", "uuid"] }
+tauri = { version = "2.3.0", features = ["specta"] }
+specta = { version = "=2.0.0-rc.20", features = [
+	"derive",
+	"serde_json",
+	"uuid",
+] }
 
 scap = { git = "https://github.com/CapSoftware/scap", rev = "58d4410bf52f" }
 nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "e309b938ccd6", features = [
@@ -36,7 +40,7 @@ sentry = { version = "0.34.0", features = [
 	"debug-images",
 ] }
 
-cidre = { git = "https://github.com/yury/cidre", rev = "3479c18b9ac81dbb15d0acb3a75edd6b42d044b1" }
+cidre = { git = "https://github.com/yury/cidre", rev = "ef04aaabe14ffbbce4a330973a74b6d797d073ff" }
 
 windows = "0.58.0"
 windows-sys = "0.59.0"

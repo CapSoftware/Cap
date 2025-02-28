@@ -65,11 +65,10 @@ export default function CaptureArea() {
   const screens = createQuery(() => listScreens);
 
   async function handleConfirm() {
-
     // Exit if no options data
     if (!options.data) return;
 
-    // Get screen 
+    // Get screen
     let screenTarget = screens.data?.[0];
 
     // Still no screen target, can't proceed
@@ -81,7 +80,7 @@ export default function CaptureArea() {
       ...options.data,
       captureTarget: {
         variant: "area",
-        screen: screenTarget,
+        screen: target.id,
         bounds: {
           x: crop.position.x,
           y: crop.position.y,

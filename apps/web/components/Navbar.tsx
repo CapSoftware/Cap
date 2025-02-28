@@ -1,24 +1,25 @@
 "use client";
 
-import { usePathname } from "next/navigation";
-import { Button, ListItem } from "@cap/ui";
 import {
+  Button,
+  ListItem,
+  Logo,
   NavigationMenu,
   NavigationMenuContent,
   NavigationMenuItem,
   NavigationMenuLink,
   NavigationMenuList,
   NavigationMenuTrigger,
-  Logo,
   navigationMenuTriggerStyle,
 } from "@cap/ui";
-import Link from "next/link";
-import { useState } from "react";
-import { Menu, X } from "lucide-react";
 import { classNames } from "@cap/utils";
-import { seoPages } from "../lib/seo-pages";
 import { faGithub } from "@fortawesome/free-brands-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Menu, X } from "lucide-react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useState } from "react";
+import { seoPages } from "../lib/seo-pages";
 
 const Links = [
   {
@@ -37,7 +38,7 @@ const Links = [
       {
         label: "Join the community",
         sub: "Join the Cap community on Discord",
-        href: "https://discord.gg/4bbD3Yt",
+        href: "https://cap.link/discord",
       },
     ],
   },

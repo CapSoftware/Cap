@@ -30,6 +30,7 @@ pub enum CapWindowId {
     InProgressRecording,
     Upgrade,
     SignIn,
+    ModeSelect,
 }
 
 impl FromStr for CapWindowId {
@@ -48,6 +49,7 @@ impl FromStr for CapWindowId {
             "recordings-overlay" => Self::RecordingsOverlay,
             "upgrade" => Self::Upgrade,
             "signin" => Self::SignIn,
+            "mode-select" => Self::ModeSelect,
             s if s.starts_with("editor-") => Self::Editor {
                 project_id: s.replace("editor-", ""),
             },
@@ -70,6 +72,7 @@ impl std::fmt::Display for CapWindowId {
             Self::RecordingsOverlay => write!(f, "recordings-overlay"),
             Self::Upgrade => write!(f, "upgrade"),
             Self::SignIn => write!(f, "signin"),
+            Self::ModeSelect => write!(f, "mode-select"),
             Self::Editor { project_id } => write!(f, "editor-{}", project_id),
         }
     }
@@ -90,6 +93,7 @@ impl CapWindowId {
             Self::InProgressRecording => "Cap In Progress Recording".to_string(),
             Self::Editor { .. } => "Cap Editor".to_string(),
             Self::SignIn => "Cap Sign In".to_string(),
+            Self::ModeSelect => "Cap Mode Selection".to_string(),
             _ => "Cap".to_string(),
         }
     }
@@ -103,6 +107,7 @@ impl CapWindowId {
                 | Self::Settings
                 | Self::Upgrade
                 | Self::SignIn
+                | Self::ModeSelect
         )
     }
 
@@ -135,6 +140,7 @@ impl CapWindowId {
             Self::Settings => (600.0, 450.0),
             Self::Camera => (460.0, 920.0),
             Self::Upgrade => (850.0, 850.0),
+            Self::ModeSelect => (900.0, 500.0),
             _ => return None,
         })
     }
@@ -146,14 +152,15 @@ pub enum ShowCapWindow {
     Main,
     Settings { page: Option<String> },
     Editor { project_id: String },
-    PrevRecordings,
+    RecordingsOverlay,
     WindowCaptureOccluder,
-    CaptureArea { screen: CaptureScreen },
+    CaptureArea { screen_id: u32 },
     TargetOverlay,
     Camera { ws_port: u16 },
     InProgressRecording { position: Option<(f64, f64)> },
     Upgrade,
     SignIn,
+    ModeSelect,
 }
 
 impl ShowCapWindow {
@@ -220,6 +227,15 @@ impl ShowCapWindow {
                 .transparent(true)
                 .center()
                 .build()?,
+            Self::ModeSelect => self
+                .window_builder(app, "/mode-select")
+                .resizable(false)
+                .maximized(false)
+                .maximizable(false)
+                .center()
+                .focused(true)
+                .shadow(true)
+                .build()?,
             Self::Camera { ws_port } => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
 
@@ -230,7 +246,7 @@ impl ShowCapWindow {
                     .shadow(false)
                     .fullscreen(false)
                     .always_on_top(true)
-                    .content_protected(true)
+                    .title("Cap Camera")
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)
                     .position(
@@ -330,7 +346,7 @@ impl ShowCapWindow {
                 window
             }
 
-            Self::CaptureArea { screen } => {
+            Self::CaptureArea { screen_id } => {
                 let mut window_builder = self
                     .window_builder(app, "/capture-area")
                     .maximized(false)
@@ -343,7 +359,7 @@ impl ShowCapWindow {
                     .decorations(false)
                     .transparent(true);
 
-                let screen_bounds = cap_media::platform::monitor_bounds(screen.id);
+                let screen_bounds = cap_media::platform::monitor_bounds(*screen_id);
                 let target_monitor = app
                     .monitor_from_point(monitor.position().x as f64, monitor.position().y as f64)
                     .ok()
@@ -414,7 +430,7 @@ impl ShowCapWindow {
 
                 window
             }
-            Self::PrevRecordings => {
+            Self::RecordingsOverlay => {
                 let window = self
                     .window_builder(app, "/recordings-overlay")
                     .maximized(false)
@@ -437,31 +453,30 @@ impl ShowCapWindow {
                 #[cfg(target_os = "macos")]
                 {
                     app.run_on_main_thread({
-		                    let window = window.clone();
-		                    move || {
-		                        use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-		                        use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
+                        let window = window.clone();
+                        move || {
+                            use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+                            use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
 
-		                        let panel = window.to_panel().unwrap();
+                            let panel = window.to_panel().unwrap();
 
-		                        panel.set_level(cocoa::appkit::NSMainMenuWindowLevel);
+                            panel.set_level(cocoa::appkit::NSMainMenuWindowLevel);
 
-		                        panel.set_collection_behaviour(
-		                            NSWindowCollectionBehavior::NSWindowCollectionBehaviorTransient
-		                                | NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace
-		                                | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
-		                                | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle,
-		                        );
+                            panel.set_collection_behaviour(
+                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorTransient
+                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace
+                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle,
+                            );
 
-		                        // seems like this doesn't work properly -_-
-		                        #[allow(non_upper_case_globals)]
-		                        const NSWindowStyleMaskNonActivatingPanel: i32 = 1 << 7;
-		                        panel.set_style_mask(NSWindowStyleMaskNonActivatingPanel);
-		                    }
-		                }).ok();
+                            // seems like this doesn't work properly -_-
+                            #[allow(non_upper_case_globals)]
+                            const NSWindowStyleMaskNonActivatingPanel: i32 = 1 << 7;
+                            panel.set_style_mask(NSWindowStyleMaskNonActivatingPanel);
+                        }
+                    })
+                    .ok();
                 }
-
-                println!("about to spawn fake window listener");
 
                 fake_window::spawn_fake_window_listener(app.clone(), window.clone());
 
@@ -525,7 +540,7 @@ impl ShowCapWindow {
             ShowCapWindow::Editor { project_id } => CapWindowId::Editor {
                 project_id: project_id.clone(),
             },
-            ShowCapWindow::PrevRecordings => CapWindowId::RecordingsOverlay,
+            ShowCapWindow::RecordingsOverlay => CapWindowId::RecordingsOverlay,
             ShowCapWindow::WindowCaptureOccluder => CapWindowId::WindowCaptureOccluder,
             ShowCapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
             ShowCapWindow::TargetOverlay => CapWindowId::TargetOverlay,
@@ -533,6 +548,7 @@ impl ShowCapWindow {
             ShowCapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
             ShowCapWindow::Upgrade => CapWindowId::Upgrade,
             ShowCapWindow::SignIn => CapWindowId::SignIn,
+            ShowCapWindow::ModeSelect => CapWindowId::ModeSelect,
         }
     }
 }

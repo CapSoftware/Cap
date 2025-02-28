@@ -4,7 +4,10 @@ use crate::{
     MediaError,
 };
 use ffmpeg::format::{self};
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use super::{H264Encoder, OpusEncoder};
 
@@ -13,6 +16,7 @@ pub struct MP4File {
     output: format::context::Output,
     video: H264Encoder,
     audio: Option<OpusEncoder>,
+    is_finished: bool,
 }
 
 impl MP4File {
@@ -36,6 +40,7 @@ impl MP4File {
             output,
             video,
             audio,
+            is_finished: false,
         })
     }
 
@@ -44,10 +49,18 @@ impl MP4File {
     }
 
     pub fn queue_video_frame(&mut self, frame: FFVideo) {
+        if self.is_finished {
+            return;
+        }
+
         self.video.queue_frame(frame, &mut self.output);
     }
 
     pub fn queue_audio_frame(&mut self, frame: FFAudio) {
+        if self.is_finished {
+            return;
+        }
+
         let Some(audio) = &mut self.audio else {
             return;
         };
@@ -56,6 +69,12 @@ impl MP4File {
     }
 
     pub fn finish(&mut self) {
+        if self.is_finished {
+            return;
+        }
+
+        self.is_finished = true;
+
         tracing::info!("MP4Encoder: Finishing encoding");
 
         self.video.finish(&mut self.output);
@@ -117,5 +136,43 @@ impl PipelineSinkTask<FFVideo> for MP4File {
 
     fn finish(&mut self) {
         self.finish();
+    }
+}
+
+impl PipelineSinkTask<FFAudio> for Arc<Mutex<MP4File>> {
+    fn run(
+        &mut self,
+        ready_signal: crate::pipeline::task::PipelineReadySignal,
+        input: &flume::Receiver<FFAudio>,
+    ) {
+        ready_signal.send(Ok(())).ok();
+
+        while let Ok(frame) = input.recv() {
+            let mut this = self.lock().unwrap();
+            this.queue_audio_frame(frame);
+        }
+    }
+
+    fn finish(&mut self) {
+        self.lock().unwrap().finish();
+    }
+}
+
+impl PipelineSinkTask<FFVideo> for Arc<Mutex<MP4File>> {
+    fn run(
+        &mut self,
+        ready_signal: crate::pipeline::task::PipelineReadySignal,
+        input: &flume::Receiver<FFVideo>,
+    ) {
+        ready_signal.send(Ok(())).ok();
+
+        while let Ok(frame) = input.recv() {
+            let mut this = self.lock().unwrap();
+            this.queue_video_frame(frame);
+        }
+    }
+
+    fn finish(&mut self) {
+        self.lock().unwrap().finish();
     }
 }

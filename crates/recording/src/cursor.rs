@@ -91,7 +91,6 @@ pub fn spawn_cursor_recorder(
                         let cursor_path = cursors_dir.join(&file_name);
 
                         if let Ok(image) = image::load_from_memory(&data.image) {
-                            dbg!(image.dimensions());
                             // Convert to RGBA
                             let rgba_image = image.into_rgba8();
 
@@ -166,7 +165,6 @@ pub fn spawn_cursor_recorder(
                     #[cfg(target_os = "macos")]
                     let (mouse_x, mouse_y) = {
                         let primary_bounds = cap_media::platform::primary_monitor_bounds();
-                        dbg!(primary_bounds);
 
                         let mouse_x = mouse_x - screen_bounds.x as i32;
                         let mouse_y = mouse_y
@@ -212,8 +210,6 @@ pub fn spawn_cursor_recorder(
                     } else {
                         y.max(0.0).min(1.0)
                     };
-
-                    debug!("Normalized coords: ({}, {})", x, y);
 
                     let mouse_event = CursorMoveEvent {
                         active_modifiers: vec![],

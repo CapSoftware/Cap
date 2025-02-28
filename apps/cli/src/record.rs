@@ -1,7 +1,7 @@
 use std::{env::current_dir, hash::Hash, path::PathBuf, sync::Arc};
 
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
-use cap_recording::RecordingOptions;
+use cap_recording::{RecordingMode, RecordingOptions};
 use clap::Args;
 use nokhwa::utils::{ApiBackend, CameraIndex};
 use tokio::{io::AsyncBufReadExt, sync::Mutex};
@@ -34,7 +34,7 @@ impl RecordStart {
                 cap_media::sources::list_screens()
                     .into_iter()
                     .find(|s| s.0.id == id)
-                    .map(|(s, t)| (ScreenCaptureTarget::Screen(s), t))
+                    .map(|(s, t)| (ScreenCaptureTarget::Screen { id: s.id }, t))
                     .ok_or(format!("Screen with id '{id}' not found"))
             })
             .or_else(|| {
@@ -42,7 +42,7 @@ impl RecordStart {
                     cap_media::sources::list_windows()
                         .into_iter()
                         .find(|s| s.0.id == id)
-                        .map(|(s, t)| (ScreenCaptureTarget::Window(s), t))
+                        .map(|(s, t)| (ScreenCaptureTarget::Window { id: s.id }, t))
                         .ok_or(format!("Window with id '{id}' not found"))
                 })
             })
@@ -69,13 +69,14 @@ impl RecordStart {
             .path
             .unwrap_or_else(|| current_dir().unwrap().join(format!("{id}.cap")));
 
-        let actor = cap_recording::spawn_recording_actor(
+        let actor = cap_recording::spawn_studio_recording_actor(
             id,
             path,
             RecordingOptions {
                 capture_target: target_info,
                 camera_label: camera.as_ref().map(|c| c.camera_info.human_name()),
                 audio_input_name: None,
+                mode: RecordingMode::Studio,
             },
             camera.map(|c| Arc::new(Mutex::new(c))),
             None,
