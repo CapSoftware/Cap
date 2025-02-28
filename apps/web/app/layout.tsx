@@ -1,13 +1,14 @@
 import "@/app/globals.css";
-import { Toaster } from "react-hot-toast";
-import { Navbar } from "@/components/Navbar";
-import { Footer } from "@/components/Footer";
-import type { Metadata } from "next";
-import { getCurrentUser } from "@cap/database/auth/session";
 import { BentoScript } from "@/components/BentoScript";
-import { PostHogProvider, Providers } from "./providers";
-import { AuthProvider } from "./AuthProvider";
+import { Footer } from "@/components/Footer";
+import { Navbar } from "@/components/Navbar";
+import { getCurrentUser } from "@cap/database/auth/session";
 import crypto from "crypto";
+import { GeistSans } from "geist/font/sans";
+import type { Metadata } from "next";
+import { Toaster } from "react-hot-toast";
+import { AuthProvider } from "./AuthProvider";
+import { PostHogProvider, Providers } from "./providers";
 
 export const metadata: Metadata = {
   title: "Cap — Beautiful screen recordings, owned by you.",
@@ -38,7 +39,7 @@ export default async function RootLayout({
   }
 
   return (
-    <html lang="en">
+    <html className={`${GeistSans.variable}`} lang="en">
       <head>
         <link
           rel="apple-touch-icon"
@@ -73,7 +74,7 @@ export default async function RootLayout({
               email={user?.email ?? ""}
             >
               <Toaster />
-              <main className="w-full overflow-hidden">
+              <main className="overflow-hidden w-full">
                 <Navbar auth={user ? true : false} />
                 {children}
                 <Footer />
