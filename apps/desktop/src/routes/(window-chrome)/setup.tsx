@@ -46,9 +46,6 @@ export default function () {
   const [currentStep, setCurrentStep] = createSignal<"permissions" | "mode">(
     "permissions"
   );
-  const [selectedMode, setSelectedMode] = createSignal<"instant" | "studio">(
-    "studio"
-  );
 
   createEffect(() => {
     if (!initialCheck()) {
@@ -87,10 +84,6 @@ export default function () {
       return !s.hasCompletedStartup;
     })
   );
-
-  const handleModeChange = (mode: "instant" | "studio") => {
-    setSelectedMode(mode);
-  };
 
   const handleContinue = () => {
     // Just proceed to the main window without saving mode to store
@@ -180,10 +173,7 @@ export default function () {
           </div>
 
           <div class="w-full py-4">
-            <ModeSelect
-              initialMode={selectedMode()}
-              onModeChange={handleModeChange}
-            />
+            <ModeSelect />
           </div>
 
           <Button class="px-12" size="lg" onClick={handleContinue}>

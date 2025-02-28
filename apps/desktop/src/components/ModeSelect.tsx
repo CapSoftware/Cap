@@ -55,20 +55,11 @@ const ModeOption = (props: ModeOptionProps) => {
   );
 };
 
-interface ModeSelectProps {
-  initialMode?: "instant" | "studio";
-  onModeChange?: (mode: "instant" | "studio") => void;
-}
-
-const ModeSelect = (props: ModeSelectProps) => {
+const ModeSelect = () => {
   const { options, setOptions } = createOptionsQuery();
 
   const handleModeChange = (mode: RecordingMode) => {
-    if (props.onModeChange) {
-      props.onModeChange(mode);
-    } else if (options.data) {
-      setOptions.mutate({ ...options.data, mode });
-    }
+    setOptions.mutate({ ...options.data, mode });
   };
 
   const modeOptions = [
