@@ -23,7 +23,7 @@
   --foreground-rgb: #000000;
   --background-start-rgb: 214, 219, 220;
   --background-end-rgb: 255, 255, 255;
-  --primary-font: "Geist", sans-serif;
+  --primary-font: "Geist Sans", sans-serif;
 }
 
 @media (prefers-color-scheme: dark) {
