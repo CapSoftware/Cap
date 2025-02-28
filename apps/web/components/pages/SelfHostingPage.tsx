@@ -4,6 +4,7 @@
 
 import { CommercialGetStarted } from "@/components/CommercialGetStarted";
 import { Button } from "@cap/ui";
+import { CSSProperties } from "react";
 import { LogoSection } from "./_components/LogoSection";
 
 interface FeatureCardProps {
@@ -11,8 +12,10 @@ interface FeatureCardProps {
   description: string;
   imagePath: string;
   imageAlt?: string;
+  bg?: string;
   className?: string;
   imageHeight?: string;
+  bgStyle?: CSSProperties;
 }
 
 const FeatureCard: React.FC<FeatureCardProps> = ({
@@ -21,16 +24,24 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
   imagePath,
   imageAlt,
   className,
+  bgStyle,
+  bg,
   imageHeight = "h-48",
 }) => {
   return (
     <div
-      className={`bg-[#FAFAFA] rounded-[12px] p-8 pt-0 h-full flex flex-col overflow-hidden ${className}`}
+      style={{
+        backgroundImage: `url(${bg})`,
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        ...bgStyle,
+      }}
+      className={`bg-[#FAFAFA]/50 rounded-[12px] p-8 pt-0 h-full backdrop-blur-md relative z-10 flex flex-col overflow-hidden ${className}`}
     >
       <img
         src={imagePath}
         alt={imageAlt || title}
-        className={`w-full ${imageHeight} object-contain rounded-lg mb-6`}
+        className={`object-contain mt-10 mb-6 w-full rounded-lg ${imageHeight}`}
       />
       <h3 className="text-[1.25rem] leading-[1.5rem] font-semibold mb-1">
         {title}
@@ -60,7 +71,7 @@ export const SelfHostingPage = () => {
   return (
     <>
       <div className="mt-[120px]">
-        <div className="relative z-10 px-5 w-full pt-24 pb-36">
+        <div className="relative z-10 px-5 pt-24 pb-36 w-full">
           <div className="mx-auto text-center wrapper wrapper-sm">
             <h1 className="fade-in-down text-[2rem] font-bold leading-[2.5rem] md:text-[3.75rem] md:leading-[4rem] relative z-10 text-black mb-4">
               Self-host Cap
@@ -94,43 +105,53 @@ export const SelfHostingPage = () => {
           <img
             src="/illustrations/mask-big-recorder.webp"
             alt="Self-hosting Background"
-            className="w-full h-auto pointer-events-none z-0 absolute top-0 left-0 -mt-40"
+            className="absolute top-0 left-0 z-0 -mt-40 w-full h-auto pointer-events-none"
           />
         </div>
         <LogoSection />
         <div className="pb-32 wrapper md:pb-40" id="features">
           <div className="space-y-3">
             {/* Section 1: 35% / 65% split */}
-            <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
               <div className="md:col-span-5">
                 <FeatureCard
                   title="Privacy-first"
                   description="Host Cap on your own servers with complete data sovereignty. Maintain full control over your sensitive information and ensure compliance with your organization's security policies and regulatory requirements."
                   imagePath="/illustrations/privacy.webp"
                   imageAlt="Complete Control"
-                  imageHeight="h-[274px]"
+                  imageHeight="h-[280px]"
                 />
               </div>
               <div className="md:col-span-7">
                 <FeatureCard
                   title="Multi-Platform Support"
                   description="Self-hosted Cap works seamlessly across macOS and Windows, giving your team the flexibility to collaborate regardless of their device preference. Deploy once and enable your entire organization to capture, share, and collaborate from any device."
-                  imagePath="/illustrations/multi-platform.webp"
+                  imagePath="/illustrations/multiplatmain.png"
+                  bg="/illustrations/multiplatbg.webp"
                   imageAlt="Enterprise-Ready"
-                  imageHeight="h-[274px]"
+                  imageHeight="h-[280px]"
+                  bgStyle={{
+                    backgroundSize: "cover",
+                    backgroundPosition: "bottom",
+                  }}
                 />
               </div>
             </div>
 
             {/* Section 2: 65% / 35% split */}
-            <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
               <div className="md:col-span-8">
                 <FeatureCard
                   title="Unlimited Recording and Cloud Storage"
+                  bg="/illustrations/unlimitedrecordingbg.webp"
                   description="Configure storage limits based on your infrastructure capacity. Self-hosting eliminates cloud storage fees and gives you complete control over retention policies, ideal for teams with high-volume recording needs or long-term archival requirements."
                   imagePath="/illustrations/cloud-feature.webp"
                   imageAlt="White Labeling"
                   imageHeight="h-[215px]"
+                  bgStyle={{
+                    backgroundSize: "cover",
+                    backgroundPosition: "bottom",
+                  }}
                 />
               </div>
               <div className="md:col-span-4">
