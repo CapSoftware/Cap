@@ -405,7 +405,7 @@ export const HomePage = () => {
           </div>
         </div>
       </div>
-      <div className="mb-32 md:mb-40">
+      <div className="px-5 mb-32 md:mb-40">
         <ReadyToGetStarted />
       </div>
     </ParallaxProvider>

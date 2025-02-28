@@ -4,7 +4,6 @@
 
 import { CommercialGetStarted } from "@/components/CommercialGetStarted";
 import { Button } from "@cap/ui";
-import { CSSProperties } from "react";
 import { LogoSection } from "./_components/LogoSection";
 
 interface FeatureCardProps {
@@ -15,7 +14,6 @@ interface FeatureCardProps {
   bg?: string;
   className?: string;
   imageHeight?: string;
-  bgStyle?: CSSProperties;
 }
 
 const FeatureCard: React.FC<FeatureCardProps> = ({
@@ -24,7 +22,6 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
   imagePath,
   imageAlt,
   className,
-  bgStyle,
   bg,
   imageHeight = "h-48",
 }) => {
@@ -32,9 +29,6 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
     <div
       style={{
         backgroundImage: `url(${bg})`,
-        backgroundSize: "cover",
-        backgroundPosition: "center",
-        ...bgStyle,
       }}
       className={`bg-[#FAFAFA]/50 rounded-[12px] p-8 pt-0 h-full backdrop-blur-md relative z-10 flex flex-col overflow-hidden ${className}`}
     >
@@ -129,11 +123,8 @@ export const SelfHostingPage = () => {
                   imagePath="/illustrations/multiplatmain.png"
                   bg="/illustrations/multiplatbg.webp"
                   imageAlt="Enterprise-Ready"
+                  className="bg-bottom bg-no-repeat bg-cover lg:bg-top"
                   imageHeight="h-[280px]"
-                  bgStyle={{
-                    backgroundSize: "cover",
-                    backgroundPosition: "bottom",
-                  }}
                 />
               </div>
             </div>
@@ -143,15 +134,12 @@ export const SelfHostingPage = () => {
               <div className="md:col-span-8">
                 <FeatureCard
                   title="Unlimited Recording and Cloud Storage"
-                  bg="/illustrations/unlimitedrecordingbg.webp"
+                  bg="/illustrations/multiplatbg.webp"
                   description="Configure storage limits based on your infrastructure capacity. Self-hosting eliminates cloud storage fees and gives you complete control over retention policies, ideal for teams with high-volume recording needs or long-term archival requirements."
                   imagePath="/illustrations/cloud-feature.webp"
                   imageAlt="White Labeling"
                   imageHeight="h-[215px]"
-                  bgStyle={{
-                    backgroundSize: "cover",
-                    backgroundPosition: "bottom",
-                  }}
+                  className="bg-bottom bg-no-repeat bg-cover"
                 />
               </div>
               <div className="md:col-span-4">
@@ -177,7 +165,7 @@ export const SelfHostingPage = () => {
             </div>
           </div>
         </div>
-        <div className="mb-32 md:mb-40">
+        <div className="px-5 mb-32 md:mb-40">
           <CommercialGetStarted />
         </div>
       </div>
