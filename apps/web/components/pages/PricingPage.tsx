@@ -35,6 +35,24 @@ export const PricingPage = () => {
   const { push } = useRouter();
   const searchParams = useSearchParams();
 
+  const faqContent = [
+    {
+      title: "Can I self-host Cap for free?",
+      answer:
+        "Yes, you can self-host Cap for free, for personal use. However, if you want to use Cap for commercial purposes, you will need to purchase a self-hosted license.",
+    },
+    {
+      title: "How much does a self-hosted license cost?",
+      answer:
+        "A self-hosted license costs $9/month, per user, with a minimum of 10 users.",
+    },
+    {
+      title: "What happens after the beta period ends?",
+      answer:
+        "Early adopters will keep their special pricing for the lifetime of their subscription, even after we move out of beta and adjust our regular pricing.",
+    },
+  ];
+
   useEffect(() => {
     const init = async () => {
       setInitialRender(false);
@@ -587,9 +605,9 @@ export const PricingPage = () => {
               </Card>
             </div>
           ) : (
-            <div className="flex justify-center">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <Card
-                className={`bg-gray-100 rounded-xl min-h-[600px] flex-grow border-blue-500 border-4 max-w-2xl ${
+                className={`bg-gray-100 rounded-xl min-h-[600px] flex-grow border-blue-500 border-4 ${
                   initialRender ? "fade-in-up animate-delay-2" : ""
                 }`}
               >
@@ -711,6 +729,20 @@ export const PricingPage = () => {
                   </CardFooter>
                 </div>
               </Card>
+              <div>
+                <div className="grid gap-6">
+                  {faqContent.map((section, index) => {
+                    return (
+                      <div key={index} className="pb-4">
+                        <h3 className="mb-2 text-xl font-medium">
+                          {section.title}
+                        </h3>
+                        <p className="text-gray-700">{section.answer}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           )}
         </div>
