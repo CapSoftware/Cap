@@ -1,5 +1,5 @@
 mod configuration;
-mod cursor;
+pub mod cursor;
 mod meta;
 
 pub use configuration::*;
