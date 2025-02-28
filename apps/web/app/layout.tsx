@@ -13,11 +13,11 @@ import { PostHogProvider, Providers } from "./providers";
 export const metadata: Metadata = {
   title: "Cap — Beautiful screen recordings, owned by you.",
   description:
-    "Cap is the open source alternative to Loom. Lightweight, powerful, and stunning. Record and share in seconds.",
+    "Cap is the open source alternative to Loom. Lightweight, powerful, and cross-platform. Record and share in seconds.",
   openGraph: {
     title: "Cap — Beautiful screen recordings, owned by you.",
     description:
-      "Cap is the open source alternative to Loom. Lightweight, powerful, and stunning. Record and share in seconds.",
+      "Cap is the open source alternative to Loom. Lightweight, powerful, and cross-platform. Record and share in seconds.",
     type: "website",
     url: "https://cap.so",
     images: ["https://cap.so/og.png"],

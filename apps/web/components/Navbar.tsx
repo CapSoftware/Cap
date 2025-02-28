@@ -36,6 +36,11 @@ const Links = [
         href: "https://github.com/CapSoftware/Cap",
       },
       {
+        label: "Self-host Cap",
+        sub: "Self-host Cap on your own infrastructure",
+        href: "/self-hosting",
+      },
+      {
         label: "Join the community",
         sub: "Join the Cap community on Discord",
         href: "https://cap.link/discord",
