@@ -59,7 +59,7 @@ const ModeSelect = () => {
   const { options, setOptions } = createOptionsQuery();
 
   const handleModeChange = (mode: RecordingMode) => {
-    setOptions.mutate({ ...options.data, mode });
+    if (options.data) setOptions.mutate({ ...options.data, mode });
   };
 
   const modeOptions = [
@@ -93,11 +93,7 @@ const ModeSelect = () => {
           darkimg={option.darkimg}
           lightimg={option.lightimg}
           icon={option.icon}
-          isSelected={
-            props.initialMode
-              ? props.initialMode === option.mode
-              : options.data?.mode === option.mode
-          }
+          isSelected={options.data?.mode === option.mode}
           onSelect={handleModeChange}
         />
       ))}
