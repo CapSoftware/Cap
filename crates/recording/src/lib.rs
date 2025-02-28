@@ -7,7 +7,7 @@ pub use studio_recording::{
     spawn_studio_recording_actor, CompletedStudioRecording, StudioRecordingHandle,
 };
 
-use cap_media::{sources::*, MediaError};
+use cap_media::{platform::Bounds, sources::*, MediaError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -27,20 +27,24 @@ pub struct RecordingOptions {
     pub mode: RecordingMode,
 }
 
-impl Default for RecordingOptions {
-    fn default() -> Self {
-        Self {
-            capture_target: ScreenCaptureTarget::Screen(CaptureScreen {
-                id: 0,
-                name: String::new(),
-                refresh_rate: 0,
-            }),
-            camera_label: None,
-            audio_input_name: None,
-            mode: RecordingMode::Studio,
-        }
-    }
+#[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum RecordingOptionCaptureTarget {
+    Window { id: u32 },
+    Screen { id: u32 },
+    Area { screen_id: u32, bounds: Bounds },
 }
+
+// impl Default for RecordingOptions {
+//     fn default() -> Self {
+//         Self {
+//             capture_target: None,
+//             camera_label: None,
+//             audio_input_name: None,
+//             mode: RecordingMode::Studio,
+//         }
+//     }
+// }
 
 impl RecordingOptions {
     pub fn camera_label(&self) -> Option<&str> {

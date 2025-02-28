@@ -264,6 +264,11 @@ fn start_capturing(
         loop {
             match control.try_recv() {
                 Ok(AudioInputControl::Switch(name, response)) => {
+                    if device.name().unwrap() == name {
+                        response.send(Ok(config.clone())).unwrap();
+                        continue;
+                    }
+
                     info!("Switching audio device to: {}", name);
                     // list_devices hangs if the stream isn't dropped
                     drop(stream);

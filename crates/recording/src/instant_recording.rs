@@ -5,8 +5,10 @@ use std::{
 };
 
 use cap_media::{
+    data::VideoInfo,
     feeds::AudioInputFeed,
     pipeline::{Pipeline, RealTimeClock},
+    platform::Bounds,
     sources::{AudioInputSource, ScreenCaptureSource, ScreenCaptureTarget},
     MediaError,
 };
@@ -40,6 +42,7 @@ enum InstantRecordingActorState {
 pub struct InstantRecordingHandle {
     ctrl_tx: flume::Sender<InstantRecordingActorControlMessage>,
     pub options: RecordingOptions,
+    pub bounds: Bounds,
 }
 
 macro_rules! send_message {
@@ -87,6 +90,7 @@ pub struct InstantRecordingActor {
     id: String,
     recording_dir: PathBuf,
     capture_target: ScreenCaptureTarget,
+    video_info: VideoInfo,
     audio_input_name: Option<String>,
 }
 
@@ -190,11 +194,13 @@ pub async fn spawn_instant_recording_actor(
 
                 spawn_actor({
                     let options = options.clone();
+                    let video_info = screen_source.info();
                     async move {
                         let mut actor = InstantRecordingActor {
                             id,
                             recording_dir,
                             capture_target: options.capture_target,
+                            video_info,
                             audio_input_name: options.audio_input_name,
                         };
 
@@ -337,7 +343,11 @@ pub async fn spawn_instant_recording_actor(
                     .in_current_span()
                 });
 
-                Ok(InstantRecordingHandle { ctrl_tx, options })
+                Ok(InstantRecordingHandle {
+                    ctrl_tx,
+                    options,
+                    bounds: screen_source.get_bounds().clone(),
+                })
             };
 
             match run().await {
@@ -365,7 +375,7 @@ async fn stop_recording(
         id: actor.id,
         project_path: actor.recording_dir.clone(),
         meta: InstantRecordingMeta {
-            fps: actor.capture_target.recording_fps(),
+            fps: actor.video_info.fps(),
             sample_rate: None,
         },
         display_source: actor.capture_target,

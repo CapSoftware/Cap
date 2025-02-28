@@ -10,6 +10,7 @@ use cap_media::{
     encoders::{H264Encoder, MP4File, OggFile, OpusEncoder},
     feeds::{AudioInputFeed, CameraFeed},
     pipeline::{Pipeline, RealTimeClock},
+    platform::Bounds,
     sources::{AudioInputSource, CameraSource, ScreenCaptureSource, ScreenCaptureTarget},
     MediaError,
 };
@@ -50,6 +51,7 @@ pub enum StudioRecordingActorControlMessage {
 pub struct StudioRecordingActor {
     id: String,
     recording_dir: PathBuf,
+    fps: u32,
     options: RecordingOptions,
     segments: Vec<StudioRecordingSegment>,
 }
@@ -77,6 +79,7 @@ struct CursorPipeline {
 pub struct StudioRecordingHandle {
     ctrl_tx: flume::Sender<StudioRecordingActorControlMessage>,
     pub options: RecordingOptions,
+    pub bounds: Bounds,
 }
 
 macro_rules! send_message {
@@ -149,6 +152,7 @@ pub async fn spawn_studio_recording_actor(
             let cursors_dir = ensure_dir(&content_dir.join("cursors"))?;
 
             let screen_source = create_screen_capture(&options.capture_target, false, false, 120)?;
+            let bounds = screen_source.get_bounds().clone();
 
             debug!("screen capture: {screen_source:#?}");
 
@@ -183,11 +187,13 @@ pub async fn spawn_studio_recording_actor(
 
             spawn_actor({
                 let options = options.clone();
+                let fps = screen_source.info().fps();
                 async move {
                     let mut actor = StudioRecordingActor {
                         id,
                         recording_dir,
                         options,
+                        fps,
                         segments: Vec::new(),
                     };
 
@@ -373,7 +379,11 @@ pub async fn spawn_studio_recording_actor(
                 .in_current_span()
             });
 
-            Ok(StudioRecordingHandle { ctrl_tx, options })
+            Ok(StudioRecordingHandle {
+                ctrl_tx,
+                options,
+                bounds,
+            })
         };
 
         match run().await {
@@ -420,7 +430,7 @@ async fn stop_recording(
                                     .unwrap(),
                             )
                             .unwrap(),
-                            fps: actor.options.capture_target.recording_fps(),
+                            fps: actor.fps,
                         },
                         camera: s.pipeline.camera.as_ref().map(|camera| CameraMeta {
                             path: RelativePathBuf::from_path(
@@ -511,7 +521,7 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
 
     trace!("preparing segment pipeline {index}");
 
-    let screen_bounds = screen_source.get_bounds();
+    let screen_bounds = screen_source.get_bounds().clone();
     pipeline_builder = TCaptureFormat::make_capture_pipeline(
         pipeline_builder,
         screen_source,
@@ -580,7 +590,7 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
 
     let cursor = FLAGS.record_mouse_state.then(|| {
         let cursor = spawn_cursor_recorder(
-            screen_bounds,
+            screen_bounds.clone(),
             cursors_dir.clone(),
             prev_cursors,
             next_cursors_id,

@@ -63,7 +63,7 @@ export default function CaptureArea() {
       ...options.data,
       captureTarget: {
         variant: "area",
-        screen: target,
+        screen: target.id,
         bounds: {
           x: crop.position.x,
           y: crop.position.y,

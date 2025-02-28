@@ -11,7 +11,7 @@ import { availableMonitors, getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize } from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
-  JSX,
+  type JSX,
   Show,
   type ValidComponent,
   createEffect,
@@ -38,7 +38,7 @@ import {
   createLicenseQuery,
 } from "~/utils/queries";
 import {
-  CaptureScreen,
+  type CaptureScreen,
   type CaptureWindow,
   commands,
   events,
@@ -58,10 +58,32 @@ export default function () {
 
   const isRecording = () => !!currentRecording.data;
 
+  const screens = createQuery(() => listScreens);
+  const windows = createQuery(() => listWindows);
   const toggleRecording = createMutation(() => ({
     mutationFn: async () => {
       if (!isRecording()) {
-        await commands.startRecording();
+        let captureTarget = options.data?.captureTarget ?? {
+          variant: "screen",
+          id: screens.data?.[0]?.id ?? 1,
+        };
+
+        if (captureTarget.variant === "screen") {
+          const id = captureTarget.id;
+          if (!screens.data?.some((s) => s.id === id))
+            captureTarget = { variant: "screen", id: captureTarget.id };
+        } else if (captureTarget.variant === "window") {
+          const id = captureTarget.id;
+          if (!windows.data?.some((w) => w.id === id))
+            captureTarget = { variant: "window", id: captureTarget.id };
+        }
+
+        await commands.startRecording({
+          captureTarget,
+          mode: options.data?.mode ?? "studio",
+          cameraLabel: options.data?.cameraLabel ?? null,
+          audioInputName: options.data?.audioInputName ?? null,
+        });
       } else {
         await commands.stopRecording();
       }
@@ -344,8 +366,9 @@ function TargetSelects(props: {
 }) {
   const screens = createQuery(() => listScreens);
   const windows = createQuery(() => listWindows);
-  const [selectedScreen, setSelectedScreen] =
-    createSignal<CaptureScreen | null>(screens?.data?.[0] ?? null);
+  const [selectedScreen, setSelectedScreen] = createSignal<{
+    id: number;
+  } | null>(screens?.data?.[0] ?? null);
 
   const isTargetScreenOrArea = createMemo(
     () =>
@@ -381,9 +404,8 @@ function TargetSelects(props: {
     if (!target) return;
 
     if (target.variant === "screen") {
-      if (target.id !== areaSelection.screen?.id) {
-        closeAreaSelection();
-      }
+      if (target.id !== areaSelection.screen?.id) closeAreaSelection();
+
       setSelectedScreen(target);
     } else if (target.variant === "window") {
       if (areaSelection.screen) closeAreaSelection();
@@ -393,6 +415,7 @@ function TargetSelects(props: {
 
   async function handleAreaSelectButtonClick() {
     const targetScreen = selectedScreen() ?? screens.data?.[0];
+    console.log({ targetScreen });
     if (!targetScreen) return;
 
     closeAreaSelection();
@@ -405,15 +428,72 @@ function TargetSelects(props: {
       return;
     }
 
+    const screen = screens.data?.find((s) => s.id === targetScreen.id);
+    if (!screen) return;
     trackEvent("crop_area_enabled", {
-      screen_id: targetScreen.id,
-      screen_name: targetScreen.name,
+      screen_id: screen.id,
+      screen_name: screen.name,
     });
-    setAreaSelection({ pending: false, screen: targetScreen });
+    setAreaSelection({ pending: false, screen: { id: screen.id } });
     commands.showWindow({
-      CaptureArea: { screen: targetScreen },
+      CaptureArea: { screen_id: screen.id },
     });
   }
+
+  const screenValue = () => {
+    const captureTarget = props.options?.captureTarget;
+    if (
+      captureTarget?.variant !== "screen" &&
+      captureTarget?.variant !== "area"
+    )
+      return null;
+
+    const screenId =
+      captureTarget.variant === "screen"
+        ? captureTarget.id
+        : captureTarget.screen;
+
+    const value =
+      screens.data?.find((d) => d.id === screenId) ?? screens.data?.[0] ?? null;
+
+    if (
+      value &&
+      screenId !== value.id &&
+      props.options &&
+      !props.setOptions.isPending
+    ) {
+      props.setOptions.mutate({
+        ...props.options,
+        captureTarget: { variant: "screen", id: value.id },
+      });
+    }
+
+    return value;
+  };
+
+  const windowValue = () => {
+    const captureTarget = props.options?.captureTarget;
+    if (captureTarget?.variant !== "window") return null;
+
+    const value =
+      windows.data?.find((d) => d.id === captureTarget.id) ??
+      windows.data?.[0] ??
+      null;
+
+    if (
+      value &&
+      captureTarget.id !== value.id &&
+      props.options &&
+      !props.setOptions.isPending
+    ) {
+      props.setOptions.mutate({
+        ...props.options,
+        captureTarget: { variant: "window", id: value.id },
+      });
+    }
+
+    return value;
+  };
 
   return (
     <div>
@@ -544,11 +624,7 @@ function TargetSelects(props: {
               captureTarget: { ...value, variant: "screen" },
             });
           }}
-          value={
-            props.options?.captureTarget.variant === "screen"
-              ? props.options.captureTarget
-              : null
-          }
+          value={screenValue()}
           placeholder="Screen"
           optionsEmptyText="No screens found"
           selected={isTargetScreenOrArea()}
@@ -572,11 +648,7 @@ function TargetSelects(props: {
               captureTarget: { ...value, variant: "window" },
             });
           }}
-          value={
-            props.options?.captureTarget.variant === "window"
-              ? props.options.captureTarget
-              : null
-          }
+          value={windowValue()}
           placeholder="Window"
           optionsEmptyText="No windows found"
           selected={props.options?.captureTarget.variant === "window"}
@@ -611,19 +683,15 @@ function CameraSelect(props: {
 
   type Option = { isCamera: boolean; name: string };
 
-  const [loading, setLoading] = createSignal(false);
   const onChange = async (item: Option | null) => {
     if (!item && permissions?.data?.camera !== "granted") {
       return requestPermission("camera");
     }
     if (!props.options) return;
 
-    let cameraLabel = !item || !item.isCamera ? null : item.name;
+    const cameraLabel = !item || !item.isCamera ? null : item.name;
 
-    setLoading(true);
-    await props.setOptions
-      .mutateAsync({ ...props.options, cameraLabel })
-      .finally(() => setLoading(false));
+    await props.setOptions.mutateAsync({ ...props.options, cameraLabel });
 
     trackEvent("camera_selected", {
       camera_name: cameraLabel,
@@ -668,7 +736,7 @@ function CameraSelect(props: {
         }}
       >
         <KSelect.Trigger
-          disabled={loading()}
+          disabled={props.setOptions.isPending}
           class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect"
         >
           <IconCapCamera class="text-gray-400 size-[1.25rem]" />
@@ -721,7 +789,7 @@ function MicrophoneSelect(props: {
   const value = createMemo(() => {
     if (!props.options?.audioInputName) return null;
     return (
-      devices.data?.find((d) => d.name === props.options!.audioInputName) ??
+      devices.data?.find((d) => d.name === props.options?.audioInputName) ??
       null
     );
   });
@@ -890,10 +958,9 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
 
     const o = props.options.find((o) => o.id === v.id);
     if (o) return props.value;
-    else {
-      props.onChange(props.options[0]);
-      return props.options[0];
-    }
+
+    props.onChange(props.options[0]);
+    return props.options[0];
   };
 
   return (

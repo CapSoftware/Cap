@@ -29,6 +29,7 @@ use cap_fail::fail;
 use cap_media::feeds::RawCameraFrame;
 use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::frame_ws::WSFrame;
+use cap_media::platform::Bounds;
 use cap_media::sources::CaptureScreen;
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
 use cap_project::RecordingMetaInner;
@@ -139,7 +140,7 @@ impl App {
 
         if matches!(
             current_recording.capture_target(),
-            ScreenCaptureTarget::Window(_) | ScreenCaptureTarget::Area(_)
+            ScreenCaptureTarget::Window { .. } | ScreenCaptureTarget::Area { .. }
         ) {
             let _ = ShowCapWindow::WindowCaptureOccluder.show(&self.handle);
         } else {
@@ -164,17 +165,15 @@ impl App {
         new_options: RecordingOptions,
     ) -> Result<(), String> {
         let options = new_options.clone();
+        let capture_target_title = options
+            .capture_target
+            .get_title()
+            .ok_or_else(|| "Failed to get capture target name".to_string())?;
+
         sentry::configure_scope(move |scope| {
+            dbg!(options.capture_target.get_title());
             let mut ctx = std::collections::BTreeMap::new();
-            ctx.insert(
-                "capture_target".into(),
-                match options.capture_target {
-                    ScreenCaptureTarget::Screen(screen) => screen.name,
-                    ScreenCaptureTarget::Window(window) => window.owner_name,
-                    ScreenCaptureTarget::Area(area) => area.screen.name,
-                }
-                .into(),
-            );
+            ctx.insert("capture_target".into(), capture_target_title.into());
             ctx.insert(
                 "camera".into(),
                 options.camera_label.unwrap_or("None".into()).into(),
@@ -184,6 +183,8 @@ impl App {
                 options.audio_input_name.unwrap_or("None".into()).into(),
             );
             scope.set_context("recording_options", sentry::protocol::Context::Other(ctx));
+
+            Some(())
         });
 
         self.recording_options.mode = new_options.mode;
@@ -478,15 +479,33 @@ pub struct RecordingInfo {
     capture_target: ScreenCaptureTarget,
 }
 
+#[derive(Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+enum CurrentRecordingTarget {
+    Window { id: u32, bounds: Bounds },
+    Screen { id: u32 },
+    Area { screen: u32, bounds: Bounds },
+}
+
 #[tauri::command]
 #[specta::specta]
 async fn get_current_recording(
     state: MutableState<'_, App>,
-) -> Result<JsonValue<Option<RecordingInfo>>, ()> {
+) -> Result<JsonValue<Option<CurrentRecordingTarget>>, ()> {
     let state = state.read().await;
     Ok(JsonValue::new(&state.current_recording.as_ref().map(|r| {
-        RecordingInfo {
-            capture_target: r.capture_target().clone(),
+        let bounds = r.bounds();
+
+        match r.capture_target() {
+            ScreenCaptureTarget::Screen { id } => CurrentRecordingTarget::Screen { id: *id },
+            ScreenCaptureTarget::Window { id } => CurrentRecordingTarget::Window {
+                id: *id,
+                bounds: bounds.clone(),
+            },
+            ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {
+                screen: *screen,
+                bounds: bounds.clone(),
+            },
         }
     })))
 }
@@ -2119,11 +2138,7 @@ pub async fn run() {
                     audio_input_tx,
                     audio_input_feed: None,
                     recording_options: RecordingOptions {
-                        capture_target: ScreenCaptureTarget::Screen(CaptureScreen {
-                            id: 0,
-                            name: String::new(),
-                            refresh_rate: 0,
-                        }),
+                        capture_target: ScreenCaptureTarget::Screen { id: 0 },
                         camera_label: None,
                         audio_input_name: None,
                         mode: RecordingMode::Studio,
@@ -2173,7 +2188,9 @@ pub async fn run() {
                     if let Err(e) = recording::stop_recording(app.clone(), app.state()).await {
                         eprintln!("Failed to stop recording: {}", e);
                     }
-                } else if let Err(e) = recording::start_recording(app.clone(), app.state()).await {
+                } else if let Err(e) =
+                    recording::start_recording(app.clone(), app.state(), None).await
+                {
                     eprintln!("Failed to start recording: {}", e);
                 }
             });
@@ -2199,7 +2216,7 @@ pub async fn run() {
                     }
                 }
 
-                if let Err(e) = recording::start_recording(app.clone(), state).await {
+                if let Err(e) = recording::start_recording(app.clone(), state, None).await {
                     eprintln!("Failed to start new recording: {}", e);
                 } else {
                     println!("New recording started successfully");

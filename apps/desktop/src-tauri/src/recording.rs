@@ -15,15 +15,19 @@ use crate::{
     RecordingStarted, RecordingStopped, UploadMode,
 };
 use cap_fail::fail;
-use cap_media::sources::{CaptureScreen, CaptureWindow};
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
+use cap_media::{
+    platform::Bounds,
+    sources::{CaptureScreen, CaptureWindow},
+};
 use cap_project::{
     ProjectConfiguration, RecordingMeta, RecordingMetaInner, StudioRecordingMeta,
     TimelineConfiguration, TimelineSegment, ZoomSegment, XY,
 };
 use cap_recording::{
     instant_recording::{CompletedInstantRecording, InstantRecordingHandle},
-    CompletedStudioRecording, RecordingError, RecordingMode, StudioRecordingHandle,
+    CompletedStudioRecording, RecordingError, RecordingMode, RecordingOptions,
+    StudioRecordingHandle,
 };
 use cap_rendering::ProjectRecordings;
 use cap_utils::spawn_actor;
@@ -65,6 +69,13 @@ impl RecordingActor {
             Self::Instant(a) => CompletedRecording::Instant(a.stop().await?),
             Self::Studio(a) => CompletedRecording::Studio(a.stop().await?),
         })
+    }
+
+    pub fn bounds(&self) -> &Bounds {
+        match self {
+            Self::Instant(a) => &a.bounds,
+            Self::Studio(a) => &a.bounds,
+        }
     }
 }
 
@@ -118,8 +129,12 @@ pub fn list_cameras() -> Vec<String> {
 pub async fn start_recording(
     app: AppHandle,
     state_mtx: MutableState<'_, App>,
+    recording_options: Option<RecordingOptions>,
 ) -> Result<(), String> {
     let mut state = state_mtx.write().await;
+
+    let recording_options = recording_options.unwrap_or(state.recording_options.clone());
+    state.recording_options = recording_options.clone();
 
     let id = uuid::Uuid::new_v4().to_string();
 
@@ -131,7 +146,7 @@ pub async fn start_recording(
         .join(format!("{id}.cap"));
 
     let camera_window = CapWindowId::Camera.get(&app);
-    match state.recording_options.mode {
+    match recording_options.mode {
         RecordingMode::Instant => {
             match AuthStore::get(&app) {
                 Ok(Some(_)) => {
@@ -167,8 +182,8 @@ pub async fn start_recording(
     }
 
     if matches!(
-        state.recording_options.capture_target,
-        ScreenCaptureTarget::Window(_) | ScreenCaptureTarget::Area(_)
+        recording_options.capture_target,
+        ScreenCaptureTarget::Window { .. } | ScreenCaptureTarget::Area { .. }
     ) {
         let _ = ShowCapWindow::WindowCaptureOccluder.show(&app);
     }
@@ -184,12 +199,12 @@ pub async fn start_recording(
             fail!("recording::spawn_actor");
             let mut state = state_mtx.write().await;
 
-            let (actor, actor_done_rx) = match state.recording_options.mode {
+            let (actor, actor_done_rx) = match recording_options.mode {
                 RecordingMode::Studio => {
                     let (actor, actor_done_rx) = cap_recording::spawn_studio_recording_actor(
                         id,
                         recording_dir,
-                        state.recording_options.clone(),
+                        recording_options.clone(),
                         state.camera_feed.clone(),
                         state.audio_input_feed.clone(),
                     )
@@ -203,7 +218,7 @@ pub async fn start_recording(
                         cap_recording::instant_recording::spawn_instant_recording_actor(
                             id,
                             recording_dir,
-                            state.recording_options.clone(),
+                            recording_options.clone(),
                             state.audio_input_feed.clone(),
                         )
                         .await

@@ -4,10 +4,10 @@ import {
   queryOptions,
 } from "@tanstack/solid-query";
 
-import { commands, RecordingOptions } from "./tauri";
+import { commands, events, RecordingOptions } from "./tauri";
 import { createQueryInvalidate } from "./events";
 import { createStore, reconcile } from "solid-js/store";
-import { createEffect, createMemo } from "solid-js";
+import { createEffect, createMemo, createSignal, onMount } from "solid-js";
 import { makePersisted } from "@solid-primitives/storage";
 import { FPS } from "~/routes/editor/context";
 import { authStore, generalSettingsStore } from "~/store";
@@ -89,41 +89,37 @@ export const getPermissions = queryOptions({
   refetchInterval: 1000,
 });
 
-type PartialRecordingOptions = Omit<RecordingOptions, "captureTarget">;
 export function createOptionsQuery() {
   const [state, setState] = makePersisted(
-    createStore<PartialRecordingOptions>({
-      cameraLabel: null,
-      audioInputName: null,
-      mode: "studio",
-    }),
-    { name: "recordingOptionsQuery" }
+    createSignal<RecordingOptions | null>(),
+    { name: "recording-options-query" }
   );
 
   const setOptions = createMutation(() => ({
     mutationFn: async (newOptions: RecordingOptions) => {
       await commands.setRecordingOptions(newOptions);
-      const { captureTarget: _, ...partialOptions } = newOptions;
-      setState(partialOptions);
     },
   }));
 
+  const initialData = state() ?? undefined;
   const options = createQuery(() => ({
     ...getOptions,
+    ...(initialData ? { initialData, staleTime: 1000 } : ({} as any)),
     select: (data) => {
-      const ret = { ...data };
+      setState(data);
 
-      if (state.cameraLabel) ret.cameraLabel = state.cameraLabel;
-      if (state.audioInputName) ret.audioInputName = state.audioInputName;
-      if (state.mode) ret.mode = state.mode;
-
-      setState(ret);
-
-      return ret;
+      return data;
     },
   }));
 
   createQueryInvalidate(options, "recordingOptionsChanged");
+
+  events.recordingOptionsChanged.listen(() => {
+    commands.getRecordingOptions().then((options) => {
+      console.log("setting state", options);
+      setState(options);
+    });
+  });
 
   return { options, setOptions };
 }

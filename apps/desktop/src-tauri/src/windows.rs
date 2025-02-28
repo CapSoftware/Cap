@@ -149,7 +149,7 @@ pub enum ShowCapWindow {
     Editor { project_id: String },
     RecordingsOverlay,
     WindowCaptureOccluder,
-    CaptureArea { screen: CaptureScreen },
+    CaptureArea { screen_id: u32 },
     Camera { ws_port: u16 },
     InProgressRecording { position: Option<(f64, f64)> },
     Upgrade,
@@ -295,7 +295,7 @@ impl ShowCapWindow {
 
                 window
             }
-            Self::CaptureArea { screen } => {
+            Self::CaptureArea { screen_id } => {
                 let mut window_builder = self
                     .window_builder(app, "/capture-area")
                     .maximized(false)
@@ -308,7 +308,7 @@ impl ShowCapWindow {
                     .decorations(false)
                     .transparent(true);
 
-                let screen_bounds = cap_media::platform::monitor_bounds(screen.id);
+                let screen_bounds = cap_media::platform::monitor_bounds(*screen_id);
                 let target_monitor = app
                     .monitor_from_point(screen_bounds.x, screen_bounds.y)
                     .ok()
