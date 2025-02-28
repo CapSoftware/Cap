@@ -2,20 +2,7 @@
 
 "use client";
 
-import { Parallax } from "react-scroll-parallax";
-import { ParallaxProvider } from "react-scroll-parallax";
-import { Button } from "@cap/ui";
-import React, { useEffect, useState } from "react";
-import { LogoSection } from "../_components/LogoSection";
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faAngleRight } from "@fortawesome/free-solid-svg-icons";
-import PowerfulFeaturesSVG from "./PowerfulFeaturesSVG";
-import LeftBlueHue from "./LeftBlueHue";
-import { AnimatePresence, motion } from "framer-motion";
-import Link from "next/link";
-import { useClickAway } from "@uidotdev/usehooks";
-import MuxPlayer from "@mux/mux-player-react";
 import {
   detectPlatform,
   getDownloadButtonText,
@@ -23,6 +10,18 @@ import {
   getPlatformIcon,
   PlatformIcons,
 } from "@/utils/platform";
+import { Button } from "@cap/ui";
+import { faAngleRight } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import MuxPlayer from "@mux/mux-player-react";
+import { useClickAway } from "@uidotdev/usehooks";
+import { AnimatePresence, motion } from "framer-motion";
+import Link from "next/link";
+import React, { useEffect, useState } from "react";
+import { Parallax, ParallaxProvider } from "react-scroll-parallax";
+import { LogoSection } from "../_components/LogoSection";
+import LeftBlueHue from "./LeftBlueHue";
+import PowerfulFeaturesSVG from "./PowerfulFeaturesSVG";
 
 export const HomePage = () => {
   const [videoToggled, setVideoToggled] = useState(false);
@@ -73,7 +72,7 @@ export const HomePage = () => {
             <h3 className="relative z-10 text-base text-black fade-in-down">
               Record. Edit. Share.
             </h3>
-            <h1 className="fade-in-down text-[2rem] font-medium leading-[2.5rem] md:text-[3.75rem] md:leading-[4rem] relative z-10 text-black mb-4">
+            <h1 className="fade-in-down text-[2rem] font-bold leading-[2.5rem] md:text-[3.75rem] md:leading-[4rem] relative z-10 text-black mb-4">
               Beautiful screen recordings,
               <br />
               owned by you.
@@ -93,7 +92,7 @@ export const HomePage = () => {
                   : getDownloadUrl(platform, isIntel)
               }
               size="lg"
-              className="w-full font-medium text-md sm:w-auto flex items-center justify-center"
+              className="flex justify-center items-center w-full font-medium text-md sm:w-auto"
             >
               {!loading && getPlatformIcon(platform)}
               {getDownloadButtonText(platform, loading, isIntel)}
@@ -118,7 +117,7 @@ export const HomePage = () => {
           <div className="flex justify-center mt-2">
             <Link
               href="/download"
-              className="text-sm text-center text-zinc-400 underline animate-delay-2 fade-in-up hover:text-zinc-500"
+              className="text-sm text-center underline text-zinc-400 animate-delay-2 fade-in-up hover:text-zinc-500"
             >
               See other options
             </Link>
