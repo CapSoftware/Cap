@@ -123,7 +123,7 @@ export const SelfHostingPage = () => {
                   imagePath="/illustrations/multiplatmain.png"
                   bg="/illustrations/multiplatbg.webp"
                   imageAlt="Enterprise-Ready"
-                  className="bg-bottom bg-no-repeat bg-cover lg:bg-top"
+                  className="bg-[center_top_-90px] bg-no-repeat bg-cover lg:bg-[center_top_-60px]"
                   imageHeight="h-[280px]"
                 />
               </div>
@@ -139,7 +139,7 @@ export const SelfHostingPage = () => {
                   imagePath="/illustrations/cloud-feature.webp"
                   imageAlt="White Labeling"
                   imageHeight="h-[215px]"
-                  className="bg-bottom bg-no-repeat bg-cover"
+                  className="lg:bg-[center_top_-150px] bg-[center_top_-120px] bg-no-repeat bg-cover"
                 />
               </div>
               <div className="md:col-span-4">
