@@ -19,11 +19,9 @@ const extendedAuthOptions: NextAuthOptions = {
       email?: { verificationRequest?: boolean };
       credentials?: Record<string, any>;
     }) {
-      console.log("🔥", { params, user: params.user });
-
       const serverConfig = await getServerConfig();
 
-      // If CapCloud or signups are enabled, allow all sign-ins
+      // If CapCloud or signups are enabled, allow all sign-ins and registrations
       if (serverConfig.isCapCloud || serverConfig.signupsEnabled) {
         return true;
       }
@@ -37,10 +35,12 @@ const extendedAuthOptions: NextAuthOptions = {
         where: eq(users.email, params.user.email),
       });
 
+      // If user exists, allow sign-in
       if (existingUser) {
         return true;
       }
 
+      // If user is invited, allow sign-in (workaround for signups being disabled)
       const matchedInvitedUser = await db.query.spaceInvites.findFirst({
         where: eq(spaceInvites.invitedEmail, params.user.email),
       });

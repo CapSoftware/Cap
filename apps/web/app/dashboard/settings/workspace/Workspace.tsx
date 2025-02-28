@@ -24,12 +24,13 @@ import {
   DialogFooter,
 } from "@cap/ui";
 import { useRouter } from "next/navigation";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import toast from "react-hot-toast";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { format } from "date-fns";
 import { Tooltip } from "react-tooltip";
 import { CustomDomain } from "./components/CustomDomain";
+import { getServerConfigAction } from "@/app/actions";
 
 export const Workspace = () => {
   const { spaceData, activeSpace, user } = useSharedContext();
@@ -41,6 +42,20 @@ export const Workspace = () => {
   const [inviteEmails, setInviteEmails] = useState<string[]>([]);
   const [emailInput, setEmailInput] = useState("");
   const ownerToastShown = useRef(false);
+  const [isCapCloud, setIsCapCloud] = useState(false);
+
+  useEffect(() => {
+    const fetchServerConfig = async () => {
+      try {
+        const serverConfig = await getServerConfigAction();
+        setIsCapCloud(serverConfig.isCapCloud);
+      } catch (error) {
+        console.error("Failed to get server config:", error);
+      }
+    };
+
+    fetchServerConfig();
+  }, []);
 
   const showOwnerToast = () => {
     if (!ownerToastShown.current) {
@@ -266,35 +281,39 @@ export const Workspace = () => {
       </CardHeader>
       <CardContent>
         <div className="flex items-center space-x-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="primary"
-            disabled={!isOwner || loading}
-            onClick={() => {
-              if (!isOwner) {
-                showOwnerToast();
-                return;
-              }
-              setLoading(true);
-              fetch(`/api/settings/billing/manage`, {
-                method: "POST",
-              })
-                .then(async (res) => {
-                  const url = await res.json();
-                  router.push(url);
-                })
-                .catch((err) => {
-                  alert(err);
-                  setLoading(false);
-                });
-            }}
-            data-tooltip-id="purchase-seats-tooltip"
-            data-tooltip-content='Once inside the Stripe dashboard, click "Manage Plan", then increase quantity of subscriptions to purchase more seats.'
-          >
-            {loading ? "Loading..." : "Purchase more seats"}
-          </Button>
-          <Tooltip id="purchase-seats-tooltip" place="top" />
+          {isCapCloud && (
+            <>
+              <Button
+                type="button"
+                size="sm"
+                variant="primary"
+                disabled={!isOwner || loading}
+                onClick={() => {
+                  if (!isOwner) {
+                    showOwnerToast();
+                    return;
+                  }
+                  setLoading(true);
+                  fetch(`/api/settings/billing/manage`, {
+                    method: "POST",
+                  })
+                    .then(async (res) => {
+                      const url = await res.json();
+                      router.push(url);
+                    })
+                    .catch((err) => {
+                      alert(err);
+                      setLoading(false);
+                    });
+                }}
+                data-tooltip-id="purchase-seats-tooltip"
+                data-tooltip-content='Once inside the Stripe dashboard, click "Manage Plan", then increase quantity of subscriptions to purchase more seats.'
+              >
+                {loading ? "Loading..." : "Purchase more seats"}
+              </Button>
+              <Tooltip id="purchase-seats-tooltip" place="top" />
+            </>
+          )}
           <Button
             type="button"
             size="sm"
@@ -377,43 +396,47 @@ export const Workspace = () => {
           </TableBody>
         </Table>
       </CardContent>
-      <CardHeader>
-        <CardTitle>View and manage your billing details</CardTitle>
-        <CardDescription>
-          View and edit your billing details, as well as manage your
-          subscription.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <CardDescription className="mt-1">
-          <Button
-            type="button"
-            size="sm"
-            variant="gray"
-            onClick={() => {
-              if (!isOwner) {
-                showOwnerToast();
-                return;
-              }
-              setLoading(true);
-              fetch(`/api/settings/billing/manage`, {
-                method: "POST",
-              })
-                .then(async (res) => {
-                  const url = await res.json();
-                  router.push(url);
-                })
-                .catch((err) => {
-                  alert(err);
-                  setLoading(false);
-                });
-            }}
-            disabled={!isOwner}
-          >
-            {loading ? "Loading..." : "Manage Billing"}
-          </Button>
-        </CardDescription>
-      </CardContent>
+      {isCapCloud && (
+        <>
+          <CardHeader>
+            <CardTitle>View and manage your billing details</CardTitle>
+            <CardDescription>
+              View and edit your billing details, as well as manage your
+              subscription.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <CardDescription className="mt-1">
+              <Button
+                type="button"
+                size="sm"
+                variant="gray"
+                onClick={() => {
+                  if (!isOwner) {
+                    showOwnerToast();
+                    return;
+                  }
+                  setLoading(true);
+                  fetch(`/api/settings/billing/manage`, {
+                    method: "POST",
+                  })
+                    .then(async (res) => {
+                      const url = await res.json();
+                      router.push(url);
+                    })
+                    .catch((err) => {
+                      alert(err);
+                      setLoading(false);
+                    });
+                }}
+                disabled={!isOwner}
+              >
+                {loading ? "Loading..." : "Manage Billing"}
+              </Button>
+            </CardDescription>
+          </CardContent>
+        </>
+      )}
 
       <Dialog open={isInviteDialogOpen} onOpenChange={setIsInviteDialogOpen}>
         <DialogContent>

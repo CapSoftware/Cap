@@ -188,7 +188,7 @@ export async function validateServerLicense({
     console.log("[function call: validateServerLicense: 200: license is valid");
     newPartialServerConfig = {
       licenseValid: true,
-      licenseValidityCache: licenseServerResponseJson.refresh,
+      licenseValidityCache: new Date(licenseServerResponseJson.refresh),
       isCapCloud: licenseServerResponseJson.isCapCloudLicense,
     };
     console.log(
