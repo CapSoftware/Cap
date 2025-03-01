@@ -9,8 +9,8 @@
     <a href="https://cap.so"><strong>Cap.so »</strong></a>
     <br />
     <br />
-    <b>Download for </b>
-		<a href="https://cap.so/download">macOS</a>
+    <b>Downloads for </b>
+		<a href="https://cap.so/download">macOS & Windows</a>
     <br />
     <br />
     <i>~ Cap is currently in public beta, and is available for macOS and Web. Windows and Linux builds are in development. Join the <a href="https://discord.gg/y8gdQ3WRN3">Cap Discord</a> to help test future releases and join the community. ~</i>
