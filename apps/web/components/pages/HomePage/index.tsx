@@ -51,7 +51,7 @@ export const HomePage = () => {
         <div className="relative z-10 px-5 w-full">
           <div className="mx-auto text-center wrapper wrapper-sm">
             <Link
-              href="https://x.com/richiemcilroy/status/1895248323294175668"
+              href="https://x.com/richiemcilroy/status/1895526857807733018"
               target="_blank"
               className="flex gap-3 transition-opacity duration-300
                  hover:opacity-90 mb-[52px] items-center relative z-[20] px-4 py-2
