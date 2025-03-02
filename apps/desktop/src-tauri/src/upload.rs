@@ -11,7 +11,7 @@ use tokio::task;
 
 use crate::web_api::{self, ManagerExt};
 
-use crate::UploadProgress;
+use crate::{PreCreatedVideo, UploadProgress};
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -837,4 +837,230 @@ async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
     })
     .await
     .map_err(|e| format!("Failed to compress image: {}", e))?
+}
+
+// New function to start progressive upload
+pub async fn start_progressive_upload(
+    app: AppHandle,
+    video_id: String,
+    file_path: PathBuf,
+    pre_created_video: PreCreatedVideo,
+) -> tokio::task::JoinHandle<Result<(), String>> {
+    println!("Starting progressive upload for {video_id}...");
+
+    // Spawn a background task that continues until the recording is finished
+    tokio::spawn(async move {
+        // Wait a bit for recording to start producing output
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+        let file_name = "result.mp4";
+        let client = reqwest::Client::new();
+        let s3_config = pre_created_video.config;
+
+        let file_key = format!("{}/{}/{}", s3_config.user_id(), s3_config.id(), file_name);
+
+        // Create a flag to track if we've completed the upload
+        let mut upload_complete = false;
+        let mut last_size = 0;
+        let mut consecutive_same_size = 0;
+
+        // Upload the file in chunks as it grows
+        while !upload_complete {
+            // Check if the file exists and has grown
+            if !file_path.exists() {
+                println!("File does not exist yet, waiting...");
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                continue;
+            }
+
+            // Get current file size
+            let file_metadata = match tokio::fs::metadata(&file_path).await {
+                Ok(metadata) => metadata,
+                Err(e) => {
+                    println!("Failed to get file metadata: {}", e);
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    continue;
+                }
+            };
+
+            let current_size = file_metadata.len();
+
+            // If the file hasn't grown for several checks, we might be paused or done
+            if current_size == last_size {
+                consecutive_same_size += 1;
+
+                // If we've checked 10 times and the size didn't change, assume we're done for now
+                if consecutive_same_size > 10 {
+                    println!(
+                        "File size hasn't changed for a while, stopping progressive upload for now"
+                    );
+                    upload_complete = true;
+                    break;
+                }
+
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                continue;
+            }
+
+            // If the file has grown, reset the counter
+            consecutive_same_size = 0;
+
+            // Only upload if we have at least 1MB of data
+            if current_size < 1024 * 1024 && last_size == 0 {
+                println!("Waiting for file to grow to at least 1MB before first upload");
+                last_size = current_size;
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                continue;
+            }
+
+            // Only upload if the file has grown by at least 500KB since last time
+            if current_size - last_size < 500 * 1024 && last_size > 0 {
+                println!(
+                    "File grew only by {} bytes, waiting for more data",
+                    current_size - last_size
+                );
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                continue;
+            }
+
+            println!(
+                "Uploading chunk, file grew from {} to {} bytes",
+                last_size, current_size
+            );
+
+            // For progressive uploads, we need to use estimated metadata since the MP4 file is not complete
+            // We'll create a simplified upload body with reasonable defaults
+            let upload_body = S3VideoUploadBody {
+                base: S3UploadBody {
+                    user_id: s3_config.user_id().to_string(),
+                    file_key: file_key.clone(),
+                    aws_bucket: s3_config.aws_bucket().to_string(),
+                    aws_region: s3_config.aws_region().to_string(),
+                    aws_endpoint: s3_config.aws_endpoint().to_string(),
+                },
+                // Estimated metadata for the in-progress file
+                duration: "0.0".to_string(), // We don't know the duration yet
+                resolution: "1920x1080".to_string(), // Use a standard resolution
+                framerate: "30".to_string(),
+                bandwidth: "2000000".to_string(), // 2Mbps estimate
+                video_codec: "h264".to_string(),
+            };
+
+            let (upload_url, form) = match presigned_s3_url(&app, upload_body).await {
+                Ok(result) => result,
+                Err(e) => {
+                    println!("Failed to get presigned URL: {}", e);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    continue;
+                }
+            };
+
+            // Read the current file content
+            let file_bytes = match tokio::fs::read(&file_path).await {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    println!("Failed to read file: {}", e);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    continue;
+                }
+            };
+
+            let total_size = file_bytes.len() as f64;
+
+            // Wrap file_bytes in an Arc for shared ownership
+            let file_bytes = std::sync::Arc::new(file_bytes);
+
+            // Create a stream that reports progress
+            let file_part = {
+                let progress_counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+                let app_handle = app.clone();
+                let file_bytes = file_bytes.clone();
+
+                let stream = stream::iter((0..file_bytes.len()).step_by(1024 * 1024).map(
+                    move |start| {
+                        let end = (start + 1024 * 1024).min(file_bytes.len());
+                        let chunk = file_bytes[start..end].to_vec();
+
+                        let current = progress_counter
+                            .fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::SeqCst)
+                            as f64;
+
+                        // Emit progress every chunk
+                        UploadProgress {
+                            progress: current / total_size,
+                            message: format!(
+                                "Progressive upload: {:.0}%",
+                                (current / total_size * 100.0)
+                            ),
+                        }
+                        .emit(&app_handle)
+                        .ok();
+
+                        Ok::<Vec<u8>, std::io::Error>(chunk)
+                    },
+                ));
+
+                match reqwest::multipart::Part::stream_with_length(
+                    reqwest::Body::wrap_stream(stream),
+                    total_size as u64,
+                )
+                .file_name(file_name.to_string())
+                .mime_str("video/mp4")
+                {
+                    Ok(part) => part,
+                    Err(e) => {
+                        println!("Error setting MIME type: {}", e);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                        continue;
+                    }
+                }
+            };
+
+            let form = form.part("file", file_part);
+
+            // Perform the upload
+            let response = match client.post(upload_url).multipart(form).send().await {
+                Ok(response) => response,
+                Err(e) => {
+                    println!("Failed to send upload request: {}", e);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    continue;
+                }
+            };
+
+            if response.status().is_success() {
+                println!("Progressive upload chunk successful");
+
+                // Update the last size
+                last_size = current_size;
+
+                // Final progress update for this chunk
+                UploadProgress {
+                    progress: 1.0,
+                    message: "Chunk uploaded: 100%".to_string(),
+                }
+                .emit(&app)
+                .ok();
+
+                // Wait before checking for more data
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            } else {
+                let status = response.status();
+                let error_body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "<no response body>".to_string());
+                println!(
+                    "Failed to upload chunk. Status: {}. Body: {}",
+                    status, error_body
+                );
+
+                // Wait longer before retrying
+                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+            }
+        }
+
+        println!("Progressive upload complete for {video_id}");
+        Ok(())
+    })
 }
