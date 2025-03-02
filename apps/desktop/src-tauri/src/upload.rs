@@ -889,11 +889,10 @@ pub async fn start_progressive_upload(
             if current_size == last_size {
                 consecutive_same_size += 1;
 
-                // If we've checked 10 times and the size didn't change, assume we're done for now
+                // If we've checked 10 times and the size didn't change, assume we're done
+                // This is approximately 5 seconds of no change
                 if consecutive_same_size > 10 {
-                    println!(
-                        "File size hasn't changed for a while, stopping progressive upload for now"
-                    );
+                    println!("File size hasn't changed for a while, stopping progressive upload");
                     upload_complete = true;
                     break;
                 }
@@ -1042,6 +1041,23 @@ pub async fn start_progressive_upload(
                 .emit(&app)
                 .ok();
 
+                // Check if we've reached the end of the file by looking for the moov atom
+                // This is a good indicator that the MP4 file is complete
+                if let Ok(buffer) = tokio::fs::read(&file_path).await {
+                    if buffer.len() >= 8 {
+                        // Search for 'moov' atom, which typically appears at the end of completed MP4 files
+                        for i in 0..buffer.len() - 4 {
+                            if &buffer[i..i + 4] == b"moov" {
+                                println!("Found moov atom, MP4 file is likely complete");
+                                // Give a little time for any last data to be written
+                                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                                upload_complete = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
                 // Wait before checking for more data
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             } else {
@@ -1059,6 +1075,14 @@ pub async fn start_progressive_upload(
                 tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
             }
         }
+
+        // Send a final complete progress notification
+        UploadProgress {
+            progress: 1.0,
+            message: "Upload complete: 100%".to_string(),
+        }
+        .emit(&app)
+        .ok();
 
         println!("Progressive upload complete for {video_id}");
         Ok(())
