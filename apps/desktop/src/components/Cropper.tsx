@@ -2,8 +2,11 @@ import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { makePersisted } from "@solid-primitives/storage";
 import { createMutation, createQuery } from "@tanstack/solid-query";
 import { type CheckMenuItemOptions, Menu } from "@tauri-apps/api/menu";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { getCurrentWindow, LogicalPosition } from "@tauri-apps/api/window";
+import {
+  getCurrentWebviewWindow,
+  WebviewWindow,
+} from "@tauri-apps/api/webviewWindow";
+import { LogicalPosition } from "@tauri-apps/api/window";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import {
   type ParentProps,
@@ -750,16 +753,11 @@ export default function Cropper(
   const currentRecording = createCurrentRecordingQuery();
   const isRecording = () => !!currentRecording.data;
 
-  const close = async () => {
-    try {
-      const mainWindow = await WebviewWindow.getByLabel("main-new");
-      if (mainWindow) {
-        await mainWindow.unminimize();
-      }
-      await getCurrentWindow()?.close();
-    } catch (error) {
-      console.error("Error closing window:", error);
-    }
+  const close = () => {
+    setTimeout(async () => {
+      (await WebviewWindow.getByLabel("main-new"))?.unminimize();
+      getCurrentWebviewWindow()?.close();
+    }, 250);
   };
 
   const screens = createQuery(() => listScreens);
