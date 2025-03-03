@@ -57,6 +57,10 @@ export const MP4VideoPlayer = memo(
       const video = videoRef.current;
       if (!video) return;
 
+      // Store the current position before reloading
+      const currentPosition = video.currentTime;
+      const wasPlaying = !video.paused;
+
       // Get a fresh URL from the API
       const newUrl = await fetchNewUrl();
 
@@ -68,6 +72,20 @@ export const MP4VideoPlayer = memo(
 
       // Reset video and reload with new source
       video.load();
+
+      // Restore position and play state after loading
+      if (currentPosition > 0) {
+        const restorePosition = () => {
+          video.currentTime = currentPosition;
+          if (wasPlaying) {
+            video
+              .play()
+              .catch((err) => console.error("Error resuming playback:", err));
+          }
+          video.removeEventListener("canplay", restorePosition);
+        };
+        video.addEventListener("canplay", restorePosition);
+      }
 
       // Update the last attempt time
       lastAttemptTime.current = Date.now();
@@ -135,6 +153,10 @@ export const MP4VideoPlayer = memo(
       const handleLoadedData = () => {
         console.log("Video loaded successfully");
         setIsLoaded(true);
+        // Dispatch canplay event to notify parent component
+        if (videoRef.current) {
+          videoRef.current.dispatchEvent(new Event("canplay"));
+        }
         // Clear any retry timeouts if video is loaded
         if (retryTimeout.current) {
           clearTimeout(retryTimeout.current);
@@ -143,8 +165,8 @@ export const MP4VideoPlayer = memo(
       };
 
       const handleLoadedMetadata = () => {
-        // Trigger a canplay event after metadata is loaded
-        video.dispatchEvent(new Event("canplay"));
+        // We'll let the loadeddata event handle dispatching canplay
+        // This ensures we don't trigger the event too early
       };
 
       const handleError = (e: ErrorEvent) => {

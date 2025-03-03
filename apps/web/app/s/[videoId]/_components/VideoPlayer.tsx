@@ -52,10 +52,46 @@ export const VideoPlayer = memo(
     useEffect(() => {
       if (!videoRef.current) return;
 
+      const videoElement = videoRef.current;
+
+      // Store current position and play state before reinitializing
+      const currentPosition = videoElement.currentTime;
+      const wasPlaying = !videoElement.paused;
+
+      // Add event listener for when HLS is ready to play
+      const handleHlsManifestParsed = () => {
+        if (videoElement) {
+          // Restore position after HLS is ready
+          if (currentPosition > 0) {
+            videoElement.currentTime = currentPosition;
+            if (wasPlaying) {
+              videoElement
+                .play()
+                .catch((err) => console.error("Error resuming playback:", err));
+            }
+          }
+          videoElement.dispatchEvent(new Event("canplay"));
+        }
+      };
+
       initializeHls(videoSrc, videoRef.current, videoHlsInstance);
 
+      // Add event listener for HLS manifest parsed
+      if (videoHlsInstance.current) {
+        videoHlsInstance.current.on(
+          Hls.Events.MANIFEST_PARSED,
+          handleHlsManifestParsed
+        );
+      }
+
       return () => {
-        videoHlsInstance.current?.destroy();
+        if (videoHlsInstance.current) {
+          videoHlsInstance.current.off(
+            Hls.Events.MANIFEST_PARSED,
+            handleHlsManifestParsed
+          );
+          videoHlsInstance.current.destroy();
+        }
       };
     }, [videoSrc]);
 
