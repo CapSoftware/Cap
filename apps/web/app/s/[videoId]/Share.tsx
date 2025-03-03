@@ -38,6 +38,8 @@ interface ShareProps {
     comments: number;
     reactions: number;
   };
+  customDomain: string | null;
+  domainVerified: boolean;
 }
 
 export const Share: React.FC<ShareProps> = ({
@@ -46,6 +48,8 @@ export const Share: React.FC<ShareProps> = ({
   comments,
   individualFiles,
   initialAnalytics,
+  customDomain,
+  domainVerified,
 }) => {
   const [analytics, setAnalytics] = useState(initialAnalytics);
 
@@ -94,6 +98,8 @@ export const Share: React.FC<ShareProps> = ({
           data={data}
           user={user}
           individualFiles={individualFiles}
+          customDomain={customDomain}
+          domainVerified={domainVerified}
         />
 
         <div className="mt-4">
