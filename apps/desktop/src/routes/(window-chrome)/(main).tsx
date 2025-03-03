@@ -9,7 +9,12 @@ import {
 } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import * as dialog from "@tauri-apps/plugin-dialog";
+import { type as ostype } from "@tauri-apps/plugin-os";
+import * as updater from "@tauri-apps/plugin-updater";
 import { cx } from "cva";
+import { Transition } from "solid-transition-group";
+
 import {
   createEffect,
   createMemo,
@@ -43,6 +48,8 @@ import {
   commands,
   events,
 } from "~/utils/tauri";
+import { setTitlebar } from "~/utils/titlebar-state";
+import { apiClient } from "~/utils/web-api";
 import {
   MenuItem,
   MenuItemList,
@@ -145,7 +152,7 @@ export default function () {
       "items",
       <div
         dir={ostype() === "windows" ? "rtl" : "rtl"}
-        class="flex mx-2 items-center gap-1"
+        class="flex gap-1 items-center mx-2"
       >
         <Tooltip.Root openDelay={0}>
           <Tooltip.Trigger>
@@ -156,11 +163,11 @@ export default function () {
               }
               class="flex items-center justify-center w-5 h-5 -ml-[1.5px]"
             >
-              <IconCapSettings class="size-5 text-gray-400 hover:text-gray-500" />
+              <IconCapSettings class="text-gray-400 size-5 hover:text-gray-500" />
             </button>
           </Tooltip.Trigger>
           <Tooltip.Portal>
-            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
               Settings
               <Tooltip.Arrow class="fill-gray-500" />
             </Tooltip.Content>
@@ -173,13 +180,13 @@ export default function () {
               onClick={() =>
                 commands.showWindow({ Settings: { page: "recordings" } })
               }
-              class="flex items-center justify-center w-5 h-5"
+              class="flex justify-center items-center w-5 h-5"
             >
-              <IconLucideSquarePlay class="size-5 text-gray-400 hover:text-gray-500" />
+              <IconLucideSquarePlay class="text-gray-400 size-5 hover:text-gray-500" />
             </button>
           </Tooltip.Trigger>
           <Tooltip.Portal>
-            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
               Previous Recordings
               <Tooltip.Arrow class="fill-gray-500" />
             </Tooltip.Content>
@@ -192,9 +199,9 @@ export default function () {
           <button
             type="button"
             onClick={() => commands.showWindow("Upgrade")}
-            class="relative flex items-center justify-center w-5 h-5"
+            class="flex relative justify-center items-center w-5 h-5"
           >
-            <IconLucideGift class="size-5 text-gray-400 hover:text-gray-500" />
+            <IconLucideGift class="text-gray-400 size-5 hover:text-gray-500" />
             <div
               style={{ "background-color": "#FF4747" }}
               class="block absolute top-0 right-0 z-10 rounded-full animate-bounce size-1.5"
@@ -208,9 +215,9 @@ export default function () {
             onClick={() => {
               new WebviewWindow("debug", { url: "/debug" });
             }}
-            class="flex items-center justify-center w-5 h-5"
+            class="flex justify-center items-center w-5 h-5"
           >
-            <IconLucideBug class="size-5 text-gray-400 hover:text-gray-500" />
+            <IconLucideBug class="text-gray-400 size-5 hover:text-gray-500" />
           </button>
         )}
       </div>
@@ -262,7 +269,7 @@ export default function () {
           variant={isRecording() ? "destructive" : "primary"}
           size="md"
           onClick={() => toggleRecording.mutate()}
-          class="flex-grow flex items-center justify-center"
+          class="flex flex-grow justify-center items-center"
         >
           {isRecording() ? (
             "Stop Recording"
@@ -1128,9 +1135,9 @@ function ChangelogButton() {
         <button
           type="button"
           onClick={handleChangelogClick}
-          class="relative flex items-center justify-center w-5 h-5"
+          class="flex relative justify-center items-center w-5 h-5"
         >
-          <IconLucideBell class="size-5 text-gray-400 hover:text-gray-500" />
+          <IconLucideBell class="text-gray-400 size-5 hover:text-gray-500" />
           {changelogState.hasUpdate && (
             <div
               style={{ "background-color": "#FF4747" }}
@@ -1140,7 +1147,7 @@ function ChangelogButton() {
         </button>
       </Tooltip.Trigger>
       <Tooltip.Portal>
-        <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+        <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
           Changelog
           <Tooltip.Arrow class="fill-gray-500" />
         </Tooltip.Content>
