@@ -30,7 +30,7 @@ export const Footer = () => {
             <div className="w-full">
               <p className="text-gray-500 max-w-md">
                 Cap is the open source alternative to Loom. Lightweight,
-                powerful, and stunning. Record and share in seconds.
+                powerful, and cross-platform. Record and share in seconds.
               </p>
             </div>
             <p className="text-gray-400">
@@ -64,6 +64,9 @@ export const Footer = () => {
                 <a href="https://github.com/CapSoftware/Cap" target="_blank">
                   Open Source
                 </a>
+              </li>
+              <li>
+                <a href="/self-hosting">Self-hosting</a>
               </li>
               <li>
                 <a href="https://discord.gg/y8gdQ3WRN3" target="_blank">

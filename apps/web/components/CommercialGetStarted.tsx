@@ -2,7 +2,21 @@
 
 import { Button } from "@cap/ui";
 
-export function ReadyToGetStarted() {
+export function CommercialGetStarted() {
+  const handleSmoothScroll = (
+    e: React.MouseEvent<HTMLButtonElement>,
+    targetId: string
+  ) => {
+    e.preventDefault();
+    const targetElement = document.getElementById(targetId);
+    if (targetElement) {
+      window.scrollTo({
+        top: targetElement.offsetTop,
+        behavior: "smooth",
+      });
+    }
+  };
+
   return (
     <div
       className="custom-bg max-w-[1000px] mx-auto rounded-[20px] overflow-hidden relative flex flex-col justify-center p-8"
@@ -31,30 +45,31 @@ export function ReadyToGetStarted() {
       <div className="wrapper mx-auto h-full flex flex-col justify-center items-center relative z-10">
         <div className="text-center max-w-[800px] mx-auto mb-8">
           <h2 className="text-xl sm:text-3xl text-white mb-3">
-            Beautiful screen recordings, owned by you.
+            Enterprise-grade screen recording, on your infrastructure.
           </h2>
           <p className="text-[1rem] sm:text-lg text-white">
-            Cap is the open source alternative to Loom. Lightweight, powerful,
-            and cross-platform. Record and share securely in seconds with custom
-            S3 bucket support.
+            Deploy Cap on your own servers with complete data sovereignty.
+            Maintain full control over your sensitive information while enabling
+            seamless team collaboration.
           </p>
         </div>
         <div className="flex flex-col sm:flex-row items-center justify-center space-y-2 sm:space-y-0 sm:space-x-2">
           <Button
             variant="white"
-            href="/pricing"
+            href="#features"
             size="lg"
             className="w-full sm:w-auto"
+            onClick={(e) => handleSmoothScroll(e, "features")}
           >
-            Get Started
+            Learn More
           </Button>
           <Button
             variant="secondary"
-            href="/download"
+            href="/pricing?type=selfhosted"
             size="lg"
             className="w-full sm:w-auto"
           >
-            Download App
+            Pricing
           </Button>
         </div>
       </div>

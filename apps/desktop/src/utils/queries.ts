@@ -101,9 +101,11 @@ export function createOptionsQuery() {
   }));
 
   const initialData = state() ?? undefined;
-  const options = createQuery(() => ({
+  const options = createQuery<RecordingOptions>(() => ({
     ...getOptions,
-    ...(initialData ? { initialData, staleTime: 1000 } : ({} as any)),
+    ...(initialData === undefined
+      ? { initialData, staleTime: 1000 }
+      : ({} as any)),
     select: (data) => {
       setState(data);
 
