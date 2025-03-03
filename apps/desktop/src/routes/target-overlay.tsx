@@ -1,9 +1,13 @@
-import { createQuery } from "@tanstack/solid-query";
+import { createMutation, createQuery } from "@tanstack/solid-query";
 import { Menu } from "@tauri-apps/api/menu";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow, LogicalPosition } from "@tauri-apps/api/window";
 import { createSignal, onCleanup, onMount } from "solid-js";
-import { createOptionsQuery, listScreens } from "~/utils/queries";
+import {
+  createCurrentRecordingQuery,
+  createOptionsQuery,
+  listScreens,
+} from "~/utils/queries";
 import { commands } from "~/utils/tauri";
 import display from "../assets/illustrations/display.png";
 
@@ -22,9 +26,10 @@ export default function TargetOverlay() {
   let boxRef!: HTMLDivElement;
   let dropdownRef!: HTMLDivElement;
 
-  // Get available screens and options
-  const screens = createQuery(() => listScreens);
   const { options } = createOptionsQuery();
+
+  const currentRecording = createCurrentRecordingQuery();
+  const isRecording = () => !!currentRecording.data;
 
   // Function to center the box on the screen
   const centerBox = () => {
@@ -42,19 +47,26 @@ export default function TargetOverlay() {
     await getCurrentWindow()?.close();
   };
 
-  const startRecording = async () => {
-    const currentScreen = screens.data?.[0];
-    if (!currentScreen || !options.data) return;
-    commands.setRecordingOptions({
-      ...options.data,
-      captureTarget: {
-        variant: "screen",
-        ...currentScreen,
-      },
-    });
-    await commands.startRecording();
-    await close();
-  };
+  const screens = createQuery(() => listScreens);
+  const toggleRecording = createMutation(() => ({
+    mutationFn: async () => {
+      if (!isRecording()) {
+        //manually setting the screen until its done properly
+        await commands.startRecording({
+          captureTarget: {
+            variant: "screen",
+            id: screens.data?.[0]?.id ?? 1,
+          },
+          mode: options.data?.mode ?? "studio",
+          cameraLabel: options.data?.cameraLabel ?? null,
+          audioInputName: options.data?.audioInputName ?? null,
+        });
+        await close();
+      } else {
+        await commands.stopRecording();
+      }
+    },
+  }));
 
   const handleMouseDown = (e: MouseEvent) => {
     if (boxRef) {
@@ -162,8 +174,6 @@ export default function TargetOverlay() {
     );
   }
 
-  console.log(screens);
-
   return (
     <div class="w-screen h-screen bg-blue-transparent-40">
       <div
@@ -198,7 +208,7 @@ export default function TargetOverlay() {
           </button>
           <div
             ref={dropdownRef}
-            onClick={startRecording}
+            onClick={() => toggleRecording.mutate()}
             class="flex flex-row items-center p-3 rounded-[12px] font-medium bg-blue-300 transition-colors duration-200 cursor-pointer hover:bg-blue-400"
           >
             <IconCapInstant class="mr-3 size-6" />

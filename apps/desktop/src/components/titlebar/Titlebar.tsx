@@ -1,9 +1,9 @@
 // Credits: tauri-controls
-import { type ComponentProps, Match, splitProps, Switch } from "solid-js";
 import { type } from "@tauri-apps/plugin-os";
-import CaptionControlsWindows11 from "./controls/CaptionControlsWindows11";
-import titlebarState from "~/utils/titlebar-state";
 import { cx } from "cva";
+import { type ComponentProps, Match, splitProps, Switch } from "solid-js";
+import titlebarState from "~/utils/titlebar-state";
+import CaptionControlsWindows11 from "./controls/CaptionControlsWindows11";
 
 export default function Titlebar() {
   function left() {
@@ -14,8 +14,8 @@ export default function Titlebar() {
   return (
     <header
       class={cx(
-        "flex flex-row items-center select-none space-x-1 shrink-0 border-gray-200",
-        titlebarState.transparent ? "bg-transparent" : "bg-gray-50",
+        "flex flex-row items-center select-none space-x-1 shrink-0 border-zinc-300",
+        titlebarState.transparent ? "bg-transparent" : "bg-zinc-200",
         titlebarState.border ? "border-b" : ""
       )}
       style={{
@@ -51,7 +51,7 @@ function WindowControls(props: ComponentProps<"div">) {
         />
       </Match>
       <Match when={ostype === "macos"}>
-        <div data-tauri-drag-region class="flex h-full w-20" />
+        <div data-tauri-drag-region class="flex w-20 h-full" />
       </Match>
     </Switch>
   );

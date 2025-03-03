@@ -4,26 +4,19 @@ import {
   getCurrentWebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
 import { cx } from "cva";
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  onCleanup,
-  onMount,
-} from "solid-js";
+import { createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { createStore } from "solid-js/store";
 import { trackEvent } from "~/utils/analytics";
-import { createOptionsQuery, listScreens, listWindows } from "~/utils/queries";
-import type { CaptureScreen } from "~/utils/tauri";
+import { createOptionsQuery, listScreens } from "~/utils/queries";
 import { commands } from "~/utils/tauri";
 
 function TargetSelects(props: {
   options: ReturnType<typeof createOptionsQuery>["options"]["data"];
 }) {
   const screens = createQuery(() => listScreens);
-  const windows = createQuery(() => listWindows);
-  const [selectedScreen, setSelectedScreen] =
-    createSignal<CaptureScreen | null>(screens?.data?.[0] ?? null);
+  const [selectedScreen, setSelectedScreen] = createSignal<{
+    id: number;
+  } | null>(screens?.data?.[0] ?? null);
 
   const isTargetScreenOrArea = createMemo(
     () =>
@@ -58,35 +51,17 @@ function TargetSelects(props: {
     onCleanup(unlistenCaptureAreaWindow);
   });
 
-  let shouldAnimateAreaSelect = false;
-  createEffect(async () => {
-    const target = props.options?.captureTarget;
-    if (!target) return;
-
-    if (target.variant === "screen") {
-      if (target.id !== areaSelection.screen?.id) {
-        closeAreaSelection();
-      }
-      setSelectedScreen(target);
-    } else if (target.variant === "window") {
-      if (areaSelection.screen) closeAreaSelection();
-      shouldAnimateAreaSelect = true;
-    }
-  });
-
   async function handleAreaSelectButtonClick() {
-    const targetScreen = selectedScreen() ?? screens.data?.[0];
-    if (!targetScreen) return;
-
+    const screen = screens.data?.[0];
+    if (!screen) return;
     closeAreaSelection();
-
     trackEvent("crop_area_enabled", {
-      screen_id: targetScreen.id,
-      screen_name: targetScreen.name,
+      screen_id: screen.id,
+      screen_name: screen.name,
     });
-    setAreaSelection({ pending: false, screen: targetScreen });
+    setAreaSelection({ pending: false, screen: { id: screen.id } });
     commands.showWindow({
-      CaptureArea: { screen: targetScreen },
+      CaptureArea: { screen_id: screen.id },
     });
   }
 
@@ -102,11 +77,8 @@ function TargetSelects(props: {
           type="button"
           onClick={handleAreaSelectButtonClick}
           class={cx(
-            "flex flex-col flex-1 gap-1 justify-center items-center rounded-lg transition-shadow duration-200",
-            "hover:ring-2 hover:ring-blue-300 hover:ring-offset-2 hover:ring-offset-zinc-50",
-            isTargetCaptureArea()
-              ? "ring-2 ring-blue-300 ring-offset-2 ring-offset-zinc-50 bg-zinc-300"
-              : "bg-zinc-200"
+            "flex flex-col flex-1 gap-1 justify-center items-center rounded-lg transition-shadow duration-200 bg-zinc-200",
+            "border ring-offset-2 border-zinc-300 dark:bg-zinc-200 dark:border-zinc-300 ring-offset-zinc-200 hover:outline-none hover:ring-2 hover:ring-blue-300"
           )}
         >
           <IconCapScan
@@ -124,7 +96,7 @@ function TargetSelects(props: {
           type="button"
           class={cx(
             "flex flex-col flex-1 gap-1 justify-center items-center rounded-lg transition-shadow duration-200 bg-zinc-200",
-            "hover:ring-2 hover:ring-blue-300 hover:ring-offset-2 hover:ring-offset-zinc-50"
+            "border ring-offset-2 border-zinc-300 dark:bg-zinc-200 dark:border-zinc-300 ring-offset-zinc-200 hover:outline-none hover:ring-2 hover:ring-blue-300"
           )}
         >
           <IconCapMonitor class={cx("w-5 text-zinc-400")} />
@@ -137,7 +109,7 @@ function TargetSelects(props: {
           type="button"
           class={cx(
             "flex flex-col flex-1 gap-1 justify-center items-center rounded-lg transition-shadow duration-200 bg-zinc-200",
-            "hover:ring-2 hover:ring-blue-300 hover:ring-offset-2 hover:ring-offset-zinc-50"
+            "border ring-offset-2 border-zinc-300 dark:bg-zinc-200 dark:border-zinc-300 ring-offset-zinc-200 hover:outline-none hover:ring-2 hover:ring-blue-300"
           )}
         >
           <IconCapWindow class={cx("w-5 text-zinc-400")} />

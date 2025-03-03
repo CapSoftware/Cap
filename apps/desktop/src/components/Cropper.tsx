@@ -1,6 +1,9 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { makePersisted } from "@solid-primitives/storage";
+import { createMutation, createQuery } from "@tanstack/solid-query";
 import { type CheckMenuItemOptions, Menu } from "@tauri-apps/api/menu";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { getCurrentWindow, LogicalPosition } from "@tauri-apps/api/window";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import {
   type ParentProps,
@@ -18,8 +21,15 @@ import {
 } from "solid-js";
 import { createStore } from "solid-js/store";
 import { Transition } from "solid-transition-group";
+import { Tooltip } from "~/components";
+import { TextInput } from "~/routes/editor/TextInput";
 import { generalSettingsStore } from "~/store";
 import Box from "~/utils/box";
+import {
+  createCurrentRecordingQuery,
+  createOptionsQuery,
+  listScreens,
+} from "~/utils/queries";
 import { type Crop, type XY, commands } from "~/utils/tauri";
 import CropAreaRenderer from "./CropAreaRenderer";
 
@@ -200,7 +210,8 @@ export default function Cropper(
         const box = Box.from(crop.position, crop.size);
         box.constrainToRatio(props.aspectRatio, ORIGIN_CENTER);
         box.constrainToBoundary(mappedSize().x, mappedSize().y, ORIGIN_CENTER);
-        setCrop(box.toBounds());
+        setTimeout(() => setGestureState("isTrackpadGesture", false), 100);
+        setSnappedRatio(null);
       }
     )
   );
@@ -223,40 +234,61 @@ export default function Cropper(
     initialSize: { width: 0, height: 0 },
   });
 
+  function setCrop(value: Crop) {
+    props.onCropChange(value);
+  }
+
+  let pressedKeys = new Set<string>([]);
+  let lastKeyHandleFrame: number | null = null;
+
   function handleDragStart(event: MouseEvent) {
-    if (gestureState.isTrackpadGesture) return; // Don't start drag if we're in a trackpad gesture
-    event.stopPropagation();
+    // Don't start drag if the click is on an input element
+    if (
+      gestureState.isTrackpadGesture ||
+      (event.target as HTMLElement).tagName === "INPUT"
+    ) {
+      return;
+    }
+
+    event.preventDefault();
     setDragging(true);
-    let lastValidPos = { x: event.clientX, y: event.clientY };
-    const box = Box.from(crop.position, crop.size);
+
+    let lastX = event.clientX;
+    let lastY = event.clientY;
     const scaleFactors = containerToMappedSizeScale();
 
-    createRoot((dispose) => {
+    const handleDrag = (event: MouseEvent) => {
+      const dx = (event.clientX - lastX) / scaleFactors.x;
+      const dy = (event.clientY - lastY) / scaleFactors.y;
+
+      lastX = event.clientX;
+      lastY = event.clientY;
+
       const mapped = mappedSize();
-      createEventListenerMap(window, {
-        mouseup: () => {
-          setDragging(false);
-          dispose();
-        },
-        mousemove: (e) => {
-          requestAnimationFrame(() => {
-            const dx = (e.clientX - lastValidPos.x) / scaleFactors.x;
-            const dy = (e.clientY - lastValidPos.y) / scaleFactors.y;
+      const box = Box.from(crop.position, crop.size);
 
-            box.move(
-              clamp(box.x + dx, 0, mapped.x - box.width),
-              clamp(box.y + dy, 0, mapped.y - box.height)
-            );
+      box.move(
+        clamp(box.x + dx, 0, mapped.x - box.width),
+        clamp(box.y + dy, 0, mapped.y - box.height)
+      );
 
-            const newBox = box;
-            if (newBox.x !== crop.position.x || newBox.y !== crop.position.y) {
-              lastValidPos = { x: e.clientX, y: e.clientY };
-              setCrop(newBox.toBounds());
-            }
-          });
-        },
-      });
-    });
+      setCrop(box.toBounds());
+
+      // Update recording box position during dragging
+      updateRecordingBoxPosition();
+    };
+
+    const handleDragEnd = () => {
+      setDragging(false);
+      document.removeEventListener("mousemove", handleDrag);
+      document.removeEventListener("mouseup", handleDragEnd);
+
+      // Final update of recording box position
+      updateRecordingBoxPosition();
+    };
+
+    document.addEventListener("mousemove", handleDrag);
+    document.addEventListener("mouseup", handleDragEnd);
   }
 
   function handleWheel(event: WheelEvent) {
@@ -275,7 +307,7 @@ export default function Cropper(
         clamp(box.height * scale, minSize().y, mapped.y),
         ORIGIN_CENTER
       );
-      box.constrainAll(box, mapped, ORIGIN_CENTER, props.aspectRatio);
+      box.constrainToBoundary(mapped.x, mapped.y, ORIGIN_CENTER);
       setTimeout(() => setGestureState("isTrackpadGesture", false), 100);
       setSnappedRatio(null);
     } else {
@@ -406,31 +438,6 @@ export default function Cropper(
     }
   }
 
-  function handleResizeStartTouch(event: TouchEvent, dir: Direction) {
-    if (event.touches.length !== 1) return;
-    event.stopPropagation();
-    const touch = event.touches[0];
-    handleResizeStart(touch.clientX, touch.clientY, dir);
-  }
-
-  function findClosestRatio(
-    width: number,
-    height: number,
-    threshold = 0.01
-  ): Ratio | null {
-    if (props.aspectRatio) return null;
-    const currentRatio = width / height;
-    for (const ratio of COMMON_RATIOS) {
-      if (Math.abs(currentRatio - ratio[0] / ratio[1]) < threshold) {
-        return [ratio[0], ratio[1]];
-      }
-      if (Math.abs(currentRatio - ratio[1] / ratio[0]) < threshold) {
-        return [ratio[1], ratio[0]];
-      }
-    }
-    return null;
-  }
-
   function handleResizeStart(clientX: number, clientY: number, dir: Direction) {
     const origin: XY<number> = {
       x: dir.includes("w") ? 1 : 0,
@@ -444,17 +451,29 @@ export default function Cropper(
 
     createRoot((dispose) => {
       createEventListenerMap(window, {
-        mouseup: dispose,
-        touchend: dispose,
+        mouseup: () => {
+          // Update recording box position after resize is complete
+          updateRecordingBoxPosition();
+          dispose();
+        },
+        touchend: () => {
+          // Update recording box position after resize is complete
+          updateRecordingBoxPosition();
+          dispose();
+        },
         touchmove: (e) =>
           requestAnimationFrame(() => {
             if (e.touches.length !== 1) return;
             handleResizeMove(e.touches[0].clientX, e.touches[0].clientY);
+            // Update recording box position during resize
+            updateRecordingBoxPosition();
           }),
         mousemove: (e) =>
-          requestAnimationFrame(() =>
-            handleResizeMove(e.clientX, e.clientY, e.altKey)
-          ),
+          requestAnimationFrame(() => {
+            handleResizeMove(e.clientX, e.clientY, e.altKey);
+            // Update recording box position during resize
+            updateRecordingBoxPosition();
+          }),
       });
     });
 
@@ -472,6 +491,9 @@ export default function Cropper(
     ) {
       const dx = (moveX - lastValidPos.x) / scaleFactors.x;
       const dy = (moveY - lastValidPos.y) / scaleFactors.y;
+
+      // Update last valid position for next calculation
+      lastValidPos = { x: moveX, y: moveY };
 
       const scaleMultiplier = centerOrigin ? 2 : 1;
       const currentBox = box.toBounds();
@@ -517,36 +539,39 @@ export default function Cropper(
       const newOrigin = centerOrigin ? ORIGIN_CENTER : origin;
       box.resize(newWidth, newHeight, newOrigin);
 
-      if (props.aspectRatio) {
-        box.constrainToRatio(
-          props.aspectRatio,
-          newOrigin,
-          dir.includes("n") || dir.includes("s") ? "width" : "height"
-        );
-      }
+      // Remove aspect ratio constraint during resize
+      // if (props.aspectRatio) box.constrainToRatio(props.aspectRatio, newOrigin);
       box.constrainToBoundary(mapped.x, mapped.y, newOrigin);
-
-      const newBox = box.toBounds();
-      if (
-        newBox.size.x !== crop.size.x ||
-        newBox.size.y !== crop.size.y ||
-        newBox.position.x !== crop.position.x ||
-        newBox.position.y !== crop.position.y
-      ) {
-        lastValidPos = { x: moveX, y: moveY };
-        props.onCropChange(newBox);
-      }
+      setCrop(box.toBounds());
     }
   }
 
-  function setCrop(value: Crop) {
-    props.onCropChange(value);
+  function handleResizeStartTouch(event: TouchEvent, dir: Direction) {
+    if (event.touches.length !== 1) return;
+    event.stopPropagation();
+    const touch = event.touches[0];
+    handleResizeStart(touch.clientX, touch.clientY, dir);
   }
 
-  let pressedKeys = new Set<string>([]);
-  let lastKeyHandleFrame: number | null = null;
+  function findClosestRatio(
+    width: number,
+    height: number,
+    threshold = 0.01
+  ): Ratio | null {
+    if (props.aspectRatio) return null;
+    const currentRatio = width / height;
+    for (const ratio of COMMON_RATIOS) {
+      if (Math.abs(currentRatio - ratio[0] / ratio[1]) < threshold) {
+        return [ratio[0], ratio[1]];
+      }
+      if (Math.abs(currentRatio - ratio[1] / ratio[0]) < threshold) {
+        return [ratio[1], ratio[0]];
+      }
+    }
+    return null;
+  }
+
   function handleKeyDown(event: KeyboardEvent) {
-    if (dragging()) return;
     const dir = KEY_MAPPINGS.get(event.key);
     if (!dir) return;
     event.preventDefault();
@@ -561,58 +586,62 @@ export default function Cropper(
       const moveDelta = event.shiftKey ? 20 : 5;
       const origin = event.altKey ? ORIGIN_CENTER : { x: 0, y: 0 };
 
-      for (const key of pressedKeys) {
-        const dir = KEY_MAPPINGS.get(key);
-        if (!dir) continue;
+      const isLeftKey = dir.includes("w");
+      const isRightKey = dir.includes("e");
+      const isUpKey = dir.includes("n");
+      const isDownKey = dir.includes("s");
 
-        const isUpKey = dir === "n";
-        const isLeftKey = dir === "w";
-        const isDownKey = dir === "s";
-        const isRightKey = dir === "e";
+      if (event.metaKey || event.ctrlKey) {
+        // Resize
+        const scaleMultiplier = event.altKey ? 2 : 1;
+        const currentBox = box.toBounds();
 
-        if (event.metaKey || event.ctrlKey) {
-          const scaleMultiplier = event.altKey ? 2 : 1;
-          const currentBox = box.toBounds();
+        let newWidth =
+          dir.includes("e") || dir.includes("w")
+            ? clamp(
+                dir.includes("w")
+                  ? currentBox.size.x - moveDelta * scaleMultiplier
+                  : currentBox.size.x + moveDelta * scaleMultiplier,
+                minSize().x,
+                mapped.x
+              )
+            : currentBox.size.x;
 
-          let newWidth = currentBox.size.x;
-          let newHeight = currentBox.size.y;
+        let newHeight =
+          dir.includes("n") || dir.includes("s")
+            ? clamp(
+                dir.includes("n")
+                  ? currentBox.size.y - moveDelta * scaleMultiplier
+                  : currentBox.size.y + moveDelta * scaleMultiplier,
+                minSize().y,
+                mapped.y
+              )
+            : currentBox.size.y;
 
-          if (isLeftKey || isRightKey) {
-            newWidth = clamp(
-              isLeftKey
-                ? currentBox.size.x - moveDelta * scaleMultiplier
-                : currentBox.size.x + moveDelta * scaleMultiplier,
-              minSize().x,
-              mapped.x
-            );
-          }
+        box.resize(newWidth, newHeight, origin);
+        // Remove aspect ratio constraint during keyboard resize
+        // if (props.aspectRatio) {
+        //   box.constrainToRatio(
+        //     props.aspectRatio,
+        //     origin,
+        //     isUpKey || isDownKey ? "width" : "height"
+        //   );
+        // }
+      } else {
+        const dx =
+          (isRightKey ? moveDelta : isLeftKey ? -moveDelta : 0) /
+          scaleFactors.x;
+        const dy =
+          (isDownKey ? moveDelta : isUpKey ? -moveDelta : 0) / scaleFactors.y;
 
-          if (isUpKey || isDownKey) {
-            newHeight = clamp(
-              isUpKey
-                ? currentBox.size.y - moveDelta * scaleMultiplier
-                : currentBox.size.y + moveDelta * scaleMultiplier,
-              minSize().y,
-              mapped.y
-            );
-          }
-
-          box.resize(newWidth, newHeight, origin);
-        } else {
-          const dx =
-            (isRightKey ? moveDelta : isLeftKey ? -moveDelta : 0) /
-            scaleFactors.x;
-          const dy =
-            (isDownKey ? moveDelta : isUpKey ? -moveDelta : 0) / scaleFactors.y;
-
-          box.move(
-            clamp(box.x + dx, 0, mapped.x - box.width),
-            clamp(box.y + dy, 0, mapped.y - box.height)
-          );
-        }
+        box.move(
+          clamp(box.x + dx, 0, mapped.x - box.width),
+          clamp(box.y + dy, 0, mapped.y - box.height)
+        );
       }
 
-      if (props.aspectRatio) box.constrainToRatio(props.aspectRatio, origin);
+      // Remove aspect ratio constraint after keyboard movement
+      // if (props.aspectRatio) box.constrainToRatio(props.aspectRatio, origin);
       box.constrainToBoundary(mapped.x, mapped.y, origin);
       setCrop(box.toBounds());
 
@@ -620,6 +649,260 @@ export default function Cropper(
       lastKeyHandleFrame = null;
     });
   }
+
+  // Function to handle key press events
+  const handleInputKeyDown = (e: KeyboardEvent) => {
+    e.stopPropagation();
+    // If Enter key is pressed, blur the input to finish editing
+    if (e.key === "Enter") {
+      (e.target as HTMLInputElement).blur();
+    }
+  };
+
+  // Add signals for input values
+  const [sizeXInput, setSizeXInput] = createSignal(
+    Math.round(crop.size.x).toString()
+  );
+  const [sizeYInput, setSizeYInput] = createSignal(
+    Math.round(crop.size.y).toString()
+  );
+  const [posXInput, setPosXInput] = createSignal(
+    Math.round(crop.position.x).toString()
+  );
+  const [posYInput, setPosYInput] = createSignal(
+    Math.round(crop.position.y).toString()
+  );
+
+  // Update input values when crop changes
+  createEffect(() => {
+    setSizeXInput(Math.round(crop.size.x).toString());
+    setSizeYInput(Math.round(crop.size.y).toString());
+    setPosXInput(Math.round(crop.position.x).toString());
+    setPosYInput(Math.round(crop.position.y).toString());
+  });
+
+  const handleSizeXChange = (e: Event) => {
+    e.stopPropagation();
+    const target = e.target as HTMLInputElement;
+    setSizeXInput(target.value);
+
+    // Apply the value as user types
+    const value = parseInt(target.value);
+    if (!isNaN(value) && value >= 50) {
+      setCrop({
+        size: { x: value, y: crop.size.y },
+        position: crop.position,
+      });
+    }
+  };
+
+  const handleSizeYChange = (e: Event) => {
+    e.stopPropagation();
+    const target = e.target as HTMLInputElement;
+    setSizeYInput(target.value);
+
+    // Apply the value as user types
+    const value = parseInt(target.value);
+    if (!isNaN(value) && value >= 50) {
+      setCrop({
+        size: { x: crop.size.x, y: value },
+        position: crop.position,
+      });
+    }
+  };
+
+  const handlePositionChange = (e: Event, axis: "x" | "y") => {
+    e.stopPropagation();
+    const target = e.target as HTMLInputElement;
+
+    if (axis === "x") {
+      setPosXInput(target.value);
+    } else {
+      setPosYInput(target.value);
+    }
+
+    // Apply the value as user types
+    const value = parseInt(target.value);
+    if (!isNaN(value) && value >= 0) {
+      setCrop({
+        size: crop.size,
+        position: {
+          x: axis === "x" ? value : crop.position.x,
+          y: axis === "y" ? value : crop.position.y,
+        },
+      });
+    }
+  };
+
+  // Start recording box related signals and functions
+  const [selectedMode, setSelectedMode] = createSignal("Instant mode");
+  const [recordingBoxPosition, setRecordingBoxPosition] = createSignal<
+    "bottom" | "top"
+  >("bottom");
+  const [showGrid, setShowGrid] = createSignal(true);
+  let dropdownRef!: HTMLDivElement;
+  let recordingBoxRef!: HTMLDivElement;
+  let cropAreaRef!: HTMLDivElement;
+  let positionChangeTimeout: number | undefined;
+
+  const { options } = createOptionsQuery();
+
+  const currentRecording = createCurrentRecordingQuery();
+  const isRecording = () => !!currentRecording.data;
+
+  const close = async () => {
+    try {
+      const mainWindow = await WebviewWindow.getByLabel("main-new");
+      if (mainWindow) {
+        await mainWindow.unminimize();
+      }
+      await getCurrentWindow()?.close();
+    } catch (error) {
+      console.error("Error closing window:", error);
+    }
+  };
+
+  const screens = createQuery(() => listScreens);
+  const toggleRecording = createMutation(() => ({
+    mutationFn: async () => {
+      try {
+        if (!isRecording()) {
+          //manually setting the screen until its done properly
+          await commands.startRecording({
+            captureTarget: {
+              variant: "screen",
+              id: screens.data?.[0]?.id ?? 1,
+            },
+            mode: options.data?.mode ?? "studio",
+            cameraLabel: options.data?.cameraLabel ?? null,
+            audioInputName: options.data?.audioInputName ?? null,
+          });
+          await close();
+        } else {
+          await commands.stopRecording();
+        }
+      } catch (error) {
+        console.error("Error toggling recording:", error);
+      }
+    },
+  }));
+
+  async function modeMenu(event: MouseEvent) {
+    event.preventDefault();
+    const menu = await Menu.new({
+      items: [
+        {
+          id: "instant",
+          text: "Instant mode",
+          checked: selectedMode() === "Instant mode",
+          action: () => setSelectedMode("Instant mode"),
+        },
+        {
+          id: "studio",
+          text: "Studio mode",
+          checked: selectedMode() === "Studio mode",
+          action: () => setSelectedMode("Studio mode"),
+        },
+      ],
+    });
+    const dropdownPosition = dropdownRef.getBoundingClientRect();
+    await menu.popup(
+      new LogicalPosition(
+        dropdownPosition.left + 80,
+        dropdownPosition.bottom - 15
+      )
+    );
+  }
+
+  // More robust check for recording box position
+  const updateRecordingBoxPosition = () => {
+    if (!recordingBoxRef || !cropAreaRef) return;
+
+    // Get the crop area and recording box positions
+    const cropRect = cropAreaRef.getBoundingClientRect();
+    const boxHeight = recordingBoxRef.getBoundingClientRect().height;
+    const windowHeight = window.innerHeight;
+    const currentPosition = recordingBoxPosition();
+
+    // Calculate if there's enough space at the bottom and top
+    const bottomSpace = windowHeight - cropRect.bottom;
+    const topSpace = cropRect.top;
+
+    // Clear any pending position change
+    if (positionChangeTimeout) {
+      clearTimeout(positionChangeTimeout);
+    }
+
+    // Make position changes immediate during dragging to prevent lag
+    const delay = dragging() ? 0 : 50;
+
+    // Use a more deterministic approach based on available space
+    if (currentPosition === "bottom") {
+      // If we're at the bottom and there's not enough space
+      if (bottomSpace < boxHeight + 40) {
+        // 20px buffer
+        // Check if there's enough space at the top before switching
+        if (topSpace > boxHeight + 40) {
+          positionChangeTimeout = window.setTimeout(() => {
+            setRecordingBoxPosition("top");
+          }, delay);
+        }
+        // If there's not enough space at top or bottom, choose the one with more space
+        else if (topSpace > bottomSpace) {
+          positionChangeTimeout = window.setTimeout(() => {
+            setRecordingBoxPosition("top");
+          }, delay);
+        }
+      }
+    } else {
+      // currentPosition === "top"
+      // If we're at the top and there's not enough space
+      if (topSpace < boxHeight + 40) {
+        // Check if there's enough space at the bottom before switching
+        if (bottomSpace > boxHeight + 40) {
+          positionChangeTimeout = window.setTimeout(() => {
+            setRecordingBoxPosition("bottom");
+          }, delay);
+        }
+        // If there's not enough space at top or bottom, choose the one with more space
+        else if (bottomSpace > topSpace) {
+          positionChangeTimeout = window.setTimeout(() => {
+            setRecordingBoxPosition("bottom");
+          }, delay);
+        }
+      }
+      // If we're at the top and there's enough space at the bottom, consider switching back
+      else if (bottomSpace > boxHeight + 50) {
+        // 50px is a larger buffer for switching back
+        positionChangeTimeout = window.setTimeout(() => {
+          setRecordingBoxPosition("bottom");
+        }, delay);
+      }
+    }
+  };
+
+  // Update position when the crop area moves
+  createEffect(() => {
+    // This will run whenever displayScaledCrop changes
+    const _ = displayScaledCrop();
+    // Schedule the check for the next frame to ensure DOM is updated
+    requestAnimationFrame(updateRecordingBoxPosition);
+  });
+
+  // Also update position during resize
+  onMount(() => {
+    const handleResize = () => {
+      updateRecordingBoxPosition();
+    };
+
+    window.addEventListener("resize", handleResize);
+    onCleanup(() => {
+      window.removeEventListener("resize", handleResize);
+      if (positionChangeTimeout) {
+        clearTimeout(positionChangeTimeout);
+      }
+    });
+  });
 
   return (
     <div
@@ -658,13 +941,14 @@ export default function Cropper(
           height: displayScaledCrop().height,
         }}
         borderRadius={9}
-        guideLines={props.showGuideLines}
+        guideLines={showGrid()}
         handles={true}
         highlighted={snappedRatio() !== null}
       >
         {props.children}
       </CropAreaRenderer>
       <div
+        ref={cropAreaRef}
         class="absolute"
         style={{
           top: `${displayScaledCrop().y}px`,
@@ -785,7 +1069,126 @@ export default function Cropper(
             );
           }}
         </For>
+
+        <div
+          ref={recordingBoxRef}
+          class="flex flex-col gap-4"
+          style={{
+            position: "absolute",
+            ...(recordingBoxPosition() === "bottom"
+              ? { bottom: "-250px", top: "auto" }
+              : { top: "-250px", bottom: "auto" }),
+            left: "50%",
+            transform: "translateX(-50%)",
+          }}
+        >
+          {/* Position and Size Display */}
+          <div class="flex flex-col gap-3 border border-zinc-300 p-4 mx-auto bg-white dark:bg-zinc-200 rounded-[12px] w-fit">
+            <div class="flex gap-4 justify-between items-center">
+              <div class="text-sm text-zinc-600">Size</div>
+              <div class="flex gap-2 items-center">
+                <ValuesTextInput
+                  value={sizeXInput()}
+                  onInput={handleSizeXChange}
+                  onKeyDown={handleInputKeyDown}
+                />
+                <span class="text-zinc-600">×</span>
+                <ValuesTextInput
+                  value={sizeYInput()}
+                  onInput={handleSizeYChange}
+                  onKeyDown={handleInputKeyDown}
+                />
+                <span class="ml-1 text-zinc-600">px</span>
+              </div>
+            </div>
+
+            <div class="flex gap-4 justify-between items-center">
+              <div class="text-sm text-zinc-600">Position</div>
+              <div class="flex gap-2 items-center">
+                <ValuesTextInput
+                  value={posXInput()}
+                  onInput={(e) => handlePositionChange(e, "x")}
+                  onKeyDown={handleInputKeyDown}
+                />
+                <span class="opacity-0 text-zinc-400">x</span>
+                <ValuesTextInput
+                  value={posYInput()}
+                  onInput={(e) => handlePositionChange(e, "y")}
+                  onKeyDown={handleInputKeyDown}
+                />
+                <span class="ml-1 text-gray-600">px</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Start Recording Box */}
+          <div class="flex gap-4 border border-zinc-300 items-center p-3 mx-auto bg-white rounded-[20px] w-fit dark:bg-zinc-200">
+            <button
+              onClick={close}
+              class="flex justify-center items-center rounded-full border duration-200 cursor-pointer hover:bg-zinc-350 size-8 bg-zinc-300 border-zinc-350"
+            >
+              <IconCapX class="text-zinc-600 size-4" />
+            </button>
+
+            {/* Rule of Thirds Button */}
+            <Tooltip content="Rule of Thirds" openDelay={500}>
+              <button
+                class={`flex justify-center items-center rounded-full border duration-200 cursor-pointer size-8 ${
+                  showGrid()
+                    ? "text-white bg-blue-300 border-blue-400"
+                    : "bg-zinc-300 border-zinc-350 hover:bg-zinc-350"
+                }`}
+                onClick={() => setShowGrid((v) => !v)}
+              >
+                <IconCapPadding class="size-4" />
+              </button>
+            </Tooltip>
+            <div
+              ref={dropdownRef}
+              onClick={() => toggleRecording.mutate()}
+              class="flex flex-row items-center p-3 rounded-[12px] font-medium bg-blue-300 transition-colors duration-200 cursor-pointer hover:bg-blue-400"
+            >
+              <IconCapInstant class="mr-3 size-6" />
+              <div class="leading-tight">
+                <p class="text-white">Start Recording</p>
+                <p class="-mt-0.5 text-sm text-white opacity-50">
+                  {selectedMode()}
+                </p>
+              </div>
+              <div
+                class="p-2 ml-2 rounded-full transition-all duration-200 cursor-pointer hover:bg-blue-500"
+                onClick={(e) => {
+                  e.stopPropagation(); // Prevent the parent onClick from firing
+                  modeMenu(e);
+                }}
+              >
+                <IconCapChevronDown class="text-white size-5" />
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
 }
+
+interface Props {
+  value: string;
+  onInput: (e: Event) => void;
+  onKeyDown: (e: KeyboardEvent) => void;
+}
+
+const ValuesTextInput = (props: Props) => {
+  return (
+    <TextInput
+      pattern="\d*"
+      inputMode="numeric"
+      type="text"
+      value={props.value}
+      onInput={(e) => props.onInput(e)}
+      onKeyDown={props.onKeyDown}
+      class="w-[60px] text-center text-sm ring-offset-2 ring-offset-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-300 transition-all
+     pointer-events-auto bg-zinc-200 border border-zinc-300 dark:bg-zinc-300 dark:border-zinc-350 rounded-md py-1.5 px-3 text-zinc-800"
+    />
+  );
+};

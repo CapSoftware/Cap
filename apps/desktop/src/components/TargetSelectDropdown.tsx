@@ -63,7 +63,7 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
   return (
     <button
       class={cx(
-        "transition-shadow duration-200 text-black",
+        "transition-shadow duration-200 text-black ",
         "data-[selected='false']:ring-0 data-[selected='false']:ring-transparent data-[selected='false']:ring-offset-0 ring-offset-zinc-50",
         props.areaSelectionPending || props.isTargetCaptureArea
           ? ""

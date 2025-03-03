@@ -90,7 +90,9 @@ function CameraSelect(props: {
       <button
         disabled={loading() || !!currentRecording.data}
         onClick={showMenu}
-        class="flex flex-row items-center p-3 gap-[0.375rem] bg-zinc-200 rounded-lg w-full disabled:text-gray-400"
+        class="relative flex flex-row 
+        border ring-offset-2 border-zinc-300 transition-shadow duration-200 dark:bg-zinc-200 dark:border-zinc-300 ring-offset-zinc-200 hover:outline-none hover:ring-2 hover:ring-blue-300
+     items-center p-3 gap-[0.375rem] bg-zinc-200 rounded-lg w-full disabled:text-gray-400 overflow-hidden z-10"
       >
         <IconCapCamera class="text-zinc-400 size-[1.25rem]" />
         <span class="flex-1 text-left truncate">
@@ -224,7 +226,9 @@ function MicrophoneSelect(props: {
       <button
         disabled={loading() || !!currentRecording.data}
         onClick={showMenu}
-        class="relative flex flex-row items-center p-3 gap-[0.375rem] bg-zinc-200 rounded-lg w-full disabled:text-gray-400 overflow-hidden z-10"
+        class="relative flex flex-row 
+           border ring-offset-2 border-zinc-300 transition-shadow duration-200 dark:bg-zinc-200 dark:border-zinc-300 ring-offset-zinc-200 hover:outline-none hover:ring-2 hover:ring-blue-300
+        items-center p-3 gap-[0.375rem] bg-zinc-200 rounded-lg w-full disabled:text-gray-400 overflow-hidden z-10"
       >
         <Show when={dbs()}>
           {(s) => (

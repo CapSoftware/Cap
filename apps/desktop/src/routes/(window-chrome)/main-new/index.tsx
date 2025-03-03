@@ -1,11 +1,11 @@
-import { createMutation } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
 import { Menu } from "@tauri-apps/api/menu";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-import { createResource, createSignal, onCleanup } from "solid-js";
+import { createResource, onCleanup } from "solid-js";
 
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { ErrorBoundary, Suspense } from "solid-js";
+import { Mode } from "~/components";
 import {
   createCurrentRecordingQuery,
   createLicenseQuery,
@@ -19,19 +19,6 @@ import TargetSelects from "./TargetSelects";
 export default function () {
   const { options, setOptions } = createOptionsQuery();
   const currentRecording = createCurrentRecordingQuery();
-  const [toggleInstantMode, setToggleInstantMode] = createSignal(false);
-
-  const isRecording = () => !!currentRecording.data;
-
-  const toggleRecording = createMutation(() => ({
-    mutationFn: async () => {
-      if (!isRecording()) {
-        await commands.startRecording();
-      } else {
-        await commands.stopRecording();
-      }
-    },
-  }));
 
   const license = createLicenseQuery();
 
@@ -55,7 +42,7 @@ export default function () {
 
     // Enforce window size with multiple safeguards
     const currentWindow = getCurrentWindow();
-    const MAIN_WINDOW_SIZE = { width: 300, height: 296 };
+    const MAIN_WINDOW_SIZE = { width: 300, height: 300 };
 
     // Set initial size
     await currentWindow.setSize(
@@ -99,7 +86,7 @@ export default function () {
   });
 
   return (
-    <div class="flex justify-center flex-col p-3 gap-2 text-[0.875rem] font-[400] bg-[--gray-50] h-full text-[--text-primary]">
+    <div class="flex justify-center flex-col p-3 gap-2 text-[0.875rem] font-[400] bg-zinc-150 h-full text-[--text-primary]">
       {initialize()}
       <div class="flex flex-1 gap-2 justify-between items-center">
         <div class="*:h-auto flex flex-col gap-2 mb-2 text-[--text-primary] ">
@@ -116,7 +103,7 @@ export default function () {
                 class={`text-[0.6rem] w-fit ${
                   license.data?.type === "pro"
                     ? "bg-[--blue-400] text-zinc-400"
-                    : "bg-zinc-300 cursor-pointer hover:bg-zinc-400 transition-colors duration-200"
+                    : "bg-zinc-300 cursor-pointer border border-zinc-350 hover:bg-zinc-350 transition-colors duration-200"
                 } rounded-full px-2 py-1`}
               >
                 {license.data?.type === "commercial"
@@ -128,7 +115,7 @@ export default function () {
             </Suspense>
           </ErrorBoundary>
         </div>
-        <Mode/>
+        <Mode />
       </div>
       <TargetSelects options={options.data} />
       <CameraSelect options={options.data} setOptions={setOptions} />
@@ -141,7 +128,6 @@ import { useNavigate } from "@solidjs/router";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import * as updater from "@tauri-apps/plugin-updater";
 import { onMount } from "solid-js";
-import Mode from "./Mode";
 
 let hasChecked = false;
 function createUpdateCheck() {
