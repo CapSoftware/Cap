@@ -28,11 +28,7 @@ import { Tooltip } from "~/components";
 import { TextInput } from "~/routes/editor/TextInput";
 import { generalSettingsStore } from "~/store";
 import Box from "~/utils/box";
-import {
-  createCurrentRecordingQuery,
-  createOptionsQuery,
-  listScreens,
-} from "~/utils/queries";
+import { createOptionsQuery, listScreens } from "~/utils/queries";
 import { type Crop, type XY, commands } from "~/utils/tauri";
 import CropAreaRenderer from "./CropAreaRenderer";
 
@@ -252,6 +248,10 @@ export default function Cropper(
     ) {
       return;
     }
+
+    //unfocus input elements
+    const activeElement = document.activeElement as HTMLInputElement;
+    activeElement?.blur();
 
     event.preventDefault();
     setDragging(true);
@@ -750,9 +750,6 @@ export default function Cropper(
 
   const { options } = createOptionsQuery();
 
-  const currentRecording = createCurrentRecordingQuery();
-  const isRecording = () => !!currentRecording.data;
-
   const close = () => {
     setTimeout(async () => {
       (await WebviewWindow.getByLabel("main-new"))?.unminimize();
@@ -764,21 +761,18 @@ export default function Cropper(
   const toggleRecording = createMutation(() => ({
     mutationFn: async () => {
       try {
-        if (!isRecording()) {
-          //manually setting the screen until its done properly
-          await commands.startRecording({
-            captureTarget: {
-              variant: "screen",
-              id: screens.data?.[0]?.id ?? 1,
-            },
-            mode: options.data?.mode ?? "studio",
-            cameraLabel: options.data?.cameraLabel ?? null,
-            audioInputName: options.data?.audioInputName ?? null,
-          });
-          await close();
-        } else {
-          await commands.stopRecording();
-        }
+        //manually setting the screen until its done properly
+        if (!screens.data) return;
+        await commands.startRecording({
+          captureTarget: {
+            variant: "screen",
+            id: screens.data?.[0]?.id,
+          },
+          mode: options.data?.mode ?? "studio",
+          cameraLabel: options.data?.cameraLabel ?? null,
+          audioInputName: options.data?.audioInputName ?? null,
+        });
+        close();
       } catch (error) {
         console.error("Error toggling recording:", error);
       }
@@ -1120,10 +1114,10 @@ export default function Cropper(
           </div>
 
           {/* Start Recording Box */}
-          <div class="flex gap-4 border border-zinc-300 items-center p-3 mx-auto bg-white rounded-[20px] w-fit dark:bg-zinc-200">
+          <div class="flex gap-4 border border-zinc-300 items-center p-3 mx-auto bg-white rounded-[20px] min-w-[320px] whitespace-nowrap dark:bg-zinc-200">
             <button
               onClick={close}
-              class="flex justify-center items-center rounded-full border duration-200 cursor-pointer hover:bg-zinc-350 size-8 bg-zinc-300 border-zinc-350"
+              class="flex flex-shrink-0 justify-center items-center rounded-full border duration-200 cursor-pointer hover:bg-zinc-350 size-8 bg-zinc-300 border-zinc-350"
             >
               <IconCapX class="text-zinc-600 size-4" />
             </button>
@@ -1131,7 +1125,7 @@ export default function Cropper(
             {/* Rule of Thirds Button */}
             <Tooltip content="Rule of Thirds" openDelay={500}>
               <button
-                class={`flex justify-center items-center rounded-full border duration-200 cursor-pointer size-8 ${
+                class={`flex justify-center items-center rounded-full border duration-200 cursor-pointer size-8 flex-shrink-0 ${
                   showGrid()
                     ? "text-white bg-blue-300 border-blue-400"
                     : "bg-zinc-300 border-zinc-350 hover:bg-zinc-350"
@@ -1144,17 +1138,17 @@ export default function Cropper(
             <div
               ref={dropdownRef}
               onClick={() => toggleRecording.mutate()}
-              class="flex flex-row items-center p-3 rounded-[12px] font-medium bg-blue-300 transition-colors duration-200 cursor-pointer hover:bg-blue-400"
+              class="flex flex-row items-center p-3 rounded-[12px] font-medium bg-blue-300 transition-colors duration-200 cursor-pointer hover:bg-blue-400 flex-shrink-0 flex-grow-0"
             >
-              <IconCapInstant class="mr-3 size-6" />
-              <div class="leading-tight">
+              <IconCapInstant class="flex-shrink-0 mr-3 size-6" />
+              <div class="leading-tight whitespace-nowrap">
                 <p class="text-white">Start Recording</p>
                 <p class="-mt-0.5 text-sm text-white opacity-50">
                   {selectedMode()}
                 </p>
               </div>
               <div
-                class="p-2 ml-2 rounded-full transition-all duration-200 cursor-pointer hover:bg-blue-500"
+                class="flex-shrink-0 p-2 ml-2 rounded-full transition-all duration-200 cursor-pointer hover:bg-blue-500"
                 onClick={(e) => {
                   e.stopPropagation(); // Prevent the parent onClick from firing
                   modeMenu(e);
