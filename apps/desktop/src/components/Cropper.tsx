@@ -233,6 +233,8 @@ export default function Cropper(
     initialSize: { width: 0, height: 0 },
   });
 
+  const [isInteracting, setIsInteracting] = createSignal(false);
+
   function setCrop(value: Crop) {
     props.onCropChange(value);
   }
@@ -249,12 +251,9 @@ export default function Cropper(
       return;
     }
 
-    //unfocus input elements
-    const activeElement = document.activeElement as HTMLInputElement;
-    activeElement?.blur();
-
     event.preventDefault();
     setDragging(true);
+    setIsInteracting(true);
 
     let lastX = event.clientX;
     let lastY = event.clientY;
@@ -283,6 +282,7 @@ export default function Cropper(
 
     const handleDragEnd = () => {
       setDragging(false);
+      setIsInteracting(false);
       document.removeEventListener("mousemove", handleDrag);
       document.removeEventListener("mouseup", handleDragEnd);
 
@@ -331,6 +331,7 @@ export default function Cropper(
   function handleTouchStart(event: TouchEvent) {
     if (event.touches.length === 2) {
       // Initialize pinch zoom
+      setIsInteracting(true);
       const distance = distanceOf(event.touches[0], event.touches[1]);
 
       // Initialize touch center
@@ -347,6 +348,7 @@ export default function Cropper(
       });
     } else if (event.touches.length === 1) {
       // Handle single touch as drag
+      setIsInteracting(true);
       batch(() => {
         setDragging(true);
         setGestureState("lastTouchCenter", {
@@ -433,6 +435,7 @@ export default function Cropper(
     if (event.touches.length === 0) {
       setDragging(false);
       setGestureState("lastTouchCenter", null);
+      setIsInteracting(false);
     } else if (event.touches.length === 1) {
       setGestureState("lastTouchCenter", {
         x: event.touches[0].clientX,
@@ -442,6 +445,7 @@ export default function Cropper(
   }
 
   function handleResizeStart(clientX: number, clientY: number, dir: Direction) {
+    setIsInteracting(true);
     const origin: XY<number> = {
       x: dir.includes("w") ? 1 : 0,
       y: dir.includes("n") ? 1 : 0,
@@ -457,11 +461,13 @@ export default function Cropper(
         mouseup: () => {
           // Update recording box position after resize is complete
           updateRecordingBoxPosition();
+          setIsInteracting(false);
           dispose();
         },
         touchend: () => {
           // Update recording box position after resize is complete
           updateRecordingBoxPosition();
+          setIsInteracting(false);
           dispose();
         },
         touchmove: (e) =>
@@ -738,15 +744,24 @@ export default function Cropper(
   };
 
   // Start recording box related signals and functions
-  const [selectedMode, setSelectedMode] = createSignal("Instant mode");
+  const [selectedMode, setSelectedMode] = createSignal<"Instant" | "Studio">(
+    "Instant"
+  );
   const [recordingBoxPosition, setRecordingBoxPosition] = createSignal<
     "bottom" | "top"
   >("bottom");
   const [showGrid, setShowGrid] = createSignal(true);
+  const [selectedSize, setSelectedSize] = createSignal<SizeOption | null>(null);
   let dropdownRef!: HTMLDivElement;
   let recordingBoxRef!: HTMLDivElement;
   let cropAreaRef!: HTMLDivElement;
   let positionChangeTimeout: number | undefined;
+
+  const [sizeAdjusted, setSizeAdjusted] = createSignal<boolean>(false);
+  const [originalSize, setOriginalSize] = createSignal<{
+    width: number;
+    height: number;
+  } | null>(null);
 
   const { options } = createOptionsQuery();
 
@@ -779,6 +794,127 @@ export default function Cropper(
     },
   }));
 
+  // Define predefined size options
+  type SizeOption = {
+    id: number;
+    name: string;
+    width: number;
+    height: number;
+  };
+
+  const PREDEFINED_SIZES: SizeOption[] = [
+    { id: 1, name: "4K", width: 3840, height: 2160 },
+    { id: 2, name: "1440p", width: 2560, height: 1440 },
+    { id: 3, name: "1080p", width: 1920, height: 1080 },
+    { id: 4, name: "720p", width: 1280, height: 720 },
+    { id: 5, name: "Custom", width: 0, height: 0 },
+  ];
+
+  // Add effect to initialize the selected size based on current crop dimensions
+  createEffect(() => {
+    // Check if current dimensions match any predefined size
+    const currentWidth = parseInt(sizeXInput());
+    const currentHeight = parseInt(sizeYInput());
+
+    const matchingSize = PREDEFINED_SIZES.find(
+      (size) => size.width === currentWidth && size.height === currentHeight
+    );
+
+    if (matchingSize) {
+      setSelectedSize(matchingSize);
+    } else if (currentWidth > 0 && currentHeight > 0) {
+      // If no match but we have valid dimensions, set to Custom
+      const customSize = { ...PREDEFINED_SIZES[5] }; // Clone the Custom option
+      customSize.width = currentWidth;
+      customSize.height = currentHeight;
+      setSelectedSize(customSize);
+    } else {
+      // Default to 1080p if nothing is set
+      setSelectedSize(PREDEFINED_SIZES[3]);
+    }
+  });
+
+  // Handle size selection
+  const handleSizeSelect = (size: SizeOption) => {
+    setSelectedSize(size);
+    setSizeAdjusted(false);
+    setOriginalSize(null);
+
+    // If not custom, apply the predefined dimensions
+    if (size.name !== "Custom") {
+      // Get current window dimensions
+      const windowWidth = window.innerWidth;
+      const windowHeight = window.innerHeight;
+
+      // Check if the selected size fits within the screen
+      let finalWidth = size.width;
+      let finalHeight = size.height;
+
+      // If the size is larger than the screen, scale it down while maintaining aspect ratio
+      if (size.width > windowWidth || size.height > windowHeight) {
+        const scaleX = windowWidth / size.width;
+        const scaleY = windowHeight / size.height;
+        const scale = Math.min(scaleX, scaleY) * 0.9; // Use 90% of available space to ensure margins
+
+        // Store original size for tooltip
+        setOriginalSize({ width: size.width, height: size.height });
+
+        finalWidth = Math.floor(size.width * scale);
+        finalHeight = Math.floor(size.height * scale);
+
+        // Set adjusted flag to show indicator
+        setSizeAdjusted(true);
+      }
+
+      // Calculate new position to center the crop area
+      const newPosX = Math.max(0, Math.floor((windowWidth - finalWidth) / 2));
+      const newPosY = Math.max(0, Math.floor((windowHeight - finalHeight) / 2));
+
+      // Update input values
+      setSizeXInput(finalWidth.toString());
+      setSizeYInput(finalHeight.toString());
+      setPosXInput(newPosX.toString());
+      setPosYInput(newPosY.toString());
+
+      // Apply the size and position to the crop
+      setCrop({
+        size: { x: finalWidth, y: finalHeight },
+        position: { x: newPosX, y: newPosY },
+      });
+      // Update the recording box position after applying the new size
+      // Use setTimeout to ensure the DOM has updated with the new size
+      setTimeout(updateRecordingBoxPosition, 0);
+    }
+  };
+
+  // Function to show the size menu
+  async function showSizeMenu(event: MouseEvent) {
+    event.preventDefault();
+
+    // Get the position of the clicked element
+    const element = event.currentTarget as HTMLElement;
+    const rect = element.getBoundingClientRect();
+
+    // Create the menu
+    const menu = await Menu.new({
+      items: PREDEFINED_SIZES.map((size) => ({
+        id: String(size.id),
+        text: size.name,
+        checked: selectedSize()?.id === size.id,
+        type: "checkbox" as const,
+        action: () => handleSizeSelect(size),
+      })),
+    });
+
+    // Position the menu below the element
+    const position = new LogicalPosition(
+      Math.floor(rect.left),
+      Math.floor(rect.bottom)
+    );
+
+    await menu.popup(position);
+  }
+
   async function modeMenu(event: MouseEvent) {
     event.preventDefault();
     const menu = await Menu.new({
@@ -786,14 +922,14 @@ export default function Cropper(
         {
           id: "instant",
           text: "Instant mode",
-          checked: selectedMode() === "Instant mode",
-          action: () => setSelectedMode("Instant mode"),
+          checked: selectedMode() === "Instant",
+          action: () => setSelectedMode("Instant"),
         },
         {
           id: "studio",
           text: "Studio mode",
-          checked: selectedMode() === "Studio mode",
-          action: () => setSelectedMode("Studio mode"),
+          checked: selectedMode() === "Studio",
+          action: () => setSelectedMode("Studio"),
         },
       ],
     });
@@ -806,82 +942,56 @@ export default function Cropper(
     );
   }
 
-  // More robust check for recording box position
-  const updateRecordingBoxPosition = () => {
-    if (!recordingBoxRef || !cropAreaRef) return;
-
-    // Get the crop area and recording box positions
-    const cropRect = cropAreaRef.getBoundingClientRect();
-    const boxHeight = recordingBoxRef.getBoundingClientRect().height;
+  // Function to check if there's enough space for the recording box
+  function updateRecordingBoxPosition() {
+    const cropHeight = parseInt(sizeYInput());
+    const cropY = parseInt(posYInput());
     const windowHeight = window.innerHeight;
-    const currentPosition = recordingBoxPosition();
 
-    // Calculate if there's enough space at the bottom and top
-    const bottomSpace = windowHeight - cropRect.bottom;
-    const topSpace = cropRect.top;
+    // Check if the crop is taking up most of the screen height
+    const isCropTooTall = cropHeight > windowHeight * 0.7;
 
-    // Clear any pending position change
-    if (positionChangeTimeout) {
-      clearTimeout(positionChangeTimeout);
-    }
+    // Check if there's not enough space at the top or bottom
+    const spaceAtTop = cropY;
+    const spaceAtBottom = windowHeight - (cropY + cropHeight);
+    const minSpaceNeeded = 250; // Minimum space needed for the recording box
 
-    // Make position changes immediate during dragging to prevent lag
-    const delay = dragging() ? 0 : 50;
+    const notEnoughSpaceAtTop = spaceAtTop < minSpaceNeeded;
+    const notEnoughSpaceAtBottom = spaceAtBottom < minSpaceNeeded;
 
-    // Use a more deterministic approach based on available space
-    if (currentPosition === "bottom") {
-      // If we're at the bottom and there's not enough space
-      if (bottomSpace < boxHeight + 40) {
-        // 20px buffer
-        // Check if there's enough space at the top before switching
-        if (topSpace > boxHeight + 40) {
-          positionChangeTimeout = window.setTimeout(() => {
-            setRecordingBoxPosition("top");
-          }, delay);
-        }
-        // If there's not enough space at top or bottom, choose the one with more space
-        else if (topSpace > bottomSpace) {
-          positionChangeTimeout = window.setTimeout(() => {
-            setRecordingBoxPosition("top");
-          }, delay);
-        }
-      }
+    // If the crop is too tall or there's not enough space at top and bottom, overlay the recording box
+    if (isCropTooTall || (notEnoughSpaceAtTop && notEnoughSpaceAtBottom)) {
+      setOverlayRecordingBox(true);
     } else {
-      // currentPosition === "top"
-      // If we're at the top and there's not enough space
-      if (topSpace < boxHeight + 40) {
-        // Check if there's enough space at the bottom before switching
-        if (bottomSpace > boxHeight + 40) {
-          positionChangeTimeout = window.setTimeout(() => {
-            setRecordingBoxPosition("bottom");
-          }, delay);
-        }
-        // If there's not enough space at top or bottom, choose the one with more space
-        else if (bottomSpace > topSpace) {
-          positionChangeTimeout = window.setTimeout(() => {
-            setRecordingBoxPosition("bottom");
-          }, delay);
-        }
-      }
-      // If we're at the top and there's enough space at the bottom, consider switching back
-      else if (bottomSpace > boxHeight + 50) {
-        // 50px is a larger buffer for switching back
-        positionChangeTimeout = window.setTimeout(() => {
-          setRecordingBoxPosition("bottom");
-        }, delay);
+      setOverlayRecordingBox(false);
+
+      // If there's enough space at the bottom but not at the top, position at bottom
+      // Otherwise, position at top (default)
+      if (notEnoughSpaceAtTop && !notEnoughSpaceAtBottom) {
+        setRecordingBoxPosition("bottom");
+      } else {
+        setRecordingBoxPosition("top");
       }
     }
-  };
+  }
 
-  // Update position when the crop area moves
+  // Create a signal to track if the cropper is taking up most of the screen height
+  const [overlayRecordingBox, setOverlayRecordingBox] = createSignal(false);
+
+  // Consolidated effect to update recording box position when any relevant state changes
   createEffect(() => {
-    // This will run whenever displayScaledCrop changes
-    const _ = displayScaledCrop();
+    // Access signals to create reactive dependencies
+    // The effect will re-run when any of these values change
+    selectedSize();
+    sizeYInput();
+    posYInput();
+    displayScaledCrop();
+
     // Schedule the check for the next frame to ensure DOM is updated
     requestAnimationFrame(updateRecordingBoxPosition);
   });
 
-  // Also update position during resize
+  // Update position during window resize
   onMount(() => {
     const handleResize = () => {
       updateRecordingBoxPosition();
@@ -890,9 +1000,6 @@ export default function Cropper(
     window.addEventListener("resize", handleResize);
     onCleanup(() => {
       window.removeEventListener("resize", handleResize);
-      if (positionChangeTimeout) {
-        clearTimeout(positionChangeTimeout);
-      }
     });
   });
 
@@ -1067,25 +1174,54 @@ export default function Cropper(
           class="flex flex-col gap-4"
           style={{
             position: "absolute",
-            ...(recordingBoxPosition() === "bottom"
-              ? { bottom: "-250px", top: "auto" }
-              : { top: "-250px", bottom: "auto" }),
-            left: "50%",
-            transform: "translateX(-50%)",
+            ...(overlayRecordingBox()
+              ? {
+                  top: "50%",
+                  left: "50%",
+                  transform: "translate(-50%, -50%)",
+                  zIndex: 100,
+                }
+              : {
+                  ...(recordingBoxPosition() === "bottom"
+                    ? { bottom: "-250px", top: "auto" }
+                    : { top: "-250px", bottom: "auto" }),
+                  left: "50%",
+                  transform: "translateX(-50%)",
+                }),
           }}
         >
           {/* Position and Size Display */}
           <div class="flex flex-col gap-3 border border-zinc-300 p-4 mx-auto bg-white dark:bg-zinc-200 rounded-[12px] w-fit">
             <div class="flex gap-4 justify-between items-center">
-              <div class="text-sm text-zinc-600">Size</div>
+              <div
+                class="flex gap-1 items-center cursor-pointer"
+                onClick={(e) => showSizeMenu(e)}
+              >
+                <div class="text-sm text-zinc-600">Size</div>
+                <IconCapChevronDown class="size-4 text-zinc-600" />
+                <span class="ml-1 text-xs text-zinc-500">
+                  {selectedSize()?.name}
+                </span>
+                <Show when={sizeAdjusted()}>
+                  <Tooltip
+                    content={`Adjusted from original ${originalSize()?.width}×${
+                      originalSize()?.height
+                    }`}
+                  >
+                    <span class="ml-1 text-xs text-amber-500">(adjusted)</span>
+                  </Tooltip>
+                </Show>
+              </div>
               <div class="flex gap-2 items-center">
                 <ValuesTextInput
+                  isInteracting={isInteracting}
                   value={sizeXInput()}
                   onInput={handleSizeXChange}
                   onKeyDown={handleInputKeyDown}
                 />
                 <span class="text-zinc-600">×</span>
                 <ValuesTextInput
+                  isInteracting={isInteracting}
                   value={sizeYInput()}
                   onInput={handleSizeYChange}
                   onKeyDown={handleInputKeyDown}
@@ -1098,12 +1234,14 @@ export default function Cropper(
               <div class="text-sm text-zinc-600">Position</div>
               <div class="flex gap-2 items-center">
                 <ValuesTextInput
+                  isInteracting={isInteracting}
                   value={posXInput()}
                   onInput={(e) => handlePositionChange(e, "x")}
                   onKeyDown={handleInputKeyDown}
                 />
                 <span class="opacity-0 text-zinc-400">x</span>
                 <ValuesTextInput
+                  isInteracting={isInteracting}
                   value={posYInput()}
                   onInput={(e) => handlePositionChange(e, "y")}
                   onKeyDown={handleInputKeyDown}
@@ -1140,11 +1278,16 @@ export default function Cropper(
               onClick={() => toggleRecording.mutate()}
               class="flex flex-row items-center p-3 rounded-[12px] font-medium bg-blue-300 transition-colors duration-200 cursor-pointer hover:bg-blue-400 flex-shrink-0 flex-grow-0"
             >
-              <IconCapInstant class="flex-shrink-0 mr-3 size-6" />
+              {/* Start Recording Icon */}
+              {selectedMode() === "Instant" ? (
+                <IconCapInstant class="flex-shrink-0 mr-3 size-6" />
+              ) : (
+                <IconCapFilmCut class="flex-shrink-0 mr-3 size-6" />
+              )}
               <div class="leading-tight whitespace-nowrap">
                 <p class="text-white">Start Recording</p>
                 <p class="-mt-0.5 text-sm text-white opacity-50">
-                  {selectedMode()}
+                  {selectedMode() + " mode"}
                 </p>
               </div>
               <div
@@ -1167,7 +1310,8 @@ export default function Cropper(
 interface Props {
   value: string;
   onInput: (e: Event) => void;
-  onKeyDown: (e: KeyboardEvent) => void;
+  onKeyDown?: (e: KeyboardEvent) => void;
+  isInteracting: () => boolean;
 }
 
 const ValuesTextInput = (props: Props) => {
@@ -1177,6 +1321,13 @@ const ValuesTextInput = (props: Props) => {
       inputMode="numeric"
       type="text"
       value={props.value}
+      autofocus={false}
+      onFocus={(e) => {
+        // Prevent focus when dragging or resizing
+        if (props.isInteracting()) {
+          e.currentTarget.blur();
+        }
+      }}
       onInput={(e) => props.onInput(e)}
       onKeyDown={props.onKeyDown}
       class="w-[60px] text-center text-sm ring-offset-2 ring-offset-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-300 transition-all
