@@ -13,7 +13,7 @@
 		<a href="https://cap.so/download">macOS & Windows</a>
     <br />
     <br />
-    <i>~ Cap is currently in public beta, and is available for macO, Web and Windows. Linux builds are in development. Join the <a href="https://discord.gg/y8gdQ3WRN3">Cap Discord</a> to help test future releases and join the community. ~</i>
+    <i>~ Cap is currently in public beta, and is available for macOS, Web and Windows. Linux builds are in development. Join the <a href="https://discord.gg/y8gdQ3WRN3">Cap Discord</a> to help test future releases and join the community. ~</i>
     <br />
   </p>
 </p>
