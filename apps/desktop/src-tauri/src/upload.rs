@@ -5,13 +5,14 @@ use image::codecs::jpeg::JpegEncoder;
 use image::ImageReader;
 use reqwest::{multipart::Form, StatusCode};
 use std::path::PathBuf;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::task;
 
 use crate::web_api::{self, ManagerExt};
 
-use crate::UploadProgress;
+use crate::{PreCreatedVideo, UploadProgress};
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -837,4 +838,231 @@ async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
     })
     .await
     .map_err(|e| format!("Failed to compress image: {}", e))?
+}
+
+// New function to start progressive upload
+pub async fn start_progressive_upload(
+    app: AppHandle,
+    video_id: String,
+    file_path: PathBuf,
+    pre_created_video: PreCreatedVideo,
+) -> tokio::task::JoinHandle<Result<(), String>> {
+    println!("Starting progressive upload for {video_id}...");
+
+    tokio::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+        let file_name = "result.mp4";
+        let client = reqwest::Client::new();
+        let s3_config = pre_created_video.config;
+        let upload_url = pre_created_video.link;
+
+        let mut upload_complete = false;
+        let mut last_uploaded_position: u64 = 0;
+        let mut consecutive_same_size = 0;
+
+        while !upload_complete {
+            if !file_path.exists() {
+                println!("File does not exist yet, waiting...");
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                continue;
+            }
+
+            let file_metadata = match tokio::fs::metadata(&file_path).await {
+                Ok(metadata) => metadata,
+                Err(e) => {
+                    println!("Failed to get file metadata: {}", e);
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    continue;
+                }
+            };
+
+            let current_size = file_metadata.len();
+
+            if current_size == last_uploaded_position {
+                consecutive_same_size += 1;
+
+                if consecutive_same_size > 10 {
+                    println!("File size hasn't changed for a while, stopping progressive upload");
+                    upload_complete = true;
+                    break;
+                }
+
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                continue;
+            }
+
+            consecutive_same_size = 0;
+
+            if current_size <= last_uploaded_position {
+                println!("No new data to upload");
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                continue;
+            }
+
+            if current_size < 1024 * 1024 && last_uploaded_position == 0 {
+                println!("Waiting for file to grow to at least 1MB before first upload");
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                continue;
+            }
+
+            let new_data_size = current_size - last_uploaded_position;
+
+            if new_data_size < 500 * 1024 && last_uploaded_position > 0 {
+                println!("Only {} bytes of new data, waiting for more", new_data_size);
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                continue;
+            }
+
+            println!(
+                "Uploading new data from position {} to {} ({} bytes)",
+                last_uploaded_position, current_size, new_data_size
+            );
+
+            let mut file = match tokio::fs::File::open(&file_path).await {
+                Ok(file) => file,
+                Err(e) => {
+                    println!("Failed to open file: {}", e);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    continue;
+                }
+            };
+
+            if let Err(e) = file
+                .seek(std::io::SeekFrom::Start(last_uploaded_position))
+                .await
+            {
+                println!("Failed to seek in file: {}", e);
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                continue;
+            }
+
+            let mut new_data = vec![0u8; new_data_size as usize];
+            match file.read_exact(&mut new_data).await {
+                Ok(_) => {}
+                Err(e) => {
+                    println!("Failed to read new data from file: {}", e);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    continue;
+                }
+            }
+
+            let total_size = new_data.len() as f64;
+            let new_data = std::sync::Arc::new(new_data);
+
+            let file_part = {
+                let progress_counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+                let app_handle = app.clone();
+                let new_data = new_data.clone();
+
+                let stream =
+                    stream::iter((0..new_data.len()).step_by(1024 * 1024).map(move |start| {
+                        let end = (start + 1024 * 1024).min(new_data.len());
+                        let chunk = new_data[start..end].to_vec();
+
+                        let current = progress_counter
+                            .fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::SeqCst)
+                            as f64;
+
+                        UploadProgress {
+                            progress: current / total_size,
+                            message: format!(
+                                "Progressive upload: {:.0}%",
+                                (current / total_size * 100.0)
+                            ),
+                        }
+                        .emit(&app_handle)
+                        .ok();
+
+                        Ok::<Vec<u8>, std::io::Error>(chunk)
+                    }));
+
+                match reqwest::multipart::Part::stream_with_length(
+                    reqwest::Body::wrap_stream(stream),
+                    total_size as u64,
+                )
+                .file_name(file_name.to_string())
+                .mime_str("video/mp4")
+                {
+                    Ok(part) => part,
+                    Err(e) => {
+                        println!("Error setting MIME type: {}", e);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                        continue;
+                    }
+                }
+            };
+
+            let form = reqwest::multipart::Form::new().part("file", file_part);
+            let mut request = client.post(&upload_url).multipart(form);
+
+            let range_header = format!(
+                "bytes {}-{}/{}",
+                last_uploaded_position,
+                current_size - 1,
+                "*"
+            );
+
+            request = request.header("Content-Range", range_header);
+
+            let response = match request.send().await {
+                Ok(response) => response,
+                Err(e) => {
+                    println!("Failed to send upload request: {}", e);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    continue;
+                }
+            };
+
+            if response.status().is_success() {
+                println!("Progressive upload chunk successful");
+
+                last_uploaded_position = current_size;
+
+                UploadProgress {
+                    progress: 1.0,
+                    message: "Chunk uploaded: 100%".to_string(),
+                }
+                .emit(&app)
+                .ok();
+
+                if let Ok(buffer) = tokio::fs::read(&file_path).await {
+                    if buffer.len() >= 8 {
+                        for i in 0..buffer.len() - 4 {
+                            if &buffer[i..i + 4] == b"moov" {
+                                println!("Found moov atom, MP4 file is likely complete");
+                                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                                upload_complete = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            } else {
+                let status = response.status();
+                let error_body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "<no response body>".to_string());
+                println!(
+                    "Failed to upload chunk. Status: {}. Body: {}",
+                    status, error_body
+                );
+
+                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+            }
+        }
+
+        UploadProgress {
+            progress: 1.0,
+            message: "Upload complete: 100%".to_string(),
+        }
+        .emit(&app)
+        .ok();
+
+        println!("Progressive upload complete for {video_id}");
+        Ok(())
+    })
 }

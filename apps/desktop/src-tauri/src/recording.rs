@@ -8,7 +8,7 @@ use crate::{
     general_settings::GeneralSettingsStore,
     notifications, open_editor, open_external_link,
     presets::PresetsStore,
-    upload::get_s3_config,
+    upload::{get_s3_config, upload_video},
     upload_exported_video, web_api,
     windows::{CapWindowId, ShowCapWindow},
     App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, PreCreatedVideo,
@@ -188,6 +188,18 @@ pub async fn start_recording(
         let _ = ShowCapWindow::WindowCaptureOccluder.show(&app);
     }
 
+    // Take a copy of the pre-created video before dropping the state lock
+    let pre_created_video = if matches!(recording_options.mode, RecordingMode::Instant) {
+        state.pre_created_video.clone()
+    } else {
+        None
+    };
+
+    // Create copies of values that will be used after the first spawn_actor
+    let recording_mode = recording_options.mode.clone();
+    let recording_dir_for_upload = recording_dir.clone();
+    let id_for_upload = id.clone();
+
     drop(state);
 
     println!("spawning actor");
@@ -202,8 +214,8 @@ pub async fn start_recording(
             let (actor, actor_done_rx) = match recording_options.mode {
                 RecordingMode::Studio => {
                     let (actor, actor_done_rx) = cap_recording::spawn_studio_recording_actor(
-                        id,
-                        recording_dir,
+                        id.clone(),
+                        recording_dir.clone(),
                         recording_options.clone(),
                         state.camera_feed.clone(),
                         state.audio_input_feed.clone(),
@@ -216,8 +228,8 @@ pub async fn start_recording(
                 RecordingMode::Instant => {
                     let (actor, actor_done_rx) =
                         cap_recording::instant_recording::spawn_instant_recording_actor(
-                            id,
-                            recording_dir,
+                            id.clone(),
+                            recording_dir.clone(),
                             recording_options.clone(),
                             state.audio_input_feed.clone(),
                         )
@@ -235,6 +247,59 @@ pub async fn start_recording(
     })
     .await
     .map_err(|e| format!("Failed to spawn recording actor: {}", e))??;
+
+    // For instant recordings, start progressive upload process
+    if matches!(recording_mode, RecordingMode::Instant) && pre_created_video.is_some() {
+        let pre_created_video = pre_created_video.unwrap();
+        let output_path = recording_dir_for_upload.join("content/output.mp4");
+        spawn_actor({
+            let app = app.clone();
+            let recording_id = id_for_upload.clone();
+            async move {
+                // Start the progressive upload process
+                info!("Starting progressive upload for instant recording");
+
+                // Wait for the file to appear
+                let mut attempts = 0;
+                while !output_path.exists() && attempts < 10 {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    attempts += 1;
+                }
+
+                if !output_path.exists() {
+                    info!("Recording file not created after waiting, progressive upload couldn't start");
+                    return;
+                }
+
+                // Send notification for shareable link
+                notifications::send_notification(
+                    &app,
+                    notifications::NotificationType::ShareableLinkCopied,
+                );
+
+                // Copy link to clipboard early
+                let _ = app.clipboard().write_text(pre_created_video.link.clone());
+
+                // Start the background upload process
+                tauri::async_runtime::spawn(async move {
+                    // We'll use a chunked upload approach, periodically checking the file
+                    // and uploading what's been recorded so far
+                    let mut upload_task = crate::upload::start_progressive_upload(
+                        app.clone(),
+                        recording_id,
+                        output_path,
+                        pre_created_video,
+                    )
+                    .await;
+
+                    // The upload task will continue until the recording stops
+                    if let Err(e) = upload_task.await {
+                        println!("Error in progressive upload: {}", e);
+                    }
+                });
+            }
+        });
+    }
 
     spawn_actor({
         let app = app.clone();
@@ -325,11 +390,21 @@ async fn handle_recording_end(
         window.unminimize().ok();
     }
 
+    // Store the link for opening later if we have one from an instant recording
+    let mut shareable_link = None;
+
     if let Some(completed_recording) = completed_recording {
-        handle_recording_finish(&app, completed_recording, state).await?;
+        shareable_link = handle_recording_finish(&app, completed_recording, state).await?;
     };
 
+    // Play sound to indicate recording has stopped
     AppSounds::StopRecording.play();
+
+    // Now that recording has fully stopped and sound has played, open the link if available
+    if let Some(link) = shareable_link {
+        // Open link after sound plays, giving user clear indication recording has ended
+        open_external_link(app.clone(), link).ok();
+    }
 
     CurrentRecordingChanged.emit(&app).ok();
 
@@ -341,7 +416,7 @@ async fn handle_recording_finish(
     app: &AppHandle,
     completed_recording: CompletedRecording,
     state: &mut App,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     let recording_dir = completed_recording.project_path().clone();
     let id = completed_recording.id().clone();
 
@@ -364,6 +439,8 @@ async fn handle_recording_finish(
 
     let display_screenshot = screenshots_dir.join("display.jpg");
     create_screenshot(display_output_path, display_screenshot.clone(), None).await?;
+
+    let mut shareable_link = None;
 
     let meta_inner = match completed_recording {
         CompletedRecording::Studio(recording) => {
@@ -393,67 +470,37 @@ async fn handle_recording_finish(
             RecordingMetaInner::Studio(recording.meta)
         }
         CompletedRecording::Instant(recording) => {
+            // For instant recordings, we may have already started the upload process
+            // Just finalize it or ensure it completes if it hasn't started
             if let Some(pre_created_video) = state.pre_created_video.take() {
-                spawn_actor({
-                    let app = app.clone();
-                    async move {
-                        // Copy link to clipboard
-                        let _ = app.clipboard().write_text(pre_created_video.link.clone());
+                // Since we're now using progressive upload, we just need to finalize it
+                // The notification and link copying was already done at the start
 
-                        // Send notification for shareable link
-                        notifications::send_notification(
-                            &app,
-                            notifications::NotificationType::ShareableLinkCopied,
-                        );
+                // Don't open the link yet - we'll do it after the sound plays
+                // Store the link for later
+                shareable_link = Some(pre_created_video.link.clone());
 
-                        // Open the pre-created shareable link
-                        open_external_link(app.clone(), pre_created_video.link.clone()).ok();
-
-                        // Start the upload process in the background with retry mechanism
-                        let app = app.clone();
-
-                        tauri::async_runtime::spawn(async move {
-                            let max_retries = 3;
-                            let mut retry_count = 0;
-
-                            while retry_count < max_retries {
-                                match upload_exported_video(
-                                    app.clone(),
-                                    id.clone(),
-                                    UploadMode::Initial {
-                                        pre_created_video: Some(pre_created_video.clone()),
-                                    },
-                                )
-                                .await
-                                {
-                                    Ok(_) => {
-                                        println!("Video uploaded successfully");
-                                        // Don't send notification here since we already did it above
-                                        break;
-                                    }
-                                    Err(e) => {
-                                        retry_count += 1;
-                                        println!(
-                                            "Error during auto-upload (attempt {}/{}): {}",
-                                            retry_count, max_retries, e
-                                        );
-
-                                        if retry_count < max_retries {
-                                            tokio::time::sleep(std::time::Duration::from_secs(5))
-                                                .await;
-                                        } else {
-                                            println!("Max retries reached. Upload failed.");
-                                            notifications::send_notification(
-                                                &app,
-                                                notifications::NotificationType::UploadFailed,
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        });
+                // Upload the display.jpg screenshot
+                if display_screenshot.exists() {
+                    // The upload_video function handles screenshot upload, so we can pass it along
+                    match upload_video(
+                        app,
+                        pre_created_video.id.clone(),
+                        recording_dir.join("content/output.mp4"),
+                        Some(pre_created_video.config.clone()),
+                        Some(display_screenshot.clone()),
+                    )
+                    .await
+                    {
+                        Ok(_) => {
+                            println!("Final video upload with screenshot completed successfully")
+                        }
+                        Err(e) => println!("Error in final upload with screenshot: {}", e),
                     }
-                });
+                }
+
+                // Wait a moment to ensure any in-progress upload has completed
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             }
 
             RecordingMetaInner::Instant(recording.meta)
@@ -478,7 +525,7 @@ async fn handle_recording_finish(
     meta.save_for_project()
         .map_err(|e| format!("Failed to save recording meta: {e}"))?;
 
-    Ok(())
+    Ok(shareable_link)
 }
 
 fn generate_zoom_segments_from_clicks(

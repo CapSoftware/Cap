@@ -439,7 +439,6 @@ async fn get_recording_options(
 #[tauri::command]
 #[specta::specta]
 async fn set_recording_options(
-    app: AppHandle,
     state: MutableState<'_, App>,
     options: RecordingOptions,
 ) -> Result<(), String> {
