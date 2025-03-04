@@ -1,11 +1,11 @@
-import {
-  memo,
-  forwardRef,
-  useEffect,
-  useRef,
-  useImperativeHandle,
-} from "react";
 import Hls from "hls.js";
+import {
+  forwardRef,
+  memo,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+} from "react";
 
 interface VideoPlayerProps {
   videoSrc: string;
@@ -99,7 +99,7 @@ export const VideoPlayer = memo(
       <video
         id="video-player"
         ref={videoRef}
-        className="absolute top-0 left-0 rounded-lg w-full h-full object-contain"
+        className="object-contain absolute top-0 left-0 w-full h-full rounded-lg"
         preload="metadata"
         playsInline
         controls={false}

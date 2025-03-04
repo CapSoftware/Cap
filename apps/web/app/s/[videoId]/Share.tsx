@@ -1,14 +1,14 @@
 "use client";
 
+import { userSelectProps } from "@cap/database/auth/session";
+import { comments as commentsSchema, videos } from "@cap/database/schema";
+import { clientEnv } from "@cap/env";
+import { Logo } from "@cap/ui";
+import { useEffect, useRef, useState } from "react";
 import { ShareHeader } from "./_components/ShareHeader";
 import { ShareVideo } from "./_components/ShareVideo";
-import { comments as commentsSchema, videos } from "@cap/database/schema";
-import { userSelectProps } from "@cap/database/auth/session";
-import { Toolbar } from "./_components/Toolbar";
-import { Logo } from "@cap/ui";
 import { Sidebar } from "./_components/Sidebar";
-import { useEffect, useState, useRef } from "react";
-import { clientEnv } from "@cap/env";
+import { Toolbar } from "./_components/Toolbar";
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
   authorName: string | null;
@@ -93,7 +93,7 @@ export const Share: React.FC<ShareProps> = ({
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F7F8FA]">
-      <div className="flex-1 container mx-auto px-4 py-4">
+      <div className="container flex-1 px-4 py-4 mx-auto">
         <ShareHeader
           data={data}
           user={user}
@@ -103,9 +103,9 @@ export const Share: React.FC<ShareProps> = ({
         />
 
         <div className="mt-4">
-          <div className="flex flex-col lg:flex-row gap-4">
+          <div className="flex flex-col gap-4 lg:flex-row">
             <div className="flex-1">
-              <div className="relative aspect-video new-card-style p-3 overflow-hidden">
+              <div className="overflow-hidden relative p-3 aspect-video new-card-style">
                 <ShareVideo
                   data={data}
                   user={user}
@@ -118,7 +118,7 @@ export const Share: React.FC<ShareProps> = ({
               </div>
             </div>
 
-            <div className="lg:w-80 flex flex-col">
+            <div className="flex flex-col lg:w-80">
               <Sidebar
                 data={data}
                 user={user}
@@ -130,17 +130,17 @@ export const Share: React.FC<ShareProps> = ({
             </div>
           </div>
 
-          <div className="hidden lg:block mt-4">
+          <div className="hidden mt-4 lg:block">
             <Toolbar data={data} user={user} />
           </div>
         </div>
       </div>
 
-      <div className="mt-auto py-4">
+      <div className="py-4 mt-auto">
         <a
           target="_blank"
           href={`${clientEnv.NEXT_PUBLIC_WEB_URL}?ref=video_${data.id}`}
-          className="flex items-center justify-center space-x-2 py-2 px-4 bg-gray-100 new-card-style rounded-full mx-auto w-fit"
+          className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 bg-gray-100 rounded-full new-card-style w-fit"
         >
           <span className="text-sm">Recorded with</span>
           <Logo className="w-14 h-auto" />

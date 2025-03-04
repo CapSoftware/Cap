@@ -1,11 +1,11 @@
 import {
-  memo,
   forwardRef,
-  useRef,
-  useImperativeHandle,
-  useEffect,
-  useState,
+  memo,
   useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
 } from "react";
 
 interface MP4VideoPlayerProps {
@@ -224,7 +224,7 @@ export const MP4VideoPlayer = memo(
       <video
         id="video-player"
         ref={videoRef}
-        className="w-full h-full object-contain"
+        className="object-contain w-full h-full"
         preload="auto"
         playsInline
         controls={false}

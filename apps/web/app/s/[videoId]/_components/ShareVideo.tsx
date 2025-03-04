@@ -1,30 +1,29 @@
-import { comments as commentsSchema, videos } from "@cap/database/schema";
-import { VideoPlayer } from "./VideoPlayer";
-import { MP4VideoPlayer } from "./MP4VideoPlayer";
-import {
-  useState,
-  useEffect,
-  useRef,
-  forwardRef,
-  useCallback,
-  useImperativeHandle,
-} from "react";
-import {
-  Play,
-  Pause,
-  Maximize,
-  VolumeX,
-  Volume2,
-  MessageSquare,
-} from "lucide-react";
-import { LogoSpinner } from "@cap/ui";
+import { apiClient } from "@/utils/web-api";
 import { userSelectProps } from "@cap/database/auth/session";
-import { fromVtt, Subtitle } from "subtitles-parser-vtt";
+import { comments as commentsSchema, videos } from "@cap/database/schema";
+import { clientEnv, NODE_ENV } from "@cap/env";
+import { LogoSpinner } from "@cap/ui";
+import { S3_BUCKET_URL } from "@cap/utils";
+import {
+  Maximize,
+  MessageSquare,
+  Pause,
+  Play,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 import toast from "react-hot-toast";
 import { Tooltip } from "react-tooltip";
-import { apiClient } from "@/utils/web-api";
-import { S3_BUCKET_URL } from "@cap/utils";
-import { clientEnv, NODE_ENV } from "@cap/env";
+import { fromVtt, Subtitle } from "subtitles-parser-vtt";
+import { MP4VideoPlayer } from "./MP4VideoPlayer";
+import { VideoPlayer } from "./VideoPlayer";
 
 declare global {
   interface Window {
@@ -984,14 +983,31 @@ export const ShareVideo = forwardRef<
     }
   }, [previewCanvasRef, previewWidth, previewHeight, isLargeScreen]);
 
+  useEffect(() => {
+    // Safari detection for applying specific styles
+    const detectSafari = () => {
+      const isSafari =
+        /^((?!chrome|android).)*safari/i.test(navigator.userAgent) ||
+        (navigator.userAgent.includes("AppleWebKit") &&
+          !navigator.userAgent.includes("Chrome"));
+
+      const videoContainer = document.getElementById("video-container");
+      if (videoContainer && isSafari) {
+        videoContainer.style.height = "calc(100% - 1.75rem)";
+      }
+    };
+
+    detectSafari();
+  }, []);
+
   if (data.jobStatus === "ERROR") {
     return (
-      <div className="flex items-center justify-center w-full h-full rounded-lg overflow-hidden">
+      <div className="flex overflow-hidden justify-center items-center w-full h-full rounded-lg">
         <div
           style={{ paddingBottom: "min(806px, 56.25%)" }}
-          className="relative w-full h-full rounded-lg bg-black flex items-center justify-center p-8"
+          className="flex relative justify-center items-center p-8 w-full h-full bg-black rounded-lg"
         >
-          <p className="text-white text-xl">
+          <p className="text-xl text-white">
             There was an error when processing the video. Please contact
             support.
           </p>
@@ -1020,14 +1036,14 @@ export const ShareVideo = forwardRef<
   return (
     <div
       id="video-container"
-      className="relative w-full h-full overflow-hidden shadow-lg rounded-lg group"
+      className="overflow-hidden relative w-full h-full rounded-lg shadow-lg group"
     >
       <div
         className={`absolute inset-0 flex items-center justify-center z-10 bg-black transition-opacity duration-300 ${
           isLoading ? "opacity-100" : "opacity-0 pointer-events-none"
         }`}
       >
-        <LogoSpinner className="w-8 sm:w-10 h-auto animate-spin" />
+        <LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
       </div>
       <div className="relative w-full h-full">
         <div className="absolute inset-0 bg-black">
@@ -1047,7 +1063,7 @@ export const ShareVideo = forwardRef<
           >
             <button
               aria-label={isPlaying ? "Pause video" : "Play video"}
-              className="w-full h-full flex items-center justify-center"
+              className="flex justify-center items-center w-full h-full"
               onClick={() => {
                 if (!videoReadyToPlay) {
                   // If video is not ready, set a visual indicator but don't try to play yet
@@ -1065,16 +1081,16 @@ export const ShareVideo = forwardRef<
               }}
             >
               {isPlaying ? (
-                <Pause className="w-auto h-10 sm:h-12 md:h-14 text-white hover:opacity-50" />
+                <Pause className="w-auto h-10 text-white sm:h-12 md:h-14 hover:opacity-50" />
               ) : (
-                <Play className="w-auto h-10 sm:h-12 md:h-14 text-white hover:opacity-50" />
+                <Play className="w-auto h-10 text-white sm:h-12 md:h-14 hover:opacity-50" />
               )}
             </button>
           </div>
         )}
         {currentSubtitle && currentSubtitle.text && subtitlesVisible && (
-          <div className="absolute bottom-12 sm:bottom-16 w-full text-center p-2 z-10">
-            <div className="inline px-2 py-1 text-sm sm:text-lg md:text-2xl text-white bg-black bg-opacity-75 rounded-xl">
+          <div className="absolute bottom-12 z-10 p-2 w-full text-center sm:bottom-16">
+            <div className="inline px-2 py-1 text-sm text-white bg-black bg-opacity-75 rounded-xl sm:text-lg md:text-2xl">
               {currentSubtitle.text
                 .replace("- ", "")
                 .replace(".", "")
@@ -1087,7 +1103,7 @@ export const ShareVideo = forwardRef<
       {/* Thumbnail preview - MP4 only, visible only on screens larger than lg */}
       {showPreview && !isLoading && isMP4Source && isLargeScreen && (
         <div
-          className="absolute z-30 bg-black border border-gray-700 shadow-lg rounded-md overflow-hidden transition-opacity duration-150 hidden xl:block"
+          className="hidden overflow-hidden absolute z-30 bg-black rounded-md border border-gray-700 shadow-lg transition-opacity duration-150 xl:block"
           style={{
             left: `${previewPosition}px`,
             bottom: "70px",
@@ -1100,7 +1116,7 @@ export const ShareVideo = forwardRef<
             <img
               src={thumbnailUrl}
               alt={`Preview at ${formatTime(previewTime)}`}
-              className="w-full h-full object-contain bg-black"
+              className="object-contain w-full h-full bg-black"
               onError={(e) => {
                 console.log(
                   "Thumbnail failed to load, using canvas preview instead"
@@ -1111,11 +1127,11 @@ export const ShareVideo = forwardRef<
           ) : (
             <canvas
               ref={previewCanvasRef}
-              className="w-full h-full object-contain bg-black"
+              className="object-contain w-full h-full bg-black"
             />
           )}
           {!thumbnailUrl && (
-            <div className="absolute bottom-0 left-0 right-0 bg-black bg-opacity-70 py-1 px-2 text-xs text-white text-center">
+            <div className="absolute right-0 bottom-0 left-0 px-2 py-1 text-xs text-center text-white bg-black bg-opacity-70">
               {formatTime(previewTime)}
             </div>
           )}
@@ -1146,7 +1162,7 @@ export const ShareVideo = forwardRef<
       >
         <div
           id="seek"
-          className="absolute left-0 right-0 -top-2 h-6 mx-2 sm:mx-4 cursor-pointer"
+          className="absolute right-0 left-0 -top-2 mx-2 h-6 cursor-pointer sm:mx-4"
           onMouseDown={handleSeekMouseDown}
           onMouseMove={(e) => {
             if (seeking) {
@@ -1171,7 +1187,7 @@ export const ShareVideo = forwardRef<
           onTouchEnd={handleSeekMouseUp}
         >
           {!isLoading && comments !== null && (
-            <div className="w-full -mt-7 md:-mt-6">
+            <div className="-mt-7 w-full md:-mt-6">
               {comments.map((comment) => {
                 const commentPosition =
                   comment.timestamp === null
@@ -1194,7 +1210,7 @@ export const ShareVideo = forwardRef<
                 return (
                   <div
                     key={comment.id}
-                    className="absolute z-10 text-sm hover:scale-125 transition-all"
+                    className="absolute z-10 text-sm transition-all hover:scale-125"
                     style={{
                       left: `${commentPosition}%`,
                     }}
@@ -1228,31 +1244,29 @@ export const ShareVideo = forwardRef<
             style={{ left: `${watchedPercentage}%` }}
           />
         </div>
-        <div className="flex items-center justify-between px-4 py-2">
+        <div className="flex justify-between items-center px-4 py-2">
           <div className="flex items-center space-x-2 sm:space-x-3">
-            <div>
-              <span className="inline-flex">
-                <button
-                  aria-label="Play video"
-                  className="inline-flex items-center text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-slate-100 border-transparent hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 px-1 sm:px-2 py-1 sm:py-2 justify-center rounded-lg"
-                  tabIndex={0}
-                  type="button"
-                  onClick={() => handlePlayPauseClick()}
-                >
-                  {isPlaying ? (
-                    <Pause className="w-auto h-5 sm:h-6" />
-                  ) : (
-                    <Play className="w-auto h-5 sm:h-6" />
-                  )}
-                </button>
-              </span>
-            </div>
+            <span className="inline-flex">
+              <button
+                aria-label="Play video"
+                className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none text-slate-100 hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 sm:px-2 sm:py-2"
+                tabIndex={0}
+                type="button"
+                onClick={() => handlePlayPauseClick()}
+              >
+                {isPlaying ? (
+                  <Pause className="w-auto h-5 sm:h-6" />
+                ) : (
+                  <Play className="w-auto h-5 sm:h-6" />
+                )}
+              </button>
+            </span>
             <div className="text-xs sm:text-sm text-white font-medium select-none tabular text-clip overflow-hidden whitespace-nowrap space-x-0.5">
               {formatTime(currentTime)} - {formatTime(longestDuration)}
             </div>
           </div>
           <div className="flex justify-end space-x-1 sm:space-x-2">
-            <div className="flex items-center justify-end space-x-1 sm:space-x-2">
+            <div className="flex justify-end items-center space-x-1 sm:space-x-2">
               <span className="inline-flex">
                 <button
                   aria-label={`Change video speed to ${videoSpeed}x`}
@@ -1268,7 +1282,7 @@ export const ShareVideo = forwardRef<
                 <span className="inline-flex">
                   <button
                     aria-label={isPlaying ? "Pause video" : "Play video"}
-                    className="inline-flex items-center text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-slate-100 border-transparent hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 px-1 sm:px-2 py-1 sm:py-2 justify-center rounded-lg"
+                    className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none text-slate-100 hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 sm:px-2 sm:py-2"
                     tabIndex={0}
                     type="button"
                     onClick={() => {
@@ -1308,7 +1322,7 @@ export const ShareVideo = forwardRef<
                     aria-label={
                       subtitlesVisible ? "Hide subtitles" : "Show subtitles"
                     }
-                    className="inline-flex items-center text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-slate-100 border-transparent hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 px-1 sm:px-2 py-1 sm:py-2 justify-center rounded-lg"
+                    className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none text-slate-100 hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 sm:px-2 sm:py-2"
                     tabIndex={0}
                     type="button"
                     onClick={() => setSubtitlesVisible(!subtitlesVisible)}
@@ -1354,7 +1368,7 @@ export const ShareVideo = forwardRef<
               <span className="inline-flex">
                 <button
                   aria-label={videoRef?.current?.muted ? "Unmute" : "Mute"}
-                  className="inline-flex items-center text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-slate-100 border-transparent hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 px-1 sm:px-2 py-1 sm:py-2 justify-center rounded-lg"
+                  className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none text-slate-100 hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 sm:px-2 sm:py-2"
                   tabIndex={0}
                   type="button"
                   onClick={() => handleMuteClick()}
@@ -1369,7 +1383,7 @@ export const ShareVideo = forwardRef<
               <span className="inline-flex">
                 <button
                   aria-label="Go fullscreen"
-                  className="inline-flex items-center text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-slate-100 border-transparent hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 px-1 sm:px-2 py-1 sm:py-2 justify-center rounded-lg"
+                  className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none text-slate-100 hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 sm:px-2 sm:py-2"
                   tabIndex={0}
                   type="button"
                   onClick={handleFullscreenClick}
