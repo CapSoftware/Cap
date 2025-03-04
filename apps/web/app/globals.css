@@ -442,3 +442,11 @@ footer a {
 .animate-slideUp {
   animation: slideUp 0.3s ease-out forwards;
 }
+
+/* Safari-specific styles using CSS hacks */
+@media screen and (-webkit-min-device-pixel-ratio:0) {
+  _::-webkit-full-page-media, _:future, :root #video-container {
+    height: calc(100% - 1.70rem) !important;
+  }
+}
+

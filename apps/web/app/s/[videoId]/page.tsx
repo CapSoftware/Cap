@@ -252,48 +252,82 @@ export default async function ShareVideoPage(props: Props) {
     );
   }
 
-  let individualFiles: {
-    fileName: string;
-    url: string;
-  }[] = [];
+  console.log("[ShareVideoPage] Fetching individual files for video:", videoId);
+  const individualFiles = await fetch(
+    `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/individual-files?videoId=${videoId}`,
+    {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+    }
+  ).then((res) => res.json());
 
-  if (video?.source.type === "desktopMP4") {
-    console.log(
-      "[ShareVideoPage] Fetching individual files for desktop MP4 video:",
-      videoId
-    );
-    const res = await fetch(
-      `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/individual?videoId=${videoId}&userId=${video.ownerId}`,
-      {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-      }
-    );
+  console.log("[ShareVideoPage] Fetching analytics for video:", videoId);
+  const analyticsResponse = await fetch(
+    `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/analytics?videoId=${videoId}`,
+    {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+    }
+  );
 
-    const data = await res.json();
-    individualFiles = data.files;
-  }
-
-  console.log("[ShareVideoPage] Rendering Share component for video:", videoId);
-
-  const analyticsData = await db
-    .select({
-      id: videos.id,
-      totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
-      totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
-    })
-    .from(videos)
-    .leftJoin(comments, eq(videos.id, comments.videoId))
-    .where(eq(videos.id, videoId))
-    .groupBy(videos.id);
-
+  const analyticsData = await analyticsResponse.json();
   const initialAnalytics = {
-    views: 0,
-    comments: analyticsData[0]?.totalComments || 0,
-    reactions: analyticsData[0]?.totalReactions || 0,
+    views: analyticsData.count || 0,
+    comments: commentsQuery.filter((c) => c.type === "text").length,
+    reactions: commentsQuery.filter((c) => c.type === "emoji").length,
   };
 
+  // Fetch custom domain information
+  let customDomain: string | null = null;
+  let domainVerified = false;
+
+  // Check if the video is shared with a space
+  if (video.sharedSpace?.spaceId) {
+    const spaceData = await db
+      .select({
+        customDomain: spaces.customDomain,
+        domainVerified: spaces.domainVerified,
+      })
+      .from(spaces)
+      .where(eq(spaces.id, video.sharedSpace.spaceId))
+      .limit(1);
+
+    if (spaceData.length > 0 && spaceData[0] && spaceData[0].customDomain) {
+      customDomain = spaceData[0].customDomain;
+      // Handle domainVerified which could be a Date or boolean
+      if (spaceData[0].domainVerified !== null) {
+        domainVerified = true; // If it exists (not null), consider it verified
+      }
+    }
+  }
+
+  // If no custom domain from shared space, check the owner's space
+  if (!customDomain && video.ownerId) {
+    const ownerSpaces = await db
+      .select({
+        customDomain: spaces.customDomain,
+        domainVerified: spaces.domainVerified,
+      })
+      .from(spaces)
+      .where(eq(spaces.ownerId, video.ownerId))
+      .limit(1);
+
+    if (
+      ownerSpaces.length > 0 &&
+      ownerSpaces[0] &&
+      ownerSpaces[0].customDomain
+    ) {
+      customDomain = ownerSpaces[0].customDomain;
+      // Handle domainVerified which could be a Date or boolean
+      if (ownerSpaces[0].domainVerified !== null) {
+        domainVerified = true; // If it exists (not null), consider it verified
+      }
+    }
+  }
+
+  // Get space members if the video is shared with a space
   const membersList = video.sharedSpace?.spaceId
     ? await db
         .select({
@@ -316,6 +350,8 @@ export default async function ShareVideoPage(props: Props) {
       comments={commentsQuery}
       individualFiles={individualFiles}
       initialAnalytics={initialAnalytics}
+      customDomain={customDomain}
+      domainVerified={domainVerified}
     />
   );
 }
