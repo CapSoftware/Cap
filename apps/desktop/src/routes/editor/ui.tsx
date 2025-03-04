@@ -7,12 +7,12 @@ import { Switch as KSwitch } from "@kobalte/core/switch";
 import { Tooltip as KTooltip } from "@kobalte/core/tooltip";
 import { cva, cx, type VariantProps } from "cva";
 import {
+  mergeProps,
+  splitProps,
   type ComponentProps,
   type JSX,
   type ParentProps,
   type ValidComponent,
-  mergeProps,
-  splitProps,
 } from "solid-js";
 import { useEditorContext } from "./context";
 import { TextInput } from "./TextInput";
@@ -45,7 +45,7 @@ export function Subfield(
     >
       <span>
         {props.name}
-        {props.required && <span class="text-blue-500 ml-px">*</span>}
+        {props.required && <span class="ml-px text-blue-500">*</span>}
       </span>
       {props.children}
     </div>
@@ -84,7 +84,7 @@ export function Slider(props: ComponentProps<typeof KSlider>) {
       }}
     >
       <KSlider.Track class="h-[0.5rem] relative mx-1">
-        <KSlider.Fill class="absolute bg-blue-100 ui-disabled:bg-gray-300 h-full rounded-full -ml-2" />
+        <KSlider.Fill class="absolute -ml-2 h-full bg-blue-100 rounded-full ui-disabled:bg-gray-300" />
         <KSlider.Thumb
           class={cx(
             "size-[1.25rem] bg-blue-300 -top-1.5 rounded-full outline-none outline-2 outline-offset-2 focus-visible:outline-blue-300 ui-disabled:bg-gray-400"
@@ -120,7 +120,7 @@ export const Dialog = {
           {!props.hideOverlay && (
             <KDialog.Overlay class="fixed inset-0 z-50 bg-[#000]/80 ui-expanded:animate-in ui-expanded:fade-in ui-closed:animate-out ui-closed:fade-out" />
           )}
-          <div class="fixed inset-0 z-50 flex items-center justify-center">
+          <div class="flex fixed inset-0 z-50 justify-center items-center">
             <KDialog.Content
               class={cx(
                 "z-50 divide-y text-sm rounded-[1.25rem] overflow-hidden border border-gray-200 bg-gray-50 min-w-[22rem] ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 origin-top ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95",
