@@ -58,7 +58,6 @@ pub fn spawn_cursor_recorder(
         async move {
             let device_state = DeviceState::new();
             let mut last_mouse_state = device_state.get_mouse();
-            let start_time = Instant::now();
 
             let mut response = CursorActorResponse {
                 cursors: prev_cursors,
@@ -69,10 +68,12 @@ pub fn spawn_cursor_recorder(
 
             // Create cursors directory if it doesn't exist
             std::fs::create_dir_all(&cursors_dir).unwrap();
+            
+            let start_time = Instant::now();
 
             while !stop_signal.load(std::sync::atomic::Ordering::Relaxed) {
-                let mouse_state = device_state.get_mouse();
                 let elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
+                let mouse_state = device_state.get_mouse();
                 let unix_time = chrono::Utc::now().timestamp_millis() as f64;
 
                 let cursor_data = get_cursor_image_data();
