@@ -212,7 +212,7 @@ export const AdminNavItems = () => {
         </div>
         <div className="mt-auto">
           <div className="w-full mb-3 pb-5 border-b-2 border-gray-200 border-dotted">
-            <UsageButton subscribed={isSubscribed} />
+            <UsageButton />
           </div>
           <Popover open={menuOpen} onOpenChange={setMenuOpen}>
             <PopoverTrigger asChild>

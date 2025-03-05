@@ -150,6 +150,7 @@ export default async function DashboardLayout({
       user={user}
       isSubscribed={isSubscribed}
       isSuperAdmin={isSuperAdmin}
+      isCapCloud={serverConfig?.isCapCloud}
     >
       <div className="full-layout">
         <DashboardTemplate>{children}</DashboardTemplate>
