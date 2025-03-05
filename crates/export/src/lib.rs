@@ -42,7 +42,7 @@ pub enum ExportError {
 
 pub struct Exporter<TOnProgress> {
     render_segments: Vec<RenderSegment>,
-    audio_segments: Vec<Option<Arc<AudioData>>>,
+    audio_segments: Vec<Vec<Arc<AudioData>>>,
     output_size: (u32, u32),
     output_path: PathBuf,
     project: ProjectConfiguration,
@@ -109,7 +109,12 @@ where
                     .await
                     .map_err(ExportError::Other)?,
             });
-            audio_segments.push(s.audio.clone());
+            audio_segments.push(
+                [s.audio.clone(), s.system_audio.clone()]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>(),
+            );
         }
 
         Ok(Self {
@@ -150,13 +155,12 @@ where
             .audio_segments
             .get(0)
             .filter(|_| !self.project.audio.mute)
-            .and_then(|s| s.as_ref())
         {
             Some(audio_data) => Some(
                 AudioInfo::new(
-                    audio_data.info.sample_format,
-                    audio_data.info.sample_rate,
-                    audio_data.info.channels as u16,
+                    ffmpeg::format::Sample::F32(cap_media::data::Type::Packed),
+                    48_000,
+                    2,
                 )
                 .map_err(Into::<MediaError>::into)?,
             ),
@@ -204,12 +208,7 @@ where
                     .filter(|_| !self.project.audio.mute)
                 {
                     Some(AudioRender {
-                        buffer: AudioFrameBuffer::new(
-                            self.audio_segments
-                                .iter()
-                                .map(|s| s.as_ref().unwrap().as_ref().clone())
-                                .collect(),
-                        ),
+                        buffer: AudioFrameBuffer::new(self.audio_segments.clone()),
                     })
                 } else {
                     None

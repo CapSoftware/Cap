@@ -153,12 +153,11 @@ fn decode_audio_to_f32(
 }
 
 pub struct AudioFrameBuffer {
-    data: Vec<AudioData>,
+    data: Vec<Vec<AudioData>>,
     cursor: AudioFrameBufferCursor,
     // sum of `frame.samples()` that have elapsed
     // this * channel count = cursor
     elapsed_samples: usize,
-    sample_size: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -169,10 +168,7 @@ pub struct AudioFrameBufferCursor {
 }
 
 impl AudioFrameBuffer {
-    pub fn new(data: Vec<AudioData>) -> Self {
-        let info = data[0].info;
-        let sample_size = info.channels * info.sample_format.bytes();
-
+    pub fn new(data: Vec<Vec<AudioData>>) -> Self {
         Self {
             data,
             cursor: AudioFrameBufferCursor {
@@ -180,12 +176,11 @@ impl AudioFrameBuffer {
                 samples: 0,
             },
             elapsed_samples: 0,
-            sample_size,
         }
     }
 
     pub fn info(&self) -> AudioInfo {
-        self.data[0].info
+        self.data[0][0].info
     }
 
     pub fn set_playhead(&mut self, playhead: f64, project: &ProjectConfiguration) {
@@ -217,7 +212,7 @@ impl AudioFrameBuffer {
             },
             None => AudioFrameBufferCursor {
                 segment_index: 0,
-                samples: self.data[0].buffer.len() / self.info().channels,
+                samples: self.data[0][0].buffer.len() / self.info().channels,
             },
         };
 

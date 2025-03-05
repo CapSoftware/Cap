@@ -333,6 +333,7 @@ pub struct EditorState {
 
 pub struct Segment {
     pub audio: Option<Arc<AudioData>>,
+    pub system_audio: Option<Arc<AudioData>>,
     pub cursor: Arc<CursorEvents>,
     pub decoders: RecordingSegmentDecoders,
 }
@@ -360,6 +361,7 @@ pub async fn create_segments(
 
             Ok(vec![Segment {
                 audio,
+                system_audio: None,
                 cursor: Default::default(),
                 decoders,
             }])
@@ -368,8 +370,12 @@ pub async fn create_segments(
             let mut segments = vec![];
 
             for (i, s) in inner.segments.iter().enumerate() {
-                let audio = s.audio.as_ref().map(|audio_meta| {
-                    Arc::new(AudioData::from_file(recording_meta.path(&audio_meta.path)).unwrap())
+                let audio = s.audio.as_ref().map(|audio| {
+                    Arc::new(AudioData::from_file(recording_meta.path(&audio.path)).unwrap())
+                });
+
+                let system_audio = s.system_audio.as_ref().map(|audio| {
+                    Arc::new(AudioData::from_file(recording_meta.path(&audio.path)).unwrap())
                 });
 
                 let cursor = Arc::new(s.cursor_events(&recording_meta));
@@ -387,6 +393,7 @@ pub async fn create_segments(
 
                 segments.push(Segment {
                     audio,
+                    system_audio,
                     cursor,
                     decoders,
                 });

@@ -188,6 +188,7 @@ impl App {
         });
 
         self.recording_options.mode = new_options.mode;
+        self.recording_options.capture_system_audio = new_options.capture_system_audio;
 
         match CapWindowId::Camera.get(&self.handle) {
             Some(window) if new_options.camera_label().is_none() => {
