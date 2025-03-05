@@ -30,7 +30,7 @@ import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayou
 import { format } from "date-fns";
 import { Tooltip } from "react-tooltip";
 import { CustomDomain } from "./components/CustomDomain";
-import { getServerConfigAction } from "@/app/actions";
+import { getServerConfigAction, canInstanceAddUserAction } from "@/app/actions";
 
 export const Workspace = () => {
   const { spaceData, activeSpace, user } = useSharedContext();
@@ -43,12 +43,15 @@ export const Workspace = () => {
   const [emailInput, setEmailInput] = useState("");
   const ownerToastShown = useRef(false);
   const [isCapCloud, setIsCapCloud] = useState(false);
+  const [canAddUser, setCanAddUser] = useState(true);
 
   useEffect(() => {
     const fetchServerConfig = async () => {
       try {
         const serverConfig = await getServerConfigAction();
         setIsCapCloud(serverConfig.isCapCloud);
+        const canAdd = await canInstanceAddUserAction();
+        setCanAddUser(canAdd);
       } catch (error) {
         console.error("Failed to get server config:", error);
       }
@@ -263,19 +266,28 @@ export const Workspace = () => {
         <div className="flex items-center justify-between">
           <div>
             <CardTitle>Workspace Members</CardTitle>
-            <CardDescription>Manage your workspace members.</CardDescription>
-            <CardDescription>
-              Current seats capacity:{" "}
-              {`${activeSpace?.inviteQuota} paid ${
-                activeSpace && activeSpace?.inviteQuota > 1
-                  ? "subscriptions"
-                  : "subscription"
-              } across all of your workspaces`}
-            </CardDescription>
-            <CardDescription>
-              Seats remaining:{" "}
-              {activeSpace?.inviteQuota ?? 1 - (activeSpace?.totalInvites ?? 1)}
-            </CardDescription>
+            {isCapCloud && (
+              <>
+                <CardDescription>
+                  Manage your workspace members.
+                </CardDescription>
+
+                {/* Legacy invite quota based code
+                <CardDescription>
+                  Current seats capacity:{" "}
+                  {`${activeSpace?.inviteQuota} paid ${
+                    activeSpace && activeSpace?.inviteQuota > 1
+                      ? "subscriptions"
+                      : "subscription"
+                  } across all of your workspaces`}
+                </CardDescription>
+                <CardDescription>
+                  Seats remaining:{" "}
+                  {activeSpace?.inviteQuota ??
+                    1 - (activeSpace?.totalInvites ?? 1)}
+                </CardDescription> */}
+              </>
+            )}
           </div>
         </div>
       </CardHeader>
@@ -314,26 +326,41 @@ export const Workspace = () => {
               <Tooltip id="purchase-seats-tooltip" place="top" />
             </>
           )}
-          <Button
-            type="button"
-            size="sm"
-            variant="gray"
-            onClick={() => {
-              if (!isOwner) {
-                showOwnerToast();
-              } else if (
-                activeSpace &&
-                activeSpace.inviteQuota <= activeSpace.totalInvites
-              ) {
-                toast.error("Invite limit reached, please purchase more seats");
-              } else {
-                setIsInviteDialogOpen(true);
-              }
-            }}
-            disabled={!isOwner}
-          >
-            Invite users
-          </Button>
+          {isCapCloud ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="gray"
+              onClick={() => {
+                if (!isOwner) {
+                  showOwnerToast();
+                } else {
+                  setIsInviteDialogOpen(true);
+                }
+              }}
+              disabled={!isOwner}
+            >
+              Invite users
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              size="sm"
+              variant="gray"
+              onClick={() => {
+                if (!isOwner) {
+                  showOwnerToast();
+                } else if (!canAddUser) {
+                  toast.error("Self-hosted user limit reached");
+                } else {
+                  setIsInviteDialogOpen(true);
+                }
+              }}
+              disabled={!isOwner}
+            >
+              Invite users
+            </Button>
+          )}
         </div>
       </CardContent>
       <CardContent>

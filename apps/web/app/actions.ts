@@ -1,6 +1,9 @@
 "use server";
 
-import { getServerConfig as getServerConfigInternal } from "@/utils/instance/functions";
+import {
+  getServerConfig as getServerConfigInternal,
+  canInstanceAddUser,
+} from "@/utils/instance/functions";
 import { serverEnv } from "@cap/env";
 
 export async function getServerConfigAction() {
@@ -16,4 +19,8 @@ export async function getServerConfigAction() {
       workos: workosSigninEnabled,
     },
   };
+}
+
+export async function canInstanceAddUserAction() {
+  return await canInstanceAddUser();
 }

@@ -615,3 +615,39 @@ export async function generateCloudProStripePortalLink({
     return null;
   }
 }
+
+// Check if the instance can add a user
+export async function canInstanceAddUser() {
+  console.log("[function call: 🔥 canInstanceAddUser input");
+  const serverConfig = await getServerConfig();
+  console.log("[function call: 🔥 canInstanceAddUser: serverConfig", {
+    serverConfig,
+  });
+  if (!serverConfig.licenseKey) {
+    console.log("[function call: 🔥 canInstanceAddUser: licenseKey not found");
+    return true;
+  }
+
+  const instanceSeatCount = await getServerUserCount();
+
+  console.log("[function call: 🔥 canInstanceAddUser: instanceSeatCount", {
+    instanceSeatCount,
+  });
+  try {
+    const response = await fetch(
+      `${LICENSE_SERVER_URL}/api/instances/add-user?currentSeats=${instanceSeatCount}`,
+      {
+        method: "GET",
+        headers: {
+          licenseKey: serverConfig.licenseKey,
+          siteUrl: INSTANCE_SITE_URL,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    return response.ok;
+  } catch (error) {
+    console.error(error);
+    return false;
+  }
+}
