@@ -238,6 +238,8 @@ pub struct MultipleSegment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio: Option<AudioMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_audio: Option<AudioMeta>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[specta(type = Option<String>)]
     pub cursor: Option<RelativePathBuf>,
 }

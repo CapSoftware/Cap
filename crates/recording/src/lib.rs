@@ -24,6 +24,8 @@ pub struct RecordingOptions {
     pub capture_target: ScreenCaptureTarget,
     pub audio_input_name: Option<String>,
     pub camera_label: Option<String>,
+    #[serde(default)]
+    pub capture_system_audio: bool,
     pub mode: RecordingMode,
 }
 

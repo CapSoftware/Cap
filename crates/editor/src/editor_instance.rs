@@ -7,13 +7,11 @@ use cap_media::frame_ws::create_frame_ws;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, XY};
 use cap_project::{RecordingConfig, StudioRecordingMeta};
 use cap_rendering::{
-    get_duration, DecodedSegmentFrames, ProjectRecordings, ProjectUniforms,
-    RecordingSegmentDecoders, RenderOptions, RenderVideoConstants, SegmentVideoPaths,
+    get_duration, ProjectRecordings, ProjectUniforms, RecordingSegmentDecoders, RenderOptions,
+    RenderVideoConstants, SegmentVideoPaths,
 };
 use std::ops::Deref;
-use std::path::Path;
 use std::sync::Mutex as StdMutex;
-use std::time::Instant;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, watch, Mutex};
 
@@ -334,7 +332,7 @@ pub struct EditorState {
 }
 
 pub struct Segment {
-    pub audio: Arc<Option<AudioData>>,
+    pub audio: Option<Arc<AudioData>>,
     pub cursor: Arc<CursorEvents>,
     pub decoders: RecordingSegmentDecoders,
 }
@@ -345,9 +343,9 @@ pub async fn create_segments(
 ) -> Result<Vec<Segment>, String> {
     match &meta {
         cap_project::StudioRecordingMeta::SingleSegment { segment: s } => {
-            let audio = Arc::new(s.audio.as_ref().map(|audio_meta| {
-                AudioData::from_file(recording_meta.path(&audio_meta.path)).unwrap()
-            }));
+            let audio = s.audio.as_ref().map(|audio_meta| {
+                Arc::new(AudioData::from_file(recording_meta.path(&audio_meta.path)).unwrap())
+            });
 
             let decoders = RecordingSegmentDecoders::new(
                 &recording_meta,
@@ -370,9 +368,9 @@ pub async fn create_segments(
             let mut segments = vec![];
 
             for (i, s) in inner.segments.iter().enumerate() {
-                let audio = Arc::new(s.audio.as_ref().map(|audio_meta| {
-                    AudioData::from_file(recording_meta.path(&audio_meta.path)).unwrap()
-                }));
+                let audio = s.audio.as_ref().map(|audio_meta| {
+                    Arc::new(AudioData::from_file(recording_meta.path(&audio_meta.path)).unwrap())
+                });
 
                 let cursor = Arc::new(s.cursor_events(&recording_meta));
 

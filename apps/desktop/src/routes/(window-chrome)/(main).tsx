@@ -112,7 +112,7 @@ export default function () {
 
     // Enforce window size with multiple safeguards
     const currentWindow = getCurrentWindow();
-    const MAIN_WINDOW_SIZE = { width: 300, height: 360 };
+    const MAIN_WINDOW_SIZE = { width: 300, height: 365 };
 
     // Set initial size
     await currentWindow.setSize(
@@ -257,6 +257,28 @@ export default function () {
       <TargetSelects options={options.data} setOptions={setOptions} />
       <CameraSelect options={options.data} setOptions={setOptions} />
       <MicrophoneSelect options={options.data} setOptions={setOptions} />
+      <button class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10">
+        <div class="size-[1.25rem] flex items-center justify-center">
+          <IconPhMonitorBold class="text-gray-400 stroke-2 size-[1.2rem]" />
+        </div>
+        <span class="flex-1 text-left truncate">No System Audio</span>
+        <TargetSelectInfoPill
+          value={null} // options.data?.captureSystemAudio ?? false}
+          permissionGranted
+          requestPermission={() => {}}
+          onClear={() => {}}
+          // value={props.options?.audioInputName ?? null}
+          // permissionGranted={permissionGranted()}
+          // requestPermission={() => requestPermission("microphone")}
+          // onClear={() => {
+          //   if (!props.options) return;
+          //   props.setOptions.mutate({
+          //     ...props.options,
+          //     audioInputName: null,
+          //   });
+          // }}
+        />
+      </button>
       <div class="w-full flex items-center space-x-1">
         <Button
           disabled={toggleRecording.isPending}
@@ -709,7 +731,7 @@ function CameraSelect(props: {
 
   return (
     <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
-      <label class="text-[--text-tertiary] text-[0.875rem]">Camera</label>
+      {/* <label class="text-[--text-tertiary] text-[0.875rem]">Camera</label> */}
       <KSelect<Option | null>
         options={selectOptions()}
         optionValue="name"
@@ -853,7 +875,7 @@ function MicrophoneSelect(props: {
 
   return (
     <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
-      <label class="text-[--text-tertiary]">Microphone</label>
+      {/* <label class="text-[--text-tertiary]">Microphone</label> */}
       <KSelect<Option>
         options={[
           { name: "No Microphone", deviceId: "" },

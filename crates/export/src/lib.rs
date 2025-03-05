@@ -42,7 +42,7 @@ pub enum ExportError {
 
 pub struct Exporter<TOnProgress> {
     render_segments: Vec<RenderSegment>,
-    audio_segments: Vec<Arc<Option<AudioData>>>,
+    audio_segments: Vec<Option<Arc<AudioData>>>,
     output_size: (u32, u32),
     output_path: PathBuf,
     project: ProjectConfiguration,
@@ -149,8 +149,8 @@ where
         let audio_info = match self
             .audio_segments
             .get(0)
-            .and_then(|d| d.as_ref().as_ref())
             .filter(|_| !self.project.audio.mute)
+            .and_then(|s| s.as_ref())
         {
             Some(audio_data) => Some(
                 AudioInfo::new(
@@ -201,14 +201,13 @@ where
                 let mut audio = if let Some(_) = self
                     .audio_segments
                     .get(0)
-                    .and_then(|d| d.as_ref().as_ref())
                     .filter(|_| !self.project.audio.mute)
                 {
                     Some(AudioRender {
                         buffer: AudioFrameBuffer::new(
                             self.audio_segments
                                 .iter()
-                                .map(|s| s.as_ref().as_ref().unwrap().clone())
+                                .map(|s| s.as_ref().unwrap().as_ref().clone())
                                 .collect(),
                         ),
                     })

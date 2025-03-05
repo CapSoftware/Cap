@@ -67,7 +67,7 @@ impl Playback {
                     segments: self
                         .segments
                         .iter()
-                        .map(|s| s.audio.as_ref().as_ref().unwrap().clone())
+                        .map(|s| s.audio.as_ref().unwrap().as_ref().clone())
                         .collect(),
                     stop_rx: stop_rx.clone(),
                     start_frame_number: self.start_frame_number,

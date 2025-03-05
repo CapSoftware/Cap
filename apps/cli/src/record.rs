@@ -77,6 +77,7 @@ impl RecordStart {
                 camera_label: camera.as_ref().map(|c| c.camera_info.human_name()),
                 audio_input_name: None,
                 mode: RecordingMode::Studio,
+                capture_system_audio: false,
             },
             camera.map(|c| Arc::new(Mutex::new(c))),
             None,

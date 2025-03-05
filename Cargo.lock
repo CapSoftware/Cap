@@ -912,8 +912,10 @@ dependencies = [
 name = "cap-audio"
 version = "0.1.0"
 dependencies = [
+ "cidre 0.7.0",
  "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
+ "tokio",
 ]
 
 [[package]]
@@ -1064,7 +1066,7 @@ dependencies = [
  "cap-flags",
  "cap-gpu-converters",
  "cap-project",
- "cidre",
+ "cidre 0.6.0",
  "cocoa 0.26.0",
  "core-foundation 0.10.0",
  "core-graphics 0.24.0",
@@ -1142,7 +1144,7 @@ dependencies = [
  "bytemuck",
  "cap-flags",
  "cap-project",
- "cidre",
+ "cidre 0.6.0",
  "ffmpeg-hw-device",
  "ffmpeg-next",
  "ffmpeg-sys-next",
@@ -1316,10 +1318,25 @@ name = "cidre"
 version = "0.6.0"
 source = "git+https://github.com/yury/cidre?rev=ef04aaabe14ffbbce4a330973a74b6d797d073ff#ef04aaabe14ffbbce4a330973a74b6d797d073ff"
 dependencies = [
- "cidre-macros",
+ "cidre-macros 0.1.0 (git+https://github.com/yury/cidre?rev=ef04aaabe14ffbbce4a330973a74b6d797d073ff)",
  "parking_lot",
  "tokio",
 ]
+
+[[package]]
+name = "cidre"
+version = "0.7.0"
+source = "git+https://github.com/yury/cidre?rev=b525fce737310f524e0159488f8a4e29685680bf#b525fce737310f524e0159488f8a4e29685680bf"
+dependencies = [
+ "cidre-macros 0.1.0 (git+https://github.com/yury/cidre?rev=b525fce737310f524e0159488f8a4e29685680bf)",
+ "parking_lot",
+ "tokio",
+]
+
+[[package]]
+name = "cidre-macros"
+version = "0.1.0"
+source = "git+https://github.com/yury/cidre?rev=b525fce737310f524e0159488f8a4e29685680bf#b525fce737310f524e0159488f8a4e29685680bf"
 
 [[package]]
 name = "cidre-macros"

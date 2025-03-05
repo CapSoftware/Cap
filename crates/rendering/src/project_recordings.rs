@@ -108,6 +108,7 @@ impl ProjectRecordings {
                     display,
                     camera,
                     audio,
+                    system_audio: None,
                 }]
             }
             StudioRecordingMeta::MultipleSegments { inner } => inner
@@ -127,10 +128,18 @@ impl ProjectRecordings {
                         .transpose()
                         .expect("Failed to read audio");
 
+                    let system_audio = s
+                        .system_audio
+                        .as_ref()
+                        .map(|audio| Audio::new(audio.path.to_path(recording_path)))
+                        .transpose()
+                        .expect("Failed to read audio");
+
                     SegmentRecordings {
                         display,
                         camera,
                         audio,
+                        system_audio,
                     }
                 })
                 .collect(),
@@ -153,6 +162,7 @@ pub struct SegmentRecordings {
     pub display: Video,
     pub camera: Option<Video>,
     pub audio: Option<Audio>,
+    pub system_audio: Option<Audio>,
 }
 
 impl SegmentRecordings {

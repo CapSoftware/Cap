@@ -2142,6 +2142,7 @@ pub async fn run() {
                         camera_label: None,
                         audio_input_name: None,
                         mode: RecordingMode::Studio,
+                        capture_system_audio: false,
                     },
                     current_recording: None,
                     pre_created_video: None,

@@ -77,7 +77,7 @@ impl ScreenCaptureTarget {
     }
 
     pub fn get_title(&self) -> Option<String> {
-        let target = dbg!(self.get_target());
+        let target = self.get_target();
 
         match target {
             None => None,
@@ -230,9 +230,6 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             }
             ScreenCaptureTarget::Screen { id } => {
                 let screens = list_screens();
-
-                dbg!(id);
-                dbg!(&screens);
 
                 let (screen_info, target) = screens
                     .into_iter()

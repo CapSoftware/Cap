@@ -116,7 +116,7 @@ impl<T: PipelineClock> PipelineBuilder<T> {
             task.ready_signal
                 .recv_async()
                 .await
-                .map_err(|_| MediaError::TaskLaunch(name.clone()))??;
+                .map_err(|e| MediaError::TaskLaunch(format!("{name} stop / {e}")))??;
 
             task_handles.insert(name, task.join_handle);
             stop_rx.push(task.done_rx);
