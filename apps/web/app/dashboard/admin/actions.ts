@@ -5,6 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { users, serverConfigTable } from "@cap/database/schema";
 import { eq, like, inArray } from "drizzle-orm";
 import { ServerConfigFormValues, SuperAdminUser } from "./server-config/schema";
+import { validateServerLicense } from "@/utils/instance/functions";
 
 export async function lookupUserById(data: FormData) {
   const currentUser = await getCurrentUser();
@@ -62,8 +63,16 @@ export async function updateServerConfiguration(
     throw new Error("Not authorized");
   }
 
-  // Prepare update data
-  const updateData: Record<string, any> = {
+  const serverConfig = await db.query.serverConfigTable.findFirst({
+    where: eq(serverConfigTable.id, 1),
+  });
+
+  if (!serverConfig) {
+    throw new Error("Server configuration not found");
+  }
+
+  const updatedServerConfig = {
+    ...serverConfig,
     licenseKey: values.licenseKey,
     signupsEnabled: values.signupsEnabled,
     emailSendFromName: values.emailSendFromName,
@@ -72,12 +81,14 @@ export async function updateServerConfiguration(
 
   await db
     .update(serverConfigTable)
-    .set(updateData)
+    .set(updatedServerConfig)
     .where(eq(serverConfigTable.id, 1));
 
-  return await db.query.serverConfigTable.findFirst({
-    where: eq(serverConfigTable.id, 1),
+  const licenseValidationResponse = await validateServerLicense({
+    serverConfig: updatedServerConfig,
   });
+
+  return licenseValidationResponse;
 }
 
 // Search for users by email

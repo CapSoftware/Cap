@@ -10,6 +10,7 @@ import Intercom from "@intercom/messenger-js-sdk";
 import { AuthProvider } from "./AuthProvider";
 import { BentoScript } from "@/components/BentoScript";
 import { getServerConfigAction } from "./actions";
+import { NuqsAdapter } from "nuqs/adapters/next/app";
 
 // Internal PostHog provider component
 function PostHogWrapper({ children }: { children: React.ReactNode }) {
@@ -107,15 +108,17 @@ export function Providers({
 
   // Always wrap with AuthProvider, but conditionally wrap with PostHog if isCapCloud
   return (
-    <AuthProvider>
-      {isCapCloud ? (
-        <>
-          <PostHogWrapper>{children}</PostHogWrapper>
-          {email && <BentoScript userEmail={email} />}
-        </>
-      ) : (
-        children
-      )}
-    </AuthProvider>
+    <NuqsAdapter>
+      <AuthProvider>
+        {isCapCloud ? (
+          <>
+            <PostHogWrapper>{children}</PostHogWrapper>
+            {email && <BentoScript userEmail={email} />}
+          </>
+        ) : (
+          children
+        )}
+      </AuthProvider>
+    </NuqsAdapter>
   );
 }
