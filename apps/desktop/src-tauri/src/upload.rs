@@ -849,25 +849,32 @@ pub async fn start_progressive_upload(
 ) -> tokio::task::JoinHandle<Result<(), String>> {
     println!("Starting progressive upload for {video_id}...");
 
+    // Spawn a background task that continues until the recording is finished
     tokio::spawn(async move {
+        // Wait a bit for recording to start producing output
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
         let file_name = "result.mp4";
         let client = reqwest::Client::new();
         let s3_config = pre_created_video.config;
-        let upload_url = pre_created_video.link;
 
+        let file_key = format!("{}/{}/{}", s3_config.user_id(), s3_config.id(), file_name);
+
+        // Create a flag to track if we've completed the upload
         let mut upload_complete = false;
         let mut last_uploaded_position: u64 = 0;
         let mut consecutive_same_size = 0;
 
+        // Upload the file in chunks as it grows
         while !upload_complete {
+            // Check if the file exists
             if !file_path.exists() {
                 println!("File does not exist yet, waiting...");
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 continue;
             }
 
+            // Get current file size
             let file_metadata = match tokio::fs::metadata(&file_path).await {
                 Ok(metadata) => metadata,
                 Err(e) => {
@@ -879,9 +886,12 @@ pub async fn start_progressive_upload(
 
             let current_size = file_metadata.len();
 
+            // If the file hasn't grown for several checks, we might be paused or done
             if current_size == last_uploaded_position {
                 consecutive_same_size += 1;
 
+                // If we've checked 10 times and the size didn't change, assume we're done
+                // This is approximately 5 seconds of no change
                 if consecutive_same_size > 10 {
                     println!("File size hasn't changed for a while, stopping progressive upload");
                     upload_complete = true;
@@ -892,22 +902,27 @@ pub async fn start_progressive_upload(
                 continue;
             }
 
+            // If the file has grown, reset the counter
             consecutive_same_size = 0;
 
+            // Only upload if we have new data to upload
             if current_size <= last_uploaded_position {
                 println!("No new data to upload");
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 continue;
             }
 
+            // For the first upload, wait until we have at least 1MB of data
             if current_size < 1024 * 1024 && last_uploaded_position == 0 {
                 println!("Waiting for file to grow to at least 1MB before first upload");
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 continue;
             }
 
+            // Calculate how much new data we have
             let new_data_size = current_size - last_uploaded_position;
 
+            // Only upload if we have at least 500KB of new data (unless it's the first upload)
             if new_data_size < 500 * 1024 && last_uploaded_position > 0 {
                 println!("Only {} bytes of new data, waiting for more", new_data_size);
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -919,6 +934,34 @@ pub async fn start_progressive_upload(
                 last_uploaded_position, current_size, new_data_size
             );
 
+            // For progressive uploads, we need to use estimated metadata since the MP4 file is not complete
+            let upload_body = S3VideoUploadBody {
+                base: S3UploadBody {
+                    user_id: s3_config.user_id().to_string(),
+                    file_key: file_key.clone(),
+                    aws_bucket: s3_config.aws_bucket().to_string(),
+                    aws_region: s3_config.aws_region().to_string(),
+                    aws_endpoint: s3_config.aws_endpoint().to_string(),
+                },
+                // Estimated metadata for the in-progress file
+                duration: "0.0".to_string(), // We don't know the duration yet
+                resolution: "1920x1080".to_string(), // Use a standard resolution
+                framerate: "30".to_string(),
+                bandwidth: "2000000".to_string(), // 2Mbps estimate
+                video_codec: "h264".to_string(),
+            };
+
+            // Get the presigned URL for this upload
+            let (upload_url, form) = match presigned_s3_url(&app, upload_body).await {
+                Ok(result) => result,
+                Err(e) => {
+                    println!("Failed to get presigned URL: {}", e);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    continue;
+                }
+            };
+
+            // Open the file for reading
             let mut file = match tokio::fs::File::open(&file_path).await {
                 Ok(file) => file,
                 Err(e) => {
@@ -928,6 +971,7 @@ pub async fn start_progressive_upload(
                 }
             };
 
+            // Seek to the position where we last uploaded
             if let Err(e) = file
                 .seek(std::io::SeekFrom::Start(last_uploaded_position))
                 .await
@@ -937,6 +981,7 @@ pub async fn start_progressive_upload(
                 continue;
             }
 
+            // Read only the new data
             let mut new_data = vec![0u8; new_data_size as usize];
             match file.read_exact(&mut new_data).await {
                 Ok(_) => {}
@@ -950,6 +995,7 @@ pub async fn start_progressive_upload(
             let total_size = new_data.len() as f64;
             let new_data = std::sync::Arc::new(new_data);
 
+            // Create a stream that reports progress
             let file_part = {
                 let progress_counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
                 let app_handle = app.clone();
@@ -964,6 +1010,7 @@ pub async fn start_progressive_upload(
                             .fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::SeqCst)
                             as f64;
 
+                        // Emit progress every chunk
                         UploadProgress {
                             progress: current / total_size,
                             message: format!(
@@ -993,13 +1040,19 @@ pub async fn start_progressive_upload(
                 }
             };
 
-            let form = reqwest::multipart::Form::new().part("file", file_part);
-            let mut request = client.post(&upload_url).multipart(form);
+            let form = form.part("file", file_part);
 
+            // Perform the upload with the Content-Range header for resumable uploads
+            let mut request = client.post(upload_url).multipart(form);
+
+            // Add Content-Range header if supported by the server
+            // Format: bytes start-end/total
+            // For example: bytes 0-1023/10000
             let range_header = format!(
                 "bytes {}-{}/{}",
                 last_uploaded_position,
                 current_size - 1,
+                // Use asterisk if we don't know the final size
                 "*"
             );
 
@@ -1017,8 +1070,10 @@ pub async fn start_progressive_upload(
             if response.status().is_success() {
                 println!("Progressive upload chunk successful");
 
+                // Update the last uploaded position
                 last_uploaded_position = current_size;
 
+                // Final progress update for this chunk
                 UploadProgress {
                     progress: 1.0,
                     message: "Chunk uploaded: 100%".to_string(),
@@ -1026,11 +1081,15 @@ pub async fn start_progressive_upload(
                 .emit(&app)
                 .ok();
 
+                // Check if we've reached the end of the file by looking for the moov atom
+                // This is a good indicator that the MP4 file is complete
                 if let Ok(buffer) = tokio::fs::read(&file_path).await {
                     if buffer.len() >= 8 {
+                        // Search for 'moov' atom, which typically appears at the end of completed MP4 files
                         for i in 0..buffer.len() - 4 {
                             if &buffer[i..i + 4] == b"moov" {
                                 println!("Found moov atom, MP4 file is likely complete");
+                                // Give a little time for any last data to be written
                                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                                 upload_complete = true;
                                 break;
@@ -1039,6 +1098,7 @@ pub async fn start_progressive_upload(
                     }
                 }
 
+                // Wait before checking for more data
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             } else {
                 let status = response.status();
@@ -1051,10 +1111,12 @@ pub async fn start_progressive_upload(
                     status, error_body
                 );
 
+                // Wait longer before retrying
                 tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
             }
         }
 
+        // Send a final complete progress notification
         UploadProgress {
             progress: 1.0,
             message: "Upload complete: 100%".to_string(),
