@@ -4,15 +4,21 @@ use futures::stream;
 use image::codecs::jpeg::JpegEncoder;
 use image::ImageReader;
 use reqwest::{multipart::Form, StatusCode};
+use std::io::SeekFrom;
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
+use std::sync::Arc;
+use std::time::Duration;
+use tauri::{AppHandle, Manager, Runtime};
 use tauri_specta::Event;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio::sync::mpsc;
+use tokio::sync::RwLock;
 use tokio::task;
+use tokio::time::sleep;
 
 use crate::web_api::{self, ManagerExt};
 
-use crate::{PreCreatedVideo, UploadProgress};
+use crate::{App, MutableState, PreCreatedVideo, RecordingStopped, UploadProgress};
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -840,298 +846,745 @@ async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
     .map_err(|e| format!("Failed to compress image: {}", e))?
 }
 
-// New function to start progressive upload
+/// starts a progressive (multipart) upload that runs until recording stops
+/// and the file has stabilized (no additional data is being written).
 pub async fn start_progressive_upload(
     app: AppHandle,
     video_id: String,
     file_path: PathBuf,
     pre_created_video: PreCreatedVideo,
 ) -> tokio::task::JoinHandle<Result<(), String>> {
-    println!("Starting progressive upload for {video_id}...");
-
     tokio::spawn(async move {
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        use std::time::Duration;
+        use tokio::io::{AsyncReadExt, AsyncSeekExt};
+        use tokio::sync::mpsc;
+        use tokio::time::sleep;
 
+        // --------------------------------------------
+        // utility function to detect the "moov" atom
+        // in an MP4 file. (Moov is usually near end
+        // if faststart isn't used, but can be anywhere.)
+        // --------------------------------------------
+        async fn found_moov_atom(path: &PathBuf) -> bool {
+            const BUFFER_SIZE: usize = 1024 * 1024;
+            let mut file = match tokio::fs::File::open(path).await {
+                Ok(f) => f,
+                Err(_) => return false,
+            };
+            let file_size = file.metadata().await.map(|m| m.len()).unwrap_or(0);
+            let mut buffer = vec![0u8; BUFFER_SIZE];
+            let mut leftover = Vec::with_capacity(3);
+
+            // Often moov is near the end on "faststart" MP4 files.
+            if file_size > BUFFER_SIZE as u64 {
+                if file
+                    .seek(std::io::SeekFrom::End(-(BUFFER_SIZE as i64)))
+                    .await
+                    .is_err()
+                {
+                    let _ = file.seek(std::io::SeekFrom::Start(0)).await;
+                }
+            }
+
+            loop {
+                match file.read(&mut buffer).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let mut search_buffer = leftover.clone();
+                        search_buffer.extend_from_slice(&buffer[..n]);
+                        if search_buffer.len() >= 4 {
+                            for i in 0..(search_buffer.len() - 3) {
+                                if &search_buffer[i..i + 4] == b"moov" {
+                                    return true;
+                                }
+                            }
+                        }
+                        // Keep the last 3 bytes for boundary checks
+                        if n >= 3 {
+                            leftover = buffer[n - 3..n].to_vec();
+                        } else {
+                            leftover.clear();
+                            leftover.extend_from_slice(&buffer[..n]);
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            false
+        }
+
+        // --------------------------------------------
+        // listen for a "RecordingStopped" signal. We'll
+        // finalize only after we know there's no more
+        // incoming data from the pipeline (plus we do
+        // an extra stabilization check).
+        // --------------------------------------------
+        let (recording_end_tx, mut recording_end_rx) = mpsc::channel::<()>(1);
+        let app_clone_for_listener = app.clone();
+        let app_clone_for_closure = app_clone_for_listener.clone();
+
+        RecordingStopped::listen_any(&app_clone_for_listener, move |_| {
+            let tx = recording_end_tx.clone();
+            let event_app = app_clone_for_closure.clone();
+
+            tokio::spawn(async move {
+                let state = event_app.state::<Arc<RwLock<App>>>();
+                let app_state = state.read().await;
+                if app_state.current_recording.is_none() {
+                    // Recording truly ended
+                    let _ = tx.send(()).await;
+                }
+            });
+        });
+
+        // --------------------------------------------
+        // basic constants and info for chunk approach
+        // --------------------------------------------
         let file_name = "result.mp4";
         let client = reqwest::Client::new();
         let s3_config = pre_created_video.config;
-
         let file_key = format!("{}/{}/{}", s3_config.user_id(), s3_config.id(), file_name);
 
-        let mut upload_complete = false;
+        // a typical recommended chunk size is 5MB (AWS min part size).
+        const CHUNK_SIZE: u64 = 5 * 1024 * 1024; // 5MB
+        const MIN_PART_SIZE: u64 = 5 * 1024 * 1024; // For non-final parts
+        let mut uploaded_parts = Vec::new();
+        let mut part_number = 1;
         let mut last_uploaded_position: u64 = 0;
-        let mut consecutive_same_size = 0;
 
-        while !upload_complete {
+        let mut upload_complete = false;
+        let mut recording_stopped = false;
+
+        // derive a base URL from `pre_created_video.link`
+        let base_url_parts: Vec<&str> = pre_created_video.link.split("/s/").collect();
+        let api_base_url = if !base_url_parts.is_empty() {
+            base_url_parts[0].to_string()
+        } else {
+            pre_created_video.link.clone() // fallback
+        };
+
+        println!("Starting multipart upload for {video_id}...");
+        println!("Using API base URL: {}", api_base_url);
+
+        // --------------------------------------------
+        // wait until the file hits 5MB or more
+        // before initiating the multipart upload.
+        // --------------------------------------------
+        loop {
             if !file_path.exists() {
                 println!("File does not exist yet, waiting...");
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                sleep(Duration::from_millis(500)).await;
                 continue;
             }
-
-            let file_metadata = match tokio::fs::metadata(&file_path).await {
-                Ok(metadata) => metadata,
+            match tokio::fs::metadata(&file_path).await {
+                Ok(metadata) => {
+                    if metadata.len() < MIN_PART_SIZE {
+                        println!("Waiting for file to grow to at least 5MB before starting upload");
+                        sleep(Duration::from_millis(500)).await;
+                        continue;
+                    } else {
+                        break;
+                    }
+                }
                 Err(e) => {
                     println!("Failed to get file metadata: {}", e);
-                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                    continue;
+                    sleep(Duration::from_millis(500)).await;
                 }
-            };
-
-            let current_size = file_metadata.len();
-
-            if current_size == last_uploaded_position {
-                consecutive_same_size += 1;
-
-                if consecutive_same_size > 10 {
-                    println!("File size hasn't changed for a while, stopping progressive upload");
-                    upload_complete = true;
-                    break;
-                }
-
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                continue;
             }
+        }
 
-            consecutive_same_size = 0;
-
-            if current_size <= last_uploaded_position {
-                println!("No new data to upload");
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                continue;
+        // --------------------------------------------
+        // initiate the multipart upload
+        // --------------------------------------------
+        println!("Initiating multipart upload for {video_id}...");
+        let initiate_response = match app
+            .authed_api_request(|c| {
+                c.post(format!("{}/api/upload/multipart/initiate", api_base_url))
+                    .header("Content-Type", "application/json")
+                    .json(&serde_json::json!({
+                        "fileKey": file_key,
+                        "contentType": "video/mp4"
+                    }))
+            })
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(format!("Failed to initiate multipart upload: {}", e));
             }
+        };
 
-            if current_size < 1024 * 1024 && last_uploaded_position == 0 {
-                println!("Waiting for file to grow to at least 1MB before first upload");
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                continue;
-            }
-
-            let new_data_size = current_size - last_uploaded_position;
-
-            if new_data_size < 500 * 1024 && last_uploaded_position > 0 {
-                println!("Only {} bytes of new data, waiting for more", new_data_size);
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                continue;
-            }
-
-            println!(
-                "Uploading new data from position {} to {} ({} bytes)",
-                last_uploaded_position, current_size, new_data_size
-            );
-
-            let upload_body = S3VideoUploadBody {
-                base: S3UploadBody {
-                    user_id: s3_config.user_id().to_string(),
-                    file_key: file_key.clone(),
-                    aws_bucket: s3_config.aws_bucket().to_string(),
-                    aws_region: s3_config.aws_region().to_string(),
-                    aws_endpoint: s3_config.aws_endpoint().to_string(),
-                },
-                duration: "0.0".to_string(),
-                resolution: "1920x1080".to_string(),
-                framerate: "30".to_string(),
-                bandwidth: "2000000".to_string(),
-                video_codec: "h264".to_string(),
-            };
-
-            let (upload_url, form) = match presigned_s3_url(&app, upload_body).await {
-                Ok(result) => result,
-                Err(e) => {
-                    println!("Failed to get presigned URL: {}", e);
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                    continue;
-                }
-            };
-
-            let mut file = match tokio::fs::File::open(&file_path).await {
-                Ok(file) => file,
-                Err(e) => {
-                    println!("Failed to open file: {}", e);
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                    continue;
-                }
-            };
-
-            if let Err(e) = file
-                .seek(std::io::SeekFrom::Start(last_uploaded_position))
+        if !initiate_response.status().is_success() {
+            let status = initiate_response.status();
+            let error_body = initiate_response
+                .text()
                 .await
-            {
-                println!("Failed to seek in file: {}", e);
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                continue;
-            }
+                .unwrap_or_else(|_| "<no response body>".to_string());
+            return Err(format!(
+                "Failed to initiate multipart upload. Status: {}. Body: {}",
+                status, error_body
+            ));
+        }
 
-            let mut new_data = vec![0u8; new_data_size as usize];
-            match file.read_exact(&mut new_data).await {
-                Ok(_) => {}
-                Err(e) => {
-                    println!("Failed to read new data from file: {}", e);
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                    continue;
+        let initiate_data = match initiate_response.json::<serde_json::Value>().await {
+            Ok(d) => d,
+            Err(e) => {
+                return Err(format!("Failed to parse initiate response: {}", e));
+            }
+        };
+
+        let upload_id = match initiate_data.get("uploadId") {
+            Some(val) => val.as_str().unwrap_or("").to_string(),
+            None => {
+                return Err("No uploadId returned from initiate endpoint".to_string());
+            }
+        };
+        if upload_id.is_empty() {
+            return Err("Empty uploadId returned from initiate endpoint".to_string());
+        }
+
+        println!("Multipart upload initiated with ID: {}", upload_id);
+
+        // --------------------------------------------
+        // Main loop while upload not complete:
+        //   - If we have >= CHUNK_SIZE new data, upload.
+        //   - If recording hasn't stopped, keep waiting.
+        //   - If recording stopped, do leftover final(s).
+        // --------------------------------------------
+        while !upload_complete {
+            if !recording_stopped {
+                // Check if the recording pipeline is done
+                if let Ok(_) = recording_end_rx.try_recv() {
+                    println!("Recording end detected, will finalize soon.");
+                    recording_stopped = true;
                 }
             }
 
-            let total_size = new_data.len() as f64;
-            let new_data = std::sync::Arc::new(new_data);
+            // Check the file's current size
+            if !file_path.exists() {
+                println!("File no longer exists, aborting upload");
+                return Err("File no longer exists".to_string());
+            }
 
-            let file_part = {
-                let progress_counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-                let app_handle = app.clone();
-                let new_data = new_data.clone();
+            let file_size = match tokio::fs::metadata(&file_path).await {
+                Ok(md) => md.len(),
+                Err(e) => {
+                    println!("Failed to get file metadata: {}", e);
+                    sleep(Duration::from_millis(500)).await;
+                    continue;
+                }
+            };
 
-                let stream =
-                    stream::iter((0..new_data.len()).step_by(1024 * 1024).map(move |start| {
-                        let end = (start + 1024 * 1024).min(new_data.len());
-                        let chunk = new_data[start..end].to_vec();
+            let new_data_size = file_size.saturating_sub(last_uploaded_position);
 
-                        let current = progress_counter
-                            .fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::SeqCst)
-                            as f64;
-
-                        UploadProgress {
-                            progress: current / total_size,
-                            message: format!(
-                                "Progressive upload: {:.0}%",
-                                (current / total_size * 100.0)
-                            ),
-                        }
-                        .emit(&app_handle)
-                        .ok();
-
-                        Ok::<Vec<u8>, std::io::Error>(chunk)
-                    }));
-
-                match reqwest::multipart::Part::stream_with_length(
-                    reqwest::Body::wrap_stream(stream),
-                    total_size as u64,
+            if new_data_size >= CHUNK_SIZE {
+                // We have a full chunk to send
+                match upload_chunk(
+                    &app,
+                    &client,
+                    &file_path,
+                    &api_base_url,
+                    &file_key,
+                    &upload_id,
+                    &mut part_number,
+                    &mut last_uploaded_position,
+                    CHUNK_SIZE,
                 )
-                .file_name(file_name.to_string())
-                .mime_str("video/mp4")
+                .await
                 {
-                    Ok(part) => part,
+                    Ok(part) => {
+                        uploaded_parts.push(part);
+                    }
                     Err(e) => {
-                        println!("Error setting MIME type: {}", e);
-                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                        continue;
+                        println!(
+                            "Error uploading chunk (part {}): {}. Retrying in 1s...",
+                            part_number, e
+                        );
+                        sleep(Duration::from_secs(1)).await;
                     }
                 }
-            };
-
-            let form = form.part("file", file_part);
-
-            let mut request = client.post(upload_url).multipart(form);
-
-            let range_header = format!(
-                "bytes {}-{}/{}",
-                last_uploaded_position,
-                current_size - 1,
-                "*"
-            );
-
-            request = request.header("Content-Range", range_header);
-
-            let response = match request.send().await {
-                Ok(response) => response,
-                Err(e) => {
-                    println!("Failed to send upload request: {}", e);
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            } else {
+                // If recording is not done, keep waiting a bit
+                if !recording_stopped {
+                    sleep(Duration::from_millis(500)).await;
                     continue;
                 }
-            };
 
-            if response.status().is_success() {
-                println!("Progressive upload chunk successful");
+                // --------------------------------------------
+                // Recording has stopped. We do repeated
+                // checks to ensure the file is stable (not
+                // still growing). Then we keep uploading
+                // leftover chunks until no more data arrives.
+                // --------------------------------------------
+                let max_stabilize_attempts = 8;
+                let mut attempts = 0;
 
-                last_uploaded_position = current_size;
+                // We'll loop to catch any last bits that appear
+                // after we do a leftover chunk upload.
+                loop {
+                    // Wait for the file to stabilize
+                    println!("Waiting for file to stabilize...");
+                    let mut stable_count = 0;
+                    let stable_required = 3; // e.g. 3 consecutive stable checks
 
-                UploadProgress {
-                    progress: 1.0,
-                    message: "Chunk uploaded: 100%".to_string(),
-                }
-                .emit(&app)
-                .ok();
+                    // Keep track of last known size
+                    let mut prev_size = tokio::fs::metadata(&file_path)
+                        .await
+                        .map(|md| md.len())
+                        .unwrap_or(0);
 
-                let mut found_moov = false;
-                if let Ok(mut file) = tokio::fs::File::open(&file_path).await {
-                    const BUFFER_SIZE: usize = 1024 * 1024;
-                    let mut buffer = vec![0u8; BUFFER_SIZE];
-                    let mut leftover = Vec::with_capacity(3);
-
-                    let file_size = file.metadata().await.map(|m| m.len()).unwrap_or(0);
-                    if file_size > BUFFER_SIZE as u64 {
-                        if let Err(_) = file
-                            .seek(std::io::SeekFrom::End(-(BUFFER_SIZE as i64)))
-                            .await
-                        {
-                            let _ = file.seek(std::io::SeekFrom::Start(0)).await;
+                    while stable_count < stable_required {
+                        sleep(Duration::from_secs(1)).await;
+                        let size_now = match tokio::fs::metadata(&file_path).await {
+                            Ok(md) => md.len(),
+                            Err(_) => 0,
+                        };
+                        if size_now == prev_size {
+                            stable_count += 1;
+                        } else {
+                            stable_count = 0;
+                            prev_size = size_now;
                         }
                     }
 
-                    loop {
-                        match file.read(&mut buffer).await {
-                            Ok(0) => break,
-                            Ok(n) => {
-                                let mut search_buffer = leftover.clone();
-                                search_buffer.extend_from_slice(&buffer[..n]);
+                    // At this point, the file has stayed the same size
+                    // for ~ stable_required seconds.
+                    let final_size = prev_size;
+                    let leftover_size = final_size.saturating_sub(last_uploaded_position);
 
-                                if search_buffer.len() >= 4 {
-                                    for i in 0..search_buffer.len() - 3 {
-                                        if &search_buffer[i..i + 4] == b"moov" {
-                                            println!(
-                                                "Found moov atom, MP4 file is likely complete"
-                                            );
-                                            found_moov = true;
-                                            break;
-                                        }
-                                    }
+                    // Double-check moov if you want
+                    // let moov_found = found_moov_atom(&file_path).await;
+
+                    if leftover_size > 0 {
+                        if leftover_size >= MIN_PART_SIZE {
+                            // We still have at least 5MB leftover, treat it like a normal part:
+                            println!(
+                                "File stabilized, but leftover >= 5MB. Uploading leftover chunk of {} bytes.",
+                                leftover_size
+                            );
+                            match upload_chunk(
+                                &app,
+                                &client,
+                                &file_path,
+                                &api_base_url,
+                                &file_key,
+                                &upload_id,
+                                &mut part_number,
+                                &mut last_uploaded_position,
+                                leftover_size, // read leftover
+                            )
+                            .await
+                            {
+                                Ok(part) => {
+                                    uploaded_parts.push(part);
                                 }
-
-                                if found_moov {
-                                    break;
-                                }
-
-                                if n >= 3 {
-                                    leftover = buffer[n - 3..n].to_vec();
-                                } else {
-                                    leftover.clear();
-                                    leftover.extend_from_slice(&buffer[..n]);
+                                Err(e) => {
+                                    return Err(format!("Failed uploading leftover chunk: {}", e));
                                 }
                             }
-                            Err(_) => break,
+                        } else {
+                            // Less than 5 MB leftover -> final chunk
+                            println!(
+                                "Uploading final leftover chunk of {} bytes before completion",
+                                leftover_size
+                            );
+                            match upload_chunk(
+                                &app,
+                                &client,
+                                &file_path,
+                                &api_base_url,
+                                &file_key,
+                                &upload_id,
+                                &mut part_number,
+                                &mut last_uploaded_position,
+                                leftover_size,
+                            )
+                            .await
+                            {
+                                Ok(part) => {
+                                    uploaded_parts.push(part);
+                                    println!(
+                                        "Successfully uploaded leftover chunk, part {}",
+                                        part_number - 1
+                                    );
+                                }
+                                Err(e) => {
+                                    return Err(format!("Failed to upload leftover chunk: {}", e));
+                                }
+                            }
                         }
-                    }
 
-                    if found_moov {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                        upload_complete = true;
+                        // We just uploaded a leftover chunk, but let's see
+                        // if more data arrives. We'll try again. If no more
+                        // new data arrives, we can finalize.
+                        attempts += 1;
+                        if attempts > max_stabilize_attempts {
+                            println!("Reached maximum leftover attempts, proceeding to finalize.");
+                            break;
+                        }
+                    } else {
+                        // No leftover. We have stabilized with no new data.
+                        println!("File is stable with no leftover data, finalizing...");
+                        break;
                     }
                 }
 
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-            } else {
-                let status = response.status();
-                let error_body = response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "<no response body>".to_string());
+                // All leftover chunks are now uploaded. We finalize.
                 println!(
-                    "Failed to upload chunk. Status: {}. Body: {}",
-                    status, error_body
+                    "Completing multipart upload with {} parts",
+                    uploaded_parts.len()
                 );
+                finalize_upload(
+                    &app,
+                    &api_base_url,
+                    &file_path,
+                    &file_key,
+                    &upload_id,
+                    &uploaded_parts,
+                    &video_id,
+                )
+                .await?;
 
-                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                upload_complete = true;
             }
         }
 
-        UploadProgress {
-            progress: 1.0,
-            message: "Upload complete: 100%".to_string(),
-        }
-        .emit(&app)
-        .ok();
-
-        println!("Progressive upload complete for {video_id}");
         Ok(())
     })
+}
+
+/// Upload a single chunk from the file at `last_uploaded_position` for `chunk_size` bytes.
+/// Advances `last_uploaded_position` accordingly. Returns JSON { PartNumber, ETag, Size }.
+async fn upload_chunk(
+    app: &AppHandle,
+    client: &reqwest::Client,
+    file_path: &PathBuf,
+    api_base_url: &str,
+    file_key: &str,
+    upload_id: &str,
+    part_number: &mut i32,
+    last_uploaded_position: &mut u64,
+    chunk_size: u64,
+) -> Result<serde_json::Value, String> {
+    let file_size = match tokio::fs::metadata(file_path).await {
+        Ok(metadata) => metadata.len(),
+        Err(e) => return Err(format!("Failed to get file metadata: {}", e)),
+    };
+
+    // Check if we're at the end of the file
+    if *last_uploaded_position >= file_size {
+        return Err("No more data to read - already at end of file".to_string());
+    }
+
+    // Calculate how much we can actually read
+    let remaining = file_size - *last_uploaded_position;
+    let bytes_to_read = std::cmp::min(chunk_size, remaining);
+
+    let mut file = tokio::fs::File::open(file_path)
+        .await
+        .map_err(|e| format!("Failed to open file: {}", e))?;
+
+    // Log before seeking
+    println!(
+        "Seeking to offset {} for part {} (file size: {}, remaining: {})",
+        *last_uploaded_position, *part_number, file_size, remaining
+    );
+
+    // Seek to the position we left off
+    if let Err(e) = file
+        .seek(std::io::SeekFrom::Start(*last_uploaded_position))
+        .await
+    {
+        return Err(format!("Failed to seek in file: {}", e));
+    }
+
+    // Read exactly bytes_to_read
+    let mut chunk = vec![0u8; bytes_to_read as usize];
+    let mut total_read = 0;
+
+    while total_read < bytes_to_read as usize {
+        match file.read(&mut chunk[total_read..]).await {
+            Ok(0) => break, // EOF
+            Ok(n) => {
+                total_read += n;
+                println!(
+                    "Read {} bytes, total so far: {}/{}",
+                    n, total_read, bytes_to_read
+                );
+            }
+            Err(e) => return Err(format!("Failed to read chunk from file: {}", e)),
+        }
+    }
+
+    if total_read == 0 {
+        return Err("No data to upload for this part.".to_string());
+    }
+
+    // Truncate the buffer to the actual bytes read
+    chunk.truncate(total_read);
+
+    // Basic content‑MD5 for data integrity
+    let md5_sum = {
+        let digest = md5::compute(&chunk);
+        base64::encode(digest.0)
+    };
+
+    // Verify file position to ensure we're not experiencing file handle issues
+    let pos_after_read = file
+        .seek(std::io::SeekFrom::Current(0))
+        .await
+        .map_err(|e| format!("Failed to get current file position: {}", e))?;
+
+    let expected_pos = *last_uploaded_position + total_read as u64;
+    if pos_after_read != expected_pos {
+        println!(
+            "WARNING: File position after read ({}) doesn't match expected position ({})",
+            pos_after_read, expected_pos
+        );
+    }
+
+    let file_size = tokio::fs::metadata(file_path)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let remaining = file_size - *last_uploaded_position;
+
+    println!(
+        "File size: {}, Last uploaded: {}, Remaining: {}, chunk_size: {}, part: {}",
+        file_size, *last_uploaded_position, remaining, chunk_size, *part_number
+    );
+    println!(
+        "Uploading part {} ({} bytes), MD5: {}",
+        *part_number, total_read, md5_sum
+    );
+
+    // Request presigned URL for this part
+    let presign_response = match app
+        .authed_api_request(|c| {
+            c.post(format!(
+                "{}/api/upload/multipart/presign-part",
+                api_base_url
+            ))
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "fileKey": file_key,
+                "uploadId": upload_id,
+                "partNumber": *part_number
+            }))
+        })
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return Err(format!(
+                "Failed to request presigned URL for part {}: {}",
+                *part_number, e
+            ))
+        }
+    };
+
+    if !presign_response.status().is_success() {
+        let status = presign_response.status();
+        let error_body = presign_response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<no response body>".to_string());
+        return Err(format!(
+            "Presign-part failed for part {}: status={}, body={}",
+            *part_number, status, error_body
+        ));
+    }
+
+    let presign_data = match presign_response.json::<serde_json::Value>().await {
+        Ok(d) => d,
+        Err(e) => return Err(format!("Failed to parse presigned URL response: {}", e)),
+    };
+
+    let presigned_url = presign_data
+        .get("presignedUrl")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if presigned_url.is_empty() {
+        return Err(format!("Empty presignedUrl for part {}", *part_number));
+    }
+
+    // Upload the chunk with retry
+    let mut retry_count = 0;
+    let max_retries = 3;
+    let mut etag: Option<String> = None;
+
+    while retry_count < max_retries && etag.is_none() {
+        println!(
+            "Sending part {} (attempt {}/{}): {} bytes",
+            *part_number,
+            retry_count + 1,
+            max_retries,
+            total_read
+        );
+
+        match client
+            .put(&presigned_url)
+            .header("Content-Length", total_read.to_string())
+            .header("Connection", "keep-alive")
+            .header("Content-MD5", &md5_sum)
+            .timeout(Duration::from_secs(120))
+            .body(chunk.clone())
+            .send()
+            .await
+        {
+            Ok(upload_response) => {
+                if upload_response.status().is_success() {
+                    if let Some(etag_val) = upload_response.headers().get("ETag") {
+                        let e = etag_val
+                            .to_str()
+                            .unwrap_or("")
+                            .trim_matches('"')
+                            .to_string();
+                        println!("Received ETag {} for part {}", e, *part_number);
+                        etag = Some(e);
+                    } else {
+                        println!("No ETag in response for part {}", *part_number);
+                        retry_count += 1;
+                        sleep(Duration::from_secs(2)).await;
+                    }
+                } else {
+                    println!(
+                        "Failed part {} (status {}). Will retry if possible.",
+                        *part_number,
+                        upload_response.status()
+                    );
+                    if let Ok(body) = upload_response.text().await {
+                        println!("Error response: {}", body);
+                    }
+                    retry_count += 1;
+                    sleep(Duration::from_secs(2)).await;
+                }
+            }
+            Err(e) => {
+                println!(
+                    "Part {} upload error (attempt {}/{}): {}",
+                    *part_number,
+                    retry_count + 1,
+                    max_retries,
+                    e
+                );
+                retry_count += 1;
+                sleep(Duration::from_secs(2)).await;
+            }
+        }
+    }
+
+    let etag = match etag {
+        Some(e) => e,
+        None => {
+            return Err(format!(
+                "Failed to upload part {} after {} attempts",
+                *part_number, max_retries
+            ))
+        }
+    };
+
+    // Advance the global progress
+    *last_uploaded_position += total_read as u64;
+    println!(
+        "After upload: new last_uploaded_position is {} ({}% of file)",
+        *last_uploaded_position,
+        (*last_uploaded_position as f64 / file_size as f64 * 100.0) as u32
+    );
+
+    // Return info for final completion
+    let part_json = serde_json::json!({
+        "PartNumber": *part_number,
+        "ETag": etag,
+        "Size": total_read
+    });
+    *part_number += 1;
+    Ok(part_json)
+}
+
+/// Completes the multipart upload with the stored parts.
+/// Logs a final location if the complete call is successful.
+async fn finalize_upload(
+    app: &AppHandle,
+    api_base_url: &str,
+    file_path: &PathBuf,
+    file_key: &str,
+    upload_id: &str,
+    uploaded_parts: &[serde_json::Value],
+    video_id: &str,
+) -> Result<(), String> {
+    println!(
+        "Completing multipart upload with {} parts",
+        uploaded_parts.len()
+    );
+
+    if uploaded_parts.is_empty() {
+        return Err("No parts uploaded before finalizing.".to_string());
+    }
+
+    let mut total_bytes_in_parts = 0u64;
+    for part_val in uploaded_parts {
+        let pn = part_val["PartNumber"].as_i64().unwrap_or(0);
+        let size = part_val["Size"].as_u64().unwrap_or(0);
+        let etag = part_val["ETag"].as_str().unwrap_or("unknown");
+        total_bytes_in_parts += size;
+        println!("Part {}: {} bytes (ETag: {})", pn, size, etag);
+    }
+
+    let file_final_size = tokio::fs::metadata(file_path)
+        .await
+        .map(|md| md.len())
+        .unwrap_or(0);
+
+    println!("Sum of all parts: {} bytes", total_bytes_in_parts);
+    println!("File size on disk: {} bytes", file_final_size);
+    println!("Proceeding with multipart upload completion...");
+
+    let complete_response = match app
+        .authed_api_request(|c| {
+            c.post(format!("{}/api/upload/multipart/complete", api_base_url))
+                .header("Content-Type", "application/json")
+                .json(&serde_json::json!({
+                    "fileKey": file_key,
+                    "uploadId": upload_id,
+                    "parts": uploaded_parts
+                }))
+        })
+        .await
+    {
+        Ok(response) => response,
+        Err(e) => {
+            return Err(format!("Failed to complete multipart upload: {}", e));
+        }
+    };
+
+    if !complete_response.status().is_success() {
+        let status = complete_response.status();
+        let error_body = complete_response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<no response body>".to_string());
+        return Err(format!(
+            "Failed to complete multipart upload. Status: {}. Body: {}",
+            status, error_body
+        ));
+    }
+
+    let complete_data = match complete_response.json::<serde_json::Value>().await {
+        Ok(d) => d,
+        Err(e) => {
+            return Err(format!("Failed to parse completion response: {}", e));
+        }
+    };
+
+    if let Some(location) = complete_data.get("location") {
+        println!("Multipart upload complete. Final S3 location: {location}");
+    } else {
+        println!("Multipart upload complete. No 'location' in response.");
+    }
+
+    println!("Multipart upload complete for {video_id}.");
+    Ok(())
 }

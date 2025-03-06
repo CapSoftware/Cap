@@ -480,27 +480,26 @@ async fn handle_recording_finish(
                 // Store the link for later
                 shareable_link = Some(pre_created_video.link.clone());
 
-                // Upload the display.jpg screenshot
-                if display_screenshot.exists() {
-                    // The upload_video function handles screenshot upload, so we can pass it along
-                    match upload_video(
-                        app,
-                        pre_created_video.id.clone(),
-                        recording_dir.join("content/output.mp4"),
-                        Some(pre_created_video.config.clone()),
-                        Some(display_screenshot.clone()),
-                    )
-                    .await
-                    {
-                        Ok(_) => {
-                            println!("Final video upload with screenshot completed successfully")
-                        }
-                        Err(e) => println!("Error in final upload with screenshot: {}", e),
-                    }
-                }
+                // // Upload the display.jpg screenshot
+                // if display_screenshot.exists() {
+                //     // The upload_video function handles screenshot upload, so we can pass it along
+                //     match upload_video(
+                //         app,
+                //         pre_created_video.id.clone(),
+                //         recording_dir.join("content/output.mp4"),
+                //         Some(pre_created_video.config.clone()),
+                //         Some(display_screenshot.clone()),
+                //     )
+                //     .await
+                //     {
+                //         Ok(_) => {
+                //             println!("Final video upload with screenshot completed successfully")
+                //         }
+                //         Err(e) => println!("Error in final upload with screenshot: {}", e),
+                //     }
+                // }
 
-                // Wait a moment to ensure any in-progress upload has completed
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+=                tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
             }
 
             RecordingMetaInner::Instant(recording.meta)
