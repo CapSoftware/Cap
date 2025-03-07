@@ -81,7 +81,7 @@ export async function GET(request: NextRequest) {
   }
 
   const Bucket = await getS3Bucket(bucket);
-  const s3Client = await createS3Client(bucket);
+  const [s3Client] = await createS3Client(bucket);
 
   if (!bucket || video.awsBucket === clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET) {
     if (video.source.type === "desktopMP4") {

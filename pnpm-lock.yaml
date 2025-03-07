@@ -446,6 +446,9 @@ importers:
       '@headlessui/react':
         specifier: ^1.7.17
         version: 1.7.19(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@hono/zod-validator':
+        specifier: ^0.4.3
+        version: 0.4.3(hono@4.7.1)(zod@3.24.1)
       '@hookform/resolvers':
         specifier: ^3.3.2
         version: 3.9.0(react-hook-form@7.53.0(react@18.3.1))
@@ -524,6 +527,9 @@ importers:
       hls.js:
         specifier: ^1.5.3
         version: 1.5.15
+      hono:
+        specifier: ^4.7.1
+        version: 4.7.1
       jszip:
         specifier: ^3.10.1
         version: 3.10.1
@@ -2623,6 +2629,12 @@ packages:
       hono: '>=3.9.0'
       zod: ^3.19.1
 
+  '@hono/zod-validator@0.4.3':
+    resolution: {integrity: sha512-xIgMYXDyJ4Hj6ekm9T9Y27s080Nl9NXHcJkOvkXPhubOLj8hZkOL8pDnnXfvCf5xEE8Q4oMFenQUZZREUY2gqQ==}
+    peerDependencies:
+      hono: '>=3.9.0'
+      zod: ^3.19.1
+
   '@hookform/resolvers@3.9.0':
     resolution: {integrity: sha512-bU0Gr4EepJ/EQsH/IwEzYLsT/PEj5C0ynLQ4m+GSHS+xKH4TfSelhluTgOaoc4kA5s7eCsQbM4wvZLzELmWzUg==}
     peerDependencies:
@@ -4643,10 +4655,10 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@9.0.0-alpha.1':
-    resolution: {integrity: sha512-uIcc85jwjZNHJuUrWqs5ADB2ge+4mMTIblJf+6gvqYMMj53MyzDtpci7pkT2daKcO03n2VB6pcjW21T/LEqL3g==}
+  '@storybook/builder-vite@9.0.0-alpha.2':
+    resolution: {integrity: sha512-j+yUaBzLrssR6dPkXj/IYubFgr3JYUovW5tneiNAJigFIcH9xNQ08m4z6pYXGKUYOqcvVLm5S5o8STg/BQjZ8Q==}
     peerDependencies:
-      storybook: ^9.0.0-alpha.1
+      storybook: ^9.0.0-alpha.2
       vite: ^4.0.0 || ^5.0.0 || ^6.0.0
 
   '@storybook/core@8.3.3':
@@ -4657,10 +4669,10 @@ packages:
     peerDependencies:
       storybook: ^8.3.3
 
-  '@storybook/csf-plugin@9.0.0-alpha.1':
-    resolution: {integrity: sha512-ax1VSSbm/5k2XQWe15A4VItG5iUM85pQmRP2p4tlS76bDIOLCuHwzYKuGmb4ILOQFM3UQAH3obHFeOaKpcTuog==}
+  '@storybook/csf-plugin@9.0.0-alpha.2':
+    resolution: {integrity: sha512-AAyHIaL6NIalFKI7gBzad85jg5vZ6RBzboQXup3qxEz4d0BrPEJva9XQf63F90SP/I4kaBQA9gURXJX8ZJ86bg==}
     peerDependencies:
-      storybook: ^9.0.0-alpha.1
+      storybook: ^9.0.0-alpha.2
 
   '@storybook/csf@0.1.11':
     resolution: {integrity: sha512-dHYFQH3mA+EtnCkHXzicbLgsvzYjcDJ1JWsogbItZogkPHgSJM/Wr71uMkcvw8v9mmCyP4NpXJuu6bPoVsOnzg==}
@@ -13631,6 +13643,11 @@ snapshots:
       hono: 4.7.1
       zod: 3.24.1
 
+  '@hono/zod-validator@0.4.3(hono@4.7.1)(zod@3.24.1)':
+    dependencies:
+      hono: 4.7.1
+      zod: 3.24.1
+
   '@hookform/resolvers@3.9.0(react-hook-form@7.53.0(react@18.3.1))':
     dependencies:
       react-hook-form: 7.53.0(react@18.3.1)
@@ -15967,9 +15984,9 @@ snapshots:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
 
-  '@storybook/builder-vite@9.0.0-alpha.1(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))':
+  '@storybook/builder-vite@9.0.0-alpha.2(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))':
     dependencies:
-      '@storybook/csf-plugin': 9.0.0-alpha.1(storybook@8.3.3)
+      '@storybook/csf-plugin': 9.0.0-alpha.2(storybook@8.3.3)
       browser-assert: 1.2.1
       storybook: 8.3.3
       ts-dedent: 2.2.0
@@ -16000,7 +16017,7 @@ snapshots:
       storybook: 8.3.3
       unplugin: 1.16.1
 
-  '@storybook/csf-plugin@9.0.0-alpha.1(storybook@8.3.3)':
+  '@storybook/csf-plugin@9.0.0-alpha.2(storybook@8.3.3)':
     dependencies:
       storybook: 8.3.3
       unplugin: 1.16.1
@@ -23827,7 +23844,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.2(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0)):
     dependencies:
-      '@storybook/builder-vite': 9.0.0-alpha.1(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))
+      '@storybook/builder-vite': 9.0.0-alpha.2(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))
     transitivePeerDependencies:
       - storybook
       - vite

@@ -131,7 +131,7 @@ export async function GET(request: NextRequest) {
     .set({ transcriptionStatus: "PROCESSING" })
     .where(eq(videos.id, videoId));
 
-  const s3Client = await createS3Client(bucket);
+  const [s3Client] = await createS3Client(bucket);
 
   try {
     const videoKey = `${userId}/${videoId}/result.mp4`;

@@ -856,62 +856,8 @@ pub async fn start_progressive_upload(
 ) -> tokio::task::JoinHandle<Result<(), String>> {
     tokio::spawn(async move {
         use std::time::Duration;
-        use tokio::io::{AsyncReadExt, AsyncSeekExt};
         use tokio::sync::mpsc;
         use tokio::time::sleep;
-
-        // --------------------------------------------
-        // utility function to detect the "moov" atom
-        // in an MP4 file. (Moov is usually near end
-        // if faststart isn't used, but can be anywhere.)
-        // --------------------------------------------
-        async fn found_moov_atom(path: &PathBuf) -> bool {
-            const BUFFER_SIZE: usize = 1024 * 1024;
-            let mut file = match tokio::fs::File::open(path).await {
-                Ok(f) => f,
-                Err(_) => return false,
-            };
-            let file_size = file.metadata().await.map(|m| m.len()).unwrap_or(0);
-            let mut buffer = vec![0u8; BUFFER_SIZE];
-            let mut leftover = Vec::with_capacity(3);
-
-            // Often moov is near the end on "faststart" MP4 files.
-            if file_size > BUFFER_SIZE as u64 {
-                if file
-                    .seek(std::io::SeekFrom::End(-(BUFFER_SIZE as i64)))
-                    .await
-                    .is_err()
-                {
-                    let _ = file.seek(std::io::SeekFrom::Start(0)).await;
-                }
-            }
-
-            loop {
-                match file.read(&mut buffer).await {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let mut search_buffer = leftover.clone();
-                        search_buffer.extend_from_slice(&buffer[..n]);
-                        if search_buffer.len() >= 4 {
-                            for i in 0..(search_buffer.len() - 3) {
-                                if &search_buffer[i..i + 4] == b"moov" {
-                                    return true;
-                                }
-                            }
-                        }
-                        // Keep the last 3 bytes for boundary checks
-                        if n >= 3 {
-                            leftover = buffer[n - 3..n].to_vec();
-                        } else {
-                            leftover.clear();
-                            leftover.extend_from_slice(&buffer[..n]);
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-            false
-        }
 
         // --------------------------------------------
         // listen for a "RecordingStopped" signal. We'll
@@ -999,7 +945,7 @@ pub async fn start_progressive_upload(
         println!("Initiating multipart upload for {video_id}...");
         let initiate_response = match app
             .authed_api_request(|c| {
-                c.post(format!("{}/api/upload/multipart/initiate", api_base_url))
+                c.post(web_api::make_url("/api/upload/multipart/initiate"))
                     .header("Content-Type", "application/json")
                     .json(&serde_json::json!({
                         "fileKey": file_key,
@@ -1236,7 +1182,6 @@ pub async fn start_progressive_upload(
                 );
                 finalize_upload(
                     &app,
-                    &api_base_url,
                     &file_path,
                     &file_key,
                     &upload_id,
@@ -1265,7 +1210,7 @@ async fn upload_chunk(
     part_number: &mut i32,
     last_uploaded_position: &mut u64,
     chunk_size: u64,
-) -> Result<serde_json::Value, String> {
+) -> Result<UploadedPart, String> {
     let file_size = match tokio::fs::metadata(file_path).await {
         Ok(metadata) => metadata.len(),
         Err(e) => return Err(format!("Failed to get file metadata: {}", e)),
@@ -1494,25 +1439,31 @@ async fn upload_chunk(
         (*last_uploaded_position as f64 / file_size as f64 * 100.0) as u32
     );
 
-    // Return info for final completion
-    let part_json = serde_json::json!({
-        "PartNumber": *part_number,
-        "ETag": etag,
-        "Size": total_read
-    });
+    let part = UploadedPart {
+        part_number: *part_number,
+        etag,
+        size: total_read,
+    };
     *part_number += 1;
-    Ok(part_json)
+    Ok(part)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadedPart {
+    part_number: i32,
+    etag: String,
+    size: usize,
 }
 
 /// Completes the multipart upload with the stored parts.
 /// Logs a final location if the complete call is successful.
 async fn finalize_upload(
     app: &AppHandle,
-    api_base_url: &str,
     file_path: &PathBuf,
     file_key: &str,
     upload_id: &str,
-    uploaded_parts: &[serde_json::Value],
+    uploaded_parts: &[UploadedPart],
     video_id: &str,
 ) -> Result<(), String> {
     println!(
@@ -1524,12 +1475,12 @@ async fn finalize_upload(
         return Err("No parts uploaded before finalizing.".to_string());
     }
 
-    let mut total_bytes_in_parts = 0u64;
-    for part_val in uploaded_parts {
-        let pn = part_val["PartNumber"].as_i64().unwrap_or(0);
-        let size = part_val["Size"].as_u64().unwrap_or(0);
-        let etag = part_val["ETag"].as_str().unwrap_or("unknown");
-        total_bytes_in_parts += size;
+    let mut total_bytes_in_parts = 0;
+    for part in uploaded_parts {
+        let pn = part.part_number;
+        let size = part.size;
+        let etag = &part.etag;
+        total_bytes_in_parts += part.size;
         println!("Part {}: {} bytes (ETag: {})", pn, size, etag);
     }
 
@@ -1544,7 +1495,7 @@ async fn finalize_upload(
 
     let complete_response = match app
         .authed_api_request(|c| {
-            c.post(format!("{}/api/upload/multipart/complete", api_base_url))
+            c.post(web_api::make_url("/api/upload/multipart/complete"))
                 .header("Content-Type", "application/json")
                 .json(&serde_json::json!({
                     "fileKey": file_key,

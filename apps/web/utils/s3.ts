@@ -40,13 +40,15 @@ export async function getS3Config(config?: S3Config) {
   const endpoint = config.endpoint
     ? await tryDecrypt(config.endpoint)
     : clientEnv.NEXT_PUBLIC_CAP_AWS_ENDPOINT;
-  
-  const region = (await tryDecrypt(config.region)) ?? clientEnv.NEXT_PUBLIC_CAP_AWS_REGION;
-  
-  const finalRegion = endpoint?.includes('localhost') ? 'us-east-1' : region;
 
-  const isLocalOrMinio = endpoint?.includes('localhost') || endpoint?.includes('127.0.0.1');
-  
+  const region =
+    (await tryDecrypt(config.region)) ?? clientEnv.NEXT_PUBLIC_CAP_AWS_REGION;
+
+  const finalRegion = endpoint?.includes("localhost") ? "us-east-1" : region;
+
+  const isLocalOrMinio =
+    endpoint?.includes("localhost") || endpoint?.includes("127.0.0.1");
+
   return {
     endpoint,
     region: finalRegion,
@@ -86,10 +88,15 @@ export async function getS3Bucket(
 
 export async function createS3Client(config?: S3Config) {
   const s3Config = await getS3Config(config);
-  const isLocalOrMinio = s3Config.endpoint?.includes('localhost') || s3Config.endpoint?.includes('127.0.0.1');
-  
-  return new S3Client({
-    ...s3Config,
-    maxAttempts: isLocalOrMinio ? 5 : 3,
-  });
+  const isLocalOrMinio =
+    s3Config.endpoint?.includes("localhost") ||
+    s3Config.endpoint?.includes("127.0.0.1");
+
+  return [
+    new S3Client({
+      ...s3Config,
+      maxAttempts: isLocalOrMinio ? 5 : 3,
+    }),
+    s3Config,
+  ] as const;
 }
