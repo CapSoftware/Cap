@@ -79,6 +79,8 @@ jobs:
           echo "NEXT_PUBLIC_CAP_AWS_REGION=${{ secrets.NEXT_PUBLIC_CAP_AWS_REGION }}" >> .env
           echo "NEXT_PUBLIC_CAP_AWS_BUCKET=${{ secrets.NEXT_PUBLIC_CAP_AWS_BUCKET }}" >> .env
 
+          cat .env >> $GITHUB_ENV
+
       - name: Run setup
         run: |
           pnpm cap-setup
