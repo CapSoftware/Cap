@@ -5,6 +5,7 @@ import { comments } from "@cap/database/schema";
 import { db } from "@cap/database";
 import { rateLimitMiddleware } from "@/utils/helpers";
 import { headers } from "next/headers";
+import { clientEnv } from "@cap/env";
 
 async function handlePost(request: NextRequest) {
   const user = await getCurrentUser();
@@ -45,6 +46,26 @@ async function handlePost(request: NextRequest) {
 
     await db.insert(comments).values(newComment);
 
+    // Trigger email notification for new comment
+    if (type === "text" && userId !== "anonymous") {
+      try {
+        // Don't await this to avoid blocking the response
+        const absoluteUrl = new URL("/api/email/new-comment", clientEnv.NEXT_PUBLIC_WEB_URL).toString();
+        fetch(absoluteUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            commentId: id,
+          }),
+        });
+      } catch (error) {
+        console.error("Error triggering comment notification:", error);
+        // Don't fail the comment creation if notification fails
+      }
+    }
+
     return Response.json(
       {
         ...newComment,
@@ -68,3 +89,7 @@ export const POST = (request: NextRequest) => {
   const headersList = headers();
   return rateLimitMiddleware(10, handlePost(request), headersList);
 };
+
+export async function GET() {
+  return Response.json({ error: true }, { status: 405 });
+}
