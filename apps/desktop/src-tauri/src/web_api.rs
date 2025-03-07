@@ -5,7 +5,7 @@ use tauri_specta::Event;
 use crate::auth::{AuthStore, AuthenticationInvalid};
 
 pub fn make_url(pathname: impl AsRef<str>) -> String {
-    let server_url_base = dotenvy_macro::dotenv!("VITE_SERVER_URL");
+    let server_url_base = std::env::var("VITE_SERVER_URL").unwrap();
     format!("{server_url_base}{}", pathname.as_ref())
 }
 

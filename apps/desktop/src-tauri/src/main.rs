@@ -3,6 +3,9 @@
 
 use std::sync::Arc;
 
+use cap_desktop::DynLoggingLayer;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
+
 fn main() {
     // We have to hold onto the ClientInitGuard until the very end
     let _guard = if dotenvy_macro::dotenv!("CAP_DESKTOP_SENTRY_URL") != "" {
@@ -37,6 +40,23 @@ fn main() {
         None
     };
 
+    let (layer, handle) = tracing_subscriber::reload::Layer::new(None::<DynLoggingLayer>);
+
+    tracing_subscriber::registry()
+        // .with(tracing_subscriber::filter::filter_fn(|v| {
+        //     v.target().starts_with("cap_")
+        // }))
+        .with(layer)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(true)
+                .with_target(true)
+                .with_filter(tracing_subscriber::filter::filter_fn(|v| {
+                    v.target().starts_with("cap_")
+                })),
+        )
+        .init();
+
     #[cfg(debug_assertions)]
     sentry::configure_scope(|scope| {
         scope.set_user(Some(sentry::User {
@@ -49,5 +69,5 @@ fn main() {
         .enable_all()
         .build()
         .expect("Failed to build multi threaded tokio runtime")
-        .block_on(desktop_solid_lib::run());
+        .block_on(cap_desktop::run(handle));
 }

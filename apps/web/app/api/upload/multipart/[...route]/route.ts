@@ -11,7 +11,6 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { s3Buckets } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
-import { setCookie } from "hono/cookie";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -23,7 +22,6 @@ const app = new Hono().basePath("/api/upload/multipart").use<{
   Variables: { user: NonNullable<Awaited<ReturnType<typeof getCurrentUser>>> };
 }>(async (c, next) => {
   const token = c.req.header("authorization")?.split(" ")[1];
-  console.log({ token });
   if (token) {
     cookies().set({
       name: "next-auth.session-token",
@@ -41,7 +39,6 @@ const app = new Hono().basePath("/api/upload/multipart").use<{
   }
 
   c.set("user", user);
-  console.log({ user });
 
   await next();
 });

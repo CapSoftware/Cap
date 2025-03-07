@@ -13,7 +13,7 @@ use cap_media::{
     MediaError,
 };
 use cap_project::InstantRecordingMeta;
-use cap_utils::spawn_actor;
+use cap_utils::{ensure_dir, spawn_actor};
 use tokio::sync::oneshot;
 use tracing::{debug, error, info, instrument::WithSubscriber, trace, Instrument};
 use tracing_subscriber::{layer::SubscriberExt, Layer};
@@ -380,11 +380,6 @@ async fn stop_recording(
         },
         display_source: actor.capture_target,
     })
-}
-
-fn ensure_dir(path: &PathBuf) -> Result<PathBuf, MediaError> {
-    std::fs::create_dir_all(&path)?;
-    Ok(path.clone())
 }
 
 fn current_time_f64() -> f64 {
