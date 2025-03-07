@@ -5,7 +5,7 @@ use tauri_specta::Event;
 use crate::auth::{AuthStore, AuthenticationInvalid};
 
 pub fn make_url(pathname: impl AsRef<str>) -> String {
-    let server_url_base = std::env::var("VITE_SERVER_URL").unwrap();
+    let server_url_base = std::option_env!("VITE_SERVER_URL").unwrap_or("https://cap.so");
     format!("{server_url_base}{}", pathname.as_ref())
 }
 

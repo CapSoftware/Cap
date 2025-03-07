@@ -10,7 +10,6 @@ use cap_media::platform::Bounds;
 use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
 use cap_utils::spawn_actor;
 use device_query::{DeviceQuery, DeviceState};
-use image::GenericImageView;
 use tokio::sync::oneshot;
 use tracing::{debug, error, info};
 

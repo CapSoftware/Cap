@@ -200,17 +200,11 @@ jobs:
           echo "NEXT_PUBLIC_CAP_AWS_BUCKET=${{ secrets.NEXT_PUBLIC_CAP_AWS_BUCKET }}" >> .env
           echo 'RUST_TARGET_TRIPLE=${{ matrix.settings.target }}' >> .env
 
-      - name: Copy .env to apps/desktop
-        run: cp .env apps/desktop/.env
-
-      - name: Output .env file
-        run: cat apps/desktop/.env
-
       - name: Build app
         working-directory: apps/desktop
         run: |
           pnpm -w cap-setup
-          pnpm tauri build --target ${{ matrix.settings.target }} --config src-tauri/tauri.prod.conf.json
+          pnpm build:tauri --target ${{ matrix.settings.target }} --config src-tauri/tauri.prod.conf.json
         env:
           # https://github.com/tauri-apps/tauri-action/issues/740
           CI: false
