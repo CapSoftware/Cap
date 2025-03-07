@@ -8,6 +8,7 @@ edition = "2021"
 cap-media = { path = "../media" }
 cap-project = { path = "../project" }
 cap-rendering = { path = "../rendering" }
+cap-audio = { path = "../audio" }
 
 tokio = { workspace = true, features = ["macros", "process", "fs"] }
 cpal.workspace = true

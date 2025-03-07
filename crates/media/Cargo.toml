@@ -13,6 +13,7 @@ debug-logging = [] # Feature flag to control debug logging
 cap-project = { path = "../project" }
 cap-flags = { path = "../flags" }
 cap-gpu-converters = { path = "../gpu-converters" }
+cap-audio = { path = "../audio" }
 cpal.workspace = true
 ffmpeg.workspace = true
 ffmpeg-sys-next.workspace = true

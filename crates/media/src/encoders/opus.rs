@@ -8,7 +8,7 @@ use ffmpeg::{
 };
 
 use crate::{
-    data::{AudioInfo, FFAudio, FFRational},
+    data::{cast_bytes_to_f32_slice, AudioInfo, FFAudio, FFRational},
     pipeline::task::PipelineSinkTask,
     MediaError,
 };
@@ -161,11 +161,8 @@ impl OpusEncoder {
         if let Some(resampler) = &mut self.resampler {
             resampler.run(&frame, &mut self.resampled_frame).unwrap();
 
-            self.buffer.extend(
-                &self.resampled_frame.data(0)[0..self.resampled_frame.samples()
-                    * self.resampled_frame.channels() as usize
-                    * self.resampled_frame.format().bytes()],
-            );
+            self.buffer
+                .extend(&self.resampled_frame.data(0)[0..frame_size_bytes(&self.resampled_frame)]);
 
             loop {
                 let frame_size_bytes = self.encoder.frame_size() as usize
@@ -189,8 +186,30 @@ impl OpusEncoder {
                 self.process_packets(output);
             }
         } else {
-            self.encoder.send_frame(&frame).unwrap();
-            self.process_packets(output);
+            self.buffer
+                .extend(&frame.data(0)[0..frame_size_bytes(&frame)]);
+
+            loop {
+                let frame_size_bytes = self.encoder.frame_size() as usize
+                    * self.encoder.channels() as usize
+                    * self.encoder.format().bytes();
+                if self.buffer.len() < frame_size_bytes {
+                    break;
+                }
+
+                let bytes = self.buffer.drain(0..frame_size_bytes).collect::<Vec<_>>();
+                let mut frame = FFAudio::new(
+                    self.encoder.format(),
+                    self.encoder.frame_size() as usize,
+                    self.encoder.channel_layout(),
+                );
+
+                frame.data_mut(0)[0..frame_size_bytes].copy_from_slice(&bytes);
+
+                self.encoder.send_frame(&frame).unwrap();
+
+                self.process_packets(output);
+            }
         }
     }
 
@@ -286,4 +305,8 @@ impl PipelineSinkTask<FFAudio> for OggFile {
     fn finish(&mut self) {
         self.finish();
     }
+}
+
+fn frame_size_bytes(frame: &FFAudio) -> usize {
+    frame.samples() * frame.format().bytes() * frame.channels() as usize
 }

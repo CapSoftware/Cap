@@ -17,8 +17,11 @@ pub struct RecordStart {
     /// ID of the microphone to record
     #[arg(long)]
     mic: Option<u32>,
+    /// Whether to capture system audio
     #[arg(long)]
+    system_audio: bool,
     /// Path to save the '.cap' project to
+    #[arg(long)]
     path: Option<PathBuf>,
     /// Maximum fps to record at (max 60)
     #[arg(long)]
@@ -77,7 +80,7 @@ impl RecordStart {
                 camera_label: camera.as_ref().map(|c| c.camera_info.human_name()),
                 audio_input_name: None,
                 mode: RecordingMode::Studio,
-                capture_system_audio: false,
+                capture_system_audio: self.system_audio,
             },
             camera.map(|c| Arc::new(Mutex::new(c))),
             None,

@@ -1002,6 +1002,7 @@ name = "cap-editor"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "cap-audio",
  "cap-media",
  "cap-project",
  "cap-rendering",
@@ -1062,6 +1063,7 @@ name = "cap-media"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "cap-audio",
  "cap-fail",
  "cap-flags",
  "cap-gpu-converters",

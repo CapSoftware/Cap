@@ -1,8 +1,9 @@
 use crate::editor;
 use crate::playback::{self, PlaybackHandle};
+use cap_audio::AudioData;
 use cap_media::data::RawVideoFormat;
 use cap_media::data::VideoInfo;
-use cap_media::feeds::AudioData;
+// use cap_media::feeds::AudioData;
 use cap_media::frame_ws::create_frame_ws;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, XY};
 use cap_project::{RecordingConfig, StudioRecordingMeta};
@@ -191,12 +192,7 @@ impl EditorInstance {
         (self.on_state_change)(&state);
     }
 
-    pub async fn start_playback(
-        self: &Arc<Self>,
-        fps: u32,
-        resolution_base: XY<u32>,
-        is_upgraded: bool,
-    ) {
+    pub async fn start_playback(self: &Arc<Self>, fps: u32, resolution_base: XY<u32>) {
         let (mut handle, prev) = {
             let Ok(mut state) = self.state.try_lock() else {
                 return;
@@ -211,7 +207,7 @@ impl EditorInstance {
                 start_frame_number,
                 project: self.project_config.0.subscribe(),
             }
-            .start(fps, resolution_base, is_upgraded)
+            .start(fps, resolution_base)
             .await;
 
             let prev = state.playback_task.replace(playback_handle.clone());
@@ -276,17 +272,13 @@ impl EditorInstance {
                     self.renderer
                         .render_frame(
                             segment_frames,
-                            project.background.source.clone(),
                             ProjectUniforms::new(
                                 &self.render_constants,
                                 &project,
                                 frame_number,
                                 fps,
                                 resolution_base,
-                                get_is_upgraded(),
-                                &segment.cursor,
                             ),
-                            resolution_base,
                             segment.cursor.clone(),
                         )
                         .await;
@@ -344,9 +336,15 @@ pub async fn create_segments(
 ) -> Result<Vec<Segment>, String> {
     match &meta {
         cap_project::StudioRecordingMeta::SingleSegment { segment: s } => {
-            let audio = s.audio.as_ref().map(|audio_meta| {
-                Arc::new(AudioData::from_file(recording_meta.path(&audio_meta.path)).unwrap())
-            });
+            let audio = s
+                .audio
+                .as_ref()
+                .map(|audio_meta| {
+                    AudioData::from_file(recording_meta.path(&audio_meta.path))
+                        .map_err(|e| format!("SingleSegment Audio / {e}"))
+                })
+                .transpose()?
+                .map(Arc::new);
 
             let decoders = RecordingSegmentDecoders::new(
                 &recording_meta,
@@ -357,7 +355,7 @@ pub async fn create_segments(
                 },
             )
             .await
-            .map_err(|e| format!("SingleSegment:{e}"))?;
+            .map_err(|e| format!("SingleSegment / {e}"))?;
 
             Ok(vec![Segment {
                 audio,
@@ -370,13 +368,25 @@ pub async fn create_segments(
             let mut segments = vec![];
 
             for (i, s) in inner.segments.iter().enumerate() {
-                let audio = s.audio.as_ref().map(|audio| {
-                    Arc::new(AudioData::from_file(recording_meta.path(&audio.path)).unwrap())
-                });
+                let audio = s
+                    .audio
+                    .as_ref()
+                    .map(|audio| {
+                        AudioData::from_file(recording_meta.path(&audio.path))
+                            .map_err(|e| format!("MultipleSegments {i} Audio / {e}"))
+                    })
+                    .transpose()?
+                    .map(Arc::new);
 
-                let system_audio = s.system_audio.as_ref().map(|audio| {
-                    Arc::new(AudioData::from_file(recording_meta.path(&audio.path)).unwrap())
-                });
+                let system_audio = s
+                    .system_audio
+                    .as_ref()
+                    .map(|audio| {
+                        AudioData::from_file(recording_meta.path(&audio.path))
+                            .map_err(|e| format!("MultipleSegments {i} System Audio / {e}"))
+                    })
+                    .transpose()?
+                    .map(Arc::new);
 
                 let cursor = Arc::new(s.cursor_events(&recording_meta));
 
@@ -389,7 +399,7 @@ pub async fn create_segments(
                     },
                 )
                 .await
-                .map_err(|e| format!("MultipleSegments/{i}:{e}"))?;
+                .map_err(|e| format!("MultipleSegments {i} / {e}"))?;
 
                 segments.push(Segment {
                     audio,
@@ -402,17 +412,4 @@ pub async fn create_segments(
             Ok(segments)
         }
     }
-}
-
-fn create_preview_config(recording_config: &RecordingConfig, meta: &RecordingMeta) -> VideoInfo {
-    let (width, height) = if recording_config.resolution.width > 1280 {
-        (1280, 720)
-    } else {
-        (
-            recording_config.resolution.width,
-            recording_config.resolution.height,
-        )
-    };
-
-    VideoInfo::from_raw(RawVideoFormat::Rgba, width, height, 30)
 }

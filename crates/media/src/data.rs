@@ -181,9 +181,7 @@ impl AudioInfo {
 
         match self.channels {
             0 => unreachable!(),
-            1 | _ if frame.is_packed() => {
-                frame.plane_data_mut(0)[0..data.len()].copy_from_slice(data)
-            }
+            1 | _ if frame.is_packed() => frame.data_mut(0)[0..data.len()].copy_from_slice(data),
             // cpal *always* returns interleaved data (i.e. the first sample from every channel, followed
             // by the second sample from every channel, et cetera). Many audio codecs work better/primarily
             // with planar data, so we de-interleave it here if there is more than one channel.

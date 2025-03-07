@@ -886,22 +886,11 @@ impl EditorStateChanged {
 #[tauri::command]
 #[specta::specta]
 async fn start_playback(
-    app: AppHandle,
     editor_instance: WindowEditorInstance,
     fps: u32,
     resolution_base: XY<u32>,
 ) -> Result<(), String> {
-    editor_instance
-        .start_playback(
-            fps,
-            resolution_base,
-            AuthStore::get(&app)
-                .ok()
-                .flatten()
-                .map(|s| s.is_upgraded())
-                .unwrap_or(false),
-        )
-        .await;
+    editor_instance.start_playback(fps, resolution_base).await;
 
     Ok(())
 }

@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use cap_media::data::{AudioInfo, AudioInfoError, FromSampleBytes};
-use cap_media::feeds::{AudioData, AudioPlaybackBuffer};
+use cap_media::feeds::{AudioPlaybackBuffer, AudioTrack};
 use cap_project::{ProjectConfiguration, XY};
 use cap_rendering::{ProjectUniforms, RenderVideoConstants};
 use cpal::{
@@ -35,12 +35,7 @@ pub struct PlaybackHandle {
 }
 
 impl Playback {
-    pub async fn start(
-        self,
-        fps: u32,
-        resolution_base: XY<u32>,
-        is_upgraded: bool,
-    ) -> PlaybackHandle {
+    pub async fn start(self, fps: u32, resolution_base: XY<u32>) -> PlaybackHandle {
         let (stop_tx, mut stop_rx) = watch::channel(false);
         stop_rx.borrow_and_update();
 
@@ -67,8 +62,13 @@ impl Playback {
                     segments: self
                         .segments
                         .iter()
-                        .map(|s| s.audio.as_ref().unwrap().as_ref().clone())
-                        .collect(),
+                        .map(|s| {
+                            [s.audio.clone(), s.system_audio.clone()]
+                                .into_iter()
+                                .flatten()
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>(),
                     stop_rx: stop_rx.clone(),
                     start_frame_number: self.start_frame_number,
                     project: self.project.clone(),
@@ -91,36 +91,23 @@ impl Playback {
                 if let Some((segment_time, segment_i)) = project.get_segment_time(time) {
                     let segment = &self.segments[segment_i as usize];
 
-                    tokio::select! {
-                        _ = stop_rx.changed() => {
-                           break;
-                        },
-                        data = segment.decoders.get_frames(segment_time as f32, !project.camera.hide) => {
-                            if let Some(segment_frames) = data {
-                                let uniforms = ProjectUniforms::new(
-                                    &self.render_constants,
-                                    &project,
-                                    frame_number,
-                                    fps,
-                                    resolution_base,
-                                    is_upgraded,
-                                    &segment.cursor
-                                );
+                    let data = tokio::select! {
+                        _ = stop_rx.changed() => { break; },
+                        data = segment.decoders.get_frames(segment_time as f32, !project.camera.hide) => { data }
+                    };
 
-                                self
-                                    .renderer
-                                    .render_frame(
-                                        segment_frames,
-                                        project.background.source.clone(),
-                                        uniforms,
-                                        resolution_base,
-                                        segment.cursor.clone()
-                                    )
-                                    .await;
-                            }
-                        }
-                        else => {
-                        }
+                    if let Some(segment_frames) = data {
+                        let uniforms = ProjectUniforms::new(
+                            &self.render_constants,
+                            &project,
+                            frame_number,
+                            fps,
+                            resolution_base,
+                        );
+
+                        self.renderer
+                            .render_frame(segment_frames, uniforms, segment.cursor.clone())
+                            .await;
                     }
                 }
 
@@ -155,7 +142,7 @@ impl PlaybackHandle {
 }
 
 struct AudioPlayback {
-    segments: Vec<AudioData>,
+    segments: Vec<AudioTrack>,
     stop_rx: watch::Receiver<bool>,
     start_frame_number: u32,
     project: watch::Receiver<ProjectConfiguration>,

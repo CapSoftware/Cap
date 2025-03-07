@@ -3,6 +3,7 @@ name = "cap-audio"
 version = "0.1.0"
 edition = "2021"
 
+
 [dependencies]
 ffmpeg = { workspace = true }
 cpal = { workspace = true }
