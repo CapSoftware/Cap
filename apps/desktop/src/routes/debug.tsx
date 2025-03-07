@@ -12,7 +12,6 @@ export default function Debug() {
 
   return (
     <main class="w-full h-full bg-gray-100 text-[--text-primary] p-4">
-<<<<<<< HEAD
       <h2 class="text-2xl font-bold">Debug Windows</h2>
       <div class="p-2 mb-4">
         <button
@@ -23,8 +22,6 @@ export default function Debug() {
         </button>
       </div>
 
-=======
->>>>>>> aee39a6c (fail injection (#344))
       <h2 class="text-2xl font-bold">Fail Points</h2>
       <ul class="p-2">
         <For each={orderedFails()}>
