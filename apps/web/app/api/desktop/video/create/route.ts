@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { db } from "@cap/database";
-import { s3Buckets, videos, users, emailNotifications } from "@cap/database/schema";
+import { s3Buckets, videos, users } from "@cap/database/schema";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { cookies } from "next/headers";
@@ -206,49 +206,26 @@ export async function GET(req: NextRequest) {
       .where(eq(videos.ownerId, user.id));
 
     if (videoCount && videoCount[0] && videoCount[0].count === 1 && user.email) {
-      // Check if we've already sent this email
-      const existingNotifications = await db
-        .select({ id: emailNotifications.id })
-        .from(emailNotifications)
-        .where(
-          and(
-            eq(emailNotifications.userId, user.id),
-            eq(emailNotifications.type, "first_shareable_link")
-          )
-        )
-        .limit(1);
+      console.log("[SendFirstShareableLinkEmail] Sending first shareable link email with 5-minute delay");
 
-      // If we've already sent this email, don't send it again
-      if (!existingNotifications || existingNotifications.length === 0) {
-        console.log("[SendFirstShareableLinkEmail] Sending first shareable link email with 5-minute delay");
+      const videoUrl = clientEnv.NEXT_PUBLIC_IS_CAP
+        ? `https://cap.link/${id}`
+        : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${id}`;
 
-        const videoUrl = clientEnv.NEXT_PUBLIC_IS_CAP
-          ? `https://cap.link/${id}`
-          : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${id}`;
-
-        // Record that we're sending this email
-        const shortId = nanoId().substring(0, 15);
-        await db.insert(emailNotifications).values({
-          id: shortId,
-          userId: user.id,
-          type: "first_shareable_link",
-        });
-
-        // Send email with 5-minute delay using Resend's scheduling feature
-        await sendEmail({
+      // Send email with 5-minute delay using Resend's scheduling feature
+      await sendEmail({
+        email: user.email,
+        subject: "You created your first Cap! 🥳",
+        react: FirstShareableLink({
           email: user.email,
-          subject: "You created your first Cap! 🥳",
-          react: FirstShareableLink({
-            email: user.email,
-            url: videoUrl,
-            videoName: videoData.name,
-          }),
-          marketing: true,
-          scheduledAt: "in 5 min"
-        });
+          url: videoUrl,
+          videoName: videoData.name,
+        }),
+        marketing: true,
+        scheduledAt: "in 5 min"
+      });
 
-        console.log("[SendFirstShareableLinkEmail] First shareable link email scheduled to be sent in 5 minutes");
-      }
+      console.log("[SendFirstShareableLinkEmail] First shareable link email scheduled to be sent in 5 minutes");
     }
   } catch (error) {
     console.error("Error checking for first video or sending email:", error);
