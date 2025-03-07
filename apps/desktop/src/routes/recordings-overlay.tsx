@@ -813,6 +813,9 @@ function createRecordingMutations(
           case "UpgradeRequired":
             onEvent("upgradeRequired");
             return;
+          case "ShareableLinkLimitReached":
+            onEvent("upgradeRequired");
+            return;
           default:
             break;
         }

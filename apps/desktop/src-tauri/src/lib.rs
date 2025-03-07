@@ -117,6 +117,7 @@ pub enum UploadResult {
     NotAuthenticated,
     PlanCheckFailed,
     UpgradeRequired,
+    ShareableLinkLimitReached,
 }
 
 #[derive(Serialize, Deserialize, specta::Type, Debug)]
@@ -1253,7 +1254,21 @@ async fn upload_exported_video(
 
         get_s3_config(&app, false, video_id).await
     }
-    .await?;
+    .await;
+
+    // Handle specific errors that we know about
+    if let Err(err) = s3_config.as_ref() {
+        if err == "shareable_link_limit_reached" {
+            ShowCapWindow::Upgrade.show(&app).ok();
+            return Ok(UploadResult::ShareableLinkLimitReached);
+        } else if err == "upgrade_required" {
+            ShowCapWindow::Upgrade.show(&app).ok();
+            return Ok(UploadResult::UpgradeRequired);
+        }
+    }
+
+    // Propagate any other errors
+    let s3_config = s3_config?;
 
     match upload_video(
         &app,

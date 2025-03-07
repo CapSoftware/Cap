@@ -1,5 +1,6 @@
 use std::{path::PathBuf, sync::Arc};
 
+use crate::web_api::ManagerExt;
 use crate::{
     audio::AppSounds,
     auth::AuthStore,
@@ -35,7 +36,7 @@ use clipboard_rs::{Clipboard, ClipboardContext};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_specta::Event;
-use tracing::info;
+use tracing::{error, info};
 
 pub enum RecordingActor {
     Instant(InstantRecordingHandle),
@@ -149,7 +150,30 @@ pub async fn start_recording(
     match recording_options.mode {
         RecordingMode::Instant => {
             match AuthStore::get(&app) {
-                Ok(Some(_)) => {
+                Ok(Some(auth)) => {
+                    // Check if user is on pro plan
+                    let is_pro = auth.plan.map(|p| p.upgraded).unwrap_or(false);
+
+                    if !is_pro {
+                        // For free users, check if they've reached their video limit
+                        let check_url = web_api::make_url("/api/desktop/video/check-limit");
+                        let response =
+                            match app.authed_api_request(|client| client.get(check_url)).await {
+                                Ok(response) => response,
+                                Err(e) => {
+                                    error!("Failed to check video limit: {}", e);
+                                    ShowCapWindow::Upgrade.show(&app).ok();
+                                    return Err("Failed to check video limit".to_string());
+                                }
+                            };
+
+                        if response.status() == 403 {
+                            // User has reached their limit
+                            ShowCapWindow::Upgrade.show(&app).ok();
+                            return Err("You've reached the maximum number of shareable links for the free plan. Please upgrade to create more.".to_string());
+                        }
+                    }
+
                     // Pre-create the video and get the shareable link
                     if let Ok(s3_config) = get_s3_config(&app, false, None).await {
                         let link = web_api::make_url(format!("/s/{}", s3_config.id()));

@@ -595,10 +595,16 @@ function ShareButton(props: {
         if (result === "NotAuthenticated") {
           await commands.showWindow("SignIn");
           throw new Error("You need to sign in to share recordings");
-        } else if (result === "PlanCheckFailed")
+        } else if (result === "PlanCheckFailed") {
           throw new Error("Failed to verify your subscription status");
-        else if (result === "UpgradeRequired")
+        } else if (result === "UpgradeRequired") {
           throw new Error("This feature requires an upgraded plan");
+        } else if (result === "ShareableLinkLimitReached") {
+          await commands.showWindow("Upgrade");
+          throw new Error(
+            "Free users are limited to 2 shareable links. Upgrade to Pro for unlimited links."
+          );
+        }
 
         setUploadState({ type: "link-copied" });
 

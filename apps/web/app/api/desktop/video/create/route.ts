@@ -5,9 +5,10 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { cookies } from "next/headers";
 import { dub } from "@/utils/dub";
-import { eq } from "drizzle-orm";
+import { count, eq } from "drizzle-orm";
 import { getS3Bucket, getS3Config } from "@/utils/s3";
 import { clientEnv, NODE_ENV } from "@cap/env";
+import { isUserOnProPlan } from "@cap/utils";
 
 const allowedOrigins = [
   clientEnv.NEXT_PUBLIC_WEB_URL,
@@ -80,7 +81,6 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  // Check if user is on free plan and video is over 5 minutes
   const isUpgraded = user.stripeSubscriptionStatus === "active";
 
   if (!isUpgraded && duration && duration > 300) {
@@ -98,6 +98,35 @@ export async function GET(req: NextRequest) {
         "Access-Control-Allow-Headers": "Authorization, sentry-trace, baggage",
       },
     });
+  }
+
+  // Check if free user has reached the limit of 2 shareable links
+  const isProUser = isUserOnProPlan({
+    subscriptionStatus: user.stripeSubscriptionStatus as string,
+  });
+
+  if (!isProUser) {
+    const videoCount = await db
+      .select({ count: count() })
+      .from(videos)
+      .where(eq(videos.ownerId, user.id));
+
+    if (videoCount[0] && videoCount[0].count >= 2) {
+      return new Response(JSON.stringify({ error: "shareable_link_limit_reached" }), {
+        status: 403,
+        headers: {
+          "Access-Control-Allow-Origin":
+            origin && allowedOrigins.includes(origin)
+              ? origin
+              : allowedOrigins.includes(originalOrigin)
+              ? originalOrigin
+              : "null",
+          "Access-Control-Allow-Credentials": "true",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Access-Control-Allow-Headers": "Authorization, sentry-trace, baggage",
+        },
+      });
+    }
   }
 
   const recordingMode: "hls" | "desktopMP4" | null = params.get(

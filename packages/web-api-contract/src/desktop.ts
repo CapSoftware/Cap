@@ -59,6 +59,14 @@ const protectedContract = c.router(
         }),
       },
     },
+    checkVideoLimit: {
+      method: "GET",
+      path: "/desktop/video/check-limit",
+      responses: {
+        200: z.object({ success: z.boolean() }),
+        403: z.object({ error: z.string() }),
+      },
+    },
     getS3Config: {
       method: "GET",
       path: "/desktop/s3/config/get",

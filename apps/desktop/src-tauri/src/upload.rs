@@ -511,6 +511,26 @@ pub async fn get_s3_config(
         return Err("Failed to authenticate request; please log in again".into());
     }
 
+    if response.status() == StatusCode::FORBIDDEN {
+        let response_text = response
+            .text()
+            .await
+            .map_err(|e| format!("Failed to read response body: {}", e))?;
+
+        let error_data: serde_json::Value = serde_json::from_str(&response_text)
+            .map_err(|e| format!("Failed to parse error response: {}", e))?;
+
+        if let Some(error) = error_data.get("error").and_then(|e| e.as_str()) {
+            if error == "shareable_link_limit_reached" {
+                return Err("shareable_link_limit_reached".into());
+            } else if error == "upgrade_required" {
+                return Err("upgrade_required".into());
+            }
+        }
+
+        return Err(format!("Forbidden: {}", response_text));
+    }
+
     let response_text = response
         .text()
         .await
