@@ -10,6 +10,8 @@ type SharedContext = {
   activeSpace: Space | null;
   user: typeof users.$inferSelect;
   isSubscribed: boolean;
+  isSuperAdmin: boolean;
+  isCapCloud: boolean;
 };
 
 const Context = createContext<SharedContext>({} as SharedContext);
@@ -20,15 +22,28 @@ export default function DynamicSharedLayout({
   activeSpace,
   user,
   isSubscribed,
+  isSuperAdmin,
+  isCapCloud,
 }: {
   children: React.ReactNode;
   spaceData: SharedContext["spaceData"];
   activeSpace: SharedContext["activeSpace"];
   user: SharedContext["user"];
   isSubscribed: SharedContext["isSubscribed"];
+  isSuperAdmin: SharedContext["isSuperAdmin"];
+  isCapCloud: SharedContext["isCapCloud"];
 }) {
   return (
-    <Context.Provider value={{ spaceData, activeSpace, user, isSubscribed }}>
+    <Context.Provider
+      value={{
+        spaceData,
+        activeSpace,
+        user,
+        isSubscribed,
+        isSuperAdmin,
+        isCapCloud,
+      }}
+    >
       <div className="dashboard-layout h-screen min-h-full flex">
         <AdminDesktopNav />
         <div className="flex-1 overflow-auto focus:outline-none">

@@ -10,6 +10,11 @@ import {
   users,
 } from "@cap/database/schema";
 import { eq, inArray, or, and, count, sql } from "drizzle-orm";
+import {
+  addServerSuperAdmin,
+  getIsUserPro,
+  getServerConfig,
+} from "@/utils/instance/functions";
 
 export type Space = {
   space: typeof spaces.$inferSelect;
@@ -128,10 +133,15 @@ export default async function DashboardLayout({
     findActiveSpace = spaceSelect[0];
   }
 
-  const isSubscribed =
-    (user.stripeSubscriptionId &&
-      user.stripeSubscriptionStatus !== "cancelled") ||
-    !!user.thirdPartyStripeSubscriptionId;
+  const isSubscribed = await getIsUserPro({ userId: user.id });
+
+  const serverConfig = await getServerConfig();
+  let serverSuperAdminIds = serverConfig?.superAdminIds;
+  if (!serverSuperAdminIds || serverSuperAdminIds.length === 0) {
+    await addServerSuperAdmin({ userId: user.id });
+    serverSuperAdminIds = [user.id];
+  }
+  const isSuperAdmin = serverSuperAdminIds.includes(user.id);
 
   return (
     <DynamicSharedLayout
@@ -139,6 +149,8 @@ export default async function DashboardLayout({
       activeSpace={findActiveSpace || null}
       user={user}
       isSubscribed={isSubscribed}
+      isSuperAdmin={isSuperAdmin}
+      isCapCloud={serverConfig?.isCapCloud}
     >
       <div className="full-layout">
         <DashboardTemplate>{children}</DashboardTemplate>

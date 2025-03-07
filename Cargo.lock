@@ -918,14 +918,13 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop"
-version = "0.3.29"
+version = "0.3.23"
 dependencies = [
  "anyhow",
  "axum",
  "base64 0.22.1",
  "cap-editor",
  "cap-export",
- "cap-fail",
  "cap-flags",
  "cap-media",
  "cap-project",
@@ -986,7 +985,6 @@ dependencies = [
  "tauri-specta",
  "tempfile",
  "tokio",
- "tokio-stream",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -1034,13 +1032,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cap-fail"
-version = "0.1.0"
-dependencies = [
- "inventory",
-]
-
-[[package]]
 name = "cap-flags"
 version = "0.1.0"
 dependencies = [
@@ -1060,7 +1051,6 @@ name = "cap-media"
 version = "0.1.0"
 dependencies = [
  "axum",
- "cap-fail",
  "cap-flags",
  "cap-gpu-converters",
  "cap-project",
@@ -1117,11 +1107,9 @@ dependencies = [
  "device_query",
  "either",
  "flume 0.11.0",
- "futures",
  "image 0.25.5",
  "objc",
  "relative-path",
- "screencapturekit",
  "serde",
  "serde_json",
  "specta",
@@ -1142,6 +1130,7 @@ dependencies = [
  "bytemuck",
  "cap-flags",
  "cap-project",
+ "cap-recording",
  "cidre",
  "ffmpeg-hw-device",
  "ffmpeg-next",
@@ -1173,14 +1162,6 @@ dependencies = [
  "uuid",
  "windows 0.58.0",
  "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "cap-video-decode"
-version = "0.1.0"
-dependencies = [
- "ffmpeg-next",
- "ffmpeg-sys-next",
 ]
 
 [[package]]
@@ -1313,8 +1294,8 @@ dependencies = [
 
 [[package]]
 name = "cidre"
-version = "0.6.0"
-source = "git+https://github.com/yury/cidre?rev=ef04aaabe14ffbbce4a330973a74b6d797d073ff#ef04aaabe14ffbbce4a330973a74b6d797d073ff"
+version = "0.5.0"
+source = "git+https://github.com/yury/cidre?rev=3479c18b9ac81dbb15d0acb3a75edd6b42d044b1#3479c18b9ac81dbb15d0acb3a75edd6b42d044b1"
 dependencies = [
  "cidre-macros",
  "parking_lot",
@@ -1324,7 +1305,7 @@ dependencies = [
 [[package]]
 name = "cidre-macros"
 version = "0.1.0"
-source = "git+https://github.com/yury/cidre?rev=ef04aaabe14ffbbce4a330973a74b6d797d073ff#ef04aaabe14ffbbce4a330973a74b6d797d073ff"
+source = "git+https://github.com/yury/cidre?rev=3479c18b9ac81dbb15d0acb3a75edd6b42d044b1#3479c18b9ac81dbb15d0acb3a75edd6b42d044b1"
 
 [[package]]
 name = "clang-sys"
@@ -3627,15 +3608,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "inventory"
-version = "0.3.19"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "54b12ebb6799019b044deaf431eadfe23245b259bba5a2c0796acec3943a3cdb"
-dependencies = [
- "rustversion",
-]
-
-[[package]]
 name = "ipnet"
 version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4420,7 +4392,7 @@ checksum = "72ef4a56884ca558e5ddb05a1d1e7e1bfd9a68d9ed024c21704cc98872dae1bb"
 [[package]]
 name = "nokhwa"
 version = "0.10.3"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=e309b938ccd6#e309b938ccd6d17afac4017b11e7bda9f6cd9f35"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=d37141b1883d#d37141b1883d7250f7d2ccc9bc199ecaee48d51b"
 dependencies = [
  "flume 0.10.14",
  "image 0.24.9",
@@ -4436,7 +4408,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-bindings-linux"
 version = "0.1.0"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=e309b938ccd6#e309b938ccd6d17afac4017b11e7bda9f6cd9f35"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=d37141b1883d#d37141b1883d7250f7d2ccc9bc199ecaee48d51b"
 dependencies = [
  "nokhwa-core",
  "v4l",
@@ -4446,7 +4418,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-bindings-macos"
 version = "0.2.0"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=e309b938ccd6#e309b938ccd6d17afac4017b11e7bda9f6cd9f35"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=d37141b1883d#d37141b1883d7250f7d2ccc9bc199ecaee48d51b"
 dependencies = [
  "block",
  "cocoa-foundation 0.1.2",
@@ -4461,7 +4433,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-bindings-windows"
 version = "0.4.0"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=e309b938ccd6#e309b938ccd6d17afac4017b11e7bda9f6cd9f35"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=d37141b1883d#d37141b1883d7250f7d2ccc9bc199ecaee48d51b"
 dependencies = [
  "nokhwa-core",
  "once_cell",
@@ -4471,7 +4443,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-core"
 version = "0.1.0"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=e309b938ccd6#e309b938ccd6d17afac4017b11e7bda9f6cd9f35"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=d37141b1883d#d37141b1883d7250f7d2ccc9bc199ecaee48d51b"
 dependencies = [
  "bytes",
  "image 0.24.9",
@@ -6824,7 +6796,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ccbb212565d2dc177bc15ecb7b039d66c4490da892436a4eee5b394d620c9bc"
 dependencies = [
  "paste",
- "serde_json",
  "specta-macros",
  "thiserror 1.0.63",
  "uuid",
@@ -7951,18 +7922,6 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "tokio",
-]
-
-[[package]]
-name = "tokio-stream"
-version = "0.1.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eca58d7bba4a75707817a2c44174253f9236b2d5fbd055602e9d5c07c139a047"
-dependencies = [
- "futures-core",
- "pin-project-lite",
- "tokio",
- "tokio-util",
 ]
 
 [[package]]

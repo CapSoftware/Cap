@@ -17,21 +17,42 @@ import { getProPlanId } from "@cap/utils";
 import toast from "react-hot-toast";
 import { useRouter, useSearchParams } from "next/navigation";
 import { SimplePlans } from "../text/SimplePlans";
+import { parseAsBoolean, parseAsInteger, useQueryState } from "nuqs";
+import { pricingPerUser, proPlanFeatureList } from "./consts";
 
 export const PricingPage = () => {
   const [proLoading, setProLoading] = useState(false);
   const [commercialLoading, setCommercialLoading] = useState(false);
   const [selfHostedLoading, setSelfHostedLoading] = useState(false);
-  const [isAnnual, setIsAnnual] = useState(true);
-  const [isCommercialAnnual, setIsCommercialAnnual] = useState(false);
-  const [isSelfHostedAnnual, setIsSelfHostedAnnual] = useState(true);
-  const [proQuantity, setProQuantity] = useState(1);
-  const [licenseQuantity, setLicenseQuantity] = useState(1);
-  const [selfHostedQuantity, setSelfHostedQuantity] = useState(10);
-  const [initialRender, setInitialRender] = useState(true);
-  const [deploymentType, setDeploymentType] = useState<"cloud" | "selfhosted">(
-    "cloud"
+  const [isAnnual, setIsAnnual] = useQueryState(
+    "proAnnual",
+    parseAsBoolean.withDefault(true)
   );
+  const [isCommercialAnnual, setIsCommercialAnnual] = useQueryState(
+    "commercialAnnual",
+    parseAsBoolean.withDefault(false)
+  );
+  const [isSelfHostedAnnual, setIsSelfHostedAnnual] = useQueryState(
+    "selfHostedAnnual",
+    parseAsBoolean.withDefault(true)
+  );
+  const [proQuantity, setProQuantity] = useQueryState(
+    "users",
+    parseAsInteger.withDefault(1)
+  );
+  const [licenseQuantity, setLicenseQuantity] = useQueryState(
+    "licenses",
+    parseAsInteger.withDefault(1)
+  );
+  const [selfHostedQuantity, setSelfHostedQuantity] = useQueryState(
+    "seats",
+    parseAsInteger.withDefault(10)
+  );
+  const [initialRender, setInitialRender] = useState(true);
+  const [deploymentType, setDeploymentType] = useQueryState("deploy", {
+    defaultValue: "cloud",
+    parse: (value) => value as "cloud" | "selfhosted",
+  });
   const { push } = useRouter();
   const searchParams = useSearchParams();
 
@@ -58,14 +79,8 @@ export const PricingPage = () => {
       setInitialRender(false);
       const planFromUrl = searchParams.get("plan");
       const next = searchParams.get("next");
-      const typeFromUrl = searchParams.get("type");
       const pendingPriceId = localStorage.getItem("pendingPriceId");
       const pendingProQuantity = localStorage.getItem("pendingQuantity");
-
-      // Set deployment type based on URL parameter
-      if (typeFromUrl === "selfhosted") {
-        setDeploymentType("selfhosted");
-      }
 
       if (pendingPriceId && pendingProQuantity) {
         localStorage.removeItem("pendingPriceId");
@@ -212,45 +227,6 @@ export const PricingPage = () => {
     }
   };
 
-  const proList = [
-    {
-      text: "Connect your own domain to Cap",
-      available: true,
-    },
-    {
-      text: "Unlimited cloud storage & Shareable links",
-      available: true,
-    },
-    {
-      text: "Connect custom S3 storage bucket",
-      available: true,
-    },
-    {
-      text: "Desktop app commercial license included",
-      available: true,
-    },
-    {
-      text: "Advanced teams features",
-      available: true,
-    },
-    {
-      text: "Unlimited views",
-      available: true,
-    },
-    {
-      text: "Password protected videos",
-      available: true,
-    },
-    {
-      text: "Advanced analytics",
-      available: true,
-    },
-    {
-      text: "Priority support",
-      available: true,
-    },
-  ];
-
   const commercialList = [
     {
       text: "Commercial Use of Cap Recorder + Editor",
@@ -326,8 +302,7 @@ export const PricingPage = () => {
             </h1>
             <p
               className={`max-w-[800px] mx-auto ${
-                initialRender ? "fade-in-down animate-delay-1" : ""
-              }`}
+                initialRender ? "fade-in-down animate-delay-1" : ""}`}
             >
               Cap is currently in public beta, and we're offering special early
               adopter pricing to our first users. This pricing will be locked in
@@ -584,7 +559,7 @@ export const PricingPage = () => {
                     <div className="space-y-8">
                       <div>
                         <ul className="p-0 space-y-3 list-none">
-                          {proList.map((item, index) => (
+                          {proPlanFeatureList.map((item, index) => (
                             <li
                               key={index}
                               className="flex justify-start items-center"
@@ -631,8 +606,14 @@ export const PricingPage = () => {
                       <div className="flex items-center space-x-3">
                         <h3 className="text-4xl">
                           {isSelfHostedAnnual
-                            ? `$${6 * selfHostedQuantity}/mo`
-                            : `$${9 * selfHostedQuantity}/mo`}
+                            ? `$${
+                                pricingPerUser.cloud.annually *
+                                selfHostedQuantity
+                              }/mo`
+                            : `$${
+                                pricingPerUser.cloud.monthly *
+                                selfHostedQuantity
+                              }/mo`}
                         </h3>
                         <div>
                           <p className="text-sm font-medium">
@@ -642,8 +623,11 @@ export const PricingPage = () => {
                           </p>
                           {isSelfHostedAnnual && (
                             <p className="text-sm">
-                              or, ${9 * selfHostedQuantity}/month, for{" "}
-                              {selfHostedQuantity} users, billed monthly.
+                              or, $
+                              {pricingPerUser.cloud.monthly *
+                                selfHostedQuantity}
+                              /month, for {selfHostedQuantity} users, billed
+                              monthly.
                             </p>
                           )}
                         </div>

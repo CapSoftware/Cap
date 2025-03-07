@@ -37,9 +37,9 @@ type VerificationResponse = {
   };
 };
 
-export function CustomDomain() {
+export function CustomDomain({ isWorkspacePro }: { isWorkspacePro: boolean }) {
   const router = useRouter();
-  const { activeSpace, isSubscribed } = useSharedContext();
+  const { activeSpace, isSubscribed, user } = useSharedContext();
   const [domain, setDomain] = useState(activeSpace?.space.customDomain || "");
   const [loading, setLoading] = useState(false);
   const [verifying, setVerifying] = useState(false);
@@ -51,6 +51,8 @@ export function CustomDomain() {
   const initialCheckDone = useRef(false);
   const pollInterval = useRef<NodeJS.Timeout>();
   const POLL_INTERVAL = 5000; // 5 seconds
+
+  const isOwner = user?.id === activeSpace?.space.ownerId;
 
   const cleanDomain = (input: string) => {
     if (!input) return "";
@@ -168,7 +170,7 @@ export function CustomDomain() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!isSubscribed) {
+    if (!isWorkspacePro) {
       toast.error(
         (t) => (
           <span>
@@ -315,10 +317,14 @@ export function CustomDomain() {
             placeholder="your-domain.com"
             value={domain}
             onChange={(e) => setDomain(e.target.value)}
-            disabled={loading}
+            disabled={loading || !isOwner}
             className="flex-1"
           />
-          <Button type="button" onClick={handleSubmit} disabled={loading}>
+          <Button
+            type="button"
+            onClick={handleSubmit}
+            disabled={loading || !isOwner}
+          >
             {loading ? "Saving..." : "Save"}
           </Button>
           {activeSpace?.space.customDomain && (
@@ -342,7 +348,7 @@ export function CustomDomain() {
               type="button"
               variant="destructive"
               onClick={handleRemoveDomain}
-              disabled={loading}
+              disabled={loading || !isOwner}
             >
               Remove
             </Button>

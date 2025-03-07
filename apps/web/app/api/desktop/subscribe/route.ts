@@ -1,11 +1,15 @@
 import { type NextRequest } from "next/server";
 import { db } from "@cap/database";
-import { users } from "@cap/database/schema";
+import { spaces, users } from "@cap/database/schema";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { cookies } from "next/headers";
-import { isUserOnProPlan, stripe } from "@cap/utils";
-import { eq } from "drizzle-orm";
+import { getProPlanBillingCycle, stripe } from "@cap/utils";
+import { asc, desc, eq } from "drizzle-orm";
 import { clientEnv } from "@cap/env";
+import {
+  generateCloudProStripeCheckoutSession,
+  getIsUserPro,
+} from "@/utils/instance/functions";
 
 const allowedOrigins = [
   clientEnv.NEXT_PUBLIC_WEB_URL,
@@ -56,7 +60,6 @@ export async function POST(request: NextRequest) {
   }
 
   const user = await getCurrentUser();
-  let customerId = user?.stripeCustomerId;
   const { priceId } = await request.json();
   const params = request.nextUrl.searchParams;
   const origin = params.get("origin") || null;
@@ -103,12 +106,23 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (
-    isUserOnProPlan({
-      subscriptionStatus: user.stripeSubscriptionStatus as string,
-    })
-  ) {
-    console.log("[POST] Error: User already on Pro plan");
+  // get workspaces owned by the user, and assume that the oldest one is the personal workspace
+  const personalWorkspace = await db.query.spaces.findFirst({
+    where: eq(spaces.ownerId, user.id),
+    orderBy: [asc(spaces.createdAt)],
+    columns: {
+      id: true,
+      pro: true,
+    },
+  });
+
+  if (!personalWorkspace) {
+    console.log("[POST] Error: User has no personal workspace");
+    return Response.json({ error: true }, { status: 400 });
+  }
+
+  if (personalWorkspace.pro) {
+    console.log("[POST] Error: Workspace already on Pro plan");
     return Response.json(
       { error: true, subscription: true },
       {
@@ -126,45 +140,25 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (!user.stripeCustomerId) {
-    console.log("[POST] Creating new Stripe customer");
-    const customer = await stripe.customers.create({
-      email: user.email,
-      metadata: {
-        userId: user.id,
-      },
-    });
+  // get the price type based on the priceId
+  const priceType = getProPlanBillingCycle(priceId);
 
-    await db
-      .update(users)
-      .set({
-        stripeCustomerId: customer.id,
-      })
-      .where(eq(users.id, user.id));
-
-    customerId = customer.id;
-    console.log("[POST] Created Stripe customer:", customerId);
-  }
-
-  console.log("[POST] Creating checkout session");
-  const checkoutSession = await stripe.checkout.sessions.create({
-    customer: customerId as string,
-    line_items: [
-      {
-        price: priceId,
-        quantity: 1,
-      },
-    ],
-    mode: "subscription",
-    success_url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/dashboard/caps?upgrade=true`,
-    cancel_url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/pricing`,
-    allow_promotion_codes: true,
+  const checkoutSession = await generateCloudProStripeCheckoutSession({
+    cloudWorkspaceId: personalWorkspace.id,
+    cloudUserId: user.id,
+    email: user.email,
+    type: priceType,
   });
 
-  if (checkoutSession.url) {
+  if (!checkoutSession) {
+    console.log("[POST] Error: Failed to create checkout session");
+    return Response.json({ error: true }, { status: 400 });
+  }
+
+  if (checkoutSession.checkoutLink) {
     console.log("[POST] Checkout session created successfully");
     return Response.json(
-      { url: checkoutSession.url },
+      { url: checkoutSession.checkoutLink },
       {
         status: 200,
         headers: {

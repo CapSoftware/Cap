@@ -178,8 +178,35 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
               <Menu className={`w-[28px] h-[28px] text-black/70`} />
             </button>
           </div>
+          </div>
+          <div className="hidden items-center space-x-2 sm:flex">
+          <Button
+                    variant="white"
+                    href="https://github.com/CapSoftware/Cap"
+                    size="md"
+                    className="w-full font-medium sm:w-auto"
+                    icon={<FontAwesomeIcon icon={faGithub} />}
+                  >
+                    Github
+             </Button>
+             <Button
+                    variant="dark"
+                    href={auth === false ? "/login" : "/dashboard"}
+                    size="md"
+                    className="w-full font-medium sm:w-auto"
+                  >
+                  {auth === false ? "Login" : "Dashboard"}
+             </Button>
+          </div>
+          <div className="block md:hidden">
+            <button onClick={() => setShowMobileMenu(!showMobileMenu)}>
+              <Menu
+                className={`w-[28px] h-[28px] text-black/70`}
+              />
+            </button>
+          </div>
         </div>
-      </div>
+        </div>
       {showMobileMenu && (
         <div className="fixed top-0 left-0 w-full h-full px-4 bg-white z-[100000] overflow-auto">
           <div
