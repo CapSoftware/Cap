@@ -3,6 +3,7 @@
 import {
   getServerConfig as getServerConfigInternal,
   canInstanceAddUser,
+  isWorkspacePro,
 } from "@/utils/instance/functions";
 import { serverEnv } from "@cap/env";
 
@@ -23,4 +24,9 @@ export async function getServerConfigAction() {
 
 export async function canInstanceAddUserAction() {
   return await canInstanceAddUser();
+}
+
+export async function isWorkspaceProAction(workspaceId: string) {
+  "use server";
+  return isWorkspacePro({ workspaceId });
 }

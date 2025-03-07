@@ -18,6 +18,7 @@ import toast from "react-hot-toast";
 import { useRouter, useSearchParams } from "next/navigation";
 import { SimplePlans } from "../text/SimplePlans";
 import { parseAsBoolean, parseAsInteger, useQueryState } from "nuqs";
+import { pricingPerUser, proPlanFeatureList } from "./consts";
 
 export const PricingPage = () => {
   const [proLoading, setProLoading] = useState(false);
@@ -225,45 +226,6 @@ export const PricingPage = () => {
       setSelfHostedLoading(false);
     }
   };
-
-  const proList = [
-    {
-      text: "Connect your own domain to Cap",
-      available: true,
-    },
-    {
-      text: "Unlimited cloud storage & Shareable links",
-      available: true,
-    },
-    {
-      text: "Connect custom S3 storage bucket",
-      available: true,
-    },
-    {
-      text: "Desktop app commercial license included",
-      available: true,
-    },
-    {
-      text: "Advanced teams features",
-      available: true,
-    },
-    {
-      text: "Unlimited views",
-      available: true,
-    },
-    {
-      text: "Password protected videos",
-      available: true,
-    },
-    {
-      text: "Advanced analytics",
-      available: true,
-    },
-    {
-      text: "Priority support",
-      available: true,
-    },
-  ];
 
   const commercialList = [
     {
@@ -597,7 +559,7 @@ export const PricingPage = () => {
                     <div className="space-y-8">
                       <div>
                         <ul className="p-0 space-y-3 list-none">
-                          {proList.map((item, index) => (
+                          {proPlanFeatureList.map((item, index) => (
                             <li
                               key={index}
                               className="flex justify-start items-center"
@@ -644,8 +606,14 @@ export const PricingPage = () => {
                       <div className="flex items-center space-x-3">
                         <h3 className="text-4xl">
                           {isSelfHostedAnnual
-                            ? `$${6 * selfHostedQuantity}/mo`
-                            : `$${9 * selfHostedQuantity}/mo`}
+                            ? `$${
+                                pricingPerUser.cloud.annually *
+                                selfHostedQuantity
+                              }/mo`
+                            : `$${
+                                pricingPerUser.cloud.monthly *
+                                selfHostedQuantity
+                              }/mo`}
                         </h3>
                         <div>
                           <p className="text-sm font-medium">
@@ -655,8 +623,11 @@ export const PricingPage = () => {
                           </p>
                           {isSelfHostedAnnual && (
                             <p className="text-sm">
-                              or, ${9 * selfHostedQuantity}/month, for{" "}
-                              {selfHostedQuantity} users, billed monthly.
+                              or, $
+                              {pricingPerUser.cloud.monthly *
+                                selfHostedQuantity}
+                              /month, for {selfHostedQuantity} users, billed
+                              monthly.
                             </p>
                           )}
                         </div>

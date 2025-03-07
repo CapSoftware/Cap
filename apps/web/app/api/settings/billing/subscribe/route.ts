@@ -9,7 +9,7 @@ import {
 export async function POST(request: NextRequest) {
   console.log("Starting subscription process");
   const user = await getCurrentUser();
-  const { priceId } = await request.json();
+  const { priceId, spaceId } = await request.json();
 
   console.log("Received request with priceId:", priceId);
   console.log("Current user:", user?.id);
@@ -19,21 +19,19 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: true }, { status: 400 });
   }
 
+  if (!spaceId) {
+    console.error("Space ID not found");
+    return Response.json({ error: true }, { status: 400 });
+  }
+
   if (!user) {
     console.error("User not found");
     return Response.json({ error: true, auth: false }, { status: 401 });
   }
 
-  const userActiveWorkspaceId = user.activeSpaceId;
-
-  if (!userActiveWorkspaceId) {
-    console.error("User has no active workspace");
-    return Response.json({ error: true }, { status: 400 });
-  }
-
   // get the current workspace pro status and return if it is already on pro
   const workspaceProStatus = await isWorkspacePro({
-    workspaceId: userActiveWorkspaceId,
+    workspaceId: spaceId,
   });
   if (workspaceProStatus) {
     console.error("Workspace already has pro plan");
@@ -44,7 +42,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const checkoutLink = await generateCloudProStripeCheckoutSession({
-      cloudWorkspaceId: userActiveWorkspaceId,
+      cloudWorkspaceId: spaceId,
       cloudUserId: user.id,
       email: user.email,
       type: priceType,

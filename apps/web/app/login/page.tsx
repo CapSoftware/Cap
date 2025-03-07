@@ -4,6 +4,7 @@ import { LoginForm } from "./form";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { redirect } from "next/navigation";
 import Loading from "../dashboard/loading";
+import { getServerConfigAction } from "../actions";
 
 export default async function LoginPage({
   searchParams,
@@ -11,6 +12,7 @@ export default async function LoginPage({
   searchParams: { error?: string };
 }) {
   const session = await getCurrentUser();
+  const serverConfig = await getServerConfigAction();
 
   if (session) {
     redirect("/dashboard");
@@ -48,7 +50,7 @@ export default async function LoginPage({
               </>
             }
           >
-            <LoginForm />
+            <LoginForm serverConfig={serverConfig} />
           </Suspense>
         </div>
       </div>

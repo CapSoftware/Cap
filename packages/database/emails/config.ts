@@ -23,7 +23,9 @@ export const sendEmail = async ({
   test?: boolean;
 }) => {
   if (!resend) {
-    console.info(`Email to ${email} with subject ${subject} sent from Cap`);
+    console.info(
+      `❌ Could not send email to ${email} with subject ${subject} sent from Cap`
+    );
     return Promise.resolve();
   }
 

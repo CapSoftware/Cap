@@ -24,16 +24,18 @@ import {
   DialogFooter,
 } from "@cap/ui";
 import { useRouter } from "next/navigation";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, Suspense } from "react";
 import toast from "react-hot-toast";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { format } from "date-fns";
 import { Tooltip } from "react-tooltip";
 import { CustomDomain } from "./components/CustomDomain";
-import { getServerConfigAction, canInstanceAddUserAction } from "@/app/actions";
+import { canInstanceAddUserAction, isWorkspaceProAction } from "@/app/actions";
+import { CloudProUpgrade } from "./components/CloudProUpgrade";
+import Loading from "../loading";
 
 export const Workspace = () => {
-  const { spaceData, activeSpace, user } = useSharedContext();
+  const { activeSpace, user, isCapCloud } = useSharedContext();
   const workspaceName = activeSpace?.space.name;
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -42,23 +44,28 @@ export const Workspace = () => {
   const [inviteEmails, setInviteEmails] = useState<string[]>([]);
   const [emailInput, setEmailInput] = useState("");
   const ownerToastShown = useRef(false);
-  const [isCapCloud, setIsCapCloud] = useState(false);
+  const [isServerConfigLoading, setIsServerConfigLoading] = useState(true);
   const [canAddUser, setCanAddUser] = useState(true);
+  const [isWorkspacePro, setIsWorkspacePro] = useState(false);
 
   useEffect(() => {
     const fetchServerConfig = async () => {
+      setIsServerConfigLoading(true);
       try {
-        const serverConfig = await getServerConfigAction();
-        setIsCapCloud(serverConfig.isCapCloud);
         const canAdd = await canInstanceAddUserAction();
         setCanAddUser(canAdd);
+        if (activeSpace?.space.id) {
+          const proStatus = await isWorkspaceProAction(activeSpace.space.id);
+          setIsWorkspacePro(proStatus);
+        }
+        setIsServerConfigLoading(false);
       } catch (error) {
         console.error("Failed to get server config:", error);
       }
     };
 
     fetchServerConfig();
-  }, []);
+  }, [activeSpace?.space.id]);
 
   const showOwnerToast = () => {
     if (!ownerToastShown.current) {
@@ -183,154 +190,101 @@ export const Workspace = () => {
   };
 
   return (
-    <form onSubmit={handleSubmit}>
-      {isOwner === false && (
+    <>
+      <form onSubmit={handleSubmit}>
+        {isOwner === false && (
+          <CardContent>
+            <CardTitle>*Only the owner can make changes</CardTitle>
+            <CardDescription>
+              Only the owner can make changes to this workspace.
+            </CardDescription>
+          </CardContent>
+        )}
         <CardContent>
-          <CardTitle>*Only the owner can make changes</CardTitle>
+          <CardTitle>Workspace Details</CardTitle>
           <CardDescription>
-            Only the owner can make changes to this workspace.
+            Changing the name and image will update how your workspace appears
+            to others members.
           </CardDescription>
         </CardContent>
-      )}
-      <CardContent>
-        <CardTitle>Workspace Details</CardTitle>
-        <CardDescription>
-          Changing the name and image will update how your workspace appears to
-          others members.
-        </CardDescription>
-      </CardContent>
-      <CardContent>
-        <div className="space-y-3">
-          <div>
-            <Label htmlFor="workspaceName">Workspace name</Label>
-            <Input
-              type="text"
-              defaultValue={workspaceName as string}
-              id="workspaceName"
-              name="workspaceName"
-              disabled={!isOwner}
-              onChange={() => {
-                if (!isOwner) showOwnerToast();
-              }}
-            />
+        <CardContent>
+          <div className="space-y-3">
+            <div>
+              <Label htmlFor="workspaceName">Workspace name</Label>
+              <Input
+                type="text"
+                defaultValue={workspaceName as string}
+                id="workspaceName"
+                name="workspaceName"
+                disabled={!isOwner}
+                onChange={() => {
+                  if (!isOwner) showOwnerToast();
+                }}
+              />
+            </div>
+            <div>
+              <Label htmlFor="allowedEmailDomain">
+                Workspace Access Requirements
+              </Label>
+              <Input
+                type="text"
+                placeholder="e.g. company.com"
+                defaultValue={activeSpace?.space.allowedEmailDomain || ""}
+                id="allowedEmailDomain"
+                name="allowedEmailDomain"
+                disabled={!isOwner}
+                onChange={() => {
+                  if (!isOwner) showOwnerToast();
+                }}
+              />
+              <p className="text-sm text-gray-400 mt-1">
+                Only users with email addresses from this domain will be able to
+                access videos shared in this workspace. Leave empty to allow all
+                users.
+              </p>
+            </div>
           </div>
-          <div>
-            <Label htmlFor="allowedEmailDomain">
-              Workspace Access Requirements
-            </Label>
-            <Input
-              type="text"
-              placeholder="e.g. company.com"
-              defaultValue={activeSpace?.space.allowedEmailDomain || ""}
-              id="allowedEmailDomain"
-              name="allowedEmailDomain"
-              disabled={!isOwner}
-              onChange={() => {
-                if (!isOwner) showOwnerToast();
-              }}
-            />
-            <p className="text-sm text-gray-400 mt-1">
-              Only users with email addresses from this domain will be able to
-              access videos shared in this workspace. Leave empty to allow all
-              users.
-            </p>
-          </div>
-        </div>
-      </CardContent>
-      <CardFooter className="border-b px-6 pt-0 pb-6">
-        <Button
-          type="submit"
-          size="sm"
-          variant="gray"
-          disabled={!isOwner}
-          onClick={() => {
-            if (!isOwner) showOwnerToast();
-          }}
-        >
-          Save
-        </Button>
-      </CardFooter>
-      <>
+        </CardContent>
+        <CardFooter className="border-b px-6 pt-0 pb-6">
+          <Button
+            type="submit"
+            size="sm"
+            disabled={!isOwner}
+            onClick={() => {
+              if (!isOwner) showOwnerToast();
+            }}
+          >
+            Save
+          </Button>
+        </CardFooter>
+
         <CardContent className="pt-6">
           <CardTitle>Custom Domain</CardTitle>
           <CardDescription>
             Configure a custom domain for your workspace's shared caps.
           </CardDescription>
           <div className="mt-4">
-            <CustomDomain />
+            <CustomDomain isWorkspacePro={isWorkspacePro} />
           </div>
         </CardContent>
         <CardFooter className="border-b px-6 pt-0 pb-2"></CardFooter>
-      </>
+      </form>
       <CardHeader>
         <div className="flex items-center justify-between">
           <div>
             <CardTitle>Workspace Members</CardTitle>
             {isCapCloud && (
-              <>
-                <CardDescription>
-                  Manage your workspace members.
-                </CardDescription>
-
-                {/* Legacy invite quota based code
-                <CardDescription>
-                  Current seats capacity:{" "}
-                  {`${activeSpace?.inviteQuota} paid ${
-                    activeSpace && activeSpace?.inviteQuota > 1
-                      ? "subscriptions"
-                      : "subscription"
-                  } across all of your workspaces`}
-                </CardDescription>
-                <CardDescription>
-                  Seats remaining:{" "}
-                  {activeSpace?.inviteQuota ??
-                    1 - (activeSpace?.totalInvites ?? 1)}
-                </CardDescription> */}
-              </>
+              <CardDescription>Manage your workspace members.</CardDescription>
             )}
           </div>
         </div>
       </CardHeader>
       <CardContent>
         <div className="flex items-center space-x-2">
-          {isCapCloud && (
-            <>
-              <Button
-                type="button"
-                size="sm"
-                variant="primary"
-                disabled={!isOwner || loading}
-                onClick={() => {
-                  if (!isOwner) {
-                    showOwnerToast();
-                    return;
-                  }
-                  setLoading(true);
-                  fetch(`/api/settings/billing/manage`, {
-                    method: "POST",
-                  })
-                    .then(async (res) => {
-                      const url = await res.json();
-                      router.push(url);
-                    })
-                    .catch((err) => {
-                      alert(err);
-                      setLoading(false);
-                    });
-                }}
-                data-tooltip-id="purchase-seats-tooltip"
-                data-tooltip-content='Once inside the Stripe dashboard, click "Manage Plan", then increase quantity of subscriptions to purchase more seats.'
-              >
-                {loading ? "Loading..." : "Purchase more seats"}
-              </Button>
-              <Tooltip id="purchase-seats-tooltip" place="top" />
-            </>
-          )}
           {isCapCloud ? (
             <Button
               type="button"
               size="sm"
-              variant="gray"
               onClick={() => {
                 if (!isOwner) {
                   showOwnerToast();
@@ -346,7 +300,6 @@ export const Workspace = () => {
             <Button
               type="button"
               size="sm"
-              variant="gray"
               onClick={() => {
                 if (!isOwner) {
                   showOwnerToast();
@@ -423,46 +376,60 @@ export const Workspace = () => {
           </TableBody>
         </Table>
       </CardContent>
-      {isCapCloud && (
-        <>
-          <CardHeader>
-            <CardTitle>View and manage your billing details</CardTitle>
-            <CardDescription>
-              View and edit your billing details, as well as manage your
-              subscription.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <CardDescription className="mt-1">
-              <Button
-                type="button"
-                size="sm"
-                variant="gray"
-                onClick={() => {
-                  if (!isOwner) {
-                    showOwnerToast();
-                    return;
-                  }
-                  setLoading(true);
-                  fetch(`/api/settings/billing/manage`, {
-                    method: "POST",
-                  })
-                    .then(async (res) => {
-                      const url = await res.json();
-                      router.push(url);
-                    })
-                    .catch((err) => {
-                      alert(err);
-                      setLoading(false);
-                    });
-                }}
-                disabled={!isOwner}
-              >
-                {loading ? "Loading..." : "Manage Billing"}
-              </Button>
-            </CardDescription>
-          </CardContent>
-        </>
+      {isServerConfigLoading ? (
+        <Loading />
+      ) : (
+        isCapCloud && (
+          <>
+            <CardHeader>
+              <CardTitle>View and manage your billing details</CardTitle>
+              <CardDescription>
+                View and edit your billing details, as well as manage your
+                subscription.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <CardDescription className="mt-1 flex flex-col gap-2">
+                {isWorkspacePro ? (
+                  <>
+                    <p>You are currently on the Cap Pro plan.</p>
+                    <div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => {
+                          if (!isOwner) {
+                            showOwnerToast();
+                            return;
+                          }
+                          setLoading(true);
+                          fetch(`/api/settings/billing/manage`, {
+                            method: "POST",
+                          })
+                            .then(async (res) => {
+                              const url = await res.json();
+                              router.push(url);
+                            })
+                            .catch((err) => {
+                              alert(err);
+                              setLoading(false);
+                            });
+                        }}
+                        disabled={!isOwner}
+                      >
+                        {loading ? "Loading..." : "Manage Billing"}
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <CloudProUpgrade
+                    workspaceUserCount={activeSpace?.members.length ?? 0}
+                  />
+                )}
+              </CardDescription>
+            </CardContent>
+          </>
+        )
       )}
 
       <Dialog open={isInviteDialogOpen} onOpenChange={setIsInviteDialogOpen}>
@@ -530,6 +497,6 @@ export const Workspace = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </form>
+    </>
   );
 };

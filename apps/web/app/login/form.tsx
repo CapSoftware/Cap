@@ -282,7 +282,7 @@ interface LoginFormProps {
   };
 }
 
-function LoginFormClient({ serverConfig }: LoginFormProps) {
+export function LoginForm({ serverConfig }: LoginFormProps) {
   const searchParams = useSearchParams();
   const next = searchParams?.get("next");
   const [email, setEmail] = useState("");
@@ -410,13 +410,4 @@ function LoginFormClient({ serverConfig }: LoginFormProps) {
       )}
     </>
   );
-}
-
-// Server component to fetch config and render client component
-import { getServerConfigAction } from "../actions";
-
-export async function LoginForm() {
-  const serverConfig = await getServerConfigAction();
-
-  return <LoginFormClient serverConfig={serverConfig} />;
 }
