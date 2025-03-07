@@ -268,6 +268,20 @@ export const comments = mysqlTable(
   })
 );
 
+// Add a new table to track email notifications
+export const emailNotifications = mysqlTable(
+  "email_notifications",
+  {
+    id: nanoId("id").notNull().primaryKey().unique(),
+    userId: nanoId("userId").notNull(),
+    type: varchar("type", { length: 255 }).notNull(),
+    sentAt: timestamp("sentAt").notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdTypeIndex: index("user_id_type_idx").on(table.userId, table.type),
+  })
+);
+
 export const s3Buckets = mysqlTable("s3_buckets", {
   id: nanoId("id").notNull().primaryKey().unique(),
   ownerId: nanoId("ownerId").notNull(),
