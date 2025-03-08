@@ -14,6 +14,8 @@ export const ShareHeader = ({
   data,
   user,
   individualFiles,
+  customDomain,
+  domainVerified,
 }: {
   data: typeof videos.$inferSelect;
   user: typeof userSelectProps | null;
@@ -21,6 +23,8 @@ export const ShareHeader = ({
     fileName: string;
     url: string;
   }[];
+  customDomain: string | null;
+  domainVerified: boolean;
 }) => {
   const { push, refresh } = useRouter();
   const [isEditing, setIsEditing] = useState(false);
@@ -80,6 +84,22 @@ export const ShareHeader = ({
     } finally {
       setIsDownloading(false);
     }
+  };
+
+  const getVideoLink = () => {
+    return customDomain && domainVerified
+      ? `https://${customDomain}/s/${data.id}`
+      : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+      ? `https://cap.link/${data.id}`
+      : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${data.id}`;
+  };
+
+  const getDisplayLink = () => {
+    return customDomain && domainVerified
+      ? `${customDomain}/s/${data.id}`
+      : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+      ? `cap.link/${data.id}`
+      : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${data.id}`;
   };
 
   return (
@@ -144,24 +164,11 @@ export const ShareHeader = ({
                 variant="gray"
                 className="hover:bg-gray-300"
                 onClick={() => {
-                  if (
-                    clientEnv.NEXT_PUBLIC_IS_CAP &&
-                    NODE_ENV === "production"
-                  ) {
-                    navigator.clipboard.writeText(
-                      `https://cap.link/${data.id}`
-                    );
-                  } else {
-                    navigator.clipboard.writeText(
-                      `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${data.id}`
-                    );
-                  }
+                  navigator.clipboard.writeText(getVideoLink());
                   toast.success("Link copied to clipboard!");
                 }}
               >
-                {clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-                  ? `cap.link/${data.id}`
-                  : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${data.id}`}
+                {getDisplayLink()}
                 <Copy className="ml-2 h-4 w-4" />
               </Button>
               {user !== null && (
