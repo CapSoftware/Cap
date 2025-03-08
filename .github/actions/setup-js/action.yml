@@ -3,11 +3,8 @@ description: Sets up pnpm & node with dependencies and caching
 runs:
   using: "composite"
   steps:
-    - name: Install pnpm
-      uses: pnpm/action-setup@v2
-      with:
-        version: 10.5.2
-        run_install: false
+    - run: corepack enable
+      shell: bash
 
     - name: Setup node
       uses: actions/setup-node@v3
