@@ -11,7 +11,8 @@ const app = new Hono()
   .use(corsMiddleware)
   .route("/", root.app)
   .route("/s3/config", s3Config.app)
-  .route("/session", session.app);
+  .route("/session", session.app)
+  .route("/video", session.app);
 
 export const GET = handle(app);
 export const POST = handle(app);

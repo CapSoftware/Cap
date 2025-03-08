@@ -15,8 +15,7 @@ async fn do_authed_request(
 ) -> Result<reqwest::Response, reqwest::Error> {
     let client = reqwest::Client::new();
 
-    build(client)
-        .header("Authorization", format!("Bearer {}", auth.token))
+    dbg!(build(client).header("Authorization", format!("Bearer {}", auth.token)))
         .send()
         .await
 }

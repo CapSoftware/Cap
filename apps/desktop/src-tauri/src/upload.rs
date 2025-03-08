@@ -454,7 +454,6 @@ pub async fn get_s3_config(
     is_screenshot: bool,
     video_id: Option<String>,
 ) -> Result<S3UploadMeta, String> {
-    let origin = "http://tauri.localhost";
     let config_url = web_api::make_url(if let Some(id) = video_id {
         format!("/api/desktop/video/create?recordingMode=desktopMP4&videoId={id}")
     } else if is_screenshot {
