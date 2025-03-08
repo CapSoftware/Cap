@@ -29,6 +29,9 @@ export const serverEnv = createEnv({
     VERCEL_TEAM_ID: z.string().optional(),
     VERCEL_PROJECT_ID: z.string().optional(),
     VERCEL_AUTH_TOKEN: z.string().optional(),
+    VERCEL_URL: z.string().optional(),
+    VERCEL_BRANCH_URL: z.string().optional(),
+    VERCEL_PROJECT_PRODUCTION_URL: z.string().optional(),
   },
   experimental__runtimeEnv: process.env,
 });

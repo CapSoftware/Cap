@@ -462,8 +462,6 @@ pub async fn get_s3_config(
         "/api/desktop/video/create?recordingMode=desktopMP4".to_string()
     });
 
-    dbg!(&config_url);
-
     let response = app
         .authed_api_request(|client| client.get(config_url))
         .await
