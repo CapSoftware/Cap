@@ -65,6 +65,9 @@ jobs:
           node-version: "20"
           cache: pnpm
 
+      - name: Install dependencies
+        run: pnpm install
+
       - name: Create .env file in root
         run: |
           echo "VITE_ENVIRONMENT=production" >> .env
