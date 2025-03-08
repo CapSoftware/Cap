@@ -1299,7 +1299,8 @@ impl ProgressiveUploadTask {
                     .json(&serde_json::json!({
                         "fileKey": file_key,
                         "uploadId": upload_id,
-                        "partNumber": *part_number
+                        "partNumber": *part_number,
+                        "md5Sum": &md5_sum
                     }))
             })
             .await
@@ -1356,7 +1357,6 @@ impl ProgressiveUploadTask {
 
             match client
                 .put(&presigned_url)
-                .header("Content-MD5", &md5_sum)
                 .timeout(Duration::from_secs(120))
                 .body(chunk.clone())
                 .send()

@@ -96,10 +96,11 @@ app.post(
       fileKey: z.string(),
       uploadId: z.string(),
       partNumber: z.number(),
+      md5Sum: z.string(),
     })
   ),
   async (c) => {
-    const { fileKey, uploadId, partNumber } = c.req.valid("json");
+    const { fileKey, uploadId, partNumber, md5Sum } = c.req.valid("json");
     const user = c.get("user");
 
     try {
@@ -115,11 +116,11 @@ app.post(
           Key: fileKey,
           UploadId: uploadId,
           PartNumber: partNumber,
+          ContentMD5: md5Sum,
         });
 
         const presignedUrl = await getSignedUrl(s3Client, command, {
           expiresIn: 3600,
-          signableHeaders: new Set(["Content-MD5"]),
         });
 
         return c.json({ presignedUrl });
