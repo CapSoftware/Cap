@@ -79,7 +79,7 @@ export async function GET(request: NextRequest) {
   const screenshotPrefix = `${userId}/${videoId}/`;
 
   try {
-    const s3Client = await createS3Client(bucket);
+    const [s3Client] = await createS3Client(bucket);
 
     const objectsCommand = new ListObjectsV2Command({
       Bucket,
