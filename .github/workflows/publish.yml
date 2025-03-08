@@ -170,19 +170,7 @@ jobs:
         with:
           shared-key: ${{ matrix.settings.target }}
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.5.2
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          # cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install
+      - uses: ./.github/actions/setup-js
 
       - name: Create .env file in root
         run: |
