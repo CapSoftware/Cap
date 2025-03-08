@@ -17,7 +17,7 @@ async fn do_authed_request(
 
     let mut req = build(client).header("Authorization", format!("Bearer {}", auth.token));
 
-    if let Some(s) = std::option_env!("VERCEL_AUTOMATION_BYPASS_SECRET") {
+    if let Some(s) = std::option_env!("VITE_VERCEL_AUTOMATION_BYPASS_SECRET") {
         req = req.header("x-vercel-protection-bypass", s);
     }
 
