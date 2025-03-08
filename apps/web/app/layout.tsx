@@ -9,6 +9,7 @@ import type { Metadata } from "next";
 import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "./AuthProvider";
 import { PostHogProvider, Providers } from "./providers";
+import { serverEnv } from "@cap/env";
 
 export const metadata: Metadata = {
   title: "Cap — Beautiful screen recordings, owned by you.",
@@ -31,9 +32,9 @@ export default async function RootLayout({
 }) {
   const user = await getCurrentUser();
   let intercomHash = "";
-  if (process.env.INTERCOM_SECRET) {
+  if (serverEnv.INTERCOM_SECRET) {
     intercomHash = crypto
-      .createHmac("sha256", process.env.INTERCOM_SECRET)
+      .createHmac("sha256", serverEnv.INTERCOM_SECRET)
       .update(user?.id ?? "")
       .digest("hex");
   }

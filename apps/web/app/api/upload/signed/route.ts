@@ -108,7 +108,7 @@ export async function POST(request: NextRequest) {
         hasSecretKey: !!s3Config?.secretAccessKey,
       });
 
-      const s3Client = await createS3Client(s3Config);
+      const [s3Client] = await createS3Client(s3Config);
 
       const contentType = fileKey.endsWith(".aac")
         ? "audio/aac"

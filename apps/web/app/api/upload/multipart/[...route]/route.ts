@@ -8,7 +8,6 @@ import {
   UploadPartCommand,
 } from "@aws-sdk/client-s3";
 import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
 import { s3Buckets } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { zValidator } from "@hono/zod-validator";
@@ -16,32 +15,12 @@ import { z } from "zod";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { clientEnv } from "@cap/env";
 import { handle } from "hono/vercel";
-import { cookies } from "next/headers";
+import { withAuth, corsMiddleware } from "@/app/api/utils";
 
-const app = new Hono().basePath("/api/upload/multipart").use<{
-  Variables: { user: NonNullable<Awaited<ReturnType<typeof getCurrentUser>>> };
-}>(async (c, next) => {
-  const token = c.req.header("authorization")?.split(" ")[1];
-  if (token) {
-    cookies().set({
-      name: "next-auth.session-token",
-      value: token,
-      path: "/",
-      sameSite: "none",
-      secure: true,
-      httpOnly: true,
-    });
-  }
-
-  const user = await getCurrentUser();
-  if (!user) {
-    return c.json({ error: true }, 401);
-  }
-
-  c.set("user", user);
-
-  await next();
-});
+const app = new Hono()
+  .basePath("/api/upload/multipart")
+  .use(corsMiddleware)
+  .use(withAuth);
 
 app.post(
   "/initiate",
@@ -125,8 +104,7 @@ app.post(
 
     try {
       try {
-        const { s3Client, s3Config, bucketName } =
-          await getUserBucketWithClient(user.id);
+        const { s3Client, bucketName } = await getUserBucketWithClient(user.id);
 
         console.log(
           `Getting presigned URL for part ${partNumber} of upload ${uploadId}`
@@ -141,38 +119,10 @@ app.post(
 
         const presignedUrl = await getSignedUrl(s3Client, command, {
           expiresIn: 3600,
+          signableHeaders: new Set(["Content-MD5"]),
         });
 
-        let finalUrl = presignedUrl;
-
-        if (s3Config.endpoint) {
-          const urlObj = new URL(presignedUrl);
-
-          const queryString = urlObj.search;
-
-          if (
-            s3Config.endpoint.includes("localhost") ||
-            s3Config?.forcePathStyle
-          ) {
-            finalUrl = `${s3Config.endpoint}/${bucketName}/${fileKey}${queryString}`;
-
-            const updatedUrl = new URL(finalUrl);
-            updatedUrl.searchParams.set("partNumber", partNumber.toString());
-            updatedUrl.searchParams.set("uploadId", uploadId);
-            finalUrl = updatedUrl.toString();
-
-            console.log(
-              `Using path-style URL for part ${partNumber}: ${finalUrl}`
-            );
-          } else {
-            finalUrl = presignedUrl;
-          }
-        }
-
-        console.log(
-          `Generated presigned URL for part ${partNumber}: ${finalUrl}`
-        );
-        return c.json({ presignedUrl: finalUrl });
+        return c.json({ presignedUrl });
       } catch (s3Error) {
         console.error("S3 operation failed:", s3Error);
         throw new Error(
@@ -406,3 +356,4 @@ async function getUserBucketWithClient(userId: string) {
 
 export const GET = handle(app);
 export const POST = handle(app);
+export const OPTIONS = handle(app);

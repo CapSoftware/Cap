@@ -75,7 +75,8 @@ const signInAction = action(async (planType: "yearly" | "monthly") => {
     console.log("Platform:", platform);
 
     const callbackUrl = new URL(
-      `${clientEnv.VITE_SERVER_URL}/api/desktop/session/request`
+      `/api/desktop/session/request`,
+      clientEnv.VITE_SERVER_URL
     );
     callbackUrl.searchParams.set("port", port);
     callbackUrl.searchParams.set("platform", platform);
