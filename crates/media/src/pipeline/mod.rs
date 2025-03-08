@@ -3,7 +3,6 @@ use std::thread::JoinHandle;
 use tracing::{info, trace};
 
 pub mod audio_buffer;
-mod audio_render;
 pub mod builder;
 pub mod clock;
 pub mod control;

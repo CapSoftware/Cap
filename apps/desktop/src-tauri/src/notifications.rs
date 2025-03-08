@@ -104,17 +104,5 @@ pub fn send_notification(app: &tauri::AppHandle, notification_type: Notification
         .show()
         .ok();
 
-    println!(
-        "Sending notification: Title: '{}', Body: '{}', Error: {}",
-        title, body, is_error
-    );
-
     AppSounds::Notification.play();
-
-    // let _ = NewNotification {
-    //     title: title.to_string(),
-    //     body: body.to_string(),
-    //     is_error,
-    // }
-    // .emit(app);
 }

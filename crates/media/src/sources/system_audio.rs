@@ -134,7 +134,7 @@ pub mod macos {
 
             futures::executor::block_on(stream.start()).unwrap();
 
-            ready_signal.send(Ok(()));
+            let _ = ready_signal.send(Ok(()));
 
             loop {
                 match control_signal.last() {
@@ -143,7 +143,7 @@ pub mod macos {
                             let ts = RawNanoseconds(samples.pts().unwrap() as u64);
                             samples.set_pts(clock.timestamp_for(ts));
 
-                            output.send(samples);
+                            let _ = output.send(samples);
                         }
                         _ => {
                             break;

@@ -493,7 +493,7 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
     pipeline_builder = TCaptureFormat::make_capture_pipeline(
         pipeline_builder,
         screen_source,
-        &display_output_path,
+        display_output_path.clone(),
     )?;
 
     info!(

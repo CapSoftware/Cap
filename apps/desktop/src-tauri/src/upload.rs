@@ -889,9 +889,6 @@ impl ProgressiveUploadTask {
                     match tokio::fs::metadata(&file_path).await {
                         Ok(metadata) => {
                             if metadata.len() < MIN_PART_SIZE {
-                                println!(
-                                "Waiting for file to grow to at least 5MB before starting upload"
-                            );
                                 sleep(Duration::from_millis(500)).await;
                                 continue;
                             } else {
@@ -1348,6 +1345,8 @@ impl ProgressiveUploadTask {
             .unwrap_or("")
             .to_string();
 
+        dbg!(&presigned_url);
+
         if presigned_url.is_empty() {
             return Err(format!("Empty presignedUrl for part {}", *part_number));
         }
@@ -1366,15 +1365,16 @@ impl ProgressiveUploadTask {
                 total_read
             );
 
-            match client
-                .put(&presigned_url)
-                .header("Content-Length", total_read.to_string())
-                .header("Connection", "keep-alive")
-                .header("Content-MD5", &md5_sum)
-                .timeout(Duration::from_secs(120))
-                .body(chunk.clone())
-                .send()
-                .await
+            match dbg!(
+                client
+                    .put(&presigned_url)
+                    .header("Content-Length", total_read.to_string()) // .header("Connection", "keep-alive")
+                                                                      // .header("Content-MD5", &md5_sum)
+            )
+            .timeout(Duration::from_secs(120))
+            .body(chunk.clone())
+            .send()
+            .await
             {
                 Ok(upload_response) => {
                     if upload_response.status().is_success() {
