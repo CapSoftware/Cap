@@ -58,6 +58,9 @@ pub fn spawn_cursor_recorder(
             let device_state = DeviceState::new();
             let mut last_mouse_state = device_state.get_mouse();
 
+            // Create cursors directory if it doesn't exist
+            std::fs::create_dir_all(&cursors_dir).unwrap();
+
             let mut response = CursorActorResponse {
                 cursors: prev_cursors,
                 next_cursor_id,
@@ -65,9 +68,6 @@ pub fn spawn_cursor_recorder(
                 clicks: vec![],
             };
 
-            // Create cursors directory if it doesn't exist
-            std::fs::create_dir_all(&cursors_dir).unwrap();
-            
             let start_time = Instant::now();
 
             while !stop_signal.load(std::sync::atomic::Ordering::Relaxed) {

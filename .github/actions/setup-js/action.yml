@@ -15,9 +15,6 @@ runs:
         node-version: 20
         cache: pnpm
 
-    - run: pnpm -v
-      shell: bash
-
     - name: Install frontend dependencies
       shell: bash
       run: pnpm install
