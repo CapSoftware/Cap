@@ -2006,7 +2006,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             reset_microphone_permissions,
             is_camera_window_open,
             seek_to,
-            send_feedback_request,
             windows::position_traffic_lights,
             windows::set_theme,
             global_message_dialog,
@@ -2381,53 +2380,6 @@ fn screenshots_path(app: &AppHandle) -> PathBuf {
 
 fn screenshot_path(app: &AppHandle, screenshot_id: &str) -> PathBuf {
     screenshots_path(app).join(format!("{}.cap", screenshot_id))
-}
-
-#[tauri::command]
-#[specta::specta]
-async fn send_feedback_request(app: AppHandle, feedback: String) -> Result<(), String> {
-    let auth = AuthStore::get(&app)
-        .map_err(|e| e.to_string())?
-        .ok_or("Not authenticated")?;
-
-    let feedback_url = web_api::make_url("/api/desktop/feedback");
-
-    // Create a proper multipart form
-    let form = reqwest::multipart::Form::new().text("feedback", feedback);
-
-    let client = reqwest::Client::new();
-    let response = client
-        .post(feedback_url)
-        .header("Authorization", format!("Bearer {}", auth.token))
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to send feedback: {}", e))?;
-
-    if !response.status().is_success() {
-        println!("Feedback request failed with status: {}", response.status());
-
-        let error_text = response
-            .text()
-            .await
-            .map_err(|_| "Failed to read error response")?;
-
-        println!("Error response: {}", error_text);
-
-        // Parse the error response and convert to owned String immediately
-        let error = match serde_json::from_str::<serde_json::Value>(&error_text) {
-            Ok(v) => v
-                .get("error")
-                .and_then(|e| e.as_str())
-                .map(ToString::to_string)
-                .unwrap_or_else(|| "Failed to submit feedback".to_string()),
-            Err(_) => "Failed to submit feedback".to_string(),
-        };
-
-        return Err(error);
-    }
-
-    Ok(())
 }
 
 #[tauri::command]
