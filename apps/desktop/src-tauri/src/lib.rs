@@ -50,7 +50,7 @@ use mp4::Mp4Reader;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use notifications::NotificationType;
 use png::{ColorType, Encoder};
-use recording::RecordingActor;
+use recording::InProgressRecording;
 use relative_path::RelativePathBuf;
 use scap::capturer::Capturer;
 use scap::frame::Frame;
@@ -98,9 +98,9 @@ pub struct App {
     #[serde(skip)]
     handle: AppHandle,
     #[serde(skip)]
-    current_recording: Option<RecordingActor>,
+    current_recording: Option<InProgressRecording>,
     #[serde(skip)]
-    pre_created_video: Option<PreCreatedVideo>,
+    recording_logging_handle: LoggingHandle,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
@@ -126,14 +126,14 @@ pub struct VideoRecordingMetadata {
 }
 
 #[derive(Clone, Serialize, Deserialize, specta::Type, Debug)]
-pub struct PreCreatedVideo {
+pub struct VideoUploadInfo {
     id: String,
     link: String,
     config: S3UploadMeta,
 }
 
 impl App {
-    pub fn set_current_recording(&mut self, actor: RecordingActor) {
+    pub fn set_current_recording(&mut self, actor: InProgressRecording) {
         let current_recording = self.current_recording.insert(actor);
 
         CurrentRecordingChanged.emit(&self.handle).ok();
@@ -148,7 +148,7 @@ impl App {
         }
     }
 
-    pub fn clear_current_recording(&mut self) -> Option<RecordingActor> {
+    pub fn clear_current_recording(&mut self) -> Option<InProgressRecording> {
         self.close_occluder_window();
 
         self.current_recording.take()
@@ -439,7 +439,6 @@ async fn get_recording_options(
 #[tauri::command]
 #[specta::specta]
 async fn set_recording_options(
-    app: AppHandle,
     state: MutableState<'_, App>,
     options: RecordingOptions,
 ) -> Result<(), String> {
@@ -1160,7 +1159,7 @@ pub struct UploadProgress {
 #[derive(Deserialize, Type)]
 pub enum UploadMode {
     Initial {
-        pre_created_video: Option<PreCreatedVideo>,
+        pre_created_video: Option<VideoUploadInfo>,
     },
     Reupload,
 }
@@ -1951,16 +1950,14 @@ async fn update_auth_plan(app: AppHandle) {
     AuthStore::update_auth_plan(&app).await.ok();
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub async fn run() {
-    let tauri_context = tauri::generate_context!();
+pub type DynLoggingLayer =
+    Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync>;
+type LoggingHandle =
+    tracing_subscriber::reload::Handle<Option<DynLoggingLayer>, tracing_subscriber::Registry>;
 
-    // let _guard = configure_logging(
-    //     &dirs::data_dir()
-    //         .unwrap()
-    //         .join(&tauri_context.config().identifier)
-    //         .join("logs"),
-    // );
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub async fn run(recording_logging_handle: LoggingHandle) {
+    let tauri_context = tauri::generate_context!();
 
     let specta_builder = tauri_specta::Builder::new()
         .commands(tauri_specta::collect_commands![
@@ -2144,7 +2141,7 @@ pub async fn run() {
                         mode: RecordingMode::Studio,
                     },
                     current_recording: None,
-                    pre_created_video: None,
+                    recording_logging_handle,
                 })));
 
                 app.manage(Arc::new(RwLock::new(
@@ -2253,7 +2250,7 @@ pub async fn run() {
                                 }
                             }
                             CapWindowId::Editor { .. } => {
-                                EditorInstances::remove(window);
+                                tokio::spawn(EditorInstances::remove(window.clone()));
                             }
                             CapWindowId::Settings | CapWindowId::Upgrade => {
                                 // Don't quit the app when settings or upgrade window is closed

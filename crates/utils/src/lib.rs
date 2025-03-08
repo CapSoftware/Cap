@@ -1,4 +1,4 @@
-use std::future::Future;
+use std::{future::Future, path::PathBuf};
 
 use tracing::Instrument;
 
@@ -41,4 +41,9 @@ where
 {
     use tracing::instrument::WithSubscriber;
     tokio::spawn(future.with_current_subscriber().in_current_span())
+}
+
+pub fn ensure_dir(path: &PathBuf) -> Result<PathBuf, std::io::Error> {
+    std::fs::create_dir_all(&path)?;
+    Ok(path.clone())
 }

@@ -74,7 +74,7 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const s3Client = await createS3Client(bucket);
+  const [s3Client] = await createS3Client(bucket);
   const Bucket = await getS3Bucket(bucket);
 
   const screenshotKey = `${video.ownerId}/${video.id}/screenshot/screen-capture.jpg`;

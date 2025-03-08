@@ -77,7 +77,7 @@ impl ScreenCaptureTarget {
     }
 
     pub fn get_title(&self) -> Option<String> {
-        let target = dbg!(self.get_target());
+        let target = self.get_target();
 
         match target {
             None => None,

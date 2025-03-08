@@ -72,7 +72,7 @@ impl EditorInstances {
         }
     }
 
-    pub async fn remove(window: &Window) {
+    pub async fn remove(window: Window) {
         let Some(instances) = window.try_state::<EditorInstances>() else {
             return;
         };

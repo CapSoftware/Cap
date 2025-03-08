@@ -70,9 +70,8 @@ impl MP4AVAssetWriterEncoder {
                 ns::Number::with_u32(output_height).as_id_ref(),
             );
 
-            let bitrate = video_config.width as f32 * video_config.height as f32
-                / (1920.0 * 1080.0)
-                * 14_000_000.0
+            let bitrate = output_width as f32 * output_height as f32 / (1920.0 * 1080.0)
+                * 10_000_000.0
                 + fps / 30.0 * 6_000_000.0;
 
             output_settings.insert(

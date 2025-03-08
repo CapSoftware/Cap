@@ -128,7 +128,7 @@ export async function GET(request: NextRequest) {
   const audioPrefix = `${userId}/${videoId}/audio/`;
 
   try {
-    const s3Client = await createS3Client(bucket);
+    const [s3Client] = await createS3Client(bucket);
 
     const videoSegmentCommand = new ListObjectsV2Command({
       Bucket,
