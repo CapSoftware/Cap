@@ -5,6 +5,7 @@ import { corsMiddleware } from "../../utils";
 import * as root from "../app";
 import * as s3Config from "../s3/config/app";
 import * as session from "../session/app";
+import * as video from "../video/app";
 
 const app = new Hono()
   .basePath("/api/desktop")
@@ -12,7 +13,7 @@ const app = new Hono()
   .route("/", root.app)
   .route("/s3/config", s3Config.app)
   .route("/session", session.app)
-  .route("/video", session.app);
+  .route("/video", video.app);
 
 export const GET = handle(app);
 export const POST = handle(app);
