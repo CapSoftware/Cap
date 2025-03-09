@@ -25,6 +25,13 @@ export const serverEnv = createEnv({
     STRIPE_SECRET_KEY_LIVE: z.string().optional(),
     STRIPE_WEBHOOK_SECRET: z.string().optional(),
     DISCORD_FEEDBACK_WEBHOOK_URL: z.string().optional(),
+    INTERCOM_SECRET: z.string().optional(),
+    VERCEL_TEAM_ID: z.string().optional(),
+    VERCEL_PROJECT_ID: z.string().optional(),
+    VERCEL_AUTH_TOKEN: z.string().optional(),
+    VERCEL_URL: z.string().optional(),
+    VERCEL_BRANCH_URL: z.string().optional(),
+    VERCEL_PROJECT_PRODUCTION_URL: z.string().optional(),
   },
   experimental__runtimeEnv: process.env,
 });

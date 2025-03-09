@@ -55,9 +55,9 @@
     {
       "identifier": "http:default",
       "allow": [
-        { "url": "https://cap.so" },
-        { "url": "https://l.cap.so" },
-        { "url": "http://localhost:3000/*" }
+        { "url": "http://*" },
+        { "url": "https://*" },
+        { "url": "http://localhost:*" }
       ]
     },
     "clipboard-manager:allow-write-text"

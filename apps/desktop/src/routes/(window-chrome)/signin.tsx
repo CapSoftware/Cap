@@ -75,7 +75,8 @@ function createSessionRequestUrl(
   platform: "web" | "desktop"
 ) {
   const callbackUrl = new URL(
-    `${clientEnv.VITE_SERVER_URL}/api/desktop/session/request`
+    `/api/desktop/session/request`,
+    clientEnv.VITE_SERVER_URL
   );
 
   if (port !== null) callbackUrl.searchParams.set("port", port);

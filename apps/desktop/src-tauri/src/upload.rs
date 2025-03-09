@@ -454,25 +454,13 @@ pub async fn get_s3_config(
     is_screenshot: bool,
     video_id: Option<String>,
 ) -> Result<S3UploadMeta, String> {
-    let origin = "http://tauri.localhost";
     let config_url = web_api::make_url(if let Some(id) = video_id {
-        format!(
-            "/api/desktop/video/create?origin={}&recordingMode=desktopMP4&videoId={}",
-            origin, id
-        )
+        format!("/api/desktop/video/create?recordingMode=desktopMP4&videoId={id}")
     } else if is_screenshot {
-        format!(
-            "/api/desktop/video/create?origin={}&recordingMode=desktopMP4&isScreenshot=true",
-            origin
-        )
+        "/api/desktop/video/create?recordingMode=desktopMP4&isScreenshot=true".to_string()
     } else {
-        format!(
-            "/api/desktop/video/create?origin={}&recordingMode=desktopMP4",
-            origin
-        )
+        "/api/desktop/video/create?recordingMode=desktopMP4".to_string()
     });
-
-    dbg!(&config_url);
 
     let response = app
         .authed_api_request(|client| client.get(config_url))
@@ -1308,7 +1296,8 @@ impl ProgressiveUploadTask {
                     .json(&serde_json::json!({
                         "fileKey": file_key,
                         "uploadId": upload_id,
-                        "partNumber": *part_number
+                        "partNumber": *part_number,
+                        "md5Sum": &md5_sum
                     }))
             })
             .await
@@ -1365,16 +1354,13 @@ impl ProgressiveUploadTask {
                 total_read
             );
 
-            match dbg!(
-                client
-                    .put(&presigned_url)
-                    .header("Content-Length", total_read.to_string()) // .header("Connection", "keep-alive")
-                                                                      // .header("Content-MD5", &md5_sum)
-            )
-            .timeout(Duration::from_secs(120))
-            .body(chunk.clone())
-            .send()
-            .await
+            match client
+                .put(&presigned_url)
+                .header("Content-MD5", &md5_sum)
+                .timeout(Duration::from_secs(120))
+                .body(chunk.clone())
+                .send()
+                .await
             {
                 Ok(upload_response) => {
                     if upload_response.status().is_success() {

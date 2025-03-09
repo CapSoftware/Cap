@@ -140,9 +140,6 @@ async isCameraWindowOpen() : Promise<boolean> {
 async seekTo(frameNumber: number) : Promise<null> {
     return await TAURI_INVOKE("seek_to", { frameNumber });
 },
-async sendFeedbackRequest(feedback: string) : Promise<null> {
-    return await TAURI_INVOKE("send_feedback_request", { feedback });
-},
 async positionTrafficLights(controlsInset: [number, number] | null) : Promise<void> {
     await TAURI_INVOKE("position_traffic_lights", { controlsInset });
 },

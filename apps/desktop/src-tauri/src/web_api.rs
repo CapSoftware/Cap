@@ -15,10 +15,13 @@ async fn do_authed_request(
 ) -> Result<reqwest::Response, reqwest::Error> {
     let client = reqwest::Client::new();
 
-    build(client)
-        .header("Authorization", format!("Bearer {}", auth.token))
-        .send()
-        .await
+    let mut req = build(client).header("Authorization", format!("Bearer {}", auth.token));
+
+    if let Some(s) = std::option_env!("VITE_VERCEL_AUTOMATION_BYPASS_SECRET") {
+        req = req.header("x-vercel-protection-bypass", s);
+    }
+
+    req.send().await
 }
 
 pub trait ManagerExt<R: Runtime>: Manager<R> {
