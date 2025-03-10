@@ -56,26 +56,23 @@ impl Playback {
                 f64::MAX
             };
 
-            // TODO: make this work with >1 segment
-            if self.segments[0].audio.is_some() {
-                AudioPlayback {
-                    segments: self
-                        .segments
-                        .iter()
-                        .map(|s| {
-                            [s.audio.clone(), s.system_audio.clone()]
-                                .into_iter()
-                                .flatten()
-                                .collect::<Vec<_>>()
-                        })
-                        .collect::<Vec<_>>(),
-                    stop_rx: stop_rx.clone(),
-                    start_frame_number: self.start_frame_number,
-                    project: self.project.clone(),
-                    fps,
-                }
-                .spawn();
-            };
+            AudioPlayback {
+                segments: self
+                    .segments
+                    .iter()
+                    .map(|s| {
+                        [s.audio.clone(), s.system_audio.clone()]
+                            .into_iter()
+                            .flatten()
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>(),
+                stop_rx: stop_rx.clone(),
+                start_frame_number: self.start_frame_number,
+                project: self.project.clone(),
+                fps,
+            }
+            .spawn();
 
             loop {
                 let time =
@@ -152,6 +149,10 @@ struct AudioPlayback {
 impl AudioPlayback {
     fn spawn(self) {
         let handle = tokio::runtime::Handle::current();
+
+        if self.segments[0].is_empty() {
+            return;
+        }
 
         std::thread::spawn(move || {
             let host = cpal::default_host();

@@ -1334,8 +1334,6 @@ impl ProgressiveUploadTask {
             .unwrap_or("")
             .to_string();
 
-        dbg!(&presigned_url);
-
         if presigned_url.is_empty() {
             return Err(format!("Empty presignedUrl for part {}", *part_number));
         }

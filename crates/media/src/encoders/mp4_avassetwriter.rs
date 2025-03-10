@@ -10,7 +10,7 @@ use crate::{
 };
 
 use arc::Retained;
-use cidre::{objc::Obj, *};
+use cidre::{cm::SampleTimingInfo, objc::Obj, *};
 
 pub struct MP4AVAssetWriterEncoder {
     tag: &'static str,
@@ -172,7 +172,6 @@ impl MP4AVAssetWriterEncoder {
     }
 
     fn queue_audio_frame(&mut self, frame: FFAudio) -> Result<(), MediaError> {
-        dbg!(&frame);
         let Some(audio_input) = &mut self.audio_input else {
             return Err(MediaError::Any("No audio input"));
         };
@@ -184,10 +183,6 @@ impl MP4AVAssetWriterEncoder {
         if self.first_timestamp.is_none() {
             return Ok(());
         }
-
-        // if frame.planes() != 1 {
-        //     return Err(MediaError::Any("Audio planes != 1"));
-        // }
 
         let audio_desc = cat::audio::StreamBasicDesc::common_f32(
             frame.rate() as f64,

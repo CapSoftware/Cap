@@ -85,13 +85,17 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
                         .await
                         .map_err(MediaError::TaskLaunch)?,
                 )
-                .sink("system_audio_sink", audio_mixer.sink());
+                .sink(
+                    "system_audio_sink",
+                    audio_mixer.sink(system_audio::macos::Source::info()),
+                );
         }
 
         if let Some(audio) = audio {
+            let info = audio.info();
             builder = builder
                 .source("microphone_capture", audio)
-                .sink("microphone_sink", audio_mixer.sink());
+                .sink("microphone_sink", audio_mixer.sink(info));
         }
 
         if audio_mixer.has_sources() {

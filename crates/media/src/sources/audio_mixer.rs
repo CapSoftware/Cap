@@ -24,6 +24,108 @@ impl AudioMixer {
     pub fn has_sources(&self) -> bool {
         !self.sources.is_empty()
     }
+
+    pub fn run(
+        &mut self,
+        on_ready: impl FnOnce() -> (),
+        mut on_output: impl FnMut(ffmpeg::frame::Audio),
+    ) {
+        fn init(
+            sources: &[AudioMixerSource],
+        ) -> (
+            ffmpeg::filter::Graph,
+            Vec<ffmpeg::filter::Context>,
+            ffmpeg::filter::Context,
+        ) {
+            let mut filter_graph = ffmpeg::filter::Graph::new();
+
+            let mut abuffers = sources
+                .iter()
+                .enumerate()
+                .map(|(i, source)| {
+                    let info = &source.info;
+                    let args = format!(
+                        "time_base={}:sample_rate={}:sample_fmt={}:channel_layout=0x{:x}",
+                        info.time_base,
+                        info.rate(),
+                        info.sample_format.name(),
+                        info.channel_layout().bits()
+                    );
+
+                    filter_graph
+                        .add(
+                            &ffmpeg::filter::find("abuffer")
+                                .expect("Failed to find abuffer filter"),
+                            &format!("src{i}"),
+                            &args,
+                        )
+                        .unwrap()
+                })
+                .collect::<Vec<_>>();
+
+            let mut amix = filter_graph
+                .add(
+                    &ffmpeg::filter::find("amix").expect("Failed to find amix filter"),
+                    "amix",
+                    &format!(
+                        "inputs={}:duration=first:dropout_transition=0",
+                        abuffers.len()
+                    ),
+                )
+                .unwrap();
+
+            let mut aformat = filter_graph
+                .add(
+                    &ffmpeg::filter::find("aformat").expect("Failed to find aformat filter"),
+                    "aformat",
+                    "sample_fmts=flt:sample_rates=48000:channel_layouts=stereo",
+                )
+                .expect("Failed to add aformat filter");
+
+            let mut abuffersink = filter_graph
+                .add(
+                    &ffmpeg::filter::find("abuffersink")
+                        .expect("Failed to find abuffersink filter"),
+                    "sink",
+                    "",
+                )
+                .expect("Failed to add abuffersink filter");
+
+            for (i, abuffer) in abuffers.iter_mut().enumerate() {
+                abuffer.link(0, &mut amix, i as u32);
+            }
+
+            amix.link(0, &mut aformat, 0);
+            aformat.link(0, &mut abuffersink, 0);
+
+            filter_graph
+                .validate()
+                .expect("Failed to validate filter graph");
+
+            (filter_graph, abuffers, abuffersink)
+        }
+
+        let (_, mut abuffers, mut abuffersink) = init(&self.sources);
+        on_ready();
+
+        let mut filtered = ffmpeg::frame::Audio::empty();
+        loop {
+            let (value, i, _) = futures::executor::block_on(futures::future::select_all(
+                self.sources.iter().map(|r| r.rx.recv_async()),
+            ));
+
+            let Ok(input) = value else {
+                break;
+            };
+
+            abuffers[i].source().add(&input).unwrap();
+
+            while abuffersink.sink().frame(&mut filtered).is_ok() {
+                on_output(filtered);
+                filtered = ffmpeg::frame::Audio::empty()
+            }
+        }
+    }
 }
 
 pub struct AudioMixerSink {
@@ -62,30 +164,89 @@ impl PipelineSourceTask for AudioMixer {
         control_signal: crate::pipeline::control::PipelineControlSignal,
         output: flume::Sender<Self::Output>,
     ) {
-        let _ = ready_signal.send(Ok(()));
-
         let mut filter_graph = ffmpeg::filter::Graph::new();
 
-        let info = &self.sources[0].info;
-        let args = format!(
-            "time_base={}:sample_rate={}:sample_fmt={}:channel_layout=0x{:x}",
-            info.time_base,
-            info.rate(),
-            info.sample_format.name(),
-            info.channel_layout().bits()
-        );
+        let mut abuffers = self
+            .sources
+            .iter()
+            .enumerate()
+            .map(|(i, source)| {
+                let info = &source.info;
+                let args = format!(
+                    "time_base={}:sample_rate={}:sample_fmt={}:channel_layout=0x{:x}",
+                    info.time_base,
+                    info.rate(),
+                    info.sample_format.name(),
+                    info.channel_layout().bits()
+                );
 
-        let abuffer = filter_graph
+                filter_graph
+                    .add(
+                        &ffmpeg::filter::find("abuffer").expect("Failed to find abuffer filter"),
+                        &format!("src{i}"),
+                        &args,
+                    )
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        let mut amix = filter_graph
             .add(
-                &ffmpeg::filter::find("abuffer").expect("Failed to find abuffer filter"),
-                "src1",
-                &args,
+                &ffmpeg::filter::find("amix").expect("Failed to find amix filter"),
+                "amix",
+                &format!(
+                    "inputs={}:duration=first:dropout_transition=0",
+                    abuffers.len()
+                ),
             )
             .unwrap();
 
-        let rx = &self.sources[0].rx;
-        while let Ok(input) = rx.recv() {
-            let _ = output.send(input);
+        let mut aformat = filter_graph
+            .add(
+                &ffmpeg::filter::find("aformat").expect("Failed to find aformat filter"),
+                "aformat",
+                "sample_fmts=flt:sample_rates=48000:channel_layouts=stereo",
+            )
+            .expect("Failed to add aformat filter");
+
+        let mut abuffersink = filter_graph
+            .add(
+                &ffmpeg::filter::find("abuffersink").expect("Failed to find abuffersink filter"),
+                "sink",
+                "",
+            )
+            .expect("Failed to add abuffersink filter");
+
+        for (i, abuffer) in abuffers.iter_mut().enumerate() {
+            abuffer.link(0, &mut amix, i as u32);
+        }
+
+        amix.link(0, &mut aformat, 0);
+        aformat.link(0, &mut abuffersink, 0);
+
+        filter_graph
+            .validate()
+            .expect("Failed to validate filter graph");
+
+        let _ = ready_signal.send(Ok(()));
+
+        let mut filtered = ffmpeg::frame::Audio::empty();
+
+        loop {
+            let (value, i, _) = futures::executor::block_on(futures::future::select_all(
+                self.sources.iter().map(|r| r.rx.recv_async()),
+            ));
+
+            let Ok(input) = value else {
+                break;
+            };
+
+            abuffers[i].source().add(&input).unwrap();
+
+            while abuffersink.sink().frame(&mut filtered).is_ok() {
+                let _ = output.send(filtered);
+                filtered = ffmpeg::frame::Audio::empty()
+            }
         }
     }
 }

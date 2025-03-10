@@ -158,3 +158,30 @@ pub mod macos {
         }
     }
 }
+
+// pub mod windows {
+//     use cpal::{
+//         traits::{DeviceTrait, HostTrait},
+//         *,
+//     };
+
+//     pub struct Source {}
+
+//     impl Source {
+//         pub async fn init() -> Result<Self, String> {
+//             let host = cpal::default_host();
+
+//             let output_device = host
+//                 .default_output_device()
+//                 .ok_or_else(|| "No default output device".to_string())?;
+
+//             let config = output_device
+//                 .default_output_config()
+//                 .map_err(|e| format!("Default Stream / {e}"))?;
+
+//             output_device.build_input_stream(, data_callback, error_callback, timeout)
+
+//             todo!();
+//         }
+//     }
+// }

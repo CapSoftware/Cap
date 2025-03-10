@@ -263,29 +263,7 @@ export default function () {
       <TargetSelects options={options.data} setOptions={setOptions} />
       <CameraSelect options={options.data} setOptions={setOptions} />
       <MicrophoneSelect options={options.data} setOptions={setOptions} />
-      <button
-        onClick={() => {
-          if (!options.data) return;
-          setOptions.mutate({
-            ...options.data,
-            captureSystemAudio: !options.data?.captureSystemAudio,
-          });
-        }}
-        disabled={setOptions.isPending}
-        class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10"
-      >
-        <div class="size-[1.25rem] flex items-center justify-center">
-          <IconPhMonitorBold class="text-gray-400 stroke-2 size-[1.2rem]" />
-        </div>
-        <span class="flex-1 text-left truncate">
-          {options.data?.captureSystemAudio
-            ? "Record System Audio"
-            : "No System Audio"}
-        </span>
-        <InfoPill variant={options.data?.captureSystemAudio ? "blue" : "red"}>
-          {options.data?.captureSystemAudio ? "On" : "Off"}
-        </InfoPill>
-      </button>
+      <SystemAudio options={options.data} setOptions={setOptions} />
       <div class="w-full flex items-center space-x-1">
         <Button
           disabled={toggleRecording.isPending}
@@ -964,6 +942,39 @@ function MicrophoneSelect(props: {
         </KSelect.Portal>
       </KSelect>
     </div>
+  );
+}
+
+function SystemAudio(props: {
+  options: ReturnType<typeof createOptionsQuery>["options"]["data"];
+  setOptions: ReturnType<typeof createOptionsQuery>["setOptions"];
+}) {
+  const currentRecording = createCurrentRecordingQuery();
+
+  return (
+    <button
+      onClick={() => {
+        if (!props.options) return;
+        props.setOptions.mutate({
+          ...props.options,
+          captureSystemAudio: !props.options?.captureSystemAudio,
+        });
+      }}
+      disabled={props.setOptions.isPending || !!currentRecording.data}
+      class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10"
+    >
+      <div class="size-[1.25rem] flex items-center justify-center">
+        <IconPhMonitorBold class="text-gray-400 stroke-2 size-[1.2rem]" />
+      </div>
+      <span class="flex-1 text-left truncate">
+        {props.options?.captureSystemAudio
+          ? "Record System Audio"
+          : "No System Audio"}
+      </span>
+      <InfoPill variant={props.options?.captureSystemAudio ? "blue" : "red"}>
+        {props.options?.captureSystemAudio ? "On" : "Off"}
+      </InfoPill>
+    </button>
   );
 }
 
