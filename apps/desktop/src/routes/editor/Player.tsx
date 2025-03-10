@@ -1,24 +1,15 @@
 import { DropdownMenu as KDropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Select as KSelect } from "@kobalte/core/select";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
-import { createEventListener } from "@solid-primitives/event-listener";
 import { createElementBounds } from "@solid-primitives/bounds";
+import { createEventListener } from "@solid-primitives/event-listener";
 import { cx } from "cva";
-import {
-  For,
-  Show,
-  Suspense,
-  createEffect,
-  createResource,
-  createSignal,
-  on,
-} from "solid-js";
+import { For, Show, Suspense, createEffect, createSignal } from "solid-js";
 import { reconcile } from "solid-js/store";
 
 import { type AspectRatio, commands } from "~/utils/tauri";
 import { FPS, OUTPUT_SIZE, useEditorContext } from "./context";
 import { ASPECT_RATIOS } from "./projectConfig";
-import { authStore } from "~/store";
 import {
   ComingSoonTooltip,
   DropdownItem,
@@ -129,51 +120,8 @@ export function Player() {
   });
 
   return (
-    <div class="flex flex-col divide-y flex-1">
-      <div class="flex flex-row justify-between font-medium p-[0.75rem] text-[0.875rem] z-10 bg-gray-50">
-        <div class="flex flex-row items-center gap-[0.5rem]">
-          <AspectRatioSelect />
-          <EditorButton
-            leftIcon={<IconCapCrop />}
-            onClick={() => {
-              const display = editorInstance.recordings.segments[0].display;
-              setDialog({
-                open: true,
-                type: "crop",
-                position: {
-                  ...(project.background.crop?.position ?? { x: 0, y: 0 }),
-                },
-                size: {
-                  ...(project.background.crop?.size ?? {
-                    x: display.width,
-                    y: display.height,
-                  }),
-                },
-              });
-            }}
-          >
-            Crop
-          </EditorButton>
-          <PresetsDropdown />
-        </div>
-        <div class="flex flex-row place-items-center gap-2">
-          <EditorButton
-            disabled={!history.canUndo()}
-            leftIcon={<IconCapUndo />}
-            onClick={() => history.undo()}
-          >
-            Undo
-          </EditorButton>
-          <EditorButton
-            disabled={!history.canRedo()}
-            leftIcon={<IconCapRedo />}
-            onClick={() => history.redo()}
-          >
-            Redo
-          </EditorButton>
-        </div>
-      </div>
-      <div ref={setCanvasContainerRef} class="bg-gray-100 flex-1 relative">
+    <div class="flex flex-col flex-1 divide-y">
+      <div ref={setCanvasContainerRef} class="relative flex-1 bg-gray-50">
         <Show when={latestFrame()}>
           {(currentFrame) => {
             const padding = 16;
@@ -224,7 +172,7 @@ export function Player() {
                   width: `${size().width}px`,
                   height: `${size().height}px`,
                 }}
-                class="bg-blue-50 absolute rounded"
+                class="absolute bg-blue-50 rounded"
                 ref={canvasRef}
                 id="canvas"
                 width={currentFrame().width}
@@ -235,7 +183,7 @@ export function Player() {
         </Show>
       </div>
       <div class="flex flex-row items-center p-[0.75rem] gap-[0.5rem] z-10 bg-gray-50 justify-between">
-        <div class="flex-1 flex items-center">
+        <div class="flex flex-1 items-center">
           <div class="flex-1" />
           <Time seconds={Math.max(previewTime() ?? playbackTime(), 0)} />
         </div>
@@ -253,7 +201,7 @@ export function Player() {
           <button
             type="button"
             onClick={handlePlayPauseClick}
-            class="hover:text-black transition-colors"
+            class="transition-colors hover:text-black"
           >
             {!playing() || isAtEnd() ? (
               <IconCapPlayCircle class="size-[1.5rem]" />
@@ -272,7 +220,7 @@ export function Player() {
             <IconCapFrameLast class="size-[1.2rem]" />
           </button>
         </div>
-        <div class="flex-1 flex flex-row justify-end items-center gap-2">
+        <div class="flex flex-row flex-1 gap-2 justify-end items-center">
           <Time seconds={totalDuration()} />
           <div class="flex-1" />
           {window.FLAGS.split ? (
@@ -403,12 +351,12 @@ function PresetsDropdown() {
           >
             <MenuItemList<typeof KDropdownMenu.Group>
               as={KDropdownMenu.Group}
-              class="flex-1 overflow-y-auto scrollbar-none"
+              class="overflow-y-auto flex-1 scrollbar-none"
             >
               <For
                 each={presets.query.data?.presets ?? []}
                 fallback={
-                  <div class="w-full text-sm text-gray-400 text-center py-1">
+                  <div class="py-1 w-full text-sm text-center text-gray-400">
                     No Presets
                   </div>
                 }
@@ -449,7 +397,7 @@ function PresetsDropdown() {
                           <MenuItemList<typeof KDropdownMenu.SubContent>
                             as={KDropdownMenu.SubContent}
                             class={cx(
-                              "animate-in fade-in slide-in-from-left-1 w-44",
+                              "w-44 animate-in fade-in slide-in-from-left-1",
                               dropdownContainerClasses
                             )}
                           >

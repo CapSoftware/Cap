@@ -1,4 +1,5 @@
 import { Button } from "@cap/ui-solid";
+import { Tooltip } from "@kobalte/core";
 import { Select as KSelect, SelectRootProps } from "@kobalte/core/select";
 import { useNavigate } from "@solidjs/router";
 import {
@@ -7,35 +8,34 @@ import {
   useQueryClient,
 } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
-import { availableMonitors, getCurrentWindow } from "@tauri-apps/api/window";
-import { LogicalSize } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
-  type JSX,
-  Show,
-  type ValidComponent,
   createEffect,
   createMemo,
   createResource,
   createSignal,
-  onMount,
-  onCleanup,
   ErrorBoundary,
+  type JSX,
+  onCleanup,
+  onMount,
+  Show,
   Suspense,
+  type ValidComponent,
 } from "solid-js";
 import { createStore } from "solid-js/store";
-import { Tooltip } from "@kobalte/core";
 import { trackEvent } from "~/utils/analytics";
 
+import Mode from "~/components/Mode";
 import {
   createCurrentRecordingQuery,
-  createOptionsQuery,
-  listWindows,
-  listAudioDevices,
-  getPermissions,
-  createVideoDevicesQuery,
-  listScreens,
   createLicenseQuery,
+  createOptionsQuery,
+  createVideoDevicesQuery,
+  getPermissions,
+  listAudioDevices,
+  listScreens,
+  listWindows,
 } from "~/utils/queries";
 import {
   type CaptureScreen,
@@ -50,7 +50,6 @@ import {
   topLeftAnimateClasses,
   topRightAnimateClasses,
 } from "../editor/ui";
-import Mode from "~/components/Mode";
 
 export default function () {
   const { options, setOptions } = createOptionsQuery();
@@ -146,7 +145,7 @@ export default function () {
       "items",
       <div
         dir={ostype() === "windows" ? "rtl" : "rtl"}
-        class="flex mx-2 items-center gap-1"
+        class="flex gap-1 items-center mx-2"
       >
         <Tooltip.Root openDelay={0}>
           <Tooltip.Trigger>
@@ -157,11 +156,11 @@ export default function () {
               }
               class="flex items-center justify-center w-5 h-5 -ml-[1.5px]"
             >
-              <IconCapSettings class="size-5 text-gray-400 hover:text-gray-500" />
+              <IconCapSettings class="text-gray-400 size-5 hover:text-gray-500" />
             </button>
           </Tooltip.Trigger>
           <Tooltip.Portal>
-            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
               Settings
               <Tooltip.Arrow class="fill-gray-500" />
             </Tooltip.Content>
@@ -174,13 +173,13 @@ export default function () {
               onClick={() =>
                 commands.showWindow({ Settings: { page: "recordings" } })
               }
-              class="flex items-center justify-center w-5 h-5"
+              class="flex justify-center items-center w-5 h-5"
             >
-              <IconLucideSquarePlay class="size-5 text-gray-400 hover:text-gray-500" />
+              <IconLucideSquarePlay class="text-gray-400 size-5 hover:text-gray-500" />
             </button>
           </Tooltip.Trigger>
           <Tooltip.Portal>
-            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
               Previous Recordings
               <Tooltip.Arrow class="fill-gray-500" />
             </Tooltip.Content>
@@ -193,9 +192,9 @@ export default function () {
           <button
             type="button"
             onClick={() => commands.showWindow("Upgrade")}
-            class="relative flex items-center justify-center w-5 h-5"
+            class="flex relative justify-center items-center w-5 h-5"
           >
-            <IconLucideGift class="size-5 text-gray-400 hover:text-gray-500" />
+            <IconLucideGift class="text-gray-400 size-5 hover:text-gray-500" />
             <div
               style={{ "background-color": "#FF4747" }}
               class="block z-10 absolute top-0 right-0 size-1.5 rounded-full animate-bounce"
@@ -209,9 +208,9 @@ export default function () {
             onClick={() => {
               new WebviewWindow("debug", { url: "/debug" });
             }}
-            class="flex items-center justify-center w-5 h-5"
+            class="flex justify-center items-center w-5 h-5"
           >
-            <IconLucideBug class="size-5 text-gray-400 hover:text-gray-500" />
+            <IconLucideBug class="text-gray-400 size-5 hover:text-gray-500" />
           </button>
         )}
       </div>
@@ -221,13 +220,13 @@ export default function () {
   });
 
   return (
-    <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-[--gray-50] h-full text-[--text-primary]">
+    <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-50 h-full text-[--text-primary]">
       {initialize()}
       <div class="flex items-center justify-between pb-[0.25rem]">
         <div class="flex items-center space-x-1">
           <div class="*:w-[92px] *:h-auto text-[--text-primary] ">
-            <IconCapLogoFullDark class="dark:block hidden" />
-            <IconCapLogoFull class="dark:hidden block" />
+            <IconCapLogoFullDark class="hidden dark:block" />
+            <IconCapLogoFull class="block dark:hidden" />
           </div>
           <ErrorBoundary fallback={<></>}>
             <Suspense>
@@ -257,13 +256,13 @@ export default function () {
       <TargetSelects options={options.data} setOptions={setOptions} />
       <CameraSelect options={options.data} setOptions={setOptions} />
       <MicrophoneSelect options={options.data} setOptions={setOptions} />
-      <div class="w-full flex items-center space-x-1">
+      <div class="flex items-center space-x-1 w-full">
         <Button
           disabled={toggleRecording.isPending}
           variant={isRecording() ? "destructive" : "primary"}
           size="md"
           onClick={() => toggleRecording.mutate()}
-          class="flex-grow flex items-center justify-center"
+          class="flex flex-grow justify-center items-center"
         >
           {isRecording() ? (
             "Stop Recording"
@@ -320,20 +319,18 @@ function useRequestPermission() {
   return requestPermission;
 }
 
-import * as dialog from "@tauri-apps/plugin-dialog";
-import * as updater from "@tauri-apps/plugin-updater";
 import { makePersisted } from "@solid-primitives/storage";
-import { setTitlebar } from "~/utils/titlebar-state";
-import { type as ostype } from "@tauri-apps/plugin-os";
-import { apiClient, protectedHeaders } from "~/utils/web-api";
-import { Transition } from "solid-transition-group";
+import { UnlistenFn } from "@tauri-apps/api/event";
 import {
   getCurrentWebviewWindow,
   WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
-import { Webview } from "@tauri-apps/api/webview";
-import { UnlistenFn } from "@tauri-apps/api/event";
-import { isDev } from "solid-js/web";
+import * as dialog from "@tauri-apps/plugin-dialog";
+import { type as ostype } from "@tauri-apps/plugin-os";
+import * as updater from "@tauri-apps/plugin-updater";
+import { Transition } from "solid-transition-group";
+import { setTitlebar } from "~/utils/titlebar-state";
+import { apiClient } from "~/utils/web-api";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -498,7 +495,7 @@ function TargetSelects(props: {
   return (
     <div>
       <Tooltip.Root openDelay={500}>
-        <Tooltip.Trigger class="fixed flex flex-row items-center w-8 h-8">
+        <Tooltip.Trigger class="flex fixed flex-row items-center w-8 h-8">
           <Transition
             onEnter={(el, done) => {
               if (shouldAnimateAreaSelect)
@@ -577,7 +574,7 @@ function TargetSelects(props: {
           </Transition>
         </Tooltip.Trigger>
         <Tooltip.Portal>
-          <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+          <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
             {isTargetCaptureArea()
               ? "Remove selection"
               : areaSelection.pending
@@ -606,7 +603,7 @@ function TargetSelects(props: {
                 : undefined,
           }}
         >
-          <div class="bg-gray-100 flex-1" />
+          <div class="flex-1 bg-gray-100" />
         </div>
         <TargetSelect<CaptureScreen>
           options={screens.data ?? []}
@@ -653,7 +650,7 @@ function TargetSelects(props: {
           optionsEmptyText="No windows found"
           selected={props.options?.captureTarget.variant === "window"}
           itemComponent={(props) => (
-            <div class="flex-1 flex flex-col overflow-x-hidden">
+            <div class="flex overflow-x-hidden flex-col flex-1">
               <div class="w-full truncate">{props.item.rawValue?.name}</div>
               <div class="w-full text-xs">
                 {props.item.rawValue?.owner_name}
@@ -762,7 +759,7 @@ function CameraSelect(props: {
             class={topLeftAnimateClasses}
           >
             <MenuItemList<typeof KSelect.Listbox>
-              class="max-h-32 overflow-y-auto"
+              class="overflow-y-auto max-h-32"
               as={KSelect.Listbox}
             />
           </PopperContent>
@@ -928,7 +925,7 @@ function MicrophoneSelect(props: {
             class={topLeftAnimateClasses}
           >
             <MenuItemList<typeof KSelect.Listbox>
-              class="max-h-36 overflow-y-auto"
+              class="overflow-y-auto max-h-36"
               as={KSelect.Listbox}
             />
           </PopperContent>
@@ -1013,8 +1010,8 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
           {(value) => value.selectedOption()?.name}
         </KSelect.Value>
         {props.options.length > 1 && (
-          <KSelect.Icon class="ui-expanded:-rotate-180 transition-transform">
-            <IconCapChevronDown class="size-4 shrink-0 transform transition-transform" />
+          <KSelect.Icon class="transition-transform ui-expanded:-rotate-180">
+            <IconCapChevronDown class="transition-transform transform size-4 shrink-0" />
           </KSelect.Icon>
         )}
       </KSelect.Trigger>
@@ -1137,9 +1134,9 @@ function ChangelogButton() {
         <button
           type="button"
           onClick={handleChangelogClick}
-          class="relative flex items-center justify-center w-5 h-5"
+          class="flex relative justify-center items-center w-5 h-5"
         >
-          <IconLucideBell class="size-5 text-gray-400 hover:text-gray-500" />
+          <IconLucideBell class="text-gray-400 size-5 hover:text-gray-500" />
           {changelogState.hasUpdate && (
             <div
               style={{ "background-color": "#FF4747" }}
@@ -1149,7 +1146,7 @@ function ChangelogButton() {
         </button>
       </Tooltip.Trigger>
       <Tooltip.Portal>
-        <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+        <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
           Changelog
           <Tooltip.Arrow class="fill-gray-500" />
         </Tooltip.Content>

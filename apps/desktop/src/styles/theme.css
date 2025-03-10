@@ -7,6 +7,7 @@
   --gray-200: #e7eaf0;
   --gray-300: #c9cedb;
   --gray-400: #8991a3;
+  --gray-450: #F3F3F3;
   --gray-500: #12161f;
 
   --text-primary: rgba(18, 22, 31, 0.95); /* Section titles, headings */
@@ -30,6 +31,7 @@
   --blue-200: #85adff;
   --blue-300: #4785ff;
   --blue-400: #3f75e0;
+  --blue-500: rgb(54, 102, 197);
 
   --blue-transparent-10: rgba(34, 64, 122, 0.1);
   --blue-transparent-20: rgba(34, 64, 122, 0.2);
@@ -43,16 +45,18 @@
   --red-transparent-20: rgba(255, 71, 102, 0.2);
 
   --shadow-s: 0px 8px 16px 0px rgba(18, 22, 31, 0.04);
+  
 }
 
 /* Dark theme variables */
 :root.dark {
   /* Main background colors */
-  --gray-50: #1e1e1e; /* Main background */
-  --gray-100: #242424; /* Secondary background */
-  --gray-200: #2a2a2a; /* Borders and dividers */
+  --gray-50: #161616; /* Main background */
+  --gray-100: #191919; /* Secondary background */
+  --gray-200: #232323; /* Borders and dividers */
   --gray-300: #3a3a3a; /* Subtle highlights */
   --gray-400: #9d9d9d; /* Secondary text - descriptions */
+  --gray-450: #F3F3F3;
   --gray-500: #ffffff; /* Primary text - titles/headings (back to white) */
 
   /* Add new variables for text hierarchy */
