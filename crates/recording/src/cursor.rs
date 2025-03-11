@@ -675,7 +675,7 @@ fn get_cursor_image_data() -> Option<CursorData> {
         };
 
         // Convert to PNG format
-        let mut png_data = Vec::new();
+        let mut png_data = vec![];
         trimmed_image
             .write_to(
                 &mut std::io::Cursor::new(&mut png_data),

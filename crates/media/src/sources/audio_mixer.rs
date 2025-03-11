@@ -9,7 +9,7 @@ pub struct AudioMixer {
 impl AudioMixer {
     pub fn new() -> Self {
         Self {
-            sources: Vec::new(),
+            sources: vec![],
         }
     }
 

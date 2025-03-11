@@ -93,7 +93,7 @@ impl Default for DefaultCursors {
                 .0
         }
 
-        DefaultCursors {
+        Self {
             arrow: load_cursor(IDC_ARROW),
             ibeam: load_cursor(IDC_IBEAM),
             cross: load_cursor(IDC_CROSS),

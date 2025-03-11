@@ -82,16 +82,16 @@ impl CapWindowId {
 
     pub fn title(&self) -> String {
         match self {
-            Self::Setup => "Cap Setup".to_string(),
-            Self::Settings => "Cap Settings".to_string(),
-            Self::WindowCaptureOccluder => "Cap Window Capture Occluder".to_string(),
-            Self::CaptureArea => "Cap Capture Area".to_string(),
-            Self::InProgressRecording => "Cap In Progress Recording".to_string(),
-            Self::Editor { .. } => "Cap Editor".to_string(),
-            Self::SignIn => "Cap Sign In".to_string(),
-            Self::ModeSelect => "Cap Mode Selection".to_string(),
-            _ => "Cap".to_string(),
-        }
+            Self::Setup => "Cap Setup",
+            Self::Settings => "Cap Settings",
+            Self::WindowCaptureOccluder => "Cap Window Capture Occluder",
+            Self::CaptureArea => "Cap Capture Area",
+            Self::InProgressRecording => "Cap In Progress Recording",
+            Self::Editor { .. } => "Cap Editor",
+            Self::SignIn => "Cap Sign In",
+            Self::ModeSelect => "Cap Mode Selection",
+            _ => "Cap",
+        }.to_string()
     }
 
     pub fn activates_dock(&self) -> bool {

@@ -782,7 +782,7 @@ async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
 
         let resized_img = img.resize(new_width, new_height, image::imageops::FilterType::Nearest);
 
-        let mut buffer = Vec::new();
+        let mut buffer = vec![];
         let mut encoder = JpegEncoder::new_with_quality(&mut buffer, 30);
         encoder
             .encode(
@@ -855,7 +855,7 @@ impl ProgressiveUploadTask {
                 let s3_config = pre_created_video.config;
                 let file_key = format!("{}/{}/{}", s3_config.user_id(), s3_config.id(), file_name);
 
-                let mut uploaded_parts = Vec::new();
+                let mut uploaded_parts = vec![];
                 let mut part_number = 1;
                 let mut last_uploaded_position: u64 = 0;
 
