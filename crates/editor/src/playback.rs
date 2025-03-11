@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use cap_media::data::{AudioInfo, AudioInfoError, FromSampleBytes};
-use cap_media::feeds::{AudioData, AudioPlaybackBuffer};
+use cap_media::feeds::{AudioPlaybackBuffer, AudioTrack};
 use cap_project::{ProjectConfiguration, XY};
 use cap_rendering::{ProjectUniforms, RenderVideoConstants};
 use cpal::{
@@ -35,12 +35,7 @@ pub struct PlaybackHandle {
 }
 
 impl Playback {
-    pub async fn start(
-        self,
-        fps: u32,
-        resolution_base: XY<u32>,
-        is_upgraded: bool,
-    ) -> PlaybackHandle {
+    pub async fn start(self, fps: u32, resolution_base: XY<u32>) -> PlaybackHandle {
         let (stop_tx, mut stop_rx) = watch::channel(false);
         stop_rx.borrow_and_update();
 
@@ -61,21 +56,23 @@ impl Playback {
                 f64::MAX
             };
 
-            // TODO: make this work with >1 segment
-            if self.segments[0].audio.is_some() {
-                AudioPlayback {
-                    segments: self
-                        .segments
-                        .iter()
-                        .map(|s| s.audio.as_ref().as_ref().unwrap().clone())
-                        .collect(),
-                    stop_rx: stop_rx.clone(),
-                    start_frame_number: self.start_frame_number,
-                    project: self.project.clone(),
-                    fps,
-                }
-                .spawn();
-            };
+            AudioPlayback {
+                segments: self
+                    .segments
+                    .iter()
+                    .map(|s| {
+                        [s.audio.clone(), s.system_audio.clone()]
+                            .into_iter()
+                            .flatten()
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>(),
+                stop_rx: stop_rx.clone(),
+                start_frame_number: self.start_frame_number,
+                project: self.project.clone(),
+                fps,
+            }
+            .spawn();
 
             loop {
                 let time =
@@ -91,36 +88,23 @@ impl Playback {
                 if let Some((segment_time, segment_i)) = project.get_segment_time(time) {
                     let segment = &self.segments[segment_i as usize];
 
-                    tokio::select! {
-                        _ = stop_rx.changed() => {
-                           break;
-                        },
-                        data = segment.decoders.get_frames(segment_time as f32, !project.camera.hide) => {
-                            if let Some(segment_frames) = data {
-                                let uniforms = ProjectUniforms::new(
-                                    &self.render_constants,
-                                    &project,
-                                    frame_number,
-                                    fps,
-                                    resolution_base,
-                                    is_upgraded,
-                                    &segment.cursor
-                                );
+                    let data = tokio::select! {
+                        _ = stop_rx.changed() => { break; },
+                        data = segment.decoders.get_frames(segment_time as f32, !project.camera.hide) => { data }
+                    };
 
-                                self
-                                    .renderer
-                                    .render_frame(
-                                        segment_frames,
-                                        project.background.source.clone(),
-                                        uniforms,
-                                        resolution_base,
-                                        segment.cursor.clone()
-                                    )
-                                    .await;
-                            }
-                        }
-                        else => {
-                        }
+                    if let Some(segment_frames) = data {
+                        let uniforms = ProjectUniforms::new(
+                            &self.render_constants,
+                            &project,
+                            frame_number,
+                            fps,
+                            resolution_base,
+                        );
+
+                        self.renderer
+                            .render_frame(segment_frames, uniforms, segment.cursor.clone())
+                            .await;
                     }
                 }
 
@@ -155,7 +139,7 @@ impl PlaybackHandle {
 }
 
 struct AudioPlayback {
-    segments: Vec<AudioData>,
+    segments: Vec<AudioTrack>,
     stop_rx: watch::Receiver<bool>,
     start_frame_number: u32,
     project: watch::Receiver<ProjectConfiguration>,
@@ -165,6 +149,10 @@ struct AudioPlayback {
 impl AudioPlayback {
     fn spawn(self) {
         let handle = tokio::runtime::Handle::current();
+
+        if self.segments[0].is_empty() {
+            return;
+        }
 
         std::thread::spawn(move || {
             let host = cpal::default_host();
@@ -211,7 +199,7 @@ impl AudioPlayback {
             ..
         } = self;
 
-        let mut output_info = AudioInfo::from_stream_config(&supported_config)?;
+        let mut output_info = AudioInfo::from_stream_config(&supported_config);
         output_info.sample_format = output_info.sample_format.packed();
 
         // TODO: Get fps and duration from video (once we start supporting other frame rates)

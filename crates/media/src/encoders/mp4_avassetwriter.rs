@@ -4,13 +4,13 @@ use std::{
 };
 
 use crate::{
-    data::{AudioInfo, FFAudio, VideoInfo},
+    data::{AudioInfo, FFAudio, PlanarData, VideoInfo},
     pipeline::task::PipelineSinkTask,
     MediaError,
 };
 
 use arc::Retained;
-use cidre::{objc::Obj, *};
+use cidre::{cm::SampleTimingInfo, objc::Obj, *};
 
 pub struct MP4AVAssetWriterEncoder {
     tag: &'static str,
@@ -32,6 +32,9 @@ impl MP4AVAssetWriterEncoder {
         output: PathBuf,
         output_height: Option<u32>,
     ) -> Result<Self, MediaError> {
+        debug!("{video_config:#?}");
+        debug!("{audio_config:#?}");
+
         let fps = video_config.frame_rate.0 as f32 / video_config.frame_rate.1 as f32;
 
         let mut asset_writer = av::AssetWriter::with_url_and_file_type(
@@ -177,13 +180,9 @@ impl MP4AVAssetWriterEncoder {
             return Err(MediaError::Any("Not ready for more media data"));
         }
 
-        if self.first_timestamp.is_none() {
+        let Some(first_timestamp) = self.first_timestamp else {
             return Ok(());
-        }
-
-        if frame.planes() != 1 {
-            return Err(MediaError::Any("Audio planes != 1"));
-        }
+        };
 
         let audio_desc = cat::audio::StreamBasicDesc::common_f32(
             frame.rate() as f64,
@@ -191,7 +190,7 @@ impl MP4AVAssetWriterEncoder {
             frame.is_packed(),
         );
 
-        let total_data = frame.data(0).len();
+        let total_data = frame.samples() * frame.channels() as usize * frame.format().bytes();
 
         let mut block_buf = cm::BlockBuf::with_mem_block(total_data, None)
             .map_err(|_| MediaError::Any("Failed to allocate block buffer"))?;
@@ -200,7 +199,17 @@ impl MP4AVAssetWriterEncoder {
             .as_mut_slice()
             .map_err(|_| MediaError::Any("Failed to map block buffer"))?;
 
-        block_buf_slice.copy_from_slice(frame.data(0));
+        if frame.is_planar() {
+            let mut offset = 0;
+            for plane_i in 0..frame.planes() {
+                let data = frame.plane_data(plane_i);
+                block_buf_slice[offset..offset + data.len()]
+                    .copy_from_slice(&data[0..frame.samples() * frame.format().bytes()]);
+                offset += data.len();
+            }
+        } else {
+            block_buf_slice.copy_from_slice(&frame.data(0)[0..total_data]);
+        }
 
         let format_desc = cm::AudioFormatDesc::with_asbd(&audio_desc)
             .map_err(|_| MediaError::Any("Failed to create audio format desc"))?;
@@ -215,8 +224,13 @@ impl MP4AVAssetWriterEncoder {
                     std::ptr::null(),
                     Some(format_desc.as_ref()),
                     frame.samples() as isize,
-                    0,
-                    std::ptr::null(),
+                    1,
+                    &SampleTimingInfo {
+                        duration: cm::Time::new(1, frame.rate() as i32),
+                        pts: cm::Time::new(frame.pts().unwrap_or(0), 1_000_000)
+                            .add(first_timestamp),
+                        dts: cm::Time::invalid(),
+                    },
                     0,
                     std::ptr::null(),
                     res,
@@ -284,7 +298,7 @@ impl PipelineSinkTask<FFAudio> for Arc<Mutex<MP4AVAssetWriterEncoder>> {
 
         while let Ok(frame) = input.recv() {
             let mut this = self.lock().unwrap();
-            this.queue_audio_frame(frame).ok();
+            this.queue_audio_frame(frame);
             this.process_frame();
         }
     }

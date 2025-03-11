@@ -188,6 +188,7 @@ impl App {
         });
 
         self.recording_options.mode = new_options.mode;
+        self.recording_options.capture_system_audio = new_options.capture_system_audio;
 
         match CapWindowId::Camera.get(&self.handle) {
             Some(window) if new_options.camera_label().is_none() => {
@@ -884,22 +885,11 @@ impl EditorStateChanged {
 #[tauri::command]
 #[specta::specta]
 async fn start_playback(
-    app: AppHandle,
     editor_instance: WindowEditorInstance,
     fps: u32,
     resolution_base: XY<u32>,
 ) -> Result<(), String> {
-    editor_instance
-        .start_playback(
-            fps,
-            resolution_base,
-            AuthStore::get(&app)
-                .ok()
-                .flatten()
-                .map(|s| s.is_upgraded())
-                .unwrap_or(false),
-        )
-        .await;
+    editor_instance.start_playback(fps, resolution_base).await;
 
     Ok(())
 }
@@ -1950,10 +1940,13 @@ async fn update_auth_plan(app: AppHandle) {
     AuthStore::update_auth_plan(&app).await.ok();
 }
 
-pub type DynLoggingLayer =
-    Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync>;
-type LoggingHandle =
-    tracing_subscriber::reload::Handle<Option<DynLoggingLayer>, tracing_subscriber::Registry>;
+pub type FilteredRegistry = tracing_subscriber::layer::Layered<
+    tracing_subscriber::filter::FilterFn<fn(m: &tracing::Metadata) -> bool>,
+    tracing_subscriber::Registry,
+>;
+
+pub type DynLoggingLayer = Box<dyn tracing_subscriber::Layer<FilteredRegistry> + Send + Sync>;
+type LoggingHandle = tracing_subscriber::reload::Handle<Option<DynLoggingLayer>, FilteredRegistry>;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run(recording_logging_handle: LoggingHandle) {
@@ -2138,6 +2131,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         camera_label: None,
                         audio_input_name: None,
                         mode: RecordingMode::Studio,
+                        capture_system_audio: false,
                     },
                     current_recording: None,
                     recording_logging_handle,

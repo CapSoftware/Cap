@@ -7,11 +7,17 @@ use std::{
 
 use cap_flags::FLAGS;
 use cap_media::{
+    data::{FFAudio, FFPacket},
     encoders::{H264Encoder, MP4File, OggFile, OpusEncoder},
     feeds::{AudioInputFeed, CameraFeed},
-    pipeline::{Pipeline, RealTimeClock},
+    pipeline::{
+        builder::PipelineBuilder, task::PipelineSourceTask, CloneInto, Pipeline, RealTimeClock,
+    },
     platform::Bounds,
-    sources::{AudioInputSource, CameraSource, ScreenCaptureSource, ScreenCaptureTarget},
+    sources::{
+        system_audio::{self, SystemAudioSource},
+        AudioInputSource, CameraSource, ScreenCaptureSource, ScreenCaptureTarget,
+    },
     MediaError,
 };
 use cap_project::{CursorEvents, StudioRecordingMeta};
@@ -68,6 +74,7 @@ struct StudioRecordingPipeline {
     pub audio_output_path: Option<PathBuf>,
     pub camera: Option<CameraPipelineInfo>,
     pub cursor: Option<CursorPipeline>,
+    pub system_audio_path: Option<PathBuf>,
 }
 
 struct CursorPipeline {
@@ -148,6 +155,7 @@ pub async fn spawn_studio_recording_actor(
         screen_source.clone(),
         camera_feed.as_deref(),
         audio_input_feed.as_ref(),
+        options.capture_system_audio,
         Default::default(),
         index,
     )
@@ -166,7 +174,7 @@ pub async fn spawn_studio_recording_actor(
             let mut actor = StudioRecordingActor {
                 id,
                 recording_dir,
-                options,
+                options: options.clone(),
                 fps,
                 segments: Vec::new(),
             };
@@ -305,6 +313,7 @@ pub async fn spawn_studio_recording_actor(
                                         screen_source.clone(),
                                         camera_feed.as_deref(),
                                         audio_input_feed.as_ref(),
+                                        options.capture_system_audio,
                                         cursors,
                                         next_cursor_id,
                                     )
@@ -415,6 +424,12 @@ async fn stop_recording(
                             )
                             .unwrap()
                         }),
+                        system_audio: s.pipeline.system_audio_path.as_ref().map(|path| AudioMeta {
+                            path: RelativePathBuf::from_path(
+                                path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
+                            )
+                            .unwrap(),
+                        }),
                     })
                     .collect()
             },
@@ -459,6 +474,7 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
     screen_source: ScreenCaptureSource<TCaptureFormat>,
     camera_feed: Option<&Mutex<CameraFeed>>,
     audio_input_feed: Option<&AudioInputFeed>,
+    capture_system_audio: bool,
     prev_cursors: Cursors,
     next_cursors_id: u32,
 ) -> Result<(StudioRecordingPipeline, oneshot::Receiver<()>), MediaError> {
@@ -481,7 +497,7 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
     pipeline_builder = TCaptureFormat::make_capture_pipeline(
         pipeline_builder,
         screen_source,
-        &display_output_path,
+        display_output_path.clone(),
     )?;
 
     info!(
@@ -508,6 +524,51 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
             "mic pipeline prepared, will output to {}",
             output_path.strip_prefix(&segments_dir).unwrap().display()
         );
+
+        Some(output_path)
+    } else {
+        None
+    };
+
+    let system_audio_path = if capture_system_audio {
+        let output_path = dir.join("system_audio.ogg");
+
+        async fn create<T: SystemAudioSource + PipelineSourceTask<Output = FFAudio>>(
+            output_path: PathBuf,
+            pipeline_builder: PipelineBuilder<RealTimeClock<()>>,
+            source: T,
+        ) -> Result<PipelineBuilder<RealTimeClock<()>>, MediaError>
+        where
+            T: 'static,
+            T::Clock: Send + 'static,
+            RealTimeClock<()>: CloneInto<T::Clock>,
+        {
+            let system_audio_encoder = OggFile::init(
+                output_path.clone(),
+                OpusEncoder::factory(
+                    "system_audio",
+                    T::info().map_err(|e| MediaError::TaskLaunch(e))?,
+                ),
+            )?;
+
+            Ok(pipeline_builder
+                .source("system_audio_capture", source)
+                .sink("system_audio_encoder", system_audio_encoder))
+        }
+
+        pipeline_builder = create(output_path.clone(), pipeline_builder, {
+            #[cfg(target_os = "macos")]
+            {
+                system_audio::macos::Source::init()
+                    .await
+                    .map_err(|e| MediaError::TaskLaunch(e))?
+            }
+            #[cfg(windows)]
+            {
+                system_audio::windows::Source
+            }
+        })
+        .await?;
 
         Some(output_path)
     } else {
@@ -569,6 +630,7 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
             audio_output_path,
             camera,
             cursor,
+            system_audio_path,
         },
         pipeline_done_rx,
     ))

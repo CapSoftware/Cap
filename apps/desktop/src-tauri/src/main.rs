@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use cap_desktop::DynLoggingLayer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {
     // We have to hold onto the ClientInitGuard until the very end
@@ -42,18 +42,16 @@ fn main() {
 
     let (layer, handle) = tracing_subscriber::reload::Layer::new(None::<DynLoggingLayer>);
 
-    tracing_subscriber::registry()
-        // .with(tracing_subscriber::filter::filter_fn(|v| {
-        //     v.target().starts_with("cap_")
-        // }))
+    let registry = tracing_subscriber::registry().with(tracing_subscriber::filter::filter_fn(
+        (|v| v.target().starts_with("cap_")) as fn(&tracing::Metadata) -> bool,
+    ));
+
+    registry
         .with(layer)
         .with(
             tracing_subscriber::fmt::layer()
                 .with_ansi(true)
-                .with_target(true)
-                .with_filter(tracing_subscriber::filter::filter_fn(|v| {
-                    v.target().starts_with("cap_")
-                })),
+                .with_target(true),
         )
         .init();
 

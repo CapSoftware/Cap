@@ -3,6 +3,11 @@ name = "cap-audio"
 version = "0.1.0"
 edition = "2021"
 
+
 [dependencies]
 ffmpeg = { workspace = true }
 cpal = { workspace = true }
+tokio.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cidre = { git = "https://github.com/yury/cidre", rev = "b525fce737310f524e0159488f8a4e29685680bf" }

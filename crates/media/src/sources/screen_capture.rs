@@ -231,9 +231,6 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             ScreenCaptureTarget::Screen { id } => {
                 let screens = list_screens();
 
-                dbg!(id);
-                dbg!(&screens);
-
                 let (screen_info, target) = screens
                     .into_iter()
                     .find(|(i, t)| i.id == *id)

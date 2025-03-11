@@ -22,6 +22,7 @@ import {
   onCleanup,
   ErrorBoundary,
   Suspense,
+  ComponentProps,
 } from "solid-js";
 import { createStore } from "solid-js/store";
 import { Tooltip } from "@kobalte/core";
@@ -83,6 +84,7 @@ export default function () {
           mode: options.data?.mode ?? "studio",
           cameraLabel: options.data?.cameraLabel ?? null,
           audioInputName: options.data?.audioInputName ?? null,
+          captureSystemAudio: options.data?.captureSystemAudio,
         });
       } else {
         await commands.stopRecording();
@@ -97,8 +99,6 @@ export default function () {
   let unlistenFn: UnlistenFn;
   onCleanup(() => unlistenFn?.());
   const [initialize] = createResource(async () => {
-    const version = await getVersion();
-
     if (options.data?.cameraLabel && options.data.cameraLabel !== "No Camera") {
       const cameraWindowActive = await commands.isCameraWindowOpen();
 
@@ -112,7 +112,10 @@ export default function () {
 
     // Enforce window size with multiple safeguards
     const currentWindow = getCurrentWindow();
-    const MAIN_WINDOW_SIZE = { width: 300, height: 360 };
+    const MAIN_WINDOW_SIZE = {
+      width: 300,
+      height: 320 + (window.FLAGS.systemAudioRecording ? 40 : 0),
+    };
 
     // Set initial size
     await currentWindow.setSize(
@@ -225,10 +228,14 @@ export default function () {
       {initialize()}
       <div class="flex items-center justify-between pb-[0.25rem]">
         <div class="flex items-center space-x-1">
-          <div class="*:w-[92px] *:h-auto text-[--text-primary] ">
+          <a
+            class="*:w-[92px] *:h-auto text-[--text-primary]"
+            target="_blank"
+            href={import.meta.env.VITE_SERVER_URL}
+          >
             <IconCapLogoFullDark class="dark:block hidden" />
             <IconCapLogoFull class="dark:hidden block" />
-          </div>
+          </a>
           <ErrorBoundary fallback={<></>}>
             <Suspense>
               <span
@@ -257,6 +264,9 @@ export default function () {
       <TargetSelects options={options.data} setOptions={setOptions} />
       <CameraSelect options={options.data} setOptions={setOptions} />
       <MicrophoneSelect options={options.data} setOptions={setOptions} />
+      {window.FLAGS.systemAudioRecording && (
+        <SystemAudio options={options.data} setOptions={setOptions} />
+      )}
       <div class="w-full flex items-center space-x-1">
         <Button
           disabled={toggleRecording.isPending}
@@ -709,7 +719,7 @@ function CameraSelect(props: {
 
   return (
     <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
-      <label class="text-[--text-tertiary] text-[0.875rem]">Camera</label>
+      {/* <label class="text-[--text-tertiary] text-[0.875rem]">Camera</label> */}
       <KSelect<Option | null>
         options={selectOptions()}
         optionValue="name"
@@ -853,7 +863,7 @@ function MicrophoneSelect(props: {
 
   return (
     <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
-      <label class="text-[--text-tertiary]">Microphone</label>
+      {/* <label class="text-[--text-tertiary]">Microphone</label> */}
       <KSelect<Option>
         options={[
           { name: "No Microphone", deviceId: "" },
@@ -935,6 +945,39 @@ function MicrophoneSelect(props: {
         </KSelect.Portal>
       </KSelect>
     </div>
+  );
+}
+
+function SystemAudio(props: {
+  options: ReturnType<typeof createOptionsQuery>["options"]["data"];
+  setOptions: ReturnType<typeof createOptionsQuery>["setOptions"];
+}) {
+  const currentRecording = createCurrentRecordingQuery();
+
+  return (
+    <button
+      onClick={() => {
+        if (!props.options) return;
+        props.setOptions.mutate({
+          ...props.options,
+          captureSystemAudio: !props.options?.captureSystemAudio,
+        });
+      }}
+      disabled={props.setOptions.isPending || !!currentRecording.data}
+      class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10"
+    >
+      <div class="size-[1.25rem] flex items-center justify-center">
+        <IconPhMonitorBold class="text-gray-400 stroke-2 size-[1.2rem]" />
+      </div>
+      <span class="flex-1 text-left truncate">
+        {props.options?.captureSystemAudio
+          ? "Record System Audio"
+          : "No System Audio"}
+      </span>
+      <InfoPill variant={props.options?.captureSystemAudio ? "blue" : "red"}>
+        {props.options?.captureSystemAudio ? "On" : "Off"}
+      </InfoPill>
+    </button>
   );
 }
 
@@ -1044,14 +1087,8 @@ function TargetSelectInfoPill<T>(props: {
   onClear: () => void;
 }) {
   return (
-    <button
-      type="button"
-      class={cx(
-        "px-[0.375rem] rounded-full text-[0.75rem]",
-        props.value !== null && props.permissionGranted
-          ? "bg-blue-50 text-blue-300"
-          : "bg-red-50 text-red-300"
-      )}
+    <InfoPill
+      variant={props.value !== null && props.permissionGranted ? "blue" : "red"}
       onPointerDown={(e) => {
         if (!props.permissionGranted || props.value === null) return;
 
@@ -1073,7 +1110,24 @@ function TargetSelectInfoPill<T>(props: {
         : props.value !== null
         ? "On"
         : "Off"}
-    </button>
+    </InfoPill>
+  );
+}
+
+function InfoPill(
+  props: ComponentProps<"button"> & { variant: "blue" | "red" }
+) {
+  return (
+    <button
+      {...props}
+      type="button"
+      class={cx(
+        "px-[0.375rem] rounded-full text-[0.75rem]",
+        props.variant === "blue"
+          ? "bg-blue-50 text-blue-300"
+          : "bg-red-50 text-red-300"
+      )}
+    />
   );
 }
 
