@@ -25,6 +25,15 @@ impl AudioMixer {
         !self.sources.is_empty()
     }
 
+    pub fn info() -> AudioInfo {
+        AudioInfo::new(
+            ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+            48000,
+            2,
+        )
+        .unwrap()
+    }
+
     pub fn run(
         &mut self,
         on_ready: impl FnOnce() -> (),

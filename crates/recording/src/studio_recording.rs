@@ -7,12 +7,16 @@ use std::{
 
 use cap_flags::FLAGS;
 use cap_media::{
+    data::{FFAudio, FFPacket},
     encoders::{H264Encoder, MP4File, OggFile, OpusEncoder},
     feeds::{AudioInputFeed, CameraFeed},
-    pipeline::{Pipeline, RealTimeClock},
+    pipeline::{
+        builder::PipelineBuilder, task::PipelineSourceTask, CloneInto, Pipeline, RealTimeClock,
+    },
     platform::Bounds,
     sources::{
-        system_audio, AudioInputSource, CameraSource, ScreenCaptureSource, ScreenCaptureTarget,
+        system_audio::{self, SystemAudioSource},
+        AudioInputSource, CameraSource, ScreenCaptureSource, ScreenCaptureTarget,
     },
     MediaError,
 };
@@ -529,19 +533,42 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
     let system_audio_path = if capture_system_audio {
         let output_path = dir.join("system_audio.ogg");
 
-        let system_audio_encoder = OggFile::init(
-            output_path.clone(),
-            OpusEncoder::factory("system_audio", system_audio::macos::Source::info()),
-        )?;
+        async fn create<T: SystemAudioSource + PipelineSourceTask<Output = FFAudio>>(
+            output_path: PathBuf,
+            pipeline_builder: PipelineBuilder<RealTimeClock<()>>,
+            source: T,
+        ) -> Result<PipelineBuilder<RealTimeClock<()>>, MediaError>
+        where
+            T: 'static,
+            T::Clock: Send + 'static,
+            RealTimeClock<()>: CloneInto<T::Clock>,
+        {
+            let system_audio_encoder = OggFile::init(
+                output_path.clone(),
+                OpusEncoder::factory(
+                    "system_audio",
+                    T::info().map_err(|e| MediaError::TaskLaunch(e))?,
+                ),
+            )?;
 
-        pipeline_builder = pipeline_builder
-            .source(
-                "system_audio_capture",
+            Ok(pipeline_builder
+                .source("system_audio_capture", source)
+                .sink("system_audio_encoder", system_audio_encoder))
+        }
+
+        pipeline_builder = create(output_path.clone(), pipeline_builder, {
+            #[cfg(target_os = "macos")]
+            {
                 system_audio::macos::Source::init()
                     .await
-                    .map_err(MediaError::TaskLaunch)?,
-            )
-            .sink("system_audio_encoder", system_audio_encoder);
+                    .map_err(|e| MediaError::TaskLaunch(e))?
+            }
+            #[cfg(windows)]
+            {
+                system_audio::windows::Source
+            }
+        })
+        .await?;
 
         Some(output_path)
     } else {

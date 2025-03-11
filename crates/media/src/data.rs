@@ -109,7 +109,7 @@ impl AudioInfo {
         })
     }
 
-    pub fn from_stream_config(config: &SupportedStreamConfig) -> Result<Self, AudioInfoError> {
+    pub fn from_stream_config(config: &SupportedStreamConfig) -> Self {
         let sample_format = ffmpeg_sample_format_for(config.sample_format()).unwrap();
         let buffer_size = match config.buffer_size() {
             SupportedBufferSize::Range { max, .. } => *max,
@@ -119,14 +119,14 @@ impl AudioInfo {
 
         let channels = config.channels().clamp(1, MAX_AUDIO_CHANNELS);
 
-        Ok(Self {
+        Self {
             sample_format,
             sample_rate: config.sample_rate().0,
             // we do this here and only here bc we know it's cpal-related
             channels: channels.into(),
             time_base: FFRational(1, 1_000_000),
             buffer_size,
-        })
+        }
     }
 
     pub fn from_decoder(decoder: &ffmpeg::codec::decoder::Audio) -> Result<Self, AudioInfoError> {

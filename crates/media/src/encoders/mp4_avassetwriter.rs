@@ -180,9 +180,9 @@ impl MP4AVAssetWriterEncoder {
             return Err(MediaError::Any("Not ready for more media data"));
         }
 
-        if self.first_timestamp.is_none() {
+        let Some(first_timestamp) = self.first_timestamp else {
             return Ok(());
-        }
+        };
 
         let audio_desc = cat::audio::StreamBasicDesc::common_f32(
             frame.rate() as f64,
@@ -224,8 +224,13 @@ impl MP4AVAssetWriterEncoder {
                     std::ptr::null(),
                     Some(format_desc.as_ref()),
                     frame.samples() as isize,
-                    0,
-                    std::ptr::null(),
+                    1,
+                    &SampleTimingInfo {
+                        duration: cm::Time::new(1, frame.rate() as i32),
+                        pts: cm::Time::new(frame.pts().unwrap_or(0), 1_000_000)
+                            .add(first_timestamp),
+                        dts: cm::Time::invalid(),
+                    },
                     0,
                     std::ptr::null(),
                     res,

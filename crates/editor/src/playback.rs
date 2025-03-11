@@ -199,7 +199,7 @@ impl AudioPlayback {
             ..
         } = self;
 
-        let mut output_info = AudioInfo::from_stream_config(&supported_config)?;
+        let mut output_info = AudioInfo::from_stream_config(&supported_config);
         output_info.sample_format = output_info.sample_format.packed();
 
         // TODO: Get fps and duration from video (once we start supporting other frame rates)

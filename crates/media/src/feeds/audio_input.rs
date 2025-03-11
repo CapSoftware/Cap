@@ -77,10 +77,7 @@ impl AudioInputFeed {
                 MediaError::DeviceUnreachable(selected_input.to_string())
             })?;
 
-        let audio_info = AudioInfo::from_stream_config(&config).map_err(|e| {
-            error!("Failed to create audio info from stream config: {}", e);
-            e
-        })?;
+        let audio_info = AudioInfo::from_stream_config(&config);
 
         debug!("Created audio info: {:?}", audio_info);
         let (control_tx, control_rx) = flume::bounded(1);
@@ -175,7 +172,7 @@ impl AudioInputFeed {
             MediaError::TaskLaunch("Failed to switch audio input".into())
         })??;
 
-        self.audio_info = AudioInfo::from_stream_config(&config)?;
+        self.audio_info = AudioInfo::from_stream_config(&config);
 
         Ok(())
     }

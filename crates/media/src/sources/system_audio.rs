@@ -1,5 +1,14 @@
-use crate::pipeline::{task::PipelineSourceTask, RawNanoseconds, RealTimeClock};
+use crate::{
+    data::AudioInfo,
+    pipeline::{task::PipelineSourceTask, RawNanoseconds, RealTimeClock},
+};
 use ffmpeg::frame as avframe;
+
+pub trait SystemAudioSource {
+    fn info() -> Result<AudioInfo, String>
+    where
+        Self: Sized;
+}
 
 #[cfg(target_os = "macos")]
 pub mod macos {
@@ -96,14 +105,16 @@ pub mod macos {
                 rx,
             })
         }
+    }
 
-        pub fn info() -> AudioInfo {
-            AudioInfo::new(
+    impl SystemAudioSource for Source {
+        fn info() -> Result<AudioInfo, String> {
+            Ok(AudioInfo::new(
                 ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
                 48_000,
                 2,
             )
-            .unwrap()
+            .unwrap())
         }
     }
 
@@ -159,29 +170,124 @@ pub mod macos {
     }
 }
 
-// pub mod windows {
-//     use cpal::{
-//         traits::{DeviceTrait, HostTrait},
-//         *,
-//     };
+pub mod windows {
+    use crate::{
+        data::AudioInfo,
+        pipeline::{control::Control, task::PipelineSourceTask, RealTimeClock},
+    };
+    use cpal::{
+        traits::{DeviceTrait, HostTrait, StreamTrait},
+        *,
+    };
 
-//     pub struct Source {}
+    use super::SystemAudioSource;
 
-//     impl Source {
-//         pub async fn init() -> Result<Self, String> {
-//             let host = cpal::default_host();
+    pub struct Source;
 
-//             let output_device = host
-//                 .default_output_device()
-//                 .ok_or_else(|| "No default output device".to_string())?;
+    impl Source {
+        pub fn info() -> Result<AudioInfo, String> {
+            let host = cpal::default_host();
 
-//             let config = output_device
-//                 .default_output_config()
-//                 .map_err(|e| format!("Default Stream / {e}"))?;
+            let output_device = host
+                .default_output_device()
+                .ok_or_else(|| "No default output device".to_string())?;
+            let supported_config = output_device
+                .default_output_config()
+                .map_err(|e| format!("Default Stream / {e}"))?;
 
-//             output_device.build_input_stream(, data_callback, error_callback, timeout)
+            Ok(AudioInfo::from_stream_config(&supported_config))
+        }
+    }
 
-//             todo!();
-//         }
-//     }
-// }
+    impl SystemAudioSource for Source {
+        fn info() -> Result<AudioInfo, String>
+        where
+            Self: Sized,
+        {
+            Self::info()
+        }
+    }
+
+    impl PipelineSourceTask for Source {
+        type Clock = RealTimeClock<StreamInstant>;
+        type Output = ffmpeg::frame::Audio;
+
+        fn run(
+            &mut self,
+            mut clock: Self::Clock,
+            ready_signal: crate::pipeline::task::PipelineReadySignal,
+            mut control_signal: crate::pipeline::control::PipelineControlSignal,
+            output: flume::Sender<Self::Output>,
+        ) {
+            let host = cpal::default_host();
+
+            let (tx, rx) = flume::bounded(8);
+
+            let init = || {
+                let output_device = host
+                    .default_output_device()
+                    .ok_or_else(|| "No default output device".to_string())?;
+                let supported_config = output_device
+                    .default_output_config()
+                    .map_err(|e| format!("Default Stream / {e}"))?;
+                let config = supported_config.clone().into();
+
+                let stream = output_device
+                    .build_input_stream_raw(
+                        &config,
+                        supported_config.sample_format(),
+                        {
+                            let tx = tx.clone();
+                            move |data, info: &cpal::InputCallbackInfo| {
+                                tx.send(Ok((data.bytes().to_vec(), info.clone()))).unwrap();
+                            }
+                        },
+                        move |e| {
+                            let _ = tx.send(Err(e));
+                        },
+                        None,
+                    )
+                    .map_err(|e| format!("Build Input Stream / {e}"))?;
+
+                stream.play().map_err(|e| format!("Play Stream / {e}"))?;
+
+                Ok::<_, String>((supported_config, stream))
+            };
+
+            let (supported_config, _) = match init() {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ = ready_signal.send(Err(crate::MediaError::TaskLaunch(e)));
+                    return;
+                }
+            };
+
+            let audio_info = AudioInfo::from_stream_config(&supported_config);
+
+            loop {
+                match control_signal.last() {
+                    Some(Control::Play) => match rx.recv() {
+                        Ok(Ok((data, info))) => match clock.timestamp_for(info.timestamp().capture)
+                        {
+                            None => {
+                                eprintln!("Clock is currently stopped. Dropping frames.");
+                            }
+                            Some(timestamp) => {
+                                let frame = audio_info.wrap_frame(&data, timestamp);
+                                if let Err(_) = output.send(frame) {
+                                    break;
+                                }
+                            }
+                        },
+                        _ => {
+                            break;
+                        }
+                    },
+                    Some(Control::Shutdown) | None => {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
