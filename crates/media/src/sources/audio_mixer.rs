@@ -8,9 +8,7 @@ pub struct AudioMixer {
 
 impl AudioMixer {
     pub fn new() -> Self {
-        Self {
-            sources: vec![],
-        }
+        Self { sources: vec![] }
     }
 
     pub fn sink(&mut self, info: AudioInfo) -> AudioMixerSink {

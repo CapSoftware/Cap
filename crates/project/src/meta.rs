@@ -125,9 +125,7 @@ pub enum StudioRecordingMeta {
 impl StudioRecordingMeta {
     pub fn camera_path(&self) -> Option<RelativePathBuf> {
         match self {
-            Self::SingleSegment { segment } => {
-                segment.camera.as_ref().map(|c| c.path.clone())
-            }
+            Self::SingleSegment { segment } => segment.camera.as_ref().map(|c| c.path.clone()),
             Self::MultipleSegments { inner } => inner
                 .segments
                 .first()

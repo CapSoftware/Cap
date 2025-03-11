@@ -19,12 +19,8 @@ impl NotificationType {
     fn details(&self) -> (&'static str, &'static str, bool) {
         match self {
             Self::VideoSaved => ("Video Saved", "Video saved successfully", false),
-            Self::VideoCopiedToClipboard => {
-                ("Video Copied", "Video copied to clipboard", false)
-            }
-            Self::ShareableLinkCopied => {
-                ("Link Copied", "Link copied to clipboard", false)
-            }
+            Self::VideoCopiedToClipboard => ("Video Copied", "Video copied to clipboard", false),
+            Self::ShareableLinkCopied => ("Link Copied", "Link copied to clipboard", false),
             Self::UploadFailed => (
                 "Upload Failed",
                 "Unable to upload media. Please try again",
@@ -45,9 +41,7 @@ impl NotificationType {
                 "Unable to create shareable link. Please try again",
                 true,
             ),
-            Self::ScreenshotSaved => {
-                ("Screenshot Saved", "Screenshot saved successfully", false)
-            }
+            Self::ScreenshotSaved => ("Screenshot Saved", "Screenshot saved successfully", false),
             Self::ScreenshotCopiedToClipboard => {
                 ("Screenshot Copied", "Screenshot copied to clipboard", false)
             }

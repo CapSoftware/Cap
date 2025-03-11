@@ -91,7 +91,8 @@ impl CapWindowId {
             Self::SignIn => "Cap Sign In",
             Self::ModeSelect => "Cap Mode Selection",
             _ => "Cap",
-        }.to_string()
+        }
+        .to_string()
     }
 
     pub fn activates_dock(&self) -> bool {
