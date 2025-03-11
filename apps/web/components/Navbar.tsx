@@ -81,6 +81,10 @@ const Links = [
     href: "/pricing",
   },
   {
+    label: "About",
+    href: "/about",
+  },
+  {
     label: "Blog",
     href: "/blog",
   },
@@ -231,6 +235,28 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
                     passHref
                   >
                     Get started
+                  </Link>
+                </li>
+                <li>
+                  <Link
+                    onClick={() => {
+                      setShowMobileMenu(false);
+                    }}
+                    href="/about"
+                    passHref
+                  >
+                    About
+                  </Link>
+                </li>
+                <li>
+                  <Link
+                    onClick={() => {
+                      setShowMobileMenu(false);
+                    }}
+                    href="/blog"
+                    passHref
+                  >
+                    Blog
                   </Link>
                 </li>
                 <li>
