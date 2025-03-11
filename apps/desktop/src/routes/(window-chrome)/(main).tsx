@@ -114,7 +114,7 @@ export default function () {
     const currentWindow = getCurrentWindow();
     const MAIN_WINDOW_SIZE = {
       width: 300,
-      height: 320 + (!window.FLAGS.systemAudioRecording ? 40 : 0),
+      height: 320 + (window.FLAGS.systemAudioRecording ? 40 : 0),
     };
 
     // Set initial size
@@ -264,7 +264,7 @@ export default function () {
       <TargetSelects options={options.data} setOptions={setOptions} />
       <CameraSelect options={options.data} setOptions={setOptions} />
       <MicrophoneSelect options={options.data} setOptions={setOptions} />
-      {!window.FLAGS.systemAudioRecording && (
+      {window.FLAGS.systemAudioRecording && (
         <SystemAudio options={options.data} setOptions={setOptions} />
       )}
       <div class="w-full flex items-center space-x-1">
