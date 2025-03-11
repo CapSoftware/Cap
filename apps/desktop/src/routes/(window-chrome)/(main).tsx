@@ -99,8 +99,6 @@ export default function () {
   let unlistenFn: UnlistenFn;
   onCleanup(() => unlistenFn?.());
   const [initialize] = createResource(async () => {
-    const version = await getVersion();
-
     if (options.data?.cameraLabel && options.data.cameraLabel !== "No Camera") {
       const cameraWindowActive = await commands.isCameraWindowOpen();
 
@@ -114,7 +112,10 @@ export default function () {
 
     // Enforce window size with multiple safeguards
     const currentWindow = getCurrentWindow();
-    const MAIN_WINDOW_SIZE = { width: 300, height: 365 };
+    const MAIN_WINDOW_SIZE = {
+      width: 300,
+      height: 320 + (!window.FLAGS.systemAudioRecording ? 40 : 0),
+    };
 
     // Set initial size
     await currentWindow.setSize(
@@ -263,7 +264,9 @@ export default function () {
       <TargetSelects options={options.data} setOptions={setOptions} />
       <CameraSelect options={options.data} setOptions={setOptions} />
       <MicrophoneSelect options={options.data} setOptions={setOptions} />
-      <SystemAudio options={options.data} setOptions={setOptions} />
+      {!window.FLAGS.systemAudioRecording && (
+        <SystemAudio options={options.data} setOptions={setOptions} />
+      )}
       <div class="w-full flex items-center space-x-1">
         <Button
           disabled={toggleRecording.isPending}

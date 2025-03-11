@@ -1,12 +1,13 @@
 use std::{future::Future, path::PathBuf, sync::Arc};
 
+use cap_flags::FLAGS;
 use cap_media::{
     data::{AudioInfo, FFAudio},
     encoders::{H264Encoder, MP4File, OpusEncoder},
     pipeline::{builder::PipelineBuilder, task::PipelineSourceTask, CloneInto, RealTimeClock},
     sources::{
         system_audio::{self, SystemAudioSource},
-        AudioInputSource, AudioMixer, AudioMixerSink, ScreenCaptureSource, ScreenCaptureTarget,
+        AudioInputSource, AudioMixer, ScreenCaptureSource, ScreenCaptureTarget,
     },
     MediaError,
 };
@@ -65,48 +66,46 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
     ) -> Result<CapturePipelineBuilder, MediaError> {
         let mut audio_mixer = AudioMixer::new();
 
-        let system_audio = {
-            if capture_system_audio {
-                fn create<T>(
-                    pipeline_builder: PipelineBuilder<RealTimeClock<()>>,
-                    source: T,
-                    audio_mixer: &mut AudioMixer,
-                ) -> Result<(PipelineBuilder<RealTimeClock<()>>, AudioInfo), MediaError>
-                where
-                    T: SystemAudioSource + PipelineSourceTask<Output = FFAudio> + 'static,
-                    T::Clock: Send + 'static,
-                    RealTimeClock<()>: CloneInto<T::Clock>,
-                {
-                    let info = T::info().map_err(MediaError::TaskLaunch)?;
-                    Ok((
-                        pipeline_builder
-                            .source("system_audio_capture", source)
-                            .sink("system_audio_sink", audio_mixer.sink(info)),
-                        info,
-                    ))
-                }
-
-                let (new_builder, info) = create(
-                    builder,
-                    {
-                        #[cfg(target_os = "macos")]
-                        {
-                            system_audio::macos::Source::init()
-                                .await
-                                .map_err(MediaError::TaskLaunch)?
-                        }
-                        #[cfg(windows)]
-                        {
-                            system_audio::windows::Source
-                        }
-                    },
-                    &mut audio_mixer,
-                )?;
-                builder = new_builder;
-                Some(info)
-            } else {
-                None
+        let system_audio = if FLAGS.system_audio_recording && capture_system_audio {
+            fn create<T>(
+                pipeline_builder: PipelineBuilder<RealTimeClock<()>>,
+                source: T,
+                audio_mixer: &mut AudioMixer,
+            ) -> Result<(PipelineBuilder<RealTimeClock<()>>, AudioInfo), MediaError>
+            where
+                T: SystemAudioSource + PipelineSourceTask<Output = FFAudio> + 'static,
+                T::Clock: Send + 'static,
+                RealTimeClock<()>: CloneInto<T::Clock>,
+            {
+                let info = T::info().map_err(MediaError::TaskLaunch)?;
+                Ok((
+                    pipeline_builder
+                        .source("system_audio_capture", source)
+                        .sink("system_audio_sink", audio_mixer.sink(info)),
+                    info,
+                ))
             }
+
+            let (new_builder, info) = create(
+                builder,
+                {
+                    #[cfg(target_os = "macos")]
+                    {
+                        system_audio::macos::Source::init()
+                            .await
+                            .map_err(MediaError::TaskLaunch)?
+                    }
+                    #[cfg(windows)]
+                    {
+                        system_audio::windows::Source
+                    }
+                },
+                &mut audio_mixer,
+            )?;
+            builder = new_builder;
+            Some(info)
+        } else {
+            None
         };
 
         let mp4 = Arc::new(std::sync::Mutex::new(
