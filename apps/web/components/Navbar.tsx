@@ -48,6 +48,10 @@ const Links = [
     ],
   },
   {
+    label: "Download",
+    href: "/download",
+  },
+  {
     label: "Help",
     dropdown: [
       {
