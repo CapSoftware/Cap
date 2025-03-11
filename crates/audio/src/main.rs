@@ -129,9 +129,7 @@ pub fn wav_encode_audio(path: impl AsRef<Path>, samples: &AudioData) {
     output.write_trailer().unwrap();
 }
 
-fn main() {
-    decode_audio("/Users/brendonovich/Library/Application Support/so.cap.desktop.dev/recordings/5730b279-10ef-478a-aa35-5b4c4d7b3b29.cap/content/segments/segment-0/audio-input.ogg");
-}
+fn main() {}
 
 // fn main() {
 //     let device = cpal::default_host().default_input_device().unwrap();
