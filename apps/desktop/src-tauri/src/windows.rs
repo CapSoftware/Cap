@@ -483,20 +483,20 @@ impl ShowCapWindow {
 
     pub fn id(&self) -> CapWindowId {
         match self {
-            ShowCapWindow::Setup => CapWindowId::Setup,
-            ShowCapWindow::Main => CapWindowId::Main,
-            ShowCapWindow::Settings { .. } => CapWindowId::Settings,
-            ShowCapWindow::Editor { project_id } => CapWindowId::Editor {
+            Self::Setup => CapWindowId::Setup,
+            Self::Main => CapWindowId::Main,
+            Self::Settings { .. } => CapWindowId::Settings,
+            Self::Editor { project_id } => CapWindowId::Editor {
                 project_id: project_id.clone(),
             },
-            ShowCapWindow::RecordingsOverlay => CapWindowId::RecordingsOverlay,
-            ShowCapWindow::WindowCaptureOccluder => CapWindowId::WindowCaptureOccluder,
-            ShowCapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
-            ShowCapWindow::Camera { .. } => CapWindowId::Camera,
-            ShowCapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
-            ShowCapWindow::Upgrade => CapWindowId::Upgrade,
-            ShowCapWindow::SignIn => CapWindowId::SignIn,
-            ShowCapWindow::ModeSelect => CapWindowId::ModeSelect,
+            Self::RecordingsOverlay => CapWindowId::RecordingsOverlay,
+            Self::WindowCaptureOccluder => CapWindowId::WindowCaptureOccluder,
+            Self::CaptureArea { .. } => CapWindowId::CaptureArea,
+            Self::Camera { .. } => CapWindowId::Camera,
+            Self::InProgressRecording { .. } => CapWindowId::InProgressRecording,
+            Self::Upgrade => CapWindowId::Upgrade,
+            Self::SignIn => CapWindowId::SignIn,
+            Self::ModeSelect => CapWindowId::ModeSelect,
         }
     }
 }

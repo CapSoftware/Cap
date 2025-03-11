@@ -61,15 +61,15 @@ impl ScreenCaptureTarget {
         let targets = scap::get_all_targets();
 
         match self {
-            ScreenCaptureTarget::Window { id } => targets.into_iter().find(|t| match t {
+            Self::Window { id } => targets.into_iter().find(|t| match t {
                 scap::Target::Window(window) => window.id == *id,
                 _ => false,
             }),
-            ScreenCaptureTarget::Screen { id } => targets.into_iter().find(|t| match t {
+            Self::Screen { id } => targets.into_iter().find(|t| match t {
                 scap::Target::Display(screen) => screen.id == *id,
                 _ => false,
             }),
-            ScreenCaptureTarget::Area { screen, .. } => targets.into_iter().find(|t| match t {
+            Self::Area { screen, .. } => targets.into_iter().find(|t| match t {
                 scap::Target::Display(display) => display.id == *screen,
                 _ => false,
             }),

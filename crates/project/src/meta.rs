@@ -125,10 +125,10 @@ pub enum StudioRecordingMeta {
 impl StudioRecordingMeta {
     pub fn camera_path(&self) -> Option<RelativePathBuf> {
         match self {
-            StudioRecordingMeta::SingleSegment { segment } => {
+            Self::SingleSegment { segment } => {
                 segment.camera.as_ref().map(|c| c.path.clone())
             }
-            StudioRecordingMeta::MultipleSegments { inner } => inner
+            Self::MultipleSegments { inner } => inner
                 .segments
                 .first()
                 .and_then(|s| s.camera.as_ref().map(|c| c.path.clone())),
@@ -137,8 +137,8 @@ impl StudioRecordingMeta {
 
     pub fn min_fps(&self) -> u32 {
         match self {
-            StudioRecordingMeta::SingleSegment { segment } => segment.display.fps,
-            StudioRecordingMeta::MultipleSegments { inner } => {
+            Self::SingleSegment { segment } => segment.display.fps,
+            Self::MultipleSegments { inner } => {
                 inner.segments.iter().map(|s| s.display.fps).min().unwrap()
             }
         }
@@ -146,8 +146,8 @@ impl StudioRecordingMeta {
 
     pub fn max_fps(&self) -> u32 {
         match self {
-            StudioRecordingMeta::SingleSegment { segment } => segment.display.fps,
-            StudioRecordingMeta::MultipleSegments { inner } => {
+            Self::SingleSegment { segment } => segment.display.fps,
+            Self::MultipleSegments { inner } => {
                 inner.segments.iter().map(|s| s.display.fps).max().unwrap()
             }
         }
@@ -186,8 +186,8 @@ pub enum Cursors {
 impl Cursors {
     fn is_empty(&self) -> bool {
         match self {
-            Cursors::Old(map) => map.is_empty(),
-            Cursors::Correct(map) => map.is_empty(),
+            Self::Old(map) => map.is_empty(),
+            Self::Correct(map) => map.is_empty(),
         }
     }
 }

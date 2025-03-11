@@ -28,10 +28,10 @@ impl AppSounds {
 
     fn get_sound_bytes(&self) -> &'static [u8] {
         match self {
-            AppSounds::StartRecording => include_bytes!("../sounds/start-recording.ogg"),
-            AppSounds::StopRecording => include_bytes!("../sounds/stop-recording.ogg"),
-            AppSounds::Screenshot => include_bytes!("../sounds/screenshot.ogg"),
-            AppSounds::Notification => include_bytes!("../sounds/action.ogg"),
+            Self::StartRecording => include_bytes!("../sounds/start-recording.ogg"),
+            Self::StopRecording => include_bytes!("../sounds/stop-recording.ogg"),
+            Self::Screenshot => include_bytes!("../sounds/screenshot.ogg"),
+            Self::Notification => include_bytes!("../sounds/action.ogg"),
         }
     }
 }
