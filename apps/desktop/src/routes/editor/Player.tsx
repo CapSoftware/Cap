@@ -1,26 +1,11 @@
-import { DropdownMenu as KDropdownMenu } from "@kobalte/core/dropdown-menu";
-import { Select as KSelect } from "@kobalte/core/select";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListener } from "@solid-primitives/event-listener";
-import { cx } from "cva";
-import { For, Show, Suspense, createEffect, createSignal } from "solid-js";
-import { reconcile } from "solid-js/store";
+import { Show, createEffect, createSignal } from "solid-js";
 
-import { type AspectRatio, commands } from "~/utils/tauri";
+import { commands } from "~/utils/tauri";
 import { FPS, OUTPUT_SIZE, useEditorContext } from "./context";
-import { ASPECT_RATIOS } from "./projectConfig";
-import {
-  ComingSoonTooltip,
-  DropdownItem,
-  EditorButton,
-  MenuItem,
-  MenuItemList,
-  PopperContent,
-  Slider,
-  dropdownContainerClasses,
-  topLeftAnimateClasses,
-} from "./ui";
+import { ComingSoonTooltip, EditorButton, Slider } from "./ui";
 import { formatTime } from "./utils";
 
 export function Player() {
@@ -120,7 +105,7 @@ export function Player() {
   });
 
   return (
-    <div class="flex flex-col flex-1 divide-y">
+    <div class="flex flex-col flex-1">
       <div ref={setCanvasContainerRef} class="relative flex-1 bg-gray-50">
         <Show when={latestFrame()}>
           {(currentFrame) => {
@@ -251,213 +236,6 @@ export function Player() {
         </div>
       </div>
     </div>
-  );
-}
-
-function AspectRatioSelect() {
-  const { project, setProject } = useEditorContext();
-
-  return (
-    <KSelect<AspectRatio | "auto">
-      value={project.aspectRatio ?? "auto"}
-      onChange={(v) => {
-        if (v === null) return;
-        setProject("aspectRatio", v === "auto" ? null : v);
-      }}
-      defaultValue="auto"
-      options={
-        ["auto", "wide", "vertical", "square", "classic", "tall"] as const
-      }
-      multiple={false}
-      itemComponent={(props) => {
-        const item = () =>
-          props.item.rawValue === "auto"
-            ? null
-            : ASPECT_RATIOS[props.item.rawValue];
-
-        return (
-          <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
-            <KSelect.ItemLabel class="flex-1">
-              {props.item.rawValue === "auto"
-                ? "Auto"
-                : ASPECT_RATIOS[props.item.rawValue].name}
-              <Show when={item()}>
-                {(item) => (
-                  <span class="text-gray-400">
-                    {"⋅"}
-                    {item().ratio[0]}:{item().ratio[1]}
-                  </span>
-                )}
-              </Show>
-            </KSelect.ItemLabel>
-            <KSelect.ItemIndicator class="ml-auto">
-              <IconCapCircleCheck />
-            </KSelect.ItemIndicator>
-          </MenuItem>
-        );
-      }}
-      placement="top-start"
-    >
-      <EditorButton<typeof KSelect.Trigger>
-        as={KSelect.Trigger}
-        leftIcon={<IconCapLayout />}
-        rightIcon={
-          <KSelect.Icon>
-            <IconCapChevronDown />
-          </KSelect.Icon>
-        }
-      >
-        <KSelect.Value<AspectRatio | "auto">>
-          {(state) => {
-            const text = () => {
-              const option = state.selectedOption();
-              return option === "auto" ? "Auto" : ASPECT_RATIOS[option].name;
-            };
-            return <>{text()}</>;
-          }}
-        </KSelect.Value>
-      </EditorButton>
-      <KSelect.Portal>
-        <PopperContent<typeof KSelect.Content>
-          as={KSelect.Content}
-          class={topLeftAnimateClasses}
-        >
-          <MenuItemList<typeof KSelect.Listbox>
-            as={KSelect.Listbox}
-            class="w-[12.5rem]"
-          />
-        </PopperContent>
-      </KSelect.Portal>
-    </KSelect>
-  );
-}
-
-function PresetsDropdown() {
-  const { setDialog, presets, setProject } = useEditorContext();
-
-  return (
-    <KDropdownMenu gutter={8}>
-      <EditorButton<typeof KDropdownMenu.Trigger>
-        as={KDropdownMenu.Trigger}
-        leftIcon={<IconCapPresets />}
-      >
-        Presets
-      </EditorButton>
-      <KDropdownMenu.Portal>
-        <Suspense>
-          <PopperContent<typeof KDropdownMenu.Content>
-            as={KDropdownMenu.Content}
-            class={cx("w-72 max-h-56", topLeftAnimateClasses)}
-          >
-            <MenuItemList<typeof KDropdownMenu.Group>
-              as={KDropdownMenu.Group}
-              class="overflow-y-auto flex-1 scrollbar-none"
-            >
-              <For
-                each={presets.query.data?.presets ?? []}
-                fallback={
-                  <div class="py-1 w-full text-sm text-center text-gray-400">
-                    No Presets
-                  </div>
-                }
-              >
-                {(preset, i) => {
-                  const [showSettings, setShowSettings] = createSignal(false);
-
-                  return (
-                    <KDropdownMenu.Sub gutter={16}>
-                      <MenuItem<typeof KDropdownMenu.SubTrigger>
-                        as={KDropdownMenu.SubTrigger}
-                        onFocusIn={() => setShowSettings(false)}
-                        onClick={() => setShowSettings(false)}
-                      >
-                        <span class="mr-auto">{preset.name}</span>
-                        <Show when={presets.query.data?.default === i()}>
-                          <span class="px-[0.375rem] h-[1.25rem] rounded-full bg-gray-100 text-gray-400 text-[0.75rem]">
-                            Default
-                          </span>
-                        </Show>
-                        <button
-                          type="button"
-                          class="text-gray-400 hover:text-[currentColor]"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setShowSettings((s) => !s);
-                          }}
-                          onPointerUp={(e) => {
-                            e.stopPropagation();
-                            e.preventDefault();
-                          }}
-                        >
-                          <IconCapSettings />
-                        </button>
-                      </MenuItem>
-                      <KDropdownMenu.Portal>
-                        {showSettings() && (
-                          <MenuItemList<typeof KDropdownMenu.SubContent>
-                            as={KDropdownMenu.SubContent}
-                            class={cx(
-                              "w-44 animate-in fade-in slide-in-from-left-1",
-                              dropdownContainerClasses
-                            )}
-                          >
-                            <DropdownItem
-                              onSelect={() =>
-                                setProject(reconcile(preset.config))
-                              }
-                            >
-                              Apply
-                            </DropdownItem>
-                            <DropdownItem
-                              onSelect={() => presets.setDefault(i())}
-                            >
-                              Set as default
-                            </DropdownItem>
-                            <DropdownItem
-                              onSelect={() =>
-                                setDialog({
-                                  type: "renamePreset",
-                                  presetIndex: i(),
-                                  open: true,
-                                })
-                              }
-                            >
-                              Rename
-                            </DropdownItem>
-                            <DropdownItem
-                              onClick={() =>
-                                setDialog({
-                                  type: "deletePreset",
-                                  presetIndex: i(),
-                                  open: true,
-                                })
-                              }
-                            >
-                              Delete
-                            </DropdownItem>
-                          </MenuItemList>
-                        )}
-                      </KDropdownMenu.Portal>
-                    </KDropdownMenu.Sub>
-                  );
-                }}
-              </For>
-            </MenuItemList>
-            <MenuItemList<typeof KDropdownMenu.Group>
-              as={KDropdownMenu.Group}
-              class="border-t shrink-0"
-            >
-              <DropdownItem
-                onSelect={() => setDialog({ type: "createPreset", open: true })}
-              >
-                <span>Create new preset</span>
-                <IconCapCirclePlus class="ml-auto" />
-              </DropdownItem>
-            </MenuItemList>
-          </PopperContent>
-        </Suspense>
-      </KDropdownMenu.Portal>
-    </KDropdownMenu>
   );
 }
 

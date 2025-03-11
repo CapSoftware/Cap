@@ -4,7 +4,7 @@
   /* Light theme variables */
   --gray-50: #ffffff;
   --gray-100: #f7f8fa;
-  --gray-200: #e7eaf0;
+  --gray-200: #eeeff3;
   --gray-300: #c9cedb;
   --gray-400: #8991a3;
   --gray-450: #F3F3F3;
@@ -113,8 +113,22 @@
   background: transparent !important;
 }
 
+.custom-scroll::-webkit-scrollbar {
+  width: 4px;
+  background-color: transparent;
+}
+
+.custom-scroll::-webkit-scrollbar-thumb {
+  background-color: var(--gray-300);
+  width: 4px;
+  border-radius: 500px;
+}
+
+
 @layer utilities {
+
   .platform-windows .overflow-y-auto {
     @apply scrollbar-thin scrollbar-track-transparent scrollbar-thumb-black-transparent-40;
   }
+  
 }

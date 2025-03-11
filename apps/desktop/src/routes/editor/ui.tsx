@@ -23,10 +23,9 @@ export function Field(
 ) {
   return (
     <div class="flex flex-col gap-[0.75rem]">
-      <span class="flex flex-row items-center gap-[0.375rem] text-gray-500 text-[0.875rem]">
+      <span class="flex flex-row items-center gap-[0.375rem] text-gray-500 font-medium text-sm">
         {props.icon}
         {props.name}
-
         {props.value && <div class="ml-auto">{props.value}</div>}
       </span>
       {props.children}
@@ -57,8 +56,8 @@ export function Toggle(props: ComponentProps<typeof KSwitch>) {
   return (
     <KSwitch {...props}>
       <KSwitch.Input class="peer" />
-      <KSwitch.Control class="rounded-full bg-gray-300 ui-disabled:bg-gray-200 w-[3rem] h-[1.5rem] p-[0.125rem] ui-checked:bg-blue-300 transition-colors peer-focus-visible:outline outline-2 outline-offset-2 outline-blue-300">
-        <KSwitch.Thumb class="bg-gray-50 rounded-full size-[1.25rem] transition-transform ui-checked:translate-x-[calc(100%+0.25rem)]" />
+      <KSwitch.Control class="rounded-full bg-gray-300 ui-disabled:bg-gray-200 w-11 h-[1.5rem] p-[0.125rem] ui-checked:bg-blue-300 transition-colors peer-focus-visible:outline outline-2 outline-offset-2 outline-blue-300">
+        <KSwitch.Thumb class="bg-gray-500 rounded-full size-[1.25rem] transition-transform ui-checked:translate-x-[calc(100%)]" />
       </KSwitch.Control>
     </KSwitch>
   );
@@ -84,11 +83,11 @@ export function Slider(props: ComponentProps<typeof KSlider>) {
         props.onChangeEnd?.(e);
       }}
     >
-      <KSlider.Track class="h-[0.5rem] relative mx-1">
-        <KSlider.Fill class="absolute -ml-2 h-full bg-blue-100 rounded-full ui-disabled:bg-gray-300" />
+      <KSlider.Track class="h-[0.2rem] relative mx-1">
+        <KSlider.Fill class="absolute -ml-2 h-full bg-gray-400 rounded-full ui-disabled:bg-gray-300" />
         <KSlider.Thumb
           class={cx(
-            "size-[1.25rem] bg-blue-300 -top-1.5 rounded-full outline-none outline-2 outline-offset-2 focus-visible:outline-blue-300 ui-disabled:bg-gray-400"
+            "bg-gray-500 rounded-full outline-none size-4 -top-[6.5px] outline-2 outline-offset-2 focus-visible:outline-blue-300 ui-disabled:bg-gray-400"
           )}
         />
       </KSlider.Track>
@@ -205,7 +204,7 @@ export function MenuItem<T extends ValidComponent = "button">(
       class={cx(
         props.class,
         "flex flex-row shrink-0 items-center gap-[0.375rem] px-[0.675rem] py-[0.375rem] rounded-[0.5rem] outline-none text-nowrap overflow-hidden text-ellipsis w-full max-w-full",
-        "text-[0.875rem] text-gray-400 disabled:text-gray-400 ui-highlighted:bg-gray-200 ui-highlighted:text-gray-500"
+        "text-[0.875rem] text-gray-400 disabled:text-gray-400 ui-highlighted:bg-gray-100 ui-highlighted:text-gray-500"
       )}
     />
   );

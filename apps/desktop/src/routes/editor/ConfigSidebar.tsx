@@ -1,62 +1,70 @@
 import {
+  Collapsible,
+  Collapsible as KCollapsible,
+} from "@kobalte/core/collapsible";
+import {
   RadioGroup as KRadioGroup,
   RadioGroup,
 } from "@kobalte/core/radio-group";
-import { Collapsible as KCollapsible } from "@kobalte/core/collapsible";
 import { Tabs as KTabs } from "@kobalte/core/tabs";
+import { createEventListenerMap } from "@solid-primitives/event-listener";
+import { createWritableMemo } from "@solid-primitives/memo";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { appDataDir } from "@tauri-apps/api/path";
+import { BaseDirectory, writeFile } from "@tauri-apps/plugin-fs";
 import { cx } from "cva";
 import {
+  For,
+  Show,
   batch,
+  createEffect,
+  createMemo,
   createResource,
   createRoot,
   createSignal,
-  For,
-  Show,
-  onMount,
-  createMemo,
-  createEffect,
   on,
+  onMount,
 } from "solid-js";
-import { Dynamic } from "solid-js/web";
-import { createWritableMemo } from "@solid-primitives/memo";
-import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { produce } from "solid-js/store";
-import { writeFile, BaseDirectory } from "@tauri-apps/plugin-fs";
-import {
-  appDataDir,
-  appLocalDataDir,
-  join,
-  resolveResource,
-} from "@tauri-apps/api/path";
-import { convertFileSrc } from "@tauri-apps/api/core";
-import { Collapsible } from "@kobalte/core/collapsible";
+import { Dynamic } from "solid-js/web";
 
+import { createElementBounds } from "@solid-primitives/bounds";
+import { type as ostype } from "@tauri-apps/plugin-os";
+import toast from "solid-toast";
+import { generalSettingsStore } from "~/store";
 import {
   type BackgroundSource,
   type CursorAnimationStyle,
   commands,
 } from "~/utils/tauri";
+import colorBg from "../../assets/illustrations/color.webp";
+import gradientBg from "../../assets/illustrations/gradient.webp";
+import imageBg from "../../assets/illustrations/image.webp";
+import transparentBg from "../../assets/illustrations/transparent.webp";
 import { useEditorContext } from "./context";
+import { DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO } from "./projectConfig";
+import { TextInput } from "./TextInput";
 import {
   ComingSoonTooltip,
   EditorButton,
   Field,
+  Slider,
   Subfield,
   Toggle,
-  Slider,
 } from "./ui";
-import { DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO } from "./projectConfig";
-import { generalSettingsStore } from "~/store";
-import { type as ostype } from "@tauri-apps/plugin-os";
-import toast from "solid-toast";
-import { createElementBounds } from "@solid-primitives/bounds";
-import { TextInput } from "./TextInput";
 
 const BACKGROUND_SOURCES = {
   wallpaper: "Wallpaper",
   image: "Image",
   color: "Color",
   gradient: "Gradient",
+} satisfies Record<BackgroundSource["type"], string>;
+
+const BACKGROUND_ICONS = {
+  wallpaper: imageBg,
+  image: transparentBg,
+  color: colorBg,
+  gradient: gradientBg,
 } satisfies Record<BackgroundSource["type"], string>;
 
 const BACKGROUND_SOURCES_LIST = [
@@ -320,9 +328,9 @@ export function ConfigSidebar() {
   return (
     <KTabs
       value={selectedTab()}
-      class="flex flex-col shrink-0 overflow-x-hidden overflow-y-hidden flex-1 max-w-[25.5rem] z-10 bg-gray-50 relative"
+      class="flex flex-col shrink-0 overflow-x-hidden overflow-y-hidden flex-1 max-w-[26rem] rounded-t-xl z-10 bg-gray-100 relative"
     >
-      <KTabs.List class="h-[3.5rem] flex flex-row divide-x divide-gray-200 text-black/50 text-lg relative z-40 overflow-x-auto border-b border-gray-200 shrink-0">
+      <KTabs.List class="flex overflow-hidden relative z-40 flex-row items-center h-16 text-lg border-b border-gray-200 shrink-0">
         <For
           each={[
             { id: "background" as const, icon: IconCapImage },
@@ -345,27 +353,36 @@ export function ConfigSidebar() {
           {(item) => (
             <KTabs.Trigger
               value={item.id}
-              class="flex-1 text-gray-400 ui-selected:text-gray-500 z-10 disabled:text-gray-300"
+              class="flex relative z-10 flex-1 justify-center items-center px-4 py-2 text-gray-400 transition-colors group ui-selected:text-gray-500 disabled:opacity-50 focus:outline-none"
               onClick={() => setSelectedTab(item.id)}
               disabled={item.disabled}
             >
-              <Dynamic class="mx-auto" component={item.icon} />
+              <div
+                class={cx(
+                  "flex justify-center relative border-transparent border z-10 items-center rounded-md size-9 transition",
+                  selectedTab() !== item.id && "group-hover:border-gray-300"
+                )}
+              >
+                <Dynamic component={item.icon} />
+              </div>
             </KTabs.Trigger>
           )}
         </For>
-        <KTabs.Indicator class="absolute inset-0">
-          <div class="bg-gray-100 w-full h-full" />
+
+        {/** Center the indicator with the icon */}
+        <KTabs.Indicator class="absolute top-0 left-0 w-full h-full transition-transform duration-300 ease-in-out pointer-events-none">
+          <div class="absolute top-1/2 left-1/2 bg-gray-200 rounded-md transform -translate-x-1/2 -translate-y-1/2 size-9" />
         </KTabs.Indicator>
       </KTabs.List>
-      <div class="p-[0.75rem] overflow-y-auto text-[0.875rem] h-full">
-        <KTabs.Content value="background" class="flex flex-col gap-[1.5rem]">
-          <Field name="Background" icon={<IconCapImage />}>
+      <KTabs.Content value="background-type"></KTabs.Content>
+      <div class="p-5 custom-scroll overflow-y-auto text-[0.875rem] h-full">
+        <KTabs.Content value="background" class="flex flex-col gap-8">
+          <Field name="Background">
             <KTabs
-              class="space-y-3"
+              class="space-y-5"
               value={project.background.source.type}
               onChange={(v) => {
                 const tab = v as BackgroundSource["type"];
-
                 switch (tab) {
                   case "image": {
                     setProject("background", "source", {
@@ -418,51 +435,45 @@ export function ConfigSidebar() {
                 }
               }}
             >
-              <KTabs.List class="flex flex-row items-center rounded-[0.5rem] relative border">
-                <div class="absolute inset-0 flex flex-row items-center justify-evenly">
-                  <For
-                    each={Array.from(
-                      { length: BACKGROUND_SOURCES_LIST.length - 1 },
-                      (_, i) => i
-                    )}
-                  >
-                    {(i) => (
-                      <div
-                        class={cx(
-                          "w-px h-[0.75rem] rounded-full transition-colors",
-                          BACKGROUND_SOURCES_LIST.indexOf(
-                            project.background.source.type
-                          ) === i ||
-                            BACKGROUND_SOURCES_LIST.indexOf(
-                              project.background.source.type
-                            ) ===
-                              i + 1
-                            ? "bg-gray-50"
-                            : "bg-gray-200"
-                        )}
-                      />
-                    )}
-                  </For>
-                </div>
+              <KTabs.List class="flex flex-row  gap-2 items-center rounded-[0.5rem] relative">
                 <For each={BACKGROUND_SOURCES_LIST}>
                   {(item) => {
                     const el = (props?: object) => (
                       <KTabs.Trigger
-                        class="flex-1 text-gray-400 py-1 z-10 ui-selected:text-gray-500 peer outline-none transition-colors duration-100"
+                        class="z-10 flex-1 py-2.5 px-2 text-xs text-gray-400 ui-not-selected:hover:border-gray-300 rounded-[10px] transition-colors duration-100 outline-none border ui-selected:text-gray-500 peer"
                         value={item}
                         {...props}
                       >
-                        {BACKGROUND_SOURCES[item]}
+                        <div class="flex gap-1.5 justify-center items-center">
+                          <img
+                            class="size-3.5 rounded"
+                            src={
+                              item === "wallpaper"
+                                ? wallpapers()?.find((w) =>
+                                    (
+                                      project.background.source as {
+                                        path?: string;
+                                      }
+                                    ).path?.includes(w.id)
+                                  )?.url ?? BACKGROUND_ICONS[item]
+                                : BACKGROUND_ICONS[item]
+                            }
+                          />
+                          {BACKGROUND_SOURCES[item]}
+                        </div>
                       </KTabs.Trigger>
                     );
 
                     return el({});
                   }}
                 </For>
-                <KTabs.Indicator class="absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-300 outline-offset-2 rounded-[0.6rem] overflow-hidden">
-                  <div class="bg-gray-100 flex-1" />
+
+                <KTabs.Indicator class="flex overflow-hidden absolute inset-0 p-px rounded-xl transition-transform duration-300 peer-focus-visible:outline outline-2 outline-blue-300 outline-offset-2">
+                  <div class="flex-1 bg-gray-200" />
                 </KTabs.Indicator>
               </KTabs.List>
+              {/** Dashed divider */}
+              <div class="w-full border-t border-gray-300 border-dashed" />
               <KTabs.Content value="wallpaper">
                 <KRadioGroup
                   value={
@@ -491,9 +502,9 @@ export function ConfigSidebar() {
                   <Show
                     when={!wallpapers.loading}
                     fallback={
-                      <div class="col-span-7 flex items-center justify-center h-32 text-gray-400">
-                        <div class="flex flex-col items-center gap-2">
-                          <div class="animate-spin rounded-full h-6 w-6 border-2 border-gray-300 border-t-blue-400" />
+                      <div class="flex col-span-7 justify-center items-center h-32 text-gray-400">
+                        <div class="flex flex-col gap-2 items-center">
+                          <div class="w-6 h-6 rounded-full border-2 border-gray-300 animate-spin border-t-blue-400" />
                           <span>Loading wallpapers...</span>
                         </div>
                       </div>
@@ -503,14 +514,14 @@ export function ConfigSidebar() {
                       {(photo) => (
                         <KRadioGroup.Item
                           value={photo.url!}
-                          class="aspect-square relative group"
+                          class="relative aspect-square group"
                         >
                           <KRadioGroup.ItemInput class="peer" />
-                          <KRadioGroup.ItemControl class="cursor-pointer w-full h-full overflow-hidden rounded-lg border border-gray-200 ui-checked:border-blue-300 ui-checked:ring-2 ui-checked:ring-blue-300 peer-focus-visible:border-2 peer-focus-visible:border-blue-300">
+                          <KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg transition-shadow cursor-pointer ui-checked:ring-2 ui-checked:ring-gray-500 ui-checked:ring-offset-2 ui-checked:ring-offset-gray-200">
                             <img
                               src={photo.url!}
                               alt="Wallpaper option"
-                              class="w-full h-full object-cover"
+                              class="object-cover w-full h-full"
                             />
                           </KRadioGroup.ItemControl>
                         </KRadioGroup.Item>
@@ -519,7 +530,7 @@ export function ConfigSidebar() {
                     <Show when={filteredWallpapers().length > 21}>
                       <Collapsible class="col-span-7">
                         <Collapsible.Trigger
-                          class="w-full text-left text-gray-500 hover:text-gray-700 flex items-center gap-1 px-2 py-2"
+                          class="flex gap-1 items-center px-2 py-2 w-full text-left text-gray-500 hover:text-gray-700"
                           onClick={() => {
                             if (!allWallpapersLoaded()) {
                               loadMoreWallpapers();
@@ -529,20 +540,20 @@ export function ConfigSidebar() {
                           <Show
                             when={!loadingMore()}
                             fallback={
-                              <div class="flex items-center gap-2">
-                                <div class="animate-spin rounded-full h-4 w-4 border-2 border-gray-300 border-t-blue-400" />
+                              <div class="flex gap-2 items-center">
+                                <div class="w-4 h-4 rounded-full border-2 border-gray-300 animate-spin border-t-blue-400" />
                                 <span>Loading more wallpapers...</span>
                               </div>
                             }
                           >
-                            <div class="flex items-center gap-1">
+                            <div class="flex gap-1 items-center">
                               <span class="data-[expanded]:hidden">
                                 Show more wallpapers
                               </span>
                               <span class="hidden data-[expanded]:inline">
                                 Hide wallpapers
                               </span>
-                              <IconCapChevronDown class="w-4 h-4 ui-expanded:rotate-180 transition-transform" />
+                              <IconCapChevronDown class="w-4 h-4 transition-transform ui-expanded:rotate-180" />
                             </div>
                           </Show>
                         </Collapsible.Trigger>
@@ -552,14 +563,14 @@ export function ConfigSidebar() {
                               {(photo) => (
                                 <KRadioGroup.Item
                                   value={photo.url!}
-                                  class="aspect-square relative group"
+                                  class="relative aspect-square group"
                                 >
                                   <KRadioGroup.ItemInput class="peer" />
-                                  <KRadioGroup.ItemControl class="cursor-pointer w-full h-full overflow-hidden rounded-lg border border-gray-200 ui-checked:border-blue-300 ui-checked:ring-2 ui-checked:ring-blue-300 peer-focus-visible:border-2 peer-focus-visible:border-blue-300">
+                                  <KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg border border-gray-200 cursor-pointer ui-checked:border-blue-300 ui-checked:ring-2 ui-checked:ring-blue-300 peer-focus-visible:border-2 peer-focus-visible:border-blue-300">
                                     <img
                                       src={photo.url!}
                                       alt="Wallpaper option"
-                                      class="w-full h-full object-cover"
+                                      class="object-cover w-full h-full"
                                       loading="lazy"
                                     />
                                   </KRadioGroup.ItemControl>
@@ -591,10 +602,10 @@ export function ConfigSidebar() {
                   }
                 >
                   {(source) => (
-                    <div class="group relative w-full h-48 rounded-md overflow-hidden border border-gray-200">
+                    <div class="overflow-hidden relative w-full h-48 rounded-md border border-gray-200 group">
                       <img
                         src={convertFileSrc(source())}
-                        class="w-full h-full object-cover"
+                        class="object-cover w-full h-full"
                         alt="Selected background"
                       />
                       <div class="absolute top-2 right-2">
@@ -606,7 +617,7 @@ export function ConfigSidebar() {
                               path: null,
                             })
                           }
-                          class="bg-black/50 text-white p-2 rounded-full hover:bg-black/70 transition-colors"
+                          class="p-2 text-white rounded-full transition-colors bg-black/50 hover:bg-black/70"
                         >
                           <IconCapCircleX class="w-4 h-4" />
                         </button>
@@ -685,7 +696,7 @@ export function ConfigSidebar() {
               </KTabs.Content>
               <KTabs.Content
                 value="gradient"
-                class="flex flex-row items-center justify-between"
+                class="flex flex-row justify-between items-center"
               >
                 <Show
                   when={
@@ -723,7 +734,7 @@ export function ConfigSidebar() {
                           }}
                         />
                         <div
-                          class="rounded-full size-12 bg-gray-50 border border-gray-200 relative p-1 flex flex-col items-center cursor-ns-resize shrink-0"
+                          class="flex relative flex-col items-center p-1 bg-gray-50 rounded-full border border-gray-200 size-12 cursor-ns-resize shrink-0"
                           style={{ transform: `rotate(${angle()}deg)` }}
                           onMouseDown={(downEvent) => {
                             const start = angle();
@@ -767,7 +778,7 @@ export function ConfigSidebar() {
                             );
                           }}
                         >
-                          <div class="bg-blue-300 size-2 rounded-full" />
+                          <div class="bg-blue-300 rounded-full size-2" />
                         </div>
                       </>
                     );
@@ -777,22 +788,25 @@ export function ConfigSidebar() {
             </KTabs>
           </Field>
 
-          <Field name="Background Blur" icon={<IconCapBlur />}>
+          <Field name="Background Blur" icon={<IconCapBgBlur />}>
             <Slider
               value={[project.background.blur]}
               onChange={(v) => setProject("background", "blur", v[0])}
               minValue={0}
               maxValue={100}
+              class="mt-3"
               step={0.1}
             />
           </Field>
-
+          {/** Dashed divider */}
+          <div class="my-2 w-full border-t border-gray-300 border-dashed" />
           <Field name="Padding" icon={<IconCapPadding />}>
             <Slider
               value={[project.background.padding]}
               onChange={(v) => setProject("background", "padding", v[0])}
               minValue={0}
               maxValue={40}
+              class="mt-3"
               step={0.1}
             />
           </Field>
@@ -802,12 +816,14 @@ export function ConfigSidebar() {
               onChange={(v) => setProject("background", "rounding", v[0])}
               minValue={0}
               maxValue={100}
+              class="mt-3"
               step={0.1}
             />
           </Field>
           <Field name="Shadow" icon={<IconCapShadow />}>
             <div class="space-y-3">
               <Slider
+                class="mt-3"
                 value={[project.background.shadow!]}
                 onChange={(v) => {
                   batch(() => {
@@ -827,13 +843,13 @@ export function ConfigSidebar() {
                 step={0.1}
               />
               <Collapsible>
-                <Collapsible.Trigger class="w-full text-left text-gray-500 hover:text-gray-700 flex items-center gap-1">
+                <Collapsible.Trigger class="flex gap-1 items-center w-full text-left text-gray-500 hover:text-gray-700">
                   Advanced shadow settings
-                  <IconCapChevronDown class="w-4 h-4 ui-expanded:rotate-180 transition-transform" />
+                  <IconCapChevronDown class="w-4 h-4 transition-transform ui-expanded:rotate-180" />
                 </Collapsible.Trigger>
-                <Collapsible.Content class="space-y-3 mt-3 animate-in slide-in-from-top-2 fade-in">
+                <Collapsible.Content class="mt-3 space-y-3 animate-in slide-in-from-top-2 fade-in">
                   <div class="flex flex-col gap-2">
-                    <span class="text-gray-500 text-sm">Size</span>
+                    <span class="text-sm text-gray-500">Size</span>
                     <Slider
                       value={[project.background.advancedShadow?.size ?? 50]}
                       onChange={(v) => {
@@ -852,7 +868,7 @@ export function ConfigSidebar() {
                     />
                   </div>
                   <div class="flex flex-col gap-2">
-                    <span class="text-gray-500 text-sm">Opacity</span>
+                    <span class="text-sm text-gray-500">Opacity</span>
                     <Slider
                       value={[project.background.advancedShadow?.opacity ?? 18]}
                       onChange={(v) => {
@@ -871,7 +887,7 @@ export function ConfigSidebar() {
                     />
                   </div>
                   <div class="flex flex-col gap-2">
-                    <span class="text-gray-500 text-sm">Blur</span>
+                    <span class="text-sm text-gray-500">Blur</span>
                     <Slider
                       value={[project.background.advancedShadow?.blur ?? 50]}
                       onChange={(v) => {
@@ -1009,13 +1025,13 @@ export function ConfigSidebar() {
                 step={0.1}
               />
               <Collapsible>
-                <Collapsible.Trigger class="w-full text-left text-gray-500 hover:text-gray-700 flex items-center gap-1">
+                <Collapsible.Trigger class="flex gap-1 items-center w-full text-left text-gray-500 hover:text-gray-700">
                   Advanced shadow settings
-                  <IconCapChevronDown class="w-4 h-4 ui-expanded:rotate-180 transition-transform" />
+                  <IconCapChevronDown class="w-4 h-4 transition-transform ui-expanded:rotate-180" />
                 </Collapsible.Trigger>
-                <Collapsible.Content class="space-y-3 mt-3 animate-in slide-in-from-top-2 fade-in">
+                <Collapsible.Content class="mt-3 space-y-3 animate-in slide-in-from-top-2 fade-in">
                   <div class="flex flex-col gap-2">
-                    <span class="text-gray-500 text-sm">Size</span>
+                    <span class="text-sm text-gray-500">Size</span>
                     <Slider
                       value={[project.camera.advanced_shadow?.size ?? 33.9]}
                       onChange={(v) => {
@@ -1034,7 +1050,7 @@ export function ConfigSidebar() {
                     />
                   </div>
                   <div class="flex flex-col gap-2">
-                    <span class="text-gray-500 text-sm">Opacity</span>
+                    <span class="text-sm text-gray-500">Opacity</span>
                     <Slider
                       value={[project.camera.advanced_shadow?.opacity ?? 44.2]}
                       onChange={(v) => {
@@ -1053,7 +1069,7 @@ export function ConfigSidebar() {
                     />
                   </div>
                   <div class="flex flex-col gap-2">
-                    <span class="text-gray-500 text-sm">Blur</span>
+                    <span class="text-sm text-gray-500">Blur</span>
                     <Slider
                       value={[project.camera.advanced_shadow?.blur ?? 10.5]}
                       onChange={(v) => {
@@ -1089,7 +1105,7 @@ export function ConfigSidebar() {
         </KTabs.Content>
         <KTabs.Content value="transcript" class="flex flex-col gap-6">
           <Field name="Transcript" icon={<IconCapMessageBubble />}>
-            <div class="text-wrap bg-gray-50 border text-gray-400 p-1 rounded-md">
+            <div class="p-1 text-gray-400 bg-gray-50 rounded-md border text-wrap">
               Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed ac
               purus sit amet nunc ultrices ultricies. Nullam nec scelerisque
               nunc. Nullam nec scelerisque nunc.
@@ -1104,7 +1120,7 @@ export function ConfigSidebar() {
         </KTabs.Content>
         <KTabs.Content value="audio" class="flex flex-col gap-6">
           <Field name="Audio" icon={<IconCapAudioOn />}>
-            <div class="flex flex-col gap-3 ">
+            <div class="flex flex-col gap-3">
               <Subfield name="Mute Audio">
                 <Toggle
                   checked={project.audio.mute}
@@ -1152,9 +1168,9 @@ export function ConfigSidebar() {
                     />
                   }
                 />
-                <KCollapsible.Content class="overflow-hidden border-b border-gray-200 animate-collapsible-up ui-expanded:animate-collapsible-down transition-opacity ui-expanded:opacity-100 opacity-0">
+                <KCollapsible.Content class="overflow-hidden border-b border-gray-200 opacity-0 transition-opacity animate-collapsible-up ui-expanded:animate-collapsible-down ui-expanded:opacity-100">
                   {/* if Content has padding or margin the animation doesn't look as good */}
-                  <div class="pt-4 pb-6 flex flex-col gap-4">
+                  <div class="flex flex-col gap-4 pt-4 pb-6">
                     <Field name="Tension">
                       <Slider
                         value={[project.cursor.tension]}
@@ -1216,10 +1232,10 @@ export function ConfigSidebar() {
                 ][]
               ).map(([value, label]) => (
                 <RadioGroup.Item value={value} class="flex items-center">
-                  <RadioGroup.ItemInput class="peer sr-only" />
+                  <RadioGroup.ItemInput class="sr-only peer" />
                   <RadioGroup.ItemControl
                     class={cx(
-                      "w-4 h-4 rounded-full border border-gray-300 mr-2",
+                      "mr-2 w-4 h-4 rounded-full border border-gray-300",
                       "relative after:absolute after:inset-0 after:m-auto after:block after:w-2 after:h-2 after:rounded-full",
                       "after:transition-colors after:duration-200",
                       "peer-checked:border-blue-500 peer-checked:after:bg-blue-400",
@@ -1242,7 +1258,7 @@ export function ConfigSidebar() {
           </Field> */}
             </>
           ) : (
-            <div class="flex flex-col items-center justify-center gap-2 text-gray-400 p-4">
+            <div class="flex flex-col gap-2 justify-center items-center p-4 text-gray-400">
               <IconCapCursor class="size-6" />
               <span>Cursor settings coming soon</span>
             </div>
@@ -1290,7 +1306,7 @@ export function ConfigSidebar() {
               class="absolute inset-0 p-[0.75rem] text-[0.875rem] space-y-6 bg-gray-50 z-50 animate-in slide-in-from-bottom-2 fade-in"
             >
               <div class="flex flex-row justify-between items-center">
-                <div class="flex items-center gap-2">
+                <div class="flex gap-2 items-center">
                   <EditorButton
                     onClick={() => setState("timelineSelection", null)}
                     leftIcon={<IconLucideCheck />}
@@ -1345,7 +1361,7 @@ export function ConfigSidebar() {
                   <KTabs.List class="flex flex-row items-center rounded-[0.5rem] relative border">
                     <KTabs.Trigger
                       value="auto"
-                      class="flex-1 text-gray-400 py-1 z-10 ui-selected:text-gray-500 peer outline-none transition-colors duration-100"
+                      class="z-10 flex-1 py-1 text-gray-400 transition-colors duration-100 outline-none ui-selected:text-gray-500 peer"
                       // onClick={() => setSelectedTab(item.id)}
                       disabled
                     >
@@ -1353,13 +1369,13 @@ export function ConfigSidebar() {
                     </KTabs.Trigger>
                     <KTabs.Trigger
                       value="manual"
-                      class="flex-1 text-gray-400 py-1 z-10 ui-selected:text-gray-500 peer outline-none transition-colors duration-100"
+                      class="z-10 flex-1 py-1 text-gray-400 transition-colors duration-100 outline-none ui-selected:text-gray-500 peer"
                       // onClick={() => setSelectedTab(item.id)}
                     >
                       Manual
                     </KTabs.Trigger>
                     <KTabs.Indicator class="absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-300 outline-offset-2 rounded-[0.6rem] overflow-hidden">
-                      <div class="bg-gray-100 flex-1" />
+                      <div class="flex-1 bg-gray-100" />
                     </KTabs.Indicator>
                   </KTabs.List>
                   <KTabs.Content value="manual" tabIndex="">
@@ -1468,7 +1484,7 @@ export function ConfigSidebar() {
                         return (
                           <div
                             ref={setRef}
-                            class="w-full relative"
+                            class="relative w-full"
                             style={{
                               height: `calc(${visualHeight()}px + 0.25rem)`,
                             }}
@@ -1511,7 +1527,7 @@ export function ConfigSidebar() {
                             }}
                           >
                             <div
-                              class="z-10 absolute w-6 h-6 rounded-full bg-gray-50 border border-gray-400 -translate-x-1/2 -translate-y-1/2"
+                              class="absolute z-10 w-6 h-6 bg-gray-50 rounded-full border border-gray-400 -translate-x-1/2 -translate-y-1/2"
                               style={{
                                 left: `calc(${mode().x * 100}% + ${
                                   2 + mode().x * -6
@@ -1521,7 +1537,7 @@ export function ConfigSidebar() {
                                 }px)`,
                               }}
                             />
-                            <div class="border-2 border-gray-300 bg-gray-300 rounded-lg overflow-hidden">
+                            <div class="overflow-hidden bg-gray-300 rounded-lg border-2 border-gray-300">
                               <canvas
                                 ref={canvasRef}
                                 width={croppedSize().x}

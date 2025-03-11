@@ -13,7 +13,7 @@ const styles = cva(
         primary:
           "bg-blue-300 text-gray-50 hover:-translate-y-px shadow-[0_0_0_0_rgba(54,102,197,1)] hover:shadow-[0_3px_0_0_rgba(54,102,197,1)] dark:hover:shadow-[0_3px_0_0_rgba(71,133,255,0.50)] dark:text-gray-500 disabled:bg-blue-200 outline-blue-300",
         secondary:
-          "bg-gray-200 hover:-translate-y-px shadow-[0_0_0_0_rgba(0,0,0,0.20)] hover:shadow-[0_3px_0_0_rgba(0,0,0,0.20)] dark:shadow-[0_0_0_0_rgba(255,255,255,0.20)] hover:dark:shadow-[0_3px_0_0_rgba(255,255,255,0.10)] text-gray-500 disabled:bg-gray-200 disabled:text-gray-400 outline-blue-300",
+          "bg-gray-200 hover:-translate-y-px shadow-[0_0_0_0_rgba(0,0,0,0.20)] hover:shadow-[0_3px_0_0_rgba(0,0,0,0.20)] dark:shadow-[0_0_0_0_rgba(58,58,58,0.50)] hover:dark:shadow-[0_3px_0_0_rgba(58,58,58,0.50)] text-gray-500 disabled:bg-gray-200 disabled:text-gray-400 outline-blue-300",
         destructive:
           "bg-red-300 text-gray-50 dark:text-gray-500 hover:bg-red-400 disabled:bg-red-200 outline-red-300",
         white:
