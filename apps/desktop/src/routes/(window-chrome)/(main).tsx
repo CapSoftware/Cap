@@ -26,6 +26,7 @@ import {
 import { createStore } from "solid-js/store";
 import { trackEvent } from "~/utils/analytics";
 
+import { ValidComponent } from "solid-js";
 import Mode from "~/components/Mode";
 import {
   createCurrentRecordingQuery,
