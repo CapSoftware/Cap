@@ -22,7 +22,7 @@ export function Field(
   props: ParentProps<{ name: string; icon?: JSX.Element; value?: JSX.Element }>
 ) {
   return (
-    <div class="flex flex-col gap-[0.75rem]">
+    <div class="flex flex-col gap-6">
       <span class="flex flex-row items-center gap-[0.375rem] text-gray-500 font-medium text-sm">
         {props.icon}
         {props.name}
@@ -39,7 +39,7 @@ export function Subfield(
   return (
     <div
       class={cx(
-        "flex flex-row justify-between items-center text-gray-400",
+        "flex flex-row font-medium justify-between items-center text-gray-500",
         props.class
       )}
     >
@@ -57,7 +57,7 @@ export function Toggle(props: ComponentProps<typeof KSwitch>) {
     <KSwitch {...props}>
       <KSwitch.Input class="peer" />
       <KSwitch.Control class="rounded-full bg-gray-300 ui-disabled:bg-gray-200 w-11 h-[1.5rem] p-[0.125rem] ui-checked:bg-blue-300 transition-colors peer-focus-visible:outline outline-2 outline-offset-2 outline-blue-300">
-        <KSwitch.Thumb class="bg-gray-500 rounded-full size-[1.25rem] transition-transform ui-checked:translate-x-[calc(100%)]" />
+        <KSwitch.Thumb class="bg-white rounded-full size-[1.25rem] transition-transform ui-checked:translate-x-[calc(100%)]" />
       </KSwitch.Control>
     </KSwitch>
   );

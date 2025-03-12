@@ -41,8 +41,9 @@ import colorBg from "../../assets/illustrations/color.webp";
 import gradientBg from "../../assets/illustrations/gradient.webp";
 import imageBg from "../../assets/illustrations/image.webp";
 import transparentBg from "../../assets/illustrations/transparent.webp";
-import { useEditorContext } from "./context";
+import { BACKGROUND_THEMES, useEditorContext } from "./context";
 import { DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO } from "./projectConfig";
+import ShadowSettings from "./ShadowSettings";
 import { TextInput } from "./TextInput";
 import {
   ComingSoonTooltip,
@@ -129,6 +130,8 @@ const WALLPAPER_NAMES = [
 
 export function ConfigSidebar() {
   const {
+    backgroundTab,
+    setBackgroundTab,
     selectedTab,
     setSelectedTab,
     project,
@@ -141,13 +144,12 @@ export function ConfigSidebar() {
 
   const [wallpapers, { mutate }] = createResource(async () => {
     // Only load visible wallpapers initially
-    const visibleWallpaperPaths = WALLPAPER_NAMES.slice(0, 21).map(
+    const visibleWallpaperPaths = WALLPAPER_NAMES.slice(0, 50).map(
       async (id) => {
         try {
           const path = await commands.getWallpaperPath(id);
           return { id, path };
         } catch (err) {
-          console.error(`Failed to get path for ${id}:`, err);
           return { id, path: null };
         }
       }
@@ -190,7 +192,6 @@ export function ConfigSidebar() {
           const path = await commands.getWallpaperPath(id);
           return { id, path };
         } catch (err) {
-          console.error(`Failed to get path for ${id}:`, err);
           return { id, path: null };
         }
       })
@@ -208,22 +209,18 @@ export function ConfigSidebar() {
     setLoadingMore(false);
   };
 
-  const filteredWallpapers = () => wallpapers() ?? [];
+  const filteredWallpapers = createMemo(() => {
+    const currentTab = backgroundTab();
+    return wallpapers()?.filter((wp) => wp.id.startsWith(currentTab)) || [];
+  });
 
   // Validate background source path on mount
   onMount(async () => {
-    console.log("Validating background source path on mount");
-    console.log(
-      "Current project background source:",
-      project.background.source
-    );
-
     if (
       project.background.source.type === "wallpaper" ||
       project.background.source.type === "image"
     ) {
       const path = project.background.source.path;
-      console.log("Background source path:", path);
 
       if (path) {
         if (project.background.source.type === "wallpaper") {
@@ -231,15 +228,12 @@ export function ConfigSidebar() {
           if (
             WALLPAPER_NAMES.includes(path as (typeof WALLPAPER_NAMES)[number])
           ) {
-            console.log("Valid wallpaper ID found:", path);
             // Wait for wallpapers to load
             const loadedWallpapers = await wallpapers();
-            console.log("Loaded wallpapers:", loadedWallpapers);
             if (!loadedWallpapers) return;
 
             // Find the wallpaper with matching ID
             const wallpaper = loadedWallpapers.find((w) => w.id === path);
-            console.log("Found matching wallpaper:", wallpaper);
             if (!wallpaper?.url) return;
 
             // Directly trigger the radio group's onChange handler
@@ -265,10 +259,8 @@ export function ConfigSidebar() {
           (async () => {
             try {
               const convertedPath = convertFileSrc(path);
-              console.log("Checking image existence at:", convertedPath);
               await fetch(convertedPath, { method: "HEAD" });
             } catch (err) {
-              console.error("Failed to verify image existence:", err);
               setProject("background", "source", {
                 type: "image",
                 path: null,
@@ -310,6 +302,13 @@ export function ConfigSidebar() {
   generalSettingsStore.listen(() => hapticsEnabledOptions.refetch());
 
   let fileInput!: HTMLInputElement;
+  let scrollRef!: HTMLDivElement;
+
+  //needs to be a signal as the ref is lost otherwise when changing tabs
+  const [backgroundRef, setBackgroundRef] = createSignal<HTMLDivElement>();
+
+  const [scrollX, setScrollX] = createSignal(0);
+  const [reachedEndOfScroll, setReachedEndOfScroll] = createSignal(false);
 
   // Optimize the debounced set project function
   const debouncedSetProject = (wallpaperPath: string) => {
@@ -324,6 +323,40 @@ export function ConfigSidebar() {
       });
     });
   };
+
+  /** Handle background tabs overflowing to show fade */
+
+  const handleScroll = () => {
+    const el = backgroundRef();
+    if (el) {
+      setScrollX(el.scrollLeft);
+      const reachedEnd = el.scrollWidth - el.clientWidth - el.scrollLeft;
+      setReachedEndOfScroll(reachedEnd === 0);
+    }
+  };
+
+  //Mouse wheel and touchpad support
+  const handleWheel = (e: WheelEvent) => {
+    const el = backgroundRef();
+    if (el) {
+      e.preventDefault();
+      el.scrollLeft +=
+        Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+    }
+  };
+
+  createEffect(() => {
+    const el = backgroundRef();
+    if (el) {
+      el.addEventListener("scroll", handleScroll);
+      el.addEventListener("wheel", handleWheel, { passive: false });
+
+      return () => {
+        el.removeEventListener("scroll", handleScroll);
+        el.removeEventListener("wheel", handleWheel);
+      };
+    }
+  });
 
   return (
     <KTabs
@@ -354,7 +387,12 @@ export function ConfigSidebar() {
             <KTabs.Trigger
               value={item.id}
               class="flex relative z-10 flex-1 justify-center items-center px-4 py-2 text-gray-400 transition-colors group ui-selected:text-gray-500 disabled:opacity-50 focus:outline-none"
-              onClick={() => setSelectedTab(item.id)}
+              onClick={() => {
+                setSelectedTab(item.id);
+                scrollRef.scrollTo({
+                  top: 0,
+                });
+              }}
               disabled={item.disabled}
             >
               <div
@@ -374,12 +412,13 @@ export function ConfigSidebar() {
           <div class="absolute top-1/2 left-1/2 bg-gray-200 rounded-md transform -translate-x-1/2 -translate-y-1/2 size-9" />
         </KTabs.Indicator>
       </KTabs.List>
-      <KTabs.Content value="background-type"></KTabs.Content>
-      <div class="p-5 custom-scroll overflow-y-auto text-[0.875rem] h-full">
+      <div
+        ref={scrollRef}
+        class="p-5 custom-scroll overflow-y-auto text-[0.875rem] h-full"
+      >
         <KTabs.Content value="background" class="flex flex-col gap-8">
-          <Field name="Background">
+          <Field icon={<IconCapImage class="size-4" />} name="Background Image">
             <KTabs
-              class="space-y-5"
               value={project.background.source.type}
               onChange={(v) => {
                 const tab = v as BackgroundSource["type"];
@@ -440,7 +479,7 @@ export function ConfigSidebar() {
                   {(item) => {
                     const el = (props?: object) => (
                       <KTabs.Trigger
-                        class="z-10 flex-1 py-2.5 px-2 text-xs text-gray-400 ui-not-selected:hover:border-gray-300 rounded-[10px] transition-colors duration-100 outline-none border ui-selected:text-gray-500 peer"
+                        class="z-10 flex-1 py-2.5 px-2 text-xs text-gray-400 ui-selected:bg-gray-200 ui-not-selected:hover:border-gray-300 rounded-[10px] transition-colors duration-300 outline-none border ui-selected:text-gray-500 peer"
                         value={item}
                         {...props}
                       >
@@ -448,7 +487,11 @@ export function ConfigSidebar() {
                           <img
                             class="size-3.5 rounded"
                             src={
-                              item === "wallpaper"
+                              item === "image" &&
+                              project.background.source.type === "image" &&
+                              project.background.source.path
+                                ? convertFileSrc(project.background.source.path)
+                                : item === "wallpaper"
                                 ? wallpapers()?.find((w) =>
                                     (
                                       project.background.source as {
@@ -468,13 +511,52 @@ export function ConfigSidebar() {
                   }}
                 </For>
 
-                <KTabs.Indicator class="flex overflow-hidden absolute inset-0 p-px rounded-xl transition-transform duration-300 peer-focus-visible:outline outline-2 outline-blue-300 outline-offset-2">
+                {/* <KTabs.Indicator class="flex overflow-hidden absolute inset-0 p-px rounded-xl transition-transform duration-300 peer-focus-visible:outline outline-2 outline-blue-300 outline-offset-2">
                   <div class="flex-1 bg-gray-200" />
-                </KTabs.Indicator>
+                </KTabs.Indicator> */}
               </KTabs.List>
               {/** Dashed divider */}
-              <div class="w-full border-t border-gray-300 border-dashed" />
+              <div class="my-5 w-full border-t border-gray-300 border-dashed" />
               <KTabs.Content value="wallpaper">
+                {/** Background Tabs */}
+                <KTabs class="overflow-hidden relative" value={backgroundTab()}>
+                  <KTabs.List
+                    ref={setBackgroundRef}
+                    class="flex overflow-x-auto overscroll-contain relative z-40 flex-row gap-2 items-center mb-5 text-xs hide-scroll"
+                    style={{
+                      "-webkit-mask-image": `linear-gradient(to right, transparent, black ${
+                        scrollX() > 0 ? "24px" : "0"
+                      }, black calc(100% - ${
+                        reachedEndOfScroll() ? "0px" : "24px"
+                      }), transparent)`,
+
+                      "mask-image": `linear-gradient(to right, transparent, black ${
+                        scrollX() > 0 ? "24px" : "0"
+                      }, black calc(100% - ${
+                        reachedEndOfScroll() ? "0px" : "24px"
+                      }), transparent);`,
+                    }}
+                  >
+                    <For each={Object.entries(BACKGROUND_THEMES)}>
+                      {([key, value]) => (
+                        <>
+                          <KTabs.Trigger
+                            onClick={() =>
+                              setBackgroundTab(
+                                key as keyof typeof BACKGROUND_THEMES
+                              )
+                            }
+                            value={key}
+                            class="flex relative z-10 flex-1 justify-center items-center px-4 py-2 text-gray-400 bg-transparent rounded-lg border transition-colors duration-300 ui-not-selected:hover:border-gray-300 ui-selected:bg-gray-200 group ui-selected:text-gray-500 disabled:opacity-50 focus:outline-none"
+                          >
+                            {value}
+                          </KTabs.Trigger>
+                        </>
+                      )}
+                    </For>
+                  </KTabs.List>
+                </KTabs>
+                {/** End of Background Tabs */}
                 <KRadioGroup
                   value={
                     project.background.source.type === "wallpaper"
@@ -594,7 +676,7 @@ export function ConfigSidebar() {
                     <button
                       type="button"
                       onClick={() => fileInput.click()}
-                      class="p-[0.75rem] bg-gray-100 w-full rounded-[0.5rem] border flex flex-col items-center justify-center gap-[0.5rem] text-gray-400 hover:bg-gray-200 transition-colors duration-100"
+                      class="p-6 bg-gray-100 text-xs w-full rounded-[0.5rem] border flex flex-col items-center justify-center gap-[0.5rem] text-gray-400 hover:bg-gray-200 transition-colors duration-100"
                     >
                       <IconCapImage class="size-6" />
                       <span>Click to select or drag and drop image</span>
@@ -794,120 +876,94 @@ export function ConfigSidebar() {
               onChange={(v) => setProject("background", "blur", v[0])}
               minValue={0}
               maxValue={100}
-              class="mt-3"
               step={0.1}
             />
           </Field>
           {/** Dashed divider */}
-          <div class="my-2 w-full border-t border-gray-300 border-dashed" />
-          <Field name="Padding" icon={<IconCapPadding />}>
+          <div class="w-full border-t border-gray-300 border-dashed" />
+          <Field name="Padding" icon={<IconCapPadding class="size-4" />}>
             <Slider
               value={[project.background.padding]}
               onChange={(v) => setProject("background", "padding", v[0])}
               minValue={0}
               maxValue={40}
-              class="mt-3"
               step={0.1}
             />
           </Field>
-          <Field name="Rounded Corners" icon={<IconCapCorners />}>
+          <Field
+            name="Rounded Corners"
+            icon={<IconCapCorners class="size-4" />}
+          >
             <Slider
               value={[project.background.rounding]}
               onChange={(v) => setProject("background", "rounding", v[0])}
               minValue={0}
               maxValue={100}
-              class="mt-3"
               step={0.1}
             />
           </Field>
-          <Field name="Shadow" icon={<IconCapShadow />}>
-            <div class="space-y-3">
-              <Slider
-                class="mt-3"
-                value={[project.background.shadow!]}
-                onChange={(v) => {
-                  batch(() => {
-                    setProject("background", "shadow", v[0]);
-                    // Initialize advanced shadow settings if they don't exist and shadow is enabled
-                    if (v[0] > 0 && !project.background.advancedShadow) {
-                      setProject("background", "advancedShadow", {
-                        size: 50,
-                        opacity: 18,
-                        blur: 50,
-                      });
-                    }
+          <Field name="Shadow" icon={<IconCapShadow class="size-4" />}>
+            <Slider
+              value={[project.background.shadow!]}
+              onChange={(v) => {
+                batch(() => {
+                  setProject("background", "shadow", v[0]);
+                  // Initialize advanced shadow settings if they don't exist and shadow is enabled
+                  if (v[0] > 0 && !project.background.advancedShadow) {
+                    setProject("background", "advancedShadow", {
+                      size: 50,
+                      opacity: 18,
+                      blur: 50,
+                    });
+                  }
+                });
+              }}
+              minValue={0}
+              maxValue={100}
+              step={0.1}
+            />
+            <ShadowSettings
+              scrollRef={scrollRef}
+              size={{
+                value: [project.background.advancedShadow?.size ?? 50],
+                onChange: (v) => {
+                  setProject("background", "advancedShadow", {
+                    ...(project.background.advancedShadow ?? {
+                      size: 50,
+                      opacity: 18,
+                      blur: 50,
+                    }),
+                    size: v[0],
                   });
-                }}
-                minValue={0}
-                maxValue={100}
-                step={0.1}
-              />
-              <Collapsible>
-                <Collapsible.Trigger class="flex gap-1 items-center w-full text-left text-gray-500 hover:text-gray-700">
-                  Advanced shadow settings
-                  <IconCapChevronDown class="w-4 h-4 transition-transform ui-expanded:rotate-180" />
-                </Collapsible.Trigger>
-                <Collapsible.Content class="mt-3 space-y-3 animate-in slide-in-from-top-2 fade-in">
-                  <div class="flex flex-col gap-2">
-                    <span class="text-sm text-gray-500">Size</span>
-                    <Slider
-                      value={[project.background.advancedShadow?.size ?? 50]}
-                      onChange={(v) => {
-                        setProject("background", "advancedShadow", {
-                          ...(project.background.advancedShadow ?? {
-                            size: 50,
-                            opacity: 18,
-                            blur: 50,
-                          }),
-                          size: v[0],
-                        });
-                      }}
-                      minValue={0}
-                      maxValue={100}
-                      step={0.1}
-                    />
-                  </div>
-                  <div class="flex flex-col gap-2">
-                    <span class="text-sm text-gray-500">Opacity</span>
-                    <Slider
-                      value={[project.background.advancedShadow?.opacity ?? 18]}
-                      onChange={(v) => {
-                        setProject("background", "advancedShadow", {
-                          ...(project.background.advancedShadow ?? {
-                            size: 50,
-                            opacity: 18,
-                            blur: 50,
-                          }),
-                          opacity: v[0],
-                        });
-                      }}
-                      minValue={0}
-                      maxValue={100}
-                      step={0.1}
-                    />
-                  </div>
-                  <div class="flex flex-col gap-2">
-                    <span class="text-sm text-gray-500">Blur</span>
-                    <Slider
-                      value={[project.background.advancedShadow?.blur ?? 50]}
-                      onChange={(v) => {
-                        setProject("background", "advancedShadow", {
-                          ...(project.background.advancedShadow ?? {
-                            size: 50,
-                            opacity: 18,
-                            blur: 50,
-                          }),
-                          blur: v[0],
-                        });
-                      }}
-                      minValue={0}
-                      maxValue={100}
-                      step={0.1}
-                    />
-                  </div>
-                </Collapsible.Content>
-              </Collapsible>
-            </div>
+                },
+              }}
+              opacity={{
+                value: [project.background.advancedShadow?.opacity ?? 18],
+                onChange: (v) => {
+                  setProject("background", "advancedShadow", {
+                    ...(project.background.advancedShadow ?? {
+                      size: 50,
+                      opacity: 18,
+                      blur: 50,
+                    }),
+                    opacity: v[0],
+                  });
+                },
+              }}
+              blur={{
+                value: [project.background.advancedShadow?.blur ?? 50],
+                onChange: (v) => {
+                  setProject("background", "advancedShadow", {
+                    ...(project.background.advancedShadow ?? {
+                      size: 50,
+                      opacity: 18,
+                      blur: 50,
+                    }),
+                    blur: v[0],
+                  });
+                },
+              }}
+            />
           </Field>
           {/* <ComingSoonTooltip>
             <Field name="Inset" icon={<IconCapInset />}>
@@ -921,23 +977,11 @@ export function ConfigSidebar() {
             </Field>
           </ComingSoonTooltip> */}
         </KTabs.Content>
-        <KTabs.Content value="camera" class="flex flex-col gap-[1.5rem]">
-          <Field name="Camera" icon={<IconCapCamera />}>
-            <div class="flex flex-col gap-[0.75rem]">
-              <Subfield name="Hide Camera">
-                <Toggle
-                  checked={project.camera.hide}
-                  onChange={(hide) => setProject("camera", "hide", hide)}
-                />
-              </Subfield>
-              <Subfield name="Mirror Camera">
-                <Toggle
-                  checked={project.camera.mirror}
-                  onChange={(mirror) => setProject("camera", "mirror", mirror)}
-                />
-              </Subfield>
+        <KTabs.Content value="camera" class="flex flex-col gap-8">
+          <Field icon={<IconCapCamera class="size-4" />} name="Camera">
+            <div class="flex flex-col gap-8">
               <div>
-                <Subfield name="Camera Position" class="mt-[0.75rem]" />
+                <Subfield name="Position" />
                 <KRadioGroup
                   value={`${project.camera.position.x}:${project.camera.position.y}`}
                   onChange={(v) => {
@@ -961,7 +1005,7 @@ export function ConfigSidebar() {
                         <RadioGroup.ItemInput class="peer" />
                         <RadioGroup.ItemControl
                           class={cx(
-                            "cursor-pointer size-[1.25rem] shink-0 rounded-[0.375rem] bg-gray-300 absolute flex justify-center items-center ui-checked:bg-blue-300 focus-visible:outline peer-focus-visible:outline outline-2 outline-offset-2 outline-blue-300 transition-colors duration-100",
+                            "cursor-pointer size-6 shink-0 rounded-[0.375rem] bg-gray-300 absolute flex justify-center items-center ui-checked:bg-blue-300 focus-visible:outline peer-focus-visible:outline outline-2 outline-offset-2 outline-blue-300 transition-colors duration-100",
                             item.x === "left"
                               ? "left-2"
                               : item.x === "right"
@@ -971,18 +1015,32 @@ export function ConfigSidebar() {
                           )}
                           onClick={() => setProject("camera", "position", item)}
                         >
-                          <div class="size-[0.5rem] shrink-0 bg-gray-50 rounded-full" />
+                          <div class="size-[0.5rem] shrink-0 bg-white rounded-full" />
                         </RadioGroup.ItemControl>
                       </RadioGroup.Item>
                     )}
                   </For>
                 </KRadioGroup>
               </div>
+              <Subfield name="Hide Camera">
+                <Toggle
+                  checked={project.camera.hide}
+                  onChange={(hide) => setProject("camera", "hide", hide)}
+                />
+              </Subfield>
+              <Subfield name="Mirror Camera">
+                <Toggle
+                  checked={project.camera.mirror}
+                  onChange={(mirror) => setProject("camera", "mirror", mirror)}
+                />
+              </Subfield>
             </div>
           </Field>
+          {/** Dashed divider */}
+          <div class="w-full border-t border-gray-300 border-dashed" />
           <Field
             name="Size"
-            icon={<IconCapEnlarge />}
+            icon={<IconCapEnlarge class="size-4" />}
             value={`${project.camera.size}%`}
           >
             <Slider
@@ -995,7 +1053,7 @@ export function ConfigSidebar() {
           </Field>
           <Field
             name="Size During Zoom"
-            icon={<IconCapEnlarge />}
+            icon={<IconCapEnlarge class="size-4" />}
             value={`${project.camera.zoom_size}%`}
           >
             <Slider
@@ -1006,7 +1064,10 @@ export function ConfigSidebar() {
               step={0.1}
             />
           </Field>
-          <Field name="Rounded Corners" icon={<IconCapCorners />}>
+          <Field
+            name="Rounded Corners"
+            icon={<IconCapCorners class="size-4" />}
+          >
             <Slider
               value={[project.camera.rounding!]}
               onChange={(v) => setProject("camera", "rounding", v[0])}
@@ -1015,8 +1076,8 @@ export function ConfigSidebar() {
               step={0.1}
             />
           </Field>
-          <Field name="Shadow" icon={<IconCapShadow />}>
-            <div class="space-y-3">
+          <Field name="Shadow" icon={<IconCapShadow class="size-4" />}>
+            <div class="space-y-8">
               <Slider
                 value={[project.camera.shadow!]}
                 onChange={(v) => setProject("camera", "shadow", v[0])}
@@ -1024,71 +1085,48 @@ export function ConfigSidebar() {
                 maxValue={100}
                 step={0.1}
               />
-              <Collapsible>
-                <Collapsible.Trigger class="flex gap-1 items-center w-full text-left text-gray-500 hover:text-gray-700">
-                  Advanced shadow settings
-                  <IconCapChevronDown class="w-4 h-4 transition-transform ui-expanded:rotate-180" />
-                </Collapsible.Trigger>
-                <Collapsible.Content class="mt-3 space-y-3 animate-in slide-in-from-top-2 fade-in">
-                  <div class="flex flex-col gap-2">
-                    <span class="text-sm text-gray-500">Size</span>
-                    <Slider
-                      value={[project.camera.advanced_shadow?.size ?? 33.9]}
-                      onChange={(v) => {
-                        setProject("camera", "advanced_shadow", {
-                          ...(project.camera.advanced_shadow ?? {
-                            size: 33.9,
-                            opacity: 44.2,
-                            blur: 10.5,
-                          }),
-                          size: v[0],
-                        });
-                      }}
-                      minValue={0}
-                      maxValue={100}
-                      step={0.1}
-                    />
-                  </div>
-                  <div class="flex flex-col gap-2">
-                    <span class="text-sm text-gray-500">Opacity</span>
-                    <Slider
-                      value={[project.camera.advanced_shadow?.opacity ?? 44.2]}
-                      onChange={(v) => {
-                        setProject("camera", "advanced_shadow", {
-                          ...(project.camera.advanced_shadow ?? {
-                            size: 33.9,
-                            opacity: 44.2,
-                            blur: 10.5,
-                          }),
-                          opacity: v[0],
-                        });
-                      }}
-                      minValue={0}
-                      maxValue={100}
-                      step={0.1}
-                    />
-                  </div>
-                  <div class="flex flex-col gap-2">
-                    <span class="text-sm text-gray-500">Blur</span>
-                    <Slider
-                      value={[project.camera.advanced_shadow?.blur ?? 10.5]}
-                      onChange={(v) => {
-                        setProject("camera", "advanced_shadow", {
-                          ...(project.camera.advanced_shadow ?? {
-                            size: 33.9,
-                            opacity: 44.2,
-                            blur: 10.5,
-                          }),
-                          blur: v[0],
-                        });
-                      }}
-                      minValue={0}
-                      maxValue={100}
-                      step={0.1}
-                    />
-                  </div>
-                </Collapsible.Content>
-              </Collapsible>
+              <ShadowSettings
+                scrollRef={scrollRef}
+                size={{
+                  value: [project.camera.advanced_shadow?.size ?? 50],
+                  onChange: (v) => {
+                    setProject("camera", "advanced_shadow", {
+                      ...(project.camera.advanced_shadow ?? {
+                        size: 50,
+                        opacity: 18,
+                        blur: 50,
+                      }),
+                      size: v[0],
+                    });
+                  },
+                }}
+                opacity={{
+                  value: [project.camera.advanced_shadow?.opacity ?? 18],
+                  onChange: (v) => {
+                    setProject("camera", "advanced_shadow", {
+                      ...(project.camera.advanced_shadow ?? {
+                        size: 50,
+                        opacity: 18,
+                        blur: 50,
+                      }),
+                      opacity: v[0],
+                    });
+                  },
+                }}
+                blur={{
+                  value: [project.camera.advanced_shadow?.blur ?? 50],
+                  onChange: (v) => {
+                    setProject("camera", "advanced_shadow", {
+                      ...(project.camera.advanced_shadow ?? {
+                        size: 50,
+                        opacity: 18,
+                        blur: 50,
+                      }),
+                      blur: v[0],
+                    });
+                  },
+                }}
+              />
             </div>
           </Field>
           {/* <ComingSoonTooltip>

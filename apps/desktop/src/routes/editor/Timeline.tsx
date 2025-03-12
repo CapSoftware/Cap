@@ -1,23 +1,24 @@
-import "~/styles/timeline.css";
 import { createElementBounds } from "@solid-primitives/bounds";
+import {
+  createEventListener,
+  createEventListenerMap,
+} from "@solid-primitives/event-listener";
+import { mergeRefs } from "@solid-primitives/refs";
+import { cx } from "cva";
 import {
   ComponentProps,
   For,
   Show,
   batch,
+  createMemo,
   createRoot,
   createSignal,
   onMount,
 } from "solid-js";
-import {
-  createEventListener,
-  createEventListenerMap,
-} from "@solid-primitives/event-listener";
-import { cx } from "cva";
 import { produce } from "solid-js/store";
-import { mergeRefs } from "@solid-primitives/refs";
-import { createMemo } from "solid-js";
+import "~/styles/timeline.css";
 
+import { platform } from "@tauri-apps/plugin-os";
 import { TimelineSegment } from "~/utils/tauri";
 import {
   SegmentContextProvider,
@@ -29,7 +30,6 @@ import {
   useTrackContext,
 } from "./context";
 import { formatTime } from "./utils";
-import { platform } from "@tauri-apps/plugin-os";
 
 type ZoomSegmentDragState =
   | { type: "idle" }
@@ -200,7 +200,7 @@ export function Timeline() {
           {(time) => (
             <div
               class={cx(
-                "w-px absolute left-5 top-4 bottom-0 z-10 pointer-events-none bg-[currentColor] flex justify-center items-center",
+                "flex absolute bottom-0 top-4 left-5 z-10 justify-center items-center w-px pointer-events-none bg-[currentColor]",
                 split() ? "text-red-300" : "text-black-transparent-20"
               )}
               style={{
@@ -221,7 +221,7 @@ export function Timeline() {
         </Show>
         <Show when={!split()}>
           <div
-            class="w-px bg-red-300 absolute top-4 bottom-0 z-10 pointer-events-none"
+            class="absolute bottom-0 top-4 z-10 w-px bg-red-300 pointer-events-none"
             style={{
               left: `${xPadding}px`,
               transform: `translateX(${Math.min(
@@ -265,7 +265,7 @@ function TimelineMarkings() {
   };
 
   return (
-    <div class="text-xs relative h-4 mb-1">
+    <div class="relative mb-1 h-4 text-xs">
       <For each={timelineMarkings()}>
         {(second) => (
           <div
@@ -417,7 +417,7 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                   });
                 }}
               />
-              <SegmentContent class="bg-blue-50 justify-between">
+              <SegmentContent class="justify-between bg-gradient-to-r from-[#2675DB] via-[#5CA3FF] to-[#2675DB]">
                 <span class="text-black-transparent-60 text-[0.625rem] mt-auto">
                   {formatTime(segment.start)}
                 </span>
@@ -432,9 +432,9 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                           })
                         );
                       }}
-                      class="size-7 opacity-0 group/button group-hover:opacity-100 transition-opacity bg-gray-50 rounded-full flex flex-col items-center justify-center"
+                      class="flex flex-col justify-center items-center bg-gray-50 rounded-full opacity-0 transition-opacity size-7 group/button group-hover:opacity-100"
                     >
-                      <IconCapTrash class="size-4 text-gray-400 group-hover/button:text-gray-500 transition-colors" />
+                      <IconCapTrash class="text-gray-400 transition-colors size-4 group-hover/button:text-gray-500" />
                     </button>
                   </Show> */}
                 <span class="text-black-transparent-60 text-[0.625rem] mt-auto">
@@ -518,7 +518,7 @@ function ZoomTrack(props: {
 
   return (
     <>
-      <div class="h-2 w-full" />
+      <div class="w-full h-2" />
 
       <TrackRoot
         onMouseMove={(e) => {
@@ -613,7 +613,7 @@ function ZoomTrack(props: {
         >
           {(time) => (
             <SegmentRoot
-              class="border-red-300 group pointer-events-none opacity-70"
+              class="border-red-300 opacity-70 pointer-events-none group"
               innerClass="ring-red-300"
               segment={{
                 start: time(),
@@ -706,7 +706,7 @@ function ZoomTrack(props: {
 
             return (
               <SegmentRoot
-                class="border-red-300 group bg-red-50 hover:bg-opacity-80 transition-colors"
+                class="bg-red-50 border-red-300 transition-colors group hover:bg-opacity-80"
                 innerClass="ring-red-300"
                 segment={segment}
                 onMouseEnter={() => {
@@ -717,7 +717,7 @@ function ZoomTrack(props: {
                 }}
               >
                 <SegmentHandle
-                  class="bg-red-300 hover:opacity-80 transition-colors"
+                  class="bg-red-300 transition-colors hover:opacity-80"
                   onMouseDown={createMouseDownDrag(
                     () => {
                       const start = segment.start;
@@ -755,7 +755,7 @@ function ZoomTrack(props: {
                   )}
                 />
                 <SegmentContent
-                  class="cursor-pointer flex items-center justify-center"
+                  class="flex justify-center items-center cursor-pointer"
                   onMouseDown={createMouseDownDrag(
                     () => {
                       const original = { ...segment };
@@ -798,8 +798,8 @@ function ZoomTrack(props: {
 
                     return (
                       <Show when={ctx.width() > 100}>
-                        <div class="text-xs text-gray-500 whitespace-nowrap flex flex-col justify-center items-center gap-1">
-                          <div class="flex items-center gap-1 text-red-300">
+                        <div class="flex flex-col gap-1 justify-center items-center text-xs text-gray-500 whitespace-nowrap">
+                          <div class="flex gap-1 items-center text-red-300">
                             <IconLucideSearch class="size-3" />{" "}
                             {zoomPercentage()}
                           </div>
@@ -809,7 +809,7 @@ function ZoomTrack(props: {
                   })()}
                 </SegmentContent>
                 <SegmentHandle
-                  class="bg-red-300 hover:opacity-80 transition-colors"
+                  class="bg-red-300 transition-colors hover:opacity-80"
                   onMouseDown={createMouseDownDrag(
                     () => {
                       const end = segment.end;
@@ -924,7 +924,7 @@ function SegmentRoot(
       >
         <div
           class={cx(
-            "h-full border border-white ring-1 flex flex-row rounded-xl overflow-hidden group",
+            "h-full flex flex-row rounded-xl overflow-hidden group",
             props.innerClass
           )}
         >

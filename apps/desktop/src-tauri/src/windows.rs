@@ -131,7 +131,7 @@ impl CapWindowId {
             Self::Setup => (600.0, 600.0),
             Self::Main => (300.0, 360.0),
             Self::SignIn => (300.0, 360.0),
-            Self::Editor { .. } => (900.0, 800.0),
+            Self::Editor { .. } => (1170.0, 800.0),
             Self::Settings => (600.0, 450.0),
             Self::Camera => (460.0, 920.0),
             Self::Upgrade => (850.0, 850.0),
