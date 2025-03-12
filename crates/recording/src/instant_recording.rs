@@ -106,6 +106,7 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
     output_path: PathBuf,
     screen_source: ScreenCaptureSource<TCaptureFormat>,
     audio_input_feed: Option<&AudioInputFeed>,
+    capture_system_audio: bool,
 ) -> Result<(InstantRecordingPipeline, oneshot::Receiver<()>), MediaError> {
     let clock = RealTimeClock::<()>::new();
     let pipeline_builder = Pipeline::builder(clock);
@@ -114,8 +115,10 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
         pipeline_builder,
         screen_source,
         audio_input_feed.map(AudioInputSource::init),
+        capture_system_audio,
         output_path.clone(),
-    )?;
+    )
+    .await?;
 
     let (mut pipeline, pipeline_done_rx) = pipeline_builder.build().await?;
 
@@ -156,6 +159,7 @@ pub async fn spawn_instant_recording_actor(
         content_dir.join("output.mp4"),
         screen_source.clone(),
         audio_input_feed.as_ref(),
+        options.capture_system_audio,
     )
     .await?;
 

@@ -191,6 +191,7 @@ export const PlatformIcons: React.FC = () => {
             width="1em"
             height="1em"
             fill="currentColor"
+            style={{ marginTop: "1.5px" }}
             className="size-[24px] text-gray-500 opacity-90"
             viewBox="0 0 256 256"
           >

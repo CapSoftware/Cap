@@ -877,9 +877,6 @@ impl ProgressiveUploadTask {
                     match tokio::fs::metadata(&file_path).await {
                         Ok(metadata) => {
                             if metadata.len() < MIN_PART_SIZE {
-                                println!(
-                                "Waiting for file to grow to at least 5MB before starting upload"
-                            );
                                 sleep(Duration::from_millis(500)).await;
                                 continue;
                             } else {

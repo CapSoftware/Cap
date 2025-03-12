@@ -57,6 +57,7 @@ declare global {
   const IconCapUndo: typeof import('~icons/cap/undo.jsx')['default']
   const IconCapUpload: typeof import('~icons/cap/upload.jsx')['default']
   const IconHugeiconsEaseCurveControlPoints: typeof import('~icons/hugeicons/ease-curve-control-points.jsx')['default']
+  const IconIcBaselineMonitor: typeof import('~icons/ic/baseline-monitor.jsx')['default']
   const IconIcRoundSearch: typeof import('~icons/ic/round-search.jsx')['default']
   const IconLucideBell: typeof import('~icons/lucide/bell.jsx')['default']
   const IconLucideBug: typeof import('~icons/lucide/bug.jsx')['default']
@@ -76,6 +77,7 @@ declare global {
   const IconLucideMessageSquare: typeof import('~icons/lucide/message-square.jsx')['default']
   const IconLucideMessageSquarePlus: typeof import('~icons/lucide/message-square-plus.jsx')['default']
   const IconLucideMicOff: typeof import('~icons/lucide/mic-off.jsx')['default']
+  const IconLucideMonitor: typeof import('~icons/lucide/monitor.jsx')['default']
   const IconLucideRabbit: typeof import('~icons/lucide/rabbit.jsx')['default']
   const IconLucideRotateCcw: typeof import('~icons/lucide/rotate-ccw.jsx')['default']
   const IconLucideSearch: typeof import('~icons/lucide/search.jsx')['default']
@@ -84,4 +86,6 @@ declare global {
   const IconLucideVideo: typeof import('~icons/lucide/video.jsx')['default']
   const IconLucideVolume2: typeof import('~icons/lucide/volume2.jsx')['default']
   const IconLucideVolumeX: typeof import('~icons/lucide/volume-x.jsx')['default']
+  const IconMdiMonitor: typeof import('~icons/mdi/monitor.jsx')['default']
+  const IconPhMonitorBold: typeof import('~icons/ph/monitor-bold.jsx')['default']
 }

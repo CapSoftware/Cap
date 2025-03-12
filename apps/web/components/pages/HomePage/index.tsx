@@ -11,7 +11,7 @@ import {
   PlatformIcons,
 } from "@/utils/platform";
 import { Button } from "@cap/ui";
-import { faAngleRight } from "@fortawesome/free-solid-svg-icons";
+import { faAngleRight, faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import MuxPlayer from "@mux/mux-player-react";
 import { useClickAway } from "@uidotdev/usehooks";
@@ -133,10 +133,10 @@ export const HomePage = () => {
           <motion.div
             whileTap={{ scale: 0.95 }}
             whileHover={{ scale: 1.05 }}
-            // onClick={() => setVideoToggled(true)}
+            onClick={() => setVideoToggled(true)}
             className="absolute cursor-pointer size-[100px] flex items-center justify-center group"
           >
-            {/* <div
+            <div
               style={{
                 background:
                   "linear-gradient(180deg, rgba(255, 255, 255, 0.10) 30%, #3B7BFA 100%)",
@@ -158,7 +158,7 @@ export const HomePage = () => {
                   icon={faPlay}
                 />
               </div>
-            </div> */}
+            </div>
           </motion.div>
           <img
             src="/illustrations/app.webp"
@@ -343,24 +343,6 @@ export const HomePage = () => {
       absolute top-20 z-[0] right-0 from-[#A6D7FF] to-transparent"
         />
       </div>
-      {/* <div
-        id="scrolling-section"
-        className="pb-32 -mt-24 md:pb-48 fade-in-up animate-delay-2"
-      >
-        <Parallax
-          className="cursor-pointer"
-          scale={[2.2, 1.25]}
-          onClick={() =>
-            toast("This was going to be something cool... it might be later 👀")
-          }
-        >
-          <img
-            src="/illustrations/landing-banner.png"
-            className="w-full max-w-[600px] block mx-auto h-auto rounded-xl"
-            alt="Landing Page Screenshot Banner"
-          />
-        </Parallax>
-      </div> */}
       <LogoSection />
       <div className="pb-32 wrapper md:pb-40">
         <div className="mb-4">
@@ -439,15 +421,12 @@ const VideoModal = ({ setVideoToggled }: Props) => {
         className="w-[calc(100%-20px)] max-w-[1000px] bg-white rounded-[16px] md:h-[700px] h-[300px]"
       >
         <MuxPlayer
-          playbackId="DS00Spx1CV902MCtPj5WknGlR102V5HFkDe"
+          playbackId="A6oZoUWVZjOIVZB6XnBMLagYnXE6xhDhp8Hcyky018hk"
+          metadataVideoTitle="Placeholder (optional)"
+          metadata-viewer-user-id="Placeholder (optional)"
           accentColor="#5C9FFF"
           className="h-full rounded-[16px] overflow-hidden select-none"
           autoPlay
-          metadata={{
-            video_id: "video-id-123456",
-            video_title: "Bick Buck Bunny",
-            viewer_user_id: "user-id-bc-789",
-          }}
         />
       </motion.div>
     </motion.div>

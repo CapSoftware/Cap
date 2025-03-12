@@ -3,11 +3,7 @@ use std::collections::VecDeque;
 use ffmpeg::encoder;
 pub use ffmpeg::util::frame::Audio as FFAudio;
 
-use crate::{
-    data::{cast_bytes_to_f32_slice, AudioInfo, PlanarData},
-    feeds::AudioData,
-};
-use cap_project::TimelineConfiguration;
+use crate::data::{cast_bytes_to_f32_slice, AudioInfo, PlanarData};
 
 #[derive(Debug)]
 pub struct AudioBuffer {

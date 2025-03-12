@@ -10,10 +10,10 @@ import * as video from "../video/app";
 const app = new Hono()
   .basePath("/api/desktop")
   .use(corsMiddleware)
-  .route("/", root.app)
   .route("/s3/config", s3Config.app)
   .route("/session", session.app)
-  .route("/video", video.app);
+  .route("/video", video.app)
+  .route("/", root.app);
 
 export const GET = handle(app);
 export const POST = handle(app);

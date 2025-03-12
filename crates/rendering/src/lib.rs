@@ -143,7 +143,6 @@ pub async fn render_video_to_channel(
     segments: Vec<RenderSegment>,
     fps: u32,
     resolution_base: XY<u32>,
-    is_upgraded: bool,
 ) -> Result<(), RenderingError> {
     let constants = RenderVideoConstants::new(options, recording_meta, meta).await?;
     let recordings = ProjectRecordings::new(&recording_meta.project_path, meta);
@@ -190,23 +189,10 @@ pub async fn render_video_to_channel(
             .get_frames(segment_time as f32, !project.camera.hide)
             .await
         {
-            let uniforms = ProjectUniforms::new(
-                &constants,
-                &project,
-                frame_number,
-                fps,
-                resolution_base,
-                is_upgraded,
-                &segment.cursor,
-            );
+            let uniforms =
+                ProjectUniforms::new(&constants, &project, frame_number, fps, resolution_base);
             let frame = frame_renderer
-                .render(
-                    segment_frames,
-                    background.clone(),
-                    &uniforms,
-                    resolution_base,
-                    &segment.cursor,
-                )
+                .render(segment_frames, uniforms, &segment.cursor)
                 .await?;
 
             if frame.width == 0 || frame.height == 0 {
@@ -511,8 +497,8 @@ pub struct ProjectUniforms {
     display: CompositeVideoFrameUniforms,
     camera: Option<CompositeVideoFrameUniforms>,
     pub project: ProjectConfiguration,
-    pub is_upgraded: bool,
     pub zoom: InterpolatedZoom,
+    pub resolution_base: XY<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -679,8 +665,6 @@ impl ProjectUniforms {
         frame_number: u32,
         fps: u32,
         resolution_base: XY<u32>,
-        is_upgraded: bool,
-        cursor_events: &CursorEvents,
     ) -> Self {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project, resolution_base);
@@ -877,10 +861,10 @@ impl ProjectUniforms {
         Self {
             output_size,
             cursor_size: project.cursor.size as f32,
+            resolution_base,
             display,
             camera,
             project: project.clone(),
-            is_upgraded,
             zoom,
         }
     }
@@ -948,9 +932,7 @@ impl<'a> FrameRenderer<'a> {
     pub async fn render(
         &mut self,
         segment_frames: DecodedSegmentFrames,
-        background: BackgroundSource,
-        uniforms: &ProjectUniforms,
-        resolution_base: XY<u32>,
+        uniforms: ProjectUniforms,
         cursor: &CursorEvents,
     ) -> Result<RenderedFrame, RenderingError> {
         self.update_output_textures(uniforms.output_size.0, uniforms.output_size.1);
@@ -958,9 +940,7 @@ impl<'a> FrameRenderer<'a> {
         produce_frame(
             &self.constants,
             segment_frames,
-            background,
             uniforms,
-            resolution_base,
             self.output_textures.as_ref().unwrap(),
             cursor,
         )
@@ -973,15 +953,13 @@ impl<'a> FrameRenderer<'a> {
 async fn produce_frame(
     constants: &RenderVideoConstants,
     segment_frames: DecodedSegmentFrames,
-    background: BackgroundSource,
-    uniforms: &ProjectUniforms,
-    resolution_base: XY<u32>,
+    uniforms: ProjectUniforms,
     textures: &(wgpu::Texture, wgpu::Texture),
     cursor: &CursorEvents,
 ) -> Result<RenderedFrame, RenderingError> {
-    let background = Background::from(background);
+    let background = Background::from(uniforms.project.background.source.clone());
 
-    let mut state = FramePipelineState::new(constants, uniforms, textures);
+    let mut state = FramePipelineState::new(constants, &uniforms, textures);
     let mut encoder = FramePipelineEncoder::new(&state);
 
     {
@@ -997,7 +975,7 @@ async fn produce_frame(
         constants.cursor_layer.render(
             &mut pipeline,
             &segment_frames,
-            resolution_base,
+            uniforms.resolution_base,
             &cursor,
             &uniforms.zoom,
         );

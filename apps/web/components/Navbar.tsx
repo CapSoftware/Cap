@@ -48,6 +48,10 @@ const Links = [
     ],
   },
   {
+    label: "Download",
+    href: "/download",
+  },
+  {
     label: "Help",
     dropdown: [
       {
@@ -75,6 +79,10 @@ const Links = [
   {
     label: "Pricing",
     href: "/pricing",
+  },
+  {
+    label: "About",
+    href: "/about",
   },
   {
     label: "Blog",
@@ -227,6 +235,28 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
                     passHref
                   >
                     Get started
+                  </Link>
+                </li>
+                <li>
+                  <Link
+                    onClick={() => {
+                      setShowMobileMenu(false);
+                    }}
+                    href="/about"
+                    passHref
+                  >
+                    About
+                  </Link>
+                </li>
+                <li>
+                  <Link
+                    onClick={() => {
+                      setShowMobileMenu(false);
+                    }}
+                    href="/blog"
+                    passHref
+                  >
+                    Blog
                   </Link>
                 </li>
                 <li>

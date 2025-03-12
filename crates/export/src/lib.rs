@@ -1,8 +1,10 @@
 use cap_editor::Segment;
 use cap_media::{
-    data::{cast_f32_slice_to_bytes, AudioInfo, RawVideoFormat, VideoInfo},
-    encoders::{H264Encoder, MP4File, MP4Input, OpusEncoder},
-    feeds::{AudioData, AudioFrameBuffer},
+    data::{
+        cast_bytes_to_f32_slice, cast_f32_slice_to_bytes, AudioInfo, RawVideoFormat, VideoInfo,
+    },
+    encoders::{H264Encoder, MP4Input, OpusEncoder},
+    feeds::{AudioRenderer, AudioTrack},
     MediaError,
 };
 use cap_project::{
@@ -15,6 +17,7 @@ use cap_rendering::{
 use futures::FutureExt;
 use image::{ImageBuffer, Rgba};
 use std::{path::PathBuf, sync::Arc, time::Duration};
+use tokio::time::timeout;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ExportError {
@@ -42,7 +45,7 @@ pub enum ExportError {
 
 pub struct Exporter<TOnProgress> {
     render_segments: Vec<RenderSegment>,
-    audio_segments: Vec<Arc<Option<AudioData>>>,
+    audio_segments: Vec<AudioTrack>,
     output_size: (u32, u32),
     output_path: PathBuf,
     project: ProjectConfiguration,
@@ -52,7 +55,6 @@ pub struct Exporter<TOnProgress> {
     render_constants: Arc<RenderVideoConstants>,
     fps: u32,
     resolution_base: XY<u32>,
-    is_upgraded: bool,
 }
 
 impl<TOnProgress> Exporter<TOnProgress>
@@ -69,7 +71,6 @@ where
         segments: &[Segment],
         fps: u32,
         resolution_base: XY<u32>,
-        is_upgraded: bool,
     ) -> Result<Self, ExportError> {
         let RecordingMetaInner::Studio(meta) = &recording_meta.inner else {
             return Err(ExportError::Other(
@@ -109,7 +110,12 @@ where
                     .await
                     .map_err(ExportError::Other)?,
             });
-            audio_segments.push(s.audio.clone());
+            audio_segments.push(
+                [s.audio.clone(), s.system_audio.clone()]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>(),
+            );
         }
 
         Ok(Self {
@@ -124,15 +130,10 @@ where
             output_size,
             fps,
             resolution_base,
-            is_upgraded,
         })
     }
 
     pub async fn export_with_custom_muxer(self) -> Result<PathBuf, ExportError> {
-        struct AudioRender {
-            buffer: AudioFrameBuffer,
-        }
-
         let meta = match &self.recording_meta.inner {
             RecordingMetaInner::Studio(meta) => meta,
             _ => panic!("Not a studio recording"),
@@ -140,43 +141,32 @@ where
 
         println!("Exporting with custom muxer");
 
-        let (tx_image_data, mut rx_image_data) =
-            tokio::sync::mpsc::channel::<(RenderedFrame, u32)>(4);
+        let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(RenderedFrame, u32)>(4);
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<MP4Input>(4);
 
         let fps = self.fps;
 
-        let audio_info = match self
+        let mut video_info = VideoInfo::from_raw(
+            RawVideoFormat::Rgba,
+            self.output_size.0,
+            self.output_size.1,
+            self.fps,
+        );
+        video_info.time_base = ffmpeg::Rational::new(1, self.fps as i32);
+
+        let mut audio_renderer = self
             .audio_segments
             .get(0)
-            .and_then(|d| d.as_ref().as_ref())
             .filter(|_| !self.project.audio.mute)
-        {
-            Some(audio_data) => Some(
-                AudioInfo::new(
-                    audio_data.info.sample_format,
-                    audio_data.info.sample_rate,
-                    audio_data.info.channels as u16,
-                )
-                .map_err(Into::<MediaError>::into)?,
-            ),
-            _ => None,
-        };
+            .map(|_| AudioRenderer::new(self.audio_segments.clone()));
+        let has_audio = audio_renderer.is_some();
 
         let encoder_thread = tokio::task::spawn_blocking(move || {
-            let mut info = VideoInfo::from_raw(
-                RawVideoFormat::Rgba,
-                self.output_size.0,
-                self.output_size.1,
-                self.fps,
-            );
-            info.time_base = ffmpeg::Rational::new(1, self.fps as i32);
-
             let mut encoder = cap_media::encoders::MP4File::init(
                 "output",
                 self.output_path.clone(),
-                H264Encoder::factory("output_video", info),
-                move |o| audio_info.map(|a| OpusEncoder::init("output_audio", a, o)),
+                H264Encoder::factory("output_video", video_info),
+                |o| has_audio.then(|| OpusEncoder::init("output_audio", AudioRenderer::info(), o)),
             )
             .unwrap();
 
@@ -198,30 +188,16 @@ where
             let project_path = self.project_path.clone();
             async move {
                 println!("Starting FFmpeg output process...");
-                let mut audio = if let Some(_) = self
-                    .audio_segments
-                    .get(0)
-                    .and_then(|d| d.as_ref().as_ref())
-                    .filter(|_| !self.project.audio.mute)
-                {
-                    Some(AudioRender {
-                        buffer: AudioFrameBuffer::new(
-                            self.audio_segments
-                                .iter()
-                                .map(|s| s.as_ref().as_ref().unwrap().clone())
-                                .collect(),
-                        ),
-                    })
-                } else {
-                    None
-                };
 
                 let mut frame_count = 0;
                 let mut first_frame = None;
 
+                let audio_samples_per_frame =
+                    (f64::from(AudioRenderer::SAMPLE_RATE) / f64::from(self.fps)).ceil() as usize;
+
                 loop {
                     let Some((frame, frame_number)) =
-                        tokio::time::timeout(Duration::from_secs(6), rx_image_data.recv()).await?
+                        timeout(Duration::from_secs(6), video_rx.recv()).await?
                     else {
                         break;
                     };
@@ -230,51 +206,28 @@ where
 
                     if frame_count == 0 {
                         first_frame = Some(frame.clone());
+                        if let Some(audio) = &mut audio_renderer {
+                            audio.set_playhead(0.0, &project);
+                        }
                     }
 
-                    let audio_frame = if let Some(audio) = &mut audio {
-                        if frame_count == 0 {
-                            audio.buffer.set_playhead(0., &project);
-                        }
-
-                        let audio_info = audio.buffer.info();
-                        let estimated_samples_per_frame =
-                            f64::from(audio_info.sample_rate) / f64::from(self.fps);
-                        let samples = estimated_samples_per_frame.ceil() as usize;
-
-                        if let Some((_, frame_data)) =
-                            audio.buffer.next_frame_data(samples, &project)
-                        {
-                            let mut frame = audio_info
-                                .wrap_frame(unsafe { cast_f32_slice_to_bytes(&frame_data) }, 0);
-                            let pts = (frame_number as f64 * f64::from(audio_info.sample_rate)
-                                / f64::from(fps)) as i64;
+                    let audio_frame = audio_renderer
+                        .as_mut()
+                        .and_then(|audio| audio.render_frame(audio_samples_per_frame, &project))
+                        .map(|mut frame| {
+                            let pts = ((frame_number * frame.rate()) as f64 / fps as f64) as i64;
                             frame.set_pts(Some(pts));
-                            Some(frame)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-
-                    let mut video_frame = VideoInfo::from_raw(
-                        RawVideoFormat::Rgba,
-                        self.output_size.0,
-                        self.output_size.1,
-                        self.fps,
-                    )
-                    .wrap_frame(
-                        &frame.data,
-                        0,
-                        frame.padded_bytes_per_row as usize,
-                    );
-                    video_frame.set_pts(Some(frame_number as i64));
+                            frame
+                        });
 
                     frame_tx
                         .send(MP4Input {
                             audio: audio_frame,
-                            video: video_frame,
+                            video: video_info.wrap_frame(
+                                &frame.data,
+                                frame_number as i64,
+                                frame.padded_bytes_per_row as usize,
+                            ),
                         })
                         .ok();
 
@@ -328,7 +281,6 @@ where
             self.render_segments,
             self.fps,
             self.resolution_base,
-            self.is_upgraded,
         )
         .then(|f| async { f.map_err(Into::into) });
 
