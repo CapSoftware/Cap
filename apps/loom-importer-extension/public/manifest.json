@@ -1,0 +1,45 @@
+{
+  "manifest_version": 3,
+  "name": "Cap Loom Importer",
+  "description": "Import your Loom data to Cap",
+  "version": "1.0.0",
+  "icons": {
+    "16": "assets/images/icons/icon16.png",
+    "48": "assets/images/icons/icon48.png",
+    "128": "assets/images/icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.loom.com/*"],
+      "js": ["/assets/js/initializeUI.js"],
+      "run_at": "document_end",
+      "all_frames": true
+    }
+  ],
+  "background": {
+    "service_worker": "react/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "/react/main.js",
+        "/react/vendor.js",
+        "/react/main.css",
+        "/react/jsx-runtime.js",
+        "/react/client.js",
+        "/react/urls.js"
+      ],
+      "matches": ["https://www.loom.com/*"]
+    }
+  ],
+  "permissions": ["cookies", "storage", "tabs", "scripting"],
+  "host_permissions": [
+    "https://cap.so/*",
+    "http://localhost:3000/*",
+    "https://www.loom.com/*"
+  ]
+}

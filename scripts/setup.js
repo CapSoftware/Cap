@@ -178,6 +178,11 @@ async function main() {
     path.join(__root, ".env"),
     path.join(__root, "apps/desktop/.env")
   );
+
+  await fs.copyFile(
+    path.join(__root, ".env"),
+    path.join(__root, "apps/loom-importer-extension/.env")
+  );
 }
 
 main();

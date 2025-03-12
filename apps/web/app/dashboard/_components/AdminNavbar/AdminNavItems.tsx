@@ -1,5 +1,5 @@
 "use client";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Plus,
   LogOut,
@@ -115,8 +115,8 @@ export const AdminNavItems = () => {
 
   const navItemClass =
     "flex items-center justify-start py-2 px-3 rounded-full outline-none tracking-tight w-full";
-
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const searchParams = useSearchParams();
+  const [dialogOpen, setDialogOpen] = useState(searchParams.get('createSpace') === 'true');
 
   return (
     <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
