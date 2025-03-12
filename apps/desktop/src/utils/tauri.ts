@@ -169,6 +169,60 @@ async setFail(name: string, value: boolean) : Promise<void> {
 },
 async updateAuthPlan() : Promise<void> {
     await TAURI_INVOKE("update_auth_plan");
+},
+/**
+ * Function to handle creating directories for the model
+ */
+async createDir(path: string, recursive: boolean) : Promise<null> {
+    return await TAURI_INVOKE("create_dir", { path, recursive });
+},
+/**
+ * Function to save the model file
+ */
+async saveModelFile(path: string, data: number[]) : Promise<null> {
+    return await TAURI_INVOKE("save_model_file", { path, data });
+},
+/**
+ * Function to transcribe audio from a video file using Whisper
+ */
+async transcribeAudio(videoPath: string, modelPath: string, language: string) : Promise<CaptionData> {
+    return await TAURI_INVOKE("transcribe_audio", { videoPath, modelPath, language });
+},
+/**
+ * Function to save caption data to a file
+ */
+async saveCaptions(videoId: string, captions: CaptionData) : Promise<null> {
+    return await TAURI_INVOKE("save_captions", { videoId, captions });
+},
+/**
+ * Function to load caption data from a file
+ */
+async loadCaptions(videoId: string) : Promise<CaptionData | null> {
+    return await TAURI_INVOKE("load_captions", { videoId });
+},
+/**
+ * Helper function to download a Whisper model from Hugging Face Hub
+ */
+async downloadWhisperModel(modelName: string, outputPath: string) : Promise<null> {
+    return await TAURI_INVOKE("download_whisper_model", { modelName, outputPath });
+},
+/**
+ * Function to check if a model file exists
+ */
+async checkModelExists(modelPath: string) : Promise<boolean> {
+    return await TAURI_INVOKE("check_model_exists", { modelPath });
+},
+/**
+ * Function to delete a downloaded model
+ */
+async deleteWhisperModel(modelPath: string) : Promise<null> {
+    return await TAURI_INVOKE("delete_whisper_model", { modelPath });
+},
+/**
+ * Export captions to an SRT file
+ */
+async exportCaptionsSrt(videoId: string) : Promise<string | null> {
+    return await TAURI_INVOKE("export_captions_srt", { videoId });
 }
 }
 
@@ -179,6 +233,7 @@ export const events = __makeEvents__<{
 audioInputLevelChange: AudioInputLevelChange,
 authenticationInvalid: AuthenticationInvalid,
 currentRecordingChanged: CurrentRecordingChanged,
+downloadProgress: DownloadProgress,
 editorStateChanged: EditorStateChanged,
 newNotification: NewNotification,
 newScreenshotAdded: NewScreenshotAdded,
@@ -198,6 +253,7 @@ uploadProgress: UploadProgress
 audioInputLevelChange: "audio-input-level-change",
 authenticationInvalid: "authentication-invalid",
 currentRecordingChanged: "current-recording-changed",
+downloadProgress: "download-progress",
 editorStateChanged: "editor-state-changed",
 newNotification: "new-notification",
 newScreenshotAdded: "new-screenshot-added",
@@ -237,6 +293,9 @@ export type CameraMeta = { path: string; fps?: number }
 export type CameraPosition = { x: CameraXPosition; y: CameraYPosition }
 export type CameraXPosition = "left" | "center" | "right"
 export type CameraYPosition = "top" | "bottom"
+export type CaptionData = { segments: CaptionSegment[]; settings: CaptionSettings | null }
+export type CaptionSegment = { id: string; start: number; end: number; text: string }
+export type CaptionSettings = { enabled: boolean; font: string; size: number; color: string; background_color: string; background_opacity: number; position: string; bold: boolean; italic: boolean; outline: boolean; outline_color: string; export_with_subtitles: boolean }
 export type CaptureScreen = { id: number; name: string; refresh_rate: number }
 export type CaptureWindow = { id: number; owner_name: string; name: string; bounds: Bounds; refresh_rate: number }
 export type CommercialLicense = { licenseKey: string; expiryDate: number | null; refresh: number; activatedOn: number }
@@ -249,6 +308,7 @@ export type CursorMeta = { imagePath: string; hotspot: XY<number> }
 export type CursorType = "pointer" | "circle"
 export type Cursors = { [key in string]: string } | { [key in string]: CursorMeta }
 export type Display = { path: string; fps?: number }
+export type DownloadProgress = { progress: number; message: string }
 export type EditorStateChanged = { playhead_position: number }
 export type ExportEstimates = { duration_seconds: number; estimated_time_seconds: number; estimated_size_mb: number }
 export type Flags = { recordMouseState: boolean; systemAudioRecording: boolean; split: boolean }

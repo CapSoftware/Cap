@@ -12,8 +12,10 @@ import {
   createResource,
   createSignal,
   on,
+  onMount,
+  onCleanup,
 } from "solid-js";
-import { reconcile } from "solid-js/store";
+import { reconcile, createStore } from "solid-js/store";
 
 import { type AspectRatio, commands } from "~/utils/tauri";
 import { FPS, OUTPUT_SIZE, useEditorContext } from "./context";
@@ -31,6 +33,7 @@ import {
   topLeftAnimateClasses,
 } from "./ui";
 import { formatTime } from "./utils";
+import { captionsStore } from "~/store/captions";
 
 export function Player() {
   const {
@@ -52,6 +55,22 @@ export function Player() {
     state,
     zoomOutLimit,
   } = useEditorContext();
+
+  // Load captions on mount
+  onMount(async () => {
+    if (editorInstance && editorInstance.path) {
+      await captionsStore.loadCaptions(editorInstance.path);
+    }
+  });
+
+  // Update current caption when playback time changes
+  createEffect(() => {
+    const time = playbackTime();
+    // Only update captions if we have a valid time and segments exist
+    if (time !== undefined && time >= 0 && captionsStore.state.segments.length > 0) {
+      captionsStore.updateCurrentCaption(time);
+    }
+  });
 
   let canvasRef!: HTMLCanvasElement;
 
@@ -211,25 +230,80 @@ export function Player() {
             };
 
             return (
-              <canvas
-                style={{
-                  left: `${Math.max(
-                    ((containerBounds.width ?? 0) - size().width) / 2,
-                    padding
-                  )}px`,
-                  top: `${Math.max(
-                    ((containerBounds.height ?? 0) - size().height) / 2,
-                    padding
-                  )}px`,
-                  width: `${size().width}px`,
-                  height: `${size().height}px`,
-                }}
-                class="bg-blue-50 absolute rounded"
-                ref={canvasRef}
-                id="canvas"
-                width={currentFrame().width}
-                height={currentFrame().data.height}
-              />
+              <>
+                <canvas
+                  style={{
+                    left: `${Math.max(
+                      ((containerBounds.width ?? 0) - size().width) / 2,
+                      padding
+                    )}px`,
+                    top: `${Math.max(
+                      ((containerBounds.height ?? 0) - size().height) / 2,
+                      padding
+                    )}px`,
+                    width: `${size().width}px`,
+                    height: `${size().height}px`,
+                  }}
+                  class="bg-blue-50 absolute rounded"
+                  ref={canvasRef}
+                  id="canvas"
+                  width={currentFrame().width}
+                  height={currentFrame().data.height}
+                />
+                <Show when={captionsStore.state.settings.enabled && captionsStore.state.currentCaption}>
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: `${Math.max(
+                        ((containerBounds.width ?? 0) - size().width) / 2,
+                        padding
+                      )}px`,
+                      width: `${size().width}px`,
+                      ...(captionsStore.state.settings.position === "middle" 
+                        ? {
+                            top: "50%",
+                            transform: "translateY(-50%)",
+                          }
+                        : captionsStore.state.settings.position === "bottom"
+                        ? {
+                            bottom: `${Math.max(
+                              ((containerBounds.height ?? 0) - size().height) / 2,
+                              padding
+                            ) + padding}px`,
+                          }
+                        : {
+                            top: `${Math.max(
+                              ((containerBounds.height ?? 0) - size().height) / 2,
+                              padding
+                            ) + padding}px`,
+                          }),
+                      display: "flex",
+                      "justify-content": "center",
+                      "align-items": "center",
+                      "z-index": 10,
+                    }}
+                  >
+                    <div
+                      class="rounded-lg px-4 py-2 max-w-[90%] text-center"
+                      style={{
+                        "background-color": `${captionsStore.state.settings.background_color}${Math.round(
+                          (captionsStore.state.settings.background_opacity * 255) / 100
+                        ).toString(16).padStart(2, "0")}`,
+                        color: captionsStore.state.settings.color,
+                        "font-family": captionsStore.state.settings.font,
+                        "font-size": `${captionsStore.state.settings.size}px`,
+                        "font-weight": captionsStore.state.settings.bold ? "bold" : "normal",
+                        "font-style": captionsStore.state.settings.italic ? "italic" : "normal",
+                        "text-shadow": captionsStore.state.settings.outline
+                          ? `1px 1px 1px ${captionsStore.state.settings.outline_color}, -1px -1px 1px ${captionsStore.state.settings.outline_color}, 1px -1px 1px ${captionsStore.state.settings.outline_color}, -1px 1px 1px ${captionsStore.state.settings.outline_color}`
+                          : "none",
+                      }}
+                    >
+                      {captionsStore.state.currentCaption}
+                    </div>
+                  </div>
+                </Show>
+              </>
             );
           }}
         </Show>

@@ -1,6 +1,7 @@
 mod audio;
 mod auth;
 mod camera;
+mod captions;
 mod flags;
 mod general_settings;
 mod hotkeys;
@@ -81,6 +82,7 @@ use tracing_subscriber::Layer;
 use upload::{get_s3_config, upload_image, upload_video, S3UploadMeta};
 use web_api::ManagerExt as WebManagerExt;
 use windows::{CapWindowId, ShowCapWindow};
+use captions::DownloadProgress;
 
 #[derive(specta::Type, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -2008,7 +2010,16 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             get_wallpaper_path,
             list_fails,
             set_fail,
-            update_auth_plan
+            update_auth_plan,
+            captions::create_dir,
+            captions::save_model_file,
+            captions::transcribe_audio,
+            captions::save_captions,
+            captions::load_captions,
+            captions::download_whisper_model,
+            captions::check_model_exists,
+            captions::delete_whisper_model,
+            captions::export_captions_srt
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2029,6 +2040,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             AuthenticationInvalid,
             audio_meter::AudioInputLevelChange,
             UploadProgress,
+            captions::DownloadProgress,
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
