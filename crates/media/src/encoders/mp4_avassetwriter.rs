@@ -149,13 +149,14 @@ impl MP4AVAssetWriterEncoder {
         })
     }
 
-    fn queue_video_frame(&mut self, frame: screencapturekit::cm_sample_buffer::CMSampleBuffer) {
+    pub fn queue_video_frame(&mut self, frame: screencapturekit::output::CMSampleBuffer) {
         if !self.video_input.is_ready_for_more_media_data() {
             return;
         }
 
         let sample_buf = unsafe {
-            let ptr = &*frame.sys_ref as *const _ as *const cm::SampleBuf;
+            use core_foundation::base::TCFType;
+            let ptr = &*frame.as_concrete_TypeRef() as *const _ as *const cm::SampleBuf;
             &*ptr
         };
 
@@ -171,7 +172,7 @@ impl MP4AVAssetWriterEncoder {
         self.video_input.append_sample_buf(sample_buf).ok();
     }
 
-    fn queue_audio_frame(&mut self, frame: FFAudio) -> Result<(), MediaError> {
+    pub fn queue_audio_frame(&mut self, frame: FFAudio) -> Result<(), MediaError> {
         let Some(audio_input) = &mut self.audio_input else {
             return Err(MediaError::Any("No audio input"));
         };
@@ -266,7 +267,8 @@ impl MP4AVAssetWriterEncoder {
     }
 }
 
-use screencapturekit::cm_sample_buffer::CMSampleBuffer;
+use flume::Receiver;
+use screencapturekit::output::CMSampleBuffer;
 use tracing::{debug, info};
 
 impl PipelineSinkTask<CMSampleBuffer> for MP4AVAssetWriterEncoder {

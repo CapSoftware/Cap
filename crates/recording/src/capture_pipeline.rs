@@ -1,25 +1,30 @@
 use std::{future::Future, path::PathBuf, sync::Arc};
 
-use cap_flags::FLAGS;
 use cap_media::{
-    data::{AudioInfo, FFAudio},
+    data::AudioInfo,
     encoders::{H264Encoder, MP4File, OpusEncoder},
-    pipeline::{builder::PipelineBuilder, task::PipelineSourceTask, CloneInto, RealTimeClock},
+    feeds::AudioInputFeed,
+    pipeline::{builder::PipelineBuilder, task::PipelineSinkTask, RealTimeClock},
     sources::{
-        system_audio::{self, SystemAudioSource},
-        AudioInputSource, AudioMixer, ScreenCaptureSource, ScreenCaptureTarget,
+        AudioInputSource, AudioMixer, CMSampleBufferCapture, ScreenCaptureFormat,
+        ScreenCaptureSource, ScreenCaptureTarget,
     },
     MediaError,
 };
+use flume::{Receiver, Sender};
+use tracing::error;
 
 use crate::RecordingError;
 
 pub type CapturePipelineBuilder = PipelineBuilder<RealTimeClock<()>>;
 
-pub trait MakeCapturePipeline: std::fmt::Debug + 'static {
-    fn make_capture_pipeline(
+pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
+    fn make_studio_mode_pipeline(
         builder: CapturePipelineBuilder,
-        source: ScreenCaptureSource<Self>,
+        source: (
+            ScreenCaptureSource<Self>,
+            flume::Receiver<Self::VideoFormat>,
+        ),
         output_path: PathBuf,
     ) -> Result<CapturePipelineBuilder, MediaError>
     where
@@ -27,9 +32,12 @@ pub trait MakeCapturePipeline: std::fmt::Debug + 'static {
 
     fn make_instant_mode_pipeline(
         builder: CapturePipelineBuilder,
-        source: ScreenCaptureSource<Self>,
-        audio: Option<AudioInputSource>,
-        capture_system_audio: bool,
+        source: (
+            ScreenCaptureSource<Self>,
+            flume::Receiver<Self::VideoFormat>,
+        ),
+        audio: Option<&AudioInputFeed>,
+        system_audio: Option<(Receiver<ffmpeg::frame::Audio>, AudioInfo)>,
         output_path: PathBuf,
     ) -> impl Future<Output = Result<CapturePipelineBuilder, MediaError>> + Send
     where
@@ -38,13 +46,16 @@ pub trait MakeCapturePipeline: std::fmt::Debug + 'static {
 
 #[cfg(target_os = "macos")]
 impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
-    fn make_capture_pipeline(
-        builder: CapturePipelineBuilder,
-        source: ScreenCaptureSource<Self>,
+    fn make_studio_mode_pipeline(
+        mut builder: CapturePipelineBuilder,
+        source: (
+            ScreenCaptureSource<Self>,
+            flume::Receiver<Self::VideoFormat>,
+        ),
         output_path: PathBuf,
     ) -> Result<CapturePipelineBuilder, MediaError> {
-        let screen_config = source.info();
-        let screen_encoder = cap_media::encoders::MP4AVAssetWriterEncoder::init(
+        let screen_config = source.0.info();
+        let mut screen_encoder = cap_media::encoders::MP4AVAssetWriterEncoder::init(
             "screen",
             screen_config,
             None,
@@ -52,153 +63,200 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
             None,
         )?;
 
-        Ok(builder
-            .source("screen_capture", source)
-            .sink("screen_capture_encoder", screen_encoder))
+        builder.spawn_task("screen_capture_encoder", move |ready| {
+            let _ = ready.send(Ok(()));
+            while let Ok(frame) = source.1.recv() {
+                screen_encoder.queue_video_frame(frame);
+            }
+            screen_encoder.finish();
+        });
+
+        builder.spawn_source("screen_capture", source.0);
+
+        Ok(builder)
     }
 
     async fn make_instant_mode_pipeline(
         mut builder: CapturePipelineBuilder,
-        source: ScreenCaptureSource<Self>,
-        audio: Option<AudioInputSource>,
-        capture_system_audio: bool,
+        source: (
+            ScreenCaptureSource<Self>,
+            flume::Receiver<Self::VideoFormat>,
+        ),
+        audio: Option<&AudioInputFeed>,
+        system_audio: Option<(Receiver<ffmpeg::frame::Audio>, AudioInfo)>,
         output_path: PathBuf,
     ) -> Result<CapturePipelineBuilder, MediaError> {
-        let mut audio_mixer = AudioMixer::new();
+        let (audio_tx, audio_rx) = flume::bounded(64);
+        let mut audio_mixer = AudioMixer::new(audio_tx);
 
-        let system_audio = if FLAGS.system_audio_recording && capture_system_audio {
-            fn create<T>(
-                pipeline_builder: PipelineBuilder<RealTimeClock<()>>,
-                source: T,
-                audio_mixer: &mut AudioMixer,
-            ) -> Result<(PipelineBuilder<RealTimeClock<()>>, AudioInfo), MediaError>
-            where
-                T: SystemAudioSource + PipelineSourceTask<Output = FFAudio> + 'static,
-                T::Clock: Send + 'static,
-                RealTimeClock<()>: CloneInto<T::Clock>,
-            {
-                let info = T::info().map_err(MediaError::TaskLaunch)?;
-                Ok((
-                    pipeline_builder
-                        .source("system_audio_capture", source)
-                        .sink("system_audio_sink", audio_mixer.sink(info)),
-                    info,
-                ))
-            }
+        if let Some(system_audio) = system_audio {
+            audio_mixer.add_source(system_audio.1, system_audio.0);
+        }
 
-            let (new_builder, info) = create(
-                builder,
-                {
-                    #[cfg(target_os = "macos")]
-                    {
-                        system_audio::macos::Source::init()
-                            .await
-                            .map_err(MediaError::TaskLaunch)?
-                    }
-                    #[cfg(windows)]
-                    {
-                        system_audio::windows::Source
-                    }
-                },
-                &mut audio_mixer,
-            )?;
-            builder = new_builder;
-            Some(info)
-        } else {
-            None
-        };
+        if let Some(audio) = audio {
+            let sink = audio_mixer.sink(audio.audio_info());
+            let source = AudioInputSource::init(audio, sink.tx);
+
+            builder.spawn_source("microphone_capture", source);
+        }
+
+        let has_audio_sources = audio_mixer.has_sources();
 
         let mp4 = Arc::new(std::sync::Mutex::new(
             cap_media::encoders::MP4AVAssetWriterEncoder::init(
                 "mp4",
-                source.info(),
-                system_audio,
+                source.0.info(),
+                has_audio_sources.then_some(AudioMixer::info()),
                 output_path.into(),
                 Some(1080),
             )?,
         ));
 
-        let mut builder = builder
-            .source("screen_capture", source)
+        if has_audio_sources {
+            builder.spawn_source("audio_mixer", audio_mixer);
+
+            let mp4 = mp4.clone();
+            builder.spawn_task("audio_encoding", move |ready| {
+                ready.send(Ok(()));
+                while let Ok(frame) = audio_rx.recv() {
+                    if let Ok(mut mp4) = mp4.lock() {
+                        if let Err(e) = mp4.queue_audio_frame(frame) {
+                            error!("{e}");
+                            return;
+                        }
+                    }
+                }
+            });
+        }
+
+        builder = builder
+            .source("screen_capture", source.0)
             .sink("screen_encoder", mp4.clone());
-
-        if let Some(audio) = audio {
-            let info = audio.info();
-            builder = builder
-                .source("microphone_capture", audio)
-                .sink("microphone_sink", audio_mixer.sink(info));
-        }
-
-        if audio_mixer.has_sources() {
-            builder = builder
-                .source("audio_mixer", audio_mixer)
-                .sink("audio_encoder", mp4.clone());
-        }
 
         Ok(builder)
     }
 }
 
 impl MakeCapturePipeline for cap_media::sources::AVFrameCapture {
-    fn make_capture_pipeline(
-        builder: CapturePipelineBuilder,
-        source: ScreenCaptureSource<Self>,
+    fn make_studio_mode_pipeline(
+        mut builder: CapturePipelineBuilder,
+        source: (
+            ScreenCaptureSource<Self>,
+            flume::Receiver<Self::VideoFormat>,
+        ),
         output_path: PathBuf,
     ) -> Result<CapturePipelineBuilder, MediaError>
     where
         Self: Sized,
     {
-        let screen_config = source.info();
-        let screen_encoder = MP4File::init(
+        let screen_config = source.0.info();
+        let mut screen_encoder = MP4File::init(
             "screen",
             output_path.into(),
             H264Encoder::factory("screen", screen_config),
             |_| None,
         )?;
-        Ok(builder
-            .source("screen_capture", source)
-            .sink("screen_capture_encoder", screen_encoder))
+
+        builder.spawn_task("screen_capture_encoder", move |ready| {
+            let _ = ready.send(Ok(()));
+            while let Ok(frame) = source.1.recv() {
+                screen_encoder.queue_video_frame(frame);
+            }
+            screen_encoder.finish();
+        });
+
+        builder.spawn_source("screen_capture", source.0);
+
+        Ok(builder)
     }
 
     async fn make_instant_mode_pipeline(
-        builder: CapturePipelineBuilder,
-        source: ScreenCaptureSource<Self>,
-        audio: Option<AudioInputSource>,
-        capture_system_audio: bool,
+        mut builder: CapturePipelineBuilder,
+        source: (
+            ScreenCaptureSource<Self>,
+            flume::Receiver<Self::VideoFormat>,
+        ),
+        audio: Option<&AudioInputFeed>,
+        system_audio: Option<(Receiver<ffmpeg::frame::Audio>, AudioInfo)>,
         output_path: PathBuf,
     ) -> Result<CapturePipelineBuilder, MediaError>
     where
         Self: Sized,
     {
-        let screen_config = source.info();
-        let audio_info = audio.as_ref().map(|f| f.info());
+        let (audio_tx, audio_rx) = flume::bounded(64);
+        let mut audio_mixer = AudioMixer::new(audio_tx);
+
+        if let Some(system_audio) = system_audio {
+            audio_mixer.add_source(system_audio.1, system_audio.0);
+        }
+
+        if let Some(audio) = audio {
+            let sink = audio_mixer.sink(audio.audio_info());
+            let source = AudioInputSource::init(audio, sink.tx);
+
+            builder.spawn_source("microphone_capture", source);
+        }
+
+        let has_audio_sources = audio_mixer.has_sources();
+
+        let screen_config = source.0.info();
         let mp4 = Arc::new(std::sync::Mutex::new(MP4File::init(
             "screen",
             output_path.into(),
             H264Encoder::factory("screen", screen_config),
-            |o| audio_info.map(|a| OpusEncoder::init("mic_audio", a, o)),
+            |o| has_audio_sources.then(|| OpusEncoder::init("mic_audio", AudioMixer::info(), o)),
         )?));
 
-        let mut builder = builder
-            .source("screen_capture", source)
-            .sink("screen_encoder", mp4.clone());
+        if has_audio_sources {
+            builder.spawn_source("audio_mixer", audio_mixer);
 
-        if let Some(audio) = audio {
-            builder = builder
-                .source("microphone_capture", audio)
-                .sink("mic_encoder", mp4.clone());
+            let mp4 = mp4.clone();
+            builder.spawn_task("audio_encoding", move |ready| {
+                let _ = ready.send(Ok(()));
+                while let Ok(frame) = audio_rx.recv() {
+                    if let Ok(mut mp4) = mp4.lock() {
+                        mp4.queue_audio_frame(frame)
+                    }
+                }
+            });
         }
+
+        builder.spawn_task("screen_encoder", move |ready| {
+            let _ = ready.send(Ok(()));
+            while let Ok(frame) = source.1.recv() {
+                if let Ok(mut mp4) = mp4.lock() {
+                    mp4.queue_video_frame(frame);
+                }
+            }
+            if let Ok(mut mp4) = mp4.lock() {
+                mp4.finish();
+            }
+        });
 
         Ok(builder)
     }
 }
+
+type ScreenCaptureReturn<T> = (
+    ScreenCaptureSource<T>,
+    Receiver<<T as ScreenCaptureFormat>::VideoFormat>,
+);
+
+#[cfg(target_os = "macos")]
+pub type ScreenCaptureMethod = CMSampleBufferCapture;
+
+#[cfg(not(target_os = "macos"))]
+pub type ScreenCaptureMethod = AVFrameCapture;
 
 pub fn create_screen_capture(
     capture_target: &ScreenCaptureTarget,
     show_camera: bool,
     force_show_cursor: bool,
     max_fps: u32,
-) -> Result<ScreenCaptureSource<impl MakeCapturePipeline>, RecordingError> {
+    audio_tx: Option<Sender<ffmpeg::frame::Audio>>,
+) -> Result<ScreenCaptureReturn<ScreenCaptureMethod>, RecordingError> {
+    let (video_tx, video_rx) = flume::bounded(16);
+
     #[cfg(target_os = "macos")]
     {
         ScreenCaptureSource::<cap_media::sources::CMSampleBufferCapture>::init(
@@ -207,7 +265,10 @@ pub fn create_screen_capture(
             show_camera,
             force_show_cursor,
             max_fps,
+            video_tx,
+            audio_tx,
         )
+        .map(|v| (v, video_rx))
         .map_err(|e| RecordingError::Media(MediaError::TaskLaunch(e)))
     }
     #[cfg(not(target_os = "macos"))]
@@ -218,7 +279,9 @@ pub fn create_screen_capture(
             show_camera,
             force_show_cursor,
             max_fps,
+            audio_tx,
         )
+        .map(|v| (v, video_rx))
         .map_err(|e| RecordingError::Media(MediaError::TaskLaunch(e)))
     }
 }

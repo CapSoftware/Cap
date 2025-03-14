@@ -1,3 +1,5 @@
+use std::marker::PhantomData;
+
 use flume::{Receiver, Sender};
 
 use crate::pipeline::{MediaError, PipelineControlSignal};
@@ -15,7 +17,6 @@ pub trait PipelineSourceTask: Send {
         clock: Self::Clock,
         ready_signal: PipelineReadySignal,
         control_signal: PipelineControlSignal,
-        output: Sender<Self::Output>,
     );
 
     fn queue_size(&self) -> usize {

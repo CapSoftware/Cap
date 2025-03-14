@@ -3,6 +3,7 @@ use crate::{
     pipeline::{task::PipelineSourceTask, RawNanoseconds, RealTimeClock},
 };
 use ffmpeg::frame as avframe;
+use flume::Receiver;
 
 pub trait SystemAudioSource {
     fn info() -> Result<AudioInfo, String>
@@ -127,7 +128,6 @@ pub mod macos {
             mut clock: Self::Clock,
             ready_signal: crate::pipeline::task::PipelineReadySignal,
             mut control_signal: crate::pipeline::control::PipelineControlSignal,
-            output: flume::Sender<Self::Output>,
         ) {
             let mut cfg = sc::StreamCfg::new();
             cfg.set_captures_audio(true);
@@ -179,10 +179,13 @@ pub mod windows {
         traits::{DeviceTrait, HostTrait, StreamTrait},
         *,
     };
+    use flume::Sender;
 
     use super::SystemAudioSource;
 
-    pub struct Source;
+    pub struct Source {
+        output: Sender<ffmpeg::frame::Audio>,
+    }
 
     impl Source {
         pub fn info() -> Result<AudioInfo, String> {
@@ -217,7 +220,6 @@ pub mod windows {
             mut clock: Self::Clock,
             ready_signal: crate::pipeline::task::PipelineReadySignal,
             mut control_signal: crate::pipeline::control::PipelineControlSignal,
-            output: flume::Sender<Self::Output>,
         ) {
             let host = cpal::default_host();
 

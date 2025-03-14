@@ -238,6 +238,10 @@ impl AudioRenderer {
             .map(|t| t.as_ref())
             .collect::<Vec<_>>();
 
+        if track_datas.is_empty() {
+            return None;
+        }
+
         let max_samples = track_datas.iter().map(|t| t.sample_count()).min().unwrap();
 
         if self.cursor.samples >= max_samples {

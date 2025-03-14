@@ -267,7 +267,7 @@ pub async fn start_recording(
                             id.clone(),
                             recording_dir.clone(),
                             recording_options.clone(),
-                            state.audio_input_feed.clone(),
+                            state.audio_input_feed.as_ref(),
                         )
                         .await
                         .map_err(|e| {
