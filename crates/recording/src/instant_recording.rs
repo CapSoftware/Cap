@@ -9,11 +9,13 @@ use cap_media::{
     feeds::AudioInputFeed,
     pipeline::{Pipeline, RealTimeClock},
     platform::Bounds,
-    sources::{AudioInputSource, ScreenCaptureSource, ScreenCaptureTarget},
+    sources::{AudioInputSource, AudioMixer, ScreenCaptureSource, ScreenCaptureTarget},
     MediaError,
 };
 use cap_project::InstantRecordingMeta;
 use cap_utils::{ensure_dir, spawn_actor};
+use ffmpeg::frame::Audio;
+use flume::{Receiver, Sender};
 use tokio::sync::oneshot;
 use tracing::{debug, error, info, instrument::WithSubscriber, trace, Instrument};
 use tracing_subscriber::{layer::SubscriberExt, Layer};
@@ -104,9 +106,12 @@ pub struct CompletedInstantRecording {
 #[tracing::instrument(skip_all, name = "standalone")]
 async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
     output_path: PathBuf,
-    screen_source: ScreenCaptureSource<TCaptureFormat>,
+    screen_source: (
+        ScreenCaptureSource<TCaptureFormat>,
+        flume::Receiver<TCaptureFormat::VideoFormat>,
+    ),
     audio_input_feed: Option<&AudioInputFeed>,
-    capture_system_audio: bool,
+    system_audio: Option<Receiver<ffmpeg::frame::Audio>>,
 ) -> Result<(InstantRecordingPipeline, oneshot::Receiver<()>), MediaError> {
     let clock = RealTimeClock::<()>::new();
     let pipeline_builder = Pipeline::builder(clock);
@@ -114,8 +119,8 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
     let pipeline_builder = TCaptureFormat::make_instant_mode_pipeline(
         pipeline_builder,
         screen_source,
-        audio_input_feed.map(AudioInputSource::init),
-        capture_system_audio,
+        audio_input_feed,
+        system_audio.map(|v| (v, AudioMixer::info())),
         output_path.clone(),
     )
     .await?;
@@ -137,7 +142,7 @@ pub async fn spawn_instant_recording_actor(
     id: String,
     recording_dir: PathBuf,
     options: RecordingOptions,
-    audio_input_feed: Option<AudioInputFeed>,
+    audio_input_feed: Option<&AudioInputFeed>,
 ) -> Result<(InstantRecordingHandle, tokio::sync::oneshot::Receiver<()>), RecordingError> {
     ensure_dir(&recording_dir)?;
 
@@ -147,7 +152,15 @@ pub async fn spawn_instant_recording_actor(
 
     let content_dir = ensure_dir(&recording_dir.join("content"))?;
 
-    let screen_source = create_screen_capture(&options.capture_target, true, true, 30)?;
+    let system_audio = if options.capture_system_audio {
+        let (tx, rx) = flume::bounded(64);
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
+
+    let (screen_source, screen_rx) =
+        create_screen_capture(&options.capture_target, true, true, 30, system_audio.0)?;
 
     debug!("screen capture: {screen_source:#?}");
 
@@ -157,9 +170,9 @@ pub async fn spawn_instant_recording_actor(
 
     let (pipeline, pipeline_done_rx) = create_pipeline(
         content_dir.join("output.mp4"),
-        screen_source.clone(),
-        audio_input_feed.as_ref(),
-        options.capture_system_audio,
+        (screen_source.clone(), screen_rx.clone()),
+        audio_input_feed,
+        system_audio.1,
     )
     .await?;
 
