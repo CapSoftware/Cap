@@ -1,11 +1,11 @@
-import { notFound } from "next/navigation";
+import type { DocMetadata } from "@/utils/blog";
+import { getDocs } from "@/utils/blog";
+import { clientEnv } from "@cap/env";
+import type { Metadata } from "next";
+import { MDXRemote } from "next-mdx-remote/rsc";
 import Image from "next/image";
 import Link from "next/link";
-import { MDXRemote } from "next-mdx-remote/rsc";
-import { getDocs } from "@/utils/blog";
-import type { Metadata } from "next";
-import type { DocMetadata } from "@/utils/blog";
-import { clientEnv } from "@cap/env";
+import { notFound } from "next/navigation";
 
 type Doc = {
   metadata: DocMetadata;
@@ -118,7 +118,7 @@ export default async function DocPage(props: DocProps) {
     const rootDoc = categoryDocs.find((doc) => doc.slug === category);
 
     return (
-      <div className="py-8 prose mx-auto">
+      <div className="py-32 mx-auto prose">
         <h1>{displayCategory} Documentation</h1>
 
         {/* Show root category content if it exists */}
@@ -142,10 +142,10 @@ export default async function DocPage(props: DocProps) {
                     href={`/docs/${doc.slug}`}
                     className="no-underline"
                   >
-                    <div className="p-4 rounded-lg border hover:border-blue-500 transition-colors">
+                    <div className="p-4 rounded-lg border transition-colors hover:border-blue-500">
                       <h3 className="m-0">{doc.metadata.title}</h3>
                       {doc.metadata.summary && (
-                        <p className="text-gray-600 dark:text-gray-400 m-0 mt-2">
+                        <p className="m-0 mt-2 text-gray-600 dark:text-gray-400">
                           {doc.metadata.summary}
                         </p>
                       )}
@@ -154,7 +154,7 @@ export default async function DocPage(props: DocProps) {
                           {doc.metadata.tags.split(", ").map((tag) => (
                             <span
                               key={tag}
-                              className="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded-full text-gray-600 dark:text-gray-400"
+                              className="px-2 py-1 text-xs text-gray-600 bg-gray-100 rounded-full dark:bg-gray-800 dark:text-gray-400"
                             >
                               {tag}
                             </span>
@@ -179,11 +179,11 @@ export default async function DocPage(props: DocProps) {
   }
 
   return (
-    <article className="py-8 prose mx-auto">
+    <article className="py-32 mx-auto prose">
       {doc.metadata.image && (
         <div className="relative mb-12 h-[345px] w-full">
           <Image
-            className="m-0 w-full rounded-lg object-contain sm:object-cover"
+            className="object-contain m-0 w-full rounded-lg sm:object-cover"
             src={doc.metadata.image}
             alt={doc.metadata.title}
             fill
