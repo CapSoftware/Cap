@@ -63,7 +63,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
     );
 
     const [selectedTab, setSelectedTab] = createSignal<
-      "background" | "camera" | "transcript" | "audio" | "cursor" | "hotkeys"
+      "background" | "camera" | "transcript" | "audio" | "cursor" | "hotkeys" | "captions"
     >("background");
 
     const [dialog, setDialog] = createSignal<DialogState>({
