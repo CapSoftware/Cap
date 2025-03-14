@@ -143,7 +143,8 @@ const Menu = {
         editorContext?: ReturnType<typeof useEditorContext>;
       }) => (
         <EditorButton
-          tooltipText="Delete recording"
+          disabled
+          comingSoon
           leftIcon={<IconCapTrash class="w-5" />}
         />
       ),

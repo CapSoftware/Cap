@@ -11,7 +11,7 @@ import {
   createEffect,
   createResource,
   createSignal,
-  on,
+  on
 } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
 
@@ -294,7 +294,7 @@ export const [TimelineContextProvider, useTimelineContext] =
     (props: {
       duration: number;
       secsPerPixel: number;
-      timelineBounds: Readonly<NullableBounds>;
+      timelineBounds: Readonly<NullableBounds>; 
     }) => {
       return {
         duration: () => props.duration,

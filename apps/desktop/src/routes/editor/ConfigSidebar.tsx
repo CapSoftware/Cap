@@ -42,7 +42,11 @@ import gradientBg from "../../assets/illustrations/gradient.webp";
 import imageBg from "../../assets/illustrations/image.webp";
 import transparentBg from "../../assets/illustrations/transparent.webp";
 import { BACKGROUND_THEMES, useEditorContext } from "./context";
-import { DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO } from "./projectConfig";
+import {
+  DEFAULT_GRADIENT_FROM,
+  DEFAULT_GRADIENT_TO,
+  RGBColor,
+} from "./projectConfig";
 import ShadowSettings from "./ShadowSettings";
 import { TextInput } from "./TextInput";
 import {
@@ -80,6 +84,46 @@ const CURSOR_ANIMATION_STYLES: Record<CursorAnimationStyle, string> = {
   regular: "Regular",
   fast: "Fast & Responsive",
 } as const;
+
+const BACKGROUND_COLORS = [
+  "#FF0000", // Red
+  "#FF4500", // Orange-Red
+  "#FF8C00", // Orange
+  "#FFD700", // Gold
+  "#FFFF00", // Yellow
+  "#ADFF2F", // Green-Yellow
+  "#32CD32", // Lime Green
+  "#008000", // Green
+  "#00CED1", // Dark Turquoise
+  "#4785FF", // Dodger Blue
+  "#0000FF", // Blue
+  "#4B0082", // Indigo
+  "#800080", // Purple
+  "#A9A9A9", // Dark Gray
+  "#FFFFFF", // White
+  "#000000", // Black
+];
+
+const BACKGROUND_GRADIENTS = [
+  { from: [15, 52, 67], to: [52, 232, 158] }, // Dark Blue to Teal
+  { from: [34, 193, 195], to: [253, 187, 45] }, // Turquoise to Golden Yellow
+  { from: [29, 253, 251], to: [195, 29, 253] }, // Cyan to Purple
+  { from: [69, 104, 220], to: [176, 106, 179] }, // Blue to Violet
+  { from: [106, 130, 251], to: [252, 92, 125] }, // Soft Blue to Pinkish Red
+  { from: [131, 58, 180], to: [253, 29, 29] }, // Purple to Red
+  { from: [249, 212, 35], to: [255, 78, 80] }, // Yellow to Coral Red
+  { from: [255, 94, 0], to: [255, 42, 104] }, // Orange to Reddish Pink
+  { from: [255, 0, 150], to: [0, 204, 255] }, // Pink to Sky Blue
+  { from: [0, 242, 96], to: [5, 117, 230] }, // Green to Blue
+  { from: [238, 205, 163], to: [239, 98, 159] }, // Peach to Soft Pink
+  { from: [44, 62, 80], to: [52, 152, 219] }, // Dark Gray Blue to Light Blue
+  { from: [168, 239, 255], to: [238, 205, 163] }, // Light Blue to Peach
+  { from: [74, 0, 224], to: [143, 0, 255] }, // Deep Blue to Bright Purple
+  { from: [252, 74, 26], to: [247, 183, 51] }, // Deep Orange to Soft Yellow
+  { from: [0, 255, 255], to: [255, 20, 147] }, // Cyan to Deep Pink
+  { from: [255, 127, 0], to: [255, 255, 0] }, // Orange to Yellow
+  { from: [255, 0, 255], to: [0, 255, 0] }, // Magenta to Green
+] satisfies Array<{ from: RGBColor; to: RGBColor }>;
 
 const WALLPAPER_NAMES = [
   // macOS wallpapers
@@ -361,7 +405,7 @@ export function ConfigSidebar() {
   return (
     <KTabs
       value={selectedTab()}
-      class="flex flex-col shrink-0 overflow-x-hidden overflow-y-hidden flex-1 max-w-[26rem] rounded-t-xl z-10 bg-gray-100 relative"
+      class="flex flex-col shrink-0 flex-1 max-w-[26rem] overflow-hidden rounded-t-xl z-10 bg-gray-100 relative"
     >
       <KTabs.List class="flex overflow-hidden relative z-40 flex-row items-center h-16 text-lg border-b border-gray-200 shrink-0">
         <For
@@ -484,24 +528,79 @@ export function ConfigSidebar() {
                         {...props}
                       >
                         <div class="flex gap-1.5 justify-center items-center">
-                          <img
-                            class="size-3.5 rounded"
-                            src={
+                          {(() => {
+                            if (item === "gradient") {
+                              const angle =
+                                project.background.source.type === "gradient"
+                                  ? project.background.source.angle
+                                  : 90;
+                              const fromColor =
+                                project.background.source.type === "gradient"
+                                  ? project.background.source.from
+                                  : DEFAULT_GRADIENT_FROM;
+                              const toColor =
+                                project.background.source.type === "gradient"
+                                  ? project.background.source.to
+                                  : DEFAULT_GRADIENT_TO;
+
+                              return (
+                                <div
+                                  class="size-3.5 rounded"
+                                  style={{
+                                    background: `linear-gradient(${angle}deg, rgb(${fromColor}), rgb(${toColor}))`,
+                                  }}
+                                />
+                              );
+                            }
+
+                            if (item === "color") {
+                              const backgroundColor =
+                                project.background.source.type === "color"
+                                  ? project.background.source.value
+                                  : hexToRgb(BACKGROUND_COLORS[9]);
+
+                              return (
+                                <div
+                                  class="size-3.5 rounded-[5px]"
+                                  style={{
+                                    "background-color": `rgb(${backgroundColor})`,
+                                  }}
+                                />
+                              );
+                            }
+
+                            let imageSrc: string = BACKGROUND_ICONS[item];
+
+                            if (
                               item === "image" &&
                               project.background.source.type === "image" &&
                               project.background.source.path
-                                ? convertFileSrc(project.background.source.path)
-                                : item === "wallpaper"
-                                ? wallpapers()?.find((w) =>
-                                    (
-                                      project.background.source as {
-                                        path?: string;
-                                      }
-                                    ).path?.includes(w.id)
-                                  )?.url ?? BACKGROUND_ICONS[item]
-                                : BACKGROUND_ICONS[item]
+                            ) {
+                              imageSrc = convertFileSrc(
+                                project.background.source.path
+                              );
+                            } else if (
+                              item === "wallpaper" &&
+                              project.background.source.type === "wallpaper"
+                            ) {
+                              const selectedWallpaper = wallpapers()?.find(
+                                (w) =>
+                                  (
+                                    project.background.source as {
+                                      path?: string;
+                                    }
+                                  ).path?.includes(w.id)
+                              );
+                              imageSrc =
+                                selectedWallpaper?.url ??
+                                wallpapers()?.[7]?.url ??
+                                BACKGROUND_ICONS[item];
                             }
-                          />
+
+                            return (
+                              <img class="size-3.5 rounded" src={imageSrc} />
+                            );
+                          })()}
                           {BACKGROUND_SOURCES[item]}
                         </div>
                       </KTabs.Trigger>
@@ -511,7 +610,7 @@ export function ConfigSidebar() {
                   }}
                 </For>
 
-                {/* <KTabs.Indicator class="flex overflow-hidden absolute inset-0 p-px rounded-xl transition-transform duration-300 peer-focus-visible:outline outline-2 outline-blue-300 outline-offset-2">
+                {/* <KTabs.Indicator class="flex overflow-hidden absolute inset-0 p-px rounded-xl transition-transform duration-300 peer-focus-visible:outline outline-2 outline-blue-300 outline-offset-2 outline-blue-300/50">
                   <div class="flex-1 bg-gray-200" />
                 </KTabs.Indicator> */}
               </KTabs.List>
@@ -574,6 +673,11 @@ export function ConfigSidebar() {
                       );
                       if (!wallpaper) return;
 
+                      // Get the raw path without any URL prefixes
+                      const rawPath = decodeURIComponent(
+                        photoUrl.replace("file://", "")
+                      );
+
                       debouncedSetProject(wallpaper.rawPath);
                     } catch (err) {
                       toast.error("Failed to set wallpaper");
@@ -602,8 +706,8 @@ export function ConfigSidebar() {
                           <KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg transition-shadow cursor-pointer ui-checked:ring-2 ui-checked:ring-gray-500 ui-checked:ring-offset-2 ui-checked:ring-offset-gray-200">
                             <img
                               src={photo.url!}
-                              alt="Wallpaper option"
                               class="object-cover w-full h-full"
+                              alt="Wallpaper option"
                             />
                           </KRadioGroup.ItemControl>
                         </KRadioGroup.Item>
@@ -676,10 +780,12 @@ export function ConfigSidebar() {
                     <button
                       type="button"
                       onClick={() => fileInput.click()}
-                      class="p-6 bg-gray-100 text-xs w-full rounded-[0.5rem] border flex flex-col items-center justify-center gap-[0.5rem] text-gray-400 hover:bg-gray-200 transition-colors duration-100"
+                      class="p-6 bg-gray-100 text-[13px] w-full rounded-[0.5rem] border border-gray-300 border-dashed flex flex-col items-center justify-center gap-[0.5rem] hover:bg-gray-200 transition-colors duration-100"
                     >
-                      <IconCapImage class="size-6" />
-                      <span>Click to select or drag and drop image</span>
+                      <IconCapImage class="text-gray-400 size-6" />
+                      <span class="text-gray-500">
+                        Click to select or drag and drop image
+                      </span>
                     </button>
                   }
                 >
@@ -762,23 +868,70 @@ export function ConfigSidebar() {
                     project.background.source
                   }
                 >
-                  {(source) => (
+                  <div class="flex flex-col flex-wrap gap-4">
                     <RgbInput
-                      value={source().value}
+                      value={
+                        project.background.source.type === "color"
+                          ? project.background.source.value
+                          : [0, 0, 0]
+                      }
                       onChange={(value) => {
-                        backgrounds.color = {
+                        setProject("background", "source", {
                           type: "color",
                           value,
-                        };
-                        setProject("background", "source", backgrounds.color);
+                        });
                       }}
                     />
-                  )}
+
+                    <div class="flex flex-wrap gap-2">
+                      <For each={BACKGROUND_COLORS}>
+                        {(color) => (
+                          <label class="relative">
+                            <input
+                              type="radio"
+                              class="sr-only peer"
+                              name="colorPicker"
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  backgrounds.color = {
+                                    type: "color",
+                                    value: hexToRgb(color) ?? [0, 0, 0],
+                                  };
+                                  setProject(
+                                    "background",
+                                    "source",
+                                    backgrounds.color
+                                  );
+                                }
+                              }}
+                            />
+                            <div
+                              class="rounded-lg transition-all duration-200 cursor-pointer size-6 peer-checked:hover:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
+                              style={{ "background-color": color }}
+                            />
+                          </label>
+                        )}
+                      </For>
+                    </div>
+                    {/* <Tooltip content="Add custom color">
+                      <button
+                        class="flex justify-center items-center w-6 h-6 text-gray-500 rounded-lg border border-gray-400 border-dashed hover:border-gray-500"
+                        onClick={() => {
+                          // Function to add a new color (you can modify this)
+                          console.log(
+                            "Open color picker or modal to add a color"
+                          );
+                        }}
+                      >
+                        +
+                      </button>
+                    </Tooltip> */}
+                  </div>
                 </Show>
               </KTabs.Content>
               <KTabs.Content
                 value="gradient"
-                class="flex flex-row justify-between items-center"
+                class="flex flex-row justify-between"
               >
                 <Show
                   when={
@@ -795,26 +948,65 @@ export function ConfigSidebar() {
 
                     return (
                       <>
-                        <RgbInput
-                          value={source().from}
-                          onChange={(from) => {
-                            backgrounds.gradient.from = from;
-                            setProject("background", "source", {
-                              type: "gradient",
-                              from,
-                            });
-                          }}
-                        />
-                        <RgbInput
-                          value={source().to}
-                          onChange={(to) => {
-                            backgrounds.gradient.to = to;
-                            setProject("background", "source", {
-                              type: "gradient",
-                              to,
-                            });
-                          }}
-                        />
+                        <div class="flex flex-col gap-6">
+                          <div class="flex gap-5">
+                            <RgbInput
+                              value={source().from}
+                              onChange={(from) => {
+                                backgrounds.gradient.from = from;
+                                setProject("background", "source", {
+                                  type: "gradient",
+                                  from,
+                                });
+                              }}
+                            />
+                            <RgbInput
+                              value={source().to}
+                              onChange={(to) => {
+                                backgrounds.gradient.to = to;
+                                setProject("background", "source", {
+                                  type: "gradient",
+                                  to,
+                                });
+                              }}
+                            />
+                          </div>
+                          <div class="flex flex-wrap gap-2">
+                            <For each={BACKGROUND_GRADIENTS}>
+                              {(gradient) => (
+                                <label class="relative">
+                                  <input
+                                    type="radio"
+                                    class="sr-only peer"
+                                    name="colorPicker"
+                                    onChange={(e) => {
+                                      if (e.target.checked) {
+                                        backgrounds.gradient = {
+                                          type: "gradient",
+                                          from: gradient.from,
+                                          to: gradient.to,
+                                        };
+                                        setProject(
+                                          "background",
+                                          "source",
+                                          backgrounds.gradient
+                                        );
+                                      }
+                                    }}
+                                  />
+                                  <div
+                                    class="rounded-lg transition-all duration-200 cursor-pointer size-6 peer-checked:hover:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
+                                    style={{
+                                      background: `linear-gradient(${angle()}deg, rgb(${gradient.from.join(
+                                        ","
+                                      )}), rgb(${gradient.to.join(",")}))`,
+                                    }}
+                                  />
+                                </label>
+                              )}
+                            </For>
+                          </div>
+                        </div>
                         <div
                           class="flex relative flex-col items-center p-1 bg-gray-50 rounded-full border border-gray-200 size-12 cursor-ns-resize shrink-0"
                           style={{ transform: `rotate(${angle()}deg)` }}
@@ -1612,7 +1804,7 @@ function RgbInput(props: {
     <div class="flex flex-row items-center gap-[0.75rem] relative">
       <button
         type="button"
-        class="size-[3rem] rounded-[0.5rem]"
+        class="size-[2rem] rounded-[0.5rem]"
         style={{
           "background-color": rgbToHex(props.value),
         }}
@@ -1628,7 +1820,7 @@ function RgbInput(props: {
         }}
       />
       <TextInput
-        class="w-[5rem] p-[0.375rem] border text-gray-400 rounded-[0.5rem] bg-gray-50"
+        class="w-[4.60rem] p-[0.375rem] text-gray-500 text-[13px] border rounded-[0.5rem] bg-gray-50 outline-none focus:ring-2 transition-shadows duration-200 focus:ring-gray-500 focus:ring-offset-2 focus:ring-offset-gray-200"
         value={text()}
         onFocus={() => {
           prevHex = rgbToHex(props.value);

@@ -80,7 +80,7 @@ export function Timeline() {
     }
   });
 
-  const xPadding = 12;
+  const xPadding = 20;
 
   if (
     !project.timeline?.zoomSegments ||
@@ -200,7 +200,7 @@ export function Timeline() {
           {(time) => (
             <div
               class={cx(
-                "flex absolute bottom-0 top-4 left-5 z-10 justify-center items-center w-px pointer-events-none bg-[currentColor]",
+                "flex absolute bottom-0 top-4 left-5 z-10 justify-center items-center w-px bg-gradient-to-b h-[70%] from-gray-400 to-transparent pointer-events-none",
                 split() ? "text-red-300" : "text-black-transparent-20"
               )}
               style={{
@@ -210,7 +210,7 @@ export function Timeline() {
                 }px)`,
               }}
             >
-              <div class="size-2 bg-[currentColor] rounded-full absolute -top-2" />
+              <div class="absolute -top-2 bg-gray-400 rounded-full size-3" />
               <Show when={split()}>
                 <div class="absolute size-[2rem] bg-[currentColor] z-20 top-6 rounded-lg flex items-center justify-center">
                   <IconCapScissors class="size-[1.25rem] text-gray-50 z-20" />
@@ -221,7 +221,7 @@ export function Timeline() {
         </Show>
         <Show when={!split()}>
           <div
-            class="absolute bottom-0 top-4 z-10 w-px bg-red-300 pointer-events-none"
+            class="absolute bottom-0 top-4 h-[70%] z-10 w-px bg-gradient-to-b from-[#66D0FF] pointer-events-none to-blue-transparent-0"
             style={{
               left: `${xPadding}px`,
               transform: `translateX(${Math.min(
@@ -231,7 +231,7 @@ export function Timeline() {
               )}px)`,
             }}
           >
-            <div class="size-2 bg-red-300 rounded-full -mt-2 -ml-[calc(0.25rem-0.5px)]" />
+            <div class="size-3 bg-[#66D0FF] rounded-full -mt-2 -ml-[calc(0.37rem-0.5px)]" />
           </div>
         </Show>
         <ClipTrack ref={setTimelineRef} />
@@ -268,20 +268,23 @@ function TimelineMarkings() {
     <div class="relative mb-1 h-4 text-xs">
       <For each={timelineMarkings()}>
         {(second) => (
-          <div
-            class="absolute bottom-1 left-0 text-center rounded-full w-1 h-1 bg-[--text-tertiary] text-[--text-tertiary]"
-            style={{
-              left: `${
-                (second - state.timelineTransform.position) / secsPerPixel() - 1
-              }px`,
-            }}
-          >
-            <Show when={second % 1 === 0}>
-              <div class="absolute -top-4 -translate-x-1/2">
-                {formatTime(second)}
-              </div>
-            </Show>
-          </div>
+          <>
+            <div
+              class="absolute bottom-1 left-0 text-center rounded-full w-1 h-1 bg-[--text-tertiary] text-[--text-tertiary]"
+              style={{
+                left: `${
+                  (second - state.timelineTransform.position) / secsPerPixel() -
+                  1
+                }px`,
+              }}
+            >
+              <Show when={second % 1 === 0}>
+                <div class="absolute -top-5 -translate-x-1/2">
+                  {formatTime(second)}
+                </div>
+              </Show>
+            </div>
+          </>
         )}
       </For>
     </div>
@@ -314,6 +317,20 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
     }
   }
 
+  const timelineMarkings = () => {
+    const resolution =
+      TIMELINE_MARKING_RESOLUTIONS.find(
+        (r) => state.timelineTransform.zoom / r <= MAX_TIMELINE_MARKINGS
+      ) ?? 30;
+
+    const diff = state.timelineTransform.position % resolution;
+
+    return Array.from(
+      { length: (state.timelineTransform.zoom + 5) / resolution },
+      (_, i) => state.timelineTransform.position - diff + (i + 1) * resolution
+    );
+  };
+
   return (
     <TrackRoot ref={props.ref}>
       <For each={segments()}>
@@ -325,7 +342,10 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
 
           return (
             <SegmentRoot
-              class="border-blue-300"
+              class={cx(
+                "overflow-hidden relative border transition-colors duration-300 group",
+                "hover:border-gray-500"
+              )}
               innerClass="ring-blue-300"
               segment={{
                 ...segment,
@@ -357,8 +377,22 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                 );
               }}
             >
+              <For each={timelineMarkings()}>
+                {(second) => (
+                  <div
+                    style={{
+                      left: `${second / secsPerPixel() + -0.5}px`,
+                    }}
+                    class="absolute z-10 w-px h-14 bg-gradient-to-b to-transparent from-white-transparent-80 dark:from-black-transparent-60"
+                  />
+                )}
+              </For>
+
               <SegmentHandle
-                class="bg-blue-300"
+                class={cx(
+                  "absolute opacity-0 top-[50%] bg-gradient-to-r -translate-y-1/2 left-2.5 z-10 w-[3px] h-8 bg-white rounded-full",
+                  "group-hover:opacity-100"
+                )}
                 onMouseDown={(downEvent) => {
                   const start = segment.start;
 
@@ -417,32 +451,14 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                   });
                 }}
               />
-              <SegmentContent class="justify-between bg-gradient-to-r from-[#2675DB] via-[#5CA3FF] to-[#2675DB]">
-                <span class="text-black-transparent-60 text-[0.625rem] mt-auto">
-                  {formatTime(segment.start)}
-                </span>
-                {/* <Show when={segments().length > 1}>
-                    <button
-                      onClick={() => {
-                        setProject(
-                          "timeline",
-                          "segments",
-                          produce((segments) => {
-                            segments.splice(i(), 1);
-                          })
-                        );
-                      }}
-                      class="flex flex-col justify-center items-center bg-gray-50 rounded-full opacity-0 transition-opacity size-7 group/button group-hover:opacity-100"
-                    >
-                      <IconCapTrash class="text-gray-400 transition-colors size-4 group-hover/button:text-gray-500" />
-                    </button>
-                  </Show> */}
-                <span class="text-black-transparent-60 text-[0.625rem] mt-auto">
-                  {formatTime(segment.end)}
-                </span>
+              <SegmentContent class="justify-between relative bg-gradient-to-r timeline-gradient-border from-[#2675DB] via-[#5CA3FF] to-[#2675DB] shadow-[inset_0_5px_10px_5px_rgba(255,255,255,0.2)]">
+                <div class="absolute inset-0 -top-[120px] bg-white w-[500px] h-[150px] rounded-full mx-auto blur-[50px] mix-blend-overlay opacity-30" />
               </SegmentContent>
               <SegmentHandle
-                class="bg-blue-300"
+                class={cx(
+                  "absolute top-[50%] opacity-0 -translate-y-1/2 right-2.5 z-10 w-[3px] h-8 bg-white rounded-full",
+                  "group-hover:opacity-100"
+                )}
                 onMouseDown={(downEvent) => {
                   const end = segment.end;
 
@@ -518,7 +534,7 @@ function ZoomTrack(props: {
 
   return (
     <>
-      <div class="w-full h-2" />
+      <div class="mt-2 w-full h-2" />
 
       <TrackRoot
         onMouseMove={(e) => {
@@ -613,16 +629,18 @@ function ZoomTrack(props: {
         >
           {(time) => (
             <SegmentRoot
-              class="border-red-300 opacity-70 pointer-events-none group"
+              class="pointer-events-none"
               innerClass="ring-red-300"
               segment={{
                 start: time(),
                 end: time() + 1,
               }}
             >
-              <SegmentHandle class="bg-red-300" />
-              <SegmentContent class="bg-red-50" />
-              <SegmentHandle class="bg-red-300" />
+              <SegmentContent class="bg-gradient-to-r zoom-gradient-border bg-[#adadad] transition-colors group shadow-[inset_0_-5px_20px_3px_rgba(255,255,255,0.8)]">
+                <p class="w-full text-sm text-center text-gray-500 text-primary dark:text-gray-50">
+                  + Zoom
+                </p>
+              </SegmentContent>
             </SegmentRoot>
           )}
         </Show>
@@ -706,7 +724,7 @@ function ZoomTrack(props: {
 
             return (
               <SegmentRoot
-                class="bg-red-50 border-red-300 transition-colors group hover:bg-opacity-80"
+                class="bg-gradient-to-r relative zoom-gradient-border hover:border duration-300 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]"
                 innerClass="ring-red-300"
                 segment={segment}
                 onMouseEnter={() => {
@@ -717,7 +735,9 @@ function ZoomTrack(props: {
                 }}
               >
                 <SegmentHandle
-                  class="bg-red-300 transition-colors hover:opacity-80"
+                  class={cx(
+                    "absolute top-[50%] group-hover:opacity-100 opacity-0 -translate-y-1/2 left-2.5 z-10 w-[3px] h-8 bg-white rounded-full"
+                  )}
                   onMouseDown={createMouseDownDrag(
                     () => {
                       const start = segment.start;
@@ -799,9 +819,9 @@ function ZoomTrack(props: {
                     return (
                       <Show when={ctx.width() > 100}>
                         <div class="flex flex-col gap-1 justify-center items-center text-xs text-gray-500 whitespace-nowrap">
-                          <div class="flex gap-1 items-center text-red-300">
-                            <IconLucideSearch class="size-3" />{" "}
-                            {zoomPercentage()}
+                          <div class="flex gap-1 items-center text-white text-md">
+                            <IconLucideSearch class="size-3.5" />{" "}
+                            {zoomPercentage()}{" "}
                           </div>
                         </div>
                       </Show>
@@ -809,7 +829,9 @@ function ZoomTrack(props: {
                   })()}
                 </SegmentContent>
                 <SegmentHandle
-                  class="bg-red-300 transition-colors hover:opacity-80"
+                  class={cx(
+                    "absolute top-[50%] group-hover:opacity-100 opacity-0 -translate-y-1/2 right-2.5 z-10 w-[3px] h-8 bg-white rounded-full"
+                  )}
                   onMouseDown={createMouseDownDrag(
                     () => {
                       const end = segment.end;
@@ -911,7 +933,7 @@ function SegmentRoot(
       <div
         {...props}
         class={cx(
-          "absolute border rounded-[calc(0.75rem+1px)] h-[3rem] w-full",
+          "absolute border rounded-[calc(0.75rem+1px)] h-14 w-full",
           props.class,
           isSelected() && "wobble-wrapper"
         )}

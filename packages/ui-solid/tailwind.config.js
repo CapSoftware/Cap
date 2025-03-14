@@ -31,6 +31,8 @@ module.exports = {
         10: "var(--white-transparent-10)",
         20: "var(--white-transparent-20)",
         40: "var(--white-transparent-40)",
+        60: "var(--white-transparent-60)",
+        80: "var(--white-transparent-80)",
       },
       blue: {
         50: "var(--blue-50)",
@@ -40,6 +42,7 @@ module.exports = {
         400: "var(--blue-400)",
       },
       "blue-transparent": {
+        0: "var(--blue-transparent-0)",
         10: "var(--blue-transparent-10)",
         20: "var(--blue-transparent-20)",
       },

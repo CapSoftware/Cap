@@ -133,11 +133,7 @@ function ExportButton(props: {
     <div class="relative">
       <Button
         variant="white"
-        class={cx(
-          "flex gap-2 justify-center",
-          showExportOptions() &&
-            "shadow-[inset_0_0_4px_2px_rgba(0,0,0,0.25)] dark:shadow-[inset_0_0_4px_2px_rgba(0,0,0,0.7)]"
-        )}
+        class={cx("flex gap-2 justify-center")}
         onClick={() => {
           trackEvent("export_button_clicked");
           setShowExportOptions(!showExportOptions());

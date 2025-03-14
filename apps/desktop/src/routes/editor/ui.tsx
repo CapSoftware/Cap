@@ -87,7 +87,7 @@ export function Slider(props: ComponentProps<typeof KSlider>) {
         <KSlider.Fill class="absolute -ml-2 h-full bg-gray-400 rounded-full ui-disabled:bg-gray-300" />
         <KSlider.Thumb
           class={cx(
-            "bg-gray-500 rounded-full outline-none size-4 -top-[6.5px] outline-2 outline-offset-2 focus-visible:outline-blue-300 ui-disabled:bg-gray-400"
+            "bg-gray-500 rounded-full outline-none size-4 -top-[6.5px] transition-shadow duration-200 focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 focus:ring-offset-gray-200 ui-disabled:bg-gray-400"
           )}
         />
       </KSlider.Track>
@@ -314,7 +314,7 @@ export function EditorButton<T extends ValidComponent = "button">(
   return (
     <>
       {local.tooltipText || local.comingSoon ? (
-        <Tooltip content={local.comingSoon ? "Coming soon" : local.tooltipText}>
+        <Tooltip content={local.comingSoon ? "Coming Soon" : local.tooltipText}>
           <Polymorphic
             as="button"
             {...others}

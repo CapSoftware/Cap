@@ -10,5 +10,34 @@
 .wobble-wrapper {
   animation: wobble 1s ease-in-out infinite;
   will-change: transform;
-  background: rgba(255, 0, 0, 0.1) !important;
+  background: rgb(38, 57, 116) !important;
+  box-shadow: inset 0px 8px 16px 0px rgba(134, 165, 249, 0.503) !important;
 } 
+
+.timeline-gradient-border::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: 12px;
+  background: linear-gradient(to bottom, #ffffff4a 50%, #ffffff00 100%);
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+.zoom-gradient-border::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: 12px;
+  background: linear-gradient(to bottom, #ffffff1f 50%, #ffffff00 100%);
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}

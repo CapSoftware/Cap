@@ -2,13 +2,14 @@
 
 :root {
   /* Light theme variables */
-  --gray-50: #ffffff;
-  --gray-100: #f7f8fa;
-  --gray-200: #e2e4ea;
-  --gray-300: #c9cedb;
-  --gray-400: #8991a3;
-  --gray-450: #F3F3F3;
-  --gray-500: #12161f;
+  --gray-50: #ffffff; /* Pure white background */
+  --gray-100: #f8f9fb; /* Soft background */
+  --gray-200: #e4e6ed; /* Light borders/dividers */
+  --gray-300: #c7ccda; /* Subtle highlights */
+  --gray-400: #868e9f; /* Secondary text - slightly softened */
+  --gray-450: #eaecef; /* Adjusted to maintain balance */
+  --gray-500: #161b26; /* Primary text - deep, rich contrast */
+
 
   --text-primary: rgba(18, 22, 31, 0.95); /* Section titles, headings */
   --text-secondary: rgba(18, 22, 31, 0.85); /* Important labels */
@@ -25,6 +26,9 @@
   --white-transparent-10: rgba(255, 255, 255, 0.1);
   --white-transparent-20: rgba(255, 255, 255, 0.2);
   --white-transparent-40: rgba(255, 255, 255, 0.4);
+  --white-transparent-60: rgba(255, 255, 255, 0.6);
+  --white-transparent-80: rgba(255, 255, 255, 0.8);
+  
   --white: #fff;
 
   --blue-50: #ebf1ff;
@@ -34,6 +38,7 @@
   --blue-400: #3f75e0;
   --blue-500: rgb(54, 102, 197);
 
+  --blue-transparent-0: rgba(34, 64, 122, 0);
   --blue-transparent-10: rgba(34, 64, 122, 0.1);
   --blue-transparent-20: rgba(34, 64, 122, 0.2);
 
@@ -52,13 +57,14 @@
 /* Dark theme variables */
 :root.dark {
   /* Main background colors */
-  --gray-50: #161616; /* Main background */
-  --gray-100: #191919; /* Secondary background */
-  --gray-200: #232323; /* Borders and dividers */
-  --gray-300: #3a3a3a; /* Subtle highlights */
-  --gray-400: #9d9d9d; /* Secondary text - descriptions */
-  --gray-450: #F3F3F3;
-  --gray-500: #ffffff; /* Primary text - titles/headings (back to white) */
+  --gray-50: #141414; /* Main background - slightly darker */
+  --gray-100: #181818; /* Secondary background */
+  --gray-200: #222222; /* Borders and dividers */
+  --gray-300: #323232; /* Subtle highlights */
+  --gray-400: #868686; /* Secondary text - slightly softer */
+  --gray-450: #EAEAEA; /* Adjusted to be more balanced */
+  --gray-500: #FFFFFF; /* Primary text - titles/headings */
+
 
   /* Add new variables for text hierarchy */
   --text-primary: rgba(255, 255, 255, 0.95); /* Section titles, headings */
@@ -78,6 +84,9 @@
   --white-transparent-10: rgba(18, 22, 31, 0.1);
   --white-transparent-20: rgba(18, 22, 31, 0.2);
   --white-transparent-40: rgba(18, 22, 31, 0.4);
+  --white-transparent-60: rgba(18, 22, 31, 0.6);
+  --white-transparent-80: rgba(18, 22, 31, 0.8);
+  
   --white: #fff;
 
   /* Accent colors remain mostly the same but adjusted for dark theme */
