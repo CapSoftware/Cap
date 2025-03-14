@@ -2,8 +2,8 @@ import { apiClient } from "@/utils/web-api";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { clientEnv, NODE_ENV } from "@cap/env";
-import { LogoSpinner } from "@cap/ui";
-import { S3_BUCKET_URL } from "@cap/utils";
+import { LogoSpinner, Logo } from "@cap/ui";
+import { S3_BUCKET_URL, isUserOnProPlan } from "@cap/utils";
 import {
   Maximize,
   MessageSquare,
@@ -1395,6 +1395,32 @@ export const ShareVideo = forwardRef<
           </div>
         </div>
       </div>
+      {user &&
+        !isUserOnProPlan({
+          subscriptionStatus: user.stripeSubscriptionStatus,
+        }) && (
+          <div className="absolute top-4 left-4 z-30">
+            <a
+              href="/pricing"
+              target="_blank"
+              className="block cursor-pointer"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="relative">
+                <div className="opacity-50 hover:opacity-100 transition-opacity peer">
+                  <Logo className="h-4 sm:h-6 w-auto" white={true} />
+                </div>
+
+                {/* Text only appears when hovering the exact logo element */}
+                <div className="absolute left-0 top-6 scale-y-0 origin-top peer-hover:scale-y-100 transition-transform duration-300 ease-in-out">
+                  <p className="text-white text-xs font-medium whitespace-nowrap bg-black bg-opacity-50 px-2 py-0.5 rounded">
+                    Upgrade to Cap Pro and remove the watermark
+                  </p>
+                </div>
+              </div>
+            </a>
+          </div>
+        )}
     </div>
   );
 });
