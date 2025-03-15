@@ -45,7 +45,7 @@ fn default_gradient_angle() -> u16 {
 
 impl Default for BackgroundSource {
     fn default() -> Self {
-        BackgroundSource::Wallpaper {
+        Self::Wallpaper {
             path: Some("sequoia-dark".to_string()),
         }
     }
@@ -453,7 +453,7 @@ impl ProjectConfiguration {
 
 impl Default for ProjectConfiguration {
     fn default() -> Self {
-        ProjectConfiguration {
+        Self {
             aspect_ratio: None,
             background: BackgroundConfiguration::default(),
             camera: Camera::default(),

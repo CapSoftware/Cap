@@ -1587,7 +1587,7 @@ fn list_recordings(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMeta
 
     // First check if directory exists
     if !recordings_dir.exists() {
-        return Ok(Vec::new());
+        return Ok(vec![]);
     }
 
     let mut result = std::fs::read_dir(&recordings_dir)

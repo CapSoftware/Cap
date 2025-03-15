@@ -77,7 +77,7 @@ impl CameraFeed {
                 .into_iter()
                 .map(|i| i.human_name().to_string())
                 .collect::<Vec<String>>(),
-            Err(_) => Vec::new(),
+            Err(_) => vec![],
         }
     }
 

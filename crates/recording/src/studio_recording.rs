@@ -176,7 +176,7 @@ pub async fn spawn_studio_recording_actor(
                 recording_dir,
                 options: options.clone(),
                 fps,
-                segments: Vec::new(),
+                segments: vec![],
             };
 
             let mut state = StudioRecordingActorState::Recording {

@@ -25,7 +25,7 @@ enum CachedFrame {
 impl CachedFrame {
     fn process(&mut self) -> Arc<Vec<u8>> {
         match self {
-            CachedFrame::Raw(image_buf) => {
+            Self::Raw(image_buf) => {
                 let format = pixel_format_to_pixel(image_buf.pixel_format());
 
                 let data = if matches!(format, format::Pixel::RGBA) {
@@ -167,7 +167,7 @@ impl CachedFrame {
 
                 data
             }
-            CachedFrame::Processed(data) => data.clone(),
+            Self::Processed(data) => data.clone(),
         }
     }
 }

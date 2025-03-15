@@ -100,10 +100,7 @@ pub enum OSPermissionStatus {
 
 impl OSPermissionStatus {
     pub fn permitted(&self) -> bool {
-        match self {
-            Self::NotNeeded | Self::Granted => true,
-            _ => false,
-        }
+        matches!(*self, Self::NotNeeded | Self::Granted)
     }
 }
 

@@ -82,16 +82,17 @@ impl CapWindowId {
 
     pub fn title(&self) -> String {
         match self {
-            Self::Setup => "Cap Setup".to_string(),
-            Self::Settings => "Cap Settings".to_string(),
-            Self::WindowCaptureOccluder => "Cap Window Capture Occluder".to_string(),
-            Self::CaptureArea => "Cap Capture Area".to_string(),
-            Self::InProgressRecording => "Cap In Progress Recording".to_string(),
-            Self::Editor { .. } => "Cap Editor".to_string(),
-            Self::SignIn => "Cap Sign In".to_string(),
-            Self::ModeSelect => "Cap Mode Selection".to_string(),
-            _ => "Cap".to_string(),
+            Self::Setup => "Cap Setup",
+            Self::Settings => "Cap Settings",
+            Self::WindowCaptureOccluder => "Cap Window Capture Occluder",
+            Self::CaptureArea => "Cap Capture Area",
+            Self::InProgressRecording => "Cap In Progress Recording",
+            Self::Editor { .. } => "Cap Editor",
+            Self::SignIn => "Cap Sign In",
+            Self::ModeSelect => "Cap Mode Selection",
+            _ => "Cap",
         }
+        .to_string()
     }
 
     pub fn activates_dock(&self) -> bool {
@@ -483,20 +484,20 @@ impl ShowCapWindow {
 
     pub fn id(&self) -> CapWindowId {
         match self {
-            ShowCapWindow::Setup => CapWindowId::Setup,
-            ShowCapWindow::Main => CapWindowId::Main,
-            ShowCapWindow::Settings { .. } => CapWindowId::Settings,
-            ShowCapWindow::Editor { project_id } => CapWindowId::Editor {
+            Self::Setup => CapWindowId::Setup,
+            Self::Main => CapWindowId::Main,
+            Self::Settings { .. } => CapWindowId::Settings,
+            Self::Editor { project_id } => CapWindowId::Editor {
                 project_id: project_id.clone(),
             },
-            ShowCapWindow::RecordingsOverlay => CapWindowId::RecordingsOverlay,
-            ShowCapWindow::WindowCaptureOccluder => CapWindowId::WindowCaptureOccluder,
-            ShowCapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
-            ShowCapWindow::Camera { .. } => CapWindowId::Camera,
-            ShowCapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
-            ShowCapWindow::Upgrade => CapWindowId::Upgrade,
-            ShowCapWindow::SignIn => CapWindowId::SignIn,
-            ShowCapWindow::ModeSelect => CapWindowId::ModeSelect,
+            Self::RecordingsOverlay => CapWindowId::RecordingsOverlay,
+            Self::WindowCaptureOccluder => CapWindowId::WindowCaptureOccluder,
+            Self::CaptureArea { .. } => CapWindowId::CaptureArea,
+            Self::Camera { .. } => CapWindowId::Camera,
+            Self::InProgressRecording { .. } => CapWindowId::InProgressRecording,
+            Self::Upgrade => CapWindowId::Upgrade,
+            Self::SignIn => CapWindowId::SignIn,
+            Self::ModeSelect => CapWindowId::ModeSelect,
         }
     }
 }

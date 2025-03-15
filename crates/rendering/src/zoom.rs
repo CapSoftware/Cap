@@ -82,7 +82,7 @@ impl SegmentBounds {
     }
 
     pub fn default() -> Self {
-        SegmentBounds::new(XY::new(0.0, 0.0), XY::new(1.0, 1.0))
+        Self::new(XY::new(0.0, 0.0), XY::new(1.0, 1.0))
     }
 }
 

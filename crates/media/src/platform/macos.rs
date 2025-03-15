@@ -29,7 +29,7 @@ extern "C" {
 }
 
 pub fn get_on_screen_windows() -> Vec<Window> {
-    let mut windows = Vec::new();
+    let mut windows = vec![];
 
     unsafe {
         let cf_win_array = CGWindowListCopyWindowInfo(
