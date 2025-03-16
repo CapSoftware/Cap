@@ -5,6 +5,7 @@ use flume::{Receiver, Sender};
 use crate::{
     data::{AudioInfo, FFAudio},
     pipeline::{
+        control::PipelineControlSignal,
         task::{PipelineSinkTask, PipelineSourceTask},
         RawNanoseconds, RealTimeClock,
     },
@@ -48,7 +49,7 @@ impl AudioMixer {
         .unwrap()
     }
 
-    pub fn run(&mut self, on_ready: impl FnOnce() -> ()) {
+    pub fn run(&mut self, mut get_is_stopped: impl FnMut() -> bool, on_ready: impl FnOnce() -> ()) {
         let mut filter_graph = ffmpeg::filter::Graph::new();
 
         let mut abuffers = self
@@ -117,14 +118,26 @@ impl AudioMixer {
 
         let mut filtered = ffmpeg::frame::Audio::empty();
         loop {
+            if get_is_stopped() {
+                return;
+            }
+
             for (i, source) in self.sources.iter().enumerate() {
-                while let Ok(value) = source.rx.try_recv() {
+                loop {
+                    let value = match source.rx.try_recv() {
+                        Ok(v) => v,
+                        Err(flume::TryRecvError::Disconnected) => return,
+                        Err(flume::TryRecvError::Empty) => break,
+                    };
+
                     abuffers[i].source().add(&value).unwrap();
                 }
             }
 
             while abuffersink.sink().frame(&mut filtered).is_ok() {
-                self.output.send(filtered);
+                if self.output.send(filtered).is_err() {
+                    return;
+                }
                 filtered = ffmpeg::frame::Audio::empty()
             }
 
@@ -166,10 +179,18 @@ impl PipelineSourceTask for AudioMixer {
         &mut self,
         clock: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
-        control_signal: crate::pipeline::control::PipelineControlSignal,
+        mut control_signal: crate::pipeline::control::PipelineControlSignal,
     ) {
-        self.run(|| {
-            let _ = ready_signal.send(Ok(()));
-        })
+        self.run(
+            || {
+                control_signal
+                    .last()
+                    .map(|v| matches!(v, crate::pipeline::control::Control::Shutdown))
+                    .unwrap_or(false)
+            },
+            || {
+                let _ = ready_signal.send(Ok(()));
+            },
+        )
     }
 }

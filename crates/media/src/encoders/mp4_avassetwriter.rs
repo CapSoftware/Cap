@@ -73,9 +73,9 @@ impl MP4AVAssetWriterEncoder {
                 ns::Number::with_u32(output_height).as_id_ref(),
             );
 
-            let bitrate = output_width as f32 * output_height as f32 / (1920.0 * 1080.0)
-                * 10_000_000.0
-                + fps / 30.0 * 6_000_000.0;
+            let bitrate = get_average_bitrate(output_width as f32, output_height as f32, fps);
+
+            debug!("recording bitrate: {bitrate}");
 
             output_settings.insert(
                 av::video_settings_keys::compression_props(),
@@ -343,3 +343,29 @@ where
     op(&mut option).into()?;
     Ok(unsafe { option.unwrap_unchecked() })
 }
+
+fn get_average_bitrate(width: f32, height: f32, fps: f32) -> f32 {
+    5_000_000.0
+        + width * height / (1920.0 * 1080.0) * 2_000_000.0
+        + fps.min(60.0) / 30.0 * 5_000_000.0
+}
+
+// #[cfg(test)]
+// mod test {
+//     use super::*;
+
+//     #[test]
+//     fn bitrate() {
+//         let hd_30 = get_average_bitrate(1920.0, 1080.0, 30.0);
+//         assert!(hd_30 < 10_000_000.0);
+
+//         let hd_60 = get_average_bitrate(1920.0, 1080.0, 60.0);
+//         assert!(hd_60 < 13_000_000.0);
+
+//         let fk_30 = get_average_bitrate(1280.0, 720.0, 30.0);
+//         assert!(fk_30 < 20_000_000.0);
+
+//         let fk_60 = get_average_bitrate(1280.0, 720.0, 60.0);
+//         assert!(fk_60 < 24_000_000.0);
+//     }
+// }

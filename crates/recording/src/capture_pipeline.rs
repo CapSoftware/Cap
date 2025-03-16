@@ -117,7 +117,7 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
 
             let mp4 = mp4.clone();
             builder.spawn_task("audio_encoding", move |ready| {
-                ready.send(Ok(()));
+                let _ = ready.send(Ok(()));
                 while let Ok(frame) = audio_rx.recv() {
                     if let Ok(mut mp4) = mp4.lock() {
                         if let Err(e) = mp4.queue_audio_frame(frame) {
@@ -129,9 +129,19 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
             });
         }
 
-        builder = builder
-            .source("screen_capture", source.0)
-            .sink("screen_encoder", mp4.clone());
+        builder.spawn_task("screen_capture_encoder", move |ready| {
+            let _ = ready.send(Ok(()));
+            while let Ok(frame) = source.1.recv() {
+                if let Ok(mut mp4) = mp4.lock() {
+                    mp4.queue_video_frame(frame);
+                }
+            }
+            if let Ok(mut mp4) = mp4.lock() {
+                mp4.finish();
+            }
+        });
+
+        builder.spawn_source("screen_capture", source.0);
 
         Ok(builder)
     }

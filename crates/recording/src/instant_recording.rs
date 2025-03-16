@@ -116,11 +116,12 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
     let clock = RealTimeClock::<()>::new();
     let pipeline_builder = Pipeline::builder(clock);
 
+    let system_audio = system_audio.map(|v| (v, screen_source.0.audio_info()));
     let pipeline_builder = TCaptureFormat::make_instant_mode_pipeline(
         pipeline_builder,
         screen_source,
         audio_input_feed,
-        system_audio.map(|v| (v, AudioMixer::info())),
+        system_audio,
         output_path.clone(),
     )
     .await?;
