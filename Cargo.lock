@@ -6381,7 +6381,7 @@ dependencies = [
 [[package]]
 name = "scap"
 version = "0.0.8"
-source = "git+https://github.com/CapSoftware/scap?rev=c949f96b7d25286e54be8f9bdedb43cca275964e#c949f96b7d25286e54be8f9bdedb43cca275964e"
+source = "git+https://github.com/CapSoftware/scap?rev=171326f4158a11b7b0a681026f5afa93c0bb2ea4#171326f4158a11b7b0a681026f5afa93c0bb2ea4"
 dependencies = [
  "cocoa 0.25.0",
  "core-foundation 0.10.0",
