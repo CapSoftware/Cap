@@ -167,6 +167,8 @@ impl MakeCapturePipeline for AVFrameCapture {
             |_| None,
         )?;
 
+        builder.spawn_source("screen_capture", source.0);
+
         builder.spawn_task("screen_capture_encoder", move |ready| {
             let _ = ready.send(Ok(()));
             while let Ok(frame) = source.1.recv() {
@@ -174,8 +176,6 @@ impl MakeCapturePipeline for AVFrameCapture {
             }
             screen_encoder.finish();
         });
-
-        builder.spawn_source("screen_capture", source.0);
 
         Ok(builder)
     }
@@ -225,11 +225,13 @@ impl MakeCapturePipeline for AVFrameCapture {
                 let _ = ready.send(Ok(()));
                 while let Ok(frame) = audio_rx.recv() {
                     if let Ok(mut mp4) = mp4.lock() {
-                        mp4.queue_audio_frame(frame)
+                        mp4.queue_audio_frame(dbg!(frame));
                     }
                 }
             });
         }
+
+        builder.spawn_source("screen_capture", source.0);
 
         builder.spawn_task("screen_encoder", move |ready| {
             let _ = ready.send(Ok(()));

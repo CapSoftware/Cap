@@ -1,5 +1,6 @@
 use cap_flags::FLAGS;
-use ffmpeg::{frame::Audio, ChannelLayout};
+use cpal::traits::{DeviceTrait, HostTrait};
+use ffmpeg::{format::Sample, frame::Audio, ChannelLayout};
 use flume::Sender;
 use scap::{
     capturer::{
@@ -161,7 +162,15 @@ impl ScreenCaptureFormat for AVFrameCapture {
     type VideoFormat = FFVideo;
 
     fn audio_info() -> AudioInfo {
-        todo!()
+        let host = cpal::default_host();
+        let output_device = host.default_output_device().unwrap();
+        let supported_config = output_device.default_output_config().unwrap();
+
+        let mut info = AudioInfo::from_stream_config(&supported_config);
+
+        info.sample_format = Sample::F32(ffmpeg::format::sample::Type::Packed);
+
+        dbg!(info)
     }
 }
 
@@ -332,7 +341,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         Ok(Options {
             fps: self.fps,
             show_cursor: self.force_show_cursor || !FLAGS.record_mouse_state,
-            show_highlight: true,
+            show_highlight: false,
             target: Some(target.clone()),
             crop_area,
             output_type: self.output_type.unwrap_or(FrameType::BGRAFrame),
@@ -794,6 +803,8 @@ fn scap_audio_to_ffmpeg(scap_frame: scap::frame::AudioFrame) -> ffmpeg::frame::A
             .data_mut(0)
             .copy_from_slice(scap_frame.raw_data());
     }
+
+    ffmpeg_frame.set_rate(scap_frame.rate());
 
     ffmpeg_frame
 }

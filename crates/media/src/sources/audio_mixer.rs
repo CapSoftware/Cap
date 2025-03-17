@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use flume::{Receiver, Sender};
+use tracing::warn;
 
 use crate::{
     data::{AudioInfo, FFAudio},
@@ -135,7 +136,8 @@ impl AudioMixer {
             }
 
             while abuffersink.sink().frame(&mut filtered).is_ok() {
-                if self.output.send(filtered).is_err() {
+                if self.output.send(dbg!(filtered)).is_err() {
+                    warn!("Mixer unable to send output");
                     return;
                 }
                 filtered = ffmpeg::frame::Audio::empty()
