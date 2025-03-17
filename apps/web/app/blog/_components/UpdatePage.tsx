@@ -1,10 +1,9 @@
 "use client";
 
-import Image from "next/image";
-import Link from "next/link";
+import { getBlogPosts } from "@/utils/blog";
 import { format, parseISO } from "date-fns";
 import { MDXRemote } from "next-mdx-remote/rsc";
-import { getBlogPosts } from "@/utils/blog";
+import Image from "next/image";
 
 export const UpdatePage = ({ postSlug }: { postSlug: string }) => {
   const post = getBlogPosts().find((post) => post.slug === postSlug);
@@ -14,11 +13,11 @@ export const UpdatePage = ({ postSlug }: { postSlug: string }) => {
   }
 
   return (
-    <article className="py-8 prose mx-auto">
+    <article className="py-32 mx-auto prose">
       {post.metadata.image && (
         <div className="relative mb-12 h-[345px] w-full">
           <Image
-            className="m-0 w-full rounded-lg object-cover"
+            className="object-cover m-0 w-full rounded-lg"
             src={post.metadata.image}
             alt={post.metadata.title}
             fill

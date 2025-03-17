@@ -1,12 +1,12 @@
-import Link from "next/link";
-import Image from "next/image";
 import { getDocs } from "@/utils/blog";
+import Image from "next/image";
+import Link from "next/link";
 
 export const DocsPage = () => {
   const allDocs = getDocs();
 
   return (
-    <div className="py-32 wrapper wrapper-sm">
+    <div className="px-5 py-32 mx-auto sm:py-32 wrapper wrapper-sm">
       <div className="mb-14 text-center page-intro">
         <h1>Documentation</h1>
       </div>
