@@ -25,7 +25,7 @@ specta = { version = "=2.0.0-rc.20", features = [
 	"uuid",
 ] }
 
-scap = { git = "https://github.com/CapSoftware/scap", rev = "171326f4158a11b7b0a681026f5afa93c0bb2ea4" }
+scap = { git = "https://github.com/CapSoftware/scap", rev = "212d7a3958662244b9c7218a90c9c770f07c4222" }
 nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "e309b938ccd6", features = [
 	"input-native",
 	"serialize",
