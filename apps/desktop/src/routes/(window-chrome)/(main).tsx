@@ -234,17 +234,16 @@ export default function () {
                     await commands.showWindow("Upgrade");
                   }
                 }}
-                class={`text-[0.6rem] ${
-                  license.data?.type === "pro"
+                class={`text-[0.6rem] ${license.data?.type === "pro"
                     ? "bg-[--blue-400] text-gray-50 dark:text-gray-500"
                     : "bg-gray-200 cursor-pointer hover:bg-gray-300"
-                } rounded-lg px-1.5 py-0.5`}
+                  } rounded-lg px-1.5 py-0.5`}
               >
                 {license.data?.type === "commercial"
                   ? "Commercial"
                   : license.data?.type === "pro"
-                  ? "Pro"
-                  : "Personal"}
+                    ? "Pro"
+                    : "Personal"}
               </span>
             </Suspense>
           </ErrorBoundary>
@@ -315,7 +314,7 @@ function useRequestPermission() {
 import * as dialog from "@tauri-apps/plugin-dialog";
 import * as updater from "@tauri-apps/plugin-updater";
 import { makePersisted } from "@solid-primitives/storage";
-import { type as ostype } from "@tauri-apps/plugin-os";
+import { type as ostype, platform } from "@tauri-apps/plugin-os";
 import { Transition } from "solid-transition-group";
 import {
   getCurrentWebviewWindow,
@@ -556,11 +555,10 @@ function TargetSelects(props: {
                   )}
                 >
                   <IconCapCrop
-                    class={`w-[1rem] h-[1rem] ${
-                      areaSelection.pending
+                    class={`w-[1rem] h-[1rem] ${areaSelection.pending
                         ? "animate-gentle-bounce duration-1000 text-gray-500 mt-1"
                         : ""
-                    }`}
+                      }`}
                   />
                 </button>
               )}
@@ -572,17 +570,16 @@ function TargetSelects(props: {
             {isTargetCaptureArea()
               ? "Remove selection"
               : areaSelection.pending
-              ? "Selecting area..."
-              : "Select area"}
+                ? "Selecting area..."
+                : "Select area"}
             <Tooltip.Arrow class="fill-gray-500" />
           </Tooltip.Content>
         </Tooltip.Portal>
       </Tooltip.Root>
 
       <div
-        class={`flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500 ${
-          isTargetScreenOrArea() ? "ml-[2.4rem]" : ""
-        }`}
+        class={`flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500 ${isTargetScreenOrArea() ? "ml-[2.4rem]" : ""
+          }`}
         style={{
           "transition-timing-function":
             "cubic-bezier(0.785, 0.135, 0.15, 0.86)",
@@ -643,7 +640,7 @@ function TargetSelects(props: {
           placeholder="Window"
           optionsEmptyText="No windows found"
           selected={props.options?.captureTarget.variant === "window"}
-          getName={(value) => `${value.owner_name} | ${value.name}`}
+          getName={(value) => platform() === "windows" ? value.name : `${value.owner_name} | ${value.name}`}
         />
       </div>
     </div>
@@ -988,8 +985,8 @@ function TargetSelectInfoPill<T>(props: {
       {!props.permissionGranted
         ? "Request Permission"
         : props.value !== null
-        ? "On"
-        : "Off"}
+          ? "On"
+          : "Off"}
     </InfoPill>
   );
 }

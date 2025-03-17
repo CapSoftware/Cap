@@ -119,7 +119,6 @@ impl ScreenCaptureTarget {
 //     }
 // }
 
-#[derive(Debug)]
 pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
     target: ScreenCaptureTarget,
     output_resolution: Option<ScapResolution>,
@@ -133,6 +132,23 @@ pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
     video_tx: Sender<TCaptureFormat::VideoFormat>,
     audio_tx: Option<Sender<ffmpeg::frame::Audio>>,
     _phantom: std::marker::PhantomData<TCaptureFormat>,
+}
+
+impl<T: ScreenCaptureFormat> std::fmt::Debug for ScreenCaptureSource<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScreenCaptureSource")
+            .field("target", &self.target)
+            .field("bounds", &self.bounds)
+            .field("output_resolution", &self.output_resolution)
+            .field("output_type", &self.output_type)
+            .field("fps", &self.fps)
+            .field("video_info", &self.video_info)
+            .field(
+                "audio_info",
+                &self.audio_tx.as_ref().map(|_| self.audio_info()),
+            )
+            .finish()
+    }
 }
 
 pub trait ScreenCaptureFormat {

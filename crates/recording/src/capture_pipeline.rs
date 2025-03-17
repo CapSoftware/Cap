@@ -6,7 +6,7 @@ use cap_media::{
     feeds::AudioInputFeed,
     pipeline::{builder::PipelineBuilder, task::PipelineSinkTask, RealTimeClock},
     sources::{
-        AudioInputSource, AudioMixer, CMSampleBufferCapture, ScreenCaptureFormat,
+        AVFrameCapture, AudioInputSource, AudioMixer, CMSampleBufferCapture, ScreenCaptureFormat,
         ScreenCaptureSource, ScreenCaptureTarget,
     },
     MediaError,
@@ -147,7 +147,7 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
     }
 }
 
-impl MakeCapturePipeline for cap_media::sources::AVFrameCapture {
+impl MakeCapturePipeline for AVFrameCapture {
     fn make_studio_mode_pipeline(
         mut builder: CapturePipelineBuilder,
         source: (
@@ -289,6 +289,7 @@ pub fn create_screen_capture(
             show_camera,
             force_show_cursor,
             max_fps,
+            video_tx,
             audio_tx,
         )
         .map(|v| (v, video_rx))
