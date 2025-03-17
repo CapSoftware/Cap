@@ -9,7 +9,6 @@ use scap::{
     Target,
 };
 
-use screencapturekit::stream::output_type::SCStreamOutputType;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{collections::HashMap, ops::ControlFlow, sync::Arc};
@@ -539,6 +538,8 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
     ) {
+        use screencapturekit::stream::output_type::SCStreamOutputType;
+
         let video_tx = self.video_tx.clone();
         let audio_tx = self.audio_tx.clone();
         let audio_info = self.audio_info();
