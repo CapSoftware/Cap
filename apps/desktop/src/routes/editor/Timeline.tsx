@@ -343,7 +343,7 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
           return (
             <SegmentRoot
               class={cx(
-                "overflow-hidden relative border transition-colors duration-300 group",
+                "overflow-hidden relative border border-transparent transition-colors duration-300 group",
                 "hover:border-gray-500"
               )}
               innerClass="ring-blue-300"

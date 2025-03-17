@@ -10,6 +10,7 @@
 .wobble-wrapper {
   animation: wobble 1s ease-in-out infinite;
   will-change: transform;
+
 } 
 
 .timeline-gradient-border::before {
