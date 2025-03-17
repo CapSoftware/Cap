@@ -222,7 +222,7 @@ export function Header() {
       >
         <div class="flex gap-4 items-center h-full">
           <p class="text-sm text-gray-500">
-            Recording<span class="opacity-50">.cap</span>
+            {editorContext.editorInstance.prettyName}
           </p>
           {/* <ErrorBoundary fallback={<></>}>
             <Suspense>

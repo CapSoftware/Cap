@@ -1,10 +1,10 @@
 import { createQuery } from "@tanstack/solid-query";
-import { For, ParentProps, Show, Suspense, createSignal } from "solid-js";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { For, ParentProps, Show, createSignal } from "solid-js";
 
-import { commands, events, type RecordingMeta } from "~/utils/tauri";
-import { trackEvent } from "~/utils/analytics";
 import Tooltip from "@corvu/tooltip";
+import { trackEvent } from "~/utils/analytics";
+import { commands, events, type RecordingMeta } from "~/utils/tauri";
 
 type MediaEntry = {
   id: string;
@@ -61,7 +61,7 @@ export default function Recordings() {
 
   return (
     <div class="flex flex-col w-full h-full divide-y divide-[--gray-200] pt-1 pb-12">
-      <div class="flex-1 overflow-y-auto">
+      <div class="overflow-y-auto flex-1">
         <ul class="p-[0.625rem] flex flex-col gap-[0.5rem] w-full text-[--text-primary]">
           <Show
             when={fetchRecordings.data && fetchRecordings.data.length > 0}
@@ -97,14 +97,14 @@ function RecordingItem(props: {
   const [imageExists, setImageExists] = createSignal(true);
 
   return (
-    <li class="w-full flex flex-row justify-between items-center p-2 hover:bg-gray-100 rounded">
+    <li class="flex flex-row justify-between items-center p-2 w-full rounded hover:bg-gray-100">
       <div class="flex items-center">
         <Show
           when={imageExists()}
-          fallback={<div class="w-8 h-8 bg-gray-400 mr-4 rounded" />}
+          fallback={<div class="mr-4 w-8 h-8 bg-gray-400 rounded" />}
         >
           <img
-            class="w-8 h-8 object-cover mr-4 rounded"
+            class="object-cover mr-4 w-8 h-8 rounded"
             alt="Recording thumbnail"
             src={`${convertFileSrc(
               props.recording.thumbnailPath
@@ -144,11 +144,11 @@ function TooltipIconButton(
   return (
     <Tooltip>
       <Tooltip.Trigger
-        onClick={(e) => {
+        onClick={(e: MouseEvent) => {
           e.stopPropagation();
           props.onClick();
         }}
-        class="p-2 hover:bg-gray-200 rounded-full mr-2"
+        class="p-2 mr-2 rounded-full hover:bg-gray-200"
       >
         {props.children}
       </Tooltip.Trigger>

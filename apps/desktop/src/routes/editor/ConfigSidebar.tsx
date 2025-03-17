@@ -598,7 +598,11 @@ export function ConfigSidebar() {
                             }
 
                             return (
-                              <img class="size-3.5 rounded" src={imageSrc} />
+                              <img
+                                loading="eager"
+                                class="size-3.5 rounded"
+                                src={imageSrc}
+                              />
                             );
                           })()}
                           {BACKGROUND_SOURCES[item]}
