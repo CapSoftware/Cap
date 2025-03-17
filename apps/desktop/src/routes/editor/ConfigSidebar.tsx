@@ -706,6 +706,7 @@ export function ConfigSidebar() {
                           <KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg transition cursor-pointer ui-not-checked:ring-offset-1 ui-not-checked:ring-offset-gray-200 ui-not-checked:hover:ring-1 ui-not-checked:hover:ring-gray-400 ui-checked:ring-2 ui-checked:ring-gray-500 ui-checked:ring-offset-2 ui-checked:ring-offset-gray-200">
                             <img
                               src={photo.url!}
+                              loading="eager"
                               class="object-cover w-full h-full"
                               alt="Wallpaper option"
                             />
