@@ -210,6 +210,7 @@ export const videos = mysqlTable(
     transcriptionStatus: varchar("transcriptionStatus", { length: 255 }),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+    loomVideoId: varchar("loomVideoId", { length: 255 }).default(""),
     source: json("source")
       .$type<
         { type: "MediaConvert" } | { type: "local" } | { type: "desktopMP4" }
