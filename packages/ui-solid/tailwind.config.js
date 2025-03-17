@@ -8,7 +8,7 @@ module.exports = {
   theme: {
     colors: {
       transparent: "rgba(0,0,0,0)",
-      white: "var(--white)",
+      "solid-white": "#ffffff",
       gray: {
         50: "var(--gray-50)",
         100: "var(--gray-100)",

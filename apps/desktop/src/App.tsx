@@ -1,5 +1,8 @@
 import { Router, useCurrentMatches } from "@solidjs/router";
 import { FileRoutes } from "@solidjs/start/router";
+import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { message } from "@tauri-apps/plugin-dialog";
 import {
   createEffect,
   ErrorBoundary,
@@ -7,24 +10,21 @@ import {
   onMount,
   Suspense,
 } from "solid-js";
-import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
-import { message } from "@tauri-apps/plugin-dialog";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 
 import "@cap/ui-solid/main.css";
 import "unfonts.css";
 import "./styles/theme.css";
 
-import titlebar from "./utils/titlebar-state";
-import { generalSettingsStore } from "./store";
-import { commands, type AppTheme } from "./utils/tauri";
+import { Button } from "@cap/ui-solid";
 import {
   getCurrentWebviewWindow,
   WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
-import { Button } from "@cap/ui-solid";
 import { Toaster } from "solid-toast";
+import { generalSettingsStore } from "./store";
 import { initAnonymousUser } from "./utils/analytics";
+import { commands, type AppTheme } from "./utils/tauri";
+import titlebar from "./utils/titlebar-state";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -79,10 +79,10 @@ function Inner() {
               <h1 class="text-[--text-primary] text-3xl max-sm:text-xl font-bold">
                 An Error Occured
               </h1>
-              <p class="max-sm:text-sm mb-2">
+              <p class="mb-2 max-sm:text-sm">
                 We're very sorry, but something has gone wrong.
               </p>
-              <div class="flex max-sm:flex-col flex-row max-sm:gap-2 gap-4">
+              <div class="flex flex-row gap-4 max-sm:flex-col max-sm:gap-2">
                 <Button
                   onClick={() => {
                     writeText(`${e.toString()}\n\n${e.stack}`);

@@ -181,6 +181,7 @@ export function Player() {
         <div class="flex flex-row items-center justify-center text-gray-400 gap-8 text-[0.875rem]">
           <button
             type="button"
+            class="transition-opacity hover:opacity-70 will-change-[opacity]"
             onClick={async () => {
               setPlaying(false);
               await commands.stopPlayback();
@@ -192,7 +193,7 @@ export function Player() {
           <button
             type="button"
             onClick={handlePlayPauseClick}
-            class="flex justify-center items-center bg-gray-200 rounded-full border border-gray-300 transition-colors hover:text-black size-9"
+            class="flex justify-center items-center bg-gray-200 rounded-full border border-gray-300 transition-colors hover:bg-gray-300 hover:text-black size-9"
           >
             {!playing() || isAtEnd() ? (
               <IconCapPlay class="text-gray-500 size-3" />
@@ -202,6 +203,7 @@ export function Player() {
           </button>
           <button
             type="button"
+            class="transition-opacity hover:opacity-70 will-change-[opacity]"
             onClick={async () => {
               setPlaying(false);
               await commands.stopPlayback();
@@ -226,7 +228,7 @@ export function Player() {
                   playbackTime()
                 );
               }}
-              class="text-gray-500 size-5"
+              class="text-gray-500 size-5 will-change-[opacity] transition-opacity hover:opacity-70"
             />
           </Tooltip>
           <Tooltip content="Zoom in">
@@ -237,7 +239,7 @@ export function Player() {
                   playbackTime()
                 );
               }}
-              class="text-gray-500 size-5"
+              class="text-gray-500 size-5 will-change-[opacity] transition-opacity hover:opacity-70"
             />
           </Tooltip>
           <p class="text-sm tabular-nums text-gray-500">

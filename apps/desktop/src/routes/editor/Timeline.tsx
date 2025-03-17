@@ -383,14 +383,14 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                     style={{
                       left: `${second / secsPerPixel() + -0.5}px`,
                     }}
-                    class="absolute z-10 w-px h-14 bg-gradient-to-b to-transparent from-white-transparent-80 dark:from-black-transparent-60"
+                    class="absolute z-10 w-px h-14 bg-gradient-to-b to-transparent from-white-transparent-40 dark:from-black-transparent-60"
                   />
                 )}
               </For>
 
               <SegmentHandle
                 class={cx(
-                  "absolute opacity-0 top-[50%] bg-gradient-to-r -translate-y-1/2 left-2.5 z-10 w-[3px] h-8 bg-white rounded-full",
+                  "absolute opacity-0 top-[50%] bg-gradient-to-r -translate-y-1/2 left-2.5 z-10 w-[3px] h-8 bg-solid-white rounded-full",
                   "group-hover:opacity-100"
                 )}
                 onMouseDown={(downEvent) => {
@@ -452,11 +452,11 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                 }}
               />
               <SegmentContent class="justify-between relative bg-gradient-to-r timeline-gradient-border from-[#2675DB] via-[#5CA3FF] to-[#2675DB] shadow-[inset_0_5px_10px_5px_rgba(255,255,255,0.2)]">
-                <div class="absolute inset-0 -top-[120px] bg-white w-[500px] h-[150px] rounded-full mx-auto blur-[50px] mix-blend-overlay opacity-30" />
+                <div class="absolute inset-0 -top-[120px] dark:bg-gray-500 bg-gray-50 w-[500px] h-[150px] rounded-full mx-auto blur-[50px] mix-blend-overlay opacity-30" />
               </SegmentContent>
               <SegmentHandle
                 class={cx(
-                  "absolute top-[50%] opacity-0 -translate-y-1/2 right-2.5 z-10 w-[3px] h-8 bg-white rounded-full",
+                  "absolute top-[50%] opacity-0 -translate-y-1/2 right-2.5 z-10 w-[3px] h-8 bg-solid-white rounded-full",
                   "group-hover:opacity-100"
                 )}
                 onMouseDown={(downEvent) => {
@@ -736,7 +736,7 @@ function ZoomTrack(props: {
               >
                 <SegmentHandle
                   class={cx(
-                    "absolute top-[50%] group-hover:opacity-100 opacity-0 -translate-y-1/2 left-2.5 z-10 w-[3px] h-8 bg-white rounded-full"
+                    "absolute top-[50%] group-hover:opacity-100 opacity-0 -translate-y-1/2 left-2.5 z-10 w-[3px] h-8 dark:bg-gray-500 bg-gray-50 rounded-full"
                   )}
                   onMouseDown={createMouseDownDrag(
                     () => {
@@ -819,7 +819,7 @@ function ZoomTrack(props: {
                     return (
                       <Show when={ctx.width() > 100}>
                         <div class="flex flex-col gap-1 justify-center items-center text-xs text-gray-500 whitespace-nowrap">
-                          <div class="flex gap-1 items-center text-white text-md">
+                          <div class="flex gap-1 items-center text-gray-50 dark:text-gray-500 text-md">
                             <IconLucideSearch class="size-3.5" />{" "}
                             {zoomPercentage()}{" "}
                           </div>
@@ -830,7 +830,7 @@ function ZoomTrack(props: {
                 </SegmentContent>
                 <SegmentHandle
                   class={cx(
-                    "absolute top-[50%] group-hover:opacity-100 opacity-0 -translate-y-1/2 right-2.5 z-10 w-[3px] h-8 bg-white rounded-full"
+                    "absolute top-[50%] group-hover:opacity-100 opacity-0 -translate-y-1/2 right-2.5 z-10 w-[3px] h-8 dark:bg-gray-500 bg-gray-50 rounded-full"
                   )}
                   onMouseDown={createMouseDownDrag(
                     () => {
@@ -935,7 +935,7 @@ function SegmentRoot(
         class={cx(
           "absolute border rounded-[calc(0.75rem+1px)] h-14 w-full",
           props.class,
-          isSelected() && "wobble-wrapper"
+          isSelected() && "wobble-wrapper border border-gray-500"
         )}
         style={{
           "--segment-x": `${translateX()}px`,

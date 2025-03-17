@@ -1,10 +1,10 @@
 import type { RouteSectionProps } from "@solidjs/router";
-import { onCleanup, onMount, ParentProps, Suspense } from "solid-js";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { onCleanup, onMount, ParentProps, Suspense } from "solid-js";
 import { AbsoluteInsetLoader } from "~/components/Loader";
-import { initializeTitlebar } from "~/utils/titlebar-state";
 import Titlebar from "~/components/titlebar/Titlebar";
+import { initializeTitlebar } from "~/utils/titlebar-state";
 
 export const route = {
   info: {
@@ -68,7 +68,7 @@ function Inner(props: ParentProps) {
   });
 
   return (
-    <div class="animate-in fade-in flex-1 flex flex-col overflow-y-hidden">
+    <div class="flex overflow-y-hidden flex-col flex-1 animate-in fade-in">
       {props.children}
     </div>
   );

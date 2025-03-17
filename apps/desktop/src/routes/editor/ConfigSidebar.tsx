@@ -441,7 +441,7 @@ export function ConfigSidebar() {
             >
               <div
                 class={cx(
-                  "flex justify-center relative border-transparent border z-10 items-center rounded-md size-9 transition",
+                  "flex justify-center relative border-transparent border z-10 items-center rounded-md size-9 transition will-change-transform",
                   selectedTab() !== item.id && "group-hover:border-gray-300"
                 )}
               >
@@ -452,8 +452,8 @@ export function ConfigSidebar() {
         </For>
 
         {/** Center the indicator with the icon */}
-        <KTabs.Indicator class="absolute top-0 left-0 w-full h-full transition-transform duration-300 ease-in-out pointer-events-none">
-          <div class="absolute top-1/2 left-1/2 bg-gray-200 rounded-md transform -translate-x-1/2 -translate-y-1/2 size-9" />
+        <KTabs.Indicator class="absolute top-0 left-0 w-full h-full transition-transform duration-300 ease-in-out pointer-events-none will-change-transform">
+          <div class="absolute top-1/2 left-1/2 bg-gray-200 rounded-md transform -translate-x-1/2 -translate-y-1/2 will-change-transform size-9" />
         </KTabs.Indicator>
       </KTabs.List>
       <div
@@ -703,7 +703,7 @@ export function ConfigSidebar() {
                           class="relative aspect-square group"
                         >
                           <KRadioGroup.ItemInput class="peer" />
-                          <KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg transition-shadow cursor-pointer ui-checked:ring-2 ui-checked:ring-gray-500 ui-checked:ring-offset-2 ui-checked:ring-offset-gray-200">
+                          <KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg transition cursor-pointer ui-not-checked:ring-offset-1 ui-not-checked:ring-offset-gray-200 ui-not-checked:hover:ring-1 ui-not-checked:hover:ring-gray-400 ui-checked:ring-2 ui-checked:ring-gray-500 ui-checked:ring-offset-2 ui-checked:ring-offset-gray-200">
                             <img
                               src={photo.url!}
                               class="object-cover w-full h-full"

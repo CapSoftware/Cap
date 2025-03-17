@@ -42,7 +42,6 @@ export const OUTPUT_SIZE = {
 
 export const BACKGROUND_THEMES = {
   macOS: "Macos",
-  nature: "Nature",
   dark: "Dark",
   blue: "Blue",
   purple: "Purple",

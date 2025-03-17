@@ -10,8 +10,6 @@
 .wobble-wrapper {
   animation: wobble 1s ease-in-out infinite;
   will-change: transform;
-  background: rgb(38, 57, 116) !important;
-  box-shadow: inset 0px 8px 16px 0px rgba(134, 165, 249, 0.503) !important;
 } 
 
 .timeline-gradient-border::before {

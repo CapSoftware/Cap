@@ -21,7 +21,7 @@
   --black-transparent-40: rgba(18, 22, 31, 0.4);
   --black-transparent-60: rgba(18, 22, 31, 0.6);
   --black-transparent-80: rgba(18, 22, 31, 0.8);
-
+  
   --white-transparent-5: rgba(255, 255, 255, 0.05);
   --white-transparent-10: rgba(255, 255, 255, 0.1);
   --white-transparent-20: rgba(255, 255, 255, 0.2);
@@ -29,7 +29,8 @@
   --white-transparent-60: rgba(255, 255, 255, 0.6);
   --white-transparent-80: rgba(255, 255, 255, 0.8);
   
-  --white: #fff;
+
+  --solid-white: #ffffff;
 
   --blue-50: #ebf1ff;
   --blue-100: #adc9ff;
@@ -86,8 +87,9 @@
   --white-transparent-40: rgba(18, 22, 31, 0.4);
   --white-transparent-60: rgba(18, 22, 31, 0.6);
   --white-transparent-80: rgba(18, 22, 31, 0.8);
-  
-  --white: #fff;
+
+  --solid-white: #ffffff;
+
 
   /* Accent colors remain mostly the same but adjusted for dark theme */
   --blue-50: #1a2438;

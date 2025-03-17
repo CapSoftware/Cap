@@ -113,7 +113,7 @@ export default function () {
     const currentWindow = getCurrentWindow();
     const MAIN_WINDOW_SIZE = {
       width: 300,
-      height: 320 + (window.FLAGS.systemAudioRecording ? 40 : 0),
+      height: 320 + (window.FLAGS.systemAudioRecording ? 60 : 0),
     };
 
     // Set initial size
@@ -223,7 +223,7 @@ export default function () {
   });
 
   return (
-    <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-50 h-full text-[--text-primary]">
+    <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-100 h-full text-[--text-primary]">
       {initialize()}
       <div class="flex items-center justify-between pb-[0.25rem]">
         <div class="flex items-center space-x-1">
@@ -266,7 +266,7 @@ export default function () {
       {window.FLAGS.systemAudioRecording && (
         <SystemAudio options={options.data} setOptions={setOptions} />
       )}
-      <div class="flex items-center space-x-1 w-full">
+      <div class="flex items-center space-x-1 w-full will-change-transform">
         <Button
           disabled={toggleRecording.isPending}
           variant={isRecording() ? "destructive" : "primary"}
@@ -859,7 +859,7 @@ function MicrophoneSelect(props: {
   });
 
   return (
-    <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
+    <div class="flex flex-col will-change-transform gap-[0.25rem] items-stretch text-[--text-primary]">
       {/* <label class="text-[--text-tertiary]">Microphone</label> */}
       <KSelect<Option>
         options={[
@@ -961,7 +961,7 @@ function SystemAudio(props: {
         });
       }}
       disabled={props.setOptions.isPending || !!currentRecording.data}
-      class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10"
+      class="relative flex flex-row items-center h-[2rem] px-[0.375rem] will-change-transform gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors overflow-hidden z-10"
     >
       <div class="size-[1.25rem] flex items-center justify-center">
         <IconPhMonitorBold class="text-gray-400 stroke-2 size-[1.2rem]" />

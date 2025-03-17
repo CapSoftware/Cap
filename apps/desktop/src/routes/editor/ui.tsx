@@ -57,7 +57,7 @@ export function Toggle(props: ComponentProps<typeof KSwitch>) {
     <KSwitch {...props}>
       <KSwitch.Input class="peer" />
       <KSwitch.Control class="rounded-full bg-gray-300 ui-disabled:bg-gray-200 w-11 h-[1.5rem] p-[0.125rem] ui-checked:bg-blue-300 transition-colors peer-focus-visible:outline outline-2 outline-offset-2 outline-blue-300">
-        <KSwitch.Thumb class="bg-white rounded-full size-[1.25rem] transition-transform ui-checked:translate-x-[calc(100%)]" />
+        <KSwitch.Thumb class="bg-solid-white rounded-full size-[1.25rem] transition-transform ui-checked:translate-x-[calc(100%)]" />
       </KSwitch.Control>
     </KSwitch>
   );
