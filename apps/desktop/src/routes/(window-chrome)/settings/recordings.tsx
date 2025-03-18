@@ -113,37 +113,35 @@ export default function Recordings() {
   };
 
   return (
-    <div class="flex flex-col pb-12 w-full">
-      <div class="overflow-y-auto flex-1">
-        <ul class="p-4 flex flex-col gap-[0.5rem] w-full text-[--text-primary]">
-          <Show
-            when={recordings.data && recordings.data.length > 0}
-            fallback={
-              <p class="text-center text-[--text-tertiary]">
-                No recordings found
-              </p>
-            }
-          >
-            <div class="pb-4 border-b border-gray-300 border-dashed">
-              <div class="flex gap-3 items-center w-fit">
-                <For each={Tabs}>
-                  {(tab) => (
-                    <div
-                      class={cx(
-                        "flex gap-1.5 items-center transition-colors duration-200 p-2 px-3 border rounded-full",
-                        activeTab() === tab.id
-                          ? "bg-gray-300 cursor-default border-gray-300"
-                          : "bg-transparent cursor-pointer hover:bg-gray-200 border-gray-200"
-                      )}
-                      onClick={() => setActiveTab(tab.id)}
-                    >
-                      {tab.icon && tab.icon}
-                      <p class="text-xs text-gray-500">{tab.label}</p>
-                    </div>
+    <div class="flex flex-col w-full h-full">
+      <Show
+        when={recordings.data && recordings.data.length > 0}
+        fallback={
+          <p class="text-center text-[--text-tertiary]">No recordings found</p>
+        }
+      >
+        <div class="p-4 border-b border-gray-300 border-dashed">
+          <div class="flex gap-3 items-center w-fit">
+            <For each={Tabs}>
+              {(tab) => (
+                <div
+                  class={cx(
+                    "flex gap-1.5 items-center transition-colors duration-200 p-2 px-3 border rounded-full",
+                    activeTab() === tab.id
+                      ? "bg-gray-300 cursor-default border-gray-300"
+                      : "bg-transparent cursor-pointer hover:bg-gray-200 border-gray-200"
                   )}
-                </For>
-              </div>
-            </div>
+                  onClick={() => setActiveTab(tab.id)}
+                >
+                  {tab.icon && tab.icon}
+                  <p class="text-xs text-gray-500">{tab.label}</p>
+                </div>
+              )}
+            </For>
+          </div>
+        </div>
+        <div class="flex flex-col flex-1 overflow-auto">
+          <ul class="p-4 flex flex-col gap-[0.5rem] w-full text-[--text-primary]">
             <For each={filteredRecordings()}>
               {(recording) => (
                 <RecordingItem
@@ -157,9 +155,9 @@ export default function Recordings() {
                 />
               )}
             </For>
-          </Show>
-        </ul>
-      </div>
+          </ul>
+        </div>
+      </Show>
     </div>
   );
 }
@@ -263,24 +261,26 @@ function RecordingItem(props: {
 
             return (
               <>
-                <TooltipIconButton
-                  tooltipText="Reupload"
-                  onClick={() => reupload.mutate()}
-                >
-                  {reupload.isPending ? (
-                    <IconLucideLoaderCircle class="animate-spin" />
-                  ) : (
-                    <IconCapUpload class="size-4" />
-                  )}
-                </TooltipIconButton>
                 <Show when={props.recording.meta.sharing}>
                   {(sharing) => (
-                    <TooltipIconButton
-                      tooltipText="Open link"
-                      onClick={() => open(sharing().link)}
-                    >
-                      <IconCapLink class="size-4" />
-                    </TooltipIconButton>
+                    <>
+                      <TooltipIconButton
+                        tooltipText="Reupload"
+                        onClick={() => reupload.mutate()}
+                      >
+                        {reupload.isPending ? (
+                          <IconLucideLoaderCircle class="animate-spin" />
+                        ) : (
+                          <IconLucideRotateCcw class="size-4" />
+                        )}
+                      </TooltipIconButton>
+                      <TooltipIconButton
+                        tooltipText="Open link"
+                        onClick={() => open(sharing().link)}
+                      >
+                        <IconCapLink class="size-4" />
+                      </TooltipIconButton>
+                    </>
                   )}
                 </Show>
                 {deleteButton()}
