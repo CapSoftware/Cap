@@ -31,6 +31,7 @@ declare global {
   const IconCapInset: typeof import('~icons/cap/inset.jsx')['default']
   const IconCapInstant: typeof import('~icons/cap/instant.jsx')['default']
   const IconCapLayout: typeof import('~icons/cap/layout.jsx')['default']
+  const IconCapLink: typeof import('~icons/cap/link.jsx')['default']
   const IconCapLogo: typeof import('~icons/cap/logo.jsx')['default']
   const IconCapLogoFull: typeof import('~icons/cap/logo-full.jsx')['default']
   const IconCapLogoFullDark: typeof import('~icons/cap/logo-full-dark.jsx')['default']
