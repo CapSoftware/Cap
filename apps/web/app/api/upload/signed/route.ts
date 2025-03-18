@@ -145,7 +145,12 @@ export async function POST(request: NextRequest) {
       );
 
       // When not using aws s3, we need to transform the url to the local endpoint
-      if (clientEnv.NEXT_PUBLIC_CAP_AWS_ENDPOINT) {
+      if (
+        clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET_URL &&
+        !clientEnv.NEXT_PUBLIC_CAP_AWS_ENDPOINT?.endsWith(
+          "s3-accelerate.amazonaws.com"
+        )
+      ) {
         const endpoint = clientEnv.NEXT_PUBLIC_CAP_AWS_ENDPOINT;
         const bucket = clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET;
         const newUrl = `${endpoint}/${bucket}/`;

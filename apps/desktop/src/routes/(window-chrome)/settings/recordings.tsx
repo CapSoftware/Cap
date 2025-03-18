@@ -8,6 +8,9 @@ import {
   ParentProps,
   Show,
 } from "solid-js";
+// import { createMutation, createQuery } from "@tanstack/solid-query";
+import { For, ParentProps, Show, Suspense, createSignal } from "solid-js";
+import { convertFileSrc } from "@tauri-apps/api/core";
 
 import Tooltip from "@corvu/tooltip";
 import { cx } from "cva";
@@ -251,6 +254,12 @@ function RecordingItem(props: {
   //   return menu;
   // };
 
+  const reupload = createMutation(() => ({
+    mutationFn: () => {
+      return commands.reuploadInstantVideo(props.recording.id);
+    },
+  }));
+
   return (
     <li class="flex flex-row justify-between items-center px-4 py-3 w-full rounded-xl transition-colors duration-200 hover:bg-gray-100">
       <div class="flex gap-5 items-center">
@@ -304,6 +313,35 @@ function RecordingItem(props: {
             {button.icon}
           </TooltipIconButton>
         ))}
+        {/* {import.meta.env.DEV &&
+          props.recording.meta.type === "instant" &&
+          props.recording.meta.sharing?.id && (
+            <button
+              onClick={() => {
+                reupload.mutate();
+              }}
+            >
+              Reupload
+            </button>
+          )}
+        <TooltipIconButton
+          tooltipText="Open project files"
+          onClick={() => props.onOpenFolder()}
+        >
+          <IconLucideFolder class="size-5" />
+        </TooltipIconButton>
+        <TooltipIconButton
+          tooltipText="Open in editor"
+          onClick={() => props.onOpenEditor()}
+        >
+          <IconLucideEdit class="size-5" />
+        </TooltipIconButton>
+        <TooltipIconButton
+          tooltipText="Show in recordings overlay"
+          onClick={() => props.onClick()}
+        >
+          <IconLucideEye class="size-5" />
+        </TooltipIconButton> */}
       </div>
     </li>
   );

@@ -76,6 +76,7 @@ use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::sync::{Mutex, RwLock};
+use tracing::info;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
@@ -1883,6 +1884,56 @@ fn set_fail(name: String, value: bool) {
     cap_fail::set_fail(&name, value)
 }
 
+#[tauri::command(async)]
+#[specta::specta]
+async fn reupload_instant_video(app: AppHandle, video_id: String) -> Result<(), String> {
+    let recording_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap()
+        .join("recordings")
+        .join(format!("{video_id}.cap"));
+
+    let meta = RecordingMeta::load_for_project(&recording_dir)?;
+
+    let Some(share_id) = meta.sharing.map(|s| s.id) else {
+        return Err("Video share data not found".to_string());
+    };
+
+    let config = match AuthStore::get(&app).ok().flatten() {
+        Some(_) => match get_s3_config(&app, false, Some(share_id)).await {
+            Ok(s3_config) => {
+                let link = web_api::make_url(format!("/s/{}", s3_config.id()));
+                info!("Created shareable link: {}", link);
+
+                VideoUploadInfo {
+                    id: s3_config.id().to_string(),
+                    link: link.clone(),
+                    config: s3_config,
+                }
+            }
+            Err(e) => return Err(format!("Failed to get upload config: {e}")),
+        },
+        // Allow the recording to proceed without error for any signed-in user
+        _ => {
+            // User is not signed in
+            ShowCapWindow::SignIn.show(&app).ok();
+            return Err("Please sign in to use instant recording".to_string());
+        }
+    };
+
+    upload::InstantMultipartUpload::run(
+        app,
+        video_id,
+        recording_dir.join("content/output.mp4"),
+        config,
+        false,
+    )
+    .await;
+
+    Ok(())
+}
+
 async fn check_notification_permissions(app: AppHandle) {
     // Check if we've already requested permissions
     let Ok(Some(settings)) = GeneralSettingsStore::get(&app) else {
@@ -2038,7 +2089,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             get_wallpaper_path,
             list_fails,
             set_fail,
-            update_auth_plan
+            update_auth_plan,
+            reupload_instant_video
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
