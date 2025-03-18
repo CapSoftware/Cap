@@ -33,7 +33,6 @@ export async function getS3Config(config?: S3Config) {
         accessKeyId: serverEnv.CAP_AWS_ACCESS_KEY ?? "",
         secretAccessKey: serverEnv.CAP_AWS_SECRET_KEY ?? "",
       },
-      forcePathStyle: true,
     };
   }
 
