@@ -3,7 +3,6 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { For, ParentProps, Show, createSignal } from "solid-js";
 
 import Tooltip from "@corvu/tooltip";
-import { cx } from "cva";
 import { trackEvent } from "~/utils/analytics";
 import { commands, events, type RecordingMeta } from "~/utils/tauri";
 
@@ -78,7 +77,7 @@ export default function Recordings() {
 
   return (
     <>
-      <div class="flex gap-4 p-4 text-gray-500 border-b border-gray-200 border-dashed">
+      {/* <div class="flex gap-4 p-4 text-gray-500 border-b border-gray-200 border-dashed">
         <For each={Modes}>
           {(mode) => (
             <div
@@ -95,7 +94,7 @@ export default function Recordings() {
             </div>
           )}
         </For>
-      </div>
+      </div> */}
       <div class="flex flex-col pb-12 w-full">
         <div class="overflow-y-auto flex-1">
           <ul class="p-[0.625rem] flex flex-col gap-[0.5rem] w-full text-[--text-primary]">
@@ -135,13 +134,13 @@ function RecordingItem(props: {
 
   return (
     <li class="flex flex-row justify-between items-center px-4 py-3 w-full rounded-xl transition-colors duration-200 hover:bg-gray-100">
-      <div class="flex items-center">
+      <div class="flex gap-5 items-center">
         <Show
           when={imageExists()}
-          fallback={<div class="mr-4 w-8 h-8 bg-gray-400 rounded" />}
+          fallback={<div class="mr-4 bg-gray-400 rounded size-11" />}
         >
           <img
-            class="object-cover mr-4 w-8 h-8 rounded"
+            class="object-cover rounded size-12"
             alt="Recording thumbnail"
             src={`${convertFileSrc(
               props.recording.thumbnailPath
@@ -149,7 +148,14 @@ function RecordingItem(props: {
             onError={() => setImageExists(false)}
           />
         </Show>
-        <span>{props.recording.prettyName}</span>
+        <div class="flex flex-col gap-2">
+          <span>{props.recording.prettyName}</span>
+          {/** Tag */}
+          <div class="px-2 py-0.5 flex items-center gap-1 font-medium text-[11px] text-gray-500 bg-blue-100 rounded-full w-fit">
+            <IconCapInstant class="invert size-2.5 dark:invert-0" />
+            <p>Instant mode</p>
+          </div>
+        </div>
       </div>
       <div class="flex items-center">
         <TooltipIconButton
