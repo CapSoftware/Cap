@@ -1,10 +1,11 @@
 import { createQuery } from "@tanstack/solid-query";
-import { For, ParentProps, Show, Suspense, createSignal } from "solid-js";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { For, ParentProps, Show, createSignal } from "solid-js";
 
-import { commands, events, type RecordingMeta } from "~/utils/tauri";
-import { trackEvent } from "~/utils/analytics";
 import Tooltip from "@corvu/tooltip";
+import { cx } from "cva";
+import { trackEvent } from "~/utils/analytics";
+import { commands, events, type RecordingMeta } from "~/utils/tauri";
 
 type MediaEntry = {
   id: string;
@@ -14,7 +15,23 @@ type MediaEntry = {
   thumbnailPath: string;
 };
 
+const Modes = [
+  {
+    id: "instant",
+    icon: <IconCapInstant class="invert size-4 dark:invert-0" />,
+    label: "Instant Mode",
+  },
+  {
+    id: "studio",
+    icon: <IconCapFilmCut class="invert size-4 dark:invert-0" />,
+    label: "Studio Mode",
+  },
+] as const;
+
 export default function Recordings() {
+  const [activeTab, setActiveTab] = createSignal<(typeof Modes)[number]["id"]>(
+    Modes[0].id
+  );
   const fetchRecordings = createQuery(() => ({
     queryKey: ["recordings"],
     queryFn: async () => {
@@ -60,31 +77,51 @@ export default function Recordings() {
   };
 
   return (
-    <div class="flex flex-col w-full h-full divide-y divide-[--gray-200] pt-1 pb-12">
-      <div class="flex-1 overflow-y-auto">
-        <ul class="p-[0.625rem] flex flex-col gap-[0.5rem] w-full text-[--text-primary]">
-          <Show
-            when={fetchRecordings.data && fetchRecordings.data.length > 0}
-            fallback={
-              <p class="text-center text-[--text-tertiary]">
-                No recordings found
-              </p>
-            }
-          >
-            <For each={fetchRecordings.data}>
-              {(recording) => (
-                <RecordingItem
-                  recording={recording}
-                  onClick={() => handleRecordingClick(recording)}
-                  onOpenFolder={() => handleOpenFolder(recording.path)}
-                  onOpenEditor={() => handleOpenEditor(recording.path)}
-                />
+    <>
+      <div class="flex gap-4 p-4 text-gray-500 border-b border-gray-200 border-dashed">
+        <For each={Modes}>
+          {(mode) => (
+            <div
+              onClick={() => setActiveTab(mode.id)}
+              class={cx(
+                "flex flex-1 gap-3 justify-center items-center p-3 rounded-xl duration-300 transition-all",
+                activeTab() === mode.id
+                  ? "ring-2 ring-blue-300 ring-offset-2 ring-offset-gray-100 cursor-default bg-gray-200"
+                  : "cursor-pointer bg-gray-100 hover:bg-gray-200"
               )}
-            </For>
-          </Show>
-        </ul>
+            >
+              {mode.icon}
+              <p class="font-medium">{mode.label}</p>
+            </div>
+          )}
+        </For>
       </div>
-    </div>
+      <div class="flex flex-col pb-12 w-full">
+        <div class="overflow-y-auto flex-1">
+          <ul class="p-[0.625rem] flex flex-col gap-[0.5rem] w-full text-[--text-primary]">
+            <Show
+              when={fetchRecordings.data && fetchRecordings.data.length > 0}
+              fallback={
+                <p class="text-center text-[--text-tertiary]">
+                  No recordings found
+                </p>
+              }
+            >
+              <For each={fetchRecordings.data}>
+                {(recording) => (
+                  <RecordingItem
+                    recording={recording}
+                    onClick={() => handleRecordingClick(recording)}
+                    onOpenFolder={() => handleOpenFolder(recording.path)}
+                    onOpenEditor={() => handleOpenEditor(recording.path)}
+                  />
+                )}
+              </For>
+            </Show>
+          </ul>
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -97,14 +134,14 @@ function RecordingItem(props: {
   const [imageExists, setImageExists] = createSignal(true);
 
   return (
-    <li class="w-full flex flex-row justify-between items-center p-2 hover:bg-gray-100 rounded">
+    <li class="flex flex-row justify-between items-center px-4 py-3 w-full rounded-xl transition-colors duration-200 hover:bg-gray-100">
       <div class="flex items-center">
         <Show
           when={imageExists()}
-          fallback={<div class="w-8 h-8 bg-gray-400 mr-4 rounded" />}
+          fallback={<div class="mr-4 w-8 h-8 bg-gray-400 rounded" />}
         >
           <img
-            class="w-8 h-8 object-cover mr-4 rounded"
+            class="object-cover mr-4 w-8 h-8 rounded"
             alt="Recording thumbnail"
             src={`${convertFileSrc(
               props.recording.thumbnailPath
@@ -119,19 +156,19 @@ function RecordingItem(props: {
           tooltipText="Open project files"
           onClick={() => props.onOpenFolder()}
         >
-          <IconLucideFolder class="size-5" />
+          <IconLucideFolder class="size-4" />
         </TooltipIconButton>
         <TooltipIconButton
           tooltipText="Open in editor"
           onClick={() => props.onOpenEditor()}
         >
-          <IconLucideEdit class="size-5" />
+          <IconLucideEdit class="size-4" />
         </TooltipIconButton>
         <TooltipIconButton
           tooltipText="Show in recordings overlay"
           onClick={() => props.onClick()}
         >
-          <IconLucideEye class="size-5" />
+          <IconLucideEye class="size-4" />
         </TooltipIconButton>
       </div>
     </li>
@@ -144,16 +181,16 @@ function TooltipIconButton(
   return (
     <Tooltip>
       <Tooltip.Trigger
-        onClick={(e) => {
+        onClick={(e: MouseEvent) => {
           e.stopPropagation();
           props.onClick();
         }}
-        class="p-2 hover:bg-gray-200 rounded-full mr-2"
+        class="p-2.5 mr-2 opacity-70 hover:opacity-100 rounded-full transition-all duration-200 hover:bg-gray-200 dark:hover:bg-gray-300"
       >
         {props.children}
       </Tooltip.Trigger>
       <Tooltip.Portal>
-        <Tooltip.Content class="py-1 px-2 font-medium bg-gray-100 text-gray-400 border border-gray-300 text-xs rounded-lg animate-in fade-in slide-in-from-top-0.5">
+        <Tooltip.Content class="py-2 px-3 font-medium bg-gray-100 text-gray-500 border border-gray-200 text-xs rounded-lg animate-in fade-in slide-in-from-top-0.5">
           {props.tooltipText}
         </Tooltip.Content>
       </Tooltip.Portal>
