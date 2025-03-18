@@ -280,6 +280,7 @@ impl EditorInstance {
                                 frame_number,
                                 fps,
                                 resolution_base,
+                                None, // Some("Preview".into()),
                             ),
                             segment.cursor.clone(),
                         )
