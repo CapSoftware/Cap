@@ -5,7 +5,6 @@ use crate::{get_either, ProjectUniforms, RenderVideoConstants, RenderVideoState,
 
 pub struct FramePipeline<'a, 'b> {
     pub state: &'a mut FramePipelineState<'b>,
-
     pub encoder: &'a mut FramePipelineEncoder,
 }
 
@@ -110,9 +109,6 @@ impl FramePipelineEncoder {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-
-        // let text_renderer =
-        //     TextRenderer::new(&mut atlas, &device, MultisampleState::default(), None);
 
         render_pass.set_pipeline(render_pipeline);
         render_pass.set_bind_group(0, &bind_group, &[]);
