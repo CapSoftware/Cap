@@ -7,7 +7,7 @@ use crate::{
     general_settings::GeneralSettingsStore,
     open_editor, open_external_link,
     presets::PresetsStore,
-    upload::{get_s3_config, prepare_screenshot_upload, upload_video, ProgressiveUploadTask},
+    upload::{get_s3_config, prepare_screenshot_upload, upload_video, InstantMultipartUpload},
     web_api,
     windows::{CapWindowId, ShowCapWindow},
     App, CurrentRecordingChanged, DynLoggingLayer, MutableState, NewStudioRecordingAdded,
@@ -20,7 +20,7 @@ use cap_media::{
     sources::{CaptureScreen, CaptureWindow},
 };
 use cap_project::{
-    ProjectConfiguration, RecordingMeta, RecordingMetaInner, StudioRecordingMeta,
+    ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta, StudioRecordingMeta,
     TimelineConfiguration, TimelineSegment, ZoomSegment,
 };
 use cap_recording::{
@@ -38,7 +38,7 @@ use tracing_subscriber::Layer;
 pub enum InProgressRecording {
     Instant {
         handle: InstantRecordingHandle,
-        progressive_upload: Option<ProgressiveUploadTask>,
+        progressive_upload: Option<InstantMultipartUpload>,
         video_upload_info: VideoUploadInfo,
     },
     Studio {
@@ -94,7 +94,7 @@ impl InProgressRecording {
 pub enum CompletedRecording {
     Instant {
         recording: CompletedInstantRecording,
-        progressive_upload: Option<ProgressiveUploadTask>,
+        progressive_upload: Option<InstantMultipartUpload>,
         video_upload_info: VideoUploadInfo,
     },
     Studio(CompletedStudioRecording),
@@ -221,7 +221,7 @@ pub async fn start_recording(
         .as_ref()
         .filter(|_| matches!(recording_options.mode, RecordingMode::Instant))
         .map(|video_upload_info| {
-            ProgressiveUploadTask::spawn(
+            InstantMultipartUpload::spawn(
                 app.clone(),
                 id.clone(),
                 recording_dir.join("content/output.mp4"),
@@ -436,7 +436,7 @@ async fn handle_recording_finish(
 
     let mut shareable_link = None;
 
-    let meta_inner = match completed_recording {
+    let (meta_inner, sharing) = match completed_recording {
         CompletedRecording::Studio(recording) => {
             let recordings = ProjectRecordings::new(&recording_dir, &recording.meta);
 
@@ -461,7 +461,7 @@ async fn handle_recording_finish(
             }
             .emit(app);
 
-            RecordingMetaInner::Studio(recording.meta)
+            (RecordingMetaInner::Studio(recording.meta), None)
         }
         CompletedRecording::Instant {
             recording,
@@ -472,77 +472,88 @@ async fn handle_recording_finish(
             let app = app.clone();
             let output_path = recording_dir.join("content/output.mp4");
 
-            spawn_actor(async move {
-                if let Some(progressive_upload) = progressive_upload {
-                    let video_upload_succeeded = match progressive_upload
-                        .handle
-                        .await
-                        .map_err(|e| e.to_string())
-                        .and_then(|r| r)
-                    {
-                        Ok(()) => {
-                            info!("Not attempting instant recording upload as progressive upload succeeded");
-                            true
-                        }
-                        Err(e) => {
-                            error!("Progressive upload failed: {}", e);
-                            false
-                        }
-                    };
-
-                    if video_upload_succeeded {
-                        let (screenshot_url, screenshot_form) = match prepare_screenshot_upload(
-                            &app,
-                            &video_upload_info.config.clone(),
-                            display_screenshot,
-                        )
-                        .await
+            {
+                let video_upload_info = video_upload_info.clone();
+                spawn_actor(async move {
+                    if let Some(progressive_upload) = progressive_upload {
+                        let video_upload_succeeded = match progressive_upload
+                            .handle
+                            .await
+                            .map_err(|e| e.to_string())
+                            .and_then(|r| r)
                         {
-                            Ok(v) => v,
+                            Ok(()) => {
+                                info!("Not attempting instant recording upload as progressive upload succeeded");
+                                true
+                            }
                             Err(e) => {
-                                error!("Failed to prepare screenshot upload: {e}");
-                                return;
+                                error!("Progressive upload failed: {}", e);
+                                false
                             }
                         };
 
-                        let resp = reqwest::Client::new()
-                            .post(screenshot_url)
-                            .multipart(screenshot_form)
-                            .send()
-                            .await;
+                        if video_upload_succeeded {
+                            let (screenshot_url, screenshot_form) = match prepare_screenshot_upload(
+                                &app,
+                                &video_upload_info.config.clone(),
+                                display_screenshot,
+                            )
+                            .await
+                            {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    error!("Failed to prepare screenshot upload: {e}");
+                                    return;
+                                }
+                            };
 
-                        match resp {
-                            Ok(r) if r.status() == 200 => {
-                                info!("Screenshot uploaded successfully");
+                            let resp = reqwest::Client::new()
+                                .post(screenshot_url)
+                                .multipart(screenshot_form)
+                                .send()
+                                .await;
+
+                            match resp {
+                                Ok(r) if r.status() == 200 => {
+                                    info!("Screenshot uploaded successfully");
+                                }
+                                Ok(r) => {
+                                    error!("Failed to upload screenshot: {}", r.status());
+                                }
+                                Err(e) => {
+                                    error!("Failed to upload screenshot: {e}");
+                                }
                             }
-                            Ok(r) => {
-                                error!("Failed to upload screenshot: {}", r.status());
+                        } else {
+                            // The upload_video function handles screenshot upload, so we can pass it along
+                            match upload_video(
+                                &app,
+                                video_upload_info.id.clone(),
+                                output_path,
+                                Some(video_upload_info.config.clone()),
+                                Some(display_screenshot.clone()),
+                            )
+                            .await
+                            {
+                                Ok(_) => {
+                                    info!(
+                                        "Final video upload with screenshot completed successfully"
+                                    )
+                                }
+                                Err(e) => error!("Error in final upload with screenshot: {}", e),
                             }
-                            Err(e) => {
-                                error!("Failed to upload screenshot: {e}");
-                            }
-                        }
-                    } else {
-                        // The upload_video function handles screenshot upload, so we can pass it along
-                        match upload_video(
-                            &app,
-                            video_upload_info.id.clone(),
-                            output_path,
-                            Some(video_upload_info.config.clone()),
-                            Some(display_screenshot.clone()),
-                        )
-                        .await
-                        {
-                            Ok(_) => {
-                                info!("Final video upload with screenshot completed successfully")
-                            }
-                            Err(e) => error!("Error in final upload with screenshot: {}", e),
                         }
                     }
-                }
-            });
+                });
+            }
 
-            RecordingMetaInner::Instant(recording.meta)
+            (
+                RecordingMetaInner::Instant(recording.meta),
+                Some(SharingMeta {
+                    link: video_upload_info.link,
+                    id: video_upload_info.id,
+                }),
+            )
         }
     };
 
@@ -553,7 +564,7 @@ async fn handle_recording_finish(
 
     let meta = RecordingMeta {
         project_path: recording_dir,
-        sharing: None,
+        sharing,
         pretty_name: format!(
             "Cap {}",
             chrono::Local::now().format("%Y-%m-%d at %H.%M.%S")
