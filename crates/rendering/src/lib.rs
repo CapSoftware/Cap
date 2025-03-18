@@ -129,6 +129,10 @@ pub enum RenderingError {
     ChannelSendFrameFailed(#[from] mpsc::error::SendError<(RenderedFrame, u32)>),
     #[error("Failed to load image: {0}")]
     ImageLoadError(String),
+    #[error("Failed to prepare text renderer: {0}")]
+    PrepareTextRendererError(#[from] glyphon::PrepareError),
+    #[error("Failed to render text: {0}")]
+    RenderTextError(#[from] glyphon::RenderError),
 }
 
 pub struct RenderSegment {
@@ -1046,7 +1050,7 @@ async fn produce_frame(
             );
         }
 
-        TextLayer::render(&mut pipeline);
+        TextLayer::render(&mut pipeline)?;
     }
 
     let padded_bytes_per_row = encoder.padded_bytes_per_row(&state);

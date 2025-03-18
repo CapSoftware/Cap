@@ -1,11 +1,11 @@
 use glyphon::{Attrs, Buffer, Family, Metrics, Shaping, TextArea, TextBounds};
 
-use crate::frame_pipeline::FramePipeline;
+use crate::{frame_pipeline::FramePipeline, RenderingError};
 
 pub struct TextLayer {}
 
 impl TextLayer {
-    pub fn render(pipeline: &mut FramePipeline) {
+    pub fn render(pipeline: &mut FramePipeline) -> Result<(), RenderingError> {
         let frame_size = pipeline.state.constants.options.screen_size;
 
         {
@@ -29,31 +29,28 @@ impl TextLayer {
                 },
             );
 
-            state
-                .text_renderer
-                .prepare(
-                    &pipeline.state.constants.device,
-                    &pipeline.state.constants.queue,
-                    &mut state.font_system,
-                    &mut state.atlas,
-                    &state.viewport,
-                    [TextArea {
-                        buffer: &text_buffer,
-                        left: 0.0,
-                        top: 0.0,
-                        scale: 1.0,
-                        bounds: TextBounds {
-                            left: 0,
-                            top: 0,
-                            right: 600,
-                            bottom: 160,
-                        },
-                        default_color: glyphon::Color::rgb(255, 255, 255),
-                        custom_glyphs: &[],
-                    }],
-                    &mut state.swash_cache,
-                )
-                .unwrap(); // TODO: Error handling
+            state.text_renderer.prepare(
+                &pipeline.state.constants.device,
+                &pipeline.state.constants.queue,
+                &mut state.font_system,
+                &mut state.atlas,
+                &state.viewport,
+                [TextArea {
+                    buffer: &text_buffer,
+                    left: 0.0,
+                    top: 0.0,
+                    scale: 1.0,
+                    bounds: TextBounds {
+                        left: 0,
+                        top: 0,
+                        right: 600,
+                        bottom: 160,
+                    },
+                    default_color: glyphon::Color::rgb(255, 255, 255),
+                    custom_glyphs: &[],
+                }],
+                &mut state.swash_cache,
+            )?
         }
 
         let mut render_pass =
@@ -78,7 +75,8 @@ impl TextLayer {
         let state = &mut pipeline.state.state;
         state
             .text_renderer
-            .render(&state.atlas, &state.viewport, &mut render_pass)
-            .unwrap(); // TODO: Error handling
+            .render(&state.atlas, &state.viewport, &mut render_pass)?;
+
+        Ok(())
     }
 }
