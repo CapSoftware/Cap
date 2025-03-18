@@ -1,12 +1,10 @@
 use crate::{
-    create_editor_instance_impl, get_video_metadata, recordings_path, windows::ShowCapWindow,
-    AuthStore, RenderProgress, VideoType, captions,
+    create_editor_instance_impl, get_video_metadata, recordings_path, windows::ShowCapWindow, RenderProgress, VideoType,
 };
 use cap_editor::EditorInstance;
-use cap_project::{ProjectConfiguration, RecordingMeta, XY};
+use cap_project::{RecordingMeta, XY};
 use std::path::PathBuf;
 use tauri::AppHandle;
-use std::process::Command;
 
 #[tauri::command]
 #[specta::specta]
@@ -99,25 +97,10 @@ pub async fn export_video(
 
     match result {
         Ok(_) => {
-            // Since captions are now rendered directly in the video frames using GPU,
-            // we don't need to apply them as a subtitle track in the export process
-            tracing::info!("Video successfully exported with captions rendered directly on frames");
-            
-            // Keep the SRT export functionality for external use if needed
-            let clean_video_id = video_id.trim_end_matches(".cap").to_string();
-            if let Ok(Some(captions_data)) = captions::load_captions(clean_video_id.clone(), app.clone()).await {
-                if captions_data.settings.as_ref().map(|s| s.export_with_subtitles).unwrap_or(false) {
-                    // Only export the SRT file but don't embed it in the video
-                    let _ = captions::export_captions_srt(clean_video_id, app.clone()).await;
-                    tracing::info!("SRT file exported separately for external use");
-                }
-            }
-
             ShowCapWindow::RecordingsOverlay.show(&app).ok();
             Ok(output_path)
         }
         Err(e) => {
-            tracing::error!("Export failed: {}", e);
             sentry::capture_message(&e.to_string(), sentry::Level::Error);
             Err(e.to_string())
         }

@@ -20,7 +20,7 @@ import { commands, events } from "~/utils/tauri";
 import { invoke } from "@tauri-apps/api/core";
 import toast from "solid-toast";
 import { listen } from "@tauri-apps/api/event";
-import { captionsStore, type CaptionSettings } from "~/store/captions";
+import type { CaptionSettings, CaptionSegment } from "~/utils/tauri";
 import IconCapMessageBubble from "~icons/cap/message-bubble";
 import IconCapDownload from "~icons/cap/download";
 import IconCapRestart from "~icons/cap/restart";
@@ -101,13 +101,6 @@ const fontOptions: FontOption[] = [
 ];
 
 // Add type definitions at the top
-interface CaptionSegment {
-  id: string;
-  start: number;
-  end: number;
-  text: string;
-}
-
 interface CaptionsResponse {
   segments: CaptionSegment[];
 }
@@ -147,124 +140,34 @@ export function CaptionsTab() {
   const [isGenerating, setIsGenerating] = createSignal(false);
   const [hasAudio, setHasAudio] = createSignal(false);
   const [modelPath, setModelPath] = createSignal("");
+  const [currentCaption, setCurrentCaption] = createSignal<string | null>(null);
   
-  // Helper function to sync settings with project
-  const syncSettingWithProject = (key: keyof CaptionSettings, value: any) => {
-    captionsStore.updateSettings({ [key]: value });
-    
-    if (project) {
-      const updatedProject = {...project};
-      if (!updatedProject.captions) {
-        updatedProject.captions = {
-          segments: captionsStore.state.segments,
-          settings: {
-            ...captionsStore.state.settings,
-            [key]: value
-          }
-        };
-      } else {
-        updatedProject.captions.settings = {
-          ...updatedProject.captions.settings,
-          [key]: value
-        };
-      }
-      setProject(updatedProject);
-    }
-  };
-  
-  // Create an effect to sync captionsStore with project settings on mount
+  // Ensure captions object is initialized in project config
   createEffect(() => {
     if (!project || !editorInstance) return;
     
-    // If project has captions, sync them with captionsStore
-    if (project.captions) {
-      const projectCaptions = project.captions;
-      
-      // Sync segments
-      if (projectCaptions.segments.length > 0) {
-        captionsStore.updateSegments(projectCaptions.segments);
-      }
-      
-      // Sync settings with proper conversion between snake_case and camelCase
-      captionsStore.updateSettings({
-        enabled: projectCaptions.settings.enabled,
-        font: projectCaptions.settings.font,
-        size: projectCaptions.settings.size,
-        color: projectCaptions.settings.color,
-        backgroundColor: projectCaptions.settings.backgroundColor,
-        backgroundOpacity: projectCaptions.settings.backgroundOpacity,
-        position: projectCaptions.settings.position,
-        bold: projectCaptions.settings.bold,
-        italic: projectCaptions.settings.italic,
-        outline: projectCaptions.settings.outline,
-        outlineColor: projectCaptions.settings.outlineColor,
-        exportWithSubtitles: projectCaptions.settings.exportWithSubtitles
+    if (!project.captions) {
+      // Initialize captions with default settings
+      setProject("captions", {
+        segments: [],
+        settings: {
+          enabled: false,
+          font: "Arial",
+          size: 24,
+          color: "#FFFFFF",
+          backgroundColor: "#000000",
+          backgroundOpacity: 80,
+          position: "bottom",
+          bold: true,
+          italic: false,
+          outline: true,
+          outlineColor: "#000000",
+          exportWithSubtitles: false
+        }
       });
     }
   });
   
-  // Effect to sync caption settings changes back to project
-  createEffect(() => {
-    if (!project || !editorInstance) return;
-    
-    // Get current settings from captionsStore
-    const settings = captionsStore.state.settings;
-    
-    // Create a new project with updated caption settings
-    const updatedProject = {...project};
-    
-    // Initialize captions if they don't exist
-    if (!updatedProject.captions) {
-      updatedProject.captions = {
-        segments: captionsStore.state.segments,
-        settings: {
-          enabled: settings.enabled,
-          font: settings.font,
-          size: settings.size,
-          color: settings.color,
-          backgroundColor: settings.backgroundColor,
-          backgroundOpacity: settings.backgroundOpacity,
-          position: settings.position,
-          bold: settings.bold,
-          italic: settings.italic,
-          outline: settings.outline,
-          outlineColor: settings.outlineColor,
-          exportWithSubtitles: settings.exportWithSubtitles
-        }
-      };
-    } else {
-      // Update existing settings
-      updatedProject.captions.settings = {
-        enabled: settings.enabled,
-        font: settings.font,
-        size: settings.size,
-        color: settings.color,
-        backgroundColor: settings.backgroundColor,
-        backgroundOpacity: settings.backgroundOpacity,
-        position: settings.position,
-        bold: settings.bold,
-        italic: settings.italic,
-        outline: settings.outline,
-        outlineColor: settings.outlineColor,
-        exportWithSubtitles: settings.exportWithSubtitles
-      };
-      
-      // Keep segments in sync
-      updatedProject.captions.segments = captionsStore.state.segments;
-    }
-    
-    // Update project
-    setProject(updatedProject);
-  });
-  
-  // Function to check if a model is downloaded
-  const checkModelExists = async (modelName: string) => {
-    const appDataDirPath = await appLocalDataDir();
-    const modelsPath = await join(appDataDirPath, MODEL_FOLDER);
-    const modelPath = await join(modelsPath, `${modelName}.bin`);
-    return await commands.checkModelExists(modelPath);
-  };
-
   // Check downloaded models on mount
   onMount(async () => {
     try {
@@ -274,7 +177,7 @@ export function CaptionsTab() {
       
       // Create models directory if it doesn't exist
       if (!(await exists(modelsPath))) {
-        await commands.createDir(modelsPath, true );
+        await commands.createDir(modelsPath, true);
       }
       
       // Check which models are already downloaded
@@ -299,8 +202,6 @@ export function CaptionsTab() {
         setHasAudio(hasAudioTrack);
       }
       
-      // Load captions data is now handled by the effects above
-      
       // Restore download state if there was an ongoing download
       const downloadState = localStorage.getItem('modelDownloadState');
       if (downloadState) {
@@ -317,7 +218,7 @@ export function CaptionsTab() {
       console.error("Error checking models:", error);
     }
   });
-
+  
   // Save download state when it changes
   createEffect(() => {
     if (isDownloading() && downloadingModel()) {
@@ -329,8 +230,61 @@ export function CaptionsTab() {
       localStorage.removeItem('modelDownloadState');
     }
   });
+  
+  // Helper function to sync settings directly with project
+  const updateCaptionSetting = (key: keyof CaptionSettings, value: any) => {
+    if (!project?.captions) return;
+    
+    setProject("captions", "settings", key, value);
+  };
+  
+  // Effect to update current caption based on playback time
+  createEffect(() => {
+    if (!project?.captions?.segments || playbackTime() === undefined) return;
+    
+    const time = playbackTime();
+    const segments = project.captions.segments;
+    
+    // Binary search for the correct segment
+    const findSegment = (time: number, segments: CaptionSegment[]): CaptionSegment | undefined => {
+      let left = 0;
+      let right = segments.length - 1;
+      
+      while (left <= right) {
+        const mid = Math.floor((left + right) / 2);
+        const segment = segments[mid];
+        
+        if (time >= segment.start && time < segment.end) {
+          return segment;
+        }
+        
+        if (time < segment.start) {
+          right = mid - 1;
+        } else {
+          left = mid + 1;
+        }
+      }
+      
+      return undefined;
+    };
 
-  // Function to download the model
+    // Find the current segment using binary search
+    const currentSegment = findSegment(time, segments);
+    
+    // Only update if the caption has changed
+    if (currentSegment?.text !== currentCaption()) {
+      setCurrentCaption(currentSegment?.text || null);
+    }
+  });
+
+  const checkModelExists = async (modelName: string) => {
+    const appDataDirPath = await appLocalDataDir();
+    const modelsPath = await join(appDataDirPath, MODEL_FOLDER);
+    const modelPath = await join(modelsPath, `${modelName}.bin`);
+    setModelPath(modelPath);
+    return await commands.checkModelExists(modelPath);
+  };
+  
   const downloadModel = async () => {
     try {
       const modelToDownload = selectedModel();
@@ -373,90 +327,67 @@ export function CaptionsTab() {
     }
   };
   
-  // Function to generate captions
   const generateCaptions = async () => {
+    if (!editorInstance) return;
+    
+    setIsGenerating(true);
+    
     try {
-      if (!editorInstance || !editorInstance.recordings) {
-        toast.error("No video available to transcribe");
-        return;
-      }
+      const videoPath = editorInstance.path;
+      const lang = selectedLanguage();
+      const currentModelPath = await join(await appLocalDataDir(), MODEL_FOLDER, `${selectedModel()}.bin`);
       
-      setIsGenerating(true);
+      const result = await commands.transcribeAudio(videoPath, currentModelPath, lang);
       
-      // Get the first segment with audio
-      const firstSegment = editorInstance.recordings.segments[0];
-      if (!firstSegment || (!firstSegment.audio && !firstSegment.system_audio)) {
-        toast.error("No audio recording found");
-        return;
-      }
-
-      // Use either microphone audio or system audio, preferring microphone audio
-      const audioPath = firstSegment.audio ? 
-        `${editorInstance.path}/content/segments/segment-0/audio-input.ogg` :
-        `${editorInstance.path}/content/segments/segment-0/system_audio.ogg`;
-      
-      try {
-        // Construct the model path
-        const appDataDirPath = await appLocalDataDir();
-        const modelsPath = await join(appDataDirPath, MODEL_FOLDER);
-        const modelPath = await join(modelsPath, `${selectedModel()}.bin`);
-        
-        // Use commands to transcribe audio
-        const transcriptionResult = await commands.transcribeAudio(audioPath, modelPath, selectedLanguage());
-        
-        // Update captions in the store
-        captionsStore.updateSegments(transcriptionResult.segments);
-        captionsStore.updateSettings({ enabled: true });
-        
-        // Save the captions
-        if (editorInstance.path) {
-          // Clean the video ID by removing .cap extension and getting the last part of the path
-          const videoId = editorInstance.path.split('/').pop()?.replace('.cap', '') || '';
-          await captionsStore.saveCaptions(videoId);
-        }
-        
+      if (result && result.segments.length > 0) {
+        // Update project with the new segments
+        setProject("captions", "segments", result.segments);
+        updateCaptionSetting("enabled", true);
         toast.success("Captions generated successfully!");
-      } catch (error: any) {
-        if (error.toString().includes("No audio stream found")) {
-          toast.error("This video does not contain any audio to transcribe");
-        } else {
-          console.error("Error generating captions:", error);
-          toast.error("Failed to generate captions");
-        }
+      } else {
+        toast.error("Failed to generate captions. No segments returned.");
       }
     } catch (error) {
-      console.error("Error in caption generation process:", error);
-      toast.error("Failed to generate captions");
+      console.error("Error generating captions:", error);
+      toast.error("Failed to generate captions: " + (error as Error).message);
     } finally {
       setIsGenerating(false);
     }
   };
   
-  // Function to delete a caption segment
+  // Segment operations that update project directly
   const deleteSegment = (id: string) => {
-    captionsStore.deleteSegment(id);
-  };
-  
-  // Function to update a caption segment
-  const updateSegment = (id: string, updates: Partial<{start: number, end: number, text: string}>) => {
-    captionsStore.updateSegment(id, updates);
-  };
-  
-  // Function to add a new caption segment
-  const addSegment = (time: number) => {
-    captionsStore.addSegment(time);
+    if (!project?.captions?.segments) return;
+    
+    setProject("captions", "segments", 
+      project.captions.segments.filter(segment => segment.id !== id)
+    );
   };
 
-  // Add effect to save settings to localStorage when they change
-  createEffect(() => {
-    if (editorInstance && editorInstance.path) {
-      const saveData = {
-        segments: captionsStore.state.segments,
-        settings: captionsStore.state.settings
-      };
-      localStorage.setItem(`captions-${editorInstance.path}`, JSON.stringify(saveData));
-    }
-  });
+  const updateSegment = (id: string, updates: Partial<{start: number, end: number, text: string}>) => {
+    if (!project?.captions?.segments) return;
+    
+    setProject("captions", "segments",
+      project.captions.segments.map(segment => 
+        segment.id === id ? { ...segment, ...updates } : segment
+      )
+    );
+  };
+
+  const addSegment = (time: number) => {
+    if (!project?.captions) return;
+    
+    const id = `segment-${Date.now()}`;
+    setProject("captions", "segments", [
+      ...project.captions.segments,
+      { 
+        id, 
+        start: time, 
+        end: time + 2,
+        text: "New caption" 
+      }
+    ]);
+  };
 
   return (
     <div class="flex flex-col gap-6 h-full overflow-y-auto">
@@ -464,13 +395,13 @@ export function CaptionsTab() {
         <div class="flex flex-col gap-4">
           <Subfield name="Enable Captions">
             <Toggle
-              checked={captionsStore.state.settings.enabled}
-              onChange={(checked) => syncSettingWithProject("enabled", checked)}
+              checked={project.captions?.settings.enabled}
+              onChange={(checked) => updateCaptionSetting("enabled", checked)}
             />
           </Subfield>
 
-          <Show when={captionsStore.state.settings.enabled}>
-            <div class="flex flex-col gap-4 overflow-y-auto">
+          <Show when={project.captions?.settings.enabled}>
+            <div class="space-y-6">
               {/* Model Selection and Download Section */}
               <div class="space-y-4">
                 <div class="space-y-2">
@@ -493,7 +424,7 @@ export function CaptionsTab() {
                     )}
                   >
                     <KSelect.Trigger class="flex flex-row items-center h-9 px-3 gap-2 border rounded-lg border-gray-200 w-full text-gray-700 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors">
-                      <KSelect.Value class="flex-1 text-left truncate">
+                      <KSelect.Value<string> class="flex-1 text-left truncate">
                         {(state) => {
                           const model = MODEL_OPTIONS.find(m => m.name === state.selectedOption());
                           return <span>{model?.label || "Select a model"}</span>;
@@ -536,7 +467,7 @@ export function CaptionsTab() {
                     )}
                   >
                     <KSelect.Trigger class="flex flex-row items-center h-9 px-3 gap-2 border rounded-lg border-gray-200 w-full text-gray-700 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors">
-                      <KSelect.Value class="flex-1 text-left truncate">
+                      <KSelect.Value<string> class="flex-1 text-left truncate">
                         {(state) => {
                           const model = MODEL_OPTIONS.find(m => m.name === state.selectedOption());
                           return <span>{model?.label || "Select a model"}</span>;
@@ -603,7 +534,7 @@ export function CaptionsTab() {
                   )}
                 >
                   <KSelect.Trigger class="flex flex-row items-center h-9 px-3 gap-2 border rounded-lg border-gray-200 w-full text-gray-700 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors">
-                    <KSelect.Value class="flex-1 text-left truncate">
+                    <KSelect.Value<string> class="flex-1 text-left truncate">
                       {(state) => {
                         const language = LANGUAGE_OPTIONS.find(l => l.code === state.selectedOption());
                         return <span>{language?.label || "Select a language"}</span>;
@@ -630,7 +561,6 @@ export function CaptionsTab() {
               {/* Generate Captions Button */}
               <Show when={hasAudio()}>
                 <Button
-                  // leftIcon={<IconCapRestart class="w-4 h-4" />}
                   onClick={generateCaptions}
                   disabled={isGenerating()}
                 >
@@ -638,289 +568,226 @@ export function CaptionsTab() {
                 </Button>
               </Show>
 
-              {/* Caption Settings */}
-              <Show when={captionsStore.state.segments.length > 0}>
-                <div class="flex flex-col gap-4">
-                  {/* Export Settings Section - Moved to top */}
-                  <div class="mb-6 bg-blue-50 rounded-lg p-4 border border-blue-100">
-                    <h3 class="text-sm font-medium text-blue-800 mb-2 flex items-center gap-2">
-                      <IconCapDownload class="w-4 h-4" />
-                      Export Settings
-                    </h3>
-                    <Subfield name="Include Subtitles">
-                      <Toggle
-                        checked={captionsStore.state.settings.exportWithSubtitles ?? true}
-                        onChange={(checked) => syncSettingWithProject("exportWithSubtitles", checked)}
+              <Field name="Font">
+                <KSelect<string>
+                  options={fontOptions.map(f => f.value)}
+                  value={project.captions?.settings.font || "Arial"}
+                  onChange={(value) => {
+                    if (value === null) return;
+                    updateCaptionSetting("font", value);
+                  }}
+                  itemComponent={(props) => (
+                    <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
+                      <KSelect.ItemLabel class="flex-1">
+                        {fontOptions.find(f => f.value === props.item.rawValue)?.label}
+                      </KSelect.ItemLabel>
+                    </MenuItem>
+                  )}
+                >
+                  <KSelect.Trigger class="w-full flex items-center justify-between rounded-lg shadow px-3 py-2 bg-white border border-gray-300">
+                    <KSelect.Value<string>>
+                      {(state) => fontOptions.find(f => f.value === state.selectedOption())?.label}
+                    </KSelect.Value>
+                    <KSelect.Icon>
+                      <IconCapChevronDown />
+                    </KSelect.Icon>
+                  </KSelect.Trigger>
+                  <KSelect.Portal>
+                    <PopperContent<typeof KSelect.Content>
+                      as={KSelect.Content}
+                      class={topLeftAnimateClasses}
+                    >
+                      <MenuItemList<typeof KSelect.Listbox>
+                        class="max-h-48 overflow-y-auto"
+                        as={KSelect.Listbox}
                       />
-                    </Subfield>
+                    </PopperContent>
+                  </KSelect.Portal>
+                </KSelect>
+              </Field>
+
+              <Field name="Size">
+                <Slider
+                  value={[project.captions?.settings.size || 24]}
+                  onChange={(v) => updateCaptionSetting("size", v[0])}
+                  minValue={12}
+                  maxValue={48}
+                  step={1}
+                />
+              </Field>
+
+              <Field name="Font Color">
+                <Input
+                  type="color"
+                  value={project.captions?.settings.color}
+                  onChange={(e) => updateCaptionSetting("color", e.target.value)}
+                />
+              </Field>
+
+              <Field name="Background Color">
+                <Input
+                  type="color"
+                  value={project.captions?.settings.backgroundColor}
+                  onChange={(e) => updateCaptionSetting("backgroundColor", e.target.value)}
+                />
+              </Field>
+
+              <Field name="Background Opacity">
+                <Slider
+                  value={[project.captions?.settings.backgroundOpacity || 80]}
+                  onChange={(v) => updateCaptionSetting("backgroundOpacity", v[0])}
+                  minValue={0}
+                  maxValue={100}
+                  step={1}
+                />
+              </Field>
+
+              <Field name="Position">
+                <KSelect<string>
+                  options={["top", "bottom"]}
+                  value={project.captions?.settings.position || "bottom"}
+                  onChange={(value) => {
+                    if (value === null) return;
+                    updateCaptionSetting("position", value);
+                  }}
+                  itemComponent={(props) => (
+                    <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
+                      <KSelect.ItemLabel class="flex-1 capitalize">
+                        {props.item.rawValue}
+                      </KSelect.ItemLabel>
+                    </MenuItem>
+                  )}
+                >
+                  <KSelect.Trigger class="w-full flex items-center justify-between rounded-lg shadow px-3 py-2 bg-white border border-gray-300">
+                    <KSelect.Value<string>>
+                      {(state) => (
+                        <span class="capitalize">{state.selectedOption()}</span>
+                      )}
+                    </KSelect.Value>
+                    <KSelect.Icon>
+                      <IconCapChevronDown />
+                    </KSelect.Icon>
+                  </KSelect.Trigger>
+                  <KSelect.Portal>
+                    <PopperContent<typeof KSelect.Content>
+                      as={KSelect.Content}
+                      class={topLeftAnimateClasses}
+                    >
+                      <MenuItemList<typeof KSelect.Listbox>
+                        as={KSelect.Listbox}
+                      />
+                    </PopperContent>
+                  </KSelect.Portal>
+                </KSelect>
+              </Field>
+
+              <Field name="Style Options">
+                <div class="flex flex-col gap-4">
+                  <Subfield name="Bold">
+                    <Toggle
+                      checked={project.captions?.settings.bold}
+                      onChange={(checked) => updateCaptionSetting("bold", checked)}
+                    />
+                  </Subfield>
+                  <Subfield name="Italic">
+                    <Toggle
+                      checked={project.captions?.settings.italic}
+                      onChange={(checked) => updateCaptionSetting("italic", checked)}
+                    />
+                  </Subfield>
+                  <Subfield name="Outline">
+                    <Toggle
+                      checked={project.captions?.settings.outline}
+                      onChange={(checked) => updateCaptionSetting("outline", checked)}
+                    />
+                  </Subfield>
+                </div>
+              </Field>
+
+              <Show when={project.captions?.settings.outline}>
+                <Field name="Outline Color">
+                  <Input
+                    type="color"
+                    value={project.captions?.settings.outlineColor}
+                    onChange={(e) => updateCaptionSetting("outlineColor", e.target.value)}
+                  />
+                </Field>
+              </Show>
+
+              <Field name="Export Options">
+                <Subfield name="Export with Subtitles">
+                  <Toggle
+                    checked={project.captions?.settings.exportWithSubtitles}
+                    onChange={(checked) => updateCaptionSetting("exportWithSubtitles", checked)}
+                  />
+                </Subfield>
+              </Field>
+              
+              {/* Add Caption Segments Section */}
+              <Show when={project.captions?.segments.length}>
+                <div class="space-y-4 mt-4">
+                  <div class="flex items-center justify-between">
+                    <h3 class="text-sm font-medium text-gray-800 mb-2 flex items-center gap-2">
+                      <IconCapMessageBubble class="w-4 h-4" />
+                      Caption Segments
+                    </h3>
+                    <Button
+                      onClick={() => addSegment(playbackTime())}
+                    >
+                      Add at Current Time
+                    </Button>
                   </div>
-
-                  <div class="space-y-6">
-                    {/* Caption Style Section */}
-                    <div class="bg-white rounded-lg p-4 border border-gray-200">
-                      <h3 class="text-sm font-medium text-gray-800 mb-4 flex items-center gap-2">
-                        <IconCapMessageBubble class="w-4 h-4" />
-                        Caption Style
-                      </h3>
-
-                      <div class="space-y-4">
-                        <Subfield name="Font">
-                          <KSelect<string>
-                            options={fontOptions.map(f => f.value)}
-                            value={captionsStore.state.settings.font}
-                            onChange={(value: string | null) => {
-                              if (value) captionsStore.updateSettings({ font: value });
-                            }}
-                            itemComponent={(props) => (
-                              <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
-                                <KSelect.ItemLabel class="flex-1">
-                                  {fontOptions.find(f => f.value === props.item.rawValue)?.label}
-                                </KSelect.ItemLabel>
-                              </MenuItem>
-                            )}
-                          >
-                            <KSelect.Trigger class="flex flex-row items-center h-9 px-3 gap-2 border rounded-lg border-gray-200 w-full text-gray-700 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors">
-                              <KSelect.Value class="flex-1 text-left truncate">
-                                {(state) => {
-                                  const font = fontOptions.find(f => f.value === state.selectedOption());
-                                  return <span>{font?.label}</span>;
-                                }}
-                              </KSelect.Value>
-                              <KSelect.Icon>
-                                <IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180" />
-                              </KSelect.Icon>
-                            </KSelect.Trigger>
-                            <KSelect.Portal>
-                              <PopperContent<typeof KSelect.Content>
-                                as={KSelect.Content}
-                                class={topLeftAnimateClasses}
-                              >
-                                <MenuItemList<typeof KSelect.Listbox>
-                                  class="max-h-48 overflow-y-auto"
-                                  as={KSelect.Listbox}
+                  
+                  <div class="max-h-[300px] overflow-y-auto space-y-3 pr-2">
+                    {project.captions?.segments.length === 0 ? (
+                      <p class="text-sm text-gray-500">No caption segments found.</p>
+                    ) : (
+                      project.captions?.segments.map((segment) => (
+                        <div class="bg-white border border-gray-200 rounded-lg p-4 space-y-4">
+                          <div class="flex items-center justify-between">
+                            <div class="flex space-x-4">
+                              <div class="space-y-1">
+                                <label class="text-xs text-gray-500">Start</label>
+                                <Input
+                                  type="number"
+                                  class="w-24"
+                                  value={segment.start.toFixed(1)}
+                                  step="0.1"
+                                  min={0}
+                                  onChange={(e) => updateSegment(segment.id, { start: parseFloat(e.target.value) })}
                                 />
-                              </PopperContent>
-                            </KSelect.Portal>
-                          </KSelect>
-                        </Subfield>
-
-                        <div class="grid grid-cols-2 gap-4">
-                          <div class="space-y-4">
-                            <Subfield name="Size">
-                              <div class="flex flex-col gap-2">
-                                <input
-                                  type="range"
-                                  class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                                  min={12}
-                                  max={48}
-                                  step={1}
-                                  value={captionsStore.state.settings.size}
-                                  onChange={(e) => captionsStore.updateSettings({ size: parseInt(e.target.value) })}
-                                />
-                                <div class="text-xs text-gray-500 text-right">{captionsStore.state.settings.size}px</div>
                               </div>
-                            </Subfield>
-
-                            <Subfield name="Text Color">
-                              <div class="flex items-center gap-2">
-                                <input
-                                  type="color"
-                                  class="w-8 h-8 rounded border border-gray-200"
-                                  value={captionsStore.state.settings.color}
-                                  onChange={(e) => captionsStore.updateSettings({ color: e.currentTarget.value })}
+                              <div class="space-y-1">
+                                <label class="text-xs text-gray-500">End</label>
+                                <Input
+                                  type="number"
+                                  class="w-24"
+                                  value={segment.end.toFixed(1)}
+                                  step="0.1"
+                                  min={segment.start}
+                                  onChange={(e) => updateSegment(segment.id, { end: parseFloat(e.target.value) })}
                                 />
-                                <span class="text-xs text-gray-500 uppercase">{captionsStore.state.settings.color}</span>
                               </div>
-                            </Subfield>
-                          </div>
-
-                          <div class="space-y-4">
-                            <Subfield name="Position">
-                              <KSelect<string>
-                                options={["top", "middle", "bottom"]}
-                                value={captionsStore.state.settings.position}
-                                onChange={(value: string | null) => {
-                                  if (value) captionsStore.updateSettings({ position: value });
-                                }}
-                                itemComponent={(props) => (
-                                  <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
-                                    <KSelect.ItemLabel class="flex-1 capitalize">
-                                      {props.item.rawValue}
-                                    </KSelect.ItemLabel>
-                                  </MenuItem>
-                                )}
-                              >
-                                <KSelect.Trigger class="flex flex-row items-center h-9 px-3 gap-2 border rounded-lg border-gray-200 w-full text-gray-700 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors">
-                                  <KSelect.Value class="flex-1 text-left truncate capitalize">
-                                    {(state) => <span>{state.selectedOption() as string}</span>}
-                                  </KSelect.Value>
-                                  <KSelect.Icon>
-                                    <IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180" />
-                                  </KSelect.Icon>
-                                </KSelect.Trigger>
-                                <KSelect.Portal>
-                                  <PopperContent<typeof KSelect.Content>
-                                    as={KSelect.Content}
-                                    class={topLeftAnimateClasses}
-                                  >
-                                    <MenuItemList<typeof KSelect.Listbox>
-                                      class="w-full"
-                                      as={KSelect.Listbox}
-                                    />
-                                  </PopperContent>
-                                </KSelect.Portal>
-                              </KSelect>
-                            </Subfield>
-
-                            {/* Text Style Options */}
-                            <div class="grid grid-cols-2 gap-2">
-                              <Subfield name="Bold">
-                                <Toggle
-                                  checked={captionsStore.state.settings.bold}
-                                  onChange={(checked) => syncSettingWithProject("bold", checked)}
-                                />
-                              </Subfield>
-
-                              <Subfield name="Italic">
-                                <Toggle
-                                  checked={captionsStore.state.settings.italic}
-                                  onChange={(checked) => syncSettingWithProject("italic", checked)}
-                                />
-                              </Subfield>
                             </div>
+                            <Button
+                              variant="white"
+                              class="text-gray-400 hover:text-red-500 transition-colors p-1"
+                              onClick={() => deleteSegment(segment.id)}
+                            >
+                              <IconDelete />
+                            </Button>
+                          </div>
+                          <div class="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 transition-colors">
+                            <textarea
+                              class="w-full resize-none outline-none"
+                              value={segment.text}
+                              rows={2}
+                              onChange={(e) => updateSegment(segment.id, { text: e.target.value })}
+                            />
                           </div>
                         </div>
-                      </div>
-                    </div>
-
-                    {/* Background Settings Section */}
-                    <div class="bg-white rounded-lg p-4 border border-gray-200">
-                      <h3 class="text-sm font-medium text-gray-800 mb-4">Background</h3>
-                      
-                      <div class="space-y-4">
-                        <Subfield name="Color">
-                          <div class="flex items-center gap-2">
-                            <input
-                              type="color"
-                              class="w-8 h-8 rounded border border-gray-200"
-                              value={captionsStore.state.settings.backgroundColor}
-                              onChange={(e) => captionsStore.updateSettings({ backgroundColor: e.currentTarget.value })}
-                            />
-                            <span class="text-xs text-gray-500 uppercase">{captionsStore.state.settings.backgroundColor}</span>
-                          </div>
-                        </Subfield>
-
-                        <Subfield name="Opacity">
-                          <div class="flex flex-col gap-2">
-                            <input
-                              type="range"
-                              class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                              min={0}
-                              max={100}
-                              step={1}
-                              value={captionsStore.state.settings.backgroundOpacity}
-                              onChange={(e) => captionsStore.updateSettings({ backgroundOpacity: parseInt(e.target.value) })}
-                            />
-                            <div class="text-xs text-gray-500 text-right">{captionsStore.state.settings.backgroundOpacity}%</div>
-                          </div>
-                        </Subfield>
-                      </div>
-                    </div>
-
-                    {/* Outline Settings Section */}
-                    <div class="bg-white rounded-lg p-4 border border-gray-200">
-                      <h3 class="text-sm font-medium text-gray-800 mb-4">Outline</h3>
-                      
-                      <div class="space-y-4">
-                        <Subfield name="Enable Outline">
-                          <Toggle
-                            checked={captionsStore.state.settings.outline}
-                            onChange={(checked) => syncSettingWithProject("outline", checked)}
-                          />
-                        </Subfield>
-
-                        <Show when={captionsStore.state.settings.outline}>
-                          <Subfield name="Color">
-                            <div class="flex items-center gap-2">
-                              <input
-                                type="color"
-                                class="w-8 h-8 rounded border border-gray-200"
-                                value={captionsStore.state.settings.outlineColor}
-                                onChange={(e) => captionsStore.updateSettings({ outlineColor: e.currentTarget.value })}
-                              />
-                              <span class="text-xs text-gray-500 uppercase">{captionsStore.state.settings.outlineColor}</span>
-                            </div>
-                          </Subfield>
-                        </Show>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Add Caption Segments Section */}
-                  <div class="space-y-4 mt-4">
-                    <div class="flex items-center justify-between">
-                      <h3 class="text-sm font-medium text-gray-800 mb-2 flex items-center gap-2">
-                        <IconCapMessageBubble class="w-4 h-4" />
-                        Caption Segments
-                      </h3>
-                      <Button
-                        onClick={() => addSegment(playbackTime())}
-                      >
-                        Add at Current Time
-                      </Button>
-                    </div>
-                    
-                    <div class="max-h-[300px] overflow-y-auto space-y-3 pr-2">
-                      {captionsStore.state.segments.length === 0 ? (
-                        <p class="text-sm text-gray-500">No caption segments found.</p>
-                      ) : (
-                        captionsStore.state.segments.map((segment) => (
-                          <div class="bg-white border border-gray-200 rounded-lg p-4 space-y-4">
-                            <div class="flex items-center justify-between">
-                              <div class="flex space-x-4">
-                                <div class="space-y-1">
-                                  <label class="text-xs text-gray-500">Start</label>
-                                  <Input
-                                    type="number"
-                                    class="w-24"
-                                    value={segment.start.toFixed(1)}
-                                    step="0.1"
-                                    min={0}
-                                    onChange={(e) => updateSegment(segment.id, { start: parseFloat(e.target.value) })}
-                                  />
-                                </div>
-                                <div class="space-y-1">
-                                  <label class="text-xs text-gray-500">End</label>
-                                  <Input
-                                    type="number"
-                                    class="w-24"
-                                    value={segment.end.toFixed(1)}
-                                    step="0.1"
-                                    min={segment.start}
-                                    onChange={(e) => updateSegment(segment.id, { end: parseFloat(e.target.value) })}
-                                  />
-                                </div>
-                              </div>
-                              <Button
-                                variant="white"
-                                class="text-gray-400 hover:text-red-500 transition-colors p-1"
-                                onClick={() => deleteSegment(segment.id)}
-                              >
-                                <IconDelete />
-                              </Button>
-                            </div>
-                            <div class="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 transition-colors">
-                              <textarea
-                                class="w-full resize-none outline-none"
-                                value={segment.text}
-                                rows={2}
-                                onChange={(e) => updateSegment(segment.id, { text: e.target.value })}
-                              />
-                            </div>
-                          </div>
-                        ))
-                      )}
-                    </div>
+                      ))
+                    )}
                   </div>
                 </div>
               </Show>

@@ -183,14 +183,18 @@ impl CaptionsLayer {
             // Create a new buffer with explicit size for this frame
             let mut updated_buffer = Buffer::new(&mut self.font_system, metrics);
             
-            // Explicitly set the buffer size to match frame dimensions
-            updated_buffer.set_size(&mut self.font_system, Some(width as f32), Some(height as f32));
+            // Set explicit width to enable proper text wrapping and centering
+            // Set width to 90% of screen width for better appearance
+            let text_width = width as f32 * 0.9;
+            updated_buffer.set_size(&mut self.font_system, Some(text_width), None);
+            updated_buffer.set_wrap(&mut self.font_system, glyphon::Wrap::Word);
             
             // Position text in the center horizontally
+            // The bounds dictate the rendering area
             let bounds = TextBounds {
-                left: (width as f32 * 0.05) as i32,  // Left margin 5%
+                left: ((width as f32 - text_width) / 2.0) as i32,  // Center the text horizontally
                 top: y_position as i32,
-                right: (width as f32 * 0.95) as i32, // Right margin 5%
+                right: ((width as f32 + text_width) / 2.0) as i32, // Center + width
                 bottom: (y_position + font_size * 4.0) as i32,  // Increased height for better visibility
             };
             info!("Text bounds: left={}, top={}, right={}, bottom={}", 
@@ -236,7 +240,7 @@ impl CaptionsLayer {
             if settings.background_color[3] > 0.01 {
                 text_areas.push(TextArea {
                     buffer: &self.text_buffer,
-                    left: width as f32 * 0.5,  // Center horizontally
+                    left: bounds.left as f32,  // Match the bounds left for positioning
                     top: y_position,
                     scale: 1.0,
                     bounds,
@@ -258,7 +262,7 @@ impl CaptionsLayer {
                 for (offset_x, offset_y) in outline_offsets.iter() {
                     text_areas.push(TextArea {
                         buffer: &self.text_buffer,
-                        left: width as f32 * 0.5 + offset_x,
+                        left: bounds.left as f32 + offset_x,  // Match bounds with small offset for outline
                         top: y_position + offset_y,
                         scale: 1.0,
                         bounds,
@@ -271,7 +275,7 @@ impl CaptionsLayer {
             // Add main text (rendered last, on top of everything)
             text_areas.push(TextArea {
                 buffer: &self.text_buffer,
-                left: width as f32 * 0.5,  // Center horizontally
+                left: bounds.left as f32,  // Match the bounds left for positioning
                 top: y_position,
                 scale: 1.0,
                 bounds,
