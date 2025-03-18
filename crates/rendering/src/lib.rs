@@ -10,8 +10,7 @@ use frame_pipeline::{FramePipeline, FramePipelineEncoder, FramePipelineState};
 use futures::future::OptionFuture;
 use futures::FutureExt;
 use layers::{
-    Background, BackgroundBlurPipeline, BackgroundLayer, CameraLayer, CursorLayer, DisplayLayer,
-    GradientOrColorPipeline, ImageBackgroundPipeline,
+    find_caption_at_time, find_caption_at_time_project, Background, BackgroundBlurPipeline, BackgroundLayer, CameraLayer, CaptionSettings, CaptionsLayer, CursorLayer, DisplayLayer, GradientOrColorPipeline, ImageBackgroundPipeline
 };
 use specta::Type;
 use std::{collections::HashMap, sync::Arc};
@@ -19,6 +18,7 @@ use tokio::sync::mpsc;
 
 use image::GenericImageView;
 use std::{path::PathBuf, time::Instant};
+use log::{info, warn, debug};
 
 mod composite_frame;
 mod coord;
@@ -277,6 +277,7 @@ pub struct RenderVideoConstants {
     screen_frame: (wgpu::Texture, wgpu::TextureView),
     camera_frame: Option<(wgpu::Texture, wgpu::TextureView)>,
     cursor_layer: CursorLayer,
+    pub captions_layer: CaptionsLayer,
 }
 
 impl RenderVideoConstants {
@@ -360,21 +361,27 @@ impl RenderVideoConstants {
             (texture, texture_view)
         });
 
+        let cursor_layer = CursorLayer::new(&device);
+        
+        // Initialize the captions layer
+        let captions_layer = CaptionsLayer::new(&device, &queue);
+
         Ok(Self {
             _instance: instance,
             _adapter: adapter,
-            cursor_layer: CursorLayer::new(&device),
             device,
             queue,
             options,
             composite_video_frame_pipeline,
-            gradient_or_color_pipeline,
             cursor_textures,
+            gradient_or_color_pipeline,
             image_background_pipeline,
+            background_blur_pipeline,
             background_textures,
             screen_frame,
             camera_frame,
-            background_blur_pipeline,
+            cursor_layer,
+            captions_layer,
         })
     }
 
@@ -938,7 +945,7 @@ impl<'a> FrameRenderer<'a> {
         self.update_output_textures(uniforms.output_size.0, uniforms.output_size.1);
 
         produce_frame(
-            &self.constants,
+            self.constants,
             segment_frames,
             uniforms,
             self.output_textures.as_ref().unwrap(),
@@ -948,7 +955,6 @@ impl<'a> FrameRenderer<'a> {
     }
 }
 
-// TODO: reuse as many resources as possible
 // https://github.com/gfx-rs/wgpu/wiki/Encapsulating-Graphics-Work
 async fn produce_frame(
     constants: &RenderVideoConstants,
@@ -999,6 +1005,94 @@ async fn produce_frame(
                 (texture, texture_view),
             );
         }
+
+        // Render captions if there are any caption segments to display
+        if let Some(caption_data) = &uniforms.project.captions {
+            debug!("Found caption data in project - Enabled: {}", caption_data.settings.enabled);
+            if caption_data.settings.enabled {
+                // Find the current caption for this time
+                let current_time = segment_frames.segment_time;
+                debug!("Looking for caption at time: {}", current_time);
+                
+                if let Some(current_caption) = find_caption_at_time_project(current_time, &caption_data.segments) {
+                    info!("Found caption to render: '{}' ({} - {})", 
+                        current_caption.text, current_caption.start, current_caption.end);
+                    
+                    // Get caption text and time for use in rendering
+                    let caption_text = current_caption.text.clone();
+                    
+                    // Create settings for the caption
+                    let caption_settings = CaptionSettings {
+                        enabled: 1,
+                        font_size: caption_data.settings.size as f32,
+                        color: [
+                            parse_color_component(&caption_data.settings.color, 0),
+                            parse_color_component(&caption_data.settings.color, 1),
+                            parse_color_component(&caption_data.settings.color, 2),
+                            1.0,
+                        ],
+                        background_color: [
+                            parse_color_component(&caption_data.settings.background_color, 0),
+                            parse_color_component(&caption_data.settings.background_color, 1),
+                            parse_color_component(&caption_data.settings.background_color, 2),
+                            caption_data.settings.background_opacity as f32 / 100.0,
+                        ],
+                        position: match caption_data.settings.position.as_str() {
+                            "top" => 0,
+                            "middle" => 1,
+                            _ => 2, // default to bottom
+                        },
+                        outline: if caption_data.settings.outline { 1 } else { 0 },
+                        outline_color: [
+                            parse_color_component(&caption_data.settings.outline_color, 0),
+                            parse_color_component(&caption_data.settings.outline_color, 1),
+                            parse_color_component(&caption_data.settings.outline_color, 2),
+                            1.0,
+                        ],
+                        _padding: [0.0, 0.0],
+                    };
+                    
+                    info!("Applying caption settings - Font size: {}, Position: {}, Background opacity: {}", 
+                          caption_settings.font_size, 
+                          caption_settings.position,
+                          caption_settings.background_color[3]);
+                    
+                    // Convert caption segments to the internal CaptionSegment type
+                    let converted_segments: Vec<layers::CaptionSegment> = caption_data.segments
+                        .iter()
+                        .map(|seg| layers::convert_project_caption(seg))
+                        .collect();
+                    
+                    // Instead of using unsafe code that creates undefined behavior,
+                    // create a properly structured temporary CaptionsLayer and use it for rendering
+                    let mut temp_captions_layer = layers::CaptionsLayer::new(&constants.device, &constants.queue);
+                    
+                    // Set current caption text
+                    temp_captions_layer.update_caption(Some(caption_text), current_time);
+                    
+                    // Render the caption with converted segments
+                    temp_captions_layer.render(
+                        &mut pipeline,
+                        uniforms.resolution_base,
+                        current_time,
+                        &converted_segments,
+                        &caption_settings,
+                    );
+
+                    // Make sure we don't lose the caption by switching output
+                    // Comment this out if captions are disappearing
+                    // pipeline.state.switch_output();
+                    
+                    info!("Caption rendering completed");
+                } else {
+                    debug!("No caption found for time {}", current_time);
+                }
+            } else {
+                debug!("Captions are disabled in project settings");
+            }
+        } else {
+            debug!("No caption data found in project");
+        }
     }
 
     let padded_bytes_per_row = encoder.padded_bytes_per_row(&state);
@@ -1010,6 +1104,29 @@ async fn produce_frame(
         width: uniforms.output_size.0,
         height: uniforms.output_size.1,
     })
+}
+
+// Helper function to parse color components from hex strings
+fn parse_color_component(hex_color: &str, index: usize) -> f32 {
+    // Remove # prefix if present
+    let color = hex_color.trim_start_matches('#');
+    
+    // Parse the color component
+    if color.len() == 6 {
+        // Standard hex color #RRGGBB
+        let start = index * 2;
+        if let Ok(value) = u8::from_str_radix(&color[start..start+2], 16) {
+            return value as f32 / 255.0;
+        }
+    }
+    
+    // Default fallback values
+    match index {
+        0 => 1.0, // Red default
+        1 => 1.0, // Green default
+        2 => 1.0, // Blue default
+        _ => 1.0, // Alpha default
+    }
 }
 
 pub fn create_shader_render_pipeline(

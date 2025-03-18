@@ -20,7 +20,7 @@ import { commands, events } from "~/utils/tauri";
 import { invoke } from "@tauri-apps/api/core";
 import toast from "solid-toast";
 import { listen } from "@tauri-apps/api/event";
-import { captionsStore } from "~/store/captions";
+import { captionsStore, type CaptionSettings } from "~/store/captions";
 import IconCapMessageBubble from "~icons/cap/message-bubble";
 import IconCapDownload from "~icons/cap/download";
 import IconCapRestart from "~icons/cap/restart";
@@ -148,44 +148,115 @@ export function CaptionsTab() {
   const [hasAudio, setHasAudio] = createSignal(false);
   const [modelPath, setModelPath] = createSignal("");
   
-  // Define the captions configuration type to match our needs
-  type CaptionsSettings = {
-    enabled: boolean;
-    font: string;
-    size: number;
-    color: string;
-    background_color: string;
-    background_opacity: number;
-    position: string; // "top", "bottom", "middle"
-    bold: boolean;
-    italic: boolean;
-    outline: boolean;
-    outline_color: string;
-    export_with_subtitles: boolean;
+  // Helper function to sync settings with project
+  const syncSettingWithProject = (key: keyof CaptionSettings, value: any) => {
+    captionsStore.updateSettings({ [key]: value });
+    
+    if (project) {
+      const updatedProject = {...project};
+      if (!updatedProject.captions) {
+        updatedProject.captions = {
+          segments: captionsStore.state.segments,
+          settings: {
+            ...captionsStore.state.settings,
+            [key]: value
+          }
+        };
+      } else {
+        updatedProject.captions.settings = {
+          ...updatedProject.captions.settings,
+          [key]: value
+        };
+      }
+      setProject(updatedProject);
+    }
   };
   
-  // Caption styling settings
-  const [captionSettings, setCaptionSettings] = createStore<CaptionsSettings>({
-    enabled: false,
-    font: "Arial",
-    size: 24,
-    color: "#FFFFFF",
-    background_color: "#000000",
-    background_opacity: 80,
-    position: "bottom", // "top", "bottom", "middle"
-    bold: true,
-    italic: false,
-    outline: true,
-    outline_color: "#000000",
-    export_with_subtitles: true,
+  // Create an effect to sync captionsStore with project settings on mount
+  createEffect(() => {
+    if (!project || !editorInstance) return;
+    
+    // If project has captions, sync them with captionsStore
+    if (project.captions) {
+      const projectCaptions = project.captions;
+      
+      // Sync segments
+      if (projectCaptions.segments.length > 0) {
+        captionsStore.updateSegments(projectCaptions.segments);
+      }
+      
+      // Sync settings with proper conversion between snake_case and camelCase
+      captionsStore.updateSettings({
+        enabled: projectCaptions.settings.enabled,
+        font: projectCaptions.settings.font,
+        size: projectCaptions.settings.size,
+        color: projectCaptions.settings.color,
+        backgroundColor: projectCaptions.settings.backgroundColor,
+        backgroundOpacity: projectCaptions.settings.backgroundOpacity,
+        position: projectCaptions.settings.position,
+        bold: projectCaptions.settings.bold,
+        italic: projectCaptions.settings.italic,
+        outline: projectCaptions.settings.outline,
+        outlineColor: projectCaptions.settings.outlineColor,
+        exportWithSubtitles: projectCaptions.settings.exportWithSubtitles
+      });
+    }
   });
   
-  const [captions, setCaptions] = createStore<{
-    segments: Array<CaptionSegment>;
-  }>({
-    segments: [],
+  // Effect to sync caption settings changes back to project
+  createEffect(() => {
+    if (!project || !editorInstance) return;
+    
+    // Get current settings from captionsStore
+    const settings = captionsStore.state.settings;
+    
+    // Create a new project with updated caption settings
+    const updatedProject = {...project};
+    
+    // Initialize captions if they don't exist
+    if (!updatedProject.captions) {
+      updatedProject.captions = {
+        segments: captionsStore.state.segments,
+        settings: {
+          enabled: settings.enabled,
+          font: settings.font,
+          size: settings.size,
+          color: settings.color,
+          backgroundColor: settings.backgroundColor,
+          backgroundOpacity: settings.backgroundOpacity,
+          position: settings.position,
+          bold: settings.bold,
+          italic: settings.italic,
+          outline: settings.outline,
+          outlineColor: settings.outlineColor,
+          exportWithSubtitles: settings.exportWithSubtitles
+        }
+      };
+    } else {
+      // Update existing settings
+      updatedProject.captions.settings = {
+        enabled: settings.enabled,
+        font: settings.font,
+        size: settings.size,
+        color: settings.color,
+        backgroundColor: settings.backgroundColor,
+        backgroundOpacity: settings.backgroundOpacity,
+        position: settings.position,
+        bold: settings.bold,
+        italic: settings.italic,
+        outline: settings.outline,
+        outlineColor: settings.outlineColor,
+        exportWithSubtitles: settings.exportWithSubtitles
+      };
+      
+      // Keep segments in sync
+      updatedProject.captions.segments = captionsStore.state.segments;
+    }
+    
+    // Update project
+    setProject(updatedProject);
   });
-
+  
   // Function to check if a model is downloaded
   const checkModelExists = async (modelName: string) => {
     const appDataDirPath = await appLocalDataDir();
@@ -197,60 +268,39 @@ export function CaptionsTab() {
   // Check downloaded models on mount
   onMount(async () => {
     try {
+      // Check for downloaded models
       const appDataDirPath = await appLocalDataDir();
       const modelsPath = await join(appDataDirPath, MODEL_FOLDER);
       
-      // Check which models are downloaded
-      const downloaded = await Promise.all(
-        MODEL_OPTIONS.map(async (model) => {
-          const exists = await checkModelExists(model.name);
-          return exists ? model.name : null;
-        })
-      );
+      // Create models directory if it doesn't exist
+      if (!(await exists(modelsPath))) {
+        await commands.createDir(modelsPath, true );
+      }
       
-      setDownloadedModels(downloaded.filter((name): name is string => name !== null));
+      // Check which models are already downloaded
+      const models = await Promise.all(MODEL_OPTIONS.map(async (model) => {
+        const downloaded = await checkModelExists(model.name);
+        return { name: model.name, downloaded };
+      }));
       
-      // Set initial selected model to first downloaded one or default
-      const initialModel = downloaded.find((name) => name !== null) || DEFAULT_MODEL;
-      setSelectedModel(initialModel);
-      setModelExists(await checkModelExists(initialModel));
-
+      // Set available models
+      setDownloadedModels(models.filter(m => m.downloaded).map(m => m.name));
+      
+      // Check if current model exists
+      if (selectedModel()) {
+        setModelExists(await checkModelExists(selectedModel()));
+      }
+      
       // Check if the video has audio
       if (editorInstance && editorInstance.recordings) {
         const hasAudioTrack = editorInstance.recordings.segments.some(
-          (segment) => segment.audio !== null
+          segment => segment.audio !== null || segment.system_audio !== null
         );
         setHasAudio(hasAudioTrack);
       }
       
-      // Load captions data
-      if (editorInstance && editorInstance.path) {
-        try {
-          // Clean the video ID by removing .cap extension and getting the last part of the path
-          const videoId = editorInstance.path.split('/').pop()?.replace('.cap', '') || '';
-          const captionsData = await commands.loadCaptions(videoId);
-          
-          if (captionsData && (captionsData as CaptionsResponse).segments) {
-            setCaptions({ segments: (captionsData as CaptionsResponse).segments });
-            setCaptionSettings("enabled", true);
-          } else {
-            try {
-              const localCaptionsData = JSON.parse(localStorage.getItem(`captions-${videoId}`) || '{}');
-              if (localCaptionsData.segments && Array.isArray(localCaptionsData.segments)) {
-                setCaptions({ segments: localCaptionsData.segments });
-              }
-              if (localCaptionsData.settings) {
-                setCaptionSettings(localCaptionsData.settings);
-              }
-            } catch (e) {
-              console.error("Error loading saved captions from localStorage:", e);
-            }
-          }
-        } catch (e) {
-          console.error("Error loading saved captions:", e);
-        }
-      }
-
+      // Load captions data is now handled by the effects above
+      
       // Restore download state if there was an ongoing download
       const downloadState = localStorage.getItem('modelDownloadState');
       if (downloadState) {
@@ -384,57 +434,43 @@ export function CaptionsTab() {
   
   // Function to delete a caption segment
   const deleteSegment = (id: string) => {
-    const newSegments = captionsStore.state.segments.filter(segment => segment.id !== id);
-    captionsStore.updateSegments(newSegments);
+    captionsStore.deleteSegment(id);
   };
   
   // Function to update a caption segment
   const updateSegment = (id: string, updates: Partial<{start: number, end: number, text: string}>) => {
-    const newSegments = captionsStore.state.segments.map(segment => 
-      segment.id === id ? { ...segment, ...updates } : segment
-    );
-    captionsStore.updateSegments(newSegments);
+    captionsStore.updateSegment(id, updates);
   };
   
   // Function to add a new caption segment
   const addSegment = (time: number) => {
-    const id = `segment-${Date.now()}`;
-    const newSegments = [
-      ...captionsStore.state.segments,
-      { 
-        id, 
-        start: time, 
-        end: time + 2, // Default 2 seconds duration
-        text: "New caption" 
-      }
-    ];
-    captionsStore.updateSegments(newSegments);
+    captionsStore.addSegment(time);
   };
 
   // Add effect to save settings to localStorage when they change
   createEffect(() => {
     if (editorInstance && editorInstance.path) {
       const saveData = {
-        segments: captions.segments,
-        settings: captionSettings
+        segments: captionsStore.state.segments,
+        settings: captionsStore.state.settings
       };
       localStorage.setItem(`captions-${editorInstance.path}`, JSON.stringify(saveData));
     }
   });
 
   return (
-    <div class="flex flex-col gap-6">
+    <div class="flex flex-col gap-6 h-full overflow-y-auto">
       <Field name="Captions" icon={<IconCapMessageBubble />}>
         <div class="flex flex-col gap-4">
           <Subfield name="Enable Captions">
             <Toggle
               checked={captionsStore.state.settings.enabled}
-              onChange={(checked) => captionsStore.updateSettings({ enabled: checked })}
+              onChange={(checked) => syncSettingWithProject("enabled", checked)}
             />
           </Subfield>
 
           <Show when={captionsStore.state.settings.enabled}>
-            <div class="flex flex-col gap-4">
+            <div class="flex flex-col gap-4 overflow-y-auto">
               {/* Model Selection and Download Section */}
               <div class="space-y-4">
                 <div class="space-y-2">
@@ -613,8 +649,8 @@ export function CaptionsTab() {
                     </h3>
                     <Subfield name="Include Subtitles">
                       <Toggle
-                        checked={captionsStore.state.settings.export_with_subtitles ?? true}
-                        onChange={(checked) => captionsStore.updateSettings({ export_with_subtitles: checked })}
+                        checked={captionsStore.state.settings.exportWithSubtitles ?? true}
+                        onChange={(checked) => syncSettingWithProject("exportWithSubtitles", checked)}
                       />
                     </Subfield>
                   </div>
@@ -741,14 +777,14 @@ export function CaptionsTab() {
                               <Subfield name="Bold">
                                 <Toggle
                                   checked={captionsStore.state.settings.bold}
-                                  onChange={(checked) => captionsStore.updateSettings({ bold: checked })}
+                                  onChange={(checked) => syncSettingWithProject("bold", checked)}
                                 />
                               </Subfield>
 
                               <Subfield name="Italic">
                                 <Toggle
                                   checked={captionsStore.state.settings.italic}
-                                  onChange={(checked) => captionsStore.updateSettings({ italic: checked })}
+                                  onChange={(checked) => syncSettingWithProject("italic", checked)}
                                 />
                               </Subfield>
                             </div>
@@ -767,10 +803,10 @@ export function CaptionsTab() {
                             <input
                               type="color"
                               class="w-8 h-8 rounded border border-gray-200"
-                              value={captionsStore.state.settings.background_color}
-                              onChange={(e) => captionsStore.updateSettings({ background_color: e.currentTarget.value })}
+                              value={captionsStore.state.settings.backgroundColor}
+                              onChange={(e) => captionsStore.updateSettings({ backgroundColor: e.currentTarget.value })}
                             />
-                            <span class="text-xs text-gray-500 uppercase">{captionsStore.state.settings.background_color}</span>
+                            <span class="text-xs text-gray-500 uppercase">{captionsStore.state.settings.backgroundColor}</span>
                           </div>
                         </Subfield>
 
@@ -782,10 +818,10 @@ export function CaptionsTab() {
                               min={0}
                               max={100}
                               step={1}
-                              value={captionsStore.state.settings.background_opacity}
-                              onChange={(e) => captionsStore.updateSettings({ background_opacity: parseInt(e.target.value) })}
+                              value={captionsStore.state.settings.backgroundOpacity}
+                              onChange={(e) => captionsStore.updateSettings({ backgroundOpacity: parseInt(e.target.value) })}
                             />
-                            <div class="text-xs text-gray-500 text-right">{captionsStore.state.settings.background_opacity}%</div>
+                            <div class="text-xs text-gray-500 text-right">{captionsStore.state.settings.backgroundOpacity}%</div>
                           </div>
                         </Subfield>
                       </div>
@@ -799,7 +835,7 @@ export function CaptionsTab() {
                         <Subfield name="Enable Outline">
                           <Toggle
                             checked={captionsStore.state.settings.outline}
-                            onChange={(checked) => captionsStore.updateSettings({ outline: checked })}
+                            onChange={(checked) => syncSettingWithProject("outline", checked)}
                           />
                         </Subfield>
 
@@ -809,10 +845,10 @@ export function CaptionsTab() {
                               <input
                                 type="color"
                                 class="w-8 h-8 rounded border border-gray-200"
-                                value={captionsStore.state.settings.outline_color}
-                                onChange={(e) => captionsStore.updateSettings({ outline_color: e.currentTarget.value })}
+                                value={captionsStore.state.settings.outlineColor}
+                                onChange={(e) => captionsStore.updateSettings({ outlineColor: e.currentTarget.value })}
                               />
-                              <span class="text-xs text-gray-500 uppercase">{captionsStore.state.settings.outline_color}</span>
+                              <span class="text-xs text-gray-500 uppercase">{captionsStore.state.settings.outlineColor}</span>
                             </div>
                           </Subfield>
                         </Show>

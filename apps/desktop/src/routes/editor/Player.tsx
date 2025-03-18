@@ -54,16 +54,57 @@ export function Player() {
     totalDuration,
     state,
     zoomOutLimit,
+    setProject,
   } = useEditorContext();
 
   // Load captions on mount
   onMount(async () => {
     if (editorInstance && editorInstance.path) {
+      // Still load captions into the store since they will be used by the GPU renderer
       await captionsStore.loadCaptions(editorInstance.path);
+      
+      // Synchronize captions settings with project configuration
+      // This ensures the GPU renderer will receive the caption settings
+      if (editorInstance && project) {
+        const updatedProject = {...project};
+        
+        // Add captions data to project configuration if it doesn't exist
+        if (!updatedProject.captions && captionsStore.state.segments.length > 0) {
+          updatedProject.captions = {
+            segments: captionsStore.state.segments.map(segment => ({
+              id: segment.id,
+              start: segment.start,
+              end: segment.end,
+              text: segment.text
+            })),
+            settings: {
+              enabled: captionsStore.state.settings.enabled,
+              font: captionsStore.state.settings.font,
+              size: captionsStore.state.settings.size,
+              color: captionsStore.state.settings.color,
+              backgroundColor: captionsStore.state.settings.backgroundColor,
+              backgroundOpacity: captionsStore.state.settings.backgroundOpacity,
+              position: captionsStore.state.settings.position,
+              bold: captionsStore.state.settings.bold,
+              italic: captionsStore.state.settings.italic,
+              outline: captionsStore.state.settings.outline,
+              outlineColor: captionsStore.state.settings.outlineColor,
+              exportWithSubtitles: captionsStore.state.settings.exportWithSubtitles
+            }
+          };
+          
+          // Update the project with captions data
+          setProject(updatedProject);
+          
+          // Save the updated project configuration
+          await commands.setProjectConfig(updatedProject);
+        }
+      }
     }
   });
 
-  // Update current caption when playback time changes
+  // Continue to update current caption when playback time changes
+  // This is still needed for CaptionsTab to highlight the current caption
   createEffect(() => {
     const time = playbackTime();
     // Only update captions if we have a valid time and segments exist
@@ -250,59 +291,6 @@ export function Player() {
                   width={currentFrame().width}
                   height={currentFrame().data.height}
                 />
-                <Show when={captionsStore.state.settings.enabled && captionsStore.state.currentCaption}>
-                  <div
-                    style={{
-                      position: "absolute",
-                      left: `${Math.max(
-                        ((containerBounds.width ?? 0) - size().width) / 2,
-                        padding
-                      )}px`,
-                      width: `${size().width}px`,
-                      ...(captionsStore.state.settings.position === "middle" 
-                        ? {
-                            top: "50%",
-                            transform: "translateY(-50%)",
-                          }
-                        : captionsStore.state.settings.position === "bottom"
-                        ? {
-                            bottom: `${Math.max(
-                              ((containerBounds.height ?? 0) - size().height) / 2,
-                              padding
-                            ) + padding}px`,
-                          }
-                        : {
-                            top: `${Math.max(
-                              ((containerBounds.height ?? 0) - size().height) / 2,
-                              padding
-                            ) + padding}px`,
-                          }),
-                      display: "flex",
-                      "justify-content": "center",
-                      "align-items": "center",
-                      "z-index": 10,
-                    }}
-                  >
-                    <div
-                      class="rounded-lg px-4 py-2 max-w-[90%] text-center"
-                      style={{
-                        "background-color": `${captionsStore.state.settings.background_color}${Math.round(
-                          (captionsStore.state.settings.background_opacity * 255) / 100
-                        ).toString(16).padStart(2, "0")}`,
-                        color: captionsStore.state.settings.color,
-                        "font-family": captionsStore.state.settings.font,
-                        "font-size": `${captionsStore.state.settings.size}px`,
-                        "font-weight": captionsStore.state.settings.bold ? "bold" : "normal",
-                        "font-style": captionsStore.state.settings.italic ? "italic" : "normal",
-                        "text-shadow": captionsStore.state.settings.outline
-                          ? `1px 1px 1px ${captionsStore.state.settings.outline_color}, -1px -1px 1px ${captionsStore.state.settings.outline_color}, 1px -1px 1px ${captionsStore.state.settings.outline_color}, -1px 1px 1px ${captionsStore.state.settings.outline_color}`
-                          : "none",
-                      }}
-                    >
-                      {captionsStore.state.currentCaption}
-                    </div>
-                  </div>
-                </Show>
               </>
             );
           }}

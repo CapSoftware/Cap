@@ -1,27 +1,27 @@
 import { createRoot, createEffect } from "solid-js";
 import { createStore } from "solid-js/store";
-import { commands } from "~/utils/tauri";
+import { CaptionSegment, commands } from "~/utils/tauri";
 
-export type CaptionSegment = {
-  id: string;
-  start: number;
-  end: number;
-  text: string;
-};
+// export type CaptionSegment = {
+//   id: string;
+//   start: number;
+//   end: number;
+//   text: string;
+// };
 
 export type CaptionSettings = {
   enabled: boolean;
   font: string;
   size: number;
   color: string;
-  background_color: string;
-  background_opacity: number;
+  backgroundColor: string;
+  backgroundOpacity: number;
   position: string;
   bold: boolean;
   italic: boolean;
   outline: boolean;
-  outline_color: string;
-  export_with_subtitles: boolean;
+  outlineColor: string;
+  exportWithSubtitles: boolean;
 };
 
 export type CaptionsState = {
@@ -38,14 +38,14 @@ function createCaptionsStore() {
       font: "Arial",
       size: 24,
       color: "#FFFFFF",
-      background_color: "#000000",
-      background_opacity: 80,
+      backgroundColor: "#000000",
+      backgroundOpacity: 80,
       position: "bottom",
       bold: true,
       italic: false,
       outline: true,
-      outline_color: "#000000",
-      export_with_subtitles: false,
+      outlineColor: "#000000",
+      exportWithSubtitles: false,
     },
     currentCaption: null
   });
@@ -67,6 +67,30 @@ function createCaptionsStore() {
       setState("currentCaption", caption);
     },
     
+    // New methods for segment operations
+    deleteSegment(id: string) {
+      setState("segments", prev => prev.filter(segment => segment.id !== id));
+    },
+
+    updateSegment(id: string, updates: Partial<{start: number, end: number, text: string}>) {
+      setState("segments", prev => prev.map(segment => 
+        segment.id === id ? { ...segment, ...updates } : segment
+      ));
+    },
+
+    addSegment(time: number) {
+      const id = `segment-${Date.now()}`;
+      setState("segments", prev => [
+        ...prev,
+        { 
+          id, 
+          start: time, 
+          end: time + 2,
+          text: "New caption" 
+        }
+      ]);
+    },
+    
     // Load captions for a video
     async loadCaptions(videoPath: string) {
       try {
@@ -75,7 +99,20 @@ function createCaptionsStore() {
           setState(prev => ({
             ...prev,
             segments: captionsData.segments,
-            settings: { ...prev.settings, enabled: true }
+            settings: captionsData.settings || {
+              enabled: true,
+              font: "Arial",
+              size: 24,
+              color: "#FFFFFF",
+              backgroundColor: "#000000",
+              backgroundOpacity: 80,
+              position: "bottom",
+              bold: true,
+              italic: false,
+              outline: true,
+              outlineColor: "#000000",
+              exportWithSubtitles: false,
+            }
           }));
         }
         
@@ -99,14 +136,26 @@ function createCaptionsStore() {
     // Save captions for a video
     async saveCaptions(videoPath: string) {
       try {
-        await commands.saveCaptions(videoPath, { 
+        const captionsData = {
           segments: state.segments,
-          settings: state.settings 
-        });
-        localStorage.setItem(`captions-${videoPath}`, JSON.stringify({
-          segments: state.segments,
-          settings: state.settings
-        }));
+          settings: {
+            enabled: state.settings.enabled,
+            font: state.settings.font,
+            size: state.settings.size,
+            color: state.settings.color,
+            backgroundColor: state.settings.backgroundColor,
+            backgroundOpacity: state.settings.backgroundOpacity,
+            position: state.settings.position,
+            bold: state.settings.bold,
+            italic: state.settings.italic,
+            outline: state.settings.outline,
+            outlineColor: state.settings.outlineColor,
+            exportWithSubtitles: state.settings.exportWithSubtitles
+          }
+        };
+        
+        await commands.saveCaptions(videoPath, captionsData);
+        localStorage.setItem(`captions-${videoPath}`, JSON.stringify(captionsData));
       } catch (e) {
         console.error("Error saving captions:", e);
       }
@@ -151,4 +200,4 @@ function createCaptionsStore() {
 // Create a singleton instance
 const captionsStore = createRoot(() => createCaptionsStore());
 
-export { captionsStore }; 
+export { captionsStore };

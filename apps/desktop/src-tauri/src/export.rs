@@ -99,74 +99,18 @@ pub async fn export_video(
 
     match result {
         Ok(_) => {
-            // Export captions if they exist and are enabled
-            tracing::info!("Attempting to export captions for video_id: {}", video_id);
-            // Strip .cap extension if present in video_id for consistency
-            let clean_video_id = video_id.trim_end_matches(".cap").to_string();
+            // Since captions are now rendered directly in the video frames using GPU,
+            // we don't need to apply them as a subtitle track in the export process
+            tracing::info!("Video successfully exported with captions rendered directly on frames");
             
-            // First check if captions exist
-            if let Ok(Some(srt_path)) = captions::export_captions_srt(clean_video_id.clone(), app.clone()).await {
-                tracing::info!("Found SRT file at: {:?}", srt_path);
-                
-                // Check if captions are enabled for export
-                let captions_enabled = if let Ok(Some(captions_data)) = captions::load_captions(clean_video_id, app.clone()).await {
-                    captions_data.settings.as_ref().map(|s| s.export_with_subtitles).unwrap_or(true)
-                } else {
-                    true // Default to true if settings not found
-                };
-                
-                if captions_enabled {
-                    tracing::info!("Captions are enabled for export, proceeding with embedding");
-                    // Create a temporary output file for the video with captions
-                    let temp_output = output_path.with_extension("with_captions.mp4");
-                    tracing::info!("Created temporary output path for captioned video: {:?}", temp_output);
-                    
-                    // Use FFmpeg to add captions to the video
-                    tracing::info!("Running FFmpeg command to embed captions");
-                    let status = Command::new("ffmpeg")
-                        .args([
-                            "-i", &output_path.to_string_lossy(),
-                            "-i", &srt_path.to_string_lossy(),
-                            "-c:v", "copy",
-                            "-c:a", "copy",
-                            "-c:s", "mov_text",
-                            "-metadata:s:s:0", "language=eng",
-                            "-movflags", "+faststart",
-                            "-map", "0:v",
-                            "-map", "0:a",
-                            "-map", "1:0",
-                            "-y",
-                            &temp_output.to_string_lossy(),
-                        ])
-                        .status()
-                        .map_err(|e| {
-                            tracing::error!("FFmpeg command failed: {}", e);
-                            format!("Failed to run FFmpeg: {}", e)
-                        })?;
-
-                    if status.success() {
-                        tracing::info!("FFmpeg command completed successfully");
-                        // Replace the original output with the captioned version
-                        tracing::info!("Renaming temporary file to final output: {:?} -> {:?}", temp_output, output_path);
-                        std::fs::rename(&temp_output, &output_path)
-                            .map_err(|e| {
-                                tracing::error!("Failed to rename output file: {}", e);
-                                format!("Failed to rename output file: {}", e)
-                            })?;
-                        tracing::info!("Successfully completed video export with captions");
-                    } else {
-                        tracing::error!("FFmpeg command failed with non-zero exit status");
-                        // Clean up the temporary file if the operation failed
-                        if let Err(e) = std::fs::remove_file(&temp_output) {
-                            tracing::warn!("Failed to clean up temporary file: {}", e);
-                        }
-                        return Err("Failed to add captions to video".to_string());
-                    }
-                } else {
-                    tracing::info!("Captions are disabled for export, skipping embedding");
+            // Keep the SRT export functionality for external use if needed
+            let clean_video_id = video_id.trim_end_matches(".cap").to_string();
+            if let Ok(Some(captions_data)) = captions::load_captions(clean_video_id.clone(), app.clone()).await {
+                if captions_data.settings.as_ref().map(|s| s.export_with_subtitles).unwrap_or(false) {
+                    // Only export the SRT file but don't embed it in the video
+                    let _ = captions::export_captions_srt(clean_video_id, app.clone()).await;
+                    tracing::info!("SRT file exported separately for external use");
                 }
-            } else {
-                tracing::info!("No captions to export for video_id: {}", video_id);
             }
 
             ShowCapWindow::RecordingsOverlay.show(&app).ok();

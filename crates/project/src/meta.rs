@@ -7,8 +7,10 @@ use std::{
     fs::File,
     path::{Path, PathBuf},
 };
+use tracing::{info, warn, debug};
+// use tracing::{debug, warn};
 
-use crate::{CursorEvents, CursorImage, CursorImages, ProjectConfiguration, XY};
+use crate::{CaptionsData, CursorEvents, CursorImage, CursorImages, ProjectConfiguration, XY};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct Display {
@@ -91,7 +93,25 @@ impl RecordingMeta {
     }
 
     pub fn project_config(&self) -> ProjectConfiguration {
-        ProjectConfiguration::load(&self.project_path).unwrap_or_default()
+        let mut config = ProjectConfiguration::load(&self.project_path).unwrap_or_default();
+        
+        // Try to load captions from captions.json if it exists
+        let captions_path = self.project_path.join("captions.json");
+        debug!("Checking for captions at: {:?}", captions_path);
+        
+        if let Ok(captions_str) = std::fs::read_to_string(&captions_path) {
+            debug!("Found captions.json, attempting to parse");
+            if let Ok(captions_data) = serde_json::from_str::<CaptionsData>(&captions_str) {
+                info!("Successfully loaded captions with {} segments", captions_data.segments.len());
+                config.captions = Some(captions_data);
+            } else {
+                warn!("Failed to parse captions.json");
+            }
+        } else {
+            debug!("No captions.json found");
+        }
+        
+        config
     }
 
     pub fn output_path(&self) -> PathBuf {

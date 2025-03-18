@@ -12,31 +12,12 @@ use tempfile::tempdir;
 use tokio::sync::Mutex;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 use tokio::io::AsyncWriteExt;
+use cap_project;
 
-#[derive(Debug, Serialize, Deserialize, Type, Clone)]
-pub struct CaptionSegment {
-    pub id: String,
-    pub start: f64,
-    pub end: f64,
-    pub text: String,
-}
+// Re-export caption types from cap_project
+pub use cap_project::{CaptionSegment, CaptionSettings};
 
-#[derive(Debug, Serialize, Deserialize, Type, Clone)]
-pub struct CaptionSettings {
-    pub enabled: bool,
-    pub font: String,
-    pub size: u32,
-    pub color: String,
-    pub background_color: String,
-    pub background_opacity: u32,
-    pub position: String,
-    pub bold: bool,
-    pub italic: bool,
-    pub outline: bool,
-    pub outline_color: String,
-    pub export_with_subtitles: bool,
-}
-
+// Convert the project type's float precision from f32 to f64 for compatibility
 #[derive(Debug, Serialize, Deserialize, Type, Clone)]
 pub struct CaptionData {
     pub segments: Vec<CaptionSegment>,
@@ -186,9 +167,9 @@ fn process_with_whisper(audio_path: &PathBuf, context: Arc<WhisperContext>, lang
         let end_i64 = state.full_get_segment_t1(i)
             .map_err(|e| format!("Failed to get segment end time: {}", e))?;
         
-        // Convert timestamps from centiseconds to seconds
-        let start_time = start_i64 as f64 / 100.0;
-        let end_time = end_i64 as f64 / 100.0;
+        // Convert timestamps from centiseconds to seconds (as f32 for CaptionSegment)
+        let start_time = (start_i64 as f32) / 100.0;
+        let end_time = (end_i64 as f32) / 100.0;
         
         // Add debug logging for timestamps
         log::info!("Segment {}: start={}, end={}, text='{}'", i, start_time, end_time, text.trim());
@@ -196,7 +177,7 @@ fn process_with_whisper(audio_path: &PathBuf, context: Arc<WhisperContext>, lang
         if !text.trim().is_empty() {
             segments.push(CaptionSegment {
                 id: format!("segment-{}", i),
-                start: start_time,
+                start: start_time, 
                 end: end_time,
                 text: text.trim().to_string(),
             });
@@ -249,44 +230,46 @@ pub async fn transcribe_audio(video_path: String, model_path: String, language: 
 #[tauri::command]
 #[specta::specta]
 pub async fn save_captions(video_id: String, captions: CaptionData, app: AppHandle) -> Result<(), String> {
-    tracing::info!("Starting to save captions for video_id: {}", video_id);
+    tracing::info!("Saving captions for video_id: {}", video_id);
     
-    // Get the path to save the captions
     let captions_dir = app_captions_dir(&app, &video_id)?;
-    let captions_path = captions_dir.join("captions.json");
-    tracing::info!("Will save captions to: {:?}", captions_path);
     
-    // Create parent directories if needed
-    if let Some(parent) = captions_path.parent() {
-        tracing::info!("Creating parent directories: {:?}", parent);
-        std::fs::create_dir_all(parent)
-            .map_err(|e| {
-                tracing::error!("Failed to create parent directories: {}", e);
-                format!("Failed to create parent directories: {}", e)
-            })?;
+    if !captions_dir.exists() {
+        tracing::info!("Creating captions directory: {:?}", captions_dir);
+        std::fs::create_dir_all(&captions_dir).map_err(|e| {
+            tracing::error!("Failed to create captions directory: {}", e);
+            format!("Failed to create captions directory: {}", e)
+        })?;
     }
     
-    // Serialize and save the captions
-    tracing::info!("Serializing {} caption segments", captions.segments.len());
-    let json = match serde_json::to_string_pretty(&captions) {
-        Ok(j) => j,
-        Err(e) => {
-            tracing::error!("Failed to serialize captions: {}", e);
-            return Err(format!("Failed to serialize captions: {}", e));
-        }
+    let captions_path = captions_dir.join("captions.json");
+    
+    tracing::info!("Writing captions to: {:?}", captions_path);
+    
+    // Convert CaptionData to project CaptionsData
+    let project_captions = cap_project::CaptionsData {
+        segments: captions.segments.iter().map(|seg| cap_project::CaptionSegment {
+            id: seg.id.clone(),
+            start: seg.start, // Already f32, no conversion needed
+            end: seg.end,     // Already f32, no conversion needed
+            text: seg.text.clone(),
+        }).collect(),
+        settings: captions.settings.clone().unwrap_or_default(),
     };
     
-    tracing::info!("Writing captions to file");
-    match std::fs::write(&captions_path, json) {
-        Ok(_) => {
-            tracing::info!("Successfully saved captions to: {:?}", captions_path);
-            Ok(())
-        }
-        Err(e) => {
-            tracing::error!("Failed to write captions file: {}", e);
-            Err(format!("Failed to write captions file: {}", e))
-        }
-    }
+    // Serialize to JSON
+    let json = serde_json::to_string_pretty(&project_captions).map_err(|e| {
+        tracing::error!("Failed to serialize captions: {}", e);
+        format!("Failed to serialize captions: {}", e)
+    })?;
+    
+    std::fs::write(captions_path, json).map_err(|e| {
+        tracing::error!("Failed to write captions file: {}", e);
+        format!("Failed to write captions file: {}", e)
+    })?;
+    
+    tracing::info!("Successfully saved captions");
+    Ok(())
 }
 
 /// Function to load caption data from a file
@@ -312,10 +295,22 @@ pub async fn load_captions(video_id: String, app: AppHandle) -> Result<Option<Ca
     };
     
     tracing::info!("Parsing captions JSON");
-    match serde_json::from_str(&json) {
-        Ok(captions) => {
+    match serde_json::from_str::<cap_project::CaptionsData>(&json) {
+        Ok(project_captions) => {
             tracing::info!("Successfully loaded captions");
-            Ok(Some(captions))
+            
+            // Convert cap_project::CaptionsData to CaptionData
+            let tauri_captions = CaptionData {
+                segments: project_captions.segments.iter().map(|seg| CaptionSegment {
+                    id: seg.id.clone(),
+                    start: seg.start, // Don't convert - keep as f32
+                    end: seg.end,     // Don't convert - keep as f32
+                    text: seg.text.clone(),
+                }).collect(),
+                settings: Some(project_captions.settings),
+            };
+            
+            Ok(Some(tauri_captions))
         }
         Err(e) => {
             tracing::error!("Failed to parse captions: {}", e);
@@ -457,8 +452,8 @@ fn captions_to_srt(captions: &CaptionData) -> String {
     let mut srt = String::new();
     for (i, segment) in captions.segments.iter().enumerate() {
         // Convert start and end times from seconds to HH:MM:SS,mmm format
-        let start_time = format_srt_time(segment.start);
-        let end_time = format_srt_time(segment.end);
+        let start_time = format_srt_time(f64::from(segment.start));
+        let end_time = format_srt_time(f64::from(segment.end));
         
         // Write SRT entry
         srt.push_str(&format!("{}\n{} --> {}\n{}\n\n", 
