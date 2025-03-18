@@ -103,7 +103,7 @@ export default function () {
     const currentWindow = getCurrentWindow();
     const MAIN_WINDOW_SIZE = {
       width: 300,
-      height: 290 + (window.FLAGS.systemAudioRecording ? 40 : 0),
+      height: 290 + (window.FLAGS.systemAudioRecording ? 60 : 0),
     };
 
     // Set initial size
