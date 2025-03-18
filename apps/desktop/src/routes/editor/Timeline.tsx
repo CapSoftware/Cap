@@ -639,8 +639,8 @@ function ZoomTrack(props: {
               }}
             >
               <SegmentContent class="bg-gradient-to-r zoom-gradient-border bg-[#adadad] transition-colors group shadow-[inset_0_-5px_20px_3px_rgba(255,255,255,0.8)]">
-                <p class="w-full text-sm text-center text-gray-500 text-primary dark:text-gray-50">
-                  + Zoom
+                <p class="w-full text-center text-gray-500 text-md text-primary dark:text-gray-50">
+                  +
                 </p>
               </SegmentContent>
             </SegmentRoot>
