@@ -3,24 +3,19 @@ import { NextRequest } from "next/server";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
-import { clientEnv } from "@cap/env";
+import { clientEnv, serverEnv } from "@cap/env";
+import { db } from "@cap/database";
+import { s3Buckets, videos } from "@cap/database/schema";
+import { eq } from "drizzle-orm";
 
 export const runtime = "edge";
 
 export async function GET(req: NextRequest) {
   const videoId = req.nextUrl.searchParams.get("videoId") as string;
 
-  const response = await fetch(
-    `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/${videoId}`,
-    {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-      },
-    }
-  );
+  const response = await getData(videoId);
 
-  if (!response.ok) {
+  if (!response) {
     return new ImageResponse(
       (
         <div
@@ -48,7 +43,7 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const { video, bucket } = await response.json();
+  const { video, bucket } = response;
 
   if (!video || !bucket || video.public === false) {
     return new ImageResponse(
@@ -75,7 +70,7 @@ export async function GET(req: NextRequest) {
   }
 
   const [s3Client] = await createS3Client(bucket);
-  const Bucket = await getS3Bucket(bucket);
+  const Bucket = await getS3Bucket(bucket as any);
 
   const screenshotKey = `${video.ownerId}/${video.id}/screenshot/screen-capture.jpg`;
   let screenshotUrl = null;
@@ -167,4 +162,31 @@ export async function GET(req: NextRequest) {
       height: 630,
     }
   );
+}
+
+async function getData(videoId: string) {
+  const query = await db
+    .select({
+      video: videos,
+      bucket: s3Buckets,
+    })
+    .from(videos)
+    .leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
+    .where(eq(videos.id, videoId));
+
+  const result = query[0];
+
+  if (!result) return;
+
+  const defaultBucket = {
+    name: clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET,
+    region: clientEnv.NEXT_PUBLIC_CAP_AWS_REGION,
+    accessKeyId: serverEnv.CAP_AWS_ACCESS_KEY,
+    secretAccessKey: serverEnv.CAP_AWS_SECRET_KEY,
+  };
+
+  return {
+    video: result.video,
+    bucket: result.bucket || defaultBucket,
+  };
 }
