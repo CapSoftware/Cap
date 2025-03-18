@@ -49,6 +49,7 @@ use editor_window::WindowEditorInstance;
 use general_settings::GeneralSettingsStore;
 use mp4::Mp4Reader;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
+use captions::DownloadProgress;
 use notifications::NotificationType;
 use png::{ColorType, Encoder};
 use recording::InProgressRecording;
@@ -84,7 +85,6 @@ use tracing_subscriber::Layer;
 use upload::{get_s3_config, upload_image, upload_video, S3UploadMeta};
 use web_api::ManagerExt as WebManagerExt;
 use windows::{CapWindowId, ShowCapWindow};
-use captions::DownloadProgress;
 
 #[derive(specta::Type, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -2100,7 +2100,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             captions::download_whisper_model,
             captions::check_model_exists,
             captions::delete_whisper_model,
-            captions::export_captions_srt
+            captions::export_captions_srt,
             reupload_instant_video
         ])
         .events(tauri_specta::collect_events![

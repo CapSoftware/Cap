@@ -1,5 +1,6 @@
 use crate::{
-    create_editor_instance_impl, get_video_metadata, recordings_path, windows::ShowCapWindow, RenderProgress, VideoType,
+    create_editor_instance_impl, get_video_metadata, recordings_path, windows::ShowCapWindow,
+    RenderProgress, VideoType,
 };
 use cap_editor::EditorInstance;
 use cap_project::{RecordingMeta, XY};

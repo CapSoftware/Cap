@@ -10,15 +10,17 @@ use frame_pipeline::{FramePipeline, FramePipelineEncoder, FramePipelineState};
 use futures::future::OptionFuture;
 use futures::FutureExt;
 use layers::{
-    find_caption_at_time, find_caption_at_time_project, Background, BackgroundBlurPipeline, BackgroundLayer, CameraLayer, CaptionSettings, CaptionsLayer, CursorLayer, DisplayLayer, GradientOrColorPipeline, ImageBackgroundPipeline
+    find_caption_at_time, find_caption_at_time_project, Background, BackgroundBlurPipeline,
+    BackgroundLayer, CameraLayer, CaptionSettings, CaptionsLayer, CursorLayer, DisplayLayer,
+    GradientOrColorPipeline, ImageBackgroundPipeline,
 };
 use specta::Type;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc;
 
 use image::GenericImageView;
+use log::{debug, info, warn};
 use std::{path::PathBuf, time::Instant};
-use log::{info, warn, debug};
 
 mod composite_frame;
 mod coord;
@@ -362,7 +364,7 @@ impl RenderVideoConstants {
         });
 
         let cursor_layer = CursorLayer::new(&device);
-        
+
         // Initialize the captions layer
         let captions_layer = CaptionsLayer::new(&device, &queue);
 
@@ -1008,19 +1010,26 @@ async fn produce_frame(
 
         // Render captions if there are any caption segments to display
         if let Some(caption_data) = &uniforms.project.captions {
-            debug!("Found caption data in project - Enabled: {}", caption_data.settings.enabled);
+            debug!(
+                "Found caption data in project - Enabled: {}",
+                caption_data.settings.enabled
+            );
             if caption_data.settings.enabled {
                 // Find the current caption for this time
                 let current_time = segment_frames.segment_time;
                 debug!("Looking for caption at time: {}", current_time);
-                
-                if let Some(current_caption) = find_caption_at_time_project(current_time, &caption_data.segments) {
-                    info!("Found caption to render: '{}' ({} - {})", 
-                        current_caption.text, current_caption.start, current_caption.end);
-                    
+
+                if let Some(current_caption) =
+                    find_caption_at_time_project(current_time, &caption_data.segments)
+                {
+                    info!(
+                        "Found caption to render: '{}' ({} - {})",
+                        current_caption.text, current_caption.start, current_caption.end
+                    );
+
                     // Get caption text and time for use in rendering
                     let caption_text = current_caption.text.clone();
-                    
+
                     // Create settings for the caption
                     let caption_settings = CaptionSettings {
                         enabled: 1,
@@ -1051,25 +1060,27 @@ async fn produce_frame(
                         ],
                         _padding: [0.0, 0.0],
                     };
-                    
+
                     info!("Applying caption settings - Font size: {}, Position: {}, Background opacity: {}", 
                           caption_settings.font_size, 
                           caption_settings.position,
                           caption_settings.background_color[3]);
-                    
+
                     // Convert caption segments to the internal CaptionSegment type
-                    let converted_segments: Vec<layers::CaptionSegment> = caption_data.segments
+                    let converted_segments: Vec<layers::CaptionSegment> = caption_data
+                        .segments
                         .iter()
                         .map(|seg| layers::convert_project_caption(seg))
                         .collect();
-                    
+
                     // Instead of using unsafe code that creates undefined behavior,
                     // create a properly structured temporary CaptionsLayer and use it for rendering
-                    let mut temp_captions_layer = layers::CaptionsLayer::new(&constants.device, &constants.queue);
-                    
+                    let mut temp_captions_layer =
+                        layers::CaptionsLayer::new(&constants.device, &constants.queue);
+
                     // Set current caption text
                     temp_captions_layer.update_caption(Some(caption_text), current_time);
-                    
+
                     // Render the caption with converted segments
                     temp_captions_layer.render(
                         &mut pipeline,
@@ -1082,7 +1093,7 @@ async fn produce_frame(
                     // Make sure we don't lose the caption by switching output
                     // Comment this out if captions are disappearing
                     // pipeline.state.switch_output();
-                    
+
                     info!("Caption rendering completed");
                 } else {
                     debug!("No caption found for time {}", current_time);
@@ -1110,16 +1121,16 @@ async fn produce_frame(
 fn parse_color_component(hex_color: &str, index: usize) -> f32 {
     // Remove # prefix if present
     let color = hex_color.trim_start_matches('#');
-    
+
     // Parse the color component
     if color.len() == 6 {
         // Standard hex color #RRGGBB
         let start = index * 2;
-        if let Ok(value) = u8::from_str_radix(&color[start..start+2], 16) {
+        if let Ok(value) = u8::from_str_radix(&color[start..start + 2], 16) {
             return value as f32 / 255.0;
         }
     }
-    
+
     // Default fallback values
     match index {
         0 => 1.0, // Red default
