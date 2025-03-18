@@ -107,13 +107,13 @@ async uploadExportedVideo(videoId: string, mode: UploadMode) : Promise<UploadRes
 async uploadScreenshot(screenshotPath: string) : Promise<UploadResult> {
     return await TAURI_INVOKE("upload_screenshot", { screenshotPath });
 },
-async getRecordingMeta(id: string, fileType: string) : Promise<RecordingMeta> {
+async getRecordingMeta(id: string, fileType: string) : Promise<RecordingMetaWithType> {
     return await TAURI_INVOKE("get_recording_meta", { id, fileType });
 },
 async saveFileDialog(fileName: string, fileType: string) : Promise<string | null> {
     return await TAURI_INVOKE("save_file_dialog", { fileName, fileType });
 },
-async listRecordings() : Promise<([string, string, RecordingMeta])[]> {
+async listRecordings() : Promise<([string, string, RecordingMetaWithType])[]> {
     return await TAURI_INVOKE("list_recordings");
 },
 async listScreenshots() : Promise<([string, string, RecordingMeta])[]> {
@@ -223,6 +223,9 @@ async deleteWhisperModel(modelPath: string) : Promise<null> {
  */
 async exportCaptionsSrt(videoId: string) : Promise<string | null> {
     return await TAURI_INVOKE("export_captions_srt", { videoId });
+},
+async reuploadInstantVideo(videoId: string) : Promise<null> {
+    return await TAURI_INVOKE("reupload_instant_video", { videoId });
 }
 }
 
@@ -337,11 +340,13 @@ export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background
 export type ProjectRecordings = { segments: SegmentRecordings[] }
 export type RecordingMeta = (StudioRecordingMeta | InstantRecordingMeta) & { pretty_name: string; sharing?: SharingMeta | null }
 export type RecordingMetaChanged = { id: string }
+export type RecordingMetaWithType = ((StudioRecordingMeta | InstantRecordingMeta) & { pretty_name: string; sharing?: SharingMeta | null }) & { type: RecordingType }
 export type RecordingMode = "studio" | "instant"
 export type RecordingOptions = { captureTarget: ScreenCaptureTarget; audioInputName: string | null; cameraLabel: string | null; captureSystemAudio?: boolean; mode: RecordingMode }
 export type RecordingOptionsChanged = null
 export type RecordingStarted = null
 export type RecordingStopped = { path: string }
+export type RecordingType = "studio" | "instant"
 export type RenderFrameEvent = { frame_number: number; fps: number; resolution_base: XY<number> }
 export type RenderProgress = { type: "Starting"; total_frames: number } | { type: "EstimatedTotalFrames"; total_frames: number } | { type: "FrameRendered"; current_frame: number }
 export type RequestNewScreenshot = null

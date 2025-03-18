@@ -1,26 +1,29 @@
-import { createQuery } from "@tanstack/solid-query";
+import { createMutation, createQuery } from "@tanstack/solid-query";
 import { For, ParentProps, Show, Suspense, createSignal } from "solid-js";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
-import { commands, events, type RecordingMeta } from "~/utils/tauri";
+import {
+  commands,
+  events,
+  RecordingMetaWithType,
+  type RecordingMeta,
+} from "~/utils/tauri";
 import { trackEvent } from "~/utils/analytics";
 import Tooltip from "@corvu/tooltip";
 
-type MediaEntry = {
+type Recording = {
+  meta: RecordingMetaWithType;
   id: string;
   path: string;
   prettyName: string;
-  isNew: boolean;
   thumbnailPath: string;
 };
 
 export default function Recordings() {
-  const fetchRecordings = createQuery(() => ({
+  const recordings = createQuery(() => ({
     queryKey: ["recordings"],
     queryFn: async () => {
-      const result = await commands
-        .listRecordings()
-        .catch(() => [] as [string, string, RecordingMeta][]);
+      const result = await commands.listRecordings().catch(() => [] as const);
 
       const recordings = await Promise.all(
         result.map(async (file) => {
@@ -28,10 +31,10 @@ export default function Recordings() {
           const thumbnailPath = `${path}/screenshots/display.jpg`;
 
           return {
+            meta,
             id,
             path,
             prettyName: meta.pretty_name,
-            isNew: false,
             thumbnailPath,
           };
         })
@@ -40,7 +43,7 @@ export default function Recordings() {
     },
   }));
 
-  const handleRecordingClick = (recording: MediaEntry) => {
+  const handleRecordingClick = (recording: Recording) => {
     trackEvent("recording_view_clicked", { recording_id: recording.id });
     events.newStudioRecordingAdded.emit({ path: recording.path });
   };
@@ -64,14 +67,14 @@ export default function Recordings() {
       <div class="flex-1 overflow-y-auto">
         <ul class="p-[0.625rem] flex flex-col gap-[0.5rem] w-full text-[--text-primary]">
           <Show
-            when={fetchRecordings.data && fetchRecordings.data.length > 0}
+            when={recordings.data && recordings.data.length > 0}
             fallback={
               <p class="text-center text-[--text-tertiary]">
                 No recordings found
               </p>
             }
           >
-            <For each={fetchRecordings.data}>
+            <For each={recordings.data}>
               {(recording) => (
                 <RecordingItem
                   recording={recording}
@@ -89,12 +92,18 @@ export default function Recordings() {
 }
 
 function RecordingItem(props: {
-  recording: MediaEntry;
+  recording: Recording;
   onClick: () => void;
   onOpenFolder: () => void;
   onOpenEditor: () => void;
 }) {
   const [imageExists, setImageExists] = createSignal(true);
+
+  const reupload = createMutation(() => ({
+    mutationFn: () => {
+      return commands.reuploadInstantVideo(props.recording.id);
+    },
+  }));
 
   return (
     <li class="w-full flex flex-row justify-between items-center p-2 hover:bg-gray-100 rounded">
@@ -115,6 +124,17 @@ function RecordingItem(props: {
         <span>{props.recording.prettyName}</span>
       </div>
       <div class="flex items-center">
+        {import.meta.env.DEV &&
+          props.recording.meta.type === "instant" &&
+          props.recording.meta.sharing?.id && (
+            <button
+              onClick={() => {
+                reupload.mutate();
+              }}
+            >
+              Reupload
+            </button>
+          )}
         <TooltipIconButton
           tooltipText="Open project files"
           onClick={() => props.onOpenFolder()}
