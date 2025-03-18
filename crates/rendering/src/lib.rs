@@ -9,15 +9,21 @@ use decoder::{spawn_decoder, AsyncVideoDecoderHandle};
 use frame_pipeline::{FramePipeline, FramePipelineEncoder, FramePipelineState};
 use futures::future::OptionFuture;
 use futures::FutureExt;
-use glyphon::{Cache, FontSystem, SwashCache, TextAtlas, TextRenderer, Viewport};
+use glyphon::{
+    Attrs, Buffer, Cache, Family, FontSystem, Metrics, Shaping, SwashCache, TextArea, TextAtlas,
+    TextBounds, TextRenderer, Viewport,
+};
 use layers::{
     Background, BackgroundBlurPipeline, BackgroundLayer, CameraLayer, CursorLayer, DisplayLayer,
-    GradientOrColorPipeline, ImageBackgroundPipeline,
+    GradientOrColorPipeline, ImageBackgroundPipeline, TextLayer,
 };
 use specta::Type;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 use tokio::sync::mpsc;
-use wgpu::MultisampleState;
+use wgpu::{util::DeviceExt, Color, MultisampleState};
 
 use image::GenericImageView;
 use std::{path::PathBuf, time::Instant};
@@ -279,7 +285,8 @@ pub struct RenderVideoConstants {
     screen_frame: (wgpu::Texture, wgpu::TextureView),
     camera_frame: Option<(wgpu::Texture, wgpu::TextureView)>,
     cursor_layer: CursorLayer,
-    text_renderer: TextRenderer,
+    viewport: Mutex<Viewport>,
+    text_cache: Cache,
 }
 
 impl RenderVideoConstants {
@@ -363,14 +370,8 @@ impl RenderVideoConstants {
             (texture, texture_view)
         });
 
-        let mut font_system = FontSystem::new();
-        let swash_cache = SwashCache::new();
-        let cache = Cache::new(&device);
-        let viewport = Viewport::new(&device, &cache);
-        let mut atlas =
-            TextAtlas::new(&device, &queue, &cache, wgpu::TextureFormat::Rgba8UnormSrgb);
-        let text_renderer =
-            TextRenderer::new(&mut atlas, &device, MultisampleState::default(), None);
+        let text_cache = Cache::new(&device);
+        let viewport = Viewport::new(&device, &text_cache);
 
         Ok(Self {
             _instance: instance,
@@ -387,7 +388,8 @@ impl RenderVideoConstants {
             screen_frame,
             camera_frame,
             background_blur_pipeline,
-            text_renderer,
+            viewport: Mutex::new(viewport),
+            text_cache,
         })
     }
 
@@ -951,7 +953,7 @@ impl<'a> FrameRenderer<'a> {
         self.update_output_textures(uniforms.output_size.0, uniforms.output_size.1);
 
         produce_frame(
-            &self.constants,
+            self.constants,
             segment_frames,
             uniforms,
             self.output_textures.as_ref().unwrap(),
@@ -1011,6 +1013,99 @@ async fn produce_frame(
                 uniforms,
                 (texture, texture_view),
             );
+        }
+
+        // TODO: Break out
+        {
+            let frame_size = pipeline.state.constants.options.screen_size;
+
+            let mut font_system = FontSystem::new();
+            let mut swash_cache = SwashCache::new();
+            let mut atlas = TextAtlas::new(
+                &pipeline.state.constants.device,
+                &pipeline.state.constants.queue,
+                &pipeline.state.constants.text_cache,
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+            );
+            let mut text_renderer = TextRenderer::new(
+                &mut atlas,
+                &pipeline.state.constants.device,
+                MultisampleState::default(),
+                None,
+            );
+
+            let mut text_buffer = Buffer::new(&mut font_system, Metrics::new(30.0, 42.0));
+
+            text_buffer.set_size(
+                &mut font_system,
+                Some(frame_size.x as f32),
+                Some(frame_size.y as f32),
+            );
+            text_buffer.set_text(&mut font_system, "Hello world! 👋\nThis is rendered with 🦅 glyphon 🦁\nThe text below should be partially clipped.\na b c d e f g h i j k l m n o p q r s t u v w x y z", Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+            text_buffer.shape_until_scroll(&mut font_system, false);
+
+            // TODO: Don't mutex viewport
+            pipeline.state.constants.viewport.lock().unwrap().update(
+                &pipeline.state.constants.queue,
+                glyphon::Resolution {
+                    width: frame_size.x,
+                    height: frame_size.y,
+                },
+            );
+
+            text_renderer
+                .prepare(
+                    &pipeline.state.constants.device,
+                    &pipeline.state.constants.queue,
+                    &mut font_system, // TODO: This being mutable means it can't be reused
+                    &mut atlas,
+                    &constants.viewport.lock().unwrap(),
+                    [TextArea {
+                        buffer: &text_buffer,
+                        left: 0.0,
+                        top: 0.0,
+                        scale: 1.0,
+                        bounds: TextBounds {
+                            left: 0,
+                            top: 0,
+                            right: 600,
+                            bottom: 160,
+                        },
+                        default_color: glyphon::Color::rgb(255, 255, 255),
+                        custom_glyphs: &[],
+                    }],
+                    &mut swash_cache,
+                )
+                .unwrap();
+
+            let mut render_pass =
+                pipeline
+                    .encoder
+                    .encoder
+                    .begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: None,
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &pipeline.state.get_current_texture_view(),
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+
+            text_renderer
+                .render(
+                    &atlas,
+                    &constants.viewport.lock().unwrap(),
+                    &mut render_pass,
+                )
+                .unwrap(); // TODO: Error handling
+
+            // TextLayer::render(&mut pipeline, &text_renderer); // TODO
         }
     }
 
