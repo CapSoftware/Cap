@@ -1058,11 +1058,16 @@ async fn produce_frame(
                             parse_color_component(&caption_data.settings.outline_color, 2),
                             1.0,
                         ],
-                        _padding: [0.0, 0.0],
+                        font: match caption_data.settings.font.as_str() {
+                            "System Serif" => 1,
+                            "System Monospace" => 2,
+                            _ => 0, // Default to SansSerif for "System Sans-Serif" and any other value
+                        },
+                        _padding: [0.0],
                     };
 
                     info!("Applying caption settings - Font size: {}, Position: {}, Background opacity: {}", 
-                          caption_settings.font_size, 
+                          caption_settings.font_size,
                           caption_settings.position,
                           caption_settings.background_color[3]);
 

@@ -444,7 +444,7 @@ impl Default for CaptionSettings {
     fn default() -> Self {
         Self {
             enabled: false,
-            font: "Arial".to_string(),
+            font: "System Sans-Serif".to_string(),
             size: 24,
             color: "#FFFFFF".to_string(),
             background_color: "#000000".to_string(),

@@ -29,7 +29,8 @@ pub struct CaptionSettings {
     pub position: u32, // 0 = top, 1 = middle, 2 = bottom
     pub outline: u32,  // 0 = disabled, 1 = enabled
     pub outline_color: [f32; 4],
-    pub _padding: [f32; 2], // for alignment
+    pub font: u32,          // 0 = SansSerif, 1 = Serif, 2 = Monospace
+    pub _padding: [f32; 1], // for alignment
 }
 
 impl Default for CaptionSettings {
@@ -42,7 +43,8 @@ impl Default for CaptionSettings {
             position: 2,                            // bottom
             outline: 1,                             // enabled
             outline_color: [0.0, 0.0, 0.0, 1.0],    // black
-            _padding: [0.0, 0.0],
+            font: 0,                                // SansSerif
+            _padding: [0.0],
         }
     }
 }
@@ -220,7 +222,13 @@ impl CaptionsLayer {
 
             // Apply text styling directly when setting the text
             // Create text attributes with or without outline
-            let mut attrs = Attrs::new().family(Family::SansSerif).color(color);
+            let font_family = match settings.font {
+                0 => Family::SansSerif,
+                1 => Family::Serif,
+                2 => Family::Monospace,
+                _ => Family::SansSerif, // Default to SansSerif for any other value
+            };
+            let mut attrs = Attrs::new().family(font_family).color(color);
 
             // Apply text to buffer
             updated_buffer.set_text(&mut self.font_system, text, attrs, Shaping::Advanced);
