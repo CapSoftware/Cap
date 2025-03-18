@@ -1,4 +1,4 @@
-import { createQuery } from "@tanstack/solid-query";
+import { createMutation, createQuery } from "@tanstack/solid-query";
 import { For, ParentProps, Show, Suspense, createSignal } from "solid-js";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
@@ -99,6 +99,12 @@ function RecordingItem(props: {
 }) {
   const [imageExists, setImageExists] = createSignal(true);
 
+  const reupload = createMutation(() => ({
+    mutationFn: () => {
+      return commands.reuploadInstantVideo(props.recording.id);
+    },
+  }));
+
   return (
     <li class="w-full flex flex-row justify-between items-center p-2 hover:bg-gray-100 rounded">
       <div class="flex items-center">
@@ -118,6 +124,17 @@ function RecordingItem(props: {
         <span>{props.recording.prettyName}</span>
       </div>
       <div class="flex items-center">
+        {import.meta.env.DEV &&
+          props.recording.meta.type === "instant" &&
+          props.recording.meta.sharing?.id && (
+            <button
+              onClick={() => {
+                reupload.mutate();
+              }}
+            >
+              Reupload
+            </button>
+          )}
         <TooltipIconButton
           tooltipText="Open project files"
           onClick={() => props.onOpenFolder()}

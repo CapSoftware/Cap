@@ -169,6 +169,9 @@ async setFail(name: string, value: boolean) : Promise<void> {
 },
 async updateAuthPlan() : Promise<void> {
     await TAURI_INVOKE("update_auth_plan");
+},
+async reuploadInstantVideo(videoId: string) : Promise<null> {
+    return await TAURI_INVOKE("reupload_instant_video", { videoId });
 }
 }
 
