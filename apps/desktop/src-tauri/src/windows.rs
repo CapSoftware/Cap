@@ -261,7 +261,15 @@ impl ShowCapWindow {
 
                 #[cfg(target_os = "macos")]
                 {
-                    crate::platform::set_window_level(window.as_ref().window(), 1000);
+                    _ = window.run_on_main_thread({
+                        let window = window.as_ref().window();
+                        move || unsafe {
+                            let win = window.ns_window().unwrap() as *const objc2_app_kit::NSWindow;
+                            (*win).setCollectionBehavior(
+                            		(*win).collectionBehavior() | objc2_app_kit::NSWindowCollectionBehavior::FullScreenAuxiliary,
+                            );
+                        }
+                    });
                 }
 
                 window

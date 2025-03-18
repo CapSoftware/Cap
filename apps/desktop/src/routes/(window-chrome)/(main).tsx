@@ -1,6 +1,5 @@
 import { Button } from "@cap/ui-solid";
 import { Tooltip } from "@kobalte/core";
-import { Select as KSelect, SelectRootProps } from "@kobalte/core/select";
 import { useNavigate } from "@solidjs/router";
 import {
   createMutation,
@@ -17,17 +16,15 @@ import {
   createResource,
   createSignal,
   ErrorBoundary,
-  type JSX,
   onCleanup,
   onMount,
   Show,
   Suspense,
 } from "solid-js";
 import { createStore } from "solid-js/store";
-import { trackEvent } from "~/utils/analytics";
 
-import { ValidComponent } from "solid-js";
 import Mode from "~/components/Mode";
+import { trackEvent } from "~/utils/analytics";
 import {
   createCurrentRecordingQuery,
   createLicenseQuery,
@@ -44,13 +41,6 @@ import {
   commands,
   events,
 } from "~/utils/tauri";
-import {
-  MenuItem,
-  MenuItemList,
-  PopperContent,
-  topLeftAnimateClasses,
-  topRightAnimateClasses,
-} from "../editor/ui";
 
 export default function () {
   const { options, setOptions } = createOptionsQuery();
@@ -113,7 +103,7 @@ export default function () {
     const currentWindow = getCurrentWindow();
     const MAIN_WINDOW_SIZE = {
       width: 300,
-      height: 320 + (window.FLAGS.systemAudioRecording ? 60 : 0),
+      height: 290 + (window.FLAGS.systemAudioRecording ? 40 : 0),
     };
 
     // Set initial size
@@ -223,7 +213,7 @@ export default function () {
   });
 
   return (
-    <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-100 h-full text-[--text-primary]">
+    <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-[--gray-50] h-full text-[--text-primary]">
       {initialize()}
       <div class="flex items-center justify-between pb-[0.25rem]">
         <div class="flex items-center space-x-1">
@@ -266,7 +256,7 @@ export default function () {
       {window.FLAGS.systemAudioRecording && (
         <SystemAudio options={options.data} setOptions={setOptions} />
       )}
-      <div class="flex items-center space-x-1 w-full will-change-transform">
+      <div class="flex items-center space-x-1 w-full">
         <Button
           disabled={toggleRecording.isPending}
           variant={isRecording() ? "destructive" : "primary"}
@@ -296,14 +286,6 @@ export default function () {
           <IconLucideCamera class="w-[1rem] h-[1rem]" />
         </Button>
       </div>
-      <a
-        href={`${import.meta.env.VITE_SERVER_URL}/dashboard`}
-        target="_blank"
-        rel="noreferrer"
-        class="text-[--text-tertiary] text-[0.875rem] mx-auto hover:text-[--text-primary] hover:underline"
-      >
-        Open Cap on Web
-      </a>
     </div>
   );
 }
@@ -331,14 +313,16 @@ function useRequestPermission() {
 
 import { makePersisted } from "@solid-primitives/storage";
 import { UnlistenFn } from "@tauri-apps/api/event";
+import { CheckMenuItem, Menu, PredefinedMenuItem } from "@tauri-apps/api/menu";
 import {
   getCurrentWebviewWindow,
   WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
 import * as dialog from "@tauri-apps/plugin-dialog";
-import { type as ostype } from "@tauri-apps/plugin-os";
+import { type as ostype, platform } from "@tauri-apps/plugin-os";
 import * as updater from "@tauri-apps/plugin-updater";
 import { Transition } from "solid-transition-group";
+
 import { setTitlebar } from "~/utils/titlebar-state";
 import { apiClient } from "~/utils/web-api";
 
@@ -422,7 +406,6 @@ function TargetSelects(props: {
 
   async function handleAreaSelectButtonClick() {
     const targetScreen = selectedScreen() ?? screens.data?.[0];
-    console.log({ targetScreen });
     if (!targetScreen) return;
 
     closeAreaSelection();
@@ -659,19 +642,18 @@ function TargetSelects(props: {
           placeholder="Window"
           optionsEmptyText="No windows found"
           selected={props.options?.captureTarget.variant === "window"}
-          itemComponent={(props) => (
-            <div class="flex overflow-x-hidden flex-col flex-1">
-              <div class="w-full truncate">{props.item.rawValue?.name}</div>
-              <div class="w-full text-xs">
-                {props.item.rawValue?.owner_name}
-              </div>
-            </div>
-          )}
+          getName={(value) =>
+            platform() === "windows"
+              ? value.name
+              : `${value.owner_name} | ${value.name}`
+          }
         />
       </div>
     </div>
   );
 }
+
+const NO_CAMERA = "No Camera";
 
 function CameraSelect(props: {
   options: ReturnType<typeof createOptionsQuery>["options"]["data"];
@@ -682,21 +664,15 @@ function CameraSelect(props: {
   const permissions = createQuery(() => getPermissions);
   const requestPermission = useRequestPermission();
 
-  const [open, setOpen] = createSignal(false);
-
   const permissionGranted = () =>
     permissions?.data?.camera === "granted" ||
     permissions?.data?.camera === "notNeeded";
 
-  type Option = { isCamera: boolean; name: string };
-
-  const onChange = async (item: Option | null) => {
-    if (!item && permissions?.data?.camera !== "granted") {
+  const onChange = async (cameraLabel: string | null) => {
+    if (!cameraLabel && permissions?.data?.camera !== "granted") {
       return requestPermission("camera");
     }
     if (!props.options) return;
-
-    const cameraLabel = !item || !item.isCamera ? null : item.name;
 
     await props.setOptions.mutateAsync({ ...props.options, cameraLabel });
 
@@ -706,78 +682,55 @@ function CameraSelect(props: {
     });
   };
 
-  const selectOptions = createMemo(() => [
-    { name: "No Camera", isCamera: false },
-    ...videoDevices.map((d) => ({ isCamera: true, name: d })),
-  ]);
-
-  const value = () =>
-    selectOptions()?.find((o) => o.name === props.options?.cameraLabel) ?? null;
-
   return (
     <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
-      {/* <label class="text-[--text-tertiary] text-[0.875rem]">Camera</label> */}
-      <KSelect<Option | null>
-        options={selectOptions()}
-        optionValue="name"
-        optionTextValue="name"
-        placeholder="No Camera"
-        value={value()}
-        disabled={!!currentRecording.data}
-        onChange={onChange}
-        itemComponent={(props) => (
-          <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
-            <KSelect.ItemLabel class="flex-1">
-              {props.item.rawValue?.name}
-            </KSelect.ItemLabel>
-          </MenuItem>
-        )}
-        open={open()}
-        onOpenChange={(isOpen) => {
-          if (!permissionGranted()) {
-            requestPermission("camera");
-            return;
-          }
-
-          setOpen(isOpen);
+      <button
+        disabled={props.setOptions.isPending || !!currentRecording.data}
+        class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect"
+        onClick={() => {
+          Promise.all([
+            CheckMenuItem.new({
+              text: NO_CAMERA,
+              checked: !props.options?.cameraLabel,
+              action: () => onChange(null),
+            }),
+            PredefinedMenuItem.new({ item: "Separator" }),
+            ...videoDevices.map((o) =>
+              CheckMenuItem.new({
+                text: o,
+                checked: o === props.options?.cameraLabel,
+                action: () => onChange(o),
+              })
+            ),
+          ])
+            .then((items) => Menu.new({ items }))
+            .then((m) => {
+              m.popup();
+            });
         }}
       >
-        <KSelect.Trigger
-          disabled={props.setOptions.isPending}
-          class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect"
-        >
-          <IconCapCamera class="text-gray-400 size-[1.25rem]" />
-          <KSelect.Value<Option | null> class="flex-1 text-left truncate">
-            {(state) => <span>{state.selectedOption()?.name}</span>}
-          </KSelect.Value>
-          <TargetSelectInfoPill
-            value={props.options?.cameraLabel ?? null}
-            permissionGranted={permissionGranted()}
-            requestPermission={() => requestPermission("camera")}
-            onClear={() => {
-              if (!props.options) return;
-              props.setOptions.mutate({
-                ...props.options,
-                cameraLabel: null,
-              });
-            }}
-          />
-        </KSelect.Trigger>
-        <KSelect.Portal>
-          <PopperContent<typeof KSelect.Content>
-            as={KSelect.Content}
-            class={topLeftAnimateClasses}
-          >
-            <MenuItemList<typeof KSelect.Listbox>
-              class="overflow-y-auto max-h-32"
-              as={KSelect.Listbox}
-            />
-          </PopperContent>
-        </KSelect.Portal>
-      </KSelect>
+        <IconCapCamera class="text-gray-400 size-[1.25rem]" />
+        <span class="flex-1 text-left truncate">
+          {props.options?.cameraLabel ?? NO_CAMERA}
+        </span>
+        <TargetSelectInfoPill
+          value={props.options?.cameraLabel ?? null}
+          permissionGranted={permissionGranted()}
+          requestPermission={() => requestPermission("camera")}
+          onClear={() => {
+            if (!props.options) return;
+            props.setOptions.mutate({
+              ...props.options,
+              cameraLabel: null,
+            });
+          }}
+        />
+      </button>
     </div>
   );
 }
+
+const NO_MICROPHONE = "No Microphone";
 
 function MicrophoneSelect(props: {
   options: ReturnType<typeof createOptionsQuery>["options"]["data"];
@@ -810,17 +763,17 @@ function MicrophoneSelect(props: {
   type Option = { name: string; deviceId: string };
 
   const handleMicrophoneChange = async (item: Option | null) => {
-    if (!item || !props.options) return;
+    if (!props.options) return;
 
     await props.setOptions.mutateAsync({
       ...props.options,
-      audioInputName: item.deviceId !== "" ? item.name : null,
+      audioInputName: item ? item.name : null,
     });
-    if (!item.deviceId) setDbs();
+    if (!item) setDbs();
 
     trackEvent("microphone_selected", {
-      microphone_name: item.deviceId !== "" ? item.name : null,
-      enabled: item.deviceId !== "",
+      microphone_name: item?.name ?? null,
+      enabled: !!item,
     });
   };
 
@@ -859,88 +812,59 @@ function MicrophoneSelect(props: {
   });
 
   return (
-    <div class="flex flex-col will-change-transform gap-[0.25rem] items-stretch text-[--text-primary]">
-      {/* <label class="text-[--text-tertiary]">Microphone</label> */}
-      <KSelect<Option>
-        options={[
-          { name: "No Microphone", deviceId: "" },
-          ...(devices.data ?? []),
-        ]}
-        optionValue="deviceId"
-        optionTextValue="name"
-        placeholder="No Microphone"
-        value={value()}
-        disabled={!!currentRecording.data}
-        onChange={handleMicrophoneChange}
-        itemComponent={(props) => (
-          <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
-            <KSelect.ItemLabel class="flex-1">
-              {props.item.rawValue.name}
-            </KSelect.ItemLabel>
-          </MenuItem>
-        )}
-        open={open()}
-        onOpenChange={(isOpen) => {
-          if (!permissionGranted()) {
-            requestPermission("microphone");
-            return;
-          }
-
-          setOpen(isOpen);
+    <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
+      <button
+        disabled={props.setOptions.isPending || !!currentRecording.data}
+        class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10"
+        onClick={() => {
+          Promise.all([
+            CheckMenuItem.new({
+              text: NO_MICROPHONE,
+              checked: !props.options?.audioInputName,
+              action: () => handleMicrophoneChange(null),
+            }),
+            PredefinedMenuItem.new({ item: "Separator" }),
+            ...(devices.data ?? []).map((o) =>
+              CheckMenuItem.new({
+                text: o.name,
+                checked: o.name === props.options?.audioInputName,
+                action: () => handleMicrophoneChange(o),
+              })
+            ),
+          ])
+            .then((items) => Menu.new({ items }))
+            .then((m) => {
+              m.popup();
+            });
         }}
       >
-        <KSelect.Trigger
-          disabled={props.setOptions.isPending}
-          class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10"
-        >
-          <Show when={dbs()}>
-            {(s) => (
-              <div
-                class="bg-blue-100 opacity-50 left-0 inset-y-0 absolute -z-10 transition-[right] duration-100"
-                style={{
-                  right: `${audioLevel() * 100}%`,
-                }}
-              />
-            )}
-          </Show>
-          <IconCapMicrophone class="text-gray-400 size-[1.25rem]" />
-          <KSelect.Value<Option> class="flex-1 text-left truncate">
-            {(state) => {
-              const selected = state.selectedOption();
-              return (
-                <span>
-                  {selected?.name ??
-                    props.options?.audioInputName ??
-                    "No Audio"}
-                </span>
-              );
-            }}
-          </KSelect.Value>
-          <TargetSelectInfoPill
-            value={props.options?.audioInputName ?? null}
-            permissionGranted={permissionGranted()}
-            requestPermission={() => requestPermission("microphone")}
-            onClear={() => {
-              if (!props.options) return;
-              props.setOptions.mutate({
-                ...props.options,
-                audioInputName: null,
-              });
-            }}
-          />
-        </KSelect.Trigger>
-        <KSelect.Portal>
-          <PopperContent<typeof KSelect.Content>
-            as={KSelect.Content}
-            class={topLeftAnimateClasses}
-          >
-            <MenuItemList<typeof KSelect.Listbox>
-              class="overflow-y-auto max-h-36"
-              as={KSelect.Listbox}
+        <Show when={dbs()}>
+          {(_) => (
+            <div
+              class="bg-blue-100 opacity-50 left-0 inset-y-0 absolute -z-10 transition-[right] duration-100"
+              style={{
+                right: `${audioLevel() * 100}%`,
+              }}
             />
-          </PopperContent>
-        </KSelect.Portal>
-      </KSelect>
+          )}
+        </Show>
+        <IconCapMicrophone class="text-gray-400 size-[1.25rem]" />
+        <span class="flex-1 text-left truncate">
+          {props.options?.audioInputName ?? NO_MICROPHONE}
+        </span>
+        <TargetSelectInfoPill
+          value={props.options?.audioInputName ?? null}
+          permissionGranted={permissionGranted()}
+          requestPermission={() => requestPermission("microphone")}
+          onClear={() => {
+            if (!props.options) return;
+            props.setOptions.mutate({
+              ...props.options,
+              audioInputName: null,
+            });
+          }}
+        />
+      </button>
     </div>
   );
 }
@@ -961,7 +885,7 @@ function SystemAudio(props: {
         });
       }}
       disabled={props.setOptions.isPending || !!currentRecording.data}
-      class="relative flex flex-row items-center h-[2rem] px-[0.375rem] will-change-transform gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors overflow-hidden z-10"
+      class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10"
     >
       <div class="size-[1.25rem] flex items-center justify-center">
         <IconPhMonitorBold class="text-gray-400 stroke-2 size-[1.2rem]" />
@@ -985,11 +909,7 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
   selected: boolean;
   optionsEmptyText: string;
   placeholder: string;
-  itemComponent?: (
-    props: Parameters<
-      NonNullable<SelectRootProps<T | null>["itemComponent"]>
-    >[0]
-  ) => JSX.Element;
+  getName?: (value: T) => string;
   disabled?: boolean;
 }) {
   const value = () => {
@@ -1003,77 +923,43 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
     return props.options[0];
   };
 
+  const getName = (value?: T) =>
+    value ? props.getName?.(value) ?? value.name : props.placeholder;
+
   return (
-    <KSelect<T | null>
-      options={props.options ?? []}
-      optionValue="id"
-      optionTextValue="name"
-      gutter={8}
-      itemComponent={(itemProps) => (
-        <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={itemProps.item}>
-          {props?.itemComponent?.(itemProps) ?? itemProps.item.rawValue?.name}
-        </MenuItem>
-      )}
-      placement="bottom"
-      class="max-w-[50%] w-full z-10 disabled:text-opacity-80"
-      placeholder={props.placeholder}
-      onChange={(value) => {
-        if (!value) return;
-        props.onChange(value);
-      }}
-      value={value()}
-    >
-      <KSelect.Trigger<ValidComponent>
-        as={
-          props.options.length <= 1
-            ? (p) => (
-                <button
-                  onClick={() => {
-                    props.onChange(props.options[0]);
-                  }}
-                  data-selected={props.selected}
-                  class={p.class}
-                >
-                  <span class="truncate">{props.placeholder}</span>
-                </button>
-              )
-            : undefined
-        }
-        class="flex-1 text-gray-400 py-1 z-10 data-[selected='true']:text-gray-500 disabled:text-gray-400 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
-        disabled={props.disabled}
+    <>
+      <button
+        class="group flex-1 text-gray-400 py-1 z-10 data-[selected='true']:text-gray-500 disabled:text-gray-400 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
         data-selected={props.selected}
-        onClick={(e) => {
-          if (props.options.length === 1) {
-            e.preventDefault();
+        onClick={() => {
+          if (props.options.length > 1) {
+            Promise.all(
+              props.options.map((o) =>
+                CheckMenuItem.new({
+                  text: getName(o),
+                  checked: o === props.value,
+                  action: () => props.onChange(o),
+                })
+              )
+            )
+              .then((items) => Menu.new({ items }))
+              .then((m) => {
+                m.popup();
+              });
+          } else if (props.options.length === 1)
             props.onChange(props.options[0]);
-          }
         }}
       >
-        <KSelect.Value<CaptureScreen | undefined> class="truncate">
-          {(value) => value.selectedOption()?.name}
-        </KSelect.Value>
-        {props.options.length > 1 && (
-          <KSelect.Icon class="transition-transform ui-expanded:-rotate-180">
-            <IconCapChevronDown class="transition-transform transform size-4 shrink-0" />
-          </KSelect.Icon>
+        {props.options.length <= 1 ? (
+          <span class="truncate">{props.placeholder}</span>
+        ) : (
+          <>
+            <span class="truncate">{value()?.name ?? props.placeholder}</span>
+            <IconCapChevronDown class="shrink-0 size-4" />
+          </>
         )}
-      </KSelect.Trigger>
-      <KSelect.Portal>
-        <PopperContent<typeof KSelect.Content>
-          as={KSelect.Content}
-          class={topRightAnimateClasses}
-        >
-          <Show
-            when={props.options.length > 0}
-            fallback={
-              <div class="p-2 text-gray-500">{props.optionsEmptyText}</div>
-            }
-          >
-            <KSelect.Listbox class="max-h-52 max-w-[17rem]" as={MenuItemList} />
-          </Show>
-        </PopperContent>
-      </KSelect.Portal>
-    </KSelect>
+      </button>
+    </>
   );
 }
 

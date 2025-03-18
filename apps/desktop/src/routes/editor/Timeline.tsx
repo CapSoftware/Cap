@@ -148,7 +148,9 @@ export function Timeline() {
           createRoot((dispose) => {
             createEventListener(e.currentTarget, "mouseup", () => {
               handleUpdatePlayhead(e);
-              setState("timelineSelection", null);
+              if (zoomSegmentDragState.type === "idle") {
+                setState("timelineSelection", null);
+              }
             });
             createEventListener(window, "mouseup", () => {
               dispose();
@@ -677,14 +679,10 @@ function ZoomTrack(props: {
                   resumeHistory();
                   if (!moved) {
                     e.stopPropagation();
-                    if (
-                      state.timelineSelection?.type !== "zoom" &&
-                      state.timelineSelection?.index !== i()
-                    )
-                      setState("timelineSelection", {
-                        type: "zoom",
-                        index: i(),
-                      });
+                    setState("timelineSelection", {
+                      type: "zoom",
+                      index: i(),
+                    });
                     props.handleUpdatePlayhead(e);
                   }
                   props.onDragStateChanged({ type: "idle" });
