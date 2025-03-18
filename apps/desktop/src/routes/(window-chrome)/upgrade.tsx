@@ -1,33 +1,23 @@
-import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { Button } from "@cap/ui-solid";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import * as shell from "@tauri-apps/plugin-shell";
-import { listen } from "@tauri-apps/api/event";
+import { action, useAction } from "@solidjs/router";
 import { invoke } from "@tauri-apps/api/core";
-import {
-  action,
-  useAction,
-  useSubmission,
-  redirect,
-  useNavigate,
-} from "@solidjs/router";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow, Window } from "@tauri-apps/api/window";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
-import { Window } from "@tauri-apps/api/window";
+import * as shell from "@tauri-apps/plugin-shell";
+import { createSignal, onCleanup, onMount, Show } from "solid-js";
 
-import { authStore } from "../../store";
-import { getProPlanId } from "~/utils/plans";
-import { commands } from "~/utils/tauri";
-import { apiClient, protectedHeaders } from "~/utils/web-api";
-import { clientEnv } from "~/utils/env";
-import { identifyUser, trackEvent } from "~/utils/analytics";
-import callbackTemplate from "./callback.template";
-import { Input } from "../editor/ui";
-import { licenseApiClient } from "~/utils/web-api";
-import { generalSettingsStore } from "~/store";
 import { createMutation } from "@tanstack/solid-query";
-import { ClientInferResponseBody } from "@ts-rest/core";
-import { licenseContract } from "@cap/web-api-contract";
+import { generalSettingsStore } from "~/store";
+import { identifyUser, trackEvent } from "~/utils/analytics";
+import { clientEnv } from "~/utils/env";
+import { getProPlanId } from "~/utils/plans";
 import { createLicenseQuery } from "~/utils/queries";
+import { commands } from "~/utils/tauri";
+import { apiClient, licenseApiClient, protectedHeaders } from "~/utils/web-api";
+import { authStore } from "../../store";
+import { Input } from "../editor/ui";
+import callbackTemplate from "./callback.template";
 
 const signInAction = action(async (planType: "yearly" | "monthly") => {
   console.log("Starting sign in action");
@@ -391,7 +381,7 @@ export default function Page() {
   });
 
   return (
-    <div class="p-5 w-full h-full mx-auto relative items-center justify-center flex flex-col">
+    <div class="flex relative flex-col justify-center items-center p-5 mx-auto w-full h-full">
       {upgradeComplete() && (
         <div class="flex justify-center items-center h-full bg-gray-800 bg-opacity-75">
           <div class="relative z-10 p-6 text-center bg-white rounded-lg shadow-lg">
@@ -460,7 +450,7 @@ export default function Page() {
                   <div class="pt-4 border-t border-gray-200 dark:border-[--gray-700]">
                     <Button
                       variant="destructive"
-                      class="w-fit mx-auto"
+                      class="mx-auto w-fit"
                       disabled={resetLicense.isPending}
                       onClick={() => {
                         resetLicense.mutate();
@@ -480,73 +470,57 @@ export default function Page() {
           ) : (
             <>
               <div class="text-center">
-                <h1 class="text-4xl md:text-4xl mb-3 tracking-[-.05em] font-medium text-[--text-primary]">
+                <h1 class="text-4xl md:text-4xl mb-6 tracking-[-.05em] font-medium text-[--text-primary]">
                   Early Adopter Pricing
                 </h1>
               </div>
               <div class="flex gap-4 w-full">
                 <div class="flex-grow p-3 bg-gray-200 rounded-xl border shadow-sm text-card-foreground md:p-3 border-gray-300/20">
                   <div class="space-y-3">
-                    <div class="flex flex-col space-y-1.5 pt-6 px-6">
-                      <h3 class="text-2xl font-medium tracking-tight text-[--text-primary]">
-                        Commercial License
-                      </h3>
-                      <p class="text-[0.875rem] leading-[1.25rem] text-[--text-primary]">
-                        For professional use without cloud features.
-                      </p>
-                      <div>
-                        <div class="flex items-center space-x-3">
-                          <h3 class="text-4xl text-[--text-primary]">
-                            {isCommercialAnnual() ? "$29" : "$58"}
-                          </h3>
-                          <div>
-                            {isCommercialAnnual() && (
-                              <p class="text-sm font-medium text-[--text-primary]">
-                                billed annually
-                              </p>
-                            )}
-                            {!isCommercialAnnual() && (
-                              <p class="text-sm font-medium text-[--text-primary]">
-                                one-time payment
-                              </p>
-                            )}
-                            {isCommercialAnnual() && (
-                              <p class="text-sm text-[--text-primary]">
-                                or, $58 one-time payment.
-                              </p>
-                            )}
-                          </div>
-                        </div>
+                    <div class="flex flex-col gap-6 items-center px-6 pt-6">
+                      <div class="space-y-1 text-center">
+                        <h3 class="text-2xl font-medium leading-5 tracking-tight text-[--text-primary]">
+                          Commercial License
+                        </h3>
+                        <p class="text-[0.875rem] text-[--text-primary]">
+                          For professional use without cloud features.
+                        </p>
+                      </div>
+                      <div class="flex flex-col justify-center items-center">
+                        <h3 class="text-4xl leading-6 text-[--text-primary]">
+                          {isCommercialAnnual() ? "$29" : "$58"}
+                          <span class="text-gray-400 text-[16px]">.00 /</span>
+                        </h3>
+                        {isCommercialAnnual() && (
+                          <p class="text-[16px] font-medium text-gray-400">
+                            billed annually
+                          </p>
+                        )}
+                        {!isCommercialAnnual() && (
+                          <p class="text-[16px] font-medium text-gray-400">
+                            one-time payment
+                          </p>
+                        )}
+                      </div>
+                      <div
+                        onClick={() => setIsCommercialAnnual((v) => !v)}
+                        class="px-3 py-2 text-center bg-gray-300 rounded-full border border-transparent hover:border-gray-400"
+                      >
+                        <p class="text-xs text-gray-500">
+                          Switch to{" "}
+                          {isCommercialAnnual() ? "lifetime" : "yearly"}:{" "}
+                          <span class="font-medium">
+                            {isCommercialAnnual() ? "$58" : "$29"}
+                          </span>
+                        </p>
                       </div>
                     </div>
                     <div class="px-3 md:px-8">
-                      <div class="flex items-center pt-4 pb-1 mt-3 border-t-2 border-[--black-transparent-20]">
+                      <div class="flex items-center pt-4 pb-1 mt-3">
                         <span class="mr-2 text-xs text-[--text-primary]">
                           Switch to{" "}
                           {isCommercialAnnual() ? "lifetime" : "yearly"}
                         </span>
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={!isCommercialAnnual()}
-                          data-state={
-                            isCommercialAnnual() ? "unchecked" : "checked"
-                          }
-                          value={!isCommercialAnnual() ? "on" : "off"}
-                          class="peer inline-flex h-4 w-8 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent bg-[--gray-400] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"
-                          onClick={() => setIsCommercialAnnual((v) => !v)}
-                        >
-                          <span
-                            data-state={
-                              isCommercialAnnual() ? "unchecked" : "checked"
-                            }
-                            class={`pointer-events-none block h-4 w-4 rounded-full bg-gray-50 shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0 border-2 ${
-                              !isCommercialAnnual()
-                                ? "border-gray-400"
-                                : "border-gray-300"
-                            }`}
-                          />
-                        </button>
                       </div>
                     </div>
                     <div class="px-6 pt-0 pb-4">
@@ -726,7 +700,7 @@ function LicenseKeyActivation() {
           onInput={(e) => setLicenseKey(e.currentTarget.value)}
         />
         <Button
-          class="mt-2 w-full relative"
+          class="relative mt-2 w-full"
           disabled={activateLicenseKey.isPending}
           onClick={() =>
             activateLicenseKey.mutate({
@@ -734,7 +708,7 @@ function LicenseKeyActivation() {
             })
           }
         >
-          <div class="w-full flex justify-center">Activate License</div>
+          <div class="flex justify-center w-full">Activate License</div>
         </Button>
       </div>
     </div>
