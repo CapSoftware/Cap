@@ -4,9 +4,10 @@ use cap_media::{feeds::RawCameraFrame, frame_ws::WSFrame};
 use cap_project::{BackgroundSource, CursorEvents, RecordingMeta, StudioRecordingMeta, XY};
 use cap_rendering::{
     decoder::DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectRecordings, ProjectUniforms,
-    RenderVideoConstants,
+    RenderVideoConstants, RenderVideoState,
 };
 use tokio::{
+    sync::Mutex,
     sync::{mpsc, oneshot},
     task::JoinHandle,
 };
@@ -27,6 +28,7 @@ pub struct Renderer {
     rx: mpsc::Receiver<RendererMessage>,
     frame_tx: flume::Sender<WSFrame>,
     render_constants: Arc<RenderVideoConstants>,
+    render_state: Mutex<RenderVideoState>,
     total_frames: u32,
 }
 
@@ -37,6 +39,7 @@ pub struct RendererHandle {
 impl Renderer {
     pub fn spawn(
         render_constants: Arc<RenderVideoConstants>,
+        render_state: Mutex<RenderVideoState>,
         frame_tx: flume::Sender<WSFrame>,
         recording_meta: &RecordingMeta,
         meta: &StudioRecordingMeta,
@@ -61,6 +64,7 @@ impl Renderer {
             rx,
             frame_tx,
             render_constants,
+            render_state,
             total_frames,
         };
 
@@ -72,7 +76,8 @@ impl Renderer {
     async fn run(mut self) {
         let mut frame_task: Option<JoinHandle<()>> = None;
 
-        let mut frame_renderer = FrameRenderer::new(&self.render_constants);
+        let mut mutables = self.render_state.lock().await;
+        let mut frame_renderer = FrameRenderer::new(&self.render_constants, &mut mutables);
 
         loop {
             while let Some(msg) = self.rx.recv().await {

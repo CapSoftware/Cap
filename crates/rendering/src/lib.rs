@@ -9,21 +9,15 @@ use decoder::{spawn_decoder, AsyncVideoDecoderHandle};
 use frame_pipeline::{FramePipeline, FramePipelineEncoder, FramePipelineState};
 use futures::future::OptionFuture;
 use futures::FutureExt;
-use glyphon::{
-    Attrs, Buffer, Cache, Family, FontSystem, Metrics, Shaping, SwashCache, TextArea, TextAtlas,
-    TextBounds, TextRenderer, Viewport,
-};
+use glyphon::{Cache, FontSystem, SwashCache, TextAtlas, TextRenderer, Viewport};
 use layers::{
     Background, BackgroundBlurPipeline, BackgroundLayer, CameraLayer, CursorLayer, DisplayLayer,
     GradientOrColorPipeline, ImageBackgroundPipeline, TextLayer,
 };
 use specta::Type;
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc;
-use wgpu::{util::DeviceExt, Color, MultisampleState};
+use wgpu::MultisampleState;
 
 use image::GenericImageView;
 use std::{path::PathBuf, time::Instant};
@@ -153,6 +147,7 @@ pub async fn render_video_to_channel(
     resolution_base: XY<u32>,
 ) -> Result<(), RenderingError> {
     let constants = RenderVideoConstants::new(options, recording_meta, meta).await?;
+    let mut state = RenderVideoState::new(&constants);
     let recordings = ProjectRecordings::new(&recording_meta.project_path, meta);
 
     ffmpeg::init().unwrap();
@@ -171,7 +166,7 @@ pub async fn render_video_to_channel(
     let mut frame_number = 0;
     let background = project.background.source.clone();
 
-    let mut frame_renderer = FrameRenderer::new(&constants);
+    let mut frame_renderer = FrameRenderer::new(&constants, &mut state);
 
     loop {
         if frame_number >= total_frames {
@@ -285,7 +280,6 @@ pub struct RenderVideoConstants {
     screen_frame: (wgpu::Texture, wgpu::TextureView),
     camera_frame: Option<(wgpu::Texture, wgpu::TextureView)>,
     cursor_layer: CursorLayer,
-    viewport: Mutex<Viewport>,
     text_cache: Cache,
 }
 
@@ -371,7 +365,6 @@ impl RenderVideoConstants {
         });
 
         let text_cache = Cache::new(&device);
-        let viewport = Viewport::new(&device, &text_cache);
 
         Ok(Self {
             _instance: instance,
@@ -388,7 +381,6 @@ impl RenderVideoConstants {
             screen_frame,
             camera_frame,
             background_blur_pipeline,
-            viewport: Mutex::new(viewport),
             text_cache,
         })
     }
@@ -502,6 +494,41 @@ impl RenderVideoConstants {
             textures.len()
         );
         textures
+    }
+}
+
+pub struct RenderVideoState {
+    viewport: Viewport,
+    font_system: FontSystem,
+    swash_cache: SwashCache,
+    atlas: TextAtlas,
+    text_renderer: TextRenderer,
+}
+
+impl RenderVideoState {
+    pub fn new(constants: &RenderVideoConstants) -> Self {
+        let viewport = Viewport::new(&constants.device, &constants.text_cache);
+
+        let mut atlas = TextAtlas::new(
+            &constants.device,
+            &constants.queue,
+            &constants.text_cache,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+        );
+        let text_renderer = TextRenderer::new(
+            &mut atlas,
+            &constants.device,
+            MultisampleState::default(),
+            None,
+        );
+
+        Self {
+            viewport,
+            font_system: FontSystem::new(),
+            swash_cache: SwashCache::new(),
+            atlas,
+            text_renderer,
+        }
     }
 }
 
@@ -901,14 +928,16 @@ pub struct DecodedSegmentFrames {
 
 pub struct FrameRenderer<'a> {
     constants: &'a RenderVideoConstants,
+    state: &'a mut RenderVideoState,
     output_texture_desc: Option<wgpu::TextureDescriptor<'static>>,
     output_textures: Option<(wgpu::Texture, wgpu::Texture)>,
 }
 
 impl<'a> FrameRenderer<'a> {
-    pub fn new(constants: &'a RenderVideoConstants) -> Self {
+    pub fn new(constants: &'a RenderVideoConstants, state: &'a mut RenderVideoState) -> Self {
         Self {
             constants,
+            state,
             output_texture_desc: None,
             output_textures: None,
         }
@@ -954,6 +983,7 @@ impl<'a> FrameRenderer<'a> {
 
         produce_frame(
             self.constants,
+            &mut self.state,
             segment_frames,
             uniforms,
             self.output_textures.as_ref().unwrap(),
@@ -967,6 +997,7 @@ impl<'a> FrameRenderer<'a> {
 // https://github.com/gfx-rs/wgpu/wiki/Encapsulating-Graphics-Work
 async fn produce_frame(
     constants: &RenderVideoConstants,
+    state: &mut RenderVideoState,
     segment_frames: DecodedSegmentFrames,
     uniforms: ProjectUniforms,
     textures: &(wgpu::Texture, wgpu::Texture),
@@ -974,7 +1005,7 @@ async fn produce_frame(
 ) -> Result<RenderedFrame, RenderingError> {
     let background = Background::from(uniforms.project.background.source.clone());
 
-    let mut state = FramePipelineState::new(constants, &uniforms, textures);
+    let mut state = FramePipelineState::new(constants, state, &uniforms, textures);
     let mut encoder = FramePipelineEncoder::new(&state);
 
     {
@@ -1015,98 +1046,7 @@ async fn produce_frame(
             );
         }
 
-        // TODO: Break out
-        {
-            let frame_size = pipeline.state.constants.options.screen_size;
-
-            let mut font_system = FontSystem::new();
-            let mut swash_cache = SwashCache::new();
-            let mut atlas = TextAtlas::new(
-                &pipeline.state.constants.device,
-                &pipeline.state.constants.queue,
-                &pipeline.state.constants.text_cache,
-                wgpu::TextureFormat::Rgba8UnormSrgb,
-            );
-            let mut text_renderer = TextRenderer::new(
-                &mut atlas,
-                &pipeline.state.constants.device,
-                MultisampleState::default(),
-                None,
-            );
-
-            let mut text_buffer = Buffer::new(&mut font_system, Metrics::new(30.0, 42.0));
-
-            text_buffer.set_size(
-                &mut font_system,
-                Some(frame_size.x as f32),
-                Some(frame_size.y as f32),
-            );
-            text_buffer.set_text(&mut font_system, "Hello world! 👋\nThis is rendered with 🦅 glyphon 🦁\nThe text below should be partially clipped.\na b c d e f g h i j k l m n o p q r s t u v w x y z", Attrs::new().family(Family::SansSerif), Shaping::Advanced);
-            text_buffer.shape_until_scroll(&mut font_system, false);
-
-            // TODO: Don't mutex viewport
-            pipeline.state.constants.viewport.lock().unwrap().update(
-                &pipeline.state.constants.queue,
-                glyphon::Resolution {
-                    width: frame_size.x,
-                    height: frame_size.y,
-                },
-            );
-
-            text_renderer
-                .prepare(
-                    &pipeline.state.constants.device,
-                    &pipeline.state.constants.queue,
-                    &mut font_system, // TODO: This being mutable means it can't be reused
-                    &mut atlas,
-                    &constants.viewport.lock().unwrap(),
-                    [TextArea {
-                        buffer: &text_buffer,
-                        left: 0.0,
-                        top: 0.0,
-                        scale: 1.0,
-                        bounds: TextBounds {
-                            left: 0,
-                            top: 0,
-                            right: 600,
-                            bottom: 160,
-                        },
-                        default_color: glyphon::Color::rgb(255, 255, 255),
-                        custom_glyphs: &[],
-                    }],
-                    &mut swash_cache,
-                )
-                .unwrap();
-
-            let mut render_pass =
-                pipeline
-                    .encoder
-                    .encoder
-                    .begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: None,
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &pipeline.state.get_current_texture_view(),
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Load,
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                    });
-
-            text_renderer
-                .render(
-                    &atlas,
-                    &constants.viewport.lock().unwrap(),
-                    &mut render_pass,
-                )
-                .unwrap(); // TODO: Error handling
-
-            // TextLayer::render(&mut pipeline, &text_renderer); // TODO
-        }
+        TextLayer::render(&mut pipeline);
     }
 
     let padded_bytes_per_row = encoder.padded_bytes_per_row(&state);

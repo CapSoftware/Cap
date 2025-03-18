@@ -9,7 +9,7 @@ use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMe
 use cap_project::{RecordingConfig, StudioRecordingMeta};
 use cap_rendering::{
     get_duration, ProjectRecordings, ProjectUniforms, RecordingSegmentDecoders, RenderOptions,
-    RenderVideoConstants, SegmentVideoPaths,
+    RenderVideoConstants, RenderVideoState, SegmentVideoPaths,
 };
 use std::ops::Deref;
 use std::sync::Mutex as StdMutex;
@@ -102,9 +102,11 @@ impl EditorInstance {
                 .await
                 .unwrap(),
         );
+        let render_state = Mutex::new(RenderVideoState::new(&render_constants));
 
         let renderer = Arc::new(editor::Renderer::spawn(
             render_constants.clone(),
+            render_state,
             frame_tx,
             &recording_meta,
             meta,
