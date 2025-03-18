@@ -6,7 +6,7 @@ settings:
 
 patchedDependencies:
   '@kobalte/core@0.13.7':
-    hash: daf56e70aa12211e66d61eca48f0538cc1963c967982714f3abc09110083cf0d
+    hash: kzigaefucz2gzue42hjqb5kxba
     path: patches/@kobalte__core@0.13.7.patch
 
 importers:
@@ -60,7 +60,7 @@ importers:
         version: 0.0.14
       '@kobalte/core':
         specifier: ^0.13.7
-        version: 0.13.7(patch_hash=daf56e70aa12211e66d61eca48f0538cc1963c967982714f3abc09110083cf0d)(solid-js@1.9.3)
+        version: 0.13.7(patch_hash=kzigaefucz2gzue42hjqb5kxba)(solid-js@1.9.3)
       '@solid-primitives/bounds':
         specifier: ^0.0.122
         version: 0.0.122(solid-js@1.9.3)
@@ -907,7 +907,7 @@ importers:
     dependencies:
       '@kobalte/core':
         specifier: ^0.13.7
-        version: 0.13.7(patch_hash=daf56e70aa12211e66d61eca48f0538cc1963c967982714f3abc09110083cf0d)(solid-js@1.9.3)
+        version: 0.13.7(patch_hash=kzigaefucz2gzue42hjqb5kxba)(solid-js@1.9.3)
       cva:
         specifier: npm:class-variance-authority@^0.7.0
         version: class-variance-authority@0.7.0
@@ -4655,10 +4655,10 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@9.0.0-alpha.4':
-    resolution: {integrity: sha512-TxCLKB+nHkoooKzcJN8QKM2D8l9A8t5/qPQkStkadP5xdkoMC9CHYuq0Anu55mtbzZQnuDtS09lT3laGqswRuw==}
+  '@storybook/builder-vite@9.0.0-alpha.6':
+    resolution: {integrity: sha512-X6cWPtBTaagi0+pIFZtJe8XjiuwjbfFks09PmSqZJMr1V/0jB/Odifa/XnKqyBHuaudnbClI1kqieBHfu4pu+g==}
     peerDependencies:
-      storybook: ^9.0.0-alpha.4
+      storybook: ^9.0.0-alpha.6
       vite: ^4.0.0 || ^5.0.0 || ^6.0.0
 
   '@storybook/core@8.3.3':
@@ -4669,10 +4669,10 @@ packages:
     peerDependencies:
       storybook: ^8.3.3
 
-  '@storybook/csf-plugin@9.0.0-alpha.4':
-    resolution: {integrity: sha512-Zq65uk267XRMr/DeAoOj1Yom6tuMPAOJo+GRw6qglX3NPxjc5eheGkFbT74P4CGXxYX9D5jDe9hY4CGBLNkACw==}
+  '@storybook/csf-plugin@9.0.0-alpha.6':
+    resolution: {integrity: sha512-7PjatRFh5dyYlNdwRWcauiitw71MhqXoWfj8/wU0CGWCTJr+Cn2ZYA9lgjX2GTKU3ctJDTX7gX45NpnZGXIcqw==}
     peerDependencies:
-      storybook: ^9.0.0-alpha.4
+      storybook: ^9.0.0-alpha.6
 
   '@storybook/csf@0.1.11':
     resolution: {integrity: sha512-dHYFQH3mA+EtnCkHXzicbLgsvzYjcDJ1JWsogbItZogkPHgSJM/Wr71uMkcvw8v9mmCyP4NpXJuu6bPoVsOnzg==}
@@ -13973,7 +13973,7 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@kobalte/core@0.13.7(patch_hash=daf56e70aa12211e66d61eca48f0538cc1963c967982714f3abc09110083cf0d)(solid-js@1.9.3)':
+  '@kobalte/core@0.13.7(patch_hash=kzigaefucz2gzue42hjqb5kxba)(solid-js@1.9.3)':
     dependencies:
       '@floating-ui/dom': 1.6.12
       '@internationalized/date': 3.5.6
@@ -15942,9 +15942,9 @@ snapshots:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
 
-  '@storybook/builder-vite@9.0.0-alpha.4(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))':
+  '@storybook/builder-vite@9.0.0-alpha.6(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))':
     dependencies:
-      '@storybook/csf-plugin': 9.0.0-alpha.4(storybook@8.3.3)
+      '@storybook/csf-plugin': 9.0.0-alpha.6(storybook@8.3.3)
       browser-assert: 1.2.1
       storybook: 8.3.3
       ts-dedent: 2.2.0
@@ -15975,7 +15975,7 @@ snapshots:
       storybook: 8.3.3
       unplugin: 1.16.1
 
-  '@storybook/csf-plugin@9.0.0-alpha.4(storybook@8.3.3)':
+  '@storybook/csf-plugin@9.0.0-alpha.6(storybook@8.3.3)':
     dependencies:
       storybook: 8.3.3
       unplugin: 1.16.1
@@ -23767,7 +23767,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.2(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0)):
     dependencies:
-      '@storybook/builder-vite': 9.0.0-alpha.4(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))
+      '@storybook/builder-vite': 9.0.0-alpha.6(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))
     transitivePeerDependencies:
       - storybook
       - vite

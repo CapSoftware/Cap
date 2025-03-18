@@ -107,6 +107,9 @@ impl FramePipelineEncoder {
             occlusion_query_set: None,
         });
 
+        // let text_renderer =
+        //     TextRenderer::new(&mut atlas, &device, MultisampleState::default(), None);
+
         render_pass.set_pipeline(render_pipeline);
         render_pass.set_bind_group(0, &bind_group, &[]);
         render_pass.draw(0..4, 0..1);
@@ -156,15 +159,15 @@ impl FramePipelineEncoder {
         );
 
         encoder.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: state.get_current_texture(),
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::ImageCopyBuffer {
+            wgpu::TexelCopyBufferInfo {
                 buffer: &output_buffer,
-                layout: wgpu::ImageDataLayout {
+                layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_bytes_per_row),
                     rows_per_image: Some(state.uniforms.output_size.1),

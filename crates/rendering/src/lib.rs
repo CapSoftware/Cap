@@ -9,6 +9,7 @@ use decoder::{spawn_decoder, AsyncVideoDecoderHandle};
 use frame_pipeline::{FramePipeline, FramePipelineEncoder, FramePipelineState};
 use futures::future::OptionFuture;
 use futures::FutureExt;
+use glyphon::{Cache, FontSystem, SwashCache, TextAtlas, TextRenderer, Viewport};
 use layers::{
     Background, BackgroundBlurPipeline, BackgroundLayer, CameraLayer, CursorLayer, DisplayLayer,
     GradientOrColorPipeline, ImageBackgroundPipeline,
@@ -16,6 +17,7 @@ use layers::{
 use specta::Type;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc;
+use wgpu::MultisampleState;
 
 use image::GenericImageView;
 use std::{path::PathBuf, time::Instant};
@@ -277,6 +279,7 @@ pub struct RenderVideoConstants {
     screen_frame: (wgpu::Texture, wgpu::TextureView),
     camera_frame: Option<(wgpu::Texture, wgpu::TextureView)>,
     cursor_layer: CursorLayer,
+    text_renderer: TextRenderer,
 }
 
 impl RenderVideoConstants {
@@ -286,7 +289,7 @@ impl RenderVideoConstants {
         meta: &StudioRecordingMeta,
     ) -> Result<Self, RenderingError> {
         println!("Initializing wgpu...");
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions::default())
             .await
@@ -360,6 +363,15 @@ impl RenderVideoConstants {
             (texture, texture_view)
         });
 
+        let mut font_system = FontSystem::new();
+        let swash_cache = SwashCache::new();
+        let cache = Cache::new(&device);
+        let viewport = Viewport::new(&device, &cache);
+        let mut atlas =
+            TextAtlas::new(&device, &queue, &cache, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let text_renderer =
+            TextRenderer::new(&mut atlas, &device, MultisampleState::default(), None);
+
         Ok(Self {
             _instance: instance,
             _adapter: adapter,
@@ -375,6 +387,7 @@ impl RenderVideoConstants {
             screen_frame,
             camera_frame,
             background_blur_pipeline,
+            text_renderer,
         })
     }
 
@@ -442,14 +455,14 @@ impl RenderVideoConstants {
                     });
 
                     queue.write_texture(
-                        wgpu::ImageCopyTexture {
+                        wgpu::TexelCopyTextureInfo {
                             texture: &texture,
                             mip_level: 0,
                             origin: wgpu::Origin3d::ZERO,
                             aspect: wgpu::TextureAspect::All,
                         },
                         &rgba,
-                        wgpu::ImageDataLayout {
+                        wgpu::TexelCopyBufferLayout {
                             offset: 0,
                             bytes_per_row: Some(4 * dimensions.0),
                             rows_per_image: None,
@@ -1032,17 +1045,16 @@ pub fn create_shader_render_pipeline(
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
-            entry_point: "vs_main",
+            entry_point: Some("vs_main"),
             buffers: &[],
             compilation_options: wgpu::PipelineCompilationOptions {
                 constants: &empty_constants,
                 zero_initialize_workgroup_memory: false,
-                vertex_pulling_transform: false,
             },
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: "fs_main",
+            entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba8UnormSrgb,
                 blend: Some(wgpu::BlendState::REPLACE),
@@ -1051,7 +1063,6 @@ pub fn create_shader_render_pipeline(
             compilation_options: wgpu::PipelineCompilationOptions {
                 constants: &empty_constants,
                 zero_initialize_workgroup_memory: false,
-                vertex_pulling_transform: false,
             },
         }),
         primitive: wgpu::PrimitiveState {

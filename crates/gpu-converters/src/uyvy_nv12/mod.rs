@@ -13,7 +13,7 @@ impl UYVYToNV12 {
     pub async fn new() -> Self {
         todo!("implement UV downsampling for UYVYToNV12");
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -99,7 +99,7 @@ impl UYVYToNV12 {
             label: Some("YUYV Converter Pipeline"),
             layout: Some(&pipeline_layout),
             module: &shader,
-            entry_point: "main",
+            entry_point: Some("main"),
             compilation_options: Default::default(),
             cache: None,
         });
