@@ -1,14 +1,12 @@
 import { ImageResponse } from "next/og";
 import { NextRequest } from "next/server";
-import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
+import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
 import { clientEnv, serverEnv } from "@cap/env";
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
-
-export const runtime = "edge";
 
 export async function GET(req: NextRequest) {
   const videoId = req.nextUrl.searchParams.get("videoId") as string;
