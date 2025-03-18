@@ -12,7 +12,7 @@ use futures::FutureExt;
 use glyphon::{Cache, FontSystem, SwashCache, TextAtlas, TextRenderer, Viewport};
 use layers::{
     Background, BackgroundBlurPipeline, BackgroundLayer, CameraLayer, CursorLayer, DisplayLayer,
-    GradientOrColorPipeline, ImageBackgroundPipeline, TextLayer,
+    GradientOrColorPipeline, ImageBackgroundPipeline, TextBackgroundPipeline, TextLayer,
 };
 use specta::Type;
 use std::{collections::HashMap, sync::Arc};
@@ -33,6 +33,7 @@ mod zoom;
 
 pub use coord::*;
 pub use decoder::DecodedFrame;
+pub use layers::Text;
 pub use project_recordings::{ProjectRecordings, SegmentRecordings, Video};
 
 use zoom::*;
@@ -287,6 +288,7 @@ pub struct RenderVideoConstants {
     image_background_pipeline: ImageBackgroundPipeline,
     pub background_blur_pipeline: BackgroundBlurPipeline,
     background_textures: std::sync::Arc<tokio::sync::RwLock<HashMap<String, wgpu::Texture>>>,
+    text_background_pipeline: TextBackgroundPipeline,
     screen_frame: (wgpu::Texture, wgpu::TextureView),
     camera_frame: Option<(wgpu::Texture, wgpu::TextureView)>,
     cursor_layer: CursorLayer,
@@ -321,6 +323,8 @@ impl RenderVideoConstants {
 
         let image_background_pipeline = ImageBackgroundPipeline::new(&device);
         let background_textures = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+
+        let text_background_pipeline = TextBackgroundPipeline::new(&device);
 
         let background_blur_pipeline = BackgroundBlurPipeline::new(&device);
 
@@ -388,6 +392,7 @@ impl RenderVideoConstants {
             cursor_textures,
             image_background_pipeline,
             background_textures,
+            text_background_pipeline,
             screen_frame,
             camera_frame,
             background_blur_pipeline,
@@ -551,7 +556,7 @@ pub struct ProjectUniforms {
     pub project: ProjectConfiguration,
     pub zoom: InterpolatedZoom,
     pub resolution_base: XY<u32>,
-    pub caption_text: Option<String>,
+    pub caption_text: Option<Text>,
 }
 
 #[derive(Debug, Clone)]
@@ -718,7 +723,7 @@ impl ProjectUniforms {
         frame_number: u32,
         fps: u32,
         resolution_base: XY<u32>,
-        caption_text: Option<String>,
+        caption_text: Option<Text>,
     ) -> Self {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project, resolution_base);
