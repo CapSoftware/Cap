@@ -1,5 +1,10 @@
-import { createQuery } from "@tanstack/solid-query";
-import { Channel, convertFileSrc } from "@tauri-apps/api/core";
+import {
+  createMutation,
+  createQuery,
+  queryOptions,
+  useQueryClient,
+} from "@tanstack/solid-query";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   createMemo,
   createSignal,
@@ -8,20 +13,14 @@ import {
   ParentProps,
   Show,
 } from "solid-js";
-// import { createMutation, createQuery } from "@tanstack/solid-query";
-import { For, ParentProps, Show, Suspense, createSignal } from "solid-js";
-import { convertFileSrc } from "@tauri-apps/api/core";
-
 import Tooltip from "@corvu/tooltip";
 import { cx } from "cva";
-import { FPS, OUTPUT_SIZE } from "~/routes/editor/context";
+import { remove } from "@tauri-apps/plugin-fs";
+
 import { trackEvent } from "~/utils/analytics";
-import {
-  commands,
-  events,
-  RecordingMetaWithType,
-  RenderProgress,
-} from "~/utils/tauri";
+import { commands, events, RecordingMetaWithType } from "~/utils/tauri";
+import { open } from "@tauri-apps/plugin-shell";
+import { ask } from "@tauri-apps/plugin-dialog";
 
 type Recording = {
   meta: RecordingMetaWithType;
@@ -48,34 +47,34 @@ const Tabs = [
   },
 ] satisfies { id: string; label: string; icon?: JSX.Element }[];
 
+const recordingsQuery = queryOptions({
+  queryKey: ["recordings"],
+  queryFn: async () => {
+    const result = await commands.listRecordings().catch(() => [] as const);
+
+    const recordings = await Promise.all(
+      result.map(async (file) => {
+        const [id, path, meta] = file;
+        const thumbnailPath = `${path}/screenshots/display.jpg`;
+
+        return {
+          meta,
+          id,
+          path,
+          prettyName: meta.pretty_name,
+          thumbnailPath,
+        };
+      })
+    );
+    return recordings;
+  },
+});
+
 export default function Recordings() {
   const [activeTab, setActiveTab] = createSignal<(typeof Tabs)[number]["id"]>(
     Tabs[0].id
   );
-  const recordings = createQuery(() => ({
-    queryKey: ["recordings"],
-    queryFn: async () => {
-      const result = await commands.listRecordings().catch(() => [] as const);
-
-      const recordings = await Promise.all(
-        result.map(async (file) => {
-          const [id, path, meta] = file;
-          const thumbnailPath = `${path}/screenshots/display.jpg`;
-
-          return {
-            meta,
-            id,
-            path,
-            prettyName: meta.pretty_name,
-            thumbnailPath,
-          };
-        })
-      );
-      return recordings;
-    },
-  }));
-
-  const progress = new Channel<RenderProgress>();
+  const recordings = createQuery(() => recordingsQuery);
 
   const filteredRecordings = createMemo(() => {
     if (!recordings.data) {
@@ -99,17 +98,6 @@ export default function Recordings() {
     commands.openFilePath(path);
   };
 
-  const handleExport = (path: string) => {
-    trackEvent("recording_export_clicked", { path });
-    commands.exportVideo(
-      recordings.data?.find((r) => r.path === path)?.id || "",
-      progress,
-      false,
-      FPS,
-      OUTPUT_SIZE
-    );
-  };
-
   const handleCopyVideoToClipboard = (path: string) => {
     trackEvent("recording_copy_clicked", { path });
     commands.copyVideoToClipboard(path);
@@ -127,7 +115,7 @@ export default function Recordings() {
   return (
     <div class="flex flex-col pb-12 w-full">
       <div class="overflow-y-auto flex-1">
-        <ul class="p-5 flex flex-col gap-[0.5rem] w-full text-[--text-primary]">
+        <ul class="p-4 flex flex-col gap-[0.5rem] w-full text-[--text-primary]">
           <Show
             when={recordings.data && recordings.data.length > 0}
             fallback={
@@ -136,7 +124,7 @@ export default function Recordings() {
               </p>
             }
           >
-            <div class="pb-5 border-b border-gray-300 border-dashed">
+            <div class="pb-4 border-b border-gray-300 border-dashed">
               <div class="flex gap-3 items-center w-fit">
                 <For each={Tabs}>
                   {(tab) => (
@@ -166,7 +154,6 @@ export default function Recordings() {
                   onCopyVideoToClipboard={() =>
                     handleCopyVideoToClipboard(recording.path)
                   }
-                  onExport={() => handleExport(recording.path)}
                 />
               )}
             </For>
@@ -182,83 +169,29 @@ function RecordingItem(props: {
   onClick: () => void;
   onOpenFolder: () => void;
   onOpenEditor: () => void;
-  onExport: () => void;
   onCopyVideoToClipboard: () => void;
 }) {
   const [imageExists, setImageExists] = createSignal(true);
-  const type = props.recording.meta.type;
-  const firstLetterUpperCase = type.charAt(0).toUpperCase() + type.slice(1);
+  const type = () => props.recording.meta.type;
+  const firstLetterUpperCase = () =>
+    type().charAt(0).toUpperCase() + type().slice(1);
 
-  const recordTypeActions = {
-    studio: [
-      {
-        label: "Edit",
-        icon: <IconLucideEdit class="size-4" />,
-        onClick: props.onOpenEditor,
-      },
-      {
-        label: "Show recordings overlay",
-        icon: <IconLucideEye class="size-4" />,
-        onClick: props.onClick,
-      },
-      {
-        label: "Open link",
-        icon: <IconCapLink class="size-4" />,
-        onClick: () => null,
-      },
-      {
-        label: "Delete",
-        icon: <IconCapTrash class="size-4" />,
-        onClick: () => null,
-      },
-    ],
-    instant: [
-      {
-        label: "Reupload",
-        icon: <IconCapUpload class="size-4" />,
-        onClick: () => null,
-      },
-      {
-        label: "Open link",
-        icon: <IconCapLink class="size-4" />,
-        onClick: () => null,
-      },
-      {
-        label: "Delete",
-        icon: <IconCapTrash class="size-4" />,
-        onClick: () => null,
-      },
-    ],
-  };
+  const queryClient = useQueryClient();
 
-  //TODO
-  // const ExportMenu = async () => {
-  //   const menu = await Menu.new({
-  //     items: [
-  //       {
-  //         id: "copy",
-  //         text: "Copy to clipboard",
-  //         action: () => {
-  //           props.onCopyVideoToClipboard();
-  //         },
-  //       },
-  //       {
-  //         id: "export",
-  //         text: "Export",
-  //         action: () => {
-  //           props.onExport();
-  //         },
-  //       },
-  //     ],
-  //   });
-  //   return menu;
-  // };
+  const deleteButton = () => (
+    <TooltipIconButton
+      tooltipText="Delete"
+      onClick={async () => {
+        if (!(await ask("Are you sure you want to delete this recording?")))
+          return;
+        await remove(props.recording.path, { recursive: true });
 
-  const reupload = createMutation(() => ({
-    mutationFn: () => {
-      return commands.reuploadInstantVideo(props.recording.id);
-    },
-  }));
+        queryClient.refetchQueries(recordingsQuery);
+      }}
+    >
+      <IconCapTrash class="size-4" />
+    </TooltipIconButton>
+  );
 
   return (
     <li class="flex flex-row justify-between items-center px-4 py-3 w-full rounded-xl transition-colors duration-200 hover:bg-gray-100">
@@ -282,73 +215,90 @@ function RecordingItem(props: {
           <div
             class={cx(
               "px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-500 rounded-full w-fit",
-              type === "instant" ? "bg-blue-100" : "bg-gray-200"
+              type() === "instant" ? "bg-blue-100" : "bg-gray-200"
             )}
           >
-            {type === "instant" ? (
+            {type() === "instant" ? (
               <IconCapInstant class="invert size-2.5 dark:invert-0" />
             ) : (
               <IconCapFilmCut class="invert size-2.5 dark:invert-0" />
             )}
-            <p>{firstLetterUpperCase}</p>
+            <p>{firstLetterUpperCase()}</p>
           </div>
         </div>
       </div>
       <div class="flex items-center">
-        {/* {type === "studio" && (
-          <Button
-            onClick={async () => (await ExportMenu()).popup()}
-            class="mr-3 text-[11px]"
-            size="xs"
-            variant="primary"
-          >
-            Export
-          </Button>
-        )} */}
-        {recordTypeActions[type].map((button) => (
+        <Show when={type() === "studio"}>
           <TooltipIconButton
-            tooltipText={button.label}
-            onClick={button.onClick}
+            tooltipText="Edit"
+            onClick={() => props.onOpenEditor()}
           >
-            {button.icon}
+            <IconLucideEdit class="size-4" />
           </TooltipIconButton>
-        ))}
-        {/* {import.meta.env.DEV &&
-          props.recording.meta.type === "instant" &&
-          props.recording.meta.sharing?.id && (
-            <button
-              onClick={() => {
-                reupload.mutate();
-              }}
-            >
-              Reupload
-            </button>
-          )}
-        <TooltipIconButton
-          tooltipText="Open project files"
-          onClick={() => props.onOpenFolder()}
-        >
-          <IconLucideFolder class="size-5" />
-        </TooltipIconButton>
-        <TooltipIconButton
-          tooltipText="Open in editor"
-          onClick={() => props.onOpenEditor()}
-        >
-          <IconLucideEdit class="size-5" />
-        </TooltipIconButton>
-        <TooltipIconButton
-          tooltipText="Show in recordings overlay"
-          onClick={() => props.onClick()}
-        >
-          <IconLucideEye class="size-5" />
-        </TooltipIconButton> */}
+          <TooltipIconButton
+            tooltipText="Show recordings overlay"
+            onClick={() => props.onClick()}
+          >
+            <IconLucideEye class="size-4" />
+          </TooltipIconButton>
+          <Show when={props.recording.meta.sharing}>
+            {(sharing) => (
+              <TooltipIconButton
+                tooltipText="Open link"
+                onClick={() => open(sharing().link)}
+              >
+                <IconCapLink class="size-4" />
+              </TooltipIconButton>
+            )}
+          </Show>
+          {deleteButton()}
+        </Show>
+        <Show when={type() === "instant"}>
+          {(_) => {
+            const reupload = createMutation(() => ({
+              mutationFn: () => {
+                return commands.reuploadInstantVideo(props.recording.id);
+              },
+            }));
+
+            return (
+              <>
+                <TooltipIconButton
+                  tooltipText="Reupload"
+                  onClick={() => reupload.mutate()}
+                >
+                  {reupload.isPending ? (
+                    <IconLucideLoaderCircle class="animate-spin" />
+                  ) : (
+                    <IconCapUpload class="size-4" />
+                  )}
+                </TooltipIconButton>
+                <Show when={props.recording.meta.sharing}>
+                  {(sharing) => (
+                    <TooltipIconButton
+                      tooltipText="Open link"
+                      onClick={() => open(sharing().link)}
+                    >
+                      <IconCapLink class="size-4" />
+                    </TooltipIconButton>
+                  )}
+                </Show>
+                {deleteButton()}
+              </>
+            );
+          }}
+        </Show>
       </div>
     </li>
   );
 }
 
 function TooltipIconButton(
-  props: ParentProps<{ onClick: () => void; tooltipText: string }>
+  props: ParentProps<{
+    onClick: () => void;
+    tooltipText: string;
+    disabled?: boolean;
+  }>
 ) {
   return (
     <Tooltip>
@@ -357,6 +307,7 @@ function TooltipIconButton(
           e.stopPropagation();
           props.onClick();
         }}
+        disabled={props.disabled}
         class="p-2.5 mr-2 opacity-70 will-change-transform hover:opacity-100 rounded-full transition-all duration-200 hover:bg-gray-200 dark:hover:bg-gray-300"
       >
         {props.children}

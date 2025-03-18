@@ -52,22 +52,24 @@ module.exports = {
         20: "var(--red-transparent-20)",
       },
     },
-    boxShadow: {
-      s: "var(--shadow-s)",
-    },
-    keyframes: {
-      "collapsible-down": {
-        from: { height: 0 },
-        to: { height: "var(--kb-collapsible-content-height)" },
+    extend: {
+      boxShadow: {
+        s: "var(--shadow-s)",
       },
-      "collapsible-up": {
-        from: { height: "var(--kb-collapsible-content-height)" },
-        to: { height: 0 },
+      keyframes: {
+        "collapsible-down": {
+          from: { height: 0 },
+          to: { height: "var(--kb-collapsible-content-height)" },
+        },
+        "collapsible-up": {
+          from: { height: "var(--kb-collapsible-content-height)" },
+          to: { height: 0 },
+        },
       },
-    },
-    animation: {
-      "collapsible-down": "collapsible-down 0.2s ease-out",
-      "collapsible-up": "collapsible-up 0.2s ease-out",
+      animation: {
+        "collapsible-down": "collapsible-down 0.2s ease-out",
+        "collapsible-up": "collapsible-up 0.2s ease-out",
+      },
     },
   },
   plugins: [
