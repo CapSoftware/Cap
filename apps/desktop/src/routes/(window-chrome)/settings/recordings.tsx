@@ -1,3 +1,4 @@
+import Tooltip from "@corvu/tooltip";
 import {
   createMutation,
   createQuery,
@@ -5,6 +6,8 @@ import {
   useQueryClient,
 } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { remove } from "@tauri-apps/plugin-fs";
+import { cx } from "cva";
 import {
   createMemo,
   createSignal,
@@ -13,14 +16,11 @@ import {
   ParentProps,
   Show,
 } from "solid-js";
-import Tooltip from "@corvu/tooltip";
-import { cx } from "cva";
-import { remove } from "@tauri-apps/plugin-fs";
 
+import { ask } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-shell";
 import { trackEvent } from "~/utils/analytics";
 import { commands, events, RecordingMetaWithType } from "~/utils/tauri";
-import { open } from "@tauri-apps/plugin-shell";
-import { ask } from "@tauri-apps/plugin-dialog";
 
 type Recording = {
   meta: RecordingMetaWithType;
@@ -140,7 +140,7 @@ export default function Recordings() {
             </For>
           </div>
         </div>
-        <div class="flex flex-col flex-1 overflow-auto">
+        <div class="flex overflow-auto flex-col flex-1 custom-scroll">
           <ul class="p-4 flex flex-col gap-[0.5rem] w-full text-[--text-primary]">
             <For each={filteredRecordings()}>
               {(recording) => (

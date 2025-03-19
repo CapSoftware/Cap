@@ -103,6 +103,19 @@
   background: transparent !important;
 }
 
+/* Custom scrollbar */
+.custom-scroll::-webkit-scrollbar {
+  width: 7px;
+  background-color: transparent;
+}
+
+.custom-scroll::-webkit-scrollbar-thumb {
+  background-color: var(--gray-300);
+  width: 7px;
+  border-radius: 500px;
+}
+
+
 /* Ensure transparent windows stay transparent in dark mode */
 .dark [data-transparent-window],
 .dark [data-transparent-window] body {
