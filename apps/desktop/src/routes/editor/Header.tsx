@@ -19,6 +19,10 @@ import ExportButton from "./ExportButton";
 import PresetsDropdown from "./PresetsDropdown";
 import ShareButton from "./ShareButton";
 import { EditorButton } from "./ui";
+import { remove } from "@tauri-apps/plugin-fs";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { commands } from "~/utils/tauri";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export type ResolutionOption = {
   label: string;
@@ -143,8 +147,15 @@ const Menu = {
         editorContext?: ReturnType<typeof useEditorContext>;
       }) => (
         <EditorButton
-          disabled
-          comingSoon
+          onClick={async () => {
+            const currentWindow = getCurrentWindow();
+            if (!props.editorContext?.editorInstance.path) return ;
+            if (!(await ask("Are you sure you want to delete this recording?")))
+              return;
+            await remove(props.editorContext?.editorInstance.path, { recursive: true });
+            await currentWindow.close();
+          }}
+          tooltipText="Delete recording"
           leftIcon={<IconCapTrash class="w-5" />}
         />
       ),
