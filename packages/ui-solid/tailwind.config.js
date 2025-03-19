@@ -8,13 +8,24 @@ module.exports = {
   theme: {
     colors: {
       transparent: "rgba(0,0,0,0)",
+      "solid-white": "#ffffff",
       gray: {
         50: "var(--gray-50)",
         100: "var(--gray-100)",
         200: "var(--gray-200)",
         300: "var(--gray-300)",
         400: "var(--gray-400)",
+        450: "var(--gray-450)",
         500: "var(--gray-500)",
+      },
+      "gray-transparent": {
+        50: "var(--gray-50-transparent-50)",
+        100: "var(--gray-100-transparent-50)",
+        200: "var(--gray-200-transparent-50)",
+        300: "var(--gray-300-transparent-50)",
+        400: "var(--gray-400-transparent-50)",
+        450: "var(--gray-450-transparent-50)",
+        500: "var(--gray-500-transparent-50)",
       },
       "black-transparent": {
         5: "var(--black-transparent-5)",
@@ -29,6 +40,8 @@ module.exports = {
         10: "var(--white-transparent-10)",
         20: "var(--white-transparent-20)",
         40: "var(--white-transparent-40)",
+        60: "var(--white-transparent-60)",
+        80: "var(--white-transparent-80)",
       },
       blue: {
         50: "var(--blue-50)",
@@ -38,6 +51,7 @@ module.exports = {
         400: "var(--blue-400)",
       },
       "blue-transparent": {
+        0: "var(--blue-transparent-0)",
         10: "var(--blue-transparent-10)",
         20: "var(--blue-transparent-20)",
       },
