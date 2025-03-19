@@ -187,9 +187,18 @@ export function Timeline() {
           else {
             let delta: number = 0;
 
-            if (platform() === "macos")
+            // Prioritize horizontal scrolling for touchpads
+            // For touchpads, both deltaX and deltaY can be used
+            // If deltaX is significant, use it (horizontal scrolling)
+            if (Math.abs(e.deltaX) > Math.abs(e.deltaY) * 0.5) {
+              delta = e.deltaX;
+            }
+            // Otherwise use platform-specific defaults
+            else if (platform() === "macos") {
               delta = e.shiftKey ? e.deltaX : e.deltaY;
-            else delta = e.deltaY;
+            } else {
+              delta = e.deltaY;
+            }
 
             state.timelineTransform.setPosition(
               state.timelineTransform.position + secsPerPixel() * delta
@@ -345,7 +354,7 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
           return (
             <SegmentRoot
               class={cx(
-                "overflow-hidden relative border border-transparent transition-colors duration-300 group",
+                "overflow-hidden border border-transparent transition-colors duration-300 group",
                 "hover:border-gray-500"
               )}
               innerClass="ring-blue-300"
@@ -379,16 +388,50 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                 );
               }}
             >
-              <For each={timelineMarkings()}>
-                {(second) => (
-                  <div
-                    style={{
-                      left: `${second / secsPerPixel() + -0.5}px`,
-                    }}
-                    class="absolute z-10 w-px h-14 bg-gradient-to-b to-transparent from-white-transparent-40 dark:from-black-transparent-60"
-                  />
-                )}
-              </For>
+              {(() => {
+                // Calculate markings based on the original segment timing, not the timeline position
+                const resolution =
+                  TIMELINE_MARKING_RESOLUTIONS.find(
+                    (r) =>
+                      state.timelineTransform.zoom / r <= MAX_TIMELINE_MARKINGS
+                  ) ?? 30;
+
+                // Align markings with the original segment start time
+                const segmentStartTime = segment.start;
+                const diff = segmentStartTime % resolution;
+
+                // Calculate how many markings should be visible in this segment
+                const segmentDuration = segment.end - segment.start;
+                const markingCount = Math.ceil(segmentDuration / resolution);
+
+                // Generate the markings
+                const markings = Array.from(
+                  { length: markingCount + 1 },
+                  (_, i) => {
+                    const markingTime =
+                      segmentStartTime - diff + i * resolution;
+                    // Only show markings that are within the segment
+                    if (
+                      markingTime >= segmentStartTime &&
+                      markingTime <= segment.end
+                    ) {
+                      return (
+                        <div
+                          style={{
+                            left: `${
+                              (markingTime - segmentStartTime) / secsPerPixel()
+                            }px`,
+                          }}
+                          class="absolute z-10 w-px h-14 bg-gradient-to-b to-transparent from-white-transparent-40 dark:from-black-transparent-60"
+                        />
+                      );
+                    }
+                    return null;
+                  }
+                );
+
+                return markings;
+              })()}
 
               <SegmentHandle
                 class={cx(
