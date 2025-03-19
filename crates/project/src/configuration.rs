@@ -430,13 +430,17 @@ pub struct CaptionSettings {
     pub font: String,
     pub size: u32,
     pub color: String,
+    #[serde(alias = "backgroundColor")]
     pub background_color: String,
+    #[serde(alias = "backgroundOpacity")]
     pub background_opacity: u32,
     pub position: String,
     pub bold: bool,
     pub italic: bool,
     pub outline: bool,
+    #[serde(alias = "outlineColor")]
     pub outline_color: String,
+    #[serde(alias = "exportWithSubtitles")]
     pub export_with_subtitles: bool,
 }
 

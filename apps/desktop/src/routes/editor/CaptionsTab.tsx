@@ -468,7 +468,10 @@ export function CaptionsTab() {
   };
   
   const generateCaptions = async () => {
-    if (!editorInstance) return;
+    if (!editorInstance) {
+      toast.error("Editor instance not found");
+      return;
+    }
     
     setIsGenerating(true);
     
@@ -477,6 +480,7 @@ export function CaptionsTab() {
       const lang = selectedLanguage();
       const currentModelPath = await join(await appLocalDataDir(), MODEL_FOLDER, `${selectedModel()}.bin`);
       
+      // Verify file existence before proceeding
       const result = await commands.transcribeAudio(videoPath, currentModelPath, lang);
       
       if (result && result.segments.length > 0) {
@@ -485,11 +489,28 @@ export function CaptionsTab() {
         updateCaptionSetting("enabled", true);
         toast.success("Captions generated successfully!");
       } else {
-        toast.error("Failed to generate captions. No segments returned.");
+        toast.error("No captions were generated. The audio might be too quiet or unclear.");
       }
     } catch (error) {
       console.error("Error generating captions:", error);
-      toast.error("Failed to generate captions: " + (error as Error).message);
+      let errorMessage = "Unknown error occurred";
+      
+      if (error instanceof Error) {
+        errorMessage = error.message;
+      } else if (typeof error === 'string') {
+        errorMessage = error;
+      }
+      
+      // Provide more user-friendly error messages
+      if (errorMessage.includes("No audio stream found")) {
+        errorMessage = "No audio found in the video file";
+      } else if (errorMessage.includes("Model file not found")) {
+        errorMessage = "Caption model not found. Please download it first";
+      } else if (errorMessage.includes("Failed to load Whisper model")) {
+        errorMessage = "Failed to load the caption model. Try downloading it again";
+      }
+      
+      toast.error("Failed to generate captions: " + errorMessage);
     } finally {
       setIsGenerating(false);
     }
