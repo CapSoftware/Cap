@@ -113,11 +113,11 @@ export default function Recordings() {
   };
 
   return (
-    <div class="flex flex-col w-full h-full">
+    <div class="flex relative flex-col w-full h-full">
       <Show
         when={recordings.data && recordings.data.length > 0}
         fallback={
-          <p class="text-center text-[--text-tertiary]">No recordings found</p>
+          <p class="text-center text-[--text-tertiary] absolute flex items-center justify-center w-full h-full">No recordings found</p>
         }
       >
         <div class="p-4 border-b border-gray-300 border-dashed">
