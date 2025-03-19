@@ -461,6 +461,11 @@ function TargetSelects(props: {
     return value;
   };
 
+  createEffect(() => {
+    screenValue();
+    windowValue();
+  });
+
   const windowValue = () => {
     const captureTarget = props.options?.captureTarget;
     if (captureTarget?.variant !== "window") return null;

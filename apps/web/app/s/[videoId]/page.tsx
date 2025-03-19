@@ -253,14 +253,14 @@ export default async function ShareVideoPage(props: Props) {
   }
 
   console.log("[ShareVideoPage] Fetching individual files for video:", videoId);
-  const individualFiles = await fetch(
-    `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/individual-files?videoId=${videoId}`,
-    {
-      method: "GET",
-      credentials: "include",
-      cache: "no-store",
-    }
-  ).then((res) => res.json());
+  // const individualFiles = await fetch(
+  //   `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/individual-files?videoId=${videoId}`,
+  //   {
+  //     method: "GET",
+  //     credentials: "include",
+  //     cache: "no-store",
+  //   }
+  // ).then((res) => res.json());
 
   console.log("[ShareVideoPage] Fetching analytics for video:", videoId);
   const analyticsResponse = await fetch(
@@ -348,7 +348,7 @@ export default async function ShareVideoPage(props: Props) {
       data={videoWithSpaceInfo}
       user={user}
       comments={commentsQuery}
-      individualFiles={individualFiles}
+      individualFiles={[]} // individualFiles}
       initialAnalytics={initialAnalytics}
       customDomain={customDomain}
       domainVerified={domainVerified}
