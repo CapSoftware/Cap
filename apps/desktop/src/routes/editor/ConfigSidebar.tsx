@@ -37,10 +37,10 @@ import {
   type CursorAnimationStyle,
   commands,
 } from "~/utils/tauri";
-import colorBg from "../../assets/illustrations/color.webp";
-import gradientBg from "../../assets/illustrations/gradient.webp";
-import imageBg from "../../assets/illustrations/image.webp";
-import transparentBg from "../../assets/illustrations/transparent.webp";
+import colorBg from "~/assets/illustrations/color.webp";
+import gradientBg from "~/assets/illustrations/gradient.webp";
+import imageBg from "~/assets/illustrations/image.webp";
+import transparentBg from "~/assets/illustrations/transparent.webp";
 import { BACKGROUND_THEMES, useEditorContext } from "./context";
 import {
   DEFAULT_GRADIENT_FROM,
@@ -458,7 +458,7 @@ export function ConfigSidebar() {
       </KTabs.List>
       <div
         ref={scrollRef}
-        class="p-5 custom-scroll overflow-y-auto text-[0.875rem] h-full"
+        class="p-5 custom-scroll overflow-x-hidden overflow-y-auto text-[0.875rem] h-full"
       >
         <KTabs.Content value="background" class="flex flex-col gap-8">
           <Field icon={<IconCapImage class="size-4" />} name="Background Image">
@@ -529,7 +529,7 @@ export function ConfigSidebar() {
                       >
                         <div class="flex gap-1.5 justify-center items-center">
                           {(() => {
-                            if (item === "gradient") {
+                            const getGradientBackground = () => {
                               const angle =
                                 project.background.source.type === "gradient"
                                   ? project.background.source.angle
@@ -551,9 +551,9 @@ export function ConfigSidebar() {
                                   }}
                                 />
                               );
-                            }
+                            };
 
-                            if (item === "color") {
+                            const getColorBackground = () => {
                               const backgroundColor =
                                 project.background.source.type === "color"
                                   ? project.background.source.value
@@ -567,43 +567,67 @@ export function ConfigSidebar() {
                                   }}
                                 />
                               );
-                            }
+                            };
 
-                            let imageSrc: string = BACKGROUND_ICONS[item];
+                            const getImageBackground = () => {
+                              // Always start with the default icon
+                              let imageSrc: string = BACKGROUND_ICONS[item];
 
-                            if (
-                              item === "image" &&
-                              project.background.source.type === "image" &&
-                              project.background.source.path
-                            ) {
-                              imageSrc = convertFileSrc(
+                              // Only override for "image" if a valid path exists
+                              if (
+                                item === "image" &&
+                                project.background.source.type === "image" &&
                                 project.background.source.path
-                              );
-                            } else if (
-                              item === "wallpaper" &&
-                              project.background.source.type === "wallpaper"
-                            ) {
-                              const selectedWallpaper = wallpapers()?.find(
-                                (w) =>
-                                  (
-                                    project.background.source as {
-                                      path?: string;
-                                    }
-                                  ).path?.includes(w.id)
-                              );
-                              imageSrc =
-                                selectedWallpaper?.url ??
-                                wallpapers()?.[7]?.url ??
-                                BACKGROUND_ICONS[item];
-                            }
+                              ) {
+                                const convertedPath = convertFileSrc(
+                                  project.background.source.path
+                                );
+                                // Only use converted path if it's valid
+                                if (convertedPath) {
+                                  imageSrc = convertedPath;
+                                }
+                              } 
+                              // Only override for "wallpaper" if a valid wallpaper is found
+                              else if (
+                                item === "wallpaper" &&
+                                project.background.source.type === "wallpaper" &&
+                                project.background.source.path
+                              ) {
+                                const selectedWallpaper = wallpapers()?.find(
+                                  (w) =>
+                                    (
+                                      project.background.source as {
+                                        path?: string;
+                                      }
+                                    ).path?.includes(w.id)
+                                );
+                                // Only use wallpaper URL if it exists
+                                if (selectedWallpaper?.url) {
+                                  imageSrc = selectedWallpaper.url;
+                                }
+                              }
 
-                            return (
-                              <img
-                                loading="eager"
-                                class="size-3.5 rounded"
-                                src={imageSrc}
-                              />
-                            );
+                              return (
+                                <img
+                                  loading="eager"
+                                  alt={BACKGROUND_SOURCES[item]}
+                                  class="size-3.5 rounded"
+                                  src={imageSrc}
+                                />
+                              );
+                            };
+
+                            switch (item) {
+                              case "gradient":
+                                return getGradientBackground();
+                              case "color":
+                                return getColorBackground();
+                              case "image":
+                              case "wallpaper":
+                                return getImageBackground();
+                              default:
+                                return null;
+                            }
                           })()}
                           {BACKGROUND_SOURCES[item]}
                         </div>
