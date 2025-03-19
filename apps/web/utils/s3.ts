@@ -62,7 +62,6 @@ export async function getS3Config(config?: S3Config) {
         "",
     },
     forcePathStyle: config.forcePathStyle ?? true,
-    useAccelerateEndpoint: isLocalOrMinio ? false : true,
     useArnRegion: false,
     requestHandler: {
       connectionTimeout: isLocalOrMinio ? 5000 : 10000,
