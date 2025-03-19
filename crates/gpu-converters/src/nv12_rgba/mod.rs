@@ -12,7 +12,7 @@ pub struct NV12ToRGBA {
 impl NV12ToRGBA {
     pub async fn new() -> Self {
         println!("NV12ToRGBA");
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
 
         // Get adapter for GPU
         let adapter = instance
@@ -85,7 +85,7 @@ impl NV12ToRGBA {
             label: Some("NV12 Converter Pipeline"),
             layout: Some(&pipeline_layout),
             module: &shader,
-            entry_point: "main",
+            entry_point: Some("main"),
             compilation_options: Default::default(),
             cache: None,
         });
@@ -209,15 +209,15 @@ impl NV12ToRGBA {
 
         // Copy texture to buffer
         encoder.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &output_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::ImageCopyBuffer {
+            wgpu::TexelCopyBufferInfo {
                 buffer: &output_buffer,
-                layout: wgpu::ImageDataLayout {
+                layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(width * 4),
                     rows_per_image: Some(height),

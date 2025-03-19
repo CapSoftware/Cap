@@ -22,6 +22,7 @@ thiserror.workspace = true
 wgpu.workspace = true
 bezier_easing = "0.1.1"
 reactive_graph = "0.1.5"
+glyphon = "0.8.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre.workspace = true
