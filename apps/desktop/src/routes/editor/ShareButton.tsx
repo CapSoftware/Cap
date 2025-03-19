@@ -185,14 +185,16 @@ function ShareButton(props: {
             variant="primary"
             class="flex gap-2 items-center"
           >
-            <IconCapLink class="size-5" />
-            {uploadVideo.isPending ? (
+            {!uploadVideo.isPending ? (
               <>
-                <span>Uploading Cap</span>
-                <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
+                <IconCapLink class="size-5" />
+                <span>Shareable Link</span>
               </>
             ) : (
-              "Shareable Link"
+              <>
+                <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
+                <span>Uploading Cap</span>
+              </>
             )}
           </Button>
         }
