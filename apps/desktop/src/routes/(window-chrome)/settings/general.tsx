@@ -1,4 +1,4 @@
-import { createResource, Show, For } from "solid-js";
+import { createResource, For, Show } from "solid-js";
 import { createStore } from "solid-js/store";
 import { generalSettingsStore } from "~/store";
 import type { AppTheme, GeneralSettingsStore } from "~/utils/tauri";
@@ -9,8 +9,8 @@ import {
 } from "@tauri-apps/plugin-notification";
 import { type OsType, type } from "@tauri-apps/plugin-os";
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
-import themePreviewLight from "~/assets/theme-previews/light.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
+import themePreviewLight from "~/assets/theme-previews/light.jpg";
 
 const settingsList: Array<{
   key: keyof GeneralSettingsStore;
@@ -102,7 +102,7 @@ function AppearanceSection(props: {
               <button
                 type="button"
                 aria-checked={props.currentTheme === theme.id}
-                class="flex flex-col items-center group rounded-md focus:outline-none focus-visible:ring-gray-300 focus-visible:ring-offset-gray-50 focus-visible:ring-offset-2 focus-visible:ring-4"
+                class="flex flex-col items-center rounded-md group focus:outline-none focus-visible:ring-gray-300 focus-visible:ring-offset-gray-50 focus-visible:ring-offset-2 focus-visible:ring-4"
                 onClick={() => props.onThemeChange(theme.id)}
               >
                 <div
@@ -113,7 +113,7 @@ function AppearanceSection(props: {
                   }`}
                   aria-label={`Select theme: ${theme.name}`}
                 >
-                  <div class="w-full h-full flex items-center justify-center">
+                  <div class="flex justify-center items-center w-full h-full">
                     <img
                       draggable={false}
                       src={theme.preview}
@@ -188,7 +188,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
   return (
     <div class="flex flex-col w-full h-full">
-      <div class="flex-1 overflow-y-auto">
+      <div class="overflow-y-auto flex-1 custom-scroll">
         <div class="p-4 space-y-2 divide-y divide-gray-200">
           <AppearanceSection
             currentTheme={settings.theme ?? "system"}
@@ -207,14 +207,14 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                     !setting.platforms || setting.platforms.includes(ostype)
                   }
                 >
-                  <div class="space-y-2 py-3">
+                  <div class="py-3 space-y-2">
                     {setting.pro && (
-                      <span class="text-xs font-medium bg-blue-400 text-gray-50 px-2 py-1 rounded-lg">
+                      <span class="px-2 py-1 text-xs font-medium text-gray-50 bg-blue-400 rounded-lg">
                         Cap Pro
                       </span>
                     )}
-                    <div class="flex items-center justify-between">
-                      <div class="flex items-center gap-2">
+                    <div class="flex justify-between items-center">
+                      <div class="flex gap-2 items-center">
                         <p class="text-[--text-primary]">{setting.label}</p>
                       </div>
                       <button
