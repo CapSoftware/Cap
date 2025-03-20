@@ -722,12 +722,15 @@ function CameraSelect(props: {
           value={props.options?.cameraLabel ?? null}
           permissionGranted={permissionGranted()}
           requestPermission={() => requestPermission("camera")}
-          onClear={() => {
+          onClick={(e) => {
             if (!props.options) return;
-            props.setOptions.mutate({
-              ...props.options,
-              cameraLabel: null,
-            });
+            if (props.options.cameraLabel) {
+              e.stopPropagation();
+              props.setOptions.mutate({
+                ...props.options,
+                cameraLabel: null,
+              });
+            }
           }}
         />
       </button>
@@ -861,12 +864,15 @@ function MicrophoneSelect(props: {
           value={props.options?.audioInputName ?? null}
           permissionGranted={permissionGranted()}
           requestPermission={() => requestPermission("microphone")}
-          onClear={() => {
+          onClick={(e) => {
             if (!props.options) return;
-            props.setOptions.mutate({
-              ...props.options,
-              audioInputName: null,
-            });
+            if (props.options?.audioInputName) {
+              e.stopPropagation();
+              props.setOptions.mutate({
+                ...props.options,
+                audioInputName: null,
+              });
+            }
           }}
         />
       </button>
@@ -972,7 +978,7 @@ function TargetSelectInfoPill<T>(props: {
   value: T | null;
   permissionGranted: boolean;
   requestPermission: () => void;
-  onClear: () => void;
+  onClick: (e: MouseEvent) => void;
 }) {
   return (
     <InfoPill
@@ -983,14 +989,12 @@ function TargetSelectInfoPill<T>(props: {
         e.stopPropagation();
       }}
       onClick={(e) => {
-        e.stopPropagation();
-
         if (!props.permissionGranted) {
           props.requestPermission();
           return;
         }
 
-        props.onClear();
+        props.onClick(e);
       }}
     >
       {!props.permissionGranted
