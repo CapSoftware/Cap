@@ -585,12 +585,12 @@ async fn create_segment_pipeline(
 
             while let Ok(frame) = rx.recv() {
                 if let Some(timestamp_tx) = timestamp_tx.take() {
-                    timestamp_tx
-                        .send(frame.timestamp().unwrap_or(0) as f64 / AV_TIME_BASE_Q.den as f64)
-                        .unwrap();
+                    // timestamp_tx
+                    //     .send(frame.timestamp().unwrap_or(0) as f64 / AV_TIME_BASE_Q.den as f64)
+                    //     .unwrap();
                 }
 
-                mic_encoder.queue_frame(frame);
+                mic_encoder.queue_frame(frame.0);
             }
             mic_encoder.finish();
         });
@@ -626,12 +626,10 @@ async fn create_segment_pipeline(
 
             while let Ok(frame) = channel.recv() {
                 if let Some(timestamp_tx) = timestamp_tx.take() {
-                    timestamp_tx
-                        .send(frame.pts().unwrap() as f64 / AV_TIME_BASE_Q.den as f64)
-                        .unwrap();
+                    timestamp_tx.send(frame.1).unwrap();
                 }
 
-                system_audio_encoder.queue_frame(frame);
+                system_audio_encoder.queue_frame(frame.0);
             }
             system_audio_encoder.finish();
         });

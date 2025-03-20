@@ -24,7 +24,7 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         builder: CapturePipelineBuilder,
         source: (
             ScreenCaptureSource<Self>,
-            flume::Receiver<Self::VideoFormat>,
+            flume::Receiver<(Self::VideoFormat, f64)>,
         ),
         output_path: PathBuf,
     ) -> Result<(CapturePipelineBuilder, flume::Receiver<f64>), MediaError>
@@ -35,10 +35,10 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         builder: CapturePipelineBuilder,
         source: (
             ScreenCaptureSource<Self>,
-            flume::Receiver<Self::VideoFormat>,
+            flume::Receiver<(Self::VideoFormat, f64)>,
         ),
         audio: Option<&AudioInputFeed>,
-        system_audio: Option<(Receiver<ffmpeg::frame::Audio>, AudioInfo)>,
+        system_audio: Option<(Receiver<(ffmpeg::frame::Audio, f64)>, AudioInfo)>,
         output_path: PathBuf,
     ) -> impl Future<Output = Result<CapturePipelineBuilder, MediaError>> + Send
     where
@@ -51,7 +51,7 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
         mut builder: CapturePipelineBuilder,
         source: (
             ScreenCaptureSource<Self>,
-            flume::Receiver<Self::VideoFormat>,
+            flume::Receiver<(Self::VideoFormat, f64)>,
         ),
         output_path: PathBuf,
     ) -> Result<(CapturePipelineBuilder, flume::Receiver<f64>), MediaError> {
@@ -80,11 +80,10 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
 
             while let Ok(frame) = source.1.recv() {
                 if let Some(timestamp_tx) = timestamp_tx.take() {
-                    let frame_time = frame.pts().value as f64 / frame.pts().scale as f64;
-                    let _ = timestamp_tx.send(start_time_unix + frame_time - start_cmtime);
+                    let _ = timestamp_tx.send(frame.1);
                 }
 
-                screen_encoder.queue_video_frame(frame.as_ref());
+                screen_encoder.queue_video_frame(frame.0.as_ref());
             }
             screen_encoder.finish();
         });
@@ -98,10 +97,10 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
         mut builder: CapturePipelineBuilder,
         source: (
             ScreenCaptureSource<Self>,
-            flume::Receiver<Self::VideoFormat>,
+            flume::Receiver<(Self::VideoFormat, f64)>,
         ),
         audio: Option<&AudioInputFeed>,
-        system_audio: Option<(Receiver<ffmpeg::frame::Audio>, AudioInfo)>,
+        system_audio: Option<(Receiver<(ffmpeg::frame::Audio, f64)>, AudioInfo)>,
         output_path: PathBuf,
     ) -> Result<CapturePipelineBuilder, MediaError> {
         let (audio_tx, audio_rx) = flume::bounded(64);
@@ -149,7 +148,7 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
 
         builder.spawn_task("screen_capture_encoder", move |ready| {
             let _ = ready.send(Ok(()));
-            while let Ok(frame) = source.1.recv() {
+            while let Ok((frame, unix_time)) = source.1.recv() {
                 if let Ok(mut mp4) = mp4.lock() {
                     mp4.queue_video_frame(frame.as_ref());
                 }
@@ -170,7 +169,7 @@ impl MakeCapturePipeline for AVFrameCapture {
         mut builder: CapturePipelineBuilder,
         source: (
             ScreenCaptureSource<Self>,
-            flume::Receiver<Self::VideoFormat>,
+            flume::Receiver<(Self::VideoFormat, f64)>,
         ),
         output_path: PathBuf,
     ) -> Result<(CapturePipelineBuilder, flume::Receiver<f64>), MediaError>
@@ -195,11 +194,9 @@ impl MakeCapturePipeline for AVFrameCapture {
 
             while let Ok(frame) = source.1.recv() {
                 if let Some(timestamp_tx) = timestamp_tx.take() {
-                    timestamp_tx
-                        .send(frame.timestamp().unwrap_or(0) as f64 / AV_TIME_BASE_Q.den as f64)
-                        .unwrap();
+                    timestamp_tx.send(frame.1).unwrap();
                 }
-                screen_encoder.queue_video_frame(frame);
+                screen_encoder.queue_video_frame(frame.0);
             }
             screen_encoder.finish();
         });
@@ -211,10 +208,10 @@ impl MakeCapturePipeline for AVFrameCapture {
         mut builder: CapturePipelineBuilder,
         source: (
             ScreenCaptureSource<Self>,
-            flume::Receiver<Self::VideoFormat>,
+            flume::Receiver<(Self::VideoFormat, f64)>,
         ),
         audio: Option<&AudioInputFeed>,
-        system_audio: Option<(Receiver<ffmpeg::frame::Audio>, AudioInfo)>,
+        system_audio: Option<(Receiver<(ffmpeg::frame::Audio, f64)>, AudioInfo)>,
         output_path: PathBuf,
     ) -> Result<CapturePipelineBuilder, MediaError>
     where
@@ -262,7 +259,7 @@ impl MakeCapturePipeline for AVFrameCapture {
 
         builder.spawn_task("screen_encoder", move |ready| {
             let _ = ready.send(Ok(()));
-            while let Ok(frame) = source.1.recv() {
+            while let Ok((frame, unix_time)) = source.1.recv() {
                 if let Ok(mut mp4) = mp4.lock() {
                     mp4.queue_video_frame(frame);
                 }
@@ -278,7 +275,7 @@ impl MakeCapturePipeline for AVFrameCapture {
 
 type ScreenCaptureReturn<T> = (
     ScreenCaptureSource<T>,
-    Receiver<<T as ScreenCaptureFormat>::VideoFormat>,
+    Receiver<(<T as ScreenCaptureFormat>::VideoFormat, f64)>,
 );
 
 #[cfg(target_os = "macos")]
@@ -292,7 +289,7 @@ pub fn create_screen_capture(
     show_camera: bool,
     force_show_cursor: bool,
     max_fps: u32,
-    audio_tx: Option<Sender<ffmpeg::frame::Audio>>,
+    audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
 ) -> Result<ScreenCaptureReturn<ScreenCaptureMethod>, RecordingError> {
     let (video_tx, video_rx) = flume::bounded(16);
 

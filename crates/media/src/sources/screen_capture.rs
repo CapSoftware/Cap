@@ -131,8 +131,8 @@ pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
     show_camera: bool,
     force_show_cursor: bool,
     bounds: Bounds,
-    video_tx: Sender<TCaptureFormat::VideoFormat>,
-    audio_tx: Option<Sender<ffmpeg::frame::Audio>>,
+    video_tx: Sender<(TCaptureFormat::VideoFormat, f64)>,
+    audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
     _phantom: std::marker::PhantomData<TCaptureFormat>,
 }
 
@@ -206,8 +206,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         show_camera: bool,
         force_show_cursor: bool,
         max_fps: u32,
-        video_tx: Sender<TCaptureFormat::VideoFormat>,
-        audio_tx: Option<Sender<ffmpeg::frame::Audio>>,
+        video_tx: Sender<(TCaptureFormat::VideoFormat, f64)>,
+        audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
     ) -> Result<Self, String> {
         cap_fail::fail!("media::screen_capture::init");
 
@@ -367,7 +367,6 @@ pub struct AVFrameCapture;
 
 impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
     type Clock = RealTimeClock<RawNanoseconds>;
-    type Output = (FFVideo, Option<ffmpeg::frame::Audio>);
 
     // #[instrument(skip_all)]
     fn run(
@@ -441,7 +440,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                                 }
                             }
 
-                            if let Err(_) = video_tx.send(buffer) {
+                            if let Err(_) = video_tx.send((buffer, todo!())) {
                                 error!("Pipeline is unreachable. Shutting down recording.");
                                 return Some(ControlFlow::Break(()));
                             }
@@ -452,7 +451,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                 }
                 Ok(Frame::Audio(frame)) => {
                     if let Some(audio_tx) = &audio_tx {
-                        let _ = audio_tx.send(scap_audio_to_ffmpeg(frame));
+                        let _ = audio_tx.send((scap_audio_to_ffmpeg(frame), todo!()));
                     }
                     None
                 }
@@ -556,7 +555,6 @@ impl ScreenCaptureFormat for CMSampleBufferCapture {
 #[cfg(target_os = "macos")]
 impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
     type Clock = RealTimeClock<RawNanoseconds>;
-    type Output = cidre::arc::R<cidre::cm::SampleBuf>;
 
     fn run(
         &mut self,
@@ -569,6 +567,14 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         let video_tx = self.video_tx.clone();
         let audio_tx = self.audio_tx.clone();
 
+        let start = std::time::SystemTime::now();
+        let start_time_unix = start
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_secs_f64();
+        let start_cmtime = cidre::cm::Clock::host_time_clock().time();
+        let start_cmtime = start_cmtime.value as f64 / start_cmtime.scale as f64;
+
         inner(
             self,
             ready_signal,
@@ -578,6 +584,10 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                     let sample_buffer = unsafe {
                         std::mem::transmute::<_, cidre::arc::R<cidre::cm::SampleBuf>>(sample_buffer)
                     };
+
+                    let frame_time =
+                        sample_buffer.pts().value as f64 / sample_buffer.pts().scale as f64;
+                    let unix_timestamp = start_time_unix + frame_time - start_cmtime;
 
                     match typ {
                         SCStreamOutputType::Screen => {
@@ -589,7 +599,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                                 return Some(ControlFlow::Continue(()));
                             }
 
-                            if let Err(_) = video_tx.send(sample_buffer) {
+                            if let Err(_) = video_tx.send((sample_buffer, unix_timestamp)) {
                                 eprintln!("Pipeline is unreachable. Shutting down recording.");
                                 return Some(ControlFlow::Continue(()));
                             }
@@ -623,7 +633,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                                     as i64,
                             ));
 
-                            let _ = audio_tx.send(frame);
+                            let _ = audio_tx.send((frame, unix_timestamp));
                         }
                     }
 
