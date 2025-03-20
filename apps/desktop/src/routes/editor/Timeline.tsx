@@ -763,7 +763,7 @@ function ZoomTrack(props: {
 
             return (
               <SegmentRoot
-                class="bg-gradient-to-r relative zoom-gradient-border hover:border duration-300 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]"
+                class="bg-gradient-to-r zoom-gradient-border hover:border duration-300 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]"
                 innerClass="ring-red-300"
                 segment={segment}
                 onMouseEnter={() => {
