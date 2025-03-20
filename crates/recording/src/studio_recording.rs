@@ -19,7 +19,9 @@ use cap_media::{
 };
 use cap_project::{CursorEvents, StudioRecordingMeta};
 use cap_utils::spawn_actor;
+use ffmpeg::ffi::AV_TIME_BASE_Q;
 use flume::Receiver;
+use futures::{future::OptionFuture, StreamExt};
 use relative_path::RelativePathBuf;
 use tokio::sync::{oneshot, Mutex};
 use tracing::{debug, info, trace, Instrument};
@@ -65,15 +67,24 @@ pub struct StudioRecordingSegment {
     pipeline: StudioRecordingPipeline,
 }
 
+pub struct PipelineOutput {
+    pub path: PathBuf,
+    pub first_timestamp_rx: flume::Receiver<f64>,
+}
+
+pub struct ScreenPipelineOutput {
+    pub inner: PipelineOutput,
+    pub bounds: Bounds,
+    pub video_info: VideoInfo,
+}
+
 struct StudioRecordingPipeline {
     pub inner: Pipeline<RealTimeClock<()>>,
-    pub display_output_path: PathBuf,
-    pub audio_output_path: Option<PathBuf>,
+    pub screen: ScreenPipelineOutput,
+    pub microphone: Option<PipelineOutput>,
     pub camera: Option<CameraPipelineInfo>,
     pub cursor: Option<CursorPipeline>,
-    pub system_audio_path: Option<PathBuf>,
-    pub screen_bounds: Bounds,
-    pub screen_video_info: VideoInfo,
+    pub system_audio: Option<PipelineOutput>,
 }
 
 struct CursorPipeline {
@@ -164,11 +175,11 @@ pub async fn spawn_studio_recording_actor(
 
     trace!("spawning recording actor");
 
-    let bounds = pipeline.screen_bounds;
+    let bounds = pipeline.screen.bounds;
 
     spawn_actor({
         let options = options.clone();
-        let fps = pipeline.screen_video_info.fps();
+        let fps = pipeline.screen.video_info.fps();
         async move {
             let mut actor = StudioRecordingActor {
                 id,
@@ -385,32 +396,48 @@ async fn stop_recording(
                     .segments
                     .iter()
                     .map(|s| MultipleSegment {
-                        display: Display {
+                        display: VideoMeta {
                             path: RelativePathBuf::from_path(
                                 s.pipeline
-                                    .display_output_path
+                                    .screen
+                                    .inner
+                                    .path
                                     .strip_prefix(&actor.recording_dir)
                                     .unwrap(),
                             )
                             .unwrap(),
                             fps: actor.fps,
+                            start_time: Some(
+                                s.pipeline
+                                    .screen
+                                    .inner
+                                    .first_timestamp_rx
+                                    .try_recv()
+                                    .unwrap(),
+                            ),
                         },
-                        camera: s.pipeline.camera.as_ref().map(|camera| CameraMeta {
+                        camera: s.pipeline.camera.as_ref().map(|camera| VideoMeta {
                             path: RelativePathBuf::from_path(
                                 camera
-                                    .output_path
+                                    .inner
+                                    .path
                                     .strip_prefix(&actor.recording_dir)
                                     .unwrap()
                                     .to_owned(),
                             )
                             .unwrap(),
                             fps: camera.fps,
+                            start_time: Some(camera.inner.first_timestamp_rx.try_recv().unwrap()),
                         }),
-                        audio: s.pipeline.audio_output_path.as_ref().map(|path| AudioMeta {
+                        audio: s.pipeline.microphone.as_ref().map(|mic| AudioMeta {
                             path: RelativePathBuf::from_path(
-                                path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
+                                mic.path
+                                    .strip_prefix(&actor.recording_dir)
+                                    .unwrap()
+                                    .to_owned(),
                             )
                             .unwrap(),
+                            start_time: Some(mic.first_timestamp_rx.try_recv().unwrap()),
                         }),
                         cursor: s.pipeline.cursor.as_ref().map(|cursor| {
                             RelativePathBuf::from_path(
@@ -422,11 +449,16 @@ async fn stop_recording(
                             )
                             .unwrap()
                         }),
-                        system_audio: s.pipeline.system_audio_path.as_ref().map(|path| AudioMeta {
+                        system_audio: s.pipeline.system_audio.as_ref().map(|audio| AudioMeta {
                             path: RelativePathBuf::from_path(
-                                path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
+                                audio
+                                    .path
+                                    .strip_prefix(&actor.recording_dir)
+                                    .unwrap()
+                                    .to_owned(),
                             )
                             .unwrap(),
+                            start_time: Some(audio.first_timestamp_rx.try_recv().unwrap()),
                         }),
                     })
                     .collect()
@@ -496,27 +528,41 @@ async fn create_segment_pipeline(
     let clock = RealTimeClock::<()>::new();
     let mut pipeline_builder = Pipeline::builder(clock);
 
-    let display_output_path = dir.join("display.mp4");
+    let screen_output_path = dir.join("display.mp4");
 
     trace!("preparing segment pipeline {index}");
 
-    let screen_bounds = screen_source.get_bounds().clone();
-    let screen_video_info = screen_source.info();
-    pipeline_builder = ScreenCaptureMethod::make_studio_mode_pipeline(
-        pipeline_builder,
-        (screen_source, screen_rx),
-        display_output_path.clone(),
-    )?;
+    let screen = {
+        let bounds = screen_source.get_bounds().clone();
+        let video_info = screen_source.info();
 
-    info!(
-        r#"screen pipeline prepared, will output to "{}""#,
-        display_output_path
-            .strip_prefix(&segments_dir)
-            .unwrap()
-            .display()
-    );
+        let (pipeline_builder_, screen_timestamp_rx) =
+            ScreenCaptureMethod::make_studio_mode_pipeline(
+                pipeline_builder,
+                (screen_source, screen_rx),
+                screen_output_path.clone(),
+            )?;
+        pipeline_builder = pipeline_builder_;
 
-    let audio_output_path = if let Some(mic_source) = mic_feed {
+        info!(
+            r#"screen pipeline prepared, will output to "{}""#,
+            screen_output_path
+                .strip_prefix(&segments_dir)
+                .unwrap()
+                .display()
+        );
+
+        ScreenPipelineOutput {
+            inner: PipelineOutput {
+                path: screen_output_path,
+                first_timestamp_rx: screen_timestamp_rx,
+            },
+            bounds,
+            video_info,
+        }
+    };
+
+    let microphone = if let Some(mic_source) = mic_feed {
         let (tx, rx) = flume::bounded(8);
 
         let mic_source = AudioInputSource::init(mic_source, tx);
@@ -531,10 +577,19 @@ async fn create_segment_pipeline(
 
         pipeline_builder.spawn_source("microphone_capture", mic_source);
 
+        let (timestamp_tx, timestamp_rx) = flume::bounded(1);
+
         pipeline_builder.spawn_task("microphone_encoder", move |ready| {
+            let mut timestamp_tx = Some(timestamp_tx);
             let _ = ready.send(Ok(()));
 
             while let Ok(frame) = rx.recv() {
+                if let Some(timestamp_tx) = timestamp_tx.take() {
+                    timestamp_tx
+                        .send(frame.timestamp().unwrap_or(0) as f64 / AV_TIME_BASE_Q.den as f64)
+                        .unwrap();
+                }
+
                 mic_encoder.queue_frame(frame);
             }
             mic_encoder.finish();
@@ -545,12 +600,15 @@ async fn create_segment_pipeline(
             output_path.strip_prefix(&segments_dir).unwrap().display()
         );
 
-        Some(output_path)
+        Some(PipelineOutput {
+            path: output_path,
+            first_timestamp_rx: timestamp_rx,
+        })
     } else {
         None
     };
 
-    let system_audio_path = if let Some((config, channel)) =
+    let system_audio = if let Some((config, channel)) =
         Some(ScreenCaptureMethod::audio_info()).zip(system_audio.1.clone())
     {
         let output_path = dir.join("system_audio.ogg");
@@ -560,15 +618,28 @@ async fn create_segment_pipeline(
             OpusEncoder::factory("system_audio", config),
         )?;
 
+        let (timestamp_tx, timestamp_rx) = flume::bounded(1);
+
         pipeline_builder.spawn_task("system_audio_encoder", move |ready| {
+            let mut timestamp_tx = Some(timestamp_tx);
             let _ = ready.send(Ok(()));
+
             while let Ok(frame) = channel.recv() {
+                if let Some(timestamp_tx) = timestamp_tx.take() {
+                    timestamp_tx
+                        .send(frame.pts().unwrap() as f64 / AV_TIME_BASE_Q.den as f64)
+                        .unwrap();
+                }
+
                 system_audio_encoder.queue_frame(frame);
             }
             system_audio_encoder.finish();
         });
 
-        Some(output_path)
+        Some(PipelineOutput {
+            path: output_path,
+            first_timestamp_rx: timestamp_rx,
+        })
     } else {
         None
     };
@@ -589,9 +660,19 @@ async fn create_segment_pipeline(
 
         pipeline_builder.spawn_source("camera_capture", camera_source);
 
+        let (timestamp_tx, timestamp_rx) = flume::bounded(1);
+
         pipeline_builder.spawn_task("camera_encoder", move |ready| {
+            let mut timestamp_tx = Some(timestamp_tx);
             let _ = ready.send(Ok(()));
+
             while let Ok(frame) = rx.recv() {
+                if let Some(timestamp_tx) = timestamp_tx.take() {
+                    timestamp_tx
+                        .send(frame.timestamp().unwrap_or(0) as f64 / AV_TIME_BASE_Q.den as f64)
+                        .unwrap();
+                }
+
                 camera_encoder.queue_video_frame(frame);
             }
             camera_encoder.finish();
@@ -603,7 +684,10 @@ async fn create_segment_pipeline(
         );
 
         Some(CameraPipelineInfo {
-            output_path,
+            inner: PipelineOutput {
+                path: output_path,
+                first_timestamp_rx: timestamp_rx,
+            },
             fps: (camera_config.frame_rate.0 / camera_config.frame_rate.1) as u32,
         })
     } else {
@@ -614,7 +698,7 @@ async fn create_segment_pipeline(
 
     let cursor = FLAGS.record_mouse_state.then(|| {
         let cursor = spawn_cursor_recorder(
-            screen_bounds.clone(),
+            screen.bounds.clone(),
             cursors_dir.clone(),
             prev_cursors,
             next_cursors_id,
@@ -633,20 +717,18 @@ async fn create_segment_pipeline(
     Ok((
         StudioRecordingPipeline {
             inner: pipeline,
-            display_output_path,
-            audio_output_path,
+            screen,
+            microphone,
             camera,
             cursor,
-            system_audio_path,
-            screen_bounds,
-            screen_video_info,
+            system_audio,
         },
         pipeline_done_rx,
     ))
 }
 
 struct CameraPipelineInfo {
-    output_path: PathBuf,
+    inner: PipelineOutput,
     fps: u32,
 }
 

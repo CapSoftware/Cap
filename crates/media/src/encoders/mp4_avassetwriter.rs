@@ -149,18 +149,12 @@ impl MP4AVAssetWriterEncoder {
         })
     }
 
-    pub fn queue_video_frame(&mut self, frame: screencapturekit::output::CMSampleBuffer) {
+    pub fn queue_video_frame(&mut self, frame: &cidre::cm::SampleBuf) {
         if !self.video_input.is_ready_for_more_media_data() {
             return;
         }
 
-        let sample_buf = unsafe {
-            use core_foundation::base::TCFType;
-            let ptr = &*frame.as_concrete_TypeRef() as *const _ as *const cm::SampleBuf;
-            &*ptr
-        };
-
-        let time = sample_buf.pts();
+        let time = frame.pts();
 
         if self.first_timestamp.is_none() {
             self.asset_writer.start_session_at_src_time(time);
@@ -169,7 +163,7 @@ impl MP4AVAssetWriterEncoder {
 
         self.last_timestamp = Some(time);
 
-        self.video_input.append_sample_buf(sample_buf).ok();
+        self.video_input.append_sample_buf(frame).ok();
     }
 
     pub fn queue_audio_frame(&mut self, frame: FFAudio) -> Result<(), MediaError> {
@@ -267,20 +261,19 @@ impl MP4AVAssetWriterEncoder {
     }
 }
 
-use flume::Receiver;
 use screencapturekit::output::CMSampleBuffer;
 use tracing::{debug, info};
 
-impl PipelineSinkTask<CMSampleBuffer> for MP4AVAssetWriterEncoder {
+impl PipelineSinkTask<cidre::arc::R<cidre::cm::SampleBuf>> for MP4AVAssetWriterEncoder {
     fn run(
         &mut self,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
-        input: &flume::Receiver<CMSampleBuffer>,
+        input: &flume::Receiver<cidre::arc::R<cidre::cm::SampleBuf>>,
     ) {
         ready_signal.send(Ok(())).ok();
 
         while let Ok(frame) = input.recv() {
-            self.queue_video_frame(frame);
+            self.queue_video_frame(&frame);
             self.process_frame();
         }
     }
@@ -310,25 +303,25 @@ impl PipelineSinkTask<FFAudio> for Arc<Mutex<MP4AVAssetWriterEncoder>> {
     }
 }
 
-impl PipelineSinkTask<CMSampleBuffer> for Arc<Mutex<MP4AVAssetWriterEncoder>> {
-    fn run(
-        &mut self,
-        ready_signal: crate::pipeline::task::PipelineReadySignal,
-        input: &flume::Receiver<CMSampleBuffer>,
-    ) {
-        ready_signal.send(Ok(())).ok();
+// impl PipelineSinkTask<cidre::cm::SampleBuf> for Arc<Mutex<MP4AVAssetWriterEncoder>> {
+//     fn run(
+//         &mut self,
+//         ready_signal: crate::pipeline::task::PipelineReadySignal,
+//         input: &flume::Receiver<cidre::cm::SampleBuf>,
+//     ) {
+//         ready_signal.send(Ok(())).ok();
 
-        while let Ok(frame) = input.recv() {
-            let mut this = self.lock().unwrap();
-            this.queue_video_frame(frame);
-            this.process_frame();
-        }
-    }
+//         while let Ok(frame) = input.recv() {
+//             let mut this = self.lock().unwrap();
+//             this.queue_video_frame(frame);
+//             this.process_frame();
+//         }
+//     }
 
-    fn finish(&mut self) {
-        self.lock().unwrap().finish();
-    }
-}
+//     fn finish(&mut self) {
+//         self.lock().unwrap().finish();
+//     }
+// }
 
 #[link(name = "AVFoundation", kind = "framework")]
 extern "C" {

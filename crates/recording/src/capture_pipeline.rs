@@ -11,6 +11,7 @@ use cap_media::{
     },
     MediaError,
 };
+use ffmpeg::ffi::AV_TIME_BASE_Q;
 use flume::{Receiver, Sender};
 use tracing::error;
 
@@ -26,7 +27,7 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
             flume::Receiver<Self::VideoFormat>,
         ),
         output_path: PathBuf,
-    ) -> Result<CapturePipelineBuilder, MediaError>
+    ) -> Result<(CapturePipelineBuilder, flume::Receiver<f64>), MediaError>
     where
         Self: Sized;
 
@@ -53,7 +54,7 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
             flume::Receiver<Self::VideoFormat>,
         ),
         output_path: PathBuf,
-    ) -> Result<CapturePipelineBuilder, MediaError> {
+    ) -> Result<(CapturePipelineBuilder, flume::Receiver<f64>), MediaError> {
         let screen_config = source.0.info();
         let mut screen_encoder = cap_media::encoders::MP4AVAssetWriterEncoder::init(
             "screen",
@@ -63,17 +64,34 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
             None,
         )?;
 
+        let (timestamp_tx, timestamp_rx) = flume::bounded(1);
+
         builder.spawn_task("screen_capture_encoder", move |ready| {
+            let start = std::time::SystemTime::now();
+            let start_time_unix = start
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("Time went backwards")
+                .as_secs_f64();
+            let start_cmtime = cidre::cm::Clock::host_time_clock().time();
+            let start_cmtime = start_cmtime.value as f64 / start_cmtime.scale as f64;
+
+            let mut timestamp_tx = Some(timestamp_tx);
             let _ = ready.send(Ok(()));
+
             while let Ok(frame) = source.1.recv() {
-                screen_encoder.queue_video_frame(frame);
+                if let Some(timestamp_tx) = timestamp_tx.take() {
+                    let frame_time = frame.pts().value as f64 / frame.pts().scale as f64;
+                    let _ = timestamp_tx.send(start_time_unix + frame_time - start_cmtime);
+                }
+
+                screen_encoder.queue_video_frame(frame.as_ref());
             }
             screen_encoder.finish();
         });
 
         builder.spawn_source("screen_capture", source.0);
 
-        Ok(builder)
+        Ok((builder, timestamp_rx))
     }
 
     async fn make_instant_mode_pipeline(
@@ -133,7 +151,7 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
             let _ = ready.send(Ok(()));
             while let Ok(frame) = source.1.recv() {
                 if let Ok(mut mp4) = mp4.lock() {
-                    mp4.queue_video_frame(frame);
+                    mp4.queue_video_frame(frame.as_ref());
                 }
             }
             if let Ok(mut mp4) = mp4.lock() {
@@ -155,7 +173,7 @@ impl MakeCapturePipeline for AVFrameCapture {
             flume::Receiver<Self::VideoFormat>,
         ),
         output_path: PathBuf,
-    ) -> Result<CapturePipelineBuilder, MediaError>
+    ) -> Result<(CapturePipelineBuilder, flume::Receiver<f64>), MediaError>
     where
         Self: Sized,
     {
@@ -169,15 +187,24 @@ impl MakeCapturePipeline for AVFrameCapture {
 
         builder.spawn_source("screen_capture", source.0);
 
+        let (timestamp_tx, timestamp_rx) = flume::bounded(1);
+
         builder.spawn_task("screen_capture_encoder", move |ready| {
+            let mut timestamp_tx = Some(timestamp_tx);
             let _ = ready.send(Ok(()));
+
             while let Ok(frame) = source.1.recv() {
+                if let Some(timestamp_tx) = timestamp_tx.take() {
+                    timestamp_tx
+                        .send(frame.timestamp().unwrap_or(0) as f64 / AV_TIME_BASE_Q.den as f64)
+                        .unwrap();
+                }
                 screen_encoder.queue_video_frame(frame);
             }
             screen_encoder.finish();
         });
 
-        Ok(builder)
+        Ok((builder, timestamp_rx))
     }
 
     async fn make_instant_mode_pipeline(

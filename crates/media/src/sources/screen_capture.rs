@@ -1,6 +1,7 @@
 use cap_flags::FLAGS;
 use cpal::traits::{DeviceTrait, HostTrait};
 use ffmpeg::{format::Sample, frame::Audio, ChannelLayout};
+use ffmpeg_sys_next::AV_TIME_BASE_Q;
 use flume::Sender;
 use scap::{
     capturer::{
@@ -540,7 +541,7 @@ pub struct CMSampleBufferCapture;
 
 #[cfg(target_os = "macos")]
 impl ScreenCaptureFormat for CMSampleBufferCapture {
-    type VideoFormat = screencapturekit::output::CMSampleBuffer;
+    type VideoFormat = cidre::arc::R<cidre::cm::SampleBuf>;
 
     fn audio_info() -> AudioInfo {
         AudioInfo::new(
@@ -555,7 +556,7 @@ impl ScreenCaptureFormat for CMSampleBufferCapture {
 #[cfg(target_os = "macos")]
 impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
     type Clock = RealTimeClock<RawNanoseconds>;
-    type Output = screencapturekit::output::CMSampleBuffer;
+    type Output = cidre::arc::R<cidre::cm::SampleBuf>;
 
     fn run(
         &mut self,
@@ -567,7 +568,6 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
 
         let video_tx = self.video_tx.clone();
         let audio_tx = self.audio_tx.clone();
-        let audio_info = self.audio_info();
 
         inner(
             self,
@@ -575,13 +575,17 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
             control_signal,
             |capturer| match capturer.raw().get_next_sample_buffer() {
                 Ok((sample_buffer, typ)) => {
+                    let sample_buffer = unsafe {
+                        std::mem::transmute::<_, cidre::arc::R<cidre::cm::SampleBuf>>(sample_buffer)
+                    };
+
                     match typ {
                         SCStreamOutputType::Screen => {
-                            let Ok(pixel_buffer) = sample_buffer.get_pixel_buffer() else {
+                            let Some(pixel_buffer) = sample_buffer.image_buf() else {
                                 return Some(ControlFlow::Continue(()));
                             };
 
-                            if pixel_buffer.get_height() == 0 || pixel_buffer.get_width() == 0 {
+                            if pixel_buffer.height() == 0 || pixel_buffer.width() == 0 {
                                 return Some(ControlFlow::Continue(()));
                             }
 
@@ -593,22 +597,6 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                         SCStreamOutputType::Audio => {
                             let Some(audio_tx) = &audio_tx else {
                                 return Some(ControlFlow::Continue(()));
-                            };
-
-                            // let list = sample_buffer.get_audio_buffer_list().unwrap();
-                            // let mut bytes = Vec::<u8>::new();
-
-                            // // dbg!(list.buffers().len());
-
-                            // for buffer in list.buffers() {
-                            //     bytes.extend(buffer.data());
-                            // }
-
-                            use core_foundation::base::TCFType;
-                            let sample_buffer = unsafe {
-                                let s = sample_buffer.as_concrete_TypeRef();
-                                let b = s as *const _ as *const cidre::cm::SampleBuf;
-                                &*b
                             };
 
                             let buf_list = sample_buffer.audio_buf_list::<2>().unwrap();
@@ -628,13 +616,14 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                                 );
                             }
 
-                            frame.set_pts(Some(sample_buffer.pts().value));
+                            frame.set_pts(Some(
+                                (sample_buffer.pts().value as f64
+                                    / sample_buffer.pts().scale as f64
+                                    * AV_TIME_BASE_Q.den as f64)
+                                    as i64,
+                            ));
 
-                            // dbg!(&audio_info);
-
-                            let _ = audio_tx.send(
-                                frame, // audio_info.wrap_frame(&bytes, sample_buffer.output_pts().value),
-                            );
+                            let _ = audio_tx.send(frame);
                         }
                     }
 

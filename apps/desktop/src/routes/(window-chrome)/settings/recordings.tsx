@@ -16,9 +16,10 @@ import {
   ParentProps,
   Show,
 } from "solid-js";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import { ask } from "@tauri-apps/plugin-dialog";
-import { open } from "@tauri-apps/plugin-shell";
+import * as shell from "@tauri-apps/plugin-shell";
 import { trackEvent } from "~/utils/analytics";
 import { commands, events, RecordingMetaWithType } from "~/utils/tauri";
 
@@ -117,7 +118,9 @@ export default function Recordings() {
       <Show
         when={recordings.data && recordings.data.length > 0}
         fallback={
-          <p class="text-center text-[--text-tertiary] absolute flex items-center justify-center w-full h-full">No recordings found</p>
+          <p class="text-center text-[--text-tertiary] absolute flex items-center justify-center w-full h-full">
+            No recordings found
+          </p>
         }
       >
         <div class="p-4 border-b border-gray-300 border-dashed">
@@ -176,21 +179,6 @@ function RecordingItem(props: {
 
   const queryClient = useQueryClient();
 
-  const deleteButton = () => (
-    <TooltipIconButton
-      tooltipText="Delete"
-      onClick={async () => {
-        if (!(await ask("Are you sure you want to delete this recording?")))
-          return;
-        await remove(props.recording.path, { recursive: true });
-
-        queryClient.refetchQueries(recordingsQuery);
-      }}
-    >
-      <IconCapTrash class="size-4" />
-    </TooltipIconButton>
-  );
-
   return (
     <li class="flex flex-row justify-between items-center px-4 py-3 w-full rounded-xl transition-colors duration-200 hover:bg-gray-100">
       <div class="flex gap-5 items-center">
@@ -225,7 +213,7 @@ function RecordingItem(props: {
           </div>
         </div>
       </div>
-      <div class="flex items-center">
+      <div class="flex items-center gap-2">
         <Show when={type() === "studio"}>
           <TooltipIconButton
             tooltipText="Edit"
@@ -243,13 +231,12 @@ function RecordingItem(props: {
             {(sharing) => (
               <TooltipIconButton
                 tooltipText="Open link"
-                onClick={() => open(sharing().link)}
+                onClick={() => shell.open(sharing().link)}
               >
                 <IconCapLink class="size-4" />
               </TooltipIconButton>
             )}
           </Show>
-          {deleteButton()}
         </Show>
         <Show when={type() === "instant"}>
           {(_) => {
@@ -260,34 +247,49 @@ function RecordingItem(props: {
             }));
 
             return (
-              <>
-                <Show when={props.recording.meta.sharing}>
-                  {(sharing) => (
-                    <>
-                      <TooltipIconButton
-                        tooltipText="Reupload"
-                        onClick={() => reupload.mutate()}
-                      >
-                        {reupload.isPending ? (
-                          <IconLucideLoaderCircle class="animate-spin" />
-                        ) : (
-                          <IconLucideRotateCcw class="size-4" />
-                        )}
-                      </TooltipIconButton>
-                      <TooltipIconButton
-                        tooltipText="Open link"
-                        onClick={() => open(sharing().link)}
-                      >
-                        <IconCapLink class="size-4" />
-                      </TooltipIconButton>
-                    </>
-                  )}
-                </Show>
-                {deleteButton()}
-              </>
+              <Show when={props.recording.meta.sharing}>
+                {(sharing) => (
+                  <>
+                    <TooltipIconButton
+                      tooltipText="Reupload"
+                      onClick={() => reupload.mutate()}
+                    >
+                      {reupload.isPending ? (
+                        <IconLucideLoaderCircle class="animate-spin" />
+                      ) : (
+                        <IconLucideRotateCcw class="size-4" />
+                      )}
+                    </TooltipIconButton>
+                    <TooltipIconButton
+                      tooltipText="Open link"
+                      onClick={() => shell.open(sharing().link)}
+                    >
+                      <IconCapLink class="size-4" />
+                    </TooltipIconButton>
+                  </>
+                )}
+              </Show>
             );
           }}
         </Show>
+        <TooltipIconButton
+          tooltipText="Open recording bundle"
+          onClick={() => revealItemInDir(`${props.recording.path}/`)}
+        >
+          <IconLucideFolder class="size-4" />
+        </TooltipIconButton>
+        <TooltipIconButton
+          tooltipText="Delete"
+          onClick={async () => {
+            if (!(await ask("Are you sure you want to delete this recording?")))
+              return;
+            await remove(props.recording.path, { recursive: true });
+
+            queryClient.refetchQueries(recordingsQuery);
+          }}
+        >
+          <IconCapTrash class="size-4" />
+        </TooltipIconButton>
       </div>
     </li>
   );
@@ -308,7 +310,7 @@ function TooltipIconButton(
           props.onClick();
         }}
         disabled={props.disabled}
-        class="p-2.5 mr-2 opacity-70 will-change-transform hover:opacity-100 rounded-full transition-all duration-200 hover:bg-gray-200 dark:hover:bg-gray-300"
+        class="p-2.5 opacity-70 will-change-transform hover:opacity-100 rounded-full transition-all duration-200 hover:bg-gray-200 dark:hover:bg-gray-300"
       >
         {props.children}
       </Tooltip.Trigger>
