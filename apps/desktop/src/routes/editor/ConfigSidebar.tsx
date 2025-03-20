@@ -57,12 +57,6 @@ import {
   Subfield,
   Toggle,
 } from "./ui";
-import { DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO } from "./projectConfig";
-import { generalSettingsStore } from "~/store";
-import { type as ostype } from "@tauri-apps/plugin-os";
-import toast from "solid-toast";
-import { createElementBounds } from "@solid-primitives/bounds";
-import { TextInput } from "./TextInput";
 import { CaptionsTab } from "./CaptionsTab";
 
 

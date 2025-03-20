@@ -16,7 +16,6 @@ import { reconcile, createStore } from "solid-js/store";
 import { createEventListener } from "@solid-primitives/event-listener";
 
 
-import { cx } from "cva";
 import Tooltip from "~/components/Tooltip";
 import { commands } from "~/utils/tauri";
 import { FPS, OUTPUT_SIZE, useEditorContext } from "./context";
