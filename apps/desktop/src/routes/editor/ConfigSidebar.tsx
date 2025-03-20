@@ -1849,7 +1849,7 @@ function RgbInput(props: {
         }}
       />
       <TextInput
-        class="w-[4.60rem] p-[0.375rem] text-gray-500 text-[13px] border rounded-[0.5rem] bg-gray-50 outline-none focus:ring-2 transition-shadows duration-200 focus:ring-gray-500 focus:ring-offset-2 focus:ring-offset-gray-200"
+        class="w-[4.60rem] p-[0.375rem] text-gray-500 text-[13px] border rounded-[0.5rem] bg-gray-50 outline-none focus:ring-1 transition-shadows duration-200 focus:ring-gray-500 focus:ring-offset-1 focus:ring-offset-gray-200"
         value={text()}
         onFocus={() => {
           prevHex = rgbToHex(props.value);
