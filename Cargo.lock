@@ -915,7 +915,7 @@ dependencies = [
 name = "cap-audio"
 version = "0.1.0"
 dependencies = [
- "cidre 0.7.0",
+ "cidre",
  "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
  "tokio",
@@ -984,6 +984,7 @@ dependencies = [
  "tauri-plugin-http",
  "tauri-plugin-notification",
  "tauri-plugin-oauth",
+ "tauri-plugin-opener",
  "tauri-plugin-os",
  "tauri-plugin-positioner",
  "tauri-plugin-process",
@@ -1076,7 +1077,7 @@ dependencies = [
  "cap-flags",
  "cap-gpu-converters",
  "cap-project",
- "cidre 0.6.0",
+ "cidre",
  "cocoa 0.26.0",
  "core-foundation 0.10.0",
  "core-graphics 0.24.0",
@@ -1127,6 +1128,7 @@ dependencies = [
  "cap-project",
  "cap-utils",
  "chrono",
+ "cidre",
  "cocoa 0.26.0",
  "device_query",
  "either",
@@ -1157,7 +1159,7 @@ dependencies = [
  "bytemuck",
  "cap-flags",
  "cap-project",
- "cidre 0.6.0",
+ "cidre",
  "ffmpeg-hw-device",
  "ffmpeg-next",
  "ffmpeg-sys-next",
@@ -1172,6 +1174,7 @@ dependencies = [
  "specta",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
  "wgpu",
 ]
 
@@ -1341,25 +1344,10 @@ name = "cidre"
 version = "0.6.0"
 source = "git+https://github.com/yury/cidre?rev=ef04aaabe14ffbbce4a330973a74b6d797d073ff#ef04aaabe14ffbbce4a330973a74b6d797d073ff"
 dependencies = [
- "cidre-macros 0.1.0 (git+https://github.com/yury/cidre?rev=ef04aaabe14ffbbce4a330973a74b6d797d073ff)",
+ "cidre-macros",
  "parking_lot",
  "tokio",
 ]
-
-[[package]]
-name = "cidre"
-version = "0.7.0"
-source = "git+https://github.com/yury/cidre?rev=b525fce737310f524e0159488f8a4e29685680bf#b525fce737310f524e0159488f8a4e29685680bf"
-dependencies = [
- "cidre-macros 0.1.0 (git+https://github.com/yury/cidre?rev=b525fce737310f524e0159488f8a4e29685680bf)",
- "parking_lot",
- "tokio",
-]
-
-[[package]]
-name = "cidre-macros"
-version = "0.1.0"
-source = "git+https://github.com/yury/cidre?rev=b525fce737310f524e0159488f8a4e29685680bf#b525fce737310f524e0159488f8a4e29685680bf"
 
 [[package]]
 name = "cidre-macros"
@@ -7862,6 +7850,28 @@ dependencies = [
  "tauri-plugin",
  "thiserror 1.0.69",
  "url",
+]
+
+[[package]]
+name = "tauri-plugin-opener"
+version = "2.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2fdc6cb608e04b7d2b6d1f21e9444ad49245f6d03465ba53323d692d1ceb1a30"
+dependencies = [
+ "dunce",
+ "glob",
+ "objc2-app-kit 0.3.0",
+ "objc2-foundation 0.3.0",
+ "open",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.6",
+ "url",
+ "windows 0.60.0",
+ "zbus 5.3.0",
 ]
 
 [[package]]

@@ -33,7 +33,7 @@ impl AudioMixer {
         AudioMixerSink { tx }
     }
 
-    pub fn add_source(&mut self, info: AudioInfo, rx: Receiver<FFAudio>) {
+    pub fn add_source(&mut self, info: AudioInfo, rx: Receiver<(FFAudio, f64)>) {
         self.sources.push(AudioMixerSource { rx, info })
     }
 
@@ -131,7 +131,7 @@ impl AudioMixer {
                         Err(flume::TryRecvError::Empty) => break,
                     };
 
-                    abuffers[i].source().add(&value).unwrap();
+                    abuffers[i].source().add(&value.0).unwrap();
                 }
             }
 
@@ -149,32 +149,31 @@ impl AudioMixer {
 }
 
 pub struct AudioMixerSink {
-    pub tx: flume::Sender<FFAudio>,
+    pub tx: flume::Sender<(FFAudio, f64)>,
 }
 
 pub struct AudioMixerSource {
-    rx: flume::Receiver<FFAudio>,
+    rx: flume::Receiver<(FFAudio, f64)>,
     info: AudioInfo,
 }
 
-impl PipelineSinkTask<FFAudio> for AudioMixerSink {
-    fn run(
-        &mut self,
-        ready_signal: crate::pipeline::task::PipelineReadySignal,
-        input: &flume::Receiver<FFAudio>,
-    ) {
-        let _ = ready_signal.send(Ok(()));
+// impl PipelineSinkTask<(FFAudio, f64)> for AudioMixerSink {
+//     fn run(
+//         &mut self,
+//         ready_signal: crate::pipeline::task::PipelineReadySignal,
+//         input: &flume::Receiver<(FFAudio, f64)>,
+//     ) {
+//         let _ = ready_signal.send(Ok(()));
 
-        while let Ok(input) = input.recv() {
-            let _ = self.tx.send(input);
-        }
-    }
+//         while let Ok(input) = input.recv() {
+//             let _ = self.tx.send(input);
+//         }
+//     }
 
-    fn finish(&mut self) {}
-}
+//     fn finish(&mut self) {}
+// }
 
 impl PipelineSourceTask for AudioMixer {
-    type Output = FFAudio;
     type Clock = RealTimeClock<RawNanoseconds>;
 
     fn run(

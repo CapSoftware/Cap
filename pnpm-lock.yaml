@@ -130,6 +130,9 @@ importers:
       '@tauri-apps/plugin-notification':
         specifier: 2.0.0
         version: 2.0.0
+      '@tauri-apps/plugin-opener':
+        specifier: ^2.2.6
+        version: 2.2.6
       '@tauri-apps/plugin-os':
         specifier: 2.0.0
         version: 2.0.0
@@ -4656,10 +4659,10 @@ packages:
         optional: true
 
 
-  '@storybook/builder-vite@9.0.0-alpha.4':
-    resolution: {integrity: sha512-TxCLKB+nHkoooKzcJN8QKM2D8l9A8t5/qPQkStkadP5xdkoMC9CHYuq0Anu55mtbzZQnuDtS09lT3laGqswRuw==}
+  '@storybook/builder-vite@9.0.0-alpha.6':
+    resolution: {integrity: sha512-X6cWPtBTaagi0+pIFZtJe8XjiuwjbfFks09PmSqZJMr1V/0jB/Odifa/XnKqyBHuaudnbClI1kqieBHfu4pu+g==}
     peerDependencies:
-      storybook: ^9.0.0-alpha.4
+      storybook: ^9.0.0-alpha.6
       vite: ^4.0.0 || ^5.0.0 || ^6.0.0
 
   '@storybook/core@8.3.3':
@@ -4670,11 +4673,10 @@ packages:
     peerDependencies:
       storybook: ^8.3.3
 
-
-  '@storybook/csf-plugin@9.0.0-alpha.4':
-    resolution: {integrity: sha512-Zq65uk267XRMr/DeAoOj1Yom6tuMPAOJo+GRw6qglX3NPxjc5eheGkFbT74P4CGXxYX9D5jDe9hY4CGBLNkACw==}
+  '@storybook/csf-plugin@9.0.0-alpha.6':
+    resolution: {integrity: sha512-7PjatRFh5dyYlNdwRWcauiitw71MhqXoWfj8/wU0CGWCTJr+Cn2ZYA9lgjX2GTKU3ctJDTX7gX45NpnZGXIcqw==}
     peerDependencies:
-      storybook: ^9.0.0-alpha.4
+      storybook: ^9.0.0-alpha.6
 
   '@storybook/csf@0.1.11':
     resolution: {integrity: sha512-dHYFQH3mA+EtnCkHXzicbLgsvzYjcDJ1JWsogbItZogkPHgSJM/Wr71uMkcvw8v9mmCyP4NpXJuu6bPoVsOnzg==}
@@ -4946,6 +4948,9 @@ packages:
 
   '@tauri-apps/plugin-notification@2.0.0':
     resolution: {integrity: sha512-6qEDYJS7mgXZWLXA0EFL+DVCJh8sJlzSoyw6B50pxhLPVFjc5Vr5DVzl5W3mUHaYhod5wsC984eQnlCCGqxYDA==}
+
+  '@tauri-apps/plugin-opener@2.2.6':
+    resolution: {integrity: sha512-bSdkuP71ZQRepPOn8BOEdBKYJQvl6+jb160QtJX/i2H9BF6ZySY/kYljh76N2Ne5fJMQRge7rlKoStYQY5Jq1w==}
 
   '@tauri-apps/plugin-os@2.0.0':
     resolution: {integrity: sha512-M7hG/nNyQYTJxVG/UhTKhp9mpXriwWzrs9mqDreB8mIgqA3ek5nHLdwRZJWhkKjZrnDT4v9CpA9BhYeplTlAiA==}
@@ -15945,9 +15950,9 @@ snapshots:
       react-dom: 18.3.1(react@18.3.1)
 
 
-  '@storybook/builder-vite@9.0.0-alpha.4(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))':
+  '@storybook/builder-vite@9.0.0-alpha.6(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))':
     dependencies:
-      '@storybook/csf-plugin': 9.0.0-alpha.4(storybook@8.3.3)
+      '@storybook/csf-plugin': 9.0.0-alpha.6(storybook@8.3.3)
       browser-assert: 1.2.1
       storybook: 8.3.3
       ts-dedent: 2.2.0
@@ -15979,7 +15984,7 @@ snapshots:
       unplugin: 1.16.1
 
 
-  '@storybook/csf-plugin@9.0.0-alpha.4(storybook@8.3.3)':
+  '@storybook/csf-plugin@9.0.0-alpha.6(storybook@8.3.3)':
     dependencies:
       storybook: 8.3.3
       unplugin: 1.16.1
@@ -16214,6 +16219,10 @@ snapshots:
       '@tauri-apps/api': 2.1.1
 
   '@tauri-apps/plugin-notification@2.0.0':
+    dependencies:
+      '@tauri-apps/api': 2.1.1
+
+  '@tauri-apps/plugin-opener@2.2.6':
     dependencies:
       '@tauri-apps/api': 2.1.1
 
@@ -18823,7 +18832,7 @@ snapshots:
       '@typescript-eslint/parser': 5.62.0(eslint@8.57.1)(typescript@5.7.2)
       eslint: 8.57.1
       eslint-import-resolver-node: 0.3.9
-      eslint-import-resolver-typescript: 3.6.3(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.30.0(eslint@8.57.1))(eslint@8.57.1)
+      eslint-import-resolver-typescript: 3.6.3(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.30.0)(eslint@8.57.1)
     transitivePeerDependencies:
       - supports-color
 
@@ -23771,7 +23780,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.2(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0)):
     dependencies:
-      '@storybook/builder-vite': 9.0.0-alpha.4(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))
+      '@storybook/builder-vite': 9.0.0-alpha.6(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))
     transitivePeerDependencies:
       - storybook
       - vite
