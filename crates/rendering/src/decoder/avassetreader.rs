@@ -14,7 +14,6 @@ use cidre::{
 };
 use ffmpeg::{codec, format, frame, Rational};
 use tokio::{runtime::Handle as TokioHandle, sync::oneshot};
-use tracing::info;
 
 use super::{pts_to_frame, DecodedFrame, VideoDecoderMessage, FRAME_CACHE_SIZE};
 
