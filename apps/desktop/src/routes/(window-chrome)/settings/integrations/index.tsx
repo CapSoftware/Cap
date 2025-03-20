@@ -65,10 +65,8 @@ export default function AppsTab() {
                 {isUpgraded.loading 
                   ? "Loading..." 
                   : app.pro && !isUpgraded() 
-                    ? "Sign In" 
-                    : app.pro && !isUpgraded() 
-                      ? "Upgrade to Pro" 
-                      : "Configure"}
+                    ? "Upgrade to Pro" 
+                    : "Configure"}
               </Button>
             </div>
             <div class="p-2">
