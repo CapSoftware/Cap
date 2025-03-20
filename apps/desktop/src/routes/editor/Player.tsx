@@ -281,7 +281,7 @@ function PreviewCanvas() {
           };
 
           return (
-            <div class="relative overflow-hidden flex items-center justify-center h-full">
+            <div class="absolute inset-0 overflow-hidden flex items-center justify-center h-full">
               <canvas
                 style={{
                   width: `${size().width - padding * 2}px`,
