@@ -361,7 +361,7 @@ impl AVAssetReaderDecoder {
                                 if let Some(sender) = sender.take() {
                                     let data = cache_frame.process();
                                     last_sent_frame = Some((current_frame, data.clone()));
-                                    info!("sending frame {requested_frame}");
+                                    // info!("sending frame {requested_frame}");
 
                                     sender.send(data).ok();
 
