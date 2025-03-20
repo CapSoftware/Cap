@@ -440,7 +440,9 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                                 }
                             }
 
-                            if let Err(_) = video_tx.send((buffer, todo!())) {
+                            if let Err(_) =
+                                video_tx.send((buffer, 0.0 /* TODO: correct this */))
+                            {
                                 error!("Pipeline is unreachable. Shutting down recording.");
                                 return Some(ControlFlow::Break(()));
                             }
@@ -451,7 +453,10 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                 }
                 Ok(Frame::Audio(frame)) => {
                     if let Some(audio_tx) = &audio_tx {
-                        let _ = audio_tx.send((scap_audio_to_ffmpeg(frame), todo!()));
+                        let _ = audio_tx.send((
+                            scap_audio_to_ffmpeg(frame),
+                            0.0, /* TODO: correct this */
+                        ));
                     }
                     None
                 }

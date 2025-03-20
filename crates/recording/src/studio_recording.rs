@@ -407,14 +407,15 @@ async fn stop_recording(
                             )
                             .unwrap(),
                             fps: actor.fps,
-                            start_time: Some(
-                                s.pipeline
-                                    .screen
-                                    .inner
-                                    .first_timestamp_rx
-                                    .try_recv()
-                                    .unwrap(),
-                            ),
+                            start_time: None,
+                            // Some(
+                            //     s.pipeline
+                            //         .screen
+                            //         .inner
+                            //         .first_timestamp_rx
+                            //         .try_recv()
+                            //         .unwrap(),
+                            // ),
                         },
                         camera: s.pipeline.camera.as_ref().map(|camera| VideoMeta {
                             path: RelativePathBuf::from_path(
@@ -427,7 +428,8 @@ async fn stop_recording(
                             )
                             .unwrap(),
                             fps: camera.fps,
-                            start_time: Some(camera.inner.first_timestamp_rx.try_recv().unwrap()),
+                            start_time: None,
+                            // Some(camera.inner.first_timestamp_rx.try_recv().unwrap()),
                         }),
                         audio: s.pipeline.microphone.as_ref().map(|mic| AudioMeta {
                             path: RelativePathBuf::from_path(
@@ -437,7 +439,8 @@ async fn stop_recording(
                                     .to_owned(),
                             )
                             .unwrap(),
-                            start_time: Some(mic.first_timestamp_rx.try_recv().unwrap()),
+                            start_time: None,
+                            // Some(mic.first_timestamp_rx.try_recv().unwrap()),
                         }),
                         cursor: s.pipeline.cursor.as_ref().map(|cursor| {
                             RelativePathBuf::from_path(
@@ -458,7 +461,8 @@ async fn stop_recording(
                                     .to_owned(),
                             )
                             .unwrap(),
-                            start_time: Some(audio.first_timestamp_rx.try_recv().unwrap()),
+                            start_time: None,
+                            // Some(audio.first_timestamp_rx.try_recv().unwrap()),
                         }),
                     })
                     .collect()

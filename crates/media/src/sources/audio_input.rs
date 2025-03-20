@@ -47,13 +47,13 @@ impl AudioInputSource {
         clock: &mut RealTimeClock<StreamInstant>,
         samples: AudioInputSamples,
     ) -> Result<(), MediaError> {
-        match clock.timestamp_for(dbg!(samples.info.timestamp().capture)) {
+        match clock.timestamp_for(samples.info.timestamp().capture) {
             None => {
                 eprintln!("Clock is currently stopped. Dropping frames.");
             }
             Some(timestamp) => {
                 let frame = self.audio_info.wrap_frame(&samples.data, timestamp);
-                if let Err(_) = self.tx.send((frame, todo!())) {
+                if let Err(_) = self.tx.send((frame, 0.0 /* TODO: correct this */)) {
                     return Err(MediaError::Any("Pipeline is unreachable! Stopping capture"));
                 }
             }
