@@ -1,10 +1,9 @@
 import { Button } from "@cap/ui-solid";
 import { useNavigate } from "@solidjs/router";
-import { For, createResource, createSignal, onMount } from "solid-js";
+import { For, createResource } from "solid-js";
 
 import "@total-typescript/ts-reset/filter-boolean";
 import { commands } from "~/utils/tauri";
-import { authStore } from "~/store";
 
 export default function AppsTab() {
   const navigate = useNavigate();
