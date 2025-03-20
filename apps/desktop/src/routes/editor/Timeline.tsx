@@ -483,7 +483,7 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                   });
                 }}
               />
-              <SegmentContent class="justify-center items-center relative bg-gradient-to-r timeline-gradient-border from-[#2675DB] via-[#4FA0FF] to-[#2675DB] shadow-[inset_0_5px_10px_5px_rgba(255,255,255,0.2)]">
+              <SegmentContent class="justify-center items-center relative dark:text-black-transparent-60 text-white-transparent-60 bg-gradient-to-r timeline-gradient-border from-[#2675DB] via-[#4FA0FF] to-[#2675DB] shadow-[inset_0_5px_10px_5px_rgba(255,255,255,0.2)]">
                 <Show when={segment.start > 0}>
                   <span class="text-black-transparent-60 text-[0.625rem] absolute top-[18px] left-5">
                     {formatTime(segment.start)}
@@ -507,7 +507,7 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                 })()}
 
                 <Show when={segment.end < editorInstance.recordingDuration}>
-                  <span class="text-black-transparent-60 text-[0.625rem] absolute top-[18px] right-5">
+                  <span class="text-[0.625rem] absolute top-[18px] right-5">
                     {formatTime(segment.end)}
                   </span>
                 </Show>
@@ -872,11 +872,9 @@ function ZoomTrack(props: {
 
                     return (
                       <Show when={ctx.width() > 100}>
-                        <div class="flex flex-col gap-1 justify-center items-center text-xs text-gray-500 whitespace-nowrap">
-                          <span class="text-[--text-tertiary] opacity-70">
-                            Zoom
-                          </span>
-                          <div class="flex gap-1 items-center text-gray-50 dark:text-gray-500 text-md">
+                        <div class="flex flex-col gap-1 justify-center items-center text-xs text-gray-50 dark:text-gray-500 whitespace-nowrap">
+                          <span class="opacity-70">Zoom</span>
+                          <div class="flex gap-1 items-center text-md">
                             <IconLucideSearch class="size-3.5" />{" "}
                             {zoomPercentage()}{" "}
                           </div>

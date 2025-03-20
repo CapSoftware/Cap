@@ -518,7 +518,7 @@ export function ConfigSidebar() {
                 }
               }}
             >
-              <KTabs.List class="flex flex-row  gap-2 items-center rounded-[0.5rem] relative">
+              <KTabs.List class="flex flex-row gap-2 items-center rounded-[0.5rem] relative">
                 <For each={BACKGROUND_SOURCES_LIST}>
                   {(item) => {
                     const el = (props?: object) => (
@@ -650,7 +650,7 @@ export function ConfigSidebar() {
                 <KTabs class="overflow-hidden relative" value={backgroundTab()}>
                   <KTabs.List
                     ref={setBackgroundRef}
-                    class="flex overflow-x-auto overscroll-contain relative z-40 flex-row gap-2 items-center mb-5 text-xs hide-scroll"
+                    class="flex overflow-x-auto overscroll-contain relative z-40 flex-row gap-2 items-center mb-3 text-xs hide-scroll"
                     style={{
                       "-webkit-mask-image": `linear-gradient(to right, transparent, black ${
                         scrollX() > 0 ? "24px" : "0"
@@ -898,20 +898,22 @@ export function ConfigSidebar() {
                     project.background.source
                   }
                 >
-                  <div class="flex flex-col flex-wrap gap-4">
-                    <RgbInput
-                      value={
-                        project.background.source.type === "color"
-                          ? project.background.source.value
-                          : [0, 0, 0]
-                      }
-                      onChange={(value) => {
-                        setProject("background", "source", {
-                          type: "color",
-                          value,
-                        });
-                      }}
-                    />
+                  <div class="flex flex-col flex-wrap gap-3">
+                    <div class="w-full h-10 flex flex-row items-center">
+                      <RgbInput
+                        value={
+                          project.background.source.type === "color"
+                            ? project.background.source.value
+                            : [0, 0, 0]
+                        }
+                        onChange={(value) => {
+                          setProject("background", "source", {
+                            type: "color",
+                            value,
+                          });
+                        }}
+                      />
+                    </div>
 
                     <div class="flex flex-wrap gap-2">
                       <For each={BACKGROUND_COLORS}>
@@ -936,7 +938,7 @@ export function ConfigSidebar() {
                               }}
                             />
                             <div
-                              class="rounded-lg transition-all duration-200 cursor-pointer size-6 peer-checked:hover:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
+                              class="rounded-lg transition-all duration-200 cursor-pointer size-8 peer-checked:hover:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
                               style={{ "background-color": color }}
                             />
                           </label>
@@ -978,8 +980,8 @@ export function ConfigSidebar() {
 
                     return (
                       <>
-                        <div class="flex flex-col gap-6">
-                          <div class="flex gap-5">
+                        <div class="flex flex-col gap-3">
+                          <div class="flex gap-5 h-10">
                             <RgbInput
                               value={source().from}
                               onChange={(from) => {
@@ -1000,6 +1002,56 @@ export function ConfigSidebar() {
                                 });
                               }}
                             />
+                            <div
+                              class="ml-auto flex relative flex-col items-center p-1 bg-gray-50 rounded-full border border-gray-200 size-10 cursor-ns-resize shrink-0"
+                              style={{ transform: `rotate(${angle()}deg)` }}
+                              onMouseDown={(downEvent) => {
+                                const start = angle();
+                                const resumeHistory = history.pause();
+
+                                createRoot((dispose) =>
+                                  createEventListenerMap(window, {
+                                    mouseup: () => dispose(),
+                                    mousemove: (moveEvent) => {
+                                      const rawNewAngle =
+                                        Math.round(
+                                          start +
+                                            (downEvent.clientY -
+                                              moveEvent.clientY)
+                                        ) % max;
+                                      const newAngle = moveEvent.shiftKey
+                                        ? rawNewAngle
+                                        : Math.round(rawNewAngle / 45) * 45;
+
+                                      if (
+                                        !moveEvent.shiftKey &&
+                                        hapticsEnabled() &&
+                                        project.background.source.type ===
+                                          "gradient"
+                                      ) {
+                                        if (previousAngle() !== newAngle) {
+                                          commands.performHapticFeedback(
+                                            "Alignment",
+                                            "Now"
+                                          );
+                                        }
+                                        setPreviousAngle(newAngle);
+                                      }
+
+                                      setProject("background", "source", {
+                                        type: "gradient",
+                                        angle:
+                                          newAngle < 0
+                                            ? newAngle + max
+                                            : newAngle,
+                                      });
+                                    },
+                                  })
+                                );
+                              }}
+                            >
+                              <div class="bg-blue-300 rounded-full size-1.5" />
+                            </div>
                           </div>
                           <div class="flex flex-wrap gap-2">
                             <For each={BACKGROUND_GRADIENTS}>
@@ -1025,7 +1077,7 @@ export function ConfigSidebar() {
                                     }}
                                   />
                                   <div
-                                    class="rounded-lg transition-all duration-200 cursor-pointer size-6 peer-checked:hover:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
+                                    class="rounded-lg transition-all duration-200 cursor-pointer size-8 peer-checked:hover:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
                                     style={{
                                       background: `linear-gradient(${angle()}deg, rgb(${gradient.from.join(
                                         ","
@@ -1036,53 +1088,6 @@ export function ConfigSidebar() {
                               )}
                             </For>
                           </div>
-                        </div>
-                        <div
-                          class="flex relative flex-col items-center p-1 bg-gray-50 rounded-full border border-gray-200 size-12 cursor-ns-resize shrink-0"
-                          style={{ transform: `rotate(${angle()}deg)` }}
-                          onMouseDown={(downEvent) => {
-                            const start = angle();
-                            const resumeHistory = history.pause();
-
-                            createRoot((dispose) =>
-                              createEventListenerMap(window, {
-                                mouseup: () => dispose(),
-                                mousemove: (moveEvent) => {
-                                  const rawNewAngle =
-                                    Math.round(
-                                      start +
-                                        (downEvent.clientY - moveEvent.clientY)
-                                    ) % max;
-                                  const newAngle = moveEvent.shiftKey
-                                    ? rawNewAngle
-                                    : Math.round(rawNewAngle / 45) * 45;
-
-                                  if (
-                                    !moveEvent.shiftKey &&
-                                    hapticsEnabled() &&
-                                    project.background.source.type ===
-                                      "gradient"
-                                  ) {
-                                    if (previousAngle() !== newAngle) {
-                                      commands.performHapticFeedback(
-                                        "Alignment",
-                                        "Now"
-                                      );
-                                    }
-                                    setPreviousAngle(newAngle);
-                                  }
-
-                                  setProject("background", "source", {
-                                    type: "gradient",
-                                    angle:
-                                      newAngle < 0 ? newAngle + max : newAngle,
-                                  });
-                                },
-                              })
-                            );
-                          }}
-                        >
-                          <div class="bg-blue-300 rounded-full size-2" />
                         </div>
                       </>
                     );
@@ -1566,7 +1571,7 @@ export function ConfigSidebar() {
           return (
             <div
               data-visible={state.timelineSelection?.type === "zoom"}
-              class="absolute inset-0 p-[0.75rem] text-[0.875rem] space-y-6 bg-gray-50 z-50 animate-in slide-in-from-bottom-2 fade-in"
+              class="absolute inset-0 p-[0.75rem] text-[0.875rem] space-y-6 bg-gray-100 z-50 animate-in slide-in-from-bottom-2 fade-in"
             >
               <div class="flex flex-row justify-between items-center">
                 <div class="flex gap-2 items-center">
@@ -1599,10 +1604,7 @@ export function ConfigSidebar() {
                   Delete
                 </EditorButton>
               </div>
-              <Field
-                name={`Zoom Amount (${zoomPercentage()})`}
-                icon={<IconLucideSearch />}
-              >
+              <Field name="Zoom Amount" icon={<IconLucideSearch />}>
                 <Slider
                   value={[value().segment.amount]}
                   onChange={(v) =>
@@ -1617,6 +1619,7 @@ export function ConfigSidebar() {
                   minValue={1}
                   maxValue={4.5}
                   step={0.001}
+                  formatTooltip="x"
                 />
               </Field>
               <Field name="Zoom Mode" icon={<IconCapSettings />}>

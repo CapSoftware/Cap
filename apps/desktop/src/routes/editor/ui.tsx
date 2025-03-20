@@ -136,10 +136,10 @@ export function Slider(
           content={
             props.value?.[0] !== undefined
               ? typeof props.formatTooltip === "string"
-                ? `${props.value[0]}${props.formatTooltip}`
+                ? `${props.value[0].toFixed(1)}${props.formatTooltip}`
                 : props.formatTooltip
                 ? props.formatTooltip(props.value[0])
-                : props.value
+                : props.value[0].toFixed(1)
               : undefined
           }
         >
@@ -154,7 +154,7 @@ export function Slider(
               console.log("set dragging false");
             }}
             class={cx(
-              "bg-gray-500 rounded-full outline-none size-4 -top-[6.3px] transition-shadow duration-200 focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 focus:ring-offset-gray-200 ui-disabled:bg-gray-400"
+              "bg-solid-white shadow-xl border border-gray-300 rounded-full outline-none size-4 -top-[6.3px] ui-disabled:bg-gray-400"
             )}
           />
         </Tooltip>
