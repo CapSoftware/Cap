@@ -303,26 +303,6 @@ impl PipelineSinkTask<FFAudio> for Arc<Mutex<MP4AVAssetWriterEncoder>> {
     }
 }
 
-// impl PipelineSinkTask<cidre::cm::SampleBuf> for Arc<Mutex<MP4AVAssetWriterEncoder>> {
-//     fn run(
-//         &mut self,
-//         ready_signal: crate::pipeline::task::PipelineReadySignal,
-//         input: &flume::Receiver<cidre::cm::SampleBuf>,
-//     ) {
-//         ready_signal.send(Ok(())).ok();
-
-//         while let Ok(frame) = input.recv() {
-//             let mut this = self.lock().unwrap();
-//             this.queue_video_frame(frame);
-//             this.process_frame();
-//         }
-//     }
-
-//     fn finish(&mut self) {
-//         self.lock().unwrap().finish();
-//     }
-// }
-
 #[link(name = "AVFoundation", kind = "framework")]
 extern "C" {
     static AVVideoAverageBitRateKey: &'static cidre::ns::String;

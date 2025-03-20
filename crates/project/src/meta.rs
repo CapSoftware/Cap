@@ -16,7 +16,7 @@ pub struct VideoMeta {
     #[serde(default = "legacy_static_video_fps")]
     pub fps: u32,
     /// unix time of the first frame
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_time: Option<f64>,
 }
 
@@ -28,7 +28,8 @@ fn legacy_static_video_fps() -> u32 {
 pub struct AudioMeta {
     #[specta(type = String)]
     pub path: RelativePathBuf,
-    #[serde(default)]
+    /// unix time of the first frame
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_time: Option<f64>,
 }
 
