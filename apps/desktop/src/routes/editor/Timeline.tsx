@@ -327,20 +327,8 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
       state.timelineTransform.updateZoom(totalDuration(), previewTime()!);
     }
   }
+  
 
-  const timelineMarkings = () => {
-    const resolution =
-      TIMELINE_MARKING_RESOLUTIONS.find(
-        (r) => state.timelineTransform.zoom / r <= MAX_TIMELINE_MARKINGS
-      ) ?? 30;
-
-    const diff = state.timelineTransform.position % resolution;
-
-    return Array.from(
-      { length: (state.timelineTransform.zoom + 5) / resolution },
-      (_, i) => state.timelineTransform.position - diff + (i + 1) * resolution
-    );
-  };
 
   return (
     <TrackRoot ref={props.ref}>
@@ -422,7 +410,7 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                               (markingTime - segmentStartTime) / secsPerPixel()
                             }px`,
                           }}
-                          class="absolute z-10 w-px h-14 bg-gradient-to-b to-transparent from-white-transparent-40 dark:from-black-transparent-60"
+                          class="absolute z-10 w-px h-12 bg-gradient-to-b from-transparent to-transparent via-white-transparent-40 dark:via-black-transparent-60"
                         />
                       );
                     }
@@ -497,7 +485,17 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                 }}
               />
               <SegmentContent class="justify-between relative bg-gradient-to-r timeline-gradient-border from-[#2675DB] via-[#5CA3FF] to-[#2675DB] shadow-[inset_0_5px_10px_5px_rgba(255,255,255,0.2)]">
+              <Show when={segment.start > 0}>
+              <span class="text-black-transparent-60 text-[0.625rem] absolute top-[18px] left-5">
+                  {formatTime(segment.start)}
+                </span>
+              </Show>
                 <div class="absolute inset-0 -top-[120px] dark:bg-gray-500 bg-gray-50 w-[500px] h-[150px] rounded-full mx-auto blur-[50px] mix-blend-overlay opacity-30" />
+               <Show when={segment.end < editorInstance.recordingDuration}>
+                <span class="text-black-transparent-60 text-[0.625rem] absolute top-[18px] right-5">
+                  {formatTime(segment.end)}
+                </span>
+              </Show>
               </SegmentContent>
               <SegmentHandle
                 class={cx(

@@ -203,14 +203,14 @@ function ShareButton(props: {
           const url = () => new URL(sharing().link);
 
           return (
-            <div class="flex flex-row gap-2 items-center">
+            <div class="flex gap-3 items-center">
               <Tooltip.Root openDelay={0} closeDelay={0}>
                 <Tooltip.Trigger>
                   <Button
                     disabled={uploadVideo.isPending}
                     onClick={(e) => uploadVideo.mutate()}
-                    variant="secondary"
-                    class="flex items-center space-x-1"
+                    variant="primary"
+                    class="flex items-center h-[41px] px-3 space-x-1"
                   >
                     {uploadVideo.isPending ? (
                       <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
@@ -229,7 +229,7 @@ function ShareButton(props: {
                 </Tooltip.Portal>
               </Tooltip.Root>
               <a
-                class="rounded-full h-[2rem] px-[1rem] flex flex-row items-center gap-[0.375rem] bg-gray-200 hover:bg-gray-300 transition-colors duration-100"
+                class="rounded-xl px-4 py-2.5 flex flex-row items-center gap-[0.375rem] bg-gray-200 hover:bg-gray-300 transition-colors duration-100"
                 href={sharing().link}
                 target="_blank"
                 rel="noreferrer"

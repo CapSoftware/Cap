@@ -9,6 +9,7 @@ import { commands } from "~/utils/tauri";
 import { FPS, OUTPUT_SIZE, useEditorContext } from "./context";
 import { ComingSoonTooltip, EditorButton, Slider } from "./ui";
 import { formatTime } from "./utils";
+import AspectRatioSelect from "./AspectRatioSelect";
 
 export function Player() {
   const {
@@ -79,6 +80,8 @@ export function Player() {
         await commands.stopPlayback();
         setPlaying(false);
       } else {
+        // Ensure we seek to the current playback time before starting playback
+        await commands.seekTo(Math.floor(playbackTime() * FPS));
         await commands.startPlayback(FPS, OUTPUT_SIZE);
         setPlaying(true);
       }
@@ -106,10 +109,34 @@ export function Player() {
 
   return (
     <div class="flex flex-col flex-1">
-      <div ref={setCanvasContainerRef} class="relative flex-1 bg-gray-50">
+      <div class="flex w-[calc(100%-40px)] mx-auto gap-3 justify-center p-5 bg-gray-100 rounded-t-xl">
+        <AspectRatioSelect />
+        <EditorButton
+          onClick={() => {
+            const display = editorInstance.recordings.segments[0].display;
+            setDialog({
+                open: true,
+                type: "crop",
+                position: {
+                  ...(project.background.crop?.position ?? { x: 0, y: 0 }),
+                },
+                size: {
+                  ...(project.background.crop?.size ?? {
+                    x: display.width,
+                    y: display.height,
+                  }),
+                },
+              });
+            }}
+            leftIcon={<IconCapCrop class="w-5 text-gray-500" />}
+          >
+            Crop
+          </EditorButton>
+                </div>
+      <div ref={setCanvasContainerRef} class="relative flex-1 justify-center items-center bg-gray-50">
         <Show when={latestFrame()}>
           {(currentFrame) => {
-            const padding = 20;
+            const padding = 4;
 
             const containerAspect = () => {
               if (containerBounds.width && containerBounds.height) {
@@ -144,21 +171,13 @@ export function Player() {
             };
 
             return (
-              <div class="relative w-[calc(100%-40px)] mx-auto h-full bg-gray-100 rounded-t-xl">
+              <div class="relative w-[calc(100%-40px)] overflow-hidden flex items-center justify-center mx-auto h-full bg-gray-100">
                 <canvas
                   style={{
-                    left: `${Math.max(
-                      ((containerBounds.width ?? 0) - size().width) / 2,
-                      padding
-                    )}px`,
-                    top: `${Math.max(
-                      ((containerBounds.height ?? 0) - size().height) / 2,
-                      padding
-                    )}px`,
                     width: `${size().width - padding * 2}px`,
                     height: `${size().height}px`,
                   }}
-                  class="absolute bg-blue-50 rounded"
+                  class="bg-blue-50 rounded"
                   ref={canvasRef}
                   id="canvas"
                   width={currentFrame().width}
@@ -169,7 +188,7 @@ export function Player() {
           }}
         </Show>
       </div>
-      <div class="flex z-10 flex-row gap-3 justify-between items-center p-5 w-[calc(100%-40px)] mx-auto bg-gray-100 rounded-b-xl">
+      <div class="flex z-10 overflow-hidden flex-row gap-3 justify-between items-center p-5 w-[calc(100%-40px)] mx-auto bg-gray-100 rounded-b-xl">
         <div class="flex-1">
           <Time
             class="text-gray-500"

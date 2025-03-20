@@ -75,41 +75,6 @@ const Menu = {
         editorContext: ReturnType<typeof useEditorContext>;
       }) => <PresetsDropdown />,
     },
-    {
-      button: (props: {
-        editorContext: ReturnType<typeof useEditorContext>;
-      }) => {
-        const { editorInstance, setDialog, project } = props.editorContext;
-        return (
-          <EditorButton
-            onClick={() => {
-              const display = editorInstance.recordings.segments[0].display;
-              setDialog({
-                open: true,
-                type: "crop",
-                position: {
-                  ...(project.background.crop?.position ?? { x: 0, y: 0 }),
-                },
-                size: {
-                  ...(project.background.crop?.size ?? {
-                    x: display.width,
-                    y: display.height,
-                  }),
-                },
-              });
-            }}
-            leftIcon={<IconCapCrop class="w-5 text-gray-500" />}
-          >
-            Crop
-          </EditorButton>
-        );
-      },
-    },
-    {
-      button: (props: {
-        editorContext: ReturnType<typeof useEditorContext>;
-      }) => <AspectRatioSelect />,
-    },
   ],
   right: [
     {
@@ -142,24 +107,6 @@ const Menu = {
         );
       },
     },
-    {
-      button: (props: {
-        editorContext?: ReturnType<typeof useEditorContext>;
-      }) => (
-        <EditorButton
-          onClick={async () => {
-            const currentWindow = getCurrentWindow();
-            if (!props.editorContext?.editorInstance.path) return ;
-            if (!(await ask("Are you sure you want to delete this recording?")))
-              return;
-            await remove(props.editorContext?.editorInstance.path, { recursive: true });
-            await currentWindow.close();
-          }}
-          tooltipText="Delete recording"
-          leftIcon={<IconCapTrash class="w-5" />}
-        />
-      ),
-    },
   ],
 } satisfies Record<
   "left" | "center" | "right",
@@ -171,7 +118,6 @@ const Menu = {
 >;
 
 export function Header() {
-  const license = createLicenseQuery();
   const editorContext = useEditorContext();
 
   const [selectedFps, setSelectedFps] = createSignal(
@@ -209,7 +155,7 @@ export function Header() {
           ostype() === "windows" ? "pl-[4.3rem]" : "pl-[1.25rem]"
         )}
       >
-        <div class="flex relative z-20 flex-row gap-2 items-center font-medium">
+        <div class="flex relative z-20 flex-row gap-3 items-center font-medium">
           <ShareButton
             selectedResolution={selectedResolution}
             selectedFps={selectedFps}
@@ -231,9 +177,21 @@ export function Header() {
         data-tauri-drag-region
         class="absolute flex gap-4 h-full w-full items-start left-[5.5rem] z-10"
       >
-        <div class="flex gap-4 items-center h-full">
+        <div class="flex gap-2 items-center h-full">
+        <EditorButton
+          onClick={async () => {
+            const currentWindow = getCurrentWindow();
+            if (!editorContext?.editorInstance.path) return ;
+            if (!(await ask("Are you sure you want to delete this recording?")))
+              return;
+            await remove(editorContext?.editorInstance.path, { recursive: true });
+            await currentWindow.close();
+          }}
+          tooltipText="Delete recording"
+          leftIcon={<IconCapTrash class="w-5" />}
+        />
           <p class="text-sm text-gray-500">
-            {editorContext.editorInstance.prettyName}
+            {editorContext.editorInstance.prettyName}<span class="text-sm text-gray-400">.cap</span>
           </p>
           {/* <ErrorBoundary fallback={<></>}>
             <Suspense>

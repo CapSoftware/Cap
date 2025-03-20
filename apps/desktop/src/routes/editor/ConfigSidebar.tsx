@@ -458,7 +458,7 @@ export function ConfigSidebar() {
       </KTabs.List>
       <div
         ref={scrollRef}
-        class="p-5 custom-scroll overflow-x-hidden overflow-y-auto text-[0.875rem] h-full"
+        class="p-4 custom-scroll overflow-x-hidden overflow-y-auto text-[0.875rem] h-full"
       >
         <KTabs.Content value="background" class="flex flex-col gap-8">
           <Field icon={<IconCapImage class="size-4" />} name="Background Image">

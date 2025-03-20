@@ -22,7 +22,7 @@ export function Field(
   props: ParentProps<{ name: string; icon?: JSX.Element; value?: JSX.Element }>
 ) {
   return (
-    <div class="flex flex-col gap-6">
+    <div class="flex flex-col gap-5">
       <span class="flex flex-row items-center gap-[0.375rem] text-gray-500 font-medium text-sm">
         {props.icon}
         {props.name}
