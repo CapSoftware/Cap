@@ -405,7 +405,7 @@ export function ConfigSidebar() {
   return (
     <KTabs
       value={selectedTab()}
-      class="flex flex-col shrink-0 flex-1 max-w-[26rem] overflow-hidden rounded-t-xl z-10 bg-gray-100 relative"
+      class="flex flex-col shrink-0 flex-1 max-w-[26rem] overflow-hidden rounded-xl z-10 bg-gray-100 relative"
     >
       <KTabs.List class="flex overflow-hidden relative z-40 flex-row items-center h-16 text-lg border-b border-gray-200 shrink-0">
         <For
@@ -458,9 +458,9 @@ export function ConfigSidebar() {
       </KTabs.List>
       <div
         ref={scrollRef}
-        class="p-4 custom-scroll overflow-x-hidden overflow-y-auto text-[0.875rem] h-full"
+        class="p-4 custom-scroll overflow-x-hidden overflow-y-scroll text-[0.875rem] h-full"
       >
-        <KTabs.Content value="background" class="flex flex-col gap-8">
+        <KTabs.Content value="background" class="flex flex-col gap-6">
           <Field icon={<IconCapImage class="size-4" />} name="Background Image">
             <KTabs
               value={project.background.source.type}
@@ -586,11 +586,12 @@ export function ConfigSidebar() {
                                 if (convertedPath) {
                                   imageSrc = convertedPath;
                                 }
-                              } 
+                              }
                               // Only override for "wallpaper" if a valid wallpaper is found
                               else if (
                                 item === "wallpaper" &&
-                                project.background.source.type === "wallpaper" &&
+                                project.background.source.type ===
+                                  "wallpaper" &&
                                 project.background.source.path
                               ) {
                                 const selectedWallpaper = wallpapers()?.find(
@@ -1098,6 +1099,7 @@ export function ConfigSidebar() {
               minValue={0}
               maxValue={100}
               step={0.1}
+              formatTooltip="%"
             />
           </Field>
           {/** Dashed divider */}
@@ -1109,6 +1111,7 @@ export function ConfigSidebar() {
               minValue={0}
               maxValue={40}
               step={0.1}
+              formatTooltip="%"
             />
           </Field>
           <Field
@@ -1121,6 +1124,7 @@ export function ConfigSidebar() {
               minValue={0}
               maxValue={100}
               step={0.1}
+              formatTooltip="%"
             />
           </Field>
           <Field name="Shadow" icon={<IconCapShadow class="size-4" />}>
@@ -1142,6 +1146,7 @@ export function ConfigSidebar() {
               minValue={0}
               maxValue={100}
               step={0.1}
+              formatTooltip="%"
             />
             <ShadowSettings
               scrollRef={scrollRef}
@@ -1198,9 +1203,9 @@ export function ConfigSidebar() {
             </Field>
           </ComingSoonTooltip> */}
         </KTabs.Content>
-        <KTabs.Content value="camera" class="flex flex-col gap-8">
+        <KTabs.Content value="camera" class="flex flex-col gap-6">
           <Field icon={<IconCapCamera class="size-4" />} name="Camera">
-            <div class="flex flex-col gap-8">
+            <div class="flex flex-col gap-6">
               <div>
                 <Subfield name="Position" />
                 <KRadioGroup
@@ -1236,7 +1241,7 @@ export function ConfigSidebar() {
                           )}
                           onClick={() => setProject("camera", "position", item)}
                         >
-                          <div class="size-[0.5rem] shrink-0 bg-white rounded-full" />
+                          <div class="size-[0.5rem] shrink-0 bg-solid-white rounded-full" />
                         </RadioGroup.ItemControl>
                       </RadioGroup.Item>
                     )}
@@ -1259,23 +1264,19 @@ export function ConfigSidebar() {
           </Field>
           {/** Dashed divider */}
           <div class="w-full border-t border-gray-300 border-dashed" />
-          <Field
-            name="Size"
-            icon={<IconCapEnlarge class="size-4" />}
-            value={`${project.camera.size}%`}
-          >
+          <Field name="Size" icon={<IconCapEnlarge class="size-4" />}>
             <Slider
               value={[project.camera.size]}
               onChange={(v) => setProject("camera", "size", v[0])}
               minValue={20}
               maxValue={80}
               step={0.1}
+              formatTooltip="%"
             />
           </Field>
           <Field
             name="Size During Zoom"
             icon={<IconCapEnlarge class="size-4" />}
-            value={`${project.camera.zoom_size}%`}
           >
             <Slider
               value={[project.camera.zoom_size ?? 60]}
@@ -1283,6 +1284,7 @@ export function ConfigSidebar() {
               minValue={10}
               maxValue={60}
               step={0.1}
+              formatTooltip="%"
             />
           </Field>
           <Field
@@ -1295,6 +1297,7 @@ export function ConfigSidebar() {
               minValue={0}
               maxValue={100}
               step={0.1}
+              formatTooltip="%"
             />
           </Field>
           <Field name="Shadow" icon={<IconCapShadow class="size-4" />}>
@@ -1305,6 +1308,7 @@ export function ConfigSidebar() {
                 minValue={0}
                 maxValue={100}
                 step={0.1}
+                formatTooltip="%"
               />
               <ShadowSettings
                 scrollRef={scrollRef}

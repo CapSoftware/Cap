@@ -180,7 +180,7 @@ export const HomePage = () => {
               repeatType: "reverse",
               ease: "linear",
             }}
-            className="absolute opacity-70 top-[340px] -left-[200px] z-[9] 
+            className="absolute opacity-70 top-[340px] -left-[200px] z-[9]
       w-full max-w-[1800px] h-[100px] bg-gradient-to-l from-transparent via-white/90 to-white"
             style={{
               borderRadius: "100%",
@@ -243,7 +243,7 @@ export const HomePage = () => {
               repeat: Infinity,
               repeatType: "reverse",
             }}
-            className="absolute 
+            className="absolute
             top-[180px] w-full max-w-[280px] z-[4] right-[60px] md:right-[600px] select-none"
             src="./illustrations/smallcloudthree.webp"
             alt="smallcloudfour"
@@ -266,7 +266,7 @@ export const HomePage = () => {
             alt="bottomcloudthree"
           />
           <img
-            className="absolute 
+            className="absolute
             top-[180px] w-full max-w-[400px] z-0 select-none right-[60px] opacity-30 pointer-events-none"
             src="./illustrations/smallcloudthree.webp"
             alt="smallcloudthree"
@@ -284,7 +284,7 @@ export const HomePage = () => {
               repeatType: "reverse",
               ease: "linear",
             }}
-            className="absolute 
+            className="absolute
         bottom-[240px] w-full max-w-[430px] z-[1] right-[40px] select-none  opacity-80 brightness-125 pointer-events-none"
             src="./illustrations/smallcloudtwo.webp"
             alt="smallcloudtwo"
@@ -293,7 +293,7 @@ export const HomePage = () => {
             style={{
               mixBlendMode: "screen",
             }}
-            className="absolute 
+            className="absolute
          w-full max-w-[500px] top-[210px] right-[300px] z-[2] select-none  brightness-125 pointer-events-none"
             src="./illustrations/chipcloud.webp"
             alt="chipcloudtwo"
@@ -315,13 +315,13 @@ export const HomePage = () => {
               repeatType: "reverse",
               ease: "linear",
             }}
-            className="absolute 
+            className="absolute
          w-full max-w-[500px] bottom-[15px] select-none left-[-200px] lg:left-[30px] z-[10] pointer-events-none"
             src="./illustrations/chipcloud.webp"
             alt="chipcloudfour"
           />
           <img
-            className="absolute 
+            className="absolute
          w-full max-w-[500px] top-[160px] select-none mix-blend-screen left-[-200px] lg:left-[30px] z-[10] pointer-events-none"
             src="./illustrations/chipcloud.webp"
             alt="chipcloud"
@@ -339,7 +339,7 @@ export const HomePage = () => {
         </div>
         {/** Right Blue Hue */}
         <div
-          className="w-[868px] h-[502px] bg-gradient-to-l rounded-full blur-[100px] 
+          className="w-[868px] h-[502px] bg-gradient-to-l rounded-full blur-[100px]
       absolute top-20 z-[0] right-0 from-[#A6D7FF] to-transparent"
         />
       </div>

@@ -1,6 +1,6 @@
 import { cx } from "cva";
 import { createSignal } from "solid-js";
-import { Slider } from "./ui";
+import { Field, Slider } from "./ui";
 
 interface Props {
   size: {
@@ -50,9 +50,8 @@ const ShadowSettings = (props: Props) => {
       </button>
 
       {isOpen() && (
-        <div class="mt-4 space-y-8 font-medium">
-          <div class="flex flex-col gap-6">
-            <span class="text-sm text-gray-500">Size</span>
+        <div class="mt-4 space-y-6 font-medium">
+          <Field name="Size">
             <Slider
               value={props.size.value}
               onChange={props.size.onChange}
@@ -60,9 +59,8 @@ const ShadowSettings = (props: Props) => {
               maxValue={100}
               step={0.1}
             />
-          </div>
-          <div class="flex flex-col gap-6">
-            <span class="text-sm text-gray-500">Opacity</span>
+          </Field>
+          <Field name="Opacity">
             <Slider
               value={props.opacity.value}
               onChange={props.opacity.onChange}
@@ -70,9 +68,8 @@ const ShadowSettings = (props: Props) => {
               maxValue={100}
               step={0.1}
             />
-          </div>
-          <div class="flex flex-col gap-6">
-            <span class="text-sm text-gray-500">Blur</span>
+          </Field>
+          <Field name="Blur">
             <Slider
               value={props.blur.value}
               onChange={props.blur.onChange}
@@ -80,7 +77,7 @@ const ShadowSettings = (props: Props) => {
               maxValue={100}
               step={0.1}
             />
-          </div>
+          </Field>
         </div>
       )}
     </div>

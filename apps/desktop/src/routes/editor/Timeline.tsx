@@ -139,7 +139,7 @@ export function Timeline() {
       timelineBounds={timelineBounds}
     >
       <div
-        class="py-[2rem] relative overflow-hidden"
+        class="pt-[2rem] relative overflow-hidden"
         style={{
           "padding-left": `${xPadding}px`,
           "padding-right": `${xPadding}px`,
@@ -211,7 +211,7 @@ export function Timeline() {
           {(time) => (
             <div
               class={cx(
-                "flex absolute bottom-0 top-4 left-5 z-10 justify-center items-center w-px bg-gradient-to-b h-[70%] from-gray-400 to-transparent pointer-events-none",
+                "flex absolute bottom-0 top-4 left-5 z-10 justify-center items-center w-px pointer-events-none bg-gradient-to-b to-[120%] from-gray-400",
                 split() ? "text-red-300" : "text-black-transparent-20"
               )}
               style={{
@@ -232,7 +232,7 @@ export function Timeline() {
         </Show>
         <Show when={!split()}>
           <div
-            class="absolute bottom-0 top-4 h-[70%] z-10 w-px bg-gradient-to-b from-[#66D0FF] pointer-events-none to-blue-transparent-0"
+            class="absolute bottom-0 top-4 h-full rounded-full z-10 w-px pointer-events-none bg-gradient-to-b to-[120%] from-[rgb(226,64,64)]"
             style={{
               left: `${xPadding}px`,
               transform: `translateX(${Math.min(
@@ -242,7 +242,7 @@ export function Timeline() {
               )}px)`,
             }}
           >
-            <div class="size-3 bg-[#66D0FF] rounded-full -mt-2 -ml-[calc(0.37rem-0.5px)]" />
+            <div class="size-3 bg-[rgb(226,64,64)] rounded-full -mt-2 -ml-[calc(0.37rem-0.5px)]" />
           </div>
         </Show>
         <ClipTrack ref={setTimelineRef} />
@@ -327,8 +327,6 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
       state.timelineTransform.updateZoom(totalDuration(), previewTime()!);
     }
   }
-  
-
 
   return (
     <TrackRoot ref={props.ref}>
@@ -422,8 +420,9 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
               })()}
 
               <SegmentHandle
+                position="start"
                 class={cx(
-                  "absolute opacity-0 top-[50%] bg-gradient-to-r -translate-y-1/2 left-2.5 z-10 w-[3px] h-8 bg-solid-white rounded-full",
+                  "absolute opacity-0 inset-y-0 z-10",
                   "group-hover:opacity-100"
                 )}
                 onMouseDown={(downEvent) => {
@@ -484,22 +483,39 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                   });
                 }}
               />
-              <SegmentContent class="justify-between relative bg-gradient-to-r timeline-gradient-border from-[#2675DB] via-[#5CA3FF] to-[#2675DB] shadow-[inset_0_5px_10px_5px_rgba(255,255,255,0.2)]">
-              <Show when={segment.start > 0}>
-              <span class="text-black-transparent-60 text-[0.625rem] absolute top-[18px] left-5">
-                  {formatTime(segment.start)}
-                </span>
-              </Show>
+              <SegmentContent class="justify-center items-center relative bg-gradient-to-r timeline-gradient-border from-[#2675DB] via-[#4FA0FF] to-[#2675DB] shadow-[inset_0_5px_10px_5px_rgba(255,255,255,0.2)]">
+                <Show when={segment.start > 0}>
+                  <span class="text-black-transparent-60 text-[0.625rem] absolute top-[18px] left-5">
+                    {formatTime(segment.start)}
+                  </span>
+                </Show>
                 <div class="absolute inset-0 -top-[120px] dark:bg-gray-500 bg-gray-50 w-[500px] h-[150px] rounded-full mx-auto blur-[50px] mix-blend-overlay opacity-30" />
-               <Show when={segment.end < editorInstance.recordingDuration}>
-                <span class="text-black-transparent-60 text-[0.625rem] absolute top-[18px] right-5">
-                  {formatTime(segment.end)}
-                </span>
-              </Show>
+                {(() => {
+                  const ctx = useSegmentContext();
+
+                  return (
+                    <Show when={ctx.width() > 100}>
+                      <div class="flex flex-col gap-1 justify-center items-center text-xs text-gray-500 whitespace-nowrap">
+                        <span class="text-solid-white opacity-60">Clip</span>
+                        <div class="flex gap-1 items-center text-gray-50 dark:text-gray-500 text-md">
+                          <IconLucideClock class="size-3.5" />{" "}
+                          {(segment.end - segment.start).toFixed(1)}s
+                        </div>
+                      </div>
+                    </Show>
+                  );
+                })()}
+
+                <Show when={segment.end < editorInstance.recordingDuration}>
+                  <span class="text-black-transparent-60 text-[0.625rem] absolute top-[18px] right-5">
+                    {formatTime(segment.end)}
+                  </span>
+                </Show>
               </SegmentContent>
               <SegmentHandle
+                position="end"
                 class={cx(
-                  "absolute top-[50%] opacity-0 -translate-y-1/2 right-2.5 z-10 w-[3px] h-8 bg-solid-white rounded-full",
+                  "absolute opacity-0 inset-y-0 z-10",
                   "group-hover:opacity-100"
                 )}
                 onMouseDown={(downEvent) => {
@@ -679,8 +695,8 @@ function ZoomTrack(props: {
                 end: time() + 1,
               }}
             >
-              <SegmentContent class="bg-gradient-to-r zoom-gradient-border bg-[#adadad] transition-colors group shadow-[inset_0_-5px_20px_3px_rgba(255,255,255,0.8)]">
-                <p class="w-full text-center text-gray-500 text-md text-primary dark:text-gray-50">
+              <SegmentContent class="bg-gradient-to-r zoom-gradient-border hover:border duration-300 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]">
+                <p class="w-full text-center dark:text-gray-500 text-md text-primary text-gray-50">
                   +
                 </p>
               </SegmentContent>
@@ -774,9 +790,8 @@ function ZoomTrack(props: {
                 }}
               >
                 <SegmentHandle
-                  class={cx(
-                    "absolute top-[50%] group-hover:opacity-100 opacity-0 -translate-y-1/2 left-2.5 z-10 w-[3px] h-8 dark:bg-gray-500 bg-gray-50 rounded-full"
-                  )}
+                  position="start"
+                  class="absolute group-hover:opacity-100 opacity-0"
                   onMouseDown={createMouseDownDrag(
                     () => {
                       const start = segment.start;
@@ -858,6 +873,9 @@ function ZoomTrack(props: {
                     return (
                       <Show when={ctx.width() > 100}>
                         <div class="flex flex-col gap-1 justify-center items-center text-xs text-gray-500 whitespace-nowrap">
+                          <span class="text-[--text-tertiary] opacity-70">
+                            Zoom
+                          </span>
                           <div class="flex gap-1 items-center text-gray-50 dark:text-gray-500 text-md">
                             <IconLucideSearch class="size-3.5" />{" "}
                             {zoomPercentage()}{" "}
@@ -868,9 +886,8 @@ function ZoomTrack(props: {
                   })()}
                 </SegmentContent>
                 <SegmentHandle
-                  class={cx(
-                    "absolute top-[50%] group-hover:opacity-100 opacity-0 -translate-y-1/2 right-2.5 z-10 w-[3px] h-8 dark:bg-gray-500 bg-gray-50 rounded-full"
-                  )}
+                  position="end"
+                  class="absolute group-hover:opacity-100 opacity-0"
                   onMouseDown={createMouseDownDrag(
                     () => {
                       const end = segment.end;
@@ -924,7 +941,7 @@ function TrackRoot(props: ComponentProps<"div">) {
       <div
         {...props}
         ref={mergeRefs(setRef, props.ref)}
-        class={cx("flex flex-row relative h-[3rem]", props.class)}
+        class={cx("flex flex-row relative h-14", props.class)}
       >
         {props.children}
       </div>
@@ -972,7 +989,7 @@ function SegmentRoot(
       <div
         {...props}
         class={cx(
-          "absolute border rounded-[calc(0.75rem+1px)] h-14 w-full",
+          "absolute border rounded-[calc(0.75rem+1px)] inset-y-0 w-full",
           props.class,
           isSelected() && "wobble-wrapper border border-gray-500"
         )}
@@ -1008,16 +1025,23 @@ function SegmentContent(props: ComponentProps<"div">) {
   );
 }
 
-function SegmentHandle(props: ComponentProps<"div">) {
+function SegmentHandle(
+  props: ComponentProps<"div"> & { position: "start" | "end" }
+) {
   const ctx = useSegmentContext();
   return (
     <div
       {...props}
       class={cx(
-        "w-[0.5rem] cursor-col-resize shrink-0 data-[hidden='true']:opacity-0 transition-opacity",
+        "w-3 cursor-col-resize shrink-0 data-[hidden='true']:opacity-0 transition-opacity h-full flex flex-row items-center",
+        props.position === "start"
+          ? "left-0 justify-end"
+          : "right-0 justify-start",
         props.class
       )}
       data-hidden={ctx.width() < 50}
-    />
+    >
+      <div class="w-[3px] h-8 bg-solid-white rounded-full" />
+    </div>
   );
 }

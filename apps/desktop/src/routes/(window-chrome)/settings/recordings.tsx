@@ -143,7 +143,7 @@ export default function Recordings() {
             </For>
           </div>
         </div>
-        <div class="flex overflow-auto flex-col flex-1 custom-scroll">
+        <div class="flex flex-col flex-1 custom-scroll">
           <ul class="p-4 flex flex-col gap-[0.5rem] w-full text-[--text-primary]">
             <For each={filteredRecordings()}>
               {(recording) => (
