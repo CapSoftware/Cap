@@ -1453,12 +1453,13 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
             pretty_name: screenshot_name,
             inner: RecordingMetaInner::Studio(cap_project::StudioRecordingMeta::SingleSegment {
                 segment: cap_project::SingleSegment {
-                    display: Display {
+                    display: VideoMeta {
                         path: RelativePathBuf::from_path(
                             &screenshot_path.strip_prefix(&recording_dir).unwrap(),
                         )
                         .unwrap(),
                         fps: 0,
+                        start_time: None,
                     },
                     camera: None,
                     audio: None,
@@ -2159,6 +2160,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags({

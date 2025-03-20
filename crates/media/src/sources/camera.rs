@@ -70,8 +70,6 @@ impl CameraSource {
 }
 
 impl PipelineSourceTask for CameraSource {
-    type Output = FFVideo;
-
     type Clock = RealTimeClock<Instant>;
 
     // #[tracing::instrument(skip_all)]

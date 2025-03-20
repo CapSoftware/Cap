@@ -30,6 +30,7 @@ futures = "0.3.31"
 screencapturekit = "0.3.5"
 cocoa = "0.26.0"
 objc = "0.2.7"
+cidre = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [

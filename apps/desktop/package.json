@@ -41,6 +41,7 @@
     "@tauri-apps/plugin-fs": "2.2.0",
     "@tauri-apps/plugin-http": "^2.0.1",
     "@tauri-apps/plugin-notification": "2.0.0",
+    "@tauri-apps/plugin-opener": "^2.2.6",
     "@tauri-apps/plugin-os": "2.0.0",
     "@tauri-apps/plugin-process": "2.0.0",
     "@tauri-apps/plugin-shell": ">=2.0.1",
