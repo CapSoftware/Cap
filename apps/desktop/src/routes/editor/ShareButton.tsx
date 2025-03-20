@@ -210,12 +210,12 @@ function ShareButton(props: {
                     disabled={uploadVideo.isPending}
                     onClick={(e) => uploadVideo.mutate()}
                     variant="primary"
-                    class="flex justify-center items-center size-[41px] px-0 py-0 space-x-1 rounded-xl"
+                    class="flex justify-center items-center size-[41px] !px-0 !py-0 space-x-1 rounded-xl"
                   >
                     {uploadVideo.isPending ? (
-                      <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
+                      <IconLucideLoaderCircle class="animate-spin size-4" />
                     ) : (
-                      <IconLucideRotateCcw class="size-[1rem]" />
+                      <IconLucideRotateCcw class="size-4" />
                     )}
                   </Button>
                 </Tooltip.Trigger>
