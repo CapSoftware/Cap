@@ -45,7 +45,7 @@ export function Subfield(
     >
       <span>
         {props.name}
-        {props.required && <span class="ml-px text-blue-500">*</span>}
+        {props.required && <span class="ml-[2px] text-xs text-blue-500">*</span>}
       </span>
       {props.children}
     </div>
@@ -100,7 +100,7 @@ export function Input(props: ComponentProps<"input">) {
     <TextInput
       {...props}
       class={cx(
-        "rounded-[0.5rem] h-[2rem] p-[0.375rem] border w-full text-[0.875rem] focus:border-blue-300 outline-none text-gray-500 dark:text-gray-50 placeholder:text-black-transparent-20",
+        "rounded-[0.5rem] bg-gray-200 hover:ring-1 py-[18px] hover:ring-gray-300 h-[2rem] font-normal placeholder:text-black-transparent-20 text-xs caret-gray-500 transition-shadow duration-200 focus:ring-offset-1 focus:ring-offset-gray-100 focus:ring-1 focus:ring-gray-500 px-[0.5rem] border w-full text-[0.875rem] outline-none text-gray-500",
         props.class
       )}
     />
@@ -143,7 +143,7 @@ export const Dialog = {
   },
   ConfirmButton(_props: ComponentProps<typeof Button>) {
     const props = mergeProps(
-      { variant: "primary" } as ComponentProps<typeof Button>,
+      { variant: "primary"} as ComponentProps<typeof Button>,
       _props
     );
     return <Button {...props} />;
@@ -152,7 +152,7 @@ export const Dialog = {
     return (
       <div
         class={cx(
-          "h-[3.5rem] px-[1rem] gap-[0.75rem] flex flex-row items-center justify-end",
+          "h-[4rem] px-[1rem] gap-[0.75rem] flex flex-row items-center justify-end",
           props.class
         )}
         {...props}

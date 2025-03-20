@@ -192,11 +192,12 @@ function Dialogs() {
                   >
                     <Subfield name="Name" required />
                     <Input
-                      class="mt-[0.25rem]"
+                      class="mt-2"
                       value={form.name}
+                      placeholder="Enter preset name..."
                       onInput={(e) => setForm("name", e.currentTarget.value)}
                     />
-                    <Subfield name="Set as default" class="mt-[0.75rem]">
+                    <Subfield name="Set as default" class="mt-4">
                       <Toggle
                         checked={form.default}
                         onChange={(checked) => setForm("default", checked)}
@@ -239,6 +240,7 @@ function Dialogs() {
                   >
                     <Subfield name="Name" required />
                     <Input
+                      class="mt-2"
                       value={name()}
                       onInput={(e) => setName(e.currentTarget.value)}
                     />
@@ -254,8 +256,10 @@ function Dialogs() {
             >
               {(dialog) => {
                 const deletePreset = createMutation(() => ({
-                  mutationFn: async () =>
-                    presets.deletePreset(dialog().presetIndex),
+                  mutationFn: async () => {
+                    await presets.deletePreset(dialog().presetIndex);
+                    await presets.query.refetch();
+                  },
                   onSuccess: () => {
                     setDialog((d) => ({ ...d, open: false }));
                   },
