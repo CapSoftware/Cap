@@ -1,13 +1,22 @@
 import { Button } from "@cap/ui-solid";
 import { useNavigate } from "@solidjs/router";
-import { For, createResource } from "solid-js";
+import { For, createResource, createSignal, onMount } from "solid-js";
 
 import "@total-typescript/ts-reset/filter-boolean";
 import { commands } from "~/utils/tauri";
+import { authStore } from "~/store";
 
 export default function AppsTab() {
   const navigate = useNavigate();
-  const [isUpgraded] = createResource(commands.checkUpgradedAndUpdate);
+  // Add error handling for plan fetching
+  const [isUpgraded] = createResource(async () => {
+    try {
+      return await commands.checkUpgradedAndUpdate();
+    } catch (error) {
+      console.error("Failed to fetch plan:", error);
+      return false; // Default to not upgraded on error
+    }
+  });
 
   const apps = [
     {
@@ -21,11 +30,15 @@ export default function AppsTab() {
   ];
 
   const handleAppClick = async (app: (typeof apps)[number]) => {
-    if (app.pro && !isUpgraded()) {
-      await commands.showWindow("Upgrade");
-      return;
+    try {
+      if (app.pro && !isUpgraded()) {
+        await commands.showWindow("Upgrade");
+        return;
+      }
+      navigate(app.url);
+    } catch (error) {
+      console.error("Error handling app click:", error);
     }
-    navigate(app.url);
   };
 
   return (
@@ -47,8 +60,15 @@ export default function AppsTab() {
               <Button
                 variant={app.pro && !isUpgraded() ? "primary" : "secondary"}
                 onClick={() => handleAppClick(app)}
+                disabled={isUpgraded.loading}
               >
-                {app.pro && !isUpgraded() ? "Upgrade to Pro" : "Configure"}
+                {isUpgraded.loading 
+                  ? "Loading..." 
+                  : app.pro && !isUpgraded() 
+                    ? "Sign In" 
+                    : app.pro && !isUpgraded() 
+                      ? "Upgrade to Pro" 
+                      : "Configure"}
               </Button>
             </div>
             <div class="p-2">
