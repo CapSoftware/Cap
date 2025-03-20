@@ -33,6 +33,8 @@ export async function getS3Config(config?: S3Config) {
         accessKeyId: serverEnv.CAP_AWS_ACCESS_KEY ?? "",
         secretAccessKey: serverEnv.CAP_AWS_SECRET_KEY ?? "",
       },
+      forcePathStyle:
+        clientEnv.NEXT_PUBLIC_CAP_AWS_ENDPOINT?.includes("localhost"),
     };
   }
 
@@ -62,7 +64,6 @@ export async function getS3Config(config?: S3Config) {
         "",
     },
     forcePathStyle: config.forcePathStyle ?? true,
-    useAccelerateEndpoint: isLocalOrMinio ? false : true,
     useArnRegion: false,
     requestHandler: {
       connectionTimeout: isLocalOrMinio ? 5000 : 10000,

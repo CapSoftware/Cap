@@ -2,5 +2,6 @@
 
 interface Env {
 	release_discord_interactions: KVNamespace;
-	GITHUB_TOKEN: "SECRET";
+	GITHUB_TOKEN: string;
+	DISCORD_BOT_TOKEN: string;
 }

@@ -131,7 +131,7 @@ app.post(
 				return new Response('Successfully updated message', { status: 200 });
 			}
 			case 'release-done': {
-				await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}`, {
+				await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}/messages`, {
 					method: 'POST',
 					body: JSON.stringify(
 						releaseWorkflowDoneMessageData({
@@ -140,7 +140,10 @@ app.post(
 							workflowRunId: c.get('githubToken').run_id,
 						})
 					),
-					headers: { 'Content-Type': 'application/json' },
+					headers: {
+						'Content-Type': 'application/json',
+						Authorization: `Bot ${c.env.DISCORD_BOT_TOKEN}`,
+					},
 				});
 
 				return new Response('Successfully sent message', { status: 200 });

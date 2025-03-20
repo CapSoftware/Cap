@@ -131,7 +131,7 @@ impl CapWindowId {
             Self::Setup => (600.0, 600.0),
             Self::Main => (300.0, 360.0),
             Self::SignIn => (300.0, 360.0),
-            Self::Editor { .. } => (900.0, 800.0),
+            Self::Editor { .. } => (1275.0, 800.0),
             Self::Settings => (600.0, 450.0),
             Self::Camera => (460.0, 920.0),
             Self::Upgrade => (850.0, 850.0),
@@ -207,8 +207,8 @@ impl ShowCapWindow {
                 .build()?,
             Self::Editor { project_id } => self
                 .window_builder(app, format!("/editor?id={project_id}"))
-                .inner_size(1150.0, 800.0)
                 .maximizable(true)
+                .inner_size(1240.0, 800.0)
                 .center()
                 .build()?,
             Self::Upgrade => self

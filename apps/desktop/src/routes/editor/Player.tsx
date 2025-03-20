@@ -1,7 +1,4 @@
-import { DropdownMenu as KDropdownMenu } from "@kobalte/core/dropdown-menu";
-import { Select as KSelect } from "@kobalte/core/select";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
-import { createEventListener } from "@solid-primitives/event-listener";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { cx } from "cva";
 import {
@@ -16,24 +13,17 @@ import {
   onCleanup,
 } from "solid-js";
 import { reconcile, createStore } from "solid-js/store";
+import { createEventListener } from "@solid-primitives/event-listener";
 
-import { type AspectRatio, commands } from "~/utils/tauri";
+
+import { cx } from "cva";
+import Tooltip from "~/components/Tooltip";
+import { commands } from "~/utils/tauri";
 import { FPS, OUTPUT_SIZE, useEditorContext } from "./context";
-import { ASPECT_RATIOS } from "./projectConfig";
-import { authStore } from "~/store";
-import {
-  ComingSoonTooltip,
-  DropdownItem,
-  EditorButton,
-  MenuItem,
-  MenuItemList,
-  PopperContent,
-  Slider,
-  dropdownContainerClasses,
-  topLeftAnimateClasses,
-} from "./ui";
+import { ComingSoonTooltip, EditorButton, Slider } from "./ui";
 import { formatTime } from "./utils";
 import { captionsStore } from "~/store/captions";
+import AspectRatioSelect from "./AspectRatioSelect";
 
 export function Player() {
   const {
@@ -133,10 +123,8 @@ export function Player() {
       onChange={setSplit}
       as={KToggleButton}
       variant="danger"
-      leftIcon={<IconCapScissors />}
-    >
-      Split
-    </EditorButton>
+      leftIcon={<IconCapScissors class="text-gray-500" />}
+    />
   );
 
   const isAtEnd = () => {
@@ -163,6 +151,8 @@ export function Player() {
         await commands.stopPlayback();
         setPlaying(false);
       } else {
+        // Ensure we seek to the current playback time before starting playback
+        await commands.seekTo(Math.floor(playbackTime() * FPS));
         await commands.startPlayback(FPS, OUTPUT_SIZE);
         setPlaying(true);
       }
@@ -189,15 +179,13 @@ export function Player() {
   });
 
   return (
-    <div class="flex flex-col divide-y flex-1">
-      <div class="flex flex-row justify-between font-medium p-[0.75rem] text-[0.875rem] z-10 bg-gray-50">
-        <div class="flex flex-row items-center gap-[0.5rem]">
-          <AspectRatioSelect />
-          <EditorButton
-            leftIcon={<IconCapCrop />}
-            onClick={() => {
-              const display = editorInstance.recordings.segments[0].display;
-              setDialog({
+    <div class="flex flex-col flex-1">
+      <div class="flex w-[calc(100%-40px)] mx-auto gap-3 justify-center p-5 bg-gray-100 rounded-t-xl">
+        <AspectRatioSelect />
+        <EditorButton
+          onClick={() => {
+            const display = editorInstance.recordings.segments[0].display;
+            setDialog({
                 open: true,
                 type: "crop",
                 position: {
@@ -211,32 +199,15 @@ export function Player() {
                 },
               });
             }}
+            leftIcon={<IconCapCrop class="w-5 text-gray-500" />}
           >
             Crop
           </EditorButton>
-          <PresetsDropdown />
-        </div>
-        <div class="flex flex-row place-items-center gap-2">
-          <EditorButton
-            disabled={!history.canUndo()}
-            leftIcon={<IconCapUndo />}
-            onClick={() => history.undo()}
-          >
-            Undo
-          </EditorButton>
-          <EditorButton
-            disabled={!history.canRedo()}
-            leftIcon={<IconCapRedo />}
-            onClick={() => history.redo()}
-          >
-            Redo
-          </EditorButton>
-        </div>
-      </div>
-      <div ref={setCanvasContainerRef} class="bg-gray-100 flex-1 relative">
+                </div>
+      <div ref={setCanvasContainerRef} class="relative flex-1 justify-center items-center bg-gray-50">
         <Show when={latestFrame()}>
           {(currentFrame) => {
-            const padding = 16;
+            const padding = 4;
 
             const containerAspect = () => {
               if (containerBounds.width && containerBounds.height) {
@@ -254,7 +225,7 @@ export function Player() {
 
             const size = () => {
               if (frameAspect() < containerAspect()) {
-                const height = (containerBounds.height ?? 0) - padding * 2;
+                const height = (containerBounds.height ?? 0) - padding * 1;
 
                 return {
                   width: height * frameAspect(),
@@ -271,7 +242,7 @@ export function Player() {
             };
 
             return (
-              <>
+ <div class="relative w-[calc(100%-40px)] overflow-hidden flex items-center justify-center mx-auto h-full bg-gray-100">
                 <canvas
                   style={{
                     left: `${Math.max(
@@ -291,59 +262,90 @@ export function Player() {
                   width={currentFrame().width}
                   height={currentFrame().data.height}
                 />
-              </>
+              </div>
             );
           }}
         </Show>
       </div>
-      <div class="flex flex-row items-center p-[0.75rem] gap-[0.5rem] z-10 bg-gray-50 justify-between">
-        <div class="flex-1 flex items-center">
-          <div class="flex-1" />
-          <Time seconds={Math.max(previewTime() ?? playbackTime(), 0)} />
+      <div class="flex z-10 overflow-hidden flex-row gap-3 justify-between items-center p-5 w-[calc(100%-40px)] mx-auto bg-gray-100 rounded-b-xl">
+        <div class="flex-1">
+          <Time
+            class="text-gray-500"
+            seconds={Math.max(previewTime() ?? playbackTime(), 0)}
+          />
+          <span class="text-gray-400 text-[0.875rem] tabular-nums"> / </span>
+          <Time seconds={totalDuration()} />
         </div>
-        <div class="flex flex-row items-center justify-center text-gray-400 text-[0.875rem]">
+        <div class="flex flex-row items-center justify-center text-gray-400 gap-8 text-[0.875rem]">
           <button
             type="button"
+            class="transition-opacity hover:opacity-70 will-change-[opacity]"
             onClick={async () => {
               setPlaying(false);
               await commands.stopPlayback();
               setPlaybackTime(0);
             }}
           >
-            <IconCapFrameFirst class="size-[1.2rem]" />
+            <IconCapPrev class="text-gray-500 size-3" />
           </button>
           <button
             type="button"
             onClick={handlePlayPauseClick}
-            class="hover:text-black transition-colors"
+            class="flex justify-center items-center bg-gray-200 rounded-full border border-gray-300 transition-colors hover:bg-gray-300 hover:text-black size-9"
           >
             {!playing() || isAtEnd() ? (
-              <IconCapPlayCircle class="size-[1.5rem]" />
+              <IconCapPlay class="text-gray-500 size-3" />
             ) : (
-              <IconCapStopCircle class="size-[1.5rem]" />
+              <IconCapPause class="text-gray-500 size-3" />
             )}
           </button>
           <button
             type="button"
+            class="transition-opacity hover:opacity-70 will-change-[opacity]"
             onClick={async () => {
               setPlaying(false);
               await commands.stopPlayback();
               setPlaybackTime(totalDuration());
             }}
           >
-            <IconCapFrameLast class="size-[1.2rem]" />
+            <IconCapNext class="text-gray-500 size-3" />
           </button>
         </div>
-        <div class="flex-1 flex flex-row justify-end items-center gap-2">
-          <Time seconds={totalDuration()} />
+        <div class="flex flex-row flex-1 gap-4 justify-end items-center">
           <div class="flex-1" />
           {window.FLAGS.split ? (
             splitButton()
           ) : (
             <ComingSoonTooltip>{splitButton()}</ComingSoonTooltip>
           )}
-          <div class="w-[0.5px] h-7 bg-gray-300 mx-1" />
-          <IconIcRoundSearch class="mt-0.5" />
+          <Tooltip content="Zoom out">
+            <IconCapZoomOut
+              onClick={() => {
+                state.timelineTransform.updateZoom(
+                  state.timelineTransform.zoom * 1.1,
+                  playbackTime()
+                );
+              }}
+              class="text-gray-500 size-5 will-change-[opacity] transition-opacity hover:opacity-70"
+            />
+          </Tooltip>
+          <Tooltip content="Zoom in">
+            <IconCapZoomIn
+              onClick={() => {
+                state.timelineTransform.updateZoom(
+                  state.timelineTransform.zoom / 1.1,
+                  playbackTime()
+                );
+              }}
+              class="text-gray-500 size-5 will-change-[opacity] transition-opacity hover:opacity-70"
+            />
+          </Tooltip>
+          <p class="text-sm tabular-nums text-gray-500">
+            {Math.min(
+              Math.max(1 - state.timelineTransform.zoom / zoomOutLimit(), 0),
+              1
+            ).toFixed(2) + "x"}
+          </p>
           <Slider
             class="w-24"
             minValue={0}
@@ -368,216 +370,9 @@ export function Player() {
   );
 }
 
-function AspectRatioSelect() {
-  const { project, setProject } = useEditorContext();
-
+function Time(props: { seconds: number; fps?: number; class?: string }) {
   return (
-    <KSelect<AspectRatio | "auto">
-      value={project.aspectRatio ?? "auto"}
-      onChange={(v) => {
-        if (v === null) return;
-        setProject("aspectRatio", v === "auto" ? null : v);
-      }}
-      defaultValue="auto"
-      options={
-        ["auto", "wide", "vertical", "square", "classic", "tall"] as const
-      }
-      multiple={false}
-      itemComponent={(props) => {
-        const item = () =>
-          props.item.rawValue === "auto"
-            ? null
-            : ASPECT_RATIOS[props.item.rawValue];
-
-        return (
-          <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
-            <KSelect.ItemLabel class="flex-1">
-              {props.item.rawValue === "auto"
-                ? "Auto"
-                : ASPECT_RATIOS[props.item.rawValue].name}
-              <Show when={item()}>
-                {(item) => (
-                  <span class="text-gray-400">
-                    {"⋅"}
-                    {item().ratio[0]}:{item().ratio[1]}
-                  </span>
-                )}
-              </Show>
-            </KSelect.ItemLabel>
-            <KSelect.ItemIndicator class="ml-auto">
-              <IconCapCircleCheck />
-            </KSelect.ItemIndicator>
-          </MenuItem>
-        );
-      }}
-      placement="top-start"
-    >
-      <EditorButton<typeof KSelect.Trigger>
-        as={KSelect.Trigger}
-        leftIcon={<IconCapLayout />}
-        rightIcon={
-          <KSelect.Icon>
-            <IconCapChevronDown />
-          </KSelect.Icon>
-        }
-      >
-        <KSelect.Value<AspectRatio | "auto">>
-          {(state) => {
-            const text = () => {
-              const option = state.selectedOption();
-              return option === "auto" ? "Auto" : ASPECT_RATIOS[option].name;
-            };
-            return <>{text()}</>;
-          }}
-        </KSelect.Value>
-      </EditorButton>
-      <KSelect.Portal>
-        <PopperContent<typeof KSelect.Content>
-          as={KSelect.Content}
-          class={topLeftAnimateClasses}
-        >
-          <MenuItemList<typeof KSelect.Listbox>
-            as={KSelect.Listbox}
-            class="w-[12.5rem]"
-          />
-        </PopperContent>
-      </KSelect.Portal>
-    </KSelect>
-  );
-}
-
-function PresetsDropdown() {
-  const { setDialog, presets, setProject } = useEditorContext();
-
-  return (
-    <KDropdownMenu gutter={8}>
-      <EditorButton<typeof KDropdownMenu.Trigger>
-        as={KDropdownMenu.Trigger}
-        leftIcon={<IconCapPresets />}
-      >
-        Presets
-      </EditorButton>
-      <KDropdownMenu.Portal>
-        <Suspense>
-          <PopperContent<typeof KDropdownMenu.Content>
-            as={KDropdownMenu.Content}
-            class={cx("w-72 max-h-56", topLeftAnimateClasses)}
-          >
-            <MenuItemList<typeof KDropdownMenu.Group>
-              as={KDropdownMenu.Group}
-              class="flex-1 overflow-y-auto scrollbar-none"
-            >
-              <For
-                each={presets.query.data?.presets ?? []}
-                fallback={
-                  <div class="w-full text-sm text-gray-400 text-center py-1">
-                    No Presets
-                  </div>
-                }
-              >
-                {(preset, i) => {
-                  const [showSettings, setShowSettings] = createSignal(false);
-
-                  return (
-                    <KDropdownMenu.Sub gutter={16}>
-                      <MenuItem<typeof KDropdownMenu.SubTrigger>
-                        as={KDropdownMenu.SubTrigger}
-                        onFocusIn={() => setShowSettings(false)}
-                        onClick={() => setShowSettings(false)}
-                      >
-                        <span class="mr-auto">{preset.name}</span>
-                        <Show when={presets.query.data?.default === i()}>
-                          <span class="px-[0.375rem] h-[1.25rem] rounded-full bg-gray-100 text-gray-400 text-[0.75rem]">
-                            Default
-                          </span>
-                        </Show>
-                        <button
-                          type="button"
-                          class="text-gray-400 hover:text-[currentColor]"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setShowSettings((s) => !s);
-                          }}
-                          onPointerUp={(e) => {
-                            e.stopPropagation();
-                            e.preventDefault();
-                          }}
-                        >
-                          <IconCapSettings />
-                        </button>
-                      </MenuItem>
-                      <KDropdownMenu.Portal>
-                        {showSettings() && (
-                          <MenuItemList<typeof KDropdownMenu.SubContent>
-                            as={KDropdownMenu.SubContent}
-                            class={cx(
-                              "animate-in fade-in slide-in-from-left-1 w-44",
-                              dropdownContainerClasses
-                            )}
-                          >
-                            <DropdownItem
-                              onSelect={() =>
-                                setProject(reconcile(preset.config))
-                              }
-                            >
-                              Apply
-                            </DropdownItem>
-                            <DropdownItem
-                              onSelect={() => presets.setDefault(i())}
-                            >
-                              Set as default
-                            </DropdownItem>
-                            <DropdownItem
-                              onSelect={() =>
-                                setDialog({
-                                  type: "renamePreset",
-                                  presetIndex: i(),
-                                  open: true,
-                                })
-                              }
-                            >
-                              Rename
-                            </DropdownItem>
-                            <DropdownItem
-                              onClick={() =>
-                                setDialog({
-                                  type: "deletePreset",
-                                  presetIndex: i(),
-                                  open: true,
-                                })
-                              }
-                            >
-                              Delete
-                            </DropdownItem>
-                          </MenuItemList>
-                        )}
-                      </KDropdownMenu.Portal>
-                    </KDropdownMenu.Sub>
-                  );
-                }}
-              </For>
-            </MenuItemList>
-            <MenuItemList<typeof KDropdownMenu.Group>
-              as={KDropdownMenu.Group}
-              class="border-t shrink-0"
-            >
-              <DropdownItem
-                onSelect={() => setDialog({ type: "createPreset", open: true })}
-              >
-                <span>Create new preset</span>
-                <IconCapCirclePlus class="ml-auto" />
-              </DropdownItem>
-            </MenuItemList>
-          </PopperContent>
-        </Suspense>
-      </KDropdownMenu.Portal>
-    </KDropdownMenu>
-  );
-}
-
-function Time(props: { seconds: number; fps?: number }) {
-  return (
-    <span class="text-gray-400 text-[0.875rem] tabular-nums">
+    <span class={cx("text-gray-400 text-sm tabular-nums", props.class)}>
       {formatTime(props.seconds, props.fps ?? FPS)}
     </span>
   );

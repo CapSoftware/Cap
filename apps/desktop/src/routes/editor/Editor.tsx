@@ -2,6 +2,8 @@ import { Button } from "@cap/ui-solid";
 import { trackDeep } from "@solid-primitives/deep";
 import { throttle } from "@solid-primitives/scheduled";
 import { useSearchParams } from "@solidjs/router";
+import { createMutation } from "@tanstack/solid-query";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   Match,
   Show,
@@ -14,10 +16,13 @@ import {
   untrack,
 } from "solid-js";
 import { createStore } from "solid-js/store";
-import { createMutation } from "@tanstack/solid-query";
-import { convertFileSrc } from "@tauri-apps/api/core";
 
-import { type Crop, events, commands } from "~/utils/tauri";
+import { Tooltip } from "@kobalte/core";
+import { makePersisted } from "@solid-primitives/storage";
+import Cropper, { cropToFloor } from "~/components/Cropper";
+import { type Crop, events } from "~/utils/tauri";
+import { setTitlebar } from "~/utils/titlebar-state";
+import { ConfigSidebar } from "./ConfigSidebar";
 import {
   EditorContextProvider,
   EditorInstanceContextProvider,
@@ -26,6 +31,9 @@ import {
   useEditorContext,
   useEditorInstanceContext,
 } from "./context";
+import { Header } from "./Header";
+import { Player } from "./Player";
+import { Timeline } from "./Timeline";
 import {
   Dialog,
   DialogContent,
@@ -34,13 +42,6 @@ import {
   Subfield,
   Toggle,
 } from "./ui";
-import { Header } from "./Header";
-import { Player } from "./Player";
-import { ConfigSidebar } from "./ConfigSidebar";
-import { Timeline } from "./Timeline";
-import Cropper, { cropToFloor } from "~/components/Cropper";
-import { makePersisted } from "@solid-primitives/storage";
-import { Tooltip } from "@kobalte/core";
 
 export function Editor() {
   const [params] = useSearchParams<{ id: string }>();
@@ -116,15 +117,17 @@ function Inner() {
     )
   );
 
+  setTitlebar("backgroundColor", "bg-gray-50");
+
   return (
-    <div class="w-screen h-screen flex flex-col">
+    <div class="flex flex-col w-screen h-screen">
       <Header />
       <div
-        class="p-5 pt-0 flex-1 w-full overflow-y-hidden flex flex-col gap-4 bg-gray-50 leading-5 animate-in fade-in"
+        class="flex overflow-y-hidden flex-col flex-1 gap-4 p-5 w-full leading-5 bg-gray-50 backdrop-blur-md animate-in fade-in"
         data-tauri-drag-region
       >
-        <div class="rounded-2xl overflow-hidden shadow border flex-1 flex flex-col divide-y bg-white">
-          <div class="flex flex-row flex-1 divide-x overflow-y-hidden">
+        <div class="flex overflow-hidden flex-col flex-1 bg-gray-50">
+          <div class="flex overflow-y-hidden flex-row flex-1">
             <Player />
             <ConfigSidebar />
           </div>
@@ -345,7 +348,7 @@ function Dialogs() {
                         <div class="flex flex-row items-center space-x-[0.5rem] text-gray-400">
                           <Tooltip.Root openDelay={500}>
                             <Tooltip.Trigger
-                              class="fixed flex flex-row items-center w-8 h-8"
+                              class="flex fixed flex-row items-center w-8 h-8"
                               tabIndex={-1}
                             >
                               <button
@@ -363,7 +366,7 @@ function Dialogs() {
                               </button>
                             </Tooltip.Trigger>
                             <Tooltip.Portal>
-                              <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+                              <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
                                 Rule of Thirds
                                 <Tooltip.Arrow class="fill-gray-500" />
                               </Tooltip.Content>
@@ -389,7 +392,7 @@ function Dialogs() {
                     </Dialog.Header>
                     <Dialog.Content>
                       <div class="flex flex-row justify-center">
-                        <div class="divide-black-transparent-10 overflow-hidden rounded">
+                        <div class="overflow-hidden rounded divide-black-transparent-10">
                           <Cropper
                             value={crop}
                             onCropChange={setCrop}

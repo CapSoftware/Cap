@@ -7,7 +7,8 @@ use std::{
 
 use cidre::{
     arc::R,
-    av, cm,
+    av::{self, AssetReaderTrackOutput},
+    cm,
     cv::{self, pixel_buffer::LockFlags},
     ns,
 };
@@ -172,9 +173,96 @@ impl CachedFrame {
     }
 }
 
-pub struct AVAssetReaderDecoder;
+pub struct AVAssetReaderDecoder {
+    path: PathBuf,
+    pixel_format: cv::PixelFormat,
+    tokio_handle: TokioHandle,
+    fps: u32,
+    track_output: R<AssetReaderTrackOutput>,
+    reader: R<av::AssetReader>,
+    last_decoded_frame: Option<(u32, CachedFrame)>,
+    is_done: bool,
+}
 
 impl AVAssetReaderDecoder {
+    fn new(path: PathBuf, tokio_handle: TokioHandle, fps: u32) -> Result<Self, String> {
+        let pixel_format = {
+            let input = ffmpeg::format::input(&path).unwrap();
+
+            let input_stream = input
+                .streams()
+                .best(ffmpeg::media::Type::Video)
+                .ok_or("Could not find a video stream")
+                .unwrap();
+
+            let decoder_codec =
+                super::ffmpeg::find_decoder(&input, &input_stream, input_stream.parameters().id())
+                    .unwrap();
+
+            let mut context = codec::context::Context::new_with_codec(decoder_codec);
+            context.set_parameters(input_stream.parameters()).unwrap();
+
+            let decoder = context.decoder().video().unwrap();
+
+            pixel_to_pixel_format(decoder.format())
+        };
+
+        let (track_output, reader) =
+            get_reader_track_output(&path, 0.0, &tokio_handle, pixel_format)?;
+
+        Ok(Self {
+            path,
+            pixel_format,
+            tokio_handle,
+            fps,
+            track_output,
+            reader,
+            last_decoded_frame: None,
+            is_done: false,
+        })
+    }
+
+    fn reset(&mut self, requested_time: f32) {
+        self.reader.cancel_reading();
+        (self.track_output, self.reader) = get_reader_track_output(
+            &self.path,
+            requested_time,
+            &self.tokio_handle,
+            self.pixel_format,
+        )
+        .unwrap();
+        self.last_decoded_frame = None;
+    }
+
+    fn get_next_frame(&mut self) -> Option<(u32, CachedFrame)> {
+        let frame = self
+            .track_output
+            .next_sample_buf()
+            .unwrap()
+            .and_then(|sample_buf| {
+                let current_frame = pts_to_frame(
+                    sample_buf.pts().value,
+                    Rational::new(1, sample_buf.pts().scale),
+                    self.fps,
+                );
+
+                let image_buf = sample_buf.image_buf()?;
+
+                // info!("decoded frame {}", current_frame);
+
+                Some((current_frame, CachedFrame::Raw(image_buf.retained())))
+            });
+
+        self.last_decoded_frame = frame.clone();
+        self.is_done = frame.is_none();
+
+        frame
+    }
+
+    fn last_decoded_frame(&mut self) -> Option<&mut (u32, CachedFrame)> {
+        self.last_decoded_frame.as_mut()
+    }
+
     pub fn spawn(
         name: &'static str,
         path: PathBuf,
@@ -184,206 +272,171 @@ impl AVAssetReaderDecoder {
     ) {
         let handle = tokio::runtime::Handle::current();
 
-        let handle = std::thread::spawn(move || {
-            let init = || {
-                let (pixel_format, width, height) = {
-                    let input = ffmpeg::format::input(&path).unwrap();
+        std::thread::spawn(move || Self::run(name, path, fps, rx, ready_tx, handle));
+    }
 
-                    let input_stream = input
-                        .streams()
-                        .best(ffmpeg::media::Type::Video)
-                        .ok_or("Could not find a video stream")
-                        .unwrap();
+    fn run(
+        name: &'static str,
+        path: PathBuf,
+        fps: u32,
+        rx: mpsc::Receiver<VideoDecoderMessage>,
+        ready_tx: oneshot::Sender<Result<(), String>>,
+        tokio_handle: tokio::runtime::Handle,
+    ) {
+        let mut this = match AVAssetReaderDecoder::new(path, tokio_handle, fps) {
+            Ok(v) => {
+                ready_tx.send(Ok(())).ok();
+                v
+            }
+            Err(e) => {
+                ready_tx.send(Err(e)).ok();
+                return;
+            }
+        };
 
-                    let decoder_codec = super::ffmpeg::find_decoder(
-                        &input,
-                        &input_stream,
-                        input_stream.parameters().id(),
-                    )
-                    .unwrap();
+        // let black_frame = LazyCell::new(|| Arc::new(vec![0; (width * height * 4) as usize]));
 
-                    let mut context = codec::context::Context::new_with_codec(decoder_codec);
-                    context.set_parameters(input_stream.parameters()).unwrap();
+        let mut cache = BTreeMap::<u32, CachedFrame>::new();
 
-                    let decoder = context.decoder().video().unwrap();
-                    (
-                        pixel_to_pixel_format(decoder.format()),
-                        decoder.width(),
-                        decoder.height(),
-                    )
-                };
+        let mut last_active_frame = None::<u32>;
 
-                Ok((
-                    get_reader_track_output(&path, 0.0, &handle, pixel_format)?,
-                    pixel_format,
-                ))
-            };
+        // let mut last_decoded_frame = None::<(u32, CachedFrame)>;
+        let mut last_sent_frame = None::<(u32, DecodedFrame)>;
 
-            let ((mut track_output, mut reader), pixel_format) = match init() {
-                Ok(v) => {
-                    ready_tx.send(Ok(())).ok();
-                    v
-                }
-                Err(e) => {
-                    ready_tx.send(Err(e)).ok();
-                    return;
-                }
-            };
+        while let Ok(r) = rx.recv() {
+            match r {
+                VideoDecoderMessage::GetFrame(requested_time, sender) => {
+                    let requested_frame = (requested_time * fps as f32).floor() as u32;
+                    // info!("requested frame {}", requested_frame);
 
-            // let black_frame = LazyCell::new(|| Arc::new(vec![0; (width * height * 4) as usize]));
+                    let mut sender = if let Some(cached) = cache.get_mut(&requested_frame) {
+                        let data = cached.process();
 
-            let mut cache = BTreeMap::<u32, CachedFrame>::new();
+                        // info!("sending cached frame {}", requested_frame);
+                        sender.send(data.clone()).ok();
+                        last_sent_frame = Some((requested_frame, data));
+                        continue;
+                    } else {
+                        Some(sender)
+                    };
 
-            let mut last_active_frame = None::<u32>;
+                    let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
+                    let cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
 
-            let mut last_decoded_frame = None::<(u32, CachedFrame)>;
-            let mut last_sent_frame = None::<(u32, DecodedFrame)>;
-
-            while let Ok(r) = rx.recv() {
-                match r {
-                    VideoDecoderMessage::GetFrame(requested_time, sender) => {
-                        let requested_frame = (requested_time * fps as f32).floor() as u32;
-
-                        let mut sender = if let Some(cached) = cache.get_mut(&requested_frame) {
-                            let data = cached.process();
-
-                            sender.send(data.clone()).ok();
-                            last_sent_frame = Some((requested_frame, data));
-                            continue;
-                        } else {
-                            Some(sender)
-                        };
-
-                        let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
-                        let cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
-
-                        if requested_frame == 0
-                            || last_sent_frame
-                                .as_ref()
-                                .map(|last| {
-                                    requested_frame < last.0 ||
-                                // seek forward for big jumps. this threshold is arbitrary but should be derived from i-frames in future
-                                requested_frame - last.0 > FRAME_CACHE_SIZE as u32
-                                })
-                                .unwrap_or(true)
-                        {
-                            reader.cancel_reading();
-                            (track_output, reader) = get_reader_track_output(
-                                &path,
-                                requested_time,
-                                &handle,
-                                pixel_format,
-                            )
-                            .unwrap();
-                            last_decoded_frame = None;
-                        }
-
-                        last_active_frame = Some(requested_frame);
-
-                        let mut exit = false;
-
-                        while let Some((current_frame, mut cache_frame)) = track_output
-                            .next_sample_buf()
-                            .unwrap()
-                            .and_then(|sample_buf| {
-                                let current_frame = pts_to_frame(
-                                    sample_buf.pts().value,
-                                    Rational::new(1, sample_buf.pts().scale),
-                                    fps,
-                                );
-
-                                let image_buf = sample_buf.image_buf()?;
-
-                                Some((current_frame, CachedFrame::Raw(image_buf.retained())))
+                    if requested_frame == 0
+                        || last_sent_frame
+                            .as_ref()
+                            .map(|last| {
+                                requested_frame < last.0 ||
+                        // seek forward for big jumps. this threshold is arbitrary but should be derived from i-frames in future
+                        requested_frame - last.0 > FRAME_CACHE_SIZE as u32
                             })
-                        {
-                            // Handles frame skips. requested_frame == last_decoded_frame should be handled by the frame cache.
-                            if let Some((last_decoded_frame, sender)) = last_decoded_frame
-                                .as_mut()
-                                .filter(|(last_decoded_frame_i, _)| {
-                                    requested_frame > *last_decoded_frame_i
-                                        && requested_frame < current_frame
-                                })
-                                .and_then(|l| Some((l, sender.take()?)))
-                            {
-                                let (frame_number, frame) = last_decoded_frame;
+                            .unwrap_or(true)
+                    {
+                        this.reset(requested_time);
+                    }
 
-                                let data = frame.process();
-                                last_sent_frame = Some((*frame_number, data.clone()));
-                                sender.send(data).ok();
+                    last_active_frame = Some(requested_frame);
+
+                    let mut exit = false;
+
+                    while let Some((current_frame, mut cache_frame)) = this.get_next_frame() {
+                        // Handles frame skips.
+                        // We use the cache instead of last_sent_frame as newer non-matching frames could have been decoded.
+                        if let Some(most_recent_prev_frame) =
+                            cache.iter_mut().rev().find(|v| *v.0 < requested_frame)
+                        {
+                            if let Some(sender) = sender.take() {
+                                let data = most_recent_prev_frame.1.process();
+                                sender.send(data.clone()).ok();
+                                last_sent_frame = Some((current_frame, data));
+                            }
+                        }
+
+                        let exceeds_cache_bounds = current_frame > cache_max;
+                        let too_small_for_cache_bounds = current_frame < cache_min;
+
+                        if !too_small_for_cache_bounds {
+                            if current_frame == requested_frame {
+                                if let Some(sender) = sender.take() {
+                                    let data = cache_frame.process();
+                                    last_sent_frame = Some((current_frame, data.clone()));
+                                    // info!("sending frame {requested_frame}");
+
+                                    sender.send(data).ok();
+
+                                    break;
+                                }
                             }
 
-                            last_decoded_frame = Some((current_frame, cache_frame.clone()));
-
-                            let exceeds_cache_bounds = current_frame > cache_max;
-                            let too_small_for_cache_bounds = current_frame < cache_min;
-
-                            if !too_small_for_cache_bounds {
-                                if current_frame == requested_frame {
-                                    if let Some(sender) = sender.take() {
-                                        let data = cache_frame.process();
-                                        last_sent_frame = Some((current_frame, data.clone()));
-                                        sender.send(data).ok();
-
-                                        break;
-                                    }
-                                }
-
-                                if cache.len() >= FRAME_CACHE_SIZE {
-                                    if let Some(last_active_frame) = &last_active_frame {
-                                        let frame = if requested_frame > *last_active_frame {
-                                            *cache.keys().next().unwrap()
-                                        } else if requested_frame < *last_active_frame {
-                                            *cache.keys().next_back().unwrap()
-                                        } else {
-                                            let min = *cache.keys().min().unwrap();
-                                            let max = *cache.keys().max().unwrap();
-
-                                            if current_frame > max {
-                                                min
-                                            } else {
-                                                max
-                                            }
-                                        };
-
-                                        cache.remove(&frame);
+                            if cache.len() >= FRAME_CACHE_SIZE {
+                                if let Some(last_active_frame) = &last_active_frame {
+                                    let frame = if requested_frame > *last_active_frame {
+                                        *cache.keys().next().unwrap()
+                                    } else if requested_frame < *last_active_frame {
+                                        *cache.keys().next_back().unwrap()
                                     } else {
-                                        cache.clear()
-                                    }
-                                }
+                                        let min = *cache.keys().min().unwrap();
+                                        let max = *cache.keys().max().unwrap();
 
-                                cache.insert(current_frame, cache_frame.clone());
-                            }
+                                        if current_frame > max {
+                                            min
+                                        } else {
+                                            max
+                                        }
+                                    };
 
-                            if current_frame > requested_frame && sender.is_some() {
-                                if let Some((sender, last_sent_frame)) = last_sent_frame
-                                    .as_ref()
-                                    .and_then(|l| Some((sender.take()?, l)))
-                                {
-                                    sender.send(last_sent_frame.1.clone()).ok();
-                                } else if let Some(sender) = sender.take() {
-                                    sender.send(cache_frame.process()).ok();
+                                    cache.remove(&frame);
+                                } else {
+                                    cache.clear()
                                 }
                             }
 
-                            exit = exit || exceeds_cache_bounds;
+                            cache.insert(current_frame, cache_frame.clone());
+                        }
 
-                            if exit {
-                                break;
+                        if current_frame > requested_frame && sender.is_some() {
+                            if let Some((sender, last_sent_frame)) = last_sent_frame
+                                .as_ref()
+                                .and_then(|l| Some((sender.take()?, l)))
+                            {
+                                // info!(
+                                //     "sending previous frame {} for {requested_frame}",
+                                //     last_sent_frame.0
+                                // );
+
+                                sender.send(last_sent_frame.1.clone()).ok();
+                            } else if let Some(sender) = sender.take() {
+                                // info!(
+                                //     "sending forward frame {current_frame} for {requested_frame}",
+                                // );
+
+                                sender.send(cache_frame.process()).ok();
                             }
                         }
 
-                        if let Some((sender, last_sent_frame)) =
-                            sender.take().zip(last_sent_frame.as_ref())
-                        {
-                            sender.send(last_sent_frame.1.clone()).ok();
+                        exit = exit || exceeds_cache_bounds;
+
+                        if exit {
+                            break;
                         }
+                    }
+
+                    if let Some((sender, last_sent_frame)) =
+                        sender.take().zip(last_sent_frame.as_ref())
+                    {
+                        // info!(
+                        //     "sending hail mary frame {} for {requested_frame}",
+                        //     last_sent_frame.0
+                        // );
+
+                        sender.send(last_sent_frame.1.clone()).ok();
                     }
                 }
             }
+        }
 
-            println!("Decoder thread ended");
-        });
+        println!("Decoder thread ended");
     }
 }
 

@@ -1,4 +1,5 @@
 // @refresh reload
+import { createElementBounds, NullableBounds } from "@solid-primitives/bounds";
 import { createContextProvider } from "@solid-primitives/context";
 import { trackStore } from "@solid-primitives/deep";
 import { createEventListener } from "@solid-primitives/event-listener";
@@ -10,21 +11,19 @@ import {
   createEffect,
   createResource,
   createSignal,
-  on,
+  on
 } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
-import { createElementBounds, NullableBounds } from "@solid-primitives/bounds";
 
+import { createPresets } from "~/utils/createPresets";
+import { createImageDataWS, createLazySignal } from "~/utils/socket";
 import {
-  PresetsStore,
-  type ProjectConfiguration,
-  type SerializedEditorInstance,
-  type XY,
   commands,
   events,
+  type ProjectConfiguration,
+  type SerializedEditorInstance,
+  type XY
 } from "~/utils/tauri";
-import { createImageDataWS, createLazySignal } from "~/utils/socket";
-import { createPresets } from "~/utils/createPresets";
 
 export type CurrentDialog =
   | { type: "createPreset" }
@@ -40,6 +39,15 @@ export const OUTPUT_SIZE = {
   x: 1920,
   y: 1080,
 };
+
+export const BACKGROUND_THEMES = {
+  macOS: "Macos",
+  dark: "Dark",
+  blue: "Blue",
+  purple: "Purple",
+  orange: "Orange",
+};
+
 
 export const MAX_ZOOM_IN = 3;
 
@@ -65,6 +73,10 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
     const [selectedTab, setSelectedTab] = createSignal<
       "background" | "camera" | "transcript" | "audio" | "cursor" | "hotkeys" | "captions"
     >("background");
+
+      //Background tabs
+  const [backgroundTab, setBackgroundTab] =
+  createSignal<keyof typeof BACKGROUND_THEMES>("macOS");
 
     const [dialog, setDialog] = createSignal<DialogState>({
       open: false,
@@ -157,6 +169,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       project,
       setProject,
       selectedTab,
+      backgroundTab,
+      setBackgroundTab,
       setSelectedTab,
       history: createStoreHistory(project, setProject),
       playbackTime,
@@ -279,7 +293,7 @@ export const [TimelineContextProvider, useTimelineContext] =
     (props: {
       duration: number;
       secsPerPixel: number;
-      timelineBounds: Readonly<NullableBounds>;
+      timelineBounds: Readonly<NullableBounds>; 
     }) => {
       return {
         duration: () => props.duration,
