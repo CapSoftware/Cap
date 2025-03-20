@@ -210,7 +210,7 @@ function ShareButton(props: {
                     disabled={uploadVideo.isPending}
                     onClick={(e) => uploadVideo.mutate()}
                     variant="primary"
-                    class="flex items-center h-[41px] px-3 space-x-1"
+                    class="flex justify-center items-center size-[41px] px-0 py-0 space-x-1 rounded-xl"
                   >
                     {uploadVideo.isPending ? (
                       <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
