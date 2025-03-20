@@ -31,16 +31,16 @@ import { Dynamic } from "solid-js/web";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import toast from "solid-toast";
+import colorBg from "~/assets/illustrations/color.webp";
+import gradientBg from "~/assets/illustrations/gradient.webp";
+import imageBg from "~/assets/illustrations/image.webp";
+import transparentBg from "~/assets/illustrations/transparent.webp";
 import { generalSettingsStore } from "~/store";
 import {
   type BackgroundSource,
   type CursorAnimationStyle,
   commands,
 } from "~/utils/tauri";
-import colorBg from "~/assets/illustrations/color.webp";
-import gradientBg from "~/assets/illustrations/gradient.webp";
-import imageBg from "~/assets/illustrations/image.webp";
-import transparentBg from "~/assets/illustrations/transparent.webp";
 import { BACKGROUND_THEMES, useEditorContext } from "./context";
 import {
   DEFAULT_GRADIENT_FROM,
@@ -1620,7 +1620,7 @@ export function ConfigSidebar() {
                   <KTabs.List class="flex flex-row items-center rounded-[0.5rem] relative border">
                     <KTabs.Trigger
                       value="auto"
-                      class="z-10 flex-1 py-1 text-gray-400 transition-colors duration-100 outline-none ui-selected:text-gray-500 peer"
+                      class="z-10 flex-1 py-2.5 text-gray-400 transition-colors duration-100 outline-none ui-selected:text-gray-500 peer"
                       // onClick={() => setSelectedTab(item.id)}
                       disabled
                     >
@@ -1628,7 +1628,7 @@ export function ConfigSidebar() {
                     </KTabs.Trigger>
                     <KTabs.Trigger
                       value="manual"
-                      class="z-10 flex-1 py-1 text-gray-400 transition-colors duration-100 outline-none ui-selected:text-gray-500 peer"
+                      class="z-10 flex-1 py-2.5 text-gray-400 transition-colors duration-100 outline-none ui-selected:text-gray-500 peer"
                       // onClick={() => setSelectedTab(item.id)}
                     >
                       Manual
@@ -1796,7 +1796,7 @@ export function ConfigSidebar() {
                                 }px)`,
                               }}
                             />
-                            <div class="overflow-hidden bg-gray-300 rounded-lg border-2 border-gray-300">
+                            <div class="overflow-hidden bg-gray-100 rounded-lg border border-gray-200">
                               <canvas
                                 ref={canvasRef}
                                 width={croppedSize().x}
