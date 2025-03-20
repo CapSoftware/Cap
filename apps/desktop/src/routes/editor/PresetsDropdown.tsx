@@ -11,17 +11,18 @@ import {
   MenuItemList,
   PopperContent,
   dropdownContainerClasses,
-  topLeftAnimateClasses,
+  topCenterAnimateClasses,
 } from "./ui";
 
-function PresetsDropdown() {
+export function PresetsDropdown() {
   const { setDialog, presets, setProject } = useEditorContext();
 
   return (
-    <KDropdownMenu gutter={8}>
+    <KDropdownMenu gutter={8} placement="bottom">
       <EditorButton<typeof KDropdownMenu.Trigger>
         as={KDropdownMenu.Trigger}
         leftIcon={<IconCapPresets />}
+        rightIcon={<IconCapChevronDown />}
       >
         Presets
       </EditorButton>
@@ -29,7 +30,7 @@ function PresetsDropdown() {
         <Suspense>
           <PopperContent<typeof KDropdownMenu.Content>
             as={KDropdownMenu.Content}
-            class={cx("w-72 max-h-56", topLeftAnimateClasses)}
+            class={cx("w-72 max-h-56", topCenterAnimateClasses)}
           >
             <MenuItemList<typeof KDropdownMenu.Group>
               as={KDropdownMenu.Group}

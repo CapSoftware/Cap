@@ -5,24 +5,21 @@ import {
   batch,
   createEffect,
   createSignal,
-  JSX,
   onCleanup,
   onMount,
 } from "solid-js";
+import { remove } from "@tauri-apps/plugin-fs";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import Titlebar from "~/components/titlebar/Titlebar";
-import { createLicenseQuery } from "~/utils/queries";
 import { initializeTitlebar, setTitlebar } from "~/utils/titlebar-state";
-import AspectRatioSelect from "./AspectRatioSelect";
 import { useEditorContext } from "./context";
 import ExportButton from "./ExportButton";
 import PresetsDropdown from "./PresetsDropdown";
 import ShareButton from "./ShareButton";
 import { EditorButton } from "./ui";
-import { remove } from "@tauri-apps/plugin-fs";
-import { ask } from "@tauri-apps/plugin-dialog";
-import { commands } from "~/utils/tauri";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export type ResolutionOption = {
   label: string;
@@ -42,80 +39,6 @@ export interface ExportEstimates {
   estimated_time_seconds: number;
   estimated_size_mb: number;
 }
-
-// Menu configuration for the header
-const Menu = {
-  left: [
-    {
-      button: (props: {
-        editorContext: ReturnType<typeof useEditorContext>;
-      }) => (
-        <EditorButton
-          tooltipText="Captions"
-          leftIcon={<IconCapCaptions class="w-5" />}
-          comingSoon
-        />
-      ),
-    },
-    {
-      button: (props: {
-        editorContext: ReturnType<typeof useEditorContext>;
-      }) => (
-        <EditorButton
-          tooltipText="Performance"
-          leftIcon={<IconCapGauge class="w-[18px]" />}
-          comingSoon
-        />
-      ),
-    },
-  ],
-  center: [
-    {
-      button: (props: {
-        editorContext: ReturnType<typeof useEditorContext>;
-      }) => <PresetsDropdown />,
-    },
-  ],
-  right: [
-    {
-      button: (props: {
-        editorContext: ReturnType<typeof useEditorContext>;
-      }) => {
-        const { history } = props.editorContext;
-        return (
-          <EditorButton
-            onClick={() => history.undo()}
-            disabled={!history.canUndo()}
-            tooltipText="Undo"
-            leftIcon={<IconCapUndo class="w-5" />}
-          />
-        );
-      },
-    },
-    {
-      button: (props: {
-        editorContext: ReturnType<typeof useEditorContext>;
-      }) => {
-        const { history } = props.editorContext;
-        return (
-          <EditorButton
-            onClick={() => history.redo()}
-            disabled={!history.canRedo()}
-            tooltipText="Redo"
-            leftIcon={<IconCapRedo class="w-5" />}
-          />
-        );
-      },
-    },
-  ],
-} satisfies Record<
-  "left" | "center" | "right",
-  {
-    button: (props: {
-      editorContext: ReturnType<typeof useEditorContext>;
-    }) => JSX.Element;
-  }[]
->;
 
 export function Header() {
   const editorContext = useEditorContext();
@@ -178,20 +101,33 @@ export function Header() {
         class="absolute flex gap-4 h-full w-full items-start left-[5.5rem] z-10"
       >
         <div class="flex gap-2 items-center h-full">
-        <EditorButton
-          onClick={async () => {
-            const currentWindow = getCurrentWindow();
-            if (!editorContext?.editorInstance.path) return ;
-            if (!(await ask("Are you sure you want to delete this recording?")))
-              return;
-            await remove(editorContext?.editorInstance.path, { recursive: true });
-            await currentWindow.close();
-          }}
-          tooltipText="Delete recording"
-          leftIcon={<IconCapTrash class="w-5" />}
-        />
+          <EditorButton
+            onClick={async () => {
+              const currentWindow = getCurrentWindow();
+              if (!editorContext?.editorInstance.path) return;
+              if (
+                !(await ask("Are you sure you want to delete this recording?"))
+              )
+                return;
+              await remove(editorContext?.editorInstance.path, {
+                recursive: true,
+              });
+              await currentWindow.close();
+            }}
+            tooltipText="Delete recording"
+            leftIcon={<IconCapTrash class="w-5" />}
+          />
+          <EditorButton
+            onClick={() =>
+              revealItemInDir(`${editorContext.editorInstance.path}/`)
+            }
+            tooltipText="Open recording bundle"
+            leftIcon={<IconLucideFolder class="w-5" />}
+          />
+
           <p class="text-sm text-gray-500">
-            {editorContext.editorInstance.prettyName}<span class="text-sm text-gray-400">.cap</span>
+            {editorContext.editorInstance.prettyName}
+            <span class="text-sm text-gray-400">.cap</span>
           </p>
           {/* <ErrorBoundary fallback={<></>}>
             <Suspense>
@@ -217,25 +153,51 @@ export function Header() {
           </ErrorBoundary> */}
         </div>
       </div>
-      <div
-        data-tauri-drag-region
-        class="flex absolute inset-x-0 z-10 items-center mx-auto h-full w-fit"
-      >
-        {Object.values(Menu).map((section) => (
-          <div
-            class={cx(
-              "flex gap-4 items-center px-4 h-full",
-              section === Menu.center &&
-                "border-r border-l border-r-gray-200 border-l-gray-200"
-            )}
-          >
-            {section.map((item) => (
-              <>{item.button({ editorContext })}</>
-            ))}
-          </div>
-        ))}
-      </div>
+      <TopBar />
       <Titlebar />
+    </div>
+  );
+}
+
+function TopBar() {
+  const editorContext = useEditorContext();
+
+  return (
+    <div
+      data-tauri-drag-region
+      class="flex absolute inset-x-0 z-10 items-center mx-auto h-full w-fit"
+    >
+      <div class="flex gap-4 items-center px-4 h-full">
+        <EditorButton
+          tooltipText="Captions"
+          leftIcon={<IconCapCaptions class="w-5" />}
+          comingSoon
+        />
+        <EditorButton
+          tooltipText="Performance"
+          leftIcon={<IconCapGauge class="w-[18px]" />}
+          comingSoon
+        />
+      </div>
+
+      <div class="flex gap-4 items-center px-4 border-r border-l border-r-gray-200 border-l-gray-200 my-2">
+        <PresetsDropdown />
+      </div>
+
+      <div class="flex gap-4 items-center px-4 h-full">
+        <EditorButton
+          onClick={() => editorContext.history.undo()}
+          disabled={!editorContext.history.canUndo()}
+          tooltipText="Undo"
+          leftIcon={<IconCapUndo class="w-5" />}
+        />
+        <EditorButton
+          onClick={() => editorContext.history.redo()}
+          disabled={!editorContext.history.canRedo()}
+          tooltipText="Redo"
+          leftIcon={<IconCapRedo class="w-5" />}
+        />
+      </div>
     </div>
   );
 }

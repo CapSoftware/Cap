@@ -3,10 +3,15 @@ import { Dialog as KDialog } from "@kobalte/core/dialog";
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Polymorphic, type PolymorphicProps } from "@kobalte/core/polymorphic";
 import { Slider as KSlider } from "@kobalte/core/slider";
-import { Switch as KSwitch } from "@kobalte/core/switch";
+import { Switch as KSwitch, Thumb } from "@kobalte/core/switch";
 import { Tooltip as KTooltip } from "@kobalte/core/tooltip";
+import { createElementBounds } from "@solid-primitives/bounds";
+import { createEventListener } from "@solid-primitives/event-listener";
 import { cva, cx, type VariantProps } from "cva";
+
 import {
+  createRoot,
+  createSignal,
   mergeProps,
   splitProps,
   type ComponentProps,
@@ -22,7 +27,7 @@ export function Field(
   props: ParentProps<{ name: string; icon?: JSX.Element; value?: JSX.Element }>
 ) {
   return (
-    <div class="flex flex-col gap-5">
+    <div class="flex flex-col gap-4">
       <span class="flex flex-row items-center gap-[0.375rem] text-gray-500 font-medium text-sm">
         {props.icon}
         {props.name}
@@ -45,7 +50,9 @@ export function Subfield(
     >
       <span>
         {props.name}
-        {props.required && <span class="ml-[2px] text-xs text-blue-500">*</span>}
+        {props.required && (
+          <span class="ml-[2px] text-xs text-blue-500">*</span>
+        )}
       </span>
       {props.children}
     </div>
@@ -63,16 +70,29 @@ export function Toggle(props: ComponentProps<typeof KSwitch>) {
   );
 }
 
-export function Slider(props: ComponentProps<typeof KSlider>) {
+export function Slider(
+  props: ComponentProps<typeof KSlider> & {
+    formatTooltip?: string | ((v: number) => string);
+  }
+) {
   const { history } = useEditorContext();
 
   // Pause history when slider is being dragged
   let resumeHistory: (() => void) | null = null;
 
+  const [thumbRef, setThumbRef] = createSignal<HTMLDivElement>();
+
+  const thumbBounds = createElementBounds(thumbRef);
+
+  const [dragging, setDragging] = createSignal(false);
+
   return (
     <KSlider
       {...props}
-      class={cx("relative px-1 bg-gray-200 rounded-full", props.class)}
+      class={cx(
+        "relative px-1 h-4 flex flex-row justify-stretch items-center",
+        props.class
+      )}
       onChange={(v) => {
         if (!resumeHistory) resumeHistory = history.pause();
         props.onChange?.(v);
@@ -83,13 +103,61 @@ export function Slider(props: ComponentProps<typeof KSlider>) {
         props.onChangeEnd?.(e);
       }}
     >
-      <KSlider.Track class="h-[0.2rem] relative mx-1">
-        <KSlider.Fill class="absolute -ml-2 h-full bg-gray-400 rounded-full ui-disabled:bg-gray-300" />
-        <KSlider.Thumb
-          class={cx(
-            "bg-gray-500 rounded-full outline-none size-4 -top-[6.5px] transition-shadow duration-200 focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 focus:ring-offset-gray-200 ui-disabled:bg-gray-400"
-          )}
+      <KSlider.Track
+        class="h-[0.3rem] transition-[height] relative mx-1 bg-gray-200 rounded-full w-full"
+        onPointerDown={() => {
+          setDragging(true);
+          console.log("set dragging true");
+          createRoot((dispose) => {
+            createEventListener(window, "mouseup", () => {
+              setDragging(false);
+              console.log("set dragging false");
+              dispose();
+            });
+          });
+        }}
+      >
+        <KSlider.Fill
+          onPointerDown={() => {
+            console.log("MOUSE DOWN FILL");
+          }}
+          class="absolute -ml-2 h-full bg-blue-300 rounded-full ui-disabled:bg-gray-300"
         />
+        <Tooltip
+          open={dragging() ? true : undefined}
+          getAnchorRect={() => {
+            return {
+              x: thumbBounds.left ?? undefined,
+              y: thumbBounds.top ?? undefined,
+              width: thumbBounds.width ?? undefined,
+              height: thumbBounds.height ?? undefined,
+            };
+          }}
+          content={
+            props.value?.[0] !== undefined
+              ? typeof props.formatTooltip === "string"
+                ? `${props.value[0].toFixed(1)}${props.formatTooltip}`
+                : props.formatTooltip
+                ? props.formatTooltip(props.value[0])
+                : props.value[0].toFixed(1)
+              : undefined
+          }
+        >
+          <KSlider.Thumb
+            ref={setThumbRef}
+            onPointerDown={() => {
+              setDragging(true);
+              console.log("set dragging true");
+            }}
+            onPointerUp={() => {
+              setDragging(false);
+              console.log("set dragging false");
+            }}
+            class={cx(
+              "bg-solid-white shadow-xl border border-gray-300 rounded-full outline-none size-4 -top-[6.3px] ui-disabled:bg-gray-400"
+            )}
+          />
+        </Tooltip>
       </KSlider.Track>
     </KSlider>
   );
@@ -143,7 +211,7 @@ export const Dialog = {
   },
   ConfirmButton(_props: ComponentProps<typeof Button>) {
     const props = mergeProps(
-      { variant: "primary"} as ComponentProps<typeof Button>,
+      { variant: "primary" } as ComponentProps<typeof Button>,
       _props
     );
     return <Button {...props} />;
@@ -348,6 +416,9 @@ export const dropdownContainerClasses =
 
 export const topLeftAnimateClasses =
   "ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95 origin-top-left";
+
+export const topCenterAnimateClasses =
+  "ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95 origin-top-center";
 
 export const topRightAnimateClasses =
   "ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95 origin-top-right";
