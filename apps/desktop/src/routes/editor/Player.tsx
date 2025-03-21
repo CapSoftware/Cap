@@ -15,7 +15,6 @@ import {
 import { reconcile, createStore } from "solid-js/store";
 import { createEventListener } from "@solid-primitives/event-listener";
 
-import { Setter, Show, createEffect, createSignal } from "solid-js";
 
 
 import Tooltip from "~/components/Tooltip";
@@ -102,15 +101,6 @@ export function Player() {
     if (time !== undefined && time >= 0 && captionsStore.state.segments.length > 0) {
       captionsStore.updateCurrentCaption(time);
     }
-  });
-
-  let canvasRef!: HTMLCanvasElement;
-
-  createEffect(() => {
-    const frame = latestFrame();
-    if (!frame) return;
-    const ctx = canvasRef.getContext("2d");
-    ctx?.putImageData(frame.data, 0, 0);
   });
 
   const [canvasContainerRef, setCanvasContainerRef] =
