@@ -4658,6 +4658,7 @@ packages:
       react-dom:
         optional: true
 
+
   '@storybook/builder-vite@9.0.0-alpha.6':
     resolution: {integrity: sha512-X6cWPtBTaagi0+pIFZtJe8XjiuwjbfFks09PmSqZJMr1V/0jB/Odifa/XnKqyBHuaudnbClI1kqieBHfu4pu+g==}
     peerDependencies:
@@ -15948,6 +15949,7 @@ snapshots:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
 
+
   '@storybook/builder-vite@9.0.0-alpha.6(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))':
     dependencies:
       '@storybook/csf-plugin': 9.0.0-alpha.6(storybook@8.3.3)
@@ -15980,6 +15982,7 @@ snapshots:
     dependencies:
       storybook: 8.3.3
       unplugin: 1.16.1
+
 
   '@storybook/csf-plugin@9.0.0-alpha.6(storybook@8.3.3)':
     dependencies:
