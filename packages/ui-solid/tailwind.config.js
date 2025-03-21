@@ -9,6 +9,7 @@ module.exports = {
     colors: {
       transparent: "rgba(0,0,0,0)",
       "solid-white": "#ffffff",
+      "transparent-window": "var(--transparent-window)",
       gray: {
         50: "var(--gray-50)",
         100: "var(--gray-100)",

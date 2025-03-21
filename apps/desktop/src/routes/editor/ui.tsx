@@ -3,7 +3,7 @@ import { Dialog as KDialog } from "@kobalte/core/dialog";
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Polymorphic, type PolymorphicProps } from "@kobalte/core/polymorphic";
 import { Slider as KSlider } from "@kobalte/core/slider";
-import { Switch as KSwitch, Thumb } from "@kobalte/core/switch";
+import { Switch as KSwitch } from "@kobalte/core/switch";
 import { Tooltip as KTooltip } from "@kobalte/core/tooltip";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListener } from "@solid-primitives/event-listener";
@@ -168,7 +168,7 @@ export function Input(props: ComponentProps<"input">) {
     <TextInput
       {...props}
       class={cx(
-        "rounded-[0.5rem] bg-gray-200 hover:ring-1 py-[18px] hover:ring-gray-300 h-[2rem] font-normal placeholder:text-black-transparent-20 text-xs caret-gray-500 transition-shadow duration-200 focus:ring-offset-1 focus:ring-offset-gray-100 focus:ring-1 focus:ring-gray-500 px-[0.5rem] border w-full text-[0.875rem] outline-none text-gray-500",
+        "rounded-[0.5rem] bg-gray-50 border-gray-200 hover:ring-1 py-[18px] hover:ring-gray-300 h-[2rem] font-normal placeholder:text-black-transparent-40 text-xs caret-gray-500 transition-shadow duration-200 focus:ring-offset-1 focus:ring-offset-gray-100 focus:ring-1 focus:ring-gray-500 px-[0.5rem] border w-full text-[0.875rem] outline-none text-gray-500",
         props.class
       )}
     />
@@ -318,9 +318,9 @@ const editorButtonStyles = cva(
     variants: {
       variant: {
         primary:
-          "text-gray-500 enabled:hover:ui-not-pressed:bg-gray-200 ui-expanded:bg-gray-200 outline-blue-300 focus:bg-gray-200",
+          "text-gray-500 enabled:hover:ui-not-pressed:bg-white-transparent-80 dark:enabled:hover:ui-not-pressed:bg-black-transparent-20 ui-expanded:bg-white-transparent-80 dark:ui-expanded:bg-black-transparent-20 dark:ui-expanded:bg-black-transparent-10 outline-blue-300 focus:bg-white-transparent-80 dark:focus:bg-black-transparent-20",
         danger:
-          "text-gray-500 enabled:hover:ui-not-pressed:bg-gray-200 ui-expanded:bg-red-300 ui-pressed:bg-red-300 ui-expanded:text-gray-50 ui-pressed:text-gray-50 outline-red-300",
+          "text-gray-500 enabled:hover:ui-not-pressed:bg-white-transparent-80 dark:enabled:hover:ui-not-pressed:bg-black-transparent-20 ui-expanded:bg-red-300  ui-pressed:bg-red-300 ui-expanded:text-gray-50 ui-pressed:text-gray-50 outline-red-300",
       },
     },
     defaultVariants: { variant: "primary" },
