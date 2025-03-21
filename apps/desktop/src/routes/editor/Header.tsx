@@ -67,7 +67,7 @@ export function Header() {
 
   batch(() => {
     setTitlebar("height", "60px");
-    setTitlebar("border", false);
+    setTitlebar("border", true);
     setTitlebar("backgroundColor", "bg-transparent-window");
     setTitlebar(
       "items",
