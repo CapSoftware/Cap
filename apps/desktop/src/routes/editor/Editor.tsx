@@ -123,11 +123,11 @@ function Inner() {
     <div class="flex flex-col w-screen h-screen">
       <Header />
       <div
-        class="flex overflow-y-hidden flex-col flex-1 gap-4 p-5 w-full leading-5 bg-gray-50 backdrop-blur-md animate-in fade-in"
+        class="flex overflow-y-hidden flex-col flex-1 gap-4 p-4 w-full leading-5 bg-gray-100 dark:bg-gray-50 backdrop-blur-md animate-in fade-in"
         data-tauri-drag-region
       >
-        <div class="flex overflow-hidden flex-col flex-1 bg-gray-50">
-          <div class="flex overflow-y-hidden flex-row flex-1">
+        <div class="flex overflow-hidden flex-col flex-1">
+          <div class="flex overflow-y-hidden flex-row flex-1 gap-4">
             <Player />
             <ConfigSidebar />
           </div>

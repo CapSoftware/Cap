@@ -285,7 +285,11 @@ export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
 export type Audio = { duration: number; sample_rate: number; channels: number }
 export type AudioConfiguration = { mute: boolean; improve: boolean }
 export type AudioInputLevelChange = number
-export type AudioMeta = { path: string; start_time?: number | null }
+export type AudioMeta = { path: string; 
+/**
+ * unix time of the first frame
+ */
+start_time?: number | null }
 export type AuthStore = { token: string; user_id: string | null; expires: number; plan: Plan | null; intercom_hash: string | null }
 export type AuthenticationInvalid = null
 export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; inset: number; crop: Crop | null; shadow?: number; advancedShadow?: ShadowConfiguration | null }

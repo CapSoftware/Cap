@@ -15,6 +15,8 @@ import {
 import { reconcile, createStore } from "solid-js/store";
 import { createEventListener } from "@solid-primitives/event-listener";
 
+import { Setter, Show, createEffect, createSignal } from "solid-js";
+
 
 import Tooltip from "~/components/Tooltip";
 import { commands } from "~/utils/tauri";
@@ -115,6 +117,7 @@ export function Player() {
     createSignal<HTMLDivElement>();
   const containerBounds = createElementBounds(canvasContainerRef);
 
+
   const splitButton = () => (
     <EditorButton<typeof KToggleButton>
       disabled={!window.FLAGS.split}
@@ -178,13 +181,13 @@ export function Player() {
   });
 
   return (
-    <div class="flex flex-col flex-1">
-      <div class="flex w-[calc(100%-40px)] mx-auto gap-3 justify-center p-5 bg-gray-100 rounded-t-xl">
+    <div class="flex flex-col flex-1 bg-gray-100 dark:bg-gray-100 rounded-xl">
+      <div class="flex gap-3 justify-center p-3">
         <AspectRatioSelect />
-        <EditorButton
-          onClick={() => {
-            const display = editorInstance.recordings.segments[0].display;
-            setDialog({
+  <EditorButton
+            onClick={() => {
+              const display = editorInstance.recordings.segments[0].display;
+              setDialog({
                 open: true,
                 type: "crop",
                 position: {
@@ -202,71 +205,9 @@ export function Player() {
           >
             Crop
           </EditorButton>
-                </div>
-      <div ref={setCanvasContainerRef} class="relative flex-1 justify-center items-center bg-gray-50">
-        <Show when={latestFrame()}>
-          {(currentFrame) => {
-            const padding = 4;
-
-            const containerAspect = () => {
-              if (containerBounds.width && containerBounds.height) {
-                return (
-                  (containerBounds.width - padding * 2) /
-                  (containerBounds.height - padding * 2)
-                );
-              }
-
-              return 1;
-            };
-
-            const frameAspect = () =>
-              currentFrame().width / currentFrame().data.height;
-
-            const size = () => {
-              if (frameAspect() < containerAspect()) {
-                const height = (containerBounds.height ?? 0) - padding * 1;
-
-                return {
-                  width: height * frameAspect(),
-                  height,
-                };
-              }
-
-              const width = (containerBounds.width ?? 0) - padding * 2;
-
-              return {
-                width,
-                height: width / frameAspect(),
-              };
-            };
-
-            return (
- <div class="relative w-[calc(100%-40px)] overflow-hidden flex items-center justify-center mx-auto h-full bg-gray-100">
-                <canvas
-                  style={{
-                    left: `${Math.max(
-                      ((containerBounds.width ?? 0) - size().width) / 2,
-                      padding
-                    )}px`,
-                    top: `${Math.max(
-                      ((containerBounds.height ?? 0) - size().height) / 2,
-                      padding
-                    )}px`,
-                    width: `${size().width}px`,
-                    height: `${size().height}px`,
-                  }}
-                  class="bg-blue-50 absolute rounded"
-                  ref={canvasRef}
-                  id="canvas"
-                  width={currentFrame().width}
-                  height={currentFrame().data.height}
-                />
-              </div>
-            );
-          }}
-        </Show>
-      </div>
-      <div class="flex z-10 overflow-hidden flex-row gap-3 justify-between items-center p-5 w-[calc(100%-40px)] mx-auto bg-gray-100 rounded-b-xl">
+        </div>
+      <PreviewCanvas />
+      <div class="flex z-10 overflow-hidden flex-row gap-3 justify-between items-center p-5">
         <div class="flex-1">
           <Time
             class="text-gray-500"
@@ -317,6 +258,7 @@ export function Player() {
           ) : (
             <ComingSoonTooltip>{splitButton()}</ComingSoonTooltip>
           )}
+          <div class="w-px h-8 rounded-full bg-gray-200" />
           <Tooltip content="Zoom out">
             <IconCapZoomOut
               onClick={() => {
@@ -339,12 +281,6 @@ export function Player() {
               class="text-gray-500 size-5 will-change-[opacity] transition-opacity hover:opacity-70"
             />
           </Tooltip>
-          <p class="text-sm tabular-nums text-gray-500">
-            {Math.min(
-              Math.max(1 - state.timelineTransform.zoom / zoomOutLimit(), 0),
-              1
-            ).toFixed(2) + "x"}
-          </p>
           <Slider
             class="w-24"
             minValue={0}
@@ -362,9 +298,91 @@ export function Player() {
                 playbackTime()
               );
             }}
+            formatTooltip={() =>
+              `${state.timelineTransform.zoom.toFixed(0)} seconds visible`
+            }
           />
         </div>
       </div>
+    </div>
+  );
+}
+
+function PreviewCanvas() {
+  const { latestFrame } = useEditorContext();
+
+  let canvasRef: HTMLCanvasElement | undefined;
+
+  const [canvasContainerRef, setCanvasContainerRef] =
+    createSignal<HTMLDivElement>();
+  const containerBounds = createElementBounds(canvasContainerRef);
+
+  createEffect(() => {
+    const frame = latestFrame();
+    if (!frame) return;
+    if (!canvasRef) return;
+    const ctx = canvasRef.getContext("2d");
+    ctx?.putImageData(frame.data, 0, 0);
+  });
+
+  return (
+    <div
+      ref={setCanvasContainerRef}
+      class="relative flex-1 justify-center items-center"
+    >
+      <Show when={latestFrame()}>
+        {(currentFrame) => {
+          const padding = 4;
+
+          const containerAspect = () => {
+            if (containerBounds.width && containerBounds.height) {
+              return (
+                (containerBounds.width - padding * 2) /
+                (containerBounds.height - padding * 2)
+              );
+            }
+
+            return 1;
+          };
+
+          const frameAspect = () =>
+            currentFrame().width / currentFrame().data.height;
+
+          const size = () => {
+            if (frameAspect() < containerAspect()) {
+              const height = (containerBounds.height ?? 0) - padding * 1;
+
+              return {
+                width: height * frameAspect(),
+                height,
+              };
+            }
+
+            const width = (containerBounds.width ?? 0) - padding * 2;
+
+            return {
+              width,
+              height: width / frameAspect(),
+            };
+          };
+
+          return (
+            <div class="absolute inset-0 overflow-hidden flex items-center justify-center h-full">
+              <canvas
+                style={{
+                  width: `${size().width - padding * 2}px`,
+                  height: `${size().height}px`,
+                }}
+                class="bg-blue-50 rounded"
+                ref={canvasRef}
+                id="canvas"
+                width={currentFrame().width}
+                height={currentFrame().data.height}
+              />
+            </div>
+          );
+        }}
+      </Show>
     </div>
   );
 }
