@@ -1188,6 +1188,7 @@ dependencies = [
 name = "cap-video-decode"
 version = "0.1.0"
 dependencies = [
+ "ffmpeg-hw-device",
  "ffmpeg-next",
  "ffmpeg-sys-next",
 ]
