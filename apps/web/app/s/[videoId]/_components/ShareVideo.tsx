@@ -2,8 +2,8 @@ import { apiClient } from "@/utils/web-api";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { clientEnv, NODE_ENV } from "@cap/env";
-import { LogoSpinner, Logo } from "@cap/ui";
-import { S3_BUCKET_URL, isUserOnProPlan } from "@cap/utils";
+import { Logo, LogoSpinner } from "@cap/ui";
+import { isUserOnProPlan, S3_BUCKET_URL } from "@cap/utils";
 import {
   Maximize,
   MessageSquare,
@@ -1235,11 +1235,11 @@ export const ShareVideo = forwardRef<
           )}
           <div className="absolute top-2.5 w-full h-1 sm:h-1.5 bg-white bg-opacity-50 rounded-full z-10" />
           <div
-            className="absolute top-2.5 h-1 sm:h-1.5 bg-white rounded-full cursor-pointer transition-all duration-300 z-10"
+            className="absolute top-2.5 h-1 sm:h-1.5 bg-white rounded-full cursor-pointer z-10"
             style={{ width: `${watchedPercentage}%` }}
           />
           <div
-            className="drag-button absolute top-2.5 z-20 -mt-1.5 -ml-2 w-4 h-4 bg-white rounded-full border border-white cursor-pointer focus:ring-2 focus:ring-indigo-600 focus:ring-opacity-80 focus:outline-none transition-all duration-300"
+            className="drag-button absolute top-2.5 z-20 -mt-1.5 -ml-2 w-4 h-4 bg-white rounded-full border border-white cursor-pointer focus:ring-2 focus:ring-indigo-600 focus:ring-opacity-80 focus:outline-none"
             tabIndex={0}
             style={{ left: `${watchedPercentage}%` }}
           />
@@ -1407,12 +1407,12 @@ export const ShareVideo = forwardRef<
               onClick={(e) => e.stopPropagation()}
             >
               <div className="relative">
-                <div className="opacity-50 hover:opacity-100 transition-opacity peer">
-                  <Logo className="h-4 sm:h-6 w-auto" white={true} />
+                <div className="opacity-50 transition-opacity hover:opacity-100 peer">
+                  <Logo className="w-auto h-4 sm:h-6" white={true} />
                 </div>
 
                 {/* Text only appears when hovering the exact logo element */}
-                <div className="absolute left-0 top-6 scale-y-0 origin-top peer-hover:scale-y-100 transition-transform duration-300 ease-in-out">
+                <div className="absolute left-0 top-6 transition-transform duration-300 ease-in-out origin-top scale-y-0 peer-hover:scale-y-100">
                   <p className="text-white text-xs font-medium whitespace-nowrap bg-black bg-opacity-50 px-2 py-0.5 rounded">
                     Upgrade to Cap Pro and remove the watermark
                   </p>
