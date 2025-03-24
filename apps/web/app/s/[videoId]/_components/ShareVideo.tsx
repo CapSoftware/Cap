@@ -62,6 +62,7 @@ export const ShareVideo = forwardRef<
   const previewVideoRef = useRef<HTMLVideoElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [buttonDrag, setButtonDrag] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [longestDuration, setLongestDuration] = useState(0);
@@ -1250,8 +1251,12 @@ export const ShareVideo = forwardRef<
             style={{ width: `${watchedPercentage}%` }}
           />
           <div
+            onMouseDown={() => setButtonDrag(true)}
+            onTouchStart={() => setButtonDrag(true) }
+            onMouseUp={() => setButtonDrag(false)}
+            onTouchEnd={() => setButtonDrag(false)}
             className={clsx("drag-button absolute top-2.5 z-20 -mt-1.5 -ml-2 w-4 h-4 bg-white rounded-full  cursor-pointer focus:outline-none", 
-              seeking && "scale-125 transition-transform ring-blue-300 ring-offset-2 ring-2"
+              buttonDrag ? "scale-125 transition-transform ring-blue-300 ring-offset-2 ring-2" : ""
             )}
             tabIndex={0}
             style={{ left: `${watchedPercentage}%` }}
