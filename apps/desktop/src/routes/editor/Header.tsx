@@ -101,7 +101,7 @@ export function Header() {
         data-tauri-drag-region
         class={cx(
           "flex absolute z-10 gap-4 items-start w-full h-full",
-          isWindows ? "left-0.5rem" : "left-[5.5rem]"
+          isWindows ? "left-2" : "left-[5.5rem]"
         )}
       >
         <div class="flex gap-2 items-center h-full">
