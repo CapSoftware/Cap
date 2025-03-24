@@ -205,12 +205,22 @@ impl ShowCapWindow {
                 .maximized(false)
                 .center()
                 .build()?,
-            Self::Editor { project_id } => self
-                .window_builder(app, format!("/editor?id={project_id}"))
-                .maximizable(true)
-                .inner_size(1240.0, 800.0)
-                .center()
-                .build()?,
+            Self::Editor { project_id } => {
+                let window = self
+                    .window_builder(app, format!("/editor?id={project_id}"))
+                    .maximizable(true)
+                    .transparent(true)
+                    .inner_size(1240.0, 800.0)
+                    .center()
+                    .build()?;
+
+                window.set_effects(tauri::utils::config::WindowEffectsConfig {
+                    effects: vec![tauri::window::Effect::HudWindow],
+                    ..Default::default()
+                });
+
+                window
+            }
             Self::Upgrade => self
                 .window_builder(app, "/upgrade")
                 .resizable(false)

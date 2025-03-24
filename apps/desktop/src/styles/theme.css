@@ -18,6 +18,8 @@
   --gray-450-transparent-50: rgba(234, 236, 239, 0.5);
   --gray-500-transparent-50: rgba(22, 27, 38, 0.5);
 
+  --transparent-window: rgba(255, 255, 255, 0.7);
+
   --text-primary: rgba(18, 22, 31, 0.95); /* Section titles, headings */
   --text-secondary: rgba(18, 22, 31, 0.85); /* Important labels */
   --text-tertiary: rgba(18, 22, 31, 0.65); /* Descriptions */
@@ -78,6 +80,8 @@
   --gray-400-transparent-50: rgba(134, 134, 134, 0.5);
   --gray-450-transparent-50: rgba(234, 234, 234, 0.5);
   --gray-500-transparent-50: rgba(255, 255, 255, 0.5);
+
+  --transparent-window: rgba(22, 22, 22, 0.7);
 
   /* Add new variables for text hierarchy */
   --text-primary: rgba(255, 255, 255, 0.95); /* Section titles, headings */

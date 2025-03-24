@@ -1,4 +1,8 @@
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { remove } from "@tauri-apps/plugin-fs";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
@@ -8,10 +12,6 @@ import {
   onCleanup,
   onMount,
 } from "solid-js";
-import { remove } from "@tauri-apps/plugin-fs";
-import { ask } from "@tauri-apps/plugin-dialog";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import Titlebar from "~/components/titlebar/Titlebar";
 import { initializeTitlebar, setTitlebar } from "~/utils/titlebar-state";
@@ -68,7 +68,7 @@ export function Header() {
   batch(() => {
     setTitlebar("height", "60px");
     setTitlebar("border", true);
-    setTitlebar("transparent", false);
+    setTitlebar("backgroundColor", "bg-transparent-window");
     setTitlebar(
       "items",
       <div
@@ -180,7 +180,7 @@ function TopBar() {
         />
       </div>
 
-      <div class="flex gap-4 items-center px-4 border-r border-l border-r-gray-200 border-l-gray-200 my-2">
+      <div class="flex gap-4 items-center px-4 my-2 border-r border-l border-r-black-transparent-10 border-l-black-transparent-10">
         <PresetsDropdown />
       </div>
 
