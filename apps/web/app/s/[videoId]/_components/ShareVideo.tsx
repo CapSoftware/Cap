@@ -4,6 +4,7 @@ import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { clientEnv, NODE_ENV } from "@cap/env";
 import { Logo, LogoSpinner } from "@cap/ui";
 import { isUserOnProPlan, S3_BUCKET_URL } from "@cap/utils";
+import clsx from "clsx";
 import {
   Maximize,
   MessageSquare,
@@ -415,12 +416,22 @@ export const ShareVideo = forwardRef<
       }
     };
 
+    const preventScroll = (e: TouchEvent) => {
+      if (seeking) {
+        e.preventDefault();
+      }
+    };
+
     const videoElement = videoRef.current;
 
-    videoElement?.addEventListener("seeking", handleSeeking);
+    if (!videoElement) return;
+
+    videoElement.addEventListener("seeking", handleSeeking);
+    window.addEventListener("touchmove", preventScroll, { passive: false });
 
     return () => {
-      videoElement?.removeEventListener("seeking", handleSeeking);
+      videoElement.removeEventListener("seeking", handleSeeking);
+      window.removeEventListener("touchmove", preventScroll);
     };
   }, [seeking]);
 
@@ -537,7 +548,7 @@ export const ShareVideo = forwardRef<
           scrubbingVideo.currentTime = time;
 
           // Listen for the seeked event
-          const handleSeeked = () => {
+          const handleSeeked = (e: Event) => {
             try {
               // Draw the current frame onto the canvas
               ctx.drawImage(scrubbingVideo, 0, 0, canvas.width, canvas.height);
@@ -719,32 +730,32 @@ export const ShareVideo = forwardRef<
 
     const offsetX = Math.max(0, Math.min(clientX - rect.left, rect.width));
     const relativePosition = offsetX / rect.width;
-    return relativePosition * longestDuration;
+    const newTime = relativePosition * longestDuration;
+    return newTime;
   };
 
   const handleSeekMouseDown = () => {
     setSeeking(true);
   };
 
-  const handleSeekMouseUp = (event: any) => {
+  const handleSeekMouseUp = (event: React.MouseEvent | React.TouchEvent, isTouch = false) => {
     if (!seeking) return;
     setSeeking(false);
     const seekBar = event.currentTarget;
     const seekTo = calculateNewTime(event, seekBar);
-    applyTimeToVideos(seekTo);
+    // we don't want to apply time to videos if it's a touch event (mobile)
+    // as it's already being handled by handleSeekMouseMove
+    if (!isTouch) {
+      applyTimeToVideos(seekTo);
+    }
     if (isPlaying) {
       videoRef.current?.play();
     }
     setShowPreview(false);
   };
 
-  const handleSeekMouseMove = (event: any) => {
+  const handleSeekMouseMove = (event: React.MouseEvent | React.TouchEvent) => {
     if (!seeking) return;
-
-    // Prevent scrolling when seeking on mobile
-    if (event.touches) {
-      event.preventDefault();
-    }
 
     const seekBar = event.currentTarget;
     const seekTo = calculateNewTime(event, seekBar);
@@ -1184,7 +1195,7 @@ export const ShareVideo = forwardRef<
               handleTimelineHover(e);
             }
           }}
-          onTouchEnd={handleSeekMouseUp}
+          onTouchEnd={(e) => handleSeekMouseUp(e, true)}
         >
           {!isLoading && comments !== null && (
             <div className="-mt-7 w-full md:-mt-6">
@@ -1239,13 +1250,15 @@ export const ShareVideo = forwardRef<
             style={{ width: `${watchedPercentage}%` }}
           />
           <div
-            className="drag-button absolute top-2.5 z-20 -mt-1.5 -ml-2 w-4 h-4 bg-white rounded-full border border-white cursor-pointer focus:ring-2 focus:ring-indigo-600 focus:ring-opacity-80 focus:outline-none"
+            className={clsx("drag-button absolute top-2.5 z-20 -mt-1.5 -ml-2 w-4 h-4 bg-white rounded-full  cursor-pointer focus:outline-none", 
+              seeking && "scale-125 transition-transform ring-blue-300 ring-offset-2 ring-2"
+            )}
             tabIndex={0}
             style={{ left: `${watchedPercentage}%` }}
           />
         </div>
         <div className="flex justify-between items-center px-4 py-2">
-          <div className="flex items-center space-x-2 sm:space-x-3">
+          <div className="flex items-center mt-2 space-x-2 sm:space-x-3">
             <span className="inline-flex">
               <button
                 aria-label="Play video"
@@ -1346,7 +1359,7 @@ export const ShareVideo = forwardRef<
                           rx="2"
                           ry="2"
                         ></rect>
-                        <path d="M7 15h4m4 0h2M7 11h2m4 0h4"></path>
+                        <path d="M7 15h4m4 0h2m4 0h2"></path>
                       </svg>
                     ) : (
                       <svg
