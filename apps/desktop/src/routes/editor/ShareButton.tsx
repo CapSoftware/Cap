@@ -184,7 +184,7 @@ function ShareButton(props: {
             disabled={uploadVideo.isPending}
             onClick={(e) => uploadVideo.mutate()}
             variant="primary"
-            class="flex gap-2 items-center"
+            class="flex gap-2 items-center !py-2"
           >
             {!uploadVideo.isPending ? (
               <>
@@ -230,14 +230,14 @@ function ShareButton(props: {
                 </Button>
               </Tooltip>
               <Tooltip content="Open link">
-                <div class="rounded-xl px-4 py-2.5 flex flex-row items-center gap-[0.375rem] bg-gray-200 hover:bg-gray-300 transition-colors duration-100">
+                <div class="rounded-xl px-3 py-2 flex flex-row items-center gap-[0.375rem] bg-white-transparent-80 hover:bg-gray-200  dark:bg-gray-200 dark:hover:bg-gray-300 transition-colors duration-100">
                   <a
                     href={sharing().link}
                     target="_blank"
                     rel="noreferrer"
                     class="w-full truncate max-w-48"
                   >
-                    <span class="text-[0.875rem] text-gray-500">
+                    <span class="text-xs text-gray-500">
                       {url().host}
                       {url().pathname}
                     </span>
@@ -246,13 +246,13 @@ function ShareButton(props: {
                   <Tooltip content="Copy link">
                     <Button
                       variant="secondary"
-                      class="flex justify-center items-center size-[28px] text-gray-500  !px-0 !py-0 space-x-1 rounded-[5px] bg-gray-300 hover:bg-gray-400"
+                      class="flex justify-center items-center size-[22px] text-gray-500  !px-0 !py-0 rounded-[5px] dark:bg-black-transparent-10 dark:hover:bg-black-transparent-40 bg-gray-200 hover:bg-gray-300"
                       onClick={copyLink}
                     >
                       {!copyPressed() ? (
-                        <IconCapCopy class="size-3" />
+                        <IconCapCopy class="size-2.5" />
                       ) : (
-                        <IconLucideCheck class="size-3 svgpathanimation" />
+                        <IconLucideCheck class="size-2.5 svgpathanimation" />
                       )}
                     </Button>
                   </Tooltip>
