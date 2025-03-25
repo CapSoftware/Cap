@@ -95,8 +95,6 @@ impl FfmpegDecoder {
         let height = this.decoder().height();
 
         std::thread::spawn(move || {
-            let mut temp_frame = ffmpeg::frame::Video::empty();
-
             let mut cache = BTreeMap::<u32, CachedFrame>::new();
             // active frame is a frame that triggered decode.
             // frames that are within render_more_margin of this frame won't trigger decode.
@@ -171,11 +169,8 @@ impl FfmpegDecoder {
                                     }
                                 };
 
-                                let current_frame = pts_to_frame(
-                                    temp_frame.pts().unwrap() - start_time,
-                                    time_base,
-                                    fps,
-                                );
+                                let current_frame =
+                                    pts_to_frame(frame.pts().unwrap() - start_time, time_base, fps);
 
                                 // Handles frame skips. requested_frame == last_decoded_frame should be handled by the frame cache.
                                 if let Some((last_decoded_frame, sender)) = last_decoded_frame
@@ -201,13 +196,6 @@ impl FfmpegDecoder {
 
                                 let exceeds_cache_bounds = current_frame > cache_max;
                                 let too_small_for_cache_bounds = current_frame < cache_min;
-
-                                // let frame = hw_device
-                                //     .and_then(|d| d.get_hwframe(&temp_frame))
-                                //     .unwrap_or(std::mem::replace(
-                                //         &mut temp_frame,
-                                //         frame::Video::empty(),
-                                //     ));
 
                                 if !too_small_for_cache_bounds {
                                     let mut cache_frame = CachedFrame {
