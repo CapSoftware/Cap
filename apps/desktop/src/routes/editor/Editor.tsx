@@ -4,6 +4,7 @@ import { throttle } from "@solid-primitives/scheduled";
 import { useSearchParams } from "@solidjs/router";
 import { createMutation } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { type as ostype } from "@tauri-apps/plugin-os";
 import {
   Match,
   Show,
@@ -41,6 +42,7 @@ import {
   Subfield,
   Toggle,
 } from "./ui";
+import { cx } from "cva";
 
 export function Editor() {
   const [params] = useSearchParams<{ id: string }>();
@@ -117,10 +119,15 @@ function Inner() {
   );
 
   return (
-    <div class="flex flex-col w-screen h-screen">
+    <div
+      class={cx(
+        "flex flex-col w-screen h-screen",
+        ostype() === "windows" ? "bg-gray-50" : "bg-transparent-window"
+      )}
+    >
       <Header />
       <div
-        class="flex overflow-y-hidden flex-col flex-1 gap-4 p-4 w-full leading-5 bg-transparent-window animate-in fade-in"
+        class="flex overflow-y-hidden flex-col flex-1 gap-4 p-4 w-full leading-5 animate-in fade-in"
         data-tauri-drag-region
       >
         <div class="flex overflow-hidden flex-col flex-1">
