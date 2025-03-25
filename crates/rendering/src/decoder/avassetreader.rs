@@ -179,9 +179,9 @@ pub struct AVAssetReaderDecoder {
 }
 
 impl AVAssetReaderDecoder {
-    fn new(path: PathBuf, tokio_handle: TokioHandle, fps: u32) -> Result<Self, String> {
+    fn new(path: PathBuf, tokio_handle: TokioHandle) -> Result<Self, String> {
         Ok(Self {
-            inner: cap_video_decode::AVAssetReaderDecoder::new(path, tokio_handle, fps)?,
+            inner: cap_video_decode::AVAssetReaderDecoder::new(path, tokio_handle)?,
             last_decoded_frame: None,
             is_done: false,
         })
@@ -216,7 +216,7 @@ impl AVAssetReaderDecoder {
         ready_tx: oneshot::Sender<Result<(), String>>,
         tokio_handle: tokio::runtime::Handle,
     ) {
-        let mut this = match AVAssetReaderDecoder::new(path, tokio_handle, fps) {
+        let mut this = match AVAssetReaderDecoder::new(path, tokio_handle) {
             Ok(v) => {
                 ready_tx.send(Ok(())).ok();
                 v

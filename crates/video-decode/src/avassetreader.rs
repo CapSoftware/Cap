@@ -14,13 +14,12 @@ pub struct AVAssetReaderDecoder {
     path: PathBuf,
     pixel_format: cv::PixelFormat,
     tokio_handle: TokioHandle,
-    pub fps: u32,
     track_output: R<av::AssetReaderTrackOutput>,
     reader: R<av::AssetReader>,
 }
 
 impl AVAssetReaderDecoder {
-    pub fn new(path: PathBuf, tokio_handle: TokioHandle, fps: u32) -> Result<Self, String> {
+    pub fn new(path: PathBuf, tokio_handle: TokioHandle) -> Result<Self, String> {
         let pixel_format = {
             let input = ffmpeg::format::input(&path).unwrap();
 
@@ -46,7 +45,6 @@ impl AVAssetReaderDecoder {
             path,
             pixel_format,
             tokio_handle,
-            fps,
             track_output,
             reader,
         })
