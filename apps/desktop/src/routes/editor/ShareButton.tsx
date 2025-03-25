@@ -1,8 +1,8 @@
 import { Button } from "@cap/ui-solid";
-import { Tooltip } from "@kobalte/core";
 import { createMutation } from "@tanstack/solid-query";
-import { createResource, Show } from "solid-js";
+import { createResource, createSignal, Show } from "solid-js";
 import { createStore, produce } from "solid-js/store";
+import Tooltip from "~/components/Tooltip";
 
 import { Channel } from "@tauri-apps/api/core";
 import { createProgressBar } from "~/routes/editor/utils";
@@ -21,6 +21,7 @@ function ShareButton(props: {
   const [recordingMeta, metaActions] = createResource(() =>
     commands.getRecordingMeta(videoId, "recording")
   );
+  const [copyPressed, setCopyPressed] = createSignal(false);
 
   const uploadVideo = createMutation(() => ({
     mutationFn: async () => {
@@ -183,7 +184,7 @@ function ShareButton(props: {
             disabled={uploadVideo.isPending}
             onClick={(e) => uploadVideo.mutate()}
             variant="primary"
-            class="flex gap-2 items-center"
+            class="flex gap-2 items-center !py-2"
           >
             {!uploadVideo.isPending ? (
               <>
@@ -201,44 +202,62 @@ function ShareButton(props: {
       >
         {(sharing) => {
           const url = () => new URL(sharing().link);
-
+          const copyLink = () => {
+            navigator.clipboard.writeText(sharing().link);
+            setCopyPressed(true);
+            setTimeout(() => {
+              setCopyPressed(false);
+            }, 2000);
+          };
           return (
             <div class="flex gap-3 items-center">
-              <Tooltip.Root openDelay={0} closeDelay={0}>
-                <Tooltip.Trigger>
-                  <Button
-                    disabled={uploadVideo.isPending}
-                    onClick={(e) => uploadVideo.mutate()}
-                    variant="primary"
-                    class="flex justify-center items-center size-[41px] !px-0 !py-0 space-x-1 rounded-xl"
-                  >
-                    {uploadVideo.isPending ? (
-                      <IconLucideLoaderCircle class="animate-spin size-4" />
-                    ) : (
-                      <IconLucideRotateCcw class="size-4" />
-                    )}
-                  </Button>
-                </Tooltip.Trigger>
-                <Tooltip.Portal>
-                  <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
-                    {uploadVideo.isPending
-                      ? "Reuploading video"
-                      : "Reupload video"}
-                    <Tooltip.Arrow class="fill-gray-500" />
-                  </Tooltip.Content>
-                </Tooltip.Portal>
-              </Tooltip.Root>
-              <a
-                class="rounded-xl px-4 py-2.5 flex flex-row items-center gap-[0.375rem] bg-gray-200 hover:bg-gray-300 transition-colors duration-100"
-                href={sharing().link}
-                target="_blank"
-                rel="noreferrer"
+              <Tooltip
+                content={
+                  uploadVideo.isPending ? "Reuploading video" : "Reupload video"
+                }
               >
-                <span class="text-[0.875rem] text-gray-500">
-                  {url().host}
-                  {url().pathname}
-                </span>
-              </a>
+                <Button
+                  disabled={uploadVideo.isPending}
+                  onClick={(e) => uploadVideo.mutate()}
+                  variant="primary"
+                  class="flex justify-center items-center size-[41px] !px-0 !py-0 space-x-1 rounded-xl"
+                >
+                  {uploadVideo.isPending ? (
+                    <IconLucideLoaderCircle class="animate-spin size-4" />
+                  ) : (
+                    <IconLucideRotateCcw class="size-4" />
+                  )}
+                </Button>
+              </Tooltip>
+              <Tooltip content="Open link">
+                <div class="rounded-xl px-3 py-2 flex flex-row items-center gap-[0.375rem] bg-white-transparent-80 hover:bg-gray-200  dark:bg-gray-200 dark:hover:bg-gray-300 transition-colors duration-100">
+                  <a
+                    href={sharing().link}
+                    target="_blank"
+                    rel="noreferrer"
+                    class="w-full truncate max-w-48"
+                  >
+                    <span class="text-xs text-gray-500">
+                      {url().host}
+                      {url().pathname}
+                    </span>
+                  </a>
+                  {/** Copy button */}
+                  <Tooltip content="Copy link">
+                    <Button
+                      variant="secondary"
+                      class="flex justify-center items-center size-[22px] text-gray-500  !px-0 !py-0 rounded-[5px] dark:bg-black-transparent-10 dark:hover:bg-black-transparent-40 bg-gray-200 hover:bg-gray-300"
+                      onClick={copyLink}
+                    >
+                      {!copyPressed() ? (
+                        <IconCapCopy class="size-2.5" />
+                      ) : (
+                        <IconLucideCheck class="size-2.5 svgpathanimation" />
+                      )}
+                    </Button>
+                  </Tooltip>
+                </div>
+              </Tooltip>
             </div>
           );
         }}

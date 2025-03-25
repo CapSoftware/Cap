@@ -39,6 +39,7 @@ sentry = { version = "0.34.0", features = [
 	"backtrace",
 	"debug-images",
 ] }
+tracing = "0.1.41"
 
 cidre = { git = "https://github.com/yury/cidre", rev = "ef04aaabe14ffbbce4a330973a74b6d797d073ff" }
 

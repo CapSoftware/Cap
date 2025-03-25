@@ -1159,6 +1159,7 @@ dependencies = [
  "bytemuck",
  "cap-flags",
  "cap-project",
+ "cap-video-decode",
  "cidre",
  "ffmpeg-hw-device",
  "ffmpeg-next",
@@ -1198,8 +1199,12 @@ dependencies = [
 name = "cap-video-decode"
 version = "0.1.0"
 dependencies = [
+ "cidre",
+ "ffmpeg-hw-device",
  "ffmpeg-next",
  "ffmpeg-sys-next",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

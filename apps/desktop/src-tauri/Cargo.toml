@@ -56,7 +56,7 @@ futures-intrusive = "0.5.0"
 anyhow.workspace = true
 futures = "0.3"
 axum = { version = "0.7.5", features = ["ws"] }
-tracing = "0.1.40"
+tracing.workspace = true
 tempfile = "3.9.0"
 ffmpeg.workspace = true
 chrono = { version = "0.4.31", features = ["serde"] }

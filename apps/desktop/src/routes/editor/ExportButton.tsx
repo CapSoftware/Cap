@@ -132,7 +132,7 @@ function ExportButton(props: {
   return (
     <div class="relative">
       <Button
-        variant="white"
+        variant="lightdark"
         class={cx("flex gap-2 justify-center")}
         onClick={() => {
           trackEvent("export_button_clicked");

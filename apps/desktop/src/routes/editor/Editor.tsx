@@ -4,6 +4,7 @@ import { throttle } from "@solid-primitives/scheduled";
 import { useSearchParams } from "@solidjs/router";
 import { createMutation } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { type as ostype } from "@tauri-apps/plugin-os";
 import {
   Match,
   Show,
@@ -21,7 +22,6 @@ import { Tooltip } from "@kobalte/core";
 import { makePersisted } from "@solid-primitives/storage";
 import Cropper, { cropToFloor } from "~/components/Cropper";
 import { type Crop, events } from "~/utils/tauri";
-import { setTitlebar } from "~/utils/titlebar-state";
 import { ConfigSidebar } from "./ConfigSidebar";
 import {
   EditorContextProvider,
@@ -42,6 +42,7 @@ import {
   Subfield,
   Toggle,
 } from "./ui";
+import { cx } from "cva";
 
 export function Editor() {
   const [params] = useSearchParams<{ id: string }>();
@@ -117,13 +118,16 @@ function Inner() {
     )
   );
 
-  setTitlebar("backgroundColor", "bg-gray-50");
-
   return (
-    <div class="flex flex-col w-screen h-screen">
+    <div
+      class={cx(
+        "flex flex-col w-screen h-screen",
+        ostype() === "windows" ? "bg-gray-50" : "bg-transparent-window"
+      )}
+    >
       <Header />
       <div
-        class="flex overflow-y-hidden flex-col flex-1 gap-4 p-4 w-full leading-5 bg-gray-100 dark:bg-gray-50 backdrop-blur-md animate-in fade-in"
+        class="flex overflow-y-hidden flex-col flex-1 gap-4 p-4 w-full leading-5 animate-in fade-in"
         data-tauri-drag-region
       >
         <div class="flex overflow-hidden flex-col flex-1">
