@@ -57,6 +57,8 @@ import {
   Subfield,
   Toggle,
 } from "./ui";
+import { CaptionsTab } from "./CaptionsTab";
+
 
 const BACKGROUND_SOURCES = {
   wallpaper: "Wallpaper",
@@ -424,6 +426,7 @@ export function ConfigSidebar() {
             // },
             { id: "audio" as const, icon: IconCapAudioOn },
             { id: "cursor" as const, icon: IconCapCursor },
+            { id: "captions" as const, icon: IconCapMessageBubble },
             // { id: "hotkeys" as const, icon: IconCapHotkeys },
           ]}
         >
@@ -1531,6 +1534,9 @@ export function ConfigSidebar() {
               <span>Cursor settings coming soon</span>
             </div>
           )}
+        </KTabs.Content>
+        <KTabs.Content value="captions" class="flex flex-col gap-6">
+          <CaptionsTab />
         </KTabs.Content>
         <KTabs.Content value="hotkeys">
           <Field name="Hotkeys" icon={<IconCapHotkeys />}>

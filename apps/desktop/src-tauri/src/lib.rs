@@ -1,6 +1,7 @@
 mod audio;
 mod auth;
 mod camera;
+mod captions;
 mod flags;
 mod general_settings;
 mod hotkeys;
@@ -48,6 +49,7 @@ use editor_window::WindowEditorInstance;
 use general_settings::GeneralSettingsStore;
 use mp4::Mp4Reader;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
+use captions::DownloadProgress;
 use notifications::NotificationType;
 use png::{ColorType, Encoder};
 use recording::InProgressRecording;
@@ -2091,6 +2093,15 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             list_fails,
             set_fail,
             update_auth_plan,
+            captions::create_dir,
+            captions::save_model_file,
+            captions::transcribe_audio,
+            captions::save_captions,
+            captions::load_captions,
+            captions::download_whisper_model,
+            captions::check_model_exists,
+            captions::delete_whisper_model,
+            captions::export_captions_srt,
             reupload_instant_video
         ])
         .events(tauri_specta::collect_events![
@@ -2112,6 +2123,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             AuthenticationInvalid,
             audio_meter::AudioInputLevelChange,
             UploadProgress,
+            captions::DownloadProgress,
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
