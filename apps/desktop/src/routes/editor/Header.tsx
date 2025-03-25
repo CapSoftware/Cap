@@ -42,7 +42,6 @@ export interface ExportEstimates {
 
 export function Header() {
   const editorContext = useEditorContext();
-  const isWindows = ostype() === 'windows'
 
   const [selectedFps, setSelectedFps] = createSignal(
     Number(localStorage.getItem("cap-export-fps")) || 30
@@ -101,7 +100,7 @@ export function Header() {
         data-tauri-drag-region
         class={cx(
           "flex absolute z-10 gap-4 items-start w-full h-full",
-          isWindows ? "left-2" : "left-[5.5rem]"
+          ostype() === "windows" ? "left-4" : "left-[5.5rem]"
         )}
       >
         <div class="flex gap-2 items-center h-full">
