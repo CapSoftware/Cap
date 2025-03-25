@@ -186,7 +186,6 @@ impl FfmpegDecoder {
                                     else {
                                         break;
                                     };
-                                    // .unwrap_or_else(|| black_frame.clone());
 
                                     last_sent_frame = Some((last_decoded_frame, data.clone()));
                                     sender.send(data).ok();

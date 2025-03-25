@@ -209,12 +209,12 @@ impl ShowCapWindow {
                 let window = self
                     .window_builder(app, format!("/editor?id={project_id}"))
                     .maximizable(true)
-                    .transparent(true)
+                    .transparent(cfg!(target_os = "macos"))
                     .inner_size(1240.0, 800.0)
                     .center()
                     .build()?;
 
-                window.set_effects(tauri::utils::config::WindowEffectsConfig {
+                let _ = window.set_effects(tauri::utils::config::WindowEffectsConfig {
                     effects: vec![tauri::window::Effect::HudWindow],
                     ..Default::default()
                 });
