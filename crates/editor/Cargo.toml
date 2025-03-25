@@ -18,5 +18,5 @@ specta.workspace = true
 serde = { version = "1", features = ["derive"] }
 sentry.workspace = true
 futures = "0.3.31"
-tracing = "0.1.41"
+tracing.workspace = true
 flume.workspace = true

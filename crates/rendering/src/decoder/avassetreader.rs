@@ -1,5 +1,4 @@
 use std::{
-    cell::LazyCell,
     collections::BTreeMap,
     path::PathBuf,
     sync::{mpsc, Arc},
@@ -8,9 +7,7 @@ use std::{
 use cidre::{
     arc::R,
     av::{self, AssetReaderTrackOutput},
-    cm,
     cv::{self, pixel_buffer::LockFlags},
-    ns,
 };
 use ffmpeg::{codec, format, frame, Rational};
 use tokio::{runtime::Handle as TokioHandle, sync::oneshot};
@@ -27,7 +24,9 @@ impl CachedFrame {
     fn process(&mut self) -> Arc<Vec<u8>> {
         match self {
             CachedFrame::Raw(image_buf) => {
-                let format = pixel_format_to_pixel(image_buf.pixel_format());
+                let format = cap_video_decode::avassetreader::pixel_format_to_pixel(
+                    image_buf.pixel_format(),
+                );
 
                 let data = if matches!(format, format::Pixel::RGBA) {
                     let _lock = unsafe {
@@ -174,89 +173,23 @@ impl CachedFrame {
 }
 
 pub struct AVAssetReaderDecoder {
-    path: PathBuf,
-    pixel_format: cv::PixelFormat,
-    tokio_handle: TokioHandle,
-    fps: u32,
-    track_output: R<AssetReaderTrackOutput>,
-    reader: R<av::AssetReader>,
+    inner: cap_video_decode::AVAssetReaderDecoder,
     last_decoded_frame: Option<(u32, CachedFrame)>,
     is_done: bool,
 }
 
 impl AVAssetReaderDecoder {
-    fn new(path: PathBuf, tokio_handle: TokioHandle, fps: u32) -> Result<Self, String> {
-        let pixel_format = {
-            let input = ffmpeg::format::input(&path).unwrap();
-
-            let input_stream = input
-                .streams()
-                .best(ffmpeg::media::Type::Video)
-                .ok_or("Could not find a video stream")
-                .unwrap();
-
-            let decoder_codec =
-                super::ffmpeg::find_decoder(&input, &input_stream, input_stream.parameters().id())
-                    .unwrap();
-
-            let mut context = codec::context::Context::new_with_codec(decoder_codec);
-            context.set_parameters(input_stream.parameters()).unwrap();
-
-            let decoder = context.decoder().video().unwrap();
-
-            pixel_to_pixel_format(decoder.format())
-        };
-
-        let (track_output, reader) =
-            get_reader_track_output(&path, 0.0, &tokio_handle, pixel_format)?;
-
+    fn new(path: PathBuf, tokio_handle: TokioHandle) -> Result<Self, String> {
         Ok(Self {
-            path,
-            pixel_format,
-            tokio_handle,
-            fps,
-            track_output,
-            reader,
+            inner: cap_video_decode::AVAssetReaderDecoder::new(path, tokio_handle)?,
             last_decoded_frame: None,
             is_done: false,
         })
     }
 
     fn reset(&mut self, requested_time: f32) {
-        self.reader.cancel_reading();
-        (self.track_output, self.reader) = get_reader_track_output(
-            &self.path,
-            requested_time,
-            &self.tokio_handle,
-            self.pixel_format,
-        )
-        .unwrap();
+        self.inner.reset(requested_time);
         self.last_decoded_frame = None;
-    }
-
-    fn get_next_frame(&mut self) -> Option<(u32, CachedFrame)> {
-        let frame = self
-            .track_output
-            .next_sample_buf()
-            .unwrap()
-            .and_then(|sample_buf| {
-                let current_frame = pts_to_frame(
-                    sample_buf.pts().value,
-                    Rational::new(1, sample_buf.pts().scale),
-                    self.fps,
-                );
-
-                let image_buf = sample_buf.image_buf()?;
-
-                // info!("decoded frame {}", current_frame);
-
-                Some((current_frame, CachedFrame::Raw(image_buf.retained())))
-            });
-
-        self.last_decoded_frame = frame.clone();
-        self.is_done = frame.is_none();
-
-        frame
     }
 
     fn last_decoded_frame(&mut self) -> Option<&mut (u32, CachedFrame)> {
@@ -283,7 +216,7 @@ impl AVAssetReaderDecoder {
         ready_tx: oneshot::Sender<Result<(), String>>,
         tokio_handle: tokio::runtime::Handle,
     ) {
-        let mut this = match AVAssetReaderDecoder::new(path, tokio_handle, fps) {
+        let mut this = match AVAssetReaderDecoder::new(path, tokio_handle) {
             Ok(v) => {
                 ready_tx.send(Ok(())).ok();
                 v
@@ -302,6 +235,8 @@ impl AVAssetReaderDecoder {
 
         // let mut last_decoded_frame = None::<(u32, CachedFrame)>;
         let mut last_sent_frame = None::<(u32, DecodedFrame)>;
+
+        let mut frames = this.inner.frames();
 
         while let Ok(r) = rx.recv() {
             match r {
@@ -334,13 +269,33 @@ impl AVAssetReaderDecoder {
                             .unwrap_or(true)
                     {
                         this.reset(requested_time);
+                        frames = this.inner.frames();
                     }
 
                     last_active_frame = Some(requested_frame);
 
                     let mut exit = false;
 
-                    while let Some((current_frame, mut cache_frame)) = this.get_next_frame() {
+                    for frame in &mut frames {
+                        let Ok(frame) = frame.map_err(|e| format!("read frame / {e}")) else {
+                            continue;
+                        };
+
+                        let current_frame = pts_to_frame(
+                            frame.pts().value,
+                            Rational::new(1, frame.pts().scale),
+                            fps,
+                        );
+
+                        let Some(frame) = frame.image_buf() else {
+                            continue;
+                        };
+
+                        let mut cache_frame = CachedFrame::Raw(frame.retained());
+
+                        this.last_decoded_frame = Some((current_frame, cache_frame.clone()));
+                        this.is_done = false;
+
                         // Handles frame skips.
                         // We use the cache instead of last_sent_frame as newer non-matching frames could have been decoded.
                         if let Some(most_recent_prev_frame) =
@@ -422,6 +377,8 @@ impl AVAssetReaderDecoder {
                         }
                     }
 
+                    this.is_done = true;
+
                     if let Some((sender, last_sent_frame)) =
                         sender.take().zip(last_sent_frame.as_ref())
                     {
@@ -438,72 +395,4 @@ impl AVAssetReaderDecoder {
 
         println!("Decoder thread ended");
     }
-}
-
-fn pixel_to_pixel_format(pixel: format::Pixel) -> cv::PixelFormat {
-    match pixel {
-        format::Pixel::NV12 => cv::PixelFormat::_420V,
-        // this is intentional, it works and is faster /shrug
-        format::Pixel::YUV420P => cv::PixelFormat::_420V,
-        format::Pixel::RGBA => cv::PixelFormat::_32_RGBA,
-        _ => todo!(),
-    }
-}
-
-fn pixel_format_to_pixel(format: cv::PixelFormat) -> format::Pixel {
-    match format {
-        cv::PixelFormat::_420V => format::Pixel::NV12,
-        cv::PixelFormat::_32_RGBA => format::Pixel::RGBA,
-        _ => todo!(),
-    }
-}
-
-fn get_reader_track_output(
-    path: &PathBuf,
-    time: f32,
-    handle: &TokioHandle,
-    pixel_format: cv::PixelFormat,
-) -> Result<(R<av::AssetReaderTrackOutput>, R<av::AssetReader>), String> {
-    let asset = av::UrlAsset::with_url(
-        &ns::Url::with_fs_path_str(path.to_str().unwrap(), false),
-        None,
-    )
-    .ok_or_else(|| format!("UrlAsset::with_url{{{path:?}}}"))?;
-
-    let mut reader =
-        av::AssetReader::with_asset(&asset).map_err(|e| format!("AssetReader::with_asset: {e}"))?;
-
-    let time_range = cm::TimeRange {
-        start: cm::Time::with_secs(time as f64, 100),
-        duration: cm::Time::infinity(),
-    };
-
-    reader.set_time_range(time_range);
-
-    let tracks = handle
-        .block_on(asset.load_tracks_with_media_type(av::MediaType::video()))
-        .map_err(|e| format!("asset.load_tracks_with_media_type: {e}"))?;
-
-    let track = tracks.get(0).map_err(|e| e.to_string())?;
-
-    let mut reader_track_output = av::AssetReaderTrackOutput::with_track(
-        &track,
-        Some(&ns::Dictionary::with_keys_values(
-            &[cv::pixel_buffer::keys::pixel_format().as_ns()],
-            &[pixel_format.to_cf_number().as_ns().as_id_ref()],
-        )),
-    )
-    .map_err(|e| format!("asset.reader_track_output{{{pixel_format:?}}}): {e}"))?;
-
-    reader_track_output.set_always_copies_sample_data(false);
-
-    reader
-        .add_output(&reader_track_output)
-        .map_err(|e| format!("reader.add_output: {e}"))?;
-
-    reader
-        .start_reading()
-        .map_err(|e| format!("reader.start_reading: {e}"))?;
-
-    Ok((reader_track_output, reader))
 }
