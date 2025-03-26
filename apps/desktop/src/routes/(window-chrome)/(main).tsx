@@ -103,7 +103,7 @@ export default function () {
     const currentWindow = getCurrentWindow();
     const MAIN_WINDOW_SIZE = {
       width: 300,
-      height: 290 + (window.FLAGS.systemAudioRecording ? 60 : 0),
+      height: 290 + (window.FLAGS.systemAudioRecording ? 50 : 0),
     };
 
     // Set initial size
@@ -133,9 +133,13 @@ export default function () {
       unlistenFocus();
       unlistenResize();
     };
-    setTitlebar("hideMaximize", true);
-    setTitlebar(
-      "items",
+
+    return null;
+  });
+
+  useWindowChrome({
+    hideMaximize: true,
+    items: (
       <div
         dir={ostype() === "windows" ? "rtl" : "rtl"}
         class="flex gap-1 items-center mx-2"
@@ -207,9 +211,7 @@ export default function () {
           </button>
         )}
       </div>
-    );
-
-    return null;
+    ),
   });
 
   return (
@@ -325,6 +327,7 @@ import { Transition } from "solid-transition-group";
 
 import { setTitlebar } from "~/utils/titlebar-state";
 import { apiClient } from "~/utils/web-api";
+import { useWindowChrome } from "./Context";
 
 let hasChecked = false;
 function createUpdateCheck() {

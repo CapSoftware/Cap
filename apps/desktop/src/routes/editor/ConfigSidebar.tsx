@@ -405,7 +405,7 @@ export function ConfigSidebar() {
   return (
     <KTabs
       value={selectedTab()}
-      class="flex flex-col shrink-0 flex-1 max-w-[26rem] overflow-hidden rounded-xl z-10 bg-gray-100 relative"
+      class="flex flex-col shrink-0 flex-1 max-w-[26rem] overflow-hidden rounded-xl z-10 bg-gray-100 relative shadow-sm"
     >
       <KTabs.List class="flex overflow-hidden relative z-40 flex-row items-center h-16 text-lg border-b border-gray-200 shrink-0">
         <For

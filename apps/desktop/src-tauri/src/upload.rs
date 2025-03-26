@@ -1,6 +1,7 @@
 // credit @filleduchaos
 
 use cap_utils::spawn_actor;
+use flume::Receiver;
 use futures::stream;
 use image::codecs::jpeg::JpegEncoder;
 use image::ImageReader;
@@ -17,6 +18,7 @@ use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio::task;
 use tokio::time::sleep;
+use tracing::warn;
 
 use crate::web_api::{self, ManagerExt};
 
@@ -815,9 +817,16 @@ impl InstantMultipartUpload {
         video_id: String,
         file_path: PathBuf,
         pre_created_video: VideoUploadInfo,
+        realtime_upload_done: Option<Receiver<()>>,
     ) -> Self {
         Self {
-            handle: spawn_actor(Self::run(app, video_id, file_path, pre_created_video, true)),
+            handle: spawn_actor(Self::run(
+                app,
+                video_id,
+                file_path,
+                pre_created_video,
+                realtime_upload_done,
+            )),
         }
     }
 
@@ -826,8 +835,7 @@ impl InstantMultipartUpload {
         video_id: String,
         file_path: PathBuf,
         pre_created_video: VideoUploadInfo,
-        // whether the video is being created at the same time as uploaded
-        realtime_uploading: bool,
+        realtime_upload_done: Option<Receiver<()>>,
     ) -> Result<(), String> {
         dbg!(&video_id, &file_path);
         use std::time::Duration;
@@ -871,7 +879,6 @@ impl InstantMultipartUpload {
         let mut part_number = 1;
         let mut last_uploaded_position: u64 = 0;
 
-        let mut upload_complete = false;
         let mut recording_stopped = false;
 
         println!("Starting multipart upload for {video_id}...");
@@ -963,7 +970,7 @@ impl InstantMultipartUpload {
         //   - If recording hasn't stopped, keep waiting.
         //   - If recording stopped, do leftover final(s).
         // --------------------------------------------
-        while !upload_complete {
+        loop {
             if !recording_stopped {
                 // Check if the recording pipeline is done
                 if let Ok(_) = recording_end_rx.try_recv() {
@@ -989,7 +996,8 @@ impl InstantMultipartUpload {
 
             let new_data_size = file_size.saturating_sub(last_uploaded_position);
 
-            if new_data_size >= CHUNK_SIZE {
+            if new_data_size >= CHUNK_SIZE || (!realtime_upload_done.is_none() && new_data_size > 0)
+            {
                 // We have a full chunk to send
                 match Self::upload_chunk(
                     &app,
@@ -999,7 +1007,7 @@ impl InstantMultipartUpload {
                     &upload_id,
                     &mut part_number,
                     &mut last_uploaded_position,
-                    CHUNK_SIZE,
+                    new_data_size.min(CHUNK_SIZE),
                 )
                 .await
                 {
@@ -1015,137 +1023,10 @@ impl InstantMultipartUpload {
                     }
                 }
             } else {
-                if realtime_uploading {
-                    // If recording is not done, keep waiting a bit
-                    if !recording_stopped {
-                        sleep(Duration::from_millis(500)).await;
-                        continue;
-                    }
-
-                    // --------------------------------------------
-                    // Recording has stopped. We do repeated
-                    // checks to ensure the file is stable (not
-                    // still growing). Then we keep uploading
-                    // leftover chunks until no more data arrives.
-                    // --------------------------------------------
-                    let max_stabilize_attempts = 8;
-                    let mut attempts = 0;
-
-                    // We'll loop to catch any last bits that appear
-                    // after we do a leftover chunk upload.
-                    loop {
-                        // Wait for the file to stabilize
-                        println!("Waiting for file to stabilize...");
-                        let mut stable_count = 0;
-                        let stable_required = 3; // e.g. 3 consecutive stable checks
-
-                        // Keep track of last known size
-                        let mut prev_size = tokio::fs::metadata(&file_path)
-                            .await
-                            .map(|md| md.len())
-                            .unwrap_or(0);
-
-                        while stable_count < stable_required {
-                            sleep(Duration::from_secs(1)).await;
-                            let size_now = match tokio::fs::metadata(&file_path).await {
-                                Ok(md) => md.len(),
-                                Err(_) => 0,
-                            };
-                            if size_now == prev_size {
-                                stable_count += 1;
-                            } else {
-                                stable_count = 0;
-                                prev_size = size_now;
-                            }
-                        }
-
-                        // At this point, the file has stayed the same size
-                        // for ~ stable_required seconds.
-                        let final_size = prev_size;
-                        let leftover_size = final_size.saturating_sub(last_uploaded_position);
-
-                        // Double-check moov if you want
-                        // let moov_found = found_moov_atom(&file_path).await;
-
-                        if leftover_size > 0 {
-                            if leftover_size >= MIN_PART_SIZE {
-                                // We still have at least 5MB leftover, treat it like a normal part:
-                                println!(
-                                "File stabilized, but leftover >= 5MB. Uploading leftover chunk of {} bytes.",
-                                leftover_size
-                            );
-                                match Self::upload_chunk(
-                                    &app,
-                                    &client,
-                                    &file_path,
-                                    &file_key,
-                                    &upload_id,
-                                    &mut part_number,
-                                    &mut last_uploaded_position,
-                                    leftover_size, // read leftover
-                                )
-                                .await
-                                {
-                                    Ok(part) => {
-                                        uploaded_parts.push(part);
-                                    }
-                                    Err(e) => {
-                                        return Err(format!(
-                                            "Failed uploading leftover chunk: {}",
-                                            e
-                                        ));
-                                    }
-                                }
-                            } else {
-                                // Less than 5 MB leftover -> final chunk
-                                println!(
-                                    "Uploading final leftover chunk of {} bytes before completion",
-                                    leftover_size
-                                );
-                                match Self::upload_chunk(
-                                    &app,
-                                    &client,
-                                    &file_path,
-                                    &file_key,
-                                    &upload_id,
-                                    &mut part_number,
-                                    &mut last_uploaded_position,
-                                    leftover_size,
-                                )
-                                .await
-                                {
-                                    Ok(part) => {
-                                        uploaded_parts.push(part);
-                                        println!(
-                                            "Successfully uploaded leftover chunk, part {}",
-                                            part_number - 1
-                                        );
-                                    }
-                                    Err(e) => {
-                                        return Err(format!(
-                                            "Failed to upload leftover chunk: {}",
-                                            e
-                                        ));
-                                    }
-                                }
-                            }
-
-                            // We just uploaded a leftover chunk, but let's see
-                            // if more data arrives. We'll try again. If no more
-                            // new data arrives, we can finalize.
-                            attempts += 1;
-                            if attempts > max_stabilize_attempts {
-                                println!(
-                                    "Reached maximum leftover attempts, proceeding to finalize."
-                                );
-                                break;
-                            }
-                        } else {
-                            // No leftover. We have stabilized with no new data.
-                            println!("File is stable with no leftover data, finalizing...");
-                            break;
-                        }
-                    }
+                if let Some(realtime_upload_done) = realtime_upload_done {
+                    if realtime_upload_done.recv_async().await.is_err() {
+                        warn!("cancelling upload as realtime generation failed");
+                    };
 
                     match Self::upload_chunk(
                         &app,
@@ -1184,7 +1065,7 @@ impl InstantMultipartUpload {
                 )
                 .await?;
 
-                upload_complete = true;
+                break;
             }
         }
 

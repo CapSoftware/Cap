@@ -1,10 +1,18 @@
 import type { RouteSectionProps } from "@solidjs/router";
 import { UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { type as ostype } from "@tauri-apps/plugin-os";
+import { cx } from "cva";
 import { onCleanup, onMount, ParentProps, Suspense } from "solid-js";
+
 import { AbsoluteInsetLoader } from "~/components/Loader";
-import Titlebar from "~/components/titlebar/Titlebar";
 import { initializeTitlebar } from "~/utils/titlebar-state";
+import {
+  useWindowChromeContext,
+  WindowChromeContext,
+} from "./(window-chrome)/Context";
+import { WindowControls } from "~/components/titlebar/Titlebar";
+import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 
 export const route = {
   info: {
@@ -26,39 +34,63 @@ export default function (props: RouteSectionProps) {
   });
 
   return (
-    <div class="bg-gray-100 border-gray-200 w-screen h-screen max-h-screen flex flex-col overflow-hidden transition-[border-radius] duration-200">
-      <Titlebar />
-      {/* breaks sometimes */}
-      {/* <Transition
+    <WindowChromeContext>
+      <div class="bg-gray-100 border-gray-200 w-screen h-screen max-h-screen flex flex-col overflow-hidden transition-[border-radius] duration-200">
+        <Header />
+
+        {/* <Titlebar /> */}
+        {/* breaks sometimes */}
+        {/* <Transition
         mode="outin"
         enterActiveClass="transition-opacity duration-100"
         exitActiveClass="transition-opacity duration-100"
         enterClass="opacity-0"
         exitToClass="opacity-0"
         > */}
-      <Suspense
-        fallback={
-          (() => {
-            console.log("Outer window chrome suspense fallback");
-            return <AbsoluteInsetLoader />;
-          }) as any
-        }
-      >
-        <Inner>
-          {/* prevents flicker idk */}
-          <Suspense
-            fallback={
-              (() => {
-                console.log("Inner window chrome suspense fallback");
-              }) as any
-            }
-          >
-            {props.children}
-          </Suspense>
-        </Inner>
-      </Suspense>
-      {/* </Transition> */}
-    </div>
+        <Suspense
+          fallback={
+            (() => {
+              console.log("Outer window chrome suspense fallback");
+              return <AbsoluteInsetLoader />;
+            }) as any
+          }
+        >
+          <Inner>
+            {/* prevents flicker idk */}
+            <Suspense
+              fallback={
+                (() => {
+                  console.log("Inner window chrome suspense fallback");
+                }) as any
+              }
+            >
+              {props.children}
+            </Suspense>
+          </Inner>
+        </Suspense>
+        {/* </Transition> */}
+      </div>
+    </WindowChromeContext>
+  );
+}
+
+function Header() {
+  const ctx = useWindowChromeContext()!;
+
+  const isWindows = ostype() === "windows";
+
+  return (
+    <header
+      class={cx(
+        "flex items-center select-none space-x-1 shrink-0 border-gray-50 bg-gray-100",
+        "border-b border-b-black-transparent-5 h-9",
+        isWindows ? "flex-row" : "pl-[5rem] flex-row-reverse"
+      )}
+      data-tauri-drag-region
+    >
+      {ctx.state()?.items}
+      {isWindows && <CaptionControlsWindows11 class="!ml-auto" />}
+    </header>
   );
 }
 

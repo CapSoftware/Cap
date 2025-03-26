@@ -28,7 +28,7 @@ export default function (props: ComponentProps<"div">) {
   return (
     <div
       class={cx(
-        "h-full align-baseline cursor-default rounded-none select-none *:outline-none *:transition-all *:duration-200",
+        "flex flex-row items-stretch h-full align-baseline cursor-default rounded-none select-none *:outline-none *:transition-all *:duration-200",
         local.class,
         focused()
           ? "*:text-black-transparent-80"

@@ -1061,10 +1061,6 @@ async fn get_video_metadata(
 fn open_editor(app: AppHandle, id: String) {
     println!("Opening editor for recording: {}", id);
 
-    if let Some(window) = CapWindowId::Camera.get(&app) {
-        window.close().ok();
-    }
-
     ShowCapWindow::Editor { project_id: id }.show(&app).unwrap();
 }
 
@@ -1928,7 +1924,7 @@ async fn reupload_instant_video(app: AppHandle, video_id: String) -> Result<(), 
         video_id,
         recording_dir.join("content/output.mp4"),
         config,
-        false,
+        None,
     )
     .await;
 

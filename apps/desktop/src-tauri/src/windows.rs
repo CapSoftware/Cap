@@ -90,6 +90,8 @@ impl CapWindowId {
             Self::Editor { .. } => "Cap Editor".to_string(),
             Self::SignIn => "Cap Sign In".to_string(),
             Self::ModeSelect => "Cap Mode Selection".to_string(),
+            Self::Camera => "Cap Camera".to_string(),
+            Self::RecordingsOverlay => "Cap Recordings Overlay".to_string(),
             _ => "Cap".to_string(),
         }
     }
@@ -250,7 +252,6 @@ impl ShowCapWindow {
                     .shadow(false)
                     .fullscreen(false)
                     .always_on_top(true)
-                    .title("Cap Camera")
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)
                     .position(
