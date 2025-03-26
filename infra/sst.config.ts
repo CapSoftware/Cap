@@ -3,7 +3,8 @@
 const GITHUB_ORG = "CapSoftware";
 const GITHUB_REPO = "Cap";
 
-const VERCEL_TEAM = "team_vbZRU7UW78rpKKIj4c9PfFAC";
+const VERCEL_TEAM_SLUG = "mc-ilroy";
+const VERCEL_TEAM_ID = "team_vbZRU7UW78rpKKIj4c9PfFAC";
 const VERCEL_PROJECT = "prj_oOlwZJGXHiAvj6vjH4jag8VrgseC";
 
 export default $config({
@@ -15,7 +16,7 @@ export default $config({
       home: "aws",
       providers: {
         vercel: {
-          team: VERCEL_TEAM,
+          team: VERCEL_TEAM_ID,
         },
       },
     };
@@ -132,14 +133,14 @@ export default $config({
       }
     );
 
-    const vercelUser = new aws.iam.User("VercelUser", {
-      name: "uploader",
-      forceDestroy: false,
-      tags: {
-        "sst:app": "cap",
-        "sst:stage": "production",
+    const vercelUser = new aws.iam.User(
+      "VercelUser",
+      {
+        name: "uploader",
+        forceDestroy: false,
       },
-    });
+      { import: "uploader" }
+    );
 
     const vercelAccessKey = new aws.iam.AccessKey("VercelS3AccessKey", {
       user: vercelUser.name,
@@ -170,6 +171,47 @@ export default $config({
       value: cloudfrontDistribution.id,
       projectId: vercelProject.id,
       targets: ["production", "preview", "development"],
+    });
+
+    new aws.iam.OpenIdConnectProvider("VercelOIDCProvider", {
+      url: "https://oidc.vercel.com",
+      clientIdLists: [`https://vercel.com/${VERCEL_TEAM_ID}`],
+    });
+
+    const awsAccount = await aws.getCallerIdentity();
+
+    const vercelAwsAccessRole = new aws.iam.Role("VercelAWSAccessRole", {
+      name: "VercelOIDCRole",
+      assumeRolePolicy: {
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Effect: "Allow",
+            Principal: {
+              Federated: `arn:aws:iam::${awsAccount.id}:oidc-provider/oidc.vercel.com/${VERCEL_TEAM_SLUG}`,
+            },
+            Action: "sts:AssumeRoleWithWebIdentity",
+            Condition: {
+              StringEquals: {
+                [`oidc.vercel.com/${VERCEL_TEAM_SLUG}:aud`]: `https://vercel.com/${VERCEL_TEAM_SLUG}`,
+              },
+              StringLike: {
+                [`oidc.vercel.com/${VERCEL_TEAM_SLUG}:sub`]: [
+                  `owner:${VERCEL_TEAM_SLUG}:project:${vercelProject.name}:environment:preview`,
+                  `owner:${VERCEL_TEAM_SLUG}:project:${vercelProject.name}:environment:production`,
+                ],
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    new vercel.ProjectEnvironmentVariable("VercelAWSAccessRoleArn", {
+      key: "AWS_ROLE_ARN",
+      value: vercelAwsAccessRole.arn,
+      projectId: vercelProject.id,
+      targets: ["production", "preview"],
     });
   },
 });
