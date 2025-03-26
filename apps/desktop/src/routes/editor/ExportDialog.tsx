@@ -771,7 +771,7 @@ const ExportDialog = () => {
 
 const CopyingContent = ({ copyState }: { copyState: CopyState }) => {
   return (
-    <div class="flex justify-center items-center h-full">
+    <div class="flex flex-col gap-4 justify-center items-center h-full">
       <h1 class="text-lg font-medium text-gray-500">
         {copyState.type === "rendering"
           ? "Rendering video..."
@@ -780,7 +780,7 @@ const CopyingContent = ({ copyState }: { copyState: CopyState }) => {
           : "Copied to clipboard"}
       </h1>
       <Show when={copyState.type === "rendering"}>
-        <div class="w-full bg-gray-200 rounded-full h-2.5 mb-2">
+        <div class="w-full bg-gray-200 rounded-full h-2.5">
           <div
             class="bg-blue-300 h-2.5 rounded-full"
             style={{
@@ -796,13 +796,15 @@ const CopyingContent = ({ copyState }: { copyState: CopyState }) => {
           />
         </div>
       </Show>
-      <p class="mt-2 text-xs text-gray-500">
-        {copyState.type === "rendering"
-          ? `${Math.floor(
-              (copyState.renderedFrames / copyState.totalFrames) * 100
-            )}%`
-          : ""}
-      </p>
+      <Show when={copyState.type === "rendering"}>
+        <p class="text-xs text-gray-500">
+          {copyState.type === "rendering"
+            ? `${Math.floor(
+                (copyState.renderedFrames / copyState.totalFrames) * 100
+              )}%`
+            : ""}
+        </p>
+      </Show>
     </div>
   );
 };
