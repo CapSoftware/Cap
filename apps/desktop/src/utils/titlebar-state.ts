@@ -56,5 +56,5 @@ async function initializeTitlebar(): Promise<UnlistenFn | undefined> {
   });
 }
 
-export { initializeTitlebar, setState as setTitlebar };
+export { initializeTitlebar };
 export default state;

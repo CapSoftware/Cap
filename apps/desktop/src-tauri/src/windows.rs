@@ -90,6 +90,8 @@ impl CapWindowId {
             Self::Editor { .. } => "Cap Editor".to_string(),
             Self::SignIn => "Cap Sign In".to_string(),
             Self::ModeSelect => "Cap Mode Selection".to_string(),
+            Self::Camera => "Cap Camera".to_string(),
+            Self::RecordingsOverlay => "Cap Recordings Overlay".to_string(),
             _ => "Cap".to_string(),
         }
     }
@@ -115,8 +117,7 @@ impl CapWindowId {
     #[cfg(target_os = "macos")]
     pub fn traffic_lights_position(&self) -> Option<Option<LogicalPosition<f64>>> {
         match self {
-            Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 40.0))),
-            Self::Setup => Some(Some(LogicalPosition::new(14.0, 24.0))),
+            Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 32.0))),
             Self::InProgressRecording => Some(Some(LogicalPosition::new(-100.0, -100.0))),
             Self::Camera
             | Self::WindowCaptureOccluder
@@ -209,15 +210,9 @@ impl ShowCapWindow {
                 let window = self
                     .window_builder(app, format!("/editor?id={project_id}"))
                     .maximizable(true)
-                    .transparent(cfg!(target_os = "macos"))
                     .inner_size(1240.0, 800.0)
                     .center()
                     .build()?;
-
-                let _ = window.set_effects(tauri::utils::config::WindowEffectsConfig {
-                    effects: vec![tauri::window::Effect::HudWindow],
-                    ..Default::default()
-                });
 
                 window
             }
@@ -250,7 +245,6 @@ impl ShowCapWindow {
                     .shadow(false)
                     .fullscreen(false)
                     .always_on_top(true)
-                    .title("Cap Camera")
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)
                     .position(
@@ -623,5 +617,21 @@ impl MonitorExt for Monitor {
         ]
         .into_iter()
         .any(|(x, y)| x >= left && x < right && y >= top && y < bottom)
+    }
+}
+
+#[specta::specta]
+#[tauri::command(async)]
+pub fn set_window_transparent(window: tauri::Window, value: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        let ns_win = window
+            .ns_window()
+            .expect("Failed to get native window handle")
+            as *const objc2_app_kit::NSWindow;
+
+        unsafe {
+            (*ns_win).setOpaque(value);
+        }
     }
 }

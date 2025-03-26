@@ -4,7 +4,6 @@ import { throttle } from "@solid-primitives/scheduled";
 import { useSearchParams } from "@solidjs/router";
 import { createMutation } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { type as ostype } from "@tauri-apps/plugin-os";
 import {
   Match,
   Show,
@@ -76,7 +75,7 @@ export function Editor() {
 }
 
 function Inner() {
-  const { project, playbackTime, setPlaybackTime, playing, previewTime } =
+  const { project, playbackTime, setPlaybackTime, playing } =
     useEditorContext();
 
   onMount(() => {
@@ -99,8 +98,8 @@ function Inner() {
   }, 1000 / FPS);
 
   const frameNumberToRender = createMemo(() => {
-    const preview = previewTime();
-    if (preview !== undefined) return preview;
+    // const preview = previewTime();
+    // if (preview !== undefined) return preview;
     return playbackTime();
   });
 
@@ -119,19 +118,14 @@ function Inner() {
   );
 
   return (
-    <div
-      class={cx(
-        "flex flex-col w-screen h-screen",
-        ostype() === "windows" ? "bg-gray-50" : "bg-transparent-window"
-      )}
-    >
+    <>
       <Header />
       <div
-        class="flex overflow-y-hidden flex-col flex-1 gap-4 p-4 w-full leading-5 animate-in fade-in"
+        class="flex overflow-y-hidden flex-col flex-1 pb-2 gap-2 w-full leading-5 animate-in fade-in"
         data-tauri-drag-region
       >
         <div class="flex overflow-hidden flex-col flex-1">
-          <div class="flex overflow-y-hidden flex-row flex-1 gap-4">
+          <div class="flex overflow-y-hidden flex-row flex-1 gap-2 px-2 pb-0.5">
             <Player />
             <ConfigSidebar />
           </div>
@@ -139,7 +133,7 @@ function Inner() {
         </div>
         <Dialogs />
       </div>
-    </div>
+    </>
   );
 }
 

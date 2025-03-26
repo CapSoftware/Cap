@@ -82,6 +82,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
 use upload::{get_s3_config, upload_image, upload_video, S3UploadMeta};
 use web_api::ManagerExt as WebManagerExt;
+use windows::set_window_transparent;
 use windows::{CapWindowId, ShowCapWindow};
 
 #[derive(specta::Type, Serialize)]
@@ -1061,10 +1062,6 @@ async fn get_video_metadata(
 fn open_editor(app: AppHandle, id: String) {
     println!("Opening editor for recording: {}", id);
 
-    if let Some(window) = CapWindowId::Camera.get(&app) {
-        window.close().ok();
-    }
-
     ShowCapWindow::Editor { project_id: id }.show(&app).unwrap();
 }
 
@@ -1928,9 +1925,9 @@ async fn reupload_instant_video(app: AppHandle, video_id: String) -> Result<(), 
         video_id,
         recording_dir.join("content/output.mp4"),
         config,
-        false,
+        None,
     )
-    .await;
+    .await?;
 
     Ok(())
 }
@@ -2091,7 +2088,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             list_fails,
             set_fail,
             update_auth_plan,
-            reupload_instant_video
+            reupload_instant_video,
+            set_window_transparent
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,

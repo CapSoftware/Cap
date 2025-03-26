@@ -1,13 +1,15 @@
 import { createResource, For, Show } from "solid-js";
 import { createStore } from "solid-js/store";
-import { generalSettingsStore } from "~/store";
-import type { AppTheme, GeneralSettingsStore } from "~/utils/tauri";
-// import { themeStore } from "~/store/theme";
 import {
   isPermissionGranted,
   requestPermission,
 } from "@tauri-apps/plugin-notification";
 import { type OsType, type } from "@tauri-apps/plugin-os";
+import "@total-typescript/ts-reset/filter-boolean";
+
+import { generalSettingsStore } from "~/store";
+import type { AppTheme, GeneralSettingsStore } from "~/utils/tauri";
+// import { themeStore } from "~/store/theme";
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
@@ -20,54 +22,49 @@ const settingsList: Array<{
   requiresPermission?: boolean;
   pro?: boolean;
   onChange?: (value: boolean) => Promise<void>;
-}> = [
-  // {
-  //   key: "autoCreateShareableLink",
-  //   label: "Automatically generate shareable link after recording",
-  //   description:
-  //     "When enabled, a shareable link will be created automatically after stopping the recording. You'll be redirected to the URL while the upload continues in the background.",
-  //   pro: true,
-  // },
-  // {
-  //   key: "uploadIndividualFiles",
-  //   label: "Upload individual recording files when creating shareable link",
-  //   description:
-  //     'Warning: this will cause shareable link uploads to become significantly slower, since all individual recording files will be uploaded. Shows "Download Assets" button in Share page.',
-  // },
-  {
-    key: "openEditorAfterRecording",
-    label: "Open editor automatically after recording stops",
-    description:
-      "The editor will be shown immediately after you finish recording.",
-  },
-  {
-    key: "hideDockIcon",
-    label: "Hide dock icon",
-    platforms: ["macos"],
-    description:
-      "The dock icon will be hidden when there are no windows available to close.",
-  },
-  {
-    key: "hapticsEnabled",
-    label: "Enable Haptics",
-    platforms: ["macos"],
-    description: "Use haptics on Force Touch™ trackpads",
-  },
-  {
-    key: "disableAutoOpenLinks",
-    label: "Disable automatic link opening",
-    description:
-      "When enabled, Cap will not automatically open links in your browser (e.g. after creating a shareable link).",
-    pro: true,
-  },
-  {
-    key: "enableNotifications",
-    label: "Enable System Notifications",
-    description:
-      "Show system notifications for events like copying to clipboard, saving files, and more. You may need to manually allow Cap access via your system's notification settings.",
-    requiresPermission: true,
-  },
-];
+}> = (
+  [
+    {
+      key: "openEditorAfterRecording",
+      label: "Open editor automatically after recording stops",
+      description:
+        "The editor will be shown immediately after you finish recording.",
+    },
+    {
+      key: "hideDockIcon",
+      label: "Hide dock icon",
+      platforms: ["macos"],
+      description:
+        "The dock icon will be hidden when there are no windows available to close.",
+    },
+    {
+      key: "hapticsEnabled",
+      label: "Enable Haptics",
+      platforms: ["macos"],
+      description: "Use haptics on Force Touch™ trackpads",
+    },
+    {
+      key: "disableAutoOpenLinks",
+      label: "Disable automatic link opening",
+      description:
+        "When enabled, Cap will not automatically open links in your browser (e.g. after creating a shareable link).",
+      pro: true,
+    },
+    {
+      key: "enableNotifications",
+      label: "Enable System Notifications",
+      description:
+        "Show system notifications for events like copying to clipboard, saving files, and more. You may need to manually allow Cap access via your system's notification settings.",
+      requiresPermission: true,
+    },
+    type() === "macos" && {
+      key: "windowTransparency",
+      label: "Enable Window Transparency",
+      description:
+        "Make the background of some windows (eg. the Editor) transparent",
+    },
+  ] as const
+).filter(Boolean);
 
 export default function GeneralSettings() {
   const [store] = createResource(() => generalSettingsStore.get());

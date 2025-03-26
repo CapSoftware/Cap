@@ -5,21 +5,15 @@ import { remove } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
-import {
-  batch,
-  createEffect,
-  createSignal,
-  onCleanup,
-  onMount,
-} from "solid-js";
+import { createEffect, createSignal, onCleanup, onMount } from "solid-js";
 
-import Titlebar from "~/components/titlebar/Titlebar";
-import { initializeTitlebar, setTitlebar } from "~/utils/titlebar-state";
+import { initializeTitlebar } from "~/utils/titlebar-state";
 import { useEditorContext } from "./context";
 import ExportButton from "./ExportButton";
 import PresetsDropdown from "./PresetsDropdown";
 import ShareButton from "./ShareButton";
 import { EditorButton } from "./ui";
+import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 
 export type ResolutionOption = {
   label: string;
@@ -65,74 +59,43 @@ export function Header() {
   });
   onCleanup(() => unlistenTitlebar?.());
 
-  batch(() => {
-    setTitlebar("height", "60px");
-    setTitlebar("border", true);
-    setTitlebar("transparent", true);
-    setTitlebar(
-      "items",
-      <div
-        data-tauri-drag-region
-        class={cx(
-          "flex flex-row justify-end items-center w-full cursor-default pr-5",
-          ostype() === "windows" ? "pl-[4.3rem]" : "pl-[1.25rem]"
-        )}
-      >
-        <div class="flex relative z-20 flex-row gap-3 items-center font-medium">
-          <ShareButton
-            selectedResolution={selectedResolution}
-            selectedFps={selectedFps}
-          />
-          <ExportButton
-            selectedResolution={selectedResolution()}
-            selectedFps={selectedFps()}
-            setSelectedFps={setSelectedFps}
-            setSelectedResolution={setSelectedResolution}
-          />
-        </div>
-      </div>
-    );
-  });
-
   return (
-    <div data-tauri-drag-region class="relative w-full">
+    <div
+      data-tauri-drag-region
+      class="relative w-full h-14 flex flex-row items-center"
+    >
       <div
         data-tauri-drag-region
-        class={cx(
-          "flex absolute z-10 gap-4 items-start w-full h-full",
-          ostype() === "windows" ? "left-4" : "left-[5.5rem]"
-        )}
+        class={cx("flex-1 h-full flex flex-row items-center gap-2 px-4")}
       >
-        <div class="flex gap-2 items-center h-full">
-          <EditorButton
-            onClick={async () => {
-              const currentWindow = getCurrentWindow();
-              if (!editorContext?.editorInstance.path) return;
-              if (
-                !(await ask("Are you sure you want to delete this recording?"))
-              )
-                return;
-              await remove(editorContext?.editorInstance.path, {
-                recursive: true,
-              });
-              await currentWindow.close();
-            }}
-            tooltipText="Delete recording"
-            leftIcon={<IconCapTrash class="w-5" />}
-          />
-          <EditorButton
-            onClick={() =>
-              revealItemInDir(`${editorContext.editorInstance.path}/`)
-            }
-            tooltipText="Open recording bundle"
-            leftIcon={<IconLucideFolder class="w-5" />}
-          />
+        {ostype() === "macos" && <div class="h-full w-[4rem]" />}
+        <EditorButton
+          onClick={async () => {
+            const currentWindow = getCurrentWindow();
+            if (!editorContext?.editorInstance.path) return;
+            if (!(await ask("Are you sure you want to delete this recording?")))
+              return;
+            await remove(editorContext?.editorInstance.path, {
+              recursive: true,
+            });
+            await currentWindow.close();
+          }}
+          tooltipText="Delete recording"
+          leftIcon={<IconCapTrash class="w-5" />}
+        />
+        <EditorButton
+          onClick={() =>
+            revealItemInDir(`${editorContext.editorInstance.path}/`)
+          }
+          tooltipText="Open recording bundle"
+          leftIcon={<IconLucideFolder class="w-5" />}
+        />
 
-          <p class="text-sm text-gray-500">
-            {editorContext.editorInstance.prettyName}
-            <span class="text-sm text-gray-400">.cap</span>
-          </p>
-          {/* <ErrorBoundary fallback={<></>}>
+        <p class="text-sm text-gray-500">
+          {editorContext.editorInstance.prettyName}
+          <span class="text-sm text-gray-400">.cap</span>
+        </p>
+        {/* <ErrorBoundary fallback={<></>}>
             <Suspense>
               <span
                 onClick={async () => {
@@ -154,23 +117,7 @@ export function Header() {
               </span>
             </Suspense>
           </ErrorBoundary> */}
-        </div>
-      </div>
-      <TopBar />
-      <Titlebar />
-    </div>
-  );
-}
-
-function TopBar() {
-  const editorContext = useEditorContext();
-
-  return (
-    <div
-      data-tauri-drag-region
-      class="flex absolute inset-x-0 z-10 items-center mx-auto h-full w-fit"
-    >
-      <div class="flex gap-4 items-center px-4 h-full">
+        <div data-tauri-drag-region class="flex-1 h-full" />
         <EditorButton
           tooltipText="Captions"
           leftIcon={<IconCapCaptions class="w-5" />}
@@ -183,11 +130,20 @@ function TopBar() {
         />
       </div>
 
-      <div class="flex gap-4 items-center px-4 my-2 border-r border-l border-r-black-transparent-10 border-l-black-transparent-10">
+      <div
+        data-tauri-drag-region
+        class="px-4 border-x border-black-transparent-10 flex flex-col justify-center"
+      >
         <PresetsDropdown />
       </div>
 
-      <div class="flex gap-4 items-center px-4 h-full">
+      <div
+        data-tauri-drag-region
+        class={cx(
+          "flex-1 h-full flex flex-row items-center gap-2 pl-2",
+          ostype() !== "windows" && "pr-2"
+        )}
+      >
         <EditorButton
           onClick={() => editorContext.history.undo()}
           disabled={!editorContext.history.canUndo()}
@@ -200,6 +156,18 @@ function TopBar() {
           tooltipText="Redo"
           leftIcon={<IconCapRedo class="w-5" />}
         />
+        <div data-tauri-drag-region class="flex-1 h-full" />
+        <ShareButton
+          selectedResolution={selectedResolution}
+          selectedFps={selectedFps}
+        />
+        <ExportButton
+          selectedResolution={selectedResolution()}
+          selectedFps={selectedFps()}
+          setSelectedFps={setSelectedFps}
+          setSelectedResolution={setSelectedResolution}
+        />
+        {ostype() === "windows" && <CaptionControlsWindows11 />}
       </div>
     </div>
   );

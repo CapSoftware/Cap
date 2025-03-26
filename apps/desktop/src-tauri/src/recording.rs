@@ -217,6 +217,7 @@ pub async fn start_recording(
         let _ = ShowCapWindow::WindowCaptureOccluder.show(&app);
     }
 
+    let (finish_upload_tx, finish_upload_rx) = flume::bounded(1);
     let progressive_upload = video_upload_info
         .as_ref()
         .filter(|_| matches!(recording_options.mode, RecordingMode::Instant))
@@ -226,6 +227,7 @@ pub async fn start_recording(
                 id.clone(),
                 recording_dir.join("content/output.mp4"),
                 video_upload_info.clone(),
+                Some(finish_upload_rx),
             )
         });
 
@@ -300,6 +302,8 @@ pub async fn start_recording(
         async move {
             fail!("recording::wait_actor_done");
             actor_done_rx.await.ok();
+
+            let _ = finish_upload_tx.send(());
 
             let mut state = state_mtx.write().await;
 
