@@ -79,10 +79,11 @@ export default function () {
   });
 
   const [showStartup, showStartupActions] = createResource(() =>
-    generalSettingsStore.get().then((s) => {
-      if (s === undefined) return true;
-      return !s.hasCompletedStartup;
-    })
+    true
+    // generalSettingsStore.get().then((s) => {
+    //   if (s === undefined) return true;
+    //   return !s.hasCompletedStartup;
+    // })
   );
 
   const handleContinue = () => {
@@ -140,8 +141,8 @@ export default function () {
                         {permissionCheck() === "granted"
                           ? "Granted"
                           : permissionCheck() !== "denied"
-                          ? "Grant Permission"
-                          : "Request Permission"}
+                            ? "Grant Permission"
+                            : "Request Permission"}
                       </Button>
                     </li>
                   </Show>
@@ -194,6 +195,7 @@ import { generalSettingsStore } from "~/store";
 import { Portal } from "solid-js/web";
 import { cx } from "cva";
 import { type as ostype } from "@tauri-apps/plugin-os";
+import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 
 function Startup(props: { onClose: () => void }) {
   const [audioState, setAudioState] = makePersisted(
@@ -298,37 +300,30 @@ function Startup(props: { onClose: () => void }) {
     audio.muted = audioState.isMuted;
   };
 
-  onMount(() => {
-    setTitlebar("transparent", true);
-    setTitlebar("border", false);
-    setTitlebar("height", "50px");
-    setTitlebar(
-      "items",
-      <div
-        dir={ostype() === "windows" ? "rtl" : "rtl"}
-        class="flex mx-4 items-center gap-[0.25rem]"
-      >
-        <button
-          onClick={toggleMute}
-          class={`text-gray-50 hover:text-gray-200 transition-colors ${
-            isExiting() ? "opacity-0" : ""
-          }`}
-        >
-          {audioState.isMuted ? (
-            <IconLucideVolumeX class="w-6 h-6" />
-          ) : (
-            <IconLucideVolume2 class="w-6 h-6" />
-          )}
-        </button>
-      </div>
-    );
-  });
-
   onCleanup(() => setTitlebar("items", null));
 
   return (
     <Portal>
       <div class="absolute inset-0 z-40">
+        <header class="absolute top-0 inset-x-0 h-12 z-10"
+          data-tauri-drag-region>
+          <div
+            class={cx("flex justify-between items-center gap-[0.25rem] w-full h-full z-10", ostype() === "windows" ? "flex-row" : "flex-row-reverse")}
+            data-tauri-drag-region
+          >
+            <button
+              onClick={toggleMute}
+              class={cx("mx-4 text-solid-white hover:text-gray-200 transition-colors", isExiting() && "opacity-0")}
+            >
+              {audioState.isMuted ? (
+                <IconLucideVolumeX class="w-6 h-6" />
+              ) : (
+                <IconLucideVolume2 class="w-6 h-6" />
+              )}
+            </button>
+            <CaptionControlsWindows11 />
+          </div>
+        </header>
         <style>
           {`
           body {
@@ -425,7 +420,7 @@ function Startup(props: { onClose: () => void }) {
         <div
           style={{ "transition-duration": "600ms" }}
           class={cx(
-            "flex flex-col h-screen custom-bg relative overflow-hidden transition-opacity",
+            "flex flex-col h-screen custom-bg relative overflow-hidden transition-opacity text-solid-white",
             isExiting() && "exiting opacity-0"
           )}
         >
@@ -434,9 +429,8 @@ function Startup(props: { onClose: () => void }) {
           {/* Floating clouds */}
           <div
             id="cloud-1"
-            class={`absolute top-0 right-0 opacity-70 pointer-events-none cloud-transition cloud-1 ${
-              isExiting() ? "exiting" : ""
-            }`}
+            class={`absolute top-0 right-0 opacity-70 pointer-events-none cloud-transition cloud-1 ${isExiting() ? "exiting" : ""
+              }`}
           >
             <img
               class="cloud-image w-[100vw] md:w-[80vw] -mr-40"
@@ -446,9 +440,8 @@ function Startup(props: { onClose: () => void }) {
           </div>
           <div
             id="cloud-2"
-            class={`absolute top-0 left-0 opacity-70 pointer-events-none cloud-transition cloud-2 ${
-              isExiting() ? "exiting" : ""
-            }`}
+            class={`absolute top-0 left-0 opacity-70 pointer-events-none cloud-transition cloud-2 ${isExiting() ? "exiting" : ""
+              }`}
           >
             <img
               class="cloud-image w-[100vw] md:w-[80vw] -ml-40"
@@ -458,9 +451,8 @@ function Startup(props: { onClose: () => void }) {
           </div>
           <div
             id="cloud-3"
-            class={`absolute -bottom-[15%] left-1/2 -translate-x-1/2 opacity-70 pointer-events-none cloud-transition cloud-3 ${
-              isExiting() ? "exiting" : ""
-            }`}
+            class={`absolute -bottom-[15%] left-1/2 -translate-x-1/2 opacity-70 pointer-events-none cloud-transition cloud-3 ${isExiting() ? "exiting" : ""
+              }`}
           >
             <img
               class="cloud-image w-[180vw] md:w-[180vw]"
@@ -471,9 +463,8 @@ function Startup(props: { onClose: () => void }) {
 
           {/* Main content */}
           <div
-            class={`content-container flex flex-col items-center justify-center flex-1 relative z-10 px-4 ${
-              isExiting() ? "exiting" : ""
-            }`}
+            class={`content-container flex flex-col items-center justify-center flex-1 relative px-4 ${isExiting() ? "exiting" : ""
+              }`}
           >
             <div class="text-center mb-8">
               <div
@@ -485,10 +476,10 @@ function Startup(props: { onClose: () => void }) {
                   ${isLogoAnimating() ? "logo-bounce" : ""}`}
                 />
               </div>
-              <h1 class="text-5xl md:text-5xl font-bold text-gray-50 mb-4 drop-shadow-[0_0_20px_rgba(0,0,0,0.2)]">
+              <h1 class="text-5xl md:text-5xl font-bold mb-4 drop-shadow-[0_0_20px_rgba(0,0,0,0.2)]">
                 Welcome to Cap
               </h1>
-              <p class="text-2xl text-gray-50 opacity-80 max-w-md mx-auto drop-shadow-[0_0_20px_rgba(0,0,0,0.2)]">
+              <p class="text-2xl opacity-80 max-w-md mx-auto drop-shadow-[0_0_20px_rgba(0,0,0,0.2)]">
                 Beautiful screen recordings, owned by you.
               </p>
             </div>
@@ -520,7 +511,6 @@ function Startup(props: { onClose: () => void }) {
             </Switch>
           </div>
         </div>
-        props.onClose()
       </div>
     </Portal>
   );

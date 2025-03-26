@@ -13,6 +13,7 @@ import ExportButton from "./ExportButton";
 import PresetsDropdown from "./PresetsDropdown";
 import ShareButton from "./ShareButton";
 import { EditorButton } from "./ui";
+import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 
 export type ResolutionOption = {
   label: string;
@@ -116,7 +117,7 @@ export function Header() {
               </span>
             </Suspense>
           </ErrorBoundary> */}
-        <div class="flex-1 h-full" />
+        <div data-tauri-drag-region class="flex-1 h-full" />
         <EditorButton
           tooltipText="Captions"
           leftIcon={<IconCapCaptions class="w-5" />}
@@ -129,13 +130,13 @@ export function Header() {
         />
       </div>
 
-      <div class="px-4 border-x border-black-transparent-10 flex flex-col justify-center">
+      <div data-tauri-drag-region class="px-4 border-x border-black-transparent-10 flex flex-col justify-center">
         <PresetsDropdown />
       </div>
 
       <div
         data-tauri-drag-region
-        class="flex-1 h-full flex flex-row items-center gap-2 px-4"
+        class="flex-1 h-full flex flex-row items-center gap-2 pl-4"
       >
         <EditorButton
           onClick={() => editorContext.history.undo()}
@@ -149,7 +150,7 @@ export function Header() {
           tooltipText="Redo"
           leftIcon={<IconCapRedo class="w-5" />}
         />
-        <div class="flex-1 h-full" />
+        <div data-tauri-drag-region class="flex-1 h-full" />
         <ShareButton
           selectedResolution={selectedResolution}
           selectedFps={selectedFps}
@@ -160,6 +161,7 @@ export function Header() {
           setSelectedFps={setSelectedFps}
           setSelectedResolution={setSelectedResolution}
         />
+        {ostype() === "windows" && <CaptionControlsWindows11 />}
       </div>
     </div>
   );

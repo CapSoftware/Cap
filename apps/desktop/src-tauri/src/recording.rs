@@ -30,7 +30,6 @@ use cap_recording::{
 };
 use cap_rendering::ProjectRecordings;
 use cap_utils::{ensure_dir, spawn_actor};
-use objc2_app_kit::NSWindow;
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
 use tracing::{error, info};
