@@ -2,3 +2,4 @@ packages:
   - "apps/*"
   - "packages/*"
   - "crates/tauri-plugin-*"
+  - "infra"

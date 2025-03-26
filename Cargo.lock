@@ -954,7 +954,7 @@ dependencies = [
  "mp4",
  "nix 0.29.0",
  "objc",
- "objc2-app-kit 0.2.2",
+ "objc2-app-kit 0.3.0",
  "png",
  "rand 0.8.5",
  "relative-path",

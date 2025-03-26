@@ -1,0 +1,9 @@
+{
+  "name": "@cap/infra",
+  "devDependencies": {
+    "sst": "3.10.13"
+  },
+  "scripts": {
+    "sst": "sst"
+  }
+}
