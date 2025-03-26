@@ -631,7 +631,7 @@ pub fn set_window_transparent(window: tauri::Window, value: bool) {
             as *const objc2_app_kit::NSWindow;
 
         unsafe {
-            (*ns_win).setOpaque(value);
+            (*ns_win).setOpaque(!value);
         }
     }
 }

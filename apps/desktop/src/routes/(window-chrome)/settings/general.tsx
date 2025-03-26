@@ -57,12 +57,12 @@ const settingsList: Array<{
         "Show system notifications for events like copying to clipboard, saving files, and more. You may need to manually allow Cap access via your system's notification settings.",
       requiresPermission: true,
     },
-    type() === "macos" && {
-      key: "windowTransparency",
-      label: "Enable Window Transparency",
-      description:
-        "Make the background of some windows (eg. the Editor) transparent",
-    },
+    // type() === "macos" && {
+    //   key: "windowTransparency",
+    //   label: "Enable Window Transparency",
+    //   description:
+    //     "Make the background of some windows (eg. the Editor) transparent",
+    // },
   ] as const
 ).filter(Boolean);
 
