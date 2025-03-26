@@ -13,6 +13,12 @@ importers:
 
   .:
     devDependencies:
+      '@clack/core':
+        specifier: ^0.4.1
+        version: 0.4.1
+      '@clack/prompts':
+        specifier: ^0.10.0
+        version: 0.10.0
       '@turbo/gen':
         specifier: ^1.9.7
         version: 1.13.4(@types/node@22.12.0)(typescript@5.7.2)
@@ -1402,6 +1408,12 @@ packages:
   '@chromatic-com/storybook@1.9.0':
     resolution: {integrity: sha512-vYQ+TcfktEE3GHnLZXHCzXF/sN9dw+KivH8a5cmPyd9YtQs7fZtHrEgsIjWpYycXiweKMo1Lm1RZsjxk8DH3rA==}
     engines: {node: '>=16.0.0', yarn: '>=1.22.18'}
+
+  '@clack/core@0.4.1':
+    resolution: {integrity: sha512-Pxhij4UXg8KSr7rPek6Zowm+5M22rbd2g1nfojHJkxp5YkFqiZ2+YLEM/XGVIzvGOcM0nqjIFxrpDwWRZYWYjA==}
+
+  '@clack/prompts@0.10.0':
+    resolution: {integrity: sha512-H3rCl6CwW1NdQt9rE3n373t7o5cthPv7yUoxF2ytZvyvlJv89C5RYMJu83Hed8ODgys5vpBU0GKxIRG83jd8NQ==}
 
   '@cloudflare/kv-asset-handler@0.3.4':
     resolution: {integrity: sha512-YLPHc8yASwjNkmcDMQMY35yiWjoKAKnhUbPRszBRS0YgH+IXtsMp61j+yTcnCE3oO2DgP0U3iejLC8FTtKDC8Q==}
@@ -4658,10 +4670,10 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@9.0.0-alpha.6':
-    resolution: {integrity: sha512-X6cWPtBTaagi0+pIFZtJe8XjiuwjbfFks09PmSqZJMr1V/0jB/Odifa/XnKqyBHuaudnbClI1kqieBHfu4pu+g==}
+  '@storybook/builder-vite@9.0.0-alpha.10':
+    resolution: {integrity: sha512-gPpW5WcxvtH1aTY5KqtUMtsExjxuHRvuD+Fsw+n6HLOGVZsBs8m/uJ7ujZMnUmSsR2w/DJI5mk9uWEB01Vasdw==}
     peerDependencies:
-      storybook: ^9.0.0-alpha.6
+      storybook: ^9.0.0-alpha.10
       vite: ^4.0.0 || ^5.0.0 || ^6.0.0
 
   '@storybook/core@8.3.3':
@@ -4672,10 +4684,10 @@ packages:
     peerDependencies:
       storybook: ^8.3.3
 
-  '@storybook/csf-plugin@9.0.0-alpha.6':
-    resolution: {integrity: sha512-7PjatRFh5dyYlNdwRWcauiitw71MhqXoWfj8/wU0CGWCTJr+Cn2ZYA9lgjX2GTKU3ctJDTX7gX45NpnZGXIcqw==}
+  '@storybook/csf-plugin@9.0.0-alpha.10':
+    resolution: {integrity: sha512-p8ho/3H07TYXn+hY9uExhXy4DyNr154PmB6kSJ/7vLZkWnHXzeP54xDq4/WT9FNCF8FwwtDzRDSoJRiPqTP0kQ==}
     peerDependencies:
-      storybook: ^9.0.0-alpha.6
+      storybook: ^9.0.0-alpha.10
 
   '@storybook/csf@0.1.11':
     resolution: {integrity: sha512-dHYFQH3mA+EtnCkHXzicbLgsvzYjcDJ1JWsogbItZogkPHgSJM/Wr71uMkcvw8v9mmCyP4NpXJuu6bPoVsOnzg==}
@@ -11842,11 +11854,6 @@ packages:
   yallist@4.0.0:
     resolution: {integrity: sha512-3wdGidZyq5PB084XLES5TpOSRA3wjXAlIWMhum2kRcv/41Sn2emQ0dycQW4uZXLejwKvg6EsvbdlVL+FYEct7A==}
 
-  yaml@2.5.1:
-    resolution: {integrity: sha512-bLQOjaX/ADgQ20isPJRvF0iRUHIxVhYvr53Of7wGcWlO2jvtUlH5m87DsmulFVxRpNLOnI4tB6p/oh8D7kpn9Q==}
-    engines: {node: '>= 14'}
-    hasBin: true
-
   yaml@2.7.0:
     resolution: {integrity: sha512-+hSoy/QHluxmC9kCIJyL/uyFmLmc+e5CFR5Wa+bpIhIj85LVb9ZH2nVnqrHoSvKogwODv0ClqZkmiSSaIH5LTA==}
     engines: {node: '>= 14'}
@@ -12770,6 +12777,17 @@ snapshots:
       - '@chromatic-com/cypress'
       - '@chromatic-com/playwright'
       - react
+
+  '@clack/core@0.4.1':
+    dependencies:
+      picocolors: 1.1.0
+      sisteransi: 1.0.5
+
+  '@clack/prompts@0.10.0':
+    dependencies:
+      '@clack/core': 0.4.1
+      picocolors: 1.1.0
+      sisteransi: 1.0.5
 
   '@cloudflare/kv-asset-handler@0.3.4':
     dependencies:
@@ -15948,9 +15966,9 @@ snapshots:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
 
-  '@storybook/builder-vite@9.0.0-alpha.6(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))':
+  '@storybook/builder-vite@9.0.0-alpha.10(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))':
     dependencies:
-      '@storybook/csf-plugin': 9.0.0-alpha.6(storybook@8.3.3)
+      '@storybook/csf-plugin': 9.0.0-alpha.10(storybook@8.3.3)
       browser-assert: 1.2.1
       storybook: 8.3.3
       ts-dedent: 2.2.0
@@ -15981,7 +15999,7 @@ snapshots:
       storybook: 8.3.3
       unplugin: 1.16.1
 
-  '@storybook/csf-plugin@9.0.0-alpha.6(storybook@8.3.3)':
+  '@storybook/csf-plugin@9.0.0-alpha.10(storybook@8.3.3)':
     dependencies:
       storybook: 8.3.3
       unplugin: 1.16.1
@@ -18829,7 +18847,7 @@ snapshots:
       '@typescript-eslint/parser': 5.62.0(eslint@8.57.1)(typescript@5.7.2)
       eslint: 8.57.1
       eslint-import-resolver-node: 0.3.9
-      eslint-import-resolver-typescript: 3.6.3(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.30.0)(eslint@8.57.1)
+      eslint-import-resolver-typescript: 3.6.3(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.30.0(eslint@8.57.1))(eslint@8.57.1)
     transitivePeerDependencies:
       - supports-color
 
@@ -22695,7 +22713,7 @@ snapshots:
   postcss-load-config@4.0.2(postcss@8.4.47)(ts-node@10.9.2(@types/node@20.16.9)(typescript@5.7.2)):
     dependencies:
       lilconfig: 3.1.2
-      yaml: 2.5.1
+      yaml: 2.7.0
     optionalDependencies:
       postcss: 8.4.47
       ts-node: 10.9.2(@types/node@20.16.9)(typescript@5.7.2)
@@ -22703,7 +22721,7 @@ snapshots:
   postcss-load-config@4.0.2(postcss@8.4.47)(ts-node@10.9.2(@types/node@22.12.0)(typescript@5.7.2)):
     dependencies:
       lilconfig: 3.1.2
-      yaml: 2.5.1
+      yaml: 2.7.0
     optionalDependencies:
       postcss: 8.4.47
       ts-node: 10.9.2(@types/node@22.12.0)(typescript@5.7.2)
@@ -23263,7 +23281,7 @@ snapshots:
       estree-util-value-to-estree: 3.2.1
       toml: 3.0.0
       unified: 11.0.5
-      yaml: 2.5.1
+      yaml: 2.7.0
 
   remark-mdx@2.3.0:
     dependencies:
@@ -23777,7 +23795,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.2(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0)):
     dependencies:
-      '@storybook/builder-vite': 9.0.0-alpha.6(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))
+      '@storybook/builder-vite': 9.0.0-alpha.10(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))
     transitivePeerDependencies:
       - storybook
       - vite
@@ -25192,8 +25210,6 @@ snapshots:
   yallist@3.1.1: {}
 
   yallist@4.0.0: {}
-
-  yaml@2.5.1: {}
 
   yaml@2.7.0: {}
 
