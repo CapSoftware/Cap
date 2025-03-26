@@ -211,15 +211,9 @@ impl ShowCapWindow {
                 let window = self
                     .window_builder(app, format!("/editor?id={project_id}"))
                     .maximizable(true)
-                    .transparent(cfg!(target_os = "macos"))
                     .inner_size(1240.0, 800.0)
                     .center()
                     .build()?;
-
-                let _ = window.set_effects(tauri::utils::config::WindowEffectsConfig {
-                    effects: vec![tauri::window::Effect::HudWindow],
-                    ..Default::default()
-                });
 
                 window
             }
@@ -624,5 +618,21 @@ impl MonitorExt for Monitor {
         ]
         .into_iter()
         .any(|(x, y)| x >= left && x < right && y >= top && y < bottom)
+    }
+}
+
+#[specta::specta]
+#[tauri::command(async)]
+pub fn set_window_transparent(window: tauri::Window, value: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        let ns_win = window
+            .ns_window()
+            .expect("Failed to get native window handle")
+            as *const objc2_app_kit::NSWindow;
+
+        unsafe {
+            (*ns_win).setOpaque(value);
+        }
     }
 }

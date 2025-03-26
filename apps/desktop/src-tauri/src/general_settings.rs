@@ -34,6 +34,8 @@ pub struct GeneralSettingsStore {
     pub commercial_license: Option<CommercialLicense>,
     #[serde(default)]
     pub last_version: Option<String>,
+    #[serde(default)]
+    pub window_transparency: bool,
 }
 
 #[derive(Serialize, Deserialize, Type, Debug)]
@@ -60,6 +62,7 @@ impl Default for GeneralSettingsStore {
             theme: AppTheme::System,
             commercial_license: None,
             last_version: None,
+            window_transparency: false,
         }
     }
 }

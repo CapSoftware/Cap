@@ -238,7 +238,6 @@ pub async fn start_recording(
     // done in spawn to catch panics just in case
     let actor_done_rx = spawn_actor({
         let state_mtx = Arc::clone(&state_mtx);
-        let app = app.clone();
         async move {
             fail!("recording::spawn_actor");
             let mut state = state_mtx.write().await;

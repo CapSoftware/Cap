@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio::task;
 use tokio::time::sleep;
-use tracing::warn;
+use tracing::{info, trace, warn};
 
 use crate::web_api::{self, ManagerExt};
 
@@ -835,7 +835,7 @@ impl InstantMultipartUpload {
         video_id: String,
         file_path: PathBuf,
         pre_created_video: VideoUploadInfo,
-        realtime_upload_done: Option<Receiver<()>>,
+        realtime_video_done: Option<Receiver<()>>,
     ) -> Result<(), String> {
         dbg!(&video_id, &file_path);
         use std::time::Duration;
@@ -964,6 +964,8 @@ impl InstantMultipartUpload {
 
         println!("Multipart upload initiated with ID: {}", upload_id);
 
+        let mut realtime_is_done = realtime_video_done.as_ref().map(|_| false);
+
         // --------------------------------------------
         // Main loop while upload not complete:
         //   - If we have >= CHUNK_SIZE new data, upload.
@@ -978,6 +980,24 @@ impl InstantMultipartUpload {
                     recording_stopped = true;
                 }
             }
+
+            if !realtime_is_done.unwrap_or(true) {
+                if let Some(realtime_video_done) = &realtime_video_done {
+                    match realtime_video_done.try_recv() {
+                        Ok(_) => {
+                            realtime_is_done = Some(true);
+                        }
+                        Err(flume::TryRecvError::Empty) => {}
+                        _ => {
+                            warn!("cancelling upload as realtime generation failed");
+                            return Err(
+                                "cancelling upload as realtime generation failed".to_string()
+                            );
+                        }
+                    }
+                }
+            }
+            dbg!(realtime_is_done);
 
             // Check the file's current size
             if !file_path.exists() {
@@ -994,9 +1014,11 @@ impl InstantMultipartUpload {
                 }
             };
 
-            let new_data_size = file_size.saturating_sub(last_uploaded_position);
+            let new_data_size = file_size - last_uploaded_position;
 
-            if new_data_size >= CHUNK_SIZE || (!realtime_upload_done.is_none() && new_data_size > 0)
+            if ((new_data_size >= CHUNK_SIZE)
+                || new_data_size > 0 && realtime_is_done.unwrap_or(false))
+                || (realtime_is_done.is_none() && new_data_size > 0)
             {
                 // We have a full chunk to send
                 match Self::upload_chunk(
@@ -1023,10 +1045,8 @@ impl InstantMultipartUpload {
                     }
                 }
             } else {
-                if let Some(realtime_upload_done) = realtime_upload_done {
-                    if realtime_upload_done.recv_async().await.is_err() {
-                        warn!("cancelling upload as realtime generation failed");
-                    };
+                if realtime_is_done.unwrap_or(false) {
+                    info!("realtime video done, uploading header chunk");
 
                     match Self::upload_chunk(
                         &app,
