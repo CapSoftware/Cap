@@ -38,6 +38,7 @@ type ZoomSegmentDragState =
 
 const MAX_TIMELINE_MARKINGS = 20;
 const TIMELINE_MARKING_RESOLUTIONS = [0.5, 1, 2.5, 5, 10, 30];
+const TIMELINE_PADDING = 8;
 
 export function Timeline() {
   const {
@@ -79,8 +80,6 @@ export function Timeline() {
       resume();
     }
   });
-
-  const xPadding = 20;
 
   if (
     !project.timeline?.zoomSegments ||
@@ -141,8 +140,8 @@ export function Timeline() {
       <div
         class="pt-[2rem] relative overflow-hidden flex flex-col gap-2"
         style={{
-          "padding-left": `${xPadding}px`,
-          "padding-right": `${xPadding}px`,
+          "padding-left": `${TIMELINE_PADDING}px`,
+          "padding-right": `${TIMELINE_PADDING}px`,
         }}
         onMouseDown={(e) => {
           createRoot((dispose) => {
@@ -215,7 +214,7 @@ export function Timeline() {
                 split() ? "text-red-300" : "text-black-transparent-20"
               )}
               style={{
-                left: `${xPadding}px`,
+                left: `${TIMELINE_PADDING}px`,
                 transform: `translateX(${
                   (time() - state.timelineTransform.position) / secsPerPixel()
                 }px)`,
@@ -234,7 +233,7 @@ export function Timeline() {
           <div
             class="absolute bottom-0 top-4 h-full rounded-full z-10 w-px pointer-events-none bg-gradient-to-b to-[120%] from-[rgb(226,64,64)]"
             style={{
-              left: `${xPadding}px`,
+              left: `${TIMELINE_PADDING}px`,
               transform: `translateX(${Math.min(
                 (playbackTime() - state.timelineTransform.position) /
                   secsPerPixel(),

@@ -62,7 +62,7 @@ export function Header() {
   return (
     <div
       data-tauri-drag-region
-      class="relative w-full h-16 flex flex-row items-center"
+      class="relative w-full h-14 flex flex-row items-center"
     >
       <div
         data-tauri-drag-region
@@ -130,13 +130,19 @@ export function Header() {
         />
       </div>
 
-      <div data-tauri-drag-region class="px-4 border-x border-black-transparent-10 flex flex-col justify-center">
+      <div
+        data-tauri-drag-region
+        class="px-4 border-x border-black-transparent-10 flex flex-col justify-center"
+      >
         <PresetsDropdown />
       </div>
 
       <div
         data-tauri-drag-region
-        class="flex-1 h-full flex flex-row items-center gap-2 pl-4"
+        class={cx(
+          "flex-1 h-full flex flex-row items-center gap-2 pl-2",
+          ostype() !== "windows" && "pr-2"
+        )}
       >
         <EditorButton
           onClick={() => editorContext.history.undo()}

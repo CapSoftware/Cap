@@ -121,11 +121,11 @@ function Inner() {
     <>
       <Header />
       <div
-        class="flex overflow-y-hidden flex-col flex-1 pb-4 gap-4 w-full leading-5 animate-in fade-in"
+        class="flex overflow-y-hidden flex-col flex-1 pb-2 gap-2 w-full leading-5 animate-in fade-in"
         data-tauri-drag-region
       >
         <div class="flex overflow-hidden flex-col flex-1">
-          <div class="flex overflow-y-hidden flex-row flex-1 gap-4 px-4 pb-0.5">
+          <div class="flex overflow-y-hidden flex-row flex-1 gap-2 px-2 pb-0.5">
             <Player />
             <ConfigSidebar />
           </div>
