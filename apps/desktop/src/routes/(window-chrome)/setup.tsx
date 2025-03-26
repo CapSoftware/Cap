@@ -17,7 +17,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands, OSPermission, type OSPermissionStatus } from "~/utils/tauri";
 import { makePersisted } from "@solid-primitives/storage";
 import { createStore } from "solid-js/store";
-import { setTitlebar } from "~/utils/titlebar-state";
 import ModeSelect from "~/components/ModeSelect";
 
 function isPermitted(status?: OSPermissionStatus): boolean {
@@ -72,18 +71,11 @@ export default function () {
     setInitialCheck(false);
   };
 
-  onMount(() => {
-    setTitlebar("height", "50px");
-    setTitlebar("transparent", true);
-    setTitlebar("border", false);
-  });
-
   const [showStartup, showStartupActions] = createResource(() =>
-    true
-    // generalSettingsStore.get().then((s) => {
-    //   if (s === undefined) return true;
-    //   return !s.hasCompletedStartup;
-    // })
+    generalSettingsStore.get().then((s) => {
+      if (s === undefined) return true;
+      return !s.hasCompletedStartup;
+    })
   );
 
   const handleContinue = () => {
@@ -141,8 +133,8 @@ export default function () {
                         {permissionCheck() === "granted"
                           ? "Granted"
                           : permissionCheck() !== "denied"
-                            ? "Grant Permission"
-                            : "Request Permission"}
+                          ? "Grant Permission"
+                          : "Request Permission"}
                       </Button>
                     </li>
                   </Show>
@@ -300,20 +292,26 @@ function Startup(props: { onClose: () => void }) {
     audio.muted = audioState.isMuted;
   };
 
-  onCleanup(() => setTitlebar("items", null));
-
   return (
     <Portal>
       <div class="absolute inset-0 z-40">
-        <header class="absolute top-0 inset-x-0 h-12 z-10"
-          data-tauri-drag-region>
+        <header
+          class="absolute top-0 inset-x-0 h-12 z-10"
+          data-tauri-drag-region
+        >
           <div
-            class={cx("flex justify-between items-center gap-[0.25rem] w-full h-full z-10", ostype() === "windows" ? "flex-row" : "flex-row-reverse")}
+            class={cx(
+              "flex justify-between items-center gap-[0.25rem] w-full h-full z-10",
+              ostype() === "windows" ? "flex-row" : "flex-row-reverse"
+            )}
             data-tauri-drag-region
           >
             <button
               onClick={toggleMute}
-              class={cx("mx-4 text-solid-white hover:text-gray-200 transition-colors", isExiting() && "opacity-0")}
+              class={cx(
+                "mx-4 text-solid-white hover:text-[#DDD] transition-colors",
+                isExiting() && "opacity-0"
+              )}
             >
               {audioState.isMuted ? (
                 <IconLucideVolumeX class="w-6 h-6" />
@@ -321,7 +319,7 @@ function Startup(props: { onClose: () => void }) {
                 <IconLucideVolume2 class="w-6 h-6" />
               )}
             </button>
-            <CaptionControlsWindows11 />
+            {ostype() === "windows" && <CaptionControlsWindows11 />}
           </div>
         </header>
         <style>
@@ -429,8 +427,9 @@ function Startup(props: { onClose: () => void }) {
           {/* Floating clouds */}
           <div
             id="cloud-1"
-            class={`absolute top-0 right-0 opacity-70 pointer-events-none cloud-transition cloud-1 ${isExiting() ? "exiting" : ""
-              }`}
+            class={`absolute top-0 right-0 opacity-70 pointer-events-none cloud-transition cloud-1 ${
+              isExiting() ? "exiting" : ""
+            }`}
           >
             <img
               class="cloud-image w-[100vw] md:w-[80vw] -mr-40"
@@ -440,8 +439,9 @@ function Startup(props: { onClose: () => void }) {
           </div>
           <div
             id="cloud-2"
-            class={`absolute top-0 left-0 opacity-70 pointer-events-none cloud-transition cloud-2 ${isExiting() ? "exiting" : ""
-              }`}
+            class={`absolute top-0 left-0 opacity-70 pointer-events-none cloud-transition cloud-2 ${
+              isExiting() ? "exiting" : ""
+            }`}
           >
             <img
               class="cloud-image w-[100vw] md:w-[80vw] -ml-40"
@@ -451,8 +451,9 @@ function Startup(props: { onClose: () => void }) {
           </div>
           <div
             id="cloud-3"
-            class={`absolute -bottom-[15%] left-1/2 -translate-x-1/2 opacity-70 pointer-events-none cloud-transition cloud-3 ${isExiting() ? "exiting" : ""
-              }`}
+            class={`absolute -bottom-[15%] left-1/2 -translate-x-1/2 opacity-70 pointer-events-none cloud-transition cloud-3 ${
+              isExiting() ? "exiting" : ""
+            }`}
           >
             <img
               class="cloud-image w-[180vw] md:w-[180vw]"
@@ -463,8 +464,9 @@ function Startup(props: { onClose: () => void }) {
 
           {/* Main content */}
           <div
-            class={`content-container flex flex-col items-center justify-center flex-1 relative px-4 ${isExiting() ? "exiting" : ""
-              }`}
+            class={`content-container flex flex-col items-center justify-center flex-1 relative px-4 ${
+              isExiting() ? "exiting" : ""
+            }`}
           >
             <div class="text-center mb-8">
               <div

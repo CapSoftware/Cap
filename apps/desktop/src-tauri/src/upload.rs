@@ -843,31 +843,6 @@ impl InstantMultipartUpload {
         use tokio::time::sleep;
 
         // --------------------------------------------
-        // listen for a "RecordingStopped" signal. We'll
-        // finalize only after we know there's no more
-        // incoming data from the pipeline (plus we do
-        // an extra stabilization check).
-        // --------------------------------------------
-        let (recording_end_tx, mut recording_end_rx) = mpsc::channel::<()>(1);
-
-        RecordingStopped::listen_any(&app.clone(), {
-            let app = app.clone();
-            move |_| {
-                let tx = recording_end_tx.clone();
-                let app = app.clone();
-
-                tokio::spawn(async move {
-                    let state = app.state::<Arc<RwLock<App>>>();
-                    let app_state = state.read().await;
-                    if app_state.current_recording.is_none() {
-                        // Recording truly ended
-                        let _ = tx.send(()).await;
-                    }
-                });
-            }
-        });
-
-        // --------------------------------------------
         // basic constants and info for chunk approach
         // --------------------------------------------
         let file_name = "result.mp4";
@@ -879,38 +854,7 @@ impl InstantMultipartUpload {
         let mut part_number = 1;
         let mut last_uploaded_position: u64 = 0;
 
-        let mut recording_stopped = false;
-
         println!("Starting multipart upload for {video_id}...");
-
-        // --------------------------------------------
-        // wait until the file hits 5MB or more
-        // before initiating the multipart upload.
-        // --------------------------------------------
-        loop {
-            if !file_path.exists() {
-                println!("File does not exist yet, waiting...");
-                sleep(Duration::from_millis(500)).await;
-                continue;
-            }
-            match tokio::fs::metadata(&file_path).await {
-                Ok(metadata) => {
-                    if metadata.len() < MIN_PART_SIZE {
-                        sleep(Duration::from_millis(500)).await;
-                        continue;
-                    } else {
-                        break;
-                    }
-                }
-                Err(e) => {
-                    println!("Failed to get file metadata: {}", e);
-                    sleep(Duration::from_millis(500)).await;
-                }
-            }
-        }
-
-        // Copy link to clipboard early
-        let _ = app.clipboard().write_text(pre_created_video.link.clone());
 
         // --------------------------------------------
         // initiate the multipart upload
@@ -973,14 +917,6 @@ impl InstantMultipartUpload {
         //   - If recording stopped, do leftover final(s).
         // --------------------------------------------
         loop {
-            if !recording_stopped {
-                // Check if the recording pipeline is done
-                if let Ok(_) = recording_end_rx.try_recv() {
-                    println!("Recording end detected, will finalize soon.");
-                    recording_stopped = true;
-                }
-            }
-
             if !realtime_is_done.unwrap_or(true) {
                 if let Some(realtime_video_done) = &realtime_video_done {
                     match realtime_video_done.try_recv() {
@@ -1044,7 +980,7 @@ impl InstantMultipartUpload {
                         sleep(Duration::from_secs(1)).await;
                     }
                 }
-            } else {
+            } else if new_data_size == 0 && realtime_is_done.unwrap_or(true) {
                 if realtime_is_done.unwrap_or(false) {
                     info!("realtime video done, uploading header chunk");
 
@@ -1086,8 +1022,13 @@ impl InstantMultipartUpload {
                 .await?;
 
                 break;
+            } else {
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }
+
+        // Copy link to clipboard early
+        let _ = app.clipboard().write_text(pre_created_video.link.clone());
 
         Ok(())
     }

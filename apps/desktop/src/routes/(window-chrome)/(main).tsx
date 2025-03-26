@@ -325,7 +325,6 @@ import { type as ostype, platform } from "@tauri-apps/plugin-os";
 import * as updater from "@tauri-apps/plugin-updater";
 import { Transition } from "solid-transition-group";
 
-import { setTitlebar } from "~/utils/titlebar-state";
 import { apiClient } from "~/utils/web-api";
 import { useWindowChrome } from "./Context";
 

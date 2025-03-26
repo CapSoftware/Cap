@@ -38,7 +38,6 @@ export default function (props: RouteSectionProps) {
       <div class="bg-gray-100 border-gray-200 w-screen h-screen max-h-screen flex flex-col overflow-hidden transition-[border-radius] duration-200">
         <Header />
 
-        {/* <Titlebar /> */}
         {/* breaks sometimes */}
         {/* <Transition
         mode="outin"

@@ -7,7 +7,7 @@ import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import { createEffect, createSignal, onCleanup, onMount } from "solid-js";
 
-import { initializeTitlebar, setTitlebar } from "~/utils/titlebar-state";
+import { initializeTitlebar } from "~/utils/titlebar-state";
 import { useEditorContext } from "./context";
 import ExportButton from "./ExportButton";
 import PresetsDropdown from "./PresetsDropdown";
