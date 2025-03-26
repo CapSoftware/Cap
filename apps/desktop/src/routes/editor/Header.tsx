@@ -7,13 +7,14 @@ import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import { createEffect, createSignal, onCleanup, onMount } from "solid-js";
 
+import { Button } from "@cap/ui-solid";
+import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import { trackEvent } from "~/utils/analytics";
 import { initializeTitlebar } from "~/utils/titlebar-state";
 import { useEditorContext } from "./context";
-import ExportButton from "./ExportButton";
 import PresetsDropdown from "./PresetsDropdown";
 import ShareButton from "./ShareButton";
 import { EditorButton } from "./ui";
-import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 
 export type ResolutionOption = {
   label: string;
@@ -36,6 +37,10 @@ export interface ExportEstimates {
 
 export function Header() {
   const editorContext = useEditorContext();
+  const [lastMetaUpdate, setLastMetaUpdate] = createSignal<{
+    videoId: string;
+    timestamp: number;
+  } | null>(null);
 
   const [selectedFps, setSelectedFps] = createSignal(
     Number(localStorage.getItem("cap-export-fps")) || 30
@@ -49,7 +54,6 @@ export function Header() {
 
   // Save settings when they change
   createEffect(() => {
-    localStorage.setItem("cap-export-fps", selectedFps().toString());
     localStorage.setItem("cap-export-resolution", selectedResolution().value);
   });
 
@@ -62,11 +66,11 @@ export function Header() {
   return (
     <div
       data-tauri-drag-region
-      class="relative w-full h-14 flex flex-row items-center"
+      class="flex relative flex-row items-center w-full h-14"
     >
       <div
         data-tauri-drag-region
-        class={cx("flex-1 h-full flex flex-row items-center gap-2 px-4")}
+        class={cx("flex flex-row flex-1 gap-2 items-center px-4 h-full")}
       >
         {ostype() === "macos" && <div class="h-full w-[4rem]" />}
         <EditorButton
@@ -132,7 +136,7 @@ export function Header() {
 
       <div
         data-tauri-drag-region
-        class="px-4 border-x border-black-transparent-10 flex flex-col justify-center"
+        class="flex flex-col justify-center px-4 border-x border-black-transparent-10"
       >
         <PresetsDropdown />
       </div>
@@ -157,16 +161,21 @@ export function Header() {
           leftIcon={<IconCapRedo class="w-5" />}
         />
         <div data-tauri-drag-region class="flex-1 h-full" />
-        <ShareButton
-          selectedResolution={selectedResolution}
-          selectedFps={selectedFps}
-        />
-        <ExportButton
-          selectedResolution={selectedResolution()}
-          selectedFps={selectedFps()}
-          setSelectedFps={setSelectedFps}
-          setSelectedResolution={setSelectedResolution}
-        />
+        <ShareButton />
+        <Button
+          variant="lightdark"
+          class={cx("flex gap-2 justify-center")}
+          onClick={() => {
+            trackEvent("export_button_clicked");
+            editorContext.setDialog({
+              type: "export",
+              open: true,
+            });
+          }}
+        >
+          <IconCapUpload class="size-5" />
+          Export
+        </Button>
         {ostype() === "windows" && <CaptionControlsWindows11 />}
       </div>
     </div>

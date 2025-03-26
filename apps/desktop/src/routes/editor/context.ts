@@ -28,7 +28,8 @@ export type CurrentDialog =
   | { type: "createPreset" }
   | { type: "renamePreset"; presetIndex: number }
   | { type: "deletePreset"; presetIndex: number }
-  | { type: "crop"; position: XY<number>; size: XY<number> };
+  | { type: "crop"; position: XY<number>; size: XY<number> }
+  | { type: "export" };
 
 export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
 
@@ -328,3 +329,17 @@ export const [SegmentContextProvider, useSegmentContext] =
   createContextProvider((props: { width: Accessor<number> }) => {
     return props;
   }, null!);
+
+
+
+  //This is used in ShareButton.tsx to notify the component that the metadata has changed, from ExportDialog.tsx
+//When a video is uploaded, the metadata is updated
+
+const [lastMetaUpdate, setLastMetaUpdate] = createSignal<{ videoId: string; timestamp: number } | null>(null);
+
+export const metaUpdateStore = {
+  notifyUpdate: (videoId: string) => {
+    setLastMetaUpdate({ videoId, timestamp: Date.now() });
+  },
+  getLastUpdate: lastMetaUpdate
+};

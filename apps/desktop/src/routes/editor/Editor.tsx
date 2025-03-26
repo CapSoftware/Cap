@@ -19,8 +19,9 @@ import { createStore } from "solid-js/store";
 
 import { Tooltip } from "@kobalte/core";
 import { makePersisted } from "@solid-primitives/storage";
+import { cx } from "cva";
 import Cropper, { cropToFloor } from "~/components/Cropper";
-import { type Crop, events } from "~/utils/tauri";
+import { events, type Crop } from "~/utils/tauri";
 import { ConfigSidebar } from "./ConfigSidebar";
 import {
   EditorContextProvider,
@@ -30,6 +31,7 @@ import {
   useEditorContext,
   useEditorInstanceContext,
 } from "./context";
+import ExportDialog from "./ExportDialog";
 import { Header } from "./Header";
 import { Player } from "./Player";
 import { Timeline } from "./Timeline";
@@ -41,7 +43,6 @@ import {
   Subfield,
   Toggle,
 } from "./ui";
-import { cx } from "cva";
 
 export function Editor() {
   const [params] = useSearchParams<{ id: string }>();
@@ -147,6 +148,11 @@ function Dialogs() {
         if ("type" in d && d.type === "crop") return "lg";
         return "sm";
       })()}
+      contentClass={(() => {
+        const d = dialog();
+        if ("type" in d && d.type === "export") return "max-w-[740px]";
+        return "";
+      })()}
       open={dialog().open}
       onOpenChange={(o) => {
         if (!o) setDialog((d) => ({ ...d, open: false }));
@@ -160,6 +166,9 @@ function Dialogs() {
       >
         {(dialog) => (
           <Switch>
+            <Match when={dialog().type === "export"}>
+              {(_) => <ExportDialog />}
+            </Match>
             <Match when={dialog().type === "createPreset"}>
               {(_) => {
                 const [form, setForm] = createStore({

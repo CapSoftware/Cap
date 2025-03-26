@@ -180,6 +180,7 @@ export const Dialog = {
     props: ComponentProps<typeof KDialog> & {
       hideOverlay?: boolean;
       size?: "sm" | "lg";
+      contentClass?: string;
     }
   ) {
     return (
@@ -191,6 +192,7 @@ export const Dialog = {
           <div class="flex fixed inset-0 z-50 justify-center items-center">
             <KDialog.Content
               class={cx(
+                props.contentClass,
                 "z-50 divide-y text-sm rounded-[1.25rem] overflow-hidden border border-gray-200 bg-gray-50 min-w-[22rem] ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 origin-top ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95",
                 (props.size ?? "sm") === "sm" ? "max-w-96" : "max-w-3xl"
               )}
@@ -216,17 +218,26 @@ export const Dialog = {
     );
     return <Button {...props} />;
   },
-  Footer(props: ComponentProps<"div"> & { close?: JSX.Element }) {
+  Footer(
+    props: ComponentProps<"div"> & {
+      close?: JSX.Element;
+      leftFooterContent?: JSX.Element;
+    }
+  ) {
     return (
       <div
         class={cx(
-          "h-[4rem] px-[1rem] gap-[0.75rem] flex flex-row items-center justify-end",
+          "h-[4rem] px-[1rem] gap-3 flex flex-row items-center",
+          props.leftFooterContent ? "justify-between" : "justify-end",
           props.class
         )}
         {...props}
       >
-        {props.close ?? <Dialog.CloseButton />}
-        {props.children}
+        {props.leftFooterContent}
+        <div class="flex flex-row gap-3 items-center">
+          {props.close ?? <Dialog.CloseButton />}
+          {props.children}
+        </div>
       </div>
     );
   },
@@ -246,6 +257,7 @@ export function DialogContent(
     confirm: JSX.Element;
     class?: string;
     close?: JSX.Element;
+    leftFooterContent?: JSX.Element;
   }>
 ) {
   return (
@@ -256,7 +268,12 @@ export function DialogContent(
         </KDialog.Title>
       </Dialog.Header>
       <Dialog.Content class={props.class}>{props.children}</Dialog.Content>
-      <Dialog.Footer close={props.close}>{props.confirm}</Dialog.Footer>
+      <Dialog.Footer
+        close={props.close}
+        leftFooterContent={props.leftFooterContent}
+      >
+        {props.confirm}
+      </Dialog.Footer>
     </>
   );
 }
