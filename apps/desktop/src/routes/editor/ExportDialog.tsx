@@ -132,6 +132,8 @@ const ExportDialog = () => {
     link: <IconCapLink class="text-gray-500 size-4" />,
   };
 
+  // States
+
   const [exportState, setExportState] = createStore<ExportState>({
     type: "idle",
   });
@@ -139,6 +141,14 @@ const ExportDialog = () => {
   const [copyState, setCopyState] = createStore<CopyState>({
     type: "idle",
   });
+
+  const [uploadState, setUploadState] = createStore<
+    | { type: "idle" }
+    | { type: "starting" }
+    | { type: "rendering"; renderedFrames: number; totalFrames: number }
+    | { type: "uploading"; progress: number }
+    | { type: "link-copied" }
+  >({ type: "idle" });
 
   const copy = createMutation(() => ({
     mutationFn: async () => {
@@ -169,7 +179,7 @@ const ExportDialog = () => {
         const outputPath = await commands.exportVideo(
           videoId,
           progress,
-          false,
+          true,
           selectedFps(),
           {
             x: selectedResolution().width,
@@ -195,8 +205,8 @@ const ExportDialog = () => {
         type: "copied",
       });
       setTimeout(() => {
-        setCopyState({ type: "idle" });
-      }, 2000);
+        setDialog((d) => ({ ...d, open: false }));
+      }, 1000);
     },
   }));
 
@@ -257,6 +267,9 @@ const ExportDialog = () => {
         await commands.copyFileToPath(videoPath, path);
 
         setExportState({ type: "saving", done: false });
+        setTimeout(() => {
+          setDialog((d) => ({ ...d, open: false }));
+        }, 1000);
       } catch (error) {
         throw error;
       }
@@ -264,26 +277,9 @@ const ExportDialog = () => {
     onSettled() {
       setTimeout(() => {
         exportWithSettings.reset();
-        setDialog((d) => ({ ...d, open: false }));
       }, 1000);
     },
   }));
-
-  createProgressBar(() => {
-    if (exportWithSettings.isIdle || exportState.type === "idle") return;
-    if (exportState.type === "starting") return 0;
-    if (exportState.type === "rendering")
-      return (exportState.renderedFrames / exportState.totalFrames) * 100;
-    return 100;
-  });
-
-  const [uploadState, setUploadState] = createStore<
-    | { type: "idle" }
-    | { type: "starting" }
-    | { type: "rendering"; renderedFrames: number; totalFrames: number }
-    | { type: "uploading"; progress: number }
-    | { type: "link-copied" }
-  >({ type: "idle" });
 
   const uploadVideo = createMutation(() => ({
     mutationFn: async () => {
@@ -414,6 +410,14 @@ const ExportDialog = () => {
   }));
 
   createProgressBar(() => {
+    if (exportWithSettings.isIdle || exportState.type === "idle") return;
+    if (exportState.type === "starting") return 0;
+    if (exportState.type === "rendering")
+      return (exportState.renderedFrames / exportState.totalFrames) * 100;
+    return 100;
+  });
+
+  createProgressBar(() => {
     if (uploadVideo.isIdle || uploadState.type === "idle") return;
     if (uploadState.type === "starting") return 0;
     if (uploadState.type === "rendering")
@@ -533,6 +537,7 @@ const ExportDialog = () => {
                             variant="secondary"
                             onClick={() => setFormat(option.value)}
                             disabled={option.disabled}
+                            autofocus={false}
                             class={cx(
                               format() === option.value && selectedStyle
                             )}
@@ -755,7 +760,12 @@ const ExportDialog = () => {
               <CopyingContent copyState={copyState} />
             </Show>
             {/** Exporting to shareable link */}
-            <Show when={uploadState.type !== "idle" && uploadVideo.isPending}>
+            <Show
+              when={
+                uploadState.type !== "idle" &&
+                (uploadVideo.isPending || uploadState.type === "starting")
+              }
+            >
               <UploadingCapContent />
             </Show>
             {/** Exporting to file */}
@@ -775,11 +785,13 @@ const CopyingContent = ({ copyState }: { copyState: CopyState }) => {
       <h1 class="text-lg font-medium text-gray-500">
         {copyState.type === "rendering"
           ? "Rendering video..."
-          : copyState.type === "starting"
-          ? "Copying to clipboard..."
-          : "Copied to clipboard"}
+          : copyState.type === "copied"
+          ? "Copied to clipboard"
+          : "Copying to clipboard..."}
       </h1>
-      <Show when={copyState.type === "rendering"}>
+      <Show
+        when={copyState.type === "rendering" || copyState.type === "starting"}
+      >
         <div class="w-full bg-gray-200 rounded-full h-2.5">
           <div
             class="bg-blue-300 h-2.5 rounded-full"
@@ -796,12 +808,14 @@ const CopyingContent = ({ copyState }: { copyState: CopyState }) => {
           />
         </div>
       </Show>
-      <Show when={copyState.type === "rendering"}>
-        <p class="text-xs text-gray-500">
+      <Show
+        when={copyState.type === "rendering" || copyState.type === "starting"}
+      >
+        <p class="text-xs">
           {copyState.type === "rendering"
-            ? `${Math.floor(
-                (copyState.renderedFrames / copyState.totalFrames) * 100
-              )}%`
+            ? `${copyState.renderedFrames}/${copyState.totalFrames} frames`
+            : copyState.type === "starting"
+            ? "Preparing to render..."
             : ""}
         </p>
       </Show>
@@ -815,33 +829,52 @@ const ExportingFileContent = ({
   exportState: ExportState;
 }) => {
   return (
-    <>
-      <div class="w-full bg-gray-200 rounded-full h-2.5 mb-2">
-        <div
-          class="bg-blue-300 h-2.5 rounded-full"
-          style={{
-            width: `${
-              exportState.type === "saving"
-                ? 100
-                : exportState.type === "rendering"
-                ? Math.min(
-                    (exportState.renderedFrames / exportState.totalFrames) *
-                      100,
-                    100
-                  )
-                : 0
-            }%`,
-          }}
-        />
-      </div>
-      <p class="relative z-10 mt-3 text-xs">
-        {exportState.type == "idle" || exportState.type === "starting"
-          ? "Preparing to render..."
-          : exportState.type === "rendering"
-          ? `Rendering video (${exportState.renderedFrames}/${exportState.totalFrames} frames)`
-          : "Exported successfully!"}
-      </p>
-    </>
+    <div class="flex flex-col gap-4 justify-center items-center h-full">
+      <h1 class="text-lg font-medium text-gray-500">
+        {exportState.type === "rendering"
+          ? "Rendering video..."
+          : exportState.type === "saving"
+          ? "Exported successfully"
+          : "Exporting to file..."}
+      </h1>
+      <Show
+        when={
+          exportState.type === "starting" || exportState.type === "rendering"
+        }
+      >
+        <div class="w-full bg-gray-200 rounded-full h-2.5">
+          <div
+            class="bg-blue-300 h-2.5 rounded-full"
+            style={{
+              width: `${
+                exportState.type === "saving"
+                  ? 100
+                  : exportState.type === "rendering"
+                  ? Math.min(
+                      (exportState.renderedFrames / exportState.totalFrames) *
+                        100,
+                      100
+                    )
+                  : 0
+              }%`,
+            }}
+          />
+        </div>
+      </Show>
+      <Show
+        when={
+          exportState.type === "starting" || exportState.type === "rendering"
+        }
+      >
+        <p class="text-xs">
+          {exportState.type === "starting"
+            ? "Preparing to render..."
+            : exportState.type === "rendering"
+            ? `${exportState.renderedFrames}/${exportState.totalFrames} frames`
+            : ""}
+        </p>
+      </Show>
+    </div>
   );
 };
 

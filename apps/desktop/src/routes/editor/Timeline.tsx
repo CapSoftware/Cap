@@ -403,7 +403,7 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                       return (
                         <div
                           style={{
-                            translate: `transformX(${
+                            transform: `translateX(${
                               (markingTime - segmentStartTime) / secsPerPixel()
                             }px)`,
                           }}
@@ -421,7 +421,7 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
               <SegmentHandle
                 position="start"
                 class={cx(
-                  "absolute opacity-0 inset-y-0 z-10",
+                  "absolute inset-y-0 z-10 opacity-0",
                   "group-hover:opacity-100"
                 )}
                 onMouseDown={(downEvent) => {
@@ -494,7 +494,7 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                   return (
                     <Show when={ctx.width() > 100}>
                       <div class="flex flex-col gap-1 justify-center items-center text-xs text-gray-500 whitespace-nowrap">
-                        <span class="text-solid-white opacity-60">Clip</span>
+                        <span class="opacity-60 text-solid-white">Clip</span>
                         <div class="flex gap-1 items-center text-gray-50 dark:text-gray-500 text-md">
                           <IconLucideClock class="size-3.5" />{" "}
                           {(segment.end - segment.start).toFixed(1)}s
@@ -513,7 +513,7 @@ function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
               <SegmentHandle
                 position="end"
                 class={cx(
-                  "absolute opacity-0 inset-y-0 z-10",
+                  "absolute inset-y-0 z-10 opacity-0",
                   "group-hover:opacity-100"
                 )}
                 onMouseDown={(downEvent) => {
@@ -691,7 +691,7 @@ function ZoomTrack(props: {
             }}
           >
             <SegmentContent class="bg-gradient-to-r zoom-gradient-border hover:border duration-300 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]">
-              <p class="w-full text-center dark:text-gray-500 text-md text-primary text-gray-50">
+              <p class="w-full text-center text-gray-50 dark:text-gray-500 text-md text-primary">
                 +
               </p>
             </SegmentContent>
@@ -786,7 +786,7 @@ function ZoomTrack(props: {
             >
               <SegmentHandle
                 position="start"
-                class="absolute group-hover:opacity-100 opacity-0"
+                class="absolute opacity-0 group-hover:opacity-100"
                 onMouseDown={createMouseDownDrag(
                   () => {
                     const start = segment.start;
@@ -867,7 +867,7 @@ function ZoomTrack(props: {
 
                   return (
                     <Show when={ctx.width() > 100}>
-                      <div class="flex flex-col gap-1 justify-center items-center text-xs text-gray-50 dark:text-gray-500 whitespace-nowrap">
+                      <div class="flex flex-col gap-1 justify-center items-center text-xs text-gray-50 whitespace-nowrap dark:text-gray-500">
                         <span class="opacity-70">Zoom</span>
                         <div class="flex gap-1 items-center text-md">
                           <IconLucideSearch class="size-3.5" />{" "}
@@ -880,7 +880,7 @@ function ZoomTrack(props: {
               </SegmentContent>
               <SegmentHandle
                 position="end"
-                class="absolute group-hover:opacity-100 opacity-0"
+                class="absolute opacity-0 group-hover:opacity-100"
                 onMouseDown={createMouseDownDrag(
                   () => {
                     const end = segment.end;

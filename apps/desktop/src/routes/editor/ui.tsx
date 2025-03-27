@@ -193,7 +193,7 @@ export const Dialog = {
             <KDialog.Content
               class={cx(
                 props.contentClass,
-                "z-50 divide-y text-sm rounded-[1.25rem] overflow-hidden border border-gray-200 bg-gray-50 min-w-[22rem] ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 origin-top ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95",
+                "z-50 text-sm rounded-[1.25rem] overflow-hidden border border-gray-200 bg-gray-50 min-w-[22rem] ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 origin-top ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95",
                 (props.size ?? "sm") === "sm" ? "max-w-96" : "max-w-3xl"
               )}
             >
@@ -247,7 +247,15 @@ export const Dialog = {
     );
   },
   Content(props: ComponentProps<"div">) {
-    return <div {...props} class={cx("p-[1rem] flex flex-col", props.class)} />;
+    return (
+      <div
+        {...props}
+        class={cx(
+          "p-[1rem] flex flex-col border-y border-gray-200",
+          props.class
+        )}
+      />
+    );
   },
 };
 
