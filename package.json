@@ -2,6 +2,8 @@
   "type": "module",
   "scripts": {
     "build": "dotenv -e .env -- turbo run build",
+    "build:web": "turbo run build:web",
+    "build:web:docker": "turbo run build:web:docker",
     "db:studio": "dotenv -e .env -- pnpm --dir packages/database db:studio",
     "dev": "(pnpm run docker:up > /dev/null &) && sleep 5 && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
     "dev:windows": "start /b cmd /c \"pnpm run docker:up > nul\" && timeout /t 5 /nobreak > nul && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",

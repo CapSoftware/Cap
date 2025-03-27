@@ -57,8 +57,11 @@ export const authOptions: NextAuthOptions = {
     }),
     EmailProvider({
       sendVerificationRequest({ identifier, url }) {
-        console.log({ NODE_ENV });
-        if (NODE_ENV === "development") {
+        if (
+          NODE_ENV === "development" ||
+          !serverEnv.RESEND_API_KEY ||
+          serverEnv.RESEND_API_KEY === ""
+        ) {
           console.log(`Login link: ${url}`);
         } else {
           sendEmail({
