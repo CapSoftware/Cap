@@ -263,6 +263,10 @@ const ExportDialog = () => {
         await commands.copyFileToPath(videoPath, path);
 
         setExportState({ type: "saving", done: true });
+        //needs to be here so if the user cancels file selection the dialog does not close
+        setTimeout(() => {
+          setDialog((d) => ({ ...d, open: false }));
+        }, 1000);
       } catch (error) {
         throw error;
       }
@@ -270,7 +274,6 @@ const ExportDialog = () => {
     onSettled() {
       setTimeout(() => {
         exportWithSettings.reset();
-        setDialog((d) => ({ ...d, open: false }));
         setExportProgress(null);
       }, 1000);
       setTimeout(() => {
