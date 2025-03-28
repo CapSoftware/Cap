@@ -75,7 +75,7 @@ export function Editor() {
 }
 
 function Inner() {
-  const { project, playbackTime, setPlaybackTime, playing } =
+  const { project, previewTime, playbackTime, setPlaybackTime, playing } =
     useEditorContext();
 
   onMount(() => {
@@ -98,8 +98,8 @@ function Inner() {
   }, 1000 / FPS);
 
   const frameNumberToRender = createMemo(() => {
-    // const preview = previewTime();
-    // if (preview !== undefined) return preview;
+    const preview = previewTime();
+    if (preview !== undefined) return preview;
     return playbackTime();
   });
 

@@ -158,8 +158,8 @@ importers:
         specifier: 2.0.0
         version: 2.0.0
       '@ts-rest/core':
-        specifier: ^3.51.0
-        version: 3.51.0(@types/node@22.12.0)(zod@3.24.2)
+        specifier: ^3.52.1
+        version: 3.52.1(@types/node@22.12.0)(zod@3.24.2)
       '@types/react-tooltip':
         specifier: ^4.2.4
         version: 4.2.4(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -460,7 +460,7 @@ importers:
         version: 1.7.19(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@hono/zod-validator':
         specifier: ^0.4.3
-        version: 0.4.3(hono@4.7.1)(zod@3.24.1)
+        version: 0.4.3(hono@4.7.1)(zod@3.24.2)
       '@hookform/resolvers':
         specifier: ^3.3.2
         version: 3.9.0(react-hook-form@7.53.0(react@18.3.1))
@@ -487,7 +487,7 @@ importers:
         version: 3.5.0
       '@t3-oss/env-nextjs':
         specifier: ^0.12.0
-        version: 0.12.0(typescript@5.7.2)(valibot@1.0.0-rc.1(typescript@5.7.2))(zod@3.24.1)
+        version: 0.12.0(typescript@5.7.2)(valibot@1.0.0-rc.1(typescript@5.7.2))(zod@3.24.2)
       '@tanstack/react-query':
         specifier: ^5.51.11
         version: 5.56.2(react@18.3.1)
@@ -498,8 +498,8 @@ importers:
         specifier: ^0.5.5
         version: 0.5.5
       '@ts-rest/core':
-        specifier: ^3.51.0
-        version: 3.51.0(@types/node@20.16.9)(zod@3.24.1)
+        specifier: ^3.52.1
+        version: 3.52.1(@types/node@20.16.9)(zod@3.24.2)
       '@uidotdev/usehooks':
         specifier: ^2.4.1
         version: 2.4.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -526,7 +526,7 @@ importers:
         version: 0.30.9(@cloudflare/workers-types@4.20250214.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(@types/react@18.3.9)(mysql2@3.11.3)(react@18.3.1)
       dub:
         specifier: ^0.33.1
-        version: 0.33.1(zod@3.24.1)
+        version: 0.33.1(zod@3.24.2)
       file-saver:
         specifier: ^2.0.5
         version: 2.0.5
@@ -621,8 +621,8 @@ importers:
         specifier: ^8.17.3
         version: 8.17.4
       zod:
-        specifier: ^3.24.1
-        version: 3.24.1
+        specifier: ^3.24.2
+        version: 3.24.2
     devDependencies:
       '@types/file-saver':
         specifier: ^2.0.7
@@ -803,10 +803,10 @@ importers:
     dependencies:
       '@t3-oss/env-nextjs':
         specifier: ^0.12.0
-        version: 0.12.0(typescript@5.7.2)(valibot@1.0.0-rc.1(typescript@5.7.2))(zod@3.24.1)
+        version: 0.12.0(typescript@5.7.2)(valibot@1.0.0-rc.1(typescript@5.7.2))(zod@3.24.2)
       zod:
-        specifier: ^3.24.1
-        version: 3.24.1
+        specifier: ^3.24.2
+        version: 3.24.2
     devDependencies:
       '@types/node':
         specifier: ^22.12.0
@@ -1014,11 +1014,11 @@ importers:
   packages/web-api-contract:
     dependencies:
       '@ts-rest/core':
-        specifier: ^3.51.0
-        version: 3.51.0(@types/node@22.12.0)(zod@3.24.1)
+        specifier: ^3.52.1
+        version: 3.52.1(@types/node@22.12.0)(zod@3.24.2)
       zod:
-        specifier: ^3.24.1
-        version: 3.24.1
+        specifier: ^3.24.2
+        version: 3.24.2
 
 packages:
 
@@ -4866,10 +4866,10 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@9.0.0-alpha.10':
-    resolution: {integrity: sha512-gPpW5WcxvtH1aTY5KqtUMtsExjxuHRvuD+Fsw+n6HLOGVZsBs8m/uJ7ujZMnUmSsR2w/DJI5mk9uWEB01Vasdw==}
+  '@storybook/builder-vite@9.0.0-alpha.11':
+    resolution: {integrity: sha512-yAboTqP1lxZiy7id5o8V2oyaPl7rkRgKzNArDI8nO5Qamie9cOwgORP6r0pOExw6PM/ClskSJRFOCrE5uoHN8Q==}
     peerDependencies:
-      storybook: ^9.0.0-alpha.10
+      storybook: ^9.0.0-alpha.11
       vite: ^4.0.0 || ^5.0.0 || ^6.0.0
 
   '@storybook/core@8.3.3':
@@ -4880,10 +4880,10 @@ packages:
     peerDependencies:
       storybook: ^8.3.3
 
-  '@storybook/csf-plugin@9.0.0-alpha.10':
-    resolution: {integrity: sha512-p8ho/3H07TYXn+hY9uExhXy4DyNr154PmB6kSJ/7vLZkWnHXzeP54xDq4/WT9FNCF8FwwtDzRDSoJRiPqTP0kQ==}
+  '@storybook/csf-plugin@9.0.0-alpha.11':
+    resolution: {integrity: sha512-SxLvKUlcJkpBTRP4/PHNlRZWPFrTmOWDpr3ZKdIhEkEC+KI97+SWNNps3SlV2BX4gDUl4JekFGrCH+ekbmJ7OQ==}
     peerDependencies:
-      storybook: ^9.0.0-alpha.10
+      storybook: ^9.0.0-alpha.11
 
   '@storybook/csf@0.1.11':
     resolution: {integrity: sha512-dHYFQH3mA+EtnCkHXzicbLgsvzYjcDJ1JWsogbItZogkPHgSJM/Wr71uMkcvw8v9mmCyP4NpXJuu6bPoVsOnzg==}
@@ -5202,8 +5202,8 @@ packages:
   '@total-typescript/ts-reset@0.6.1':
     resolution: {integrity: sha512-cka47fVSo6lfQDIATYqb/vO1nvFfbPw7uWLayIXIhGETj0wcOOlrlkobOMDNQOFr9QOafegUPq13V2+6vtD7yg==}
 
-  '@ts-rest/core@3.51.0':
-    resolution: {integrity: sha512-v6lnWEcpZj1UgN9wb84XQ+EORP1QEtncFumoXMJjno5ZUV6vdjKze3MYcQN0C6vjBpIJPQEaI/gab2jr4/0KzQ==}
+  '@ts-rest/core@3.52.1':
+    resolution: {integrity: sha512-tAjz7Kxq/grJodcTA1Anop4AVRDlD40fkksEV5Mmal88VoZeRKAG8oMHsDwdwPZz+B/zgnz0q2sF+cm5M7Bc7g==}
     peerDependencies:
       '@types/node': ^18.18.7 || >=20.8.4
       zod: ^3.22.3
@@ -5804,6 +5804,11 @@ packages:
 
   acorn@8.14.0:
     resolution: {integrity: sha512-cl669nCJTZBsL97OF4kUQm5g5hC2uihk0NxY3WENAC0TYdILVkAyHymAntgxGkl7K+t0cXIrH5siy5S4XkFycA==}
+    engines: {node: '>=0.4.0'}
+    hasBin: true
+
+  acorn@8.14.1:
+    resolution: {integrity: sha512-OvQ/2pUDKmgfCg++xsTX1wGxfTaszcHVcTctW4UJB4hibJx2HXxxO5UmVgyjMa+ZDsiaf5wWLXYpRWMmBI0QHg==}
     engines: {node: '>=0.4.0'}
     hasBin: true
 
@@ -11822,8 +11827,8 @@ packages:
   ts-pattern@5.5.0:
     resolution: {integrity: sha512-jqbIpTsa/KKTJYWgPNsFNbLVpwCgzXfFJ1ukNn4I8hMwyQzHMJnk/BqWzggB0xpkILuKzaO/aMYhS0SkaJyKXg==}
 
-  ts-pattern@5.6.2:
-    resolution: {integrity: sha512-d4IxJUXROL5NCa3amvMg6VQW2HVtZYmUTPfvVtO7zJWGYLJ+mry9v2OmYm+z67aniQoQ8/yFNadiEwtNS9qQiw==}
+  ts-pattern@5.7.0:
+    resolution: {integrity: sha512-0/FvIG4g3kNkYgbNwBBW5pZBkfpeYQnH+2AA3xmjkCAit/DSDPKmgwC3fKof4oYUq6gupClVOJlFl+939VRBMg==}
 
   tsconfck@3.1.3:
     resolution: {integrity: sha512-ulNZP1SVpRDesxeMLON/LtWM8HIgAJEIVpVVhBM6gsmvQ8+Rh+ZG7FWGvHh7Ah3pRABwVJWklWCr/BTZSv0xnQ==}
@@ -13699,7 +13704,7 @@ snapshots:
       gray-matter: 4.0.3
       imagescript: 1.3.0
       micromatch: 4.0.8
-      ts-pattern: 5.6.2
+      ts-pattern: 5.7.0
       unified: 11.0.5
       yaml: 2.7.0
       zod: 3.24.2
@@ -14438,15 +14443,15 @@ snapshots:
       hono: 4.7.1
       valibot: 1.0.0-rc.1(typescript@5.7.2)
 
-  '@hono/zod-validator@0.2.2(hono@4.7.1)(zod@3.24.1)':
+  '@hono/zod-validator@0.2.2(hono@4.7.1)(zod@3.24.2)':
     dependencies:
       hono: 4.7.1
-      zod: 3.24.1
+      zod: 3.24.2
 
-  '@hono/zod-validator@0.4.3(hono@4.7.1)(zod@3.24.1)':
+  '@hono/zod-validator@0.4.3(hono@4.7.1)(zod@3.24.2)':
     dependencies:
       hono: 4.7.1
-      zod: 3.24.1
+      zod: 3.24.2
 
   '@hookform/resolvers@3.9.0(react-hook-form@7.53.0(react@18.3.1))':
     dependencies:
@@ -17087,9 +17092,9 @@ snapshots:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
 
-  '@storybook/builder-vite@9.0.0-alpha.10(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))':
+  '@storybook/builder-vite@9.0.0-alpha.11(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))':
     dependencies:
-      '@storybook/csf-plugin': 9.0.0-alpha.10(storybook@8.3.3)
+      '@storybook/csf-plugin': 9.0.0-alpha.11(storybook@8.3.3)
       browser-assert: 1.2.1
       storybook: 8.3.3
       ts-dedent: 2.2.0
@@ -17120,7 +17125,7 @@ snapshots:
       storybook: 8.3.3
       unplugin: 1.16.1
 
-  '@storybook/csf-plugin@9.0.0-alpha.10(storybook@8.3.3)':
+  '@storybook/csf-plugin@9.0.0-alpha.11(storybook@8.3.3)':
     dependencies:
       storybook: 8.3.3
       unplugin: 1.16.1
@@ -17189,19 +17194,19 @@ snapshots:
     dependencies:
       defer-to-connect: 2.0.1
 
-  '@t3-oss/env-core@0.12.0(typescript@5.7.2)(valibot@1.0.0-rc.1(typescript@5.7.2))(zod@3.24.1)':
+  '@t3-oss/env-core@0.12.0(typescript@5.7.2)(valibot@1.0.0-rc.1(typescript@5.7.2))(zod@3.24.2)':
     optionalDependencies:
       typescript: 5.7.2
       valibot: 1.0.0-rc.1(typescript@5.7.2)
-      zod: 3.24.1
+      zod: 3.24.2
 
-  '@t3-oss/env-nextjs@0.12.0(typescript@5.7.2)(valibot@1.0.0-rc.1(typescript@5.7.2))(zod@3.24.1)':
+  '@t3-oss/env-nextjs@0.12.0(typescript@5.7.2)(valibot@1.0.0-rc.1(typescript@5.7.2))(zod@3.24.2)':
     dependencies:
-      '@t3-oss/env-core': 0.12.0(typescript@5.7.2)(valibot@1.0.0-rc.1(typescript@5.7.2))(zod@3.24.1)
+      '@t3-oss/env-core': 0.12.0(typescript@5.7.2)(valibot@1.0.0-rc.1(typescript@5.7.2))(zod@3.24.2)
     optionalDependencies:
       typescript: 5.7.2
       valibot: 1.0.0-rc.1(typescript@5.7.2)
-      zod: 3.24.1
+      zod: 3.24.2
 
   '@tailwindcss/typography@0.5.15(tailwindcss@3.4.13(ts-node@10.9.2(@types/node@20.16.9)(typescript@5.7.2)))':
     dependencies:
@@ -17430,17 +17435,12 @@ snapshots:
 
   '@total-typescript/ts-reset@0.6.1': {}
 
-  '@ts-rest/core@3.51.0(@types/node@20.16.9)(zod@3.24.1)':
+  '@ts-rest/core@3.52.1(@types/node@20.16.9)(zod@3.24.2)':
     optionalDependencies:
       '@types/node': 20.16.9
-      zod: 3.24.1
+      zod: 3.24.2
 
-  '@ts-rest/core@3.51.0(@types/node@22.12.0)(zod@3.24.1)':
-    optionalDependencies:
-      '@types/node': 22.12.0
-      zod: 3.24.1
-
-  '@ts-rest/core@3.51.0(@types/node@22.12.0)(zod@3.24.2)':
+  '@ts-rest/core@3.52.1(@types/node@22.12.0)(zod@3.24.2)':
     optionalDependencies:
       '@types/node': 22.12.0
       zod: 3.24.2
@@ -18222,6 +18222,10 @@ snapshots:
     dependencies:
       acorn: 8.14.0
 
+  acorn-jsx@5.3.2(acorn@8.14.1):
+    dependencies:
+      acorn: 8.14.1
+
   acorn-loose@8.4.0:
     dependencies:
       acorn: 8.14.0
@@ -18241,6 +18245,8 @@ snapshots:
   acorn@8.12.1: {}
 
   acorn@8.14.0: {}
+
+  acorn@8.14.1: {}
 
   aes-decrypter@4.0.1:
     dependencies:
@@ -19535,7 +19541,7 @@ snapshots:
     dependencies:
       '@esbuild-kit/esm-loader': 2.6.5
       '@hono/node-server': 1.13.1(hono@4.7.1)
-      '@hono/zod-validator': 0.2.2(hono@4.7.1)(zod@3.24.1)
+      '@hono/zod-validator': 0.2.2(hono@4.7.1)(zod@3.24.2)
       camelcase: 7.0.1
       chalk: 5.3.0
       commander: 9.5.0
@@ -19549,7 +19555,7 @@ snapshots:
       minimatch: 7.4.6
       semver: 7.6.3
       superjson: 2.2.1
-      zod: 3.24.1
+      zod: 3.24.2
     transitivePeerDependencies:
       - supports-color
 
@@ -19562,9 +19568,9 @@ snapshots:
       mysql2: 3.11.3
       react: 18.3.1
 
-  dub@0.33.1(zod@3.24.1):
+  dub@0.33.1(zod@3.24.2):
     dependencies:
-      zod: 3.24.1
+      zod: 3.24.2
 
   dunder-proto@1.0.1:
     dependencies:
@@ -19785,7 +19791,7 @@ snapshots:
   esast-util-from-js@2.0.1:
     dependencies:
       '@types/estree-jsx': 1.0.5
-      acorn: 8.14.0
+      acorn: 8.14.1
       esast-util-from-estree: 2.0.0
       vfile-message: 4.0.2
 
@@ -20140,7 +20146,7 @@ snapshots:
       '@typescript-eslint/parser': 5.62.0(eslint@8.57.1)(typescript@5.7.2)
       eslint: 8.57.1
       eslint-import-resolver-node: 0.3.9
-      eslint-import-resolver-typescript: 3.6.3(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.30.0)(eslint@8.57.1)
+      eslint-import-resolver-typescript: 3.6.3(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.7.2))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.30.0(eslint@8.57.1))(eslint@8.57.1)
     transitivePeerDependencies:
       - supports-color
 
@@ -23081,8 +23087,8 @@ snapshots:
 
   micromark-extension-mdxjs@3.0.0:
     dependencies:
-      acorn: 8.14.0
-      acorn-jsx: 5.3.2(acorn@8.14.0)
+      acorn: 8.14.1
+      acorn-jsx: 5.3.2(acorn@8.14.1)
       micromark-extension-mdx-expression: 3.0.0
       micromark-extension-mdx-jsx: 3.0.1
       micromark-extension-mdx-md: 2.0.0
@@ -25617,7 +25623,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.2(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0)):
     dependencies:
-      '@storybook/builder-vite': 9.0.0-alpha.10(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))
+      '@storybook/builder-vite': 9.0.0-alpha.11(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))
     transitivePeerDependencies:
       - storybook
       - vite
@@ -26142,7 +26148,7 @@ snapshots:
 
   ts-pattern@5.5.0: {}
 
-  ts-pattern@5.6.2: {}
+  ts-pattern@5.7.0: {}
 
   tsconfck@3.1.3(typescript@5.7.2):
     optionalDependencies:
@@ -26493,7 +26499,7 @@ snapshots:
 
   unplugin@1.16.1:
     dependencies:
-      acorn: 8.14.0
+      acorn: 8.14.1
       webpack-virtual-modules: 0.6.2
 
   unstorage@1.12.0(@planetscale/database@1.19.0)(ioredis@5.4.1):

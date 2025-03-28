@@ -1,10 +1,25 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
-use std::sync::Mutex;
-use tauri::{AppHandle, Manager, Wry};
+use tauri::{AppHandle, Wry};
 use tauri_plugin_store::StoreExt;
 use uuid::Uuid;
+
+#[derive(Default, Serialize, Deserialize, Type, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum PostStudioRecordingBehaviour {
+    #[default]
+    OpenEditor,
+    ShowOverlay,
+}
+
+#[derive(Default, Serialize, Deserialize, Type, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum MainWindowRecordingStartBehaviour {
+    #[default]
+    Close,
+    Minimise,
+}
 
 #[derive(Serialize, Deserialize, Type, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -13,8 +28,6 @@ pub struct GeneralSettingsStore {
     pub instance_id: Uuid,
     #[serde(default)]
     pub upload_individual_files: bool,
-    #[serde(default)]
-    pub open_editor_after_recording: bool,
     #[serde(default)]
     pub hide_dock_icon: bool,
     #[serde(default = "true_b")]
@@ -36,6 +49,13 @@ pub struct GeneralSettingsStore {
     pub last_version: Option<String>,
     #[serde(default)]
     pub window_transparency: bool,
+    #[serde(default)]
+    pub post_studio_recording_behaviour: PostStudioRecordingBehaviour,
+    #[serde(default)]
+    pub main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour,
+    #[serde(default, alias = "open_editor_after_recording")]
+    #[deprecated]
+    _open_editor_after_recording: bool,
 }
 
 #[derive(Serialize, Deserialize, Type, Debug)]
@@ -52,7 +72,6 @@ impl Default for GeneralSettingsStore {
         Self {
             instance_id: uuid::Uuid::new_v4(),
             upload_individual_files: false,
-            open_editor_after_recording: false,
             hide_dock_icon: false,
             haptics_enabled: true,
             auto_create_shareable_link: false,
@@ -63,6 +82,9 @@ impl Default for GeneralSettingsStore {
             commercial_license: None,
             last_version: None,
             window_transparency: false,
+            post_studio_recording_behaviour: PostStudioRecordingBehaviour::OpenEditor,
+            main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour::Close,
+            _open_editor_after_recording: false,
         }
     }
 }

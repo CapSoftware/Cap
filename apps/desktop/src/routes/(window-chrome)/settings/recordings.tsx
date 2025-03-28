@@ -221,12 +221,6 @@ function RecordingItem(props: {
           >
             <IconLucideEdit class="size-4" />
           </TooltipIconButton>
-          <TooltipIconButton
-            tooltipText="Show recordings overlay"
-            onClick={() => props.onClick()}
-          >
-            <IconLucideEye class="size-4" />
-          </TooltipIconButton>
           <Show when={props.recording.meta.sharing}>
             {(sharing) => (
               <TooltipIconButton

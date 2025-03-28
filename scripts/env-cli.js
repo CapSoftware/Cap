@@ -9,6 +9,18 @@ import { text } from "@clack/prompts";
 import { confirm } from "@clack/prompts";
 import { intro, multiselect, isCancel } from "@clack/prompts";
 
+const DOCKER_S3_ENVS = {
+  accessKey: "capS3root",
+  secretKey: "capS3root",
+  bucket: "capso",
+  region: "us-east-1",
+  endpoint: "http://localhost:3902",
+};
+
+const DOCKER_DB_ENVS = {
+  url: "mysql://root:@localhost:3306/planetscale",
+};
+
 async function main() {
   intro("Welcome to the Cap env setup CLI!");
 
@@ -26,18 +38,7 @@ async function main() {
   const file = await fs
     .readFile("./target/env-profiles/default.json", "utf8")
     .catch(() => null);
-  let allEnvs = file
-    ? JSON.parse(file)
-    : {
-        VITE_ENVIRONMENT: "development",
-        NODE_ENV: "development",
-        CAP_AWS_ACCESS_KEY: "capS3root",
-        CAP_AWS_SECRET_KEY: "capS3root",
-        NEXT_PUBLIC_CAP_AWS_BUCKET: "capso",
-        NEXT_PUBLIC_CAP_AWS_REGION: "us-east-1",
-        NEXT_PUBLIC_CAP_AWS_ENDPOINT: "http://localhost:3902",
-        DATABASE_URL: "mysql://root:@localhost:3306/planetscale",
-      };
+  let allEnvs = file ? JSON.parse(file) : {};
 
   let envs = {};
 
@@ -137,6 +138,15 @@ async function main() {
       );
 
       envs = { ...envs, ...s3Values };
+    } else {
+      envs.DATABASE_URL = DOCKER_DB_ENVS.url;
+      envs.DATABASE_MIGRATION_URL = DOCKER_DB_ENVS.url;
+
+      envs.CAP_AWS_ACCESS_KEY = DOCKER_S3_ENVS.accessKey;
+      envs.CAP_AWS_SECRET_KEY = DOCKER_S3_ENVS.secretKey;
+      envs.NEXT_PUBLIC_CAP_AWS_BUCKET = DOCKER_S3_ENVS.bucket;
+      envs.NEXT_PUBLIC_CAP_AWS_REGION = DOCKER_S3_ENVS.region;
+      envs.NEXT_PUBLIC_CAP_AWS_ENDPOINT = DOCKER_S3_ENVS.endpoint;
     }
   } else {
     envs.VITE_SERVER_URL = "http://cap.so";
@@ -145,13 +155,15 @@ async function main() {
   if (hasDesktop) {
     const values = await group(
       {
-        VITE_VERCEL_AUTOMATION_BYPASS_SECRET: () =>
-          text({
-            message:
-              "VITE_VERCEL_AUTOMATION_BYPASS_SECRET - skip if you're not a Cap team member",
-            placeholder: allEnvs.VITE_VERCEL_AUTOMATION_BYPASS_SECRET,
-            defaultValue: allEnvs.VITE_VERCEL_AUTOMATION_BYPASS_SECRET,
-          }),
+        VITE_VERCEL_AUTOMATION_BYPASS_SECRET: () => {
+          if (!hasWeb)
+            return text({
+              message:
+                "VITE_VERCEL_AUTOMATION_BYPASS_SECRET - skip if you're not a Cap team member",
+              placeholder: allEnvs.VITE_VERCEL_AUTOMATION_BYPASS_SECRET,
+              defaultValue: allEnvs.VITE_VERCEL_AUTOMATION_BYPASS_SECRET,
+            });
+        },
       },
       { onCancel: () => process.exit(0) }
     );
@@ -163,7 +175,7 @@ async function main() {
   }
 
   await fs.writeFile(
-    ".env.test",
+    ".env",
     Object.entries(envs)
       .map(([key, value]) => `${key}=${value}`)
       .join("\n")

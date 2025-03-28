@@ -1076,6 +1076,12 @@ fn close_recordings_overlay_window(app: AppHandle) {
             panel.close();
         }
     }
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Some(window) = CapWindowId::RecordingsOverlay.get() {
+            let _ = window.close();
+        }
+    }
 }
 
 #[tauri::command(async)]
@@ -2242,8 +2248,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 
                 ShowCapWindow::Main.show(&app).ok();
             }
-
-            ShowCapWindow::RecordingsOverlay.show(&app).ok();
 
             audio_meter::spawn_event_emitter(app.clone(), audio_input_rx);
 
