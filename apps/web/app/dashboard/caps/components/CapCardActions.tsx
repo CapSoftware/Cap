@@ -5,23 +5,17 @@ import { Tooltip } from "react-tooltip";
 import { useSharedContext } from "../../_components/DynamicSharedLayout";
 interface CapCardActionsProps {
   capId: string;
+  url: string;
   onDelete: (videoId: string) => Promise<void>;
 }
 
-export const CapCardActions: React.FC<CapCardActionsProps> = ({
+export const CapCardActions = ({
   capId,
+  url,
   onDelete,
-}) => {
-  const { activeSpace } = useSharedContext();
+}: CapCardActionsProps) => {
   const copyLink = () => {
-    const link =
-      activeSpace?.space.customDomain && activeSpace.space.domainVerified
-        ? `https://${activeSpace.space.customDomain}/s/${capId}`
-        : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-        ? `https://cap.link/${capId}`
-        : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${capId}`;
-
-    navigator.clipboard.writeText(link);
+    navigator.clipboard.writeText(url);
     toast.success("Link copied to clipboard!");
   };
 

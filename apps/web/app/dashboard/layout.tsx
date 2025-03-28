@@ -1,4 +1,5 @@
 import DynamicSharedLayout from "@/app/dashboard/_components/DynamicSharedLayout";
+import { cache } from "react";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { redirect } from "next/navigation";
 import { DashboardTemplate } from "@/components/templates/DashboardTemplate";

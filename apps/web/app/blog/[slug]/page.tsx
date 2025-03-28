@@ -87,7 +87,10 @@ export default async function PostPage({ params }: PostProps) {
           </header>
           <hr className="my-6" />
           <MDXRemote source={post.content} />
-          <Share post={post} />
+          <Share
+            post={post}
+            url={`${clientEnv.NEXT_PUBLIC_WEB_URL}/blog/${post.slug}`}
+          />
         </div>
       </article>
       <div className="mb-4 wrapper">

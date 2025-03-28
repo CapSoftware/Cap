@@ -20,6 +20,7 @@ interface CapCardProps {
     totalReactions: number;
     sharedSpaces: { id: string; name: string }[];
     ownerName: string;
+    url: string;
   };
   analytics: number;
   onDelete: (videoId: string) => Promise<void>;
@@ -27,13 +28,13 @@ interface CapCardProps {
   userSpaces: { id: string; name: string }[];
 }
 
-export const CapCard: React.FC<CapCardProps> = ({
+export const CapCard = ({
   cap,
   analytics,
   onDelete,
   userId,
   userSpaces,
-}) => {
+}: CapCardProps) => {
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(cap.name);
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
@@ -47,14 +48,11 @@ export const CapCard: React.FC<CapCardProps> = ({
       return;
     }
 
-    const response = await fetch(
-      `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/title`,
-      {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, videoId: cap.id }),
-      }
-    );
+    const response = await fetch(`/api/video/title`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, videoId: cap.id }),
+    });
     if (!response.ok) {
       toast.error("Failed to update title - please try again.");
       return;
@@ -118,17 +116,8 @@ export const CapCard: React.FC<CapCardProps> = ({
       className="rounded-xl border-[1px] border-gray-200 relative"
       style={{ boxShadow: "0px 8px 16px rgba(18, 22, 31, 0.04)" }}
     >
-      <CapCardActions capId={cap.id} onDelete={onDelete} />
-      <a
-        className="group block"
-        href={
-          activeSpace?.space.customDomain
-            ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
-            : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-            ? `https://cap.link/${cap.id}`
-            : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
-        }
-      >
+      <CapCardActions capId={cap.id} onDelete={onDelete} url={cap.url} />
+      <a className="group block" href={cap.url}>
         <VideoThumbnail
           userId={cap.ownerId}
           videoId={cap.id}
