@@ -5,15 +5,16 @@ import { remove } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
-import { createEffect, createSignal, onCleanup, onMount } from "solid-js";
+import { ComponentProps, onCleanup, onMount } from "solid-js";
 
+import { Button } from "@cap/ui-solid";
+import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import { trackEvent } from "~/utils/analytics";
 import { initializeTitlebar } from "~/utils/titlebar-state";
 import { useEditorContext } from "./context";
-import ExportButton from "./ExportButton";
 import PresetsDropdown from "./PresetsDropdown";
 import ShareButton from "./ShareButton";
 import { EditorButton } from "./ui";
-import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 
 export type ResolutionOption = {
   label: string;
@@ -35,23 +36,8 @@ export interface ExportEstimates {
 }
 
 export function Header() {
-  const editorContext = useEditorContext();
-
-  const [selectedFps, setSelectedFps] = createSignal(
-    Number(localStorage.getItem("cap-export-fps")) || 30
-  );
-  const [selectedResolution, setSelectedResolution] =
-    createSignal<ResolutionOption>(
-      RESOLUTION_OPTIONS.find(
-        (opt) => opt.value === localStorage.getItem("cap-export-resolution")
-      ) || RESOLUTION_OPTIONS[0]
-    );
-
-  // Save settings when they change
-  createEffect(() => {
-    localStorage.setItem("cap-export-fps", selectedFps().toString());
-    localStorage.setItem("cap-export-resolution", selectedResolution().value);
-  });
+  const { editorInstance, history, setDialog, exportProgress } =
+    useEditorContext();
 
   let unlistenTitlebar: UnlistenFn | undefined;
   onMount(async () => {
@@ -62,20 +48,20 @@ export function Header() {
   return (
     <div
       data-tauri-drag-region
-      class="relative w-full h-14 flex flex-row items-center"
+      class="flex relative flex-row items-center w-full h-14"
     >
       <div
         data-tauri-drag-region
-        class={cx("flex-1 h-full flex flex-row items-center gap-2 px-4")}
+        class={cx("flex flex-row flex-1 gap-2 items-center px-4 h-full")}
       >
         {ostype() === "macos" && <div class="h-full w-[4rem]" />}
         <EditorButton
           onClick={async () => {
             const currentWindow = getCurrentWindow();
-            if (!editorContext?.editorInstance.path) return;
+            if (!editorInstance.path) return;
             if (!(await ask("Are you sure you want to delete this recording?")))
               return;
-            await remove(editorContext?.editorInstance.path, {
+            await remove(editorInstance.path, {
               recursive: true,
             });
             await currentWindow.close();
@@ -84,15 +70,13 @@ export function Header() {
           leftIcon={<IconCapTrash class="w-5" />}
         />
         <EditorButton
-          onClick={() =>
-            revealItemInDir(`${editorContext.editorInstance.path}/`)
-          }
+          onClick={() => revealItemInDir(`${editorInstance.path}/`)}
           tooltipText="Open recording bundle"
           leftIcon={<IconLucideFolder class="w-5" />}
         />
 
         <p class="text-sm text-gray-500">
-          {editorContext.editorInstance.prettyName}
+          {editorInstance.prettyName}
           <span class="text-sm text-gray-400">.cap</span>
         </p>
         {/* <ErrorBoundary fallback={<></>}>
@@ -132,7 +116,7 @@ export function Header() {
 
       <div
         data-tauri-drag-region
-        class="px-4 border-x border-black-transparent-10 flex flex-col justify-center"
+        class="flex flex-col justify-center px-4 border-x border-black-transparent-10"
       >
         <PresetsDropdown />
       </div>
@@ -145,30 +129,69 @@ export function Header() {
         )}
       >
         <EditorButton
-          onClick={() => editorContext.history.undo()}
-          disabled={!editorContext.history.canUndo()}
+          onClick={() => history.undo()}
+          disabled={!history.canUndo()}
           tooltipText="Undo"
           leftIcon={<IconCapUndo class="w-5" />}
         />
         <EditorButton
-          onClick={() => editorContext.history.redo()}
-          disabled={!editorContext.history.canRedo()}
+          onClick={() => history.redo()}
+          disabled={!history.canRedo()}
           tooltipText="Redo"
           leftIcon={<IconCapRedo class="w-5" />}
         />
         <div data-tauri-drag-region class="flex-1 h-full" />
-        <ShareButton
-          selectedResolution={selectedResolution}
-          selectedFps={selectedFps}
-        />
-        <ExportButton
-          selectedResolution={selectedResolution()}
-          selectedFps={selectedFps()}
-          setSelectedFps={setSelectedFps}
-          setSelectedResolution={setSelectedResolution}
-        />
+        <ShareButton />
+        <Button
+          variant="lightdark"
+          class={cx("flex gap-2 justify-center")}
+          onClick={() => {
+            trackEvent("export_button_clicked");
+            setDialog({
+              type: "export",
+              open: true,
+            });
+          }}
+        >
+          <UploadIcon class="text-gray-50 size-5" />
+          Export
+        </Button>
         {ostype() === "windows" && <CaptionControlsWindows11 />}
       </div>
     </div>
   );
 }
+
+const UploadIcon = (props: ComponentProps<"svg">) => {
+  const { exportProgress } = useEditorContext();
+  return (
+    <svg
+      width={20}
+      height={20}
+      viewBox="0 0 20 20"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      {...props}
+    >
+      {/* Bottom part (the base) */}
+      <path
+        d="M16.6667 10.625V14.1667C16.6667 15.5474 15.5474 16.6667 14.1667 16.6667H5.83333C4.45262 16.6667 3.33333 15.5474 3.33333 14.1667V10.625"
+        stroke="currentColor"
+        stroke-width={1.66667}
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        class="upload-base"
+      />
+
+      {/* Arrow part */}
+      <path
+        d="M9.99999 3.33333V12.7083M9.99999 3.33333L13.75 7.08333M9.99999 3.33333L6.24999 7.08333"
+        stroke="currentColor"
+        stroke-width={1.66667}
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        class={cx(exportProgress() !== null ? "bounce" : "")}
+      />
+    </svg>
+  );
+};

@@ -20,7 +20,7 @@ import { createStore } from "solid-js/store";
 import { Tooltip } from "@kobalte/core";
 import { makePersisted } from "@solid-primitives/storage";
 import Cropper, { cropToFloor } from "~/components/Cropper";
-import { type Crop, events } from "~/utils/tauri";
+import { events, type Crop } from "~/utils/tauri";
 import { ConfigSidebar } from "./ConfigSidebar";
 import {
   EditorContextProvider,
@@ -30,6 +30,7 @@ import {
   useEditorContext,
   useEditorInstanceContext,
 } from "./context";
+import ExportDialog from "./ExportDialog";
 import { Header } from "./Header";
 import { Player } from "./Player";
 import { Timeline } from "./Timeline";
@@ -41,7 +42,6 @@ import {
   Subfield,
   Toggle,
 } from "./ui";
-import { cx } from "cva";
 
 export function Editor() {
   const [params] = useSearchParams<{ id: string }>();
@@ -121,7 +121,7 @@ function Inner() {
     <>
       <Header />
       <div
-        class="flex overflow-y-hidden flex-col flex-1 pb-2 gap-2 w-full leading-5 animate-in fade-in"
+        class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-2 w-full leading-5 animate-in fade-in"
         data-tauri-drag-region
       >
         <div class="flex overflow-hidden flex-col flex-1">
@@ -147,6 +147,11 @@ function Dialogs() {
         if ("type" in d && d.type === "crop") return "lg";
         return "sm";
       })()}
+      contentClass={(() => {
+        const d = dialog();
+        if ("type" in d && d.type === "export") return "max-w-[740px]";
+        return "";
+      })()}
       open={dialog().open}
       onOpenChange={(o) => {
         if (!o) setDialog((d) => ({ ...d, open: false }));
@@ -160,6 +165,9 @@ function Dialogs() {
       >
         {(dialog) => (
           <Switch>
+            <Match when={dialog().type === "export"}>
+              {(_) => <ExportDialog />}
+            </Match>
             <Match when={dialog().type === "createPreset"}>
               {(_) => {
                 const [form, setForm] = createStore({

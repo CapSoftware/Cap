@@ -180,20 +180,39 @@
   0% {
     stroke-dasharray: 100;
     stroke-dashoffset: 100;
-    opacity: 0;
   }
   50% {
-    opacity: 1;
   }
   100% {
     stroke-dashoffset: 0;
   }
 }
 
+@keyframes bounce {
+  0%, 100% {
+    transform: translateY(-15%);
+    animation-timing-function: cubic-bezier(0.8, 0, 1, 1);
+  }
+  50% {
+    transform: none;
+    animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
+  }
+}
+
+.bounce {
+  animation: bounce 1s ease-in-out forwards;
+  animation-iteration-count: infinite;
+} 
+
 .svgpathanimation {
   stroke-dasharray: 100;
   stroke-dashoffset: 100;
   animation: svgpathframes 1s ease-in-out forwards;
+}
+
+.svgpathanimationrepeat {
+  animation: svgpathframes 1s ease-in-out forwards;
+  animation-iteration-count: infinite;
 }
 
 /* Tabs container with mask-based fade-out effect */
