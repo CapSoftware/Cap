@@ -413,7 +413,6 @@ const ExportDialog = () => {
       setTimeout(() => {
         uploadVideo.reset();
       }, 2000);
-      setUploadState({ type: "idle" });
       setExportProgress(null);
     },
   }));
