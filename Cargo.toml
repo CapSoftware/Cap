@@ -46,3 +46,6 @@ cidre = { git = "https://github.com/yury/cidre", rev = "ef04aaabe14ffbbce4a33097
 windows = "0.58.0"
 windows-sys = "0.59.0"
 windows-capture = "1.4.2"
+
+[patch.crates-io]
+screencapturekit = { git = "https://github.com/CapSoftware/screencapturekit-rs", rev = "7ff1e103742e56c8f6c2e940b5e52684ed0bed69" }
