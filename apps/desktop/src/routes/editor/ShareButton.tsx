@@ -8,12 +8,12 @@ import { Channel } from "@tauri-apps/api/core";
 import { createProgressBar } from "~/routes/editor/utils";
 import { authStore } from "~/store";
 import { commands, events, RenderProgress } from "~/utils/tauri";
-import { metaUpdateStore, useEditorContext } from "./context";
+import { useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
 import { Dialog, DialogContent } from "./ui";
 
 function ShareButton() {
-  const { videoId } = useEditorContext();
+  const { videoId, metaUpdateStore } = useEditorContext();
   const [recordingMeta, metaActions] = createResource(() =>
     commands.getRecordingMeta(videoId, "recording")
   );

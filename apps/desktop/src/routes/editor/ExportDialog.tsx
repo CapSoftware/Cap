@@ -13,12 +13,12 @@ import { createMutation } from "@tanstack/solid-query";
 import { Channel } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
-import { createStore, produce } from "solid-js/store";
+import { produce } from "solid-js/store";
 import Tooltip from "~/components/Tooltip";
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { commands, events, RenderProgress } from "~/utils/tauri";
-import { metaUpdateStore, useEditorContext } from "./context";
+import { useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS, ResolutionOption } from "./Header";
 import {
   DialogContent,
@@ -27,7 +27,6 @@ import {
   PopperContent,
   topLeftAnimateClasses,
 } from "./ui";
-import { createProgressBar } from "./utils";
 
 export const COMPRESSION_OPTIONS = [
   { label: "Studio", value: "studio" },
@@ -66,21 +65,21 @@ export const FORMAT_OPTIONS = [
 
 type ExportToOption = (typeof EXPORT_TO_OPTIONS)[number]["value"];
 
-type ExportState =
-  | { type: "idle" }
-  | { type: "starting" }
-  | { type: "rendering"; renderedFrames: number; totalFrames: number }
-  | { type: "saving"; done: boolean };
-
-type CopyState =
-  | { type: "idle" }
-  | { type: "starting" }
-  | { type: "rendering"; renderedFrames: number; totalFrames: number }
-  | { type: "copying" }
-  | { type: "copied" };
-
 const ExportDialog = () => {
-  const { videoId, prettyName, setDialog } = useEditorContext();
+  const {
+    videoId,
+    prettyName,
+    setDialog,
+    exportState,
+    setExportState,
+    exportProgress,
+    setExportProgress,
+    copyState,
+    setCopyState,
+    uploadState,
+    setUploadState,
+    metaUpdateStore,
+  } = useEditorContext();
   const [format, setFormat] = createSignal(
     localStorage.getItem("cap-export-format") || "mp4"
   );
@@ -127,28 +126,10 @@ const ExportDialog = () => {
       commands.getExportEstimates(params.videoId, params.resolution, params.fps)
   );
   const exportButtonIcon: Record<"file" | "clipboard" | "link", JSX.Element> = {
-    file: <IconCapFile class="text-gray-500 size-4" />,
-    clipboard: <IconCapCopy class="text-gray-500 size-4" />,
-    link: <IconCapLink class="text-gray-500 size-4" />,
+    file: <IconCapFile class="text-solid-white size-4" />,
+    clipboard: <IconCapCopy class="text-solid-white size-4" />,
+    link: <IconCapLink class="text-solid-white size-4" />,
   };
-
-  // States
-
-  const [exportState, setExportState] = createStore<ExportState>({
-    type: "idle",
-  });
-
-  const [copyState, setCopyState] = createStore<CopyState>({
-    type: "idle",
-  });
-
-  const [uploadState, setUploadState] = createStore<
-    | { type: "idle" }
-    | { type: "starting" }
-    | { type: "rendering"; renderedFrames: number; totalFrames: number }
-    | { type: "uploading"; progress: number }
-    | { type: "link-copied" }
-  >({ type: "idle" });
 
   const copy = createMutation(() => ({
     mutationFn: async () => {
@@ -160,17 +141,26 @@ const ExportDialog = () => {
         const progress = new Channel<RenderProgress>();
 
         progress.onmessage = (msg) => {
-          if (msg.type === "EstimatedTotalFrames")
+          if (msg.type === "EstimatedTotalFrames") {
             setCopyState({
               type: "rendering",
+            });
+            setExportProgress({
               renderedFrames: 0,
               totalFrames: msg.total_frames,
             });
-          else
+          } else
             setCopyState(
               produce((state) => {
-                if (msg.type === "FrameRendered" && state.type === "rendering")
-                  state.renderedFrames = msg.current_frame;
+                if (
+                  msg.type === "FrameRendered" &&
+                  state.type === "rendering"
+                ) {
+                  setExportProgress({
+                    renderedFrames: msg.current_frame,
+                    totalFrames: exportProgress()?.totalFrames ?? 0,
+                  });
+                }
               })
             );
         };
@@ -187,13 +177,6 @@ const ExportDialog = () => {
           }
         );
 
-        // Show quick progress animation for existing video
-        setCopyState(
-          produce((s) => {
-            if (s.type === "rendering") s.renderedFrames = s.totalFrames;
-          })
-        );
-
         await commands.copyVideoToClipboard(outputPath);
       } catch (error) {
         console.error("Error in copy media:", error);
@@ -205,8 +188,14 @@ const ExportDialog = () => {
         type: "copied",
       });
       setTimeout(() => {
+        setExportProgress(null);
         setDialog((d) => ({ ...d, open: false }));
       }, 1000);
+      setTimeout(() => {
+        setCopyState({
+          type: "idle",
+        });
+      }, 1500);
     },
   }));
 
@@ -235,19 +224,26 @@ const ExportDialog = () => {
       const progress = new Channel<RenderProgress>();
 
       progress.onmessage = (msg) => {
-        if (msg.type === "EstimatedTotalFrames")
+        if (msg.type === "EstimatedTotalFrames") {
           setExportState({
             type: "rendering",
+          });
+          setExportProgress({
             renderedFrames: 0,
             totalFrames: msg.total_frames,
           });
-        else
+        } else if (msg.type === "FrameRendered") {
           setExportState(
             produce((state) => {
-              if (msg.type === "FrameRendered" && state.type === "rendering")
-                state.renderedFrames = msg.current_frame;
+              if (state.type === "rendering") {
+                setExportProgress({
+                  renderedFrames: msg.current_frame,
+                  totalFrames: exportProgress()?.totalFrames ?? 0,
+                });
+              }
             })
           );
+        }
       };
 
       try {
@@ -266,10 +262,7 @@ const ExportDialog = () => {
 
         await commands.copyFileToPath(videoPath, path);
 
-        setExportState({ type: "saving", done: false });
-        setTimeout(() => {
-          setDialog((d) => ({ ...d, open: false }));
-        }, 1000);
+        setExportState({ type: "saving", done: true });
       } catch (error) {
         throw error;
       }
@@ -277,7 +270,12 @@ const ExportDialog = () => {
     onSettled() {
       setTimeout(() => {
         exportWithSettings.reset();
+        setDialog((d) => ({ ...d, open: false }));
+        setExportProgress(null);
       }, 1000);
+      setTimeout(() => {
+        setExportState({ type: "idle" });
+      }, 1500);
     },
   }));
 
@@ -343,17 +341,26 @@ const ExportDialog = () => {
         const progress = new Channel<RenderProgress>();
 
         progress.onmessage = (msg) => {
-          if (msg.type === "EstimatedTotalFrames")
+          if (msg.type === "EstimatedTotalFrames") {
             setUploadState({
               type: "rendering",
+            });
+            setExportProgress({
               renderedFrames: 0,
               totalFrames: msg.total_frames,
             });
-          else
+          } else
             setUploadState(
               produce((state) => {
-                if (msg.type === "FrameRendered" && state.type === "rendering")
-                  state.renderedFrames = msg.current_frame;
+                if (
+                  msg.type === "FrameRendered" &&
+                  state.type === "rendering"
+                ) {
+                  setExportProgress({
+                    renderedFrames: msg.current_frame,
+                    totalFrames: exportProgress()?.totalFrames ?? 0,
+                  });
+                }
               })
             );
         };
@@ -406,25 +413,10 @@ const ExportDialog = () => {
       setTimeout(() => {
         uploadVideo.reset();
       }, 2000);
+      setUploadState({ type: "idle" });
+      setExportProgress(null);
     },
   }));
-
-  createProgressBar(() => {
-    if (exportWithSettings.isIdle || exportState.type === "idle") return;
-    if (exportState.type === "starting") return 0;
-    if (exportState.type === "rendering")
-      return (exportState.renderedFrames / exportState.totalFrames) * 100;
-    return 100;
-  });
-
-  createProgressBar(() => {
-    if (uploadVideo.isIdle || uploadState.type === "idle") return;
-    if (uploadState.type === "starting") return 0;
-    if (uploadState.type === "rendering")
-      return (uploadState.renderedFrames / uploadState.totalFrames) * 100;
-    if (uploadState.type === "uploading") return uploadState.progress;
-    return 100;
-  });
 
   return (
     <>
@@ -757,7 +749,7 @@ const ExportDialog = () => {
             </Show>
             {/** Copying to clipboard */}
             <Show when={copyState.type !== "idle"}>
-              <CopyingContent copyState={copyState} />
+              <CopyingContent />
             </Show>
             {/** Exporting to shareable link */}
             <Show
@@ -770,7 +762,7 @@ const ExportDialog = () => {
             </Show>
             {/** Exporting to file */}
             <Show when={exportState.type !== "idle"}>
-              <ExportingFileContent exportState={exportState} />
+              <ExportingFileContent />
             </Show>
           </div>
         </DialogContent>
@@ -779,7 +771,8 @@ const ExportDialog = () => {
   );
 };
 
-const CopyingContent = ({ copyState }: { copyState: CopyState }) => {
+const CopyingContent = () => {
+  const { exportProgress, copyState } = useEditorContext();
   return (
     <div class="flex flex-col gap-4 justify-center items-center h-full">
       <h1 class="text-lg font-medium text-gray-500">
@@ -799,8 +792,9 @@ const CopyingContent = ({ copyState }: { copyState: CopyState }) => {
               width: `${
                 copyState.type === "rendering"
                   ? Math.min(
-                      (copyState.renderedFrames / copyState.totalFrames) * 100,
-                      100
+                      ((exportProgress()?.renderedFrames ?? 0) /
+                        (exportProgress()?.totalFrames ?? 0)) *
+                        100
                     )
                   : 0
               }%`,
@@ -813,7 +807,9 @@ const CopyingContent = ({ copyState }: { copyState: CopyState }) => {
       >
         <p class="text-xs">
           {copyState.type === "rendering"
-            ? `${copyState.renderedFrames}/${copyState.totalFrames} frames`
+            ? `${exportProgress()?.renderedFrames}/${
+                exportProgress()?.totalFrames
+              } frames`
             : copyState.type === "starting"
             ? "Preparing to render..."
             : ""}
@@ -823,11 +819,8 @@ const CopyingContent = ({ copyState }: { copyState: CopyState }) => {
   );
 };
 
-const ExportingFileContent = ({
-  exportState,
-}: {
-  exportState: ExportState;
-}) => {
+const ExportingFileContent = () => {
+  const { exportProgress, exportState } = useEditorContext();
   return (
     <div class="flex flex-col gap-4 justify-center items-center h-full">
       <h1 class="text-lg font-medium text-gray-500">
@@ -851,7 +844,8 @@ const ExportingFileContent = ({
                   ? 100
                   : exportState.type === "rendering"
                   ? Math.min(
-                      (exportState.renderedFrames / exportState.totalFrames) *
+                      ((exportProgress()?.renderedFrames ?? 0) /
+                        (exportProgress()?.totalFrames ?? 0)) *
                         100,
                       100
                     )
@@ -870,7 +864,9 @@ const ExportingFileContent = ({
           {exportState.type === "starting"
             ? "Preparing to render..."
             : exportState.type === "rendering"
-            ? `${exportState.renderedFrames}/${exportState.totalFrames} frames`
+            ? `${exportProgress()?.renderedFrames}/${
+                exportProgress()?.totalFrames
+              } frames`
             : ""}
         </p>
       </Show>
