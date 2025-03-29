@@ -2388,6 +2388,11 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     ShowCapWindow::Main.show(handle).ok();
                 }
             }
+            tauri::RunEvent::ExitRequested { code, api, .. } => {
+                if code != Some(0) {
+                    api.prevent_exit();
+                }
+            }
             _ => {}
         });
 }
