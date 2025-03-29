@@ -2389,7 +2389,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 }
             }
             tauri::RunEvent::ExitRequested { code, api, .. } => {
-                if code != Some(0) {
+                if code.is_none() {
                     api.prevent_exit();
                 }
             }
