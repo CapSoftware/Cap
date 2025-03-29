@@ -7,6 +7,7 @@
     "sst": "sst"
   },
   "dependencies": {
+    "@pulumi/github": "^6.7.0",
     "@pulumiverse/vercel": "^1.14.3"
   }
 }

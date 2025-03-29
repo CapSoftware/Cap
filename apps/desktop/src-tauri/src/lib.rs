@@ -1076,9 +1076,9 @@ fn close_recordings_overlay_window(app: AppHandle) {
             panel.close();
         }
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        if let Some(window) = CapWindowId::RecordingsOverlay.get() {
+
+    if !cfg!(target_os = "macos") {
+        if let Some(window) = CapWindowId::RecordingsOverlay.get(&app) {
             let _ = window.close();
         }
     }

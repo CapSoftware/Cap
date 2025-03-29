@@ -2,10 +2,12 @@
 
 const GITHUB_ORG = "CapSoftware";
 const GITHUB_REPO = "Cap";
+const GITHUB_APP_ID = "1196731";
 
 const VERCEL_TEAM_SLUG = "mc-ilroy";
 const VERCEL_TEAM_ID = "team_vbZRU7UW78rpKKIj4c9PfFAC";
-const VERCEL_PROJECT = "prj_oOlwZJGXHiAvj6vjH4jag8VrgseC";
+
+const CLOUDFLARE_ACCOUNT_ID = "3de2dd633194481d80f68f55257bdbaa";
 
 export default $config({
   app(input) {
@@ -18,6 +20,10 @@ export default $config({
         vercel: {
           team: VERCEL_TEAM_ID,
         },
+        github: {
+          owner: GITHUB_ORG,
+        },
+        cloudflare: true,
       },
     };
   },
@@ -213,5 +219,35 @@ export default $config({
       projectId: vercelProject.id,
       targets: ["production", "preview"],
     });
+
+    DiscordBot();
   },
 });
+
+function DiscordBot() {
+  new sst.cloudflare.Worker("DiscordBotScript", {
+    handler: "../apps/discord-bot/src/index.ts",
+    transform: {
+      worker: (args) => {
+        args.name = "cap-discord-bot";
+        args.kvNamespaceBindings = [
+          {
+            name: "release_discord_interactions",
+            namespaceId: "846b080b86914e2ba666d35acee35c9a",
+          },
+        ];
+        args.observability = { enabled: true };
+        args.secretTextBindings = [
+          {
+            name: "DISCORD_BOT_TOKEN",
+            text: new sst.Secret("DISCORD_BOT_TOKEN").value,
+          },
+          {
+            name: "GITHUB_APP_PRIVATE_KEY",
+            text: new sst.Secret("GITHUB_APP_PRIVATE_KEY").value,
+          },
+        ];
+      },
+    },
+  });
+}
