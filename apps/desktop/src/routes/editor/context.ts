@@ -1,4 +1,4 @@
-// @refresh reload
+import { createElementBounds, NullableBounds } from "@solid-primitives/bounds";
 import { createContextProvider } from "@solid-primitives/context";
 import { trackStore } from "@solid-primitives/deep";
 import { createEventListener } from "@solid-primitives/event-listener";
@@ -13,24 +13,23 @@ import {
   on,
 } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
-import { createElementBounds, NullableBounds } from "@solid-primitives/bounds";
 
+import { createPresets } from "~/utils/createPresets";
+import { createImageDataWS, createLazySignal } from "~/utils/socket";
 import {
-  PresetsStore,
+  commands,
+  events,
   type ProjectConfiguration,
   type SerializedEditorInstance,
   type XY,
-  commands,
-  events,
 } from "~/utils/tauri";
-import { createImageDataWS, createLazySignal } from "~/utils/socket";
-import { createPresets } from "~/utils/createPresets";
 
 export type CurrentDialog =
   | { type: "createPreset" }
   | { type: "renamePreset"; presetIndex: number }
   | { type: "deletePreset"; presetIndex: number }
-  | { type: "crop"; position: XY<number>; size: XY<number> };
+  | { type: "crop"; position: XY<number>; size: XY<number> }
+  | { type: "export" };
 
 export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
 
@@ -39,6 +38,14 @@ export const FPS = 60;
 export const OUTPUT_SIZE = {
   x: 1920,
   y: 1080,
+};
+
+export const BACKGROUND_THEMES = {
+  macOS: "macOS",
+  dark: "Dark",
+  blue: "Blue",
+  purple: "Purple",
+  orange: "Orange",
 };
 
 export const MAX_ZOOM_IN = 3;
@@ -66,6 +73,10 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       "background" | "camera" | "transcript" | "audio" | "cursor" | "hotkeys"
     >("background");
 
+    //Background tabs
+    const [backgroundTab, setBackgroundTab] =
+      createSignal<keyof typeof BACKGROUND_THEMES>("macOS");
+
     const [dialog, setDialog] = createSignal<DialogState>({
       open: false,
     });
@@ -73,6 +84,57 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
     const [previewTime, setPreviewTime] = createSignal<number>();
     const [playbackTime, setPlaybackTime] = createSignal<number>(0);
     const [playing, setPlaying] = createSignal(false);
+
+
+    //Export states
+
+    const [exportProgress, setExportProgress] = createSignal<{
+      totalFrames: number;
+      renderedFrames: number;
+    } | null>(null);
+
+      type ExportState =
+  | { type: "idle" }
+  | { type: "starting" }
+  | { type: "rendering"}
+  | { type: "saving"; done: boolean };
+
+type CopyState =
+  | { type: "idle" }
+  | { type: "starting" }
+  | { type: "rendering"}
+  | { type: "copying" }
+  | { type: "copied" };
+
+  const [exportState, setExportState] = createStore<ExportState>({
+    type: "idle",
+  });
+
+  const [copyState, setCopyState] = createStore<CopyState>({
+    type: "idle",
+  });
+
+  const [uploadState, setUploadState] = createStore<
+    | { type: "idle" }
+    | { type: "starting" }
+    | { type: "rendering" }
+    | { type: "uploading"; progress: number }
+    | { type: "link-copied" }
+  >({ type: "idle" });
+
+
+//This is used in ShareButton.tsx to notify the component that the metadata has changed, from ExportDialog.tsx
+//When a video is uploaded, the metadata is updated
+
+
+  const [lastMetaUpdate, setLastMetaUpdate] = createSignal<{ videoId: string; timestamp: number } | null>(null);
+
+  const metaUpdateStore = {
+    notifyUpdate: (videoId: string) => {
+      setLastMetaUpdate({ videoId, timestamp: Date.now() });
+    },
+    getLastUpdate: lastMetaUpdate
+  };
 
     createEffect(
       on(playing, () => {
@@ -157,7 +219,20 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       project,
       setProject,
       selectedTab,
+      backgroundTab,
+      exportProgress,
+      setExportProgress,
+      copyState,
+      setCopyState,
+      uploadState,
+      setUploadState,
+      exportState,
+      setExportState,
+      setBackgroundTab,
       setSelectedTab,
+      metaUpdateStore,
+      lastMetaUpdate,
+      setLastMetaUpdate,
       history: createStoreHistory(project, setProject),
       playbackTime,
       setPlaybackTime,
@@ -316,3 +391,4 @@ export const [SegmentContextProvider, useSegmentContext] =
   createContextProvider((props: { width: Accessor<number> }) => {
     return props;
   }, null!);
+

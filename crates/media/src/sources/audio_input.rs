@@ -26,11 +26,11 @@ impl LocalTimestamp for StreamInstant {
 pub struct AudioInputSource {
     feed_connection: AudioInputConnection,
     audio_info: AudioInfo,
-    tx: Sender<FFAudio>,
+    tx: Sender<(FFAudio, f64)>,
 }
 
 impl AudioInputSource {
-    pub fn init(feed: &AudioInputFeed, tx: Sender<FFAudio>) -> Self {
+    pub fn init(feed: &AudioInputFeed, tx: Sender<(FFAudio, f64)>) -> Self {
         Self {
             feed_connection: feed.create_connection(),
             audio_info: feed.audio_info(),
@@ -53,7 +53,7 @@ impl AudioInputSource {
             }
             Some(timestamp) => {
                 let frame = self.audio_info.wrap_frame(&samples.data, timestamp);
-                if let Err(_) = self.tx.send(frame) {
+                if let Err(_) = self.tx.send((frame, 0.0 /* TODO: correct this */)) {
                     return Err(MediaError::Any("Pipeline is unreachable! Stopping capture"));
                 }
             }
@@ -79,8 +79,6 @@ impl AudioInputSource {
 }
 
 impl PipelineSourceTask for AudioInputSource {
-    type Output = FFAudio;
-
     type Clock = RealTimeClock<StreamInstant>;
 
     fn run(

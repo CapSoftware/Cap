@@ -82,6 +82,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
 use upload::{get_s3_config, upload_image, upload_video, S3UploadMeta};
 use web_api::ManagerExt as WebManagerExt;
+use windows::set_window_transparent;
 use windows::{CapWindowId, ShowCapWindow};
 
 #[derive(specta::Type, Serialize)]
@@ -1061,10 +1062,6 @@ async fn get_video_metadata(
 fn open_editor(app: AppHandle, id: String) {
     println!("Opening editor for recording: {}", id);
 
-    if let Some(window) = CapWindowId::Camera.get(&app) {
-        window.close().ok();
-    }
-
     ShowCapWindow::Editor { project_id: id }.show(&app).unwrap();
 }
 
@@ -1077,6 +1074,12 @@ fn close_recordings_overlay_window(app: AppHandle) {
         if let Ok(panel) = app.get_webview_panel(&CapWindowId::RecordingsOverlay.label()) {
             panel.released_when_closed(true);
             panel.close();
+        }
+    }
+
+    if !cfg!(target_os = "macos") {
+        if let Some(window) = CapWindowId::RecordingsOverlay.get(&app) {
+            let _ = window.close();
         }
     }
 }
@@ -1453,12 +1456,13 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
             pretty_name: screenshot_name,
             inner: RecordingMetaInner::Studio(cap_project::StudioRecordingMeta::SingleSegment {
                 segment: cap_project::SingleSegment {
-                    display: Display {
+                    display: VideoMeta {
                         path: RelativePathBuf::from_path(
                             &screenshot_path.strip_prefix(&recording_dir).unwrap(),
                         )
                         .unwrap(),
                         fps: 0,
+                        start_time: None,
                     },
                     camera: None,
                     audio: None,
@@ -1927,9 +1931,9 @@ async fn reupload_instant_video(app: AppHandle, video_id: String) -> Result<(), 
         video_id,
         recording_dir.join("content/output.mp4"),
         config,
-        false,
+        None,
     )
-    .await;
+    .await?;
 
     Ok(())
 }
@@ -2090,7 +2094,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             list_fails,
             set_fail,
             update_auth_plan,
-            reupload_instant_video
+            reupload_instant_video,
+            set_window_transparent
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2159,6 +2164,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags({
@@ -2243,8 +2249,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 ShowCapWindow::Main.show(&app).ok();
             }
 
-            ShowCapWindow::RecordingsOverlay.show(&app).ok();
-
             audio_meter::spawn_event_emitter(app.clone(), audio_input_rx);
 
             tray::create_tray(&app).unwrap();
@@ -2319,11 +2323,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 WindowEvent::Destroyed => {
                     if let Ok(window_id) = CapWindowId::from_str(label) {
                         match window_id {
-                            CapWindowId::Main => {
-                                if let Some(w) = CapWindowId::Camera.get(app) {
-                                    w.close().ok();
-                                }
-                            }
                             CapWindowId::Editor { .. } => {
                                 tokio::spawn(EditorInstances::remove(window.clone()));
                             }

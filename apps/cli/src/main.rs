@@ -10,6 +10,7 @@ use clap::{Args, Parser, Subcommand};
 use record::RecordStart;
 use serde_json::json;
 use tracing::*;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser)]
 struct Cli {
@@ -49,6 +50,21 @@ enum RecordCommands {
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
+    // let (layer, handle) = tracing_subscriber::reload::Layer::new(None::<DynLoggingLayer>);
+
+    let registry = tracing_subscriber::registry().with(tracing_subscriber::filter::filter_fn(
+        (|v| v.target().starts_with("cap_")) as fn(&tracing::Metadata) -> bool,
+    ));
+
+    registry
+        // .with(layer)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(true)
+                .with_target(true),
+        )
+        .init();
+
     let cli = Cli::parse();
 
     match cli.command {
@@ -177,7 +193,7 @@ impl Export {
             recording_meta,
             render_constants,
             &segments,
-            fps,
+            60,
             XY::new(1920, 1080),
         )
         .await
