@@ -1,0 +1,86 @@
+name: cap-so-docker-template
+
+# THIS IS A TEMPLATE FOR DOCKER COMPOSE FILES
+# IT IS NOT MEANT FOR PRODUCTION DEPLOYMENT WITHOUT MODIFICATIONS TO ENVIRONMENT VARIABLES
+# IT IS MEANT FOR LOCAL EVALUATION AND DEVELOPMENT PURPOSES ONLY
+
+services:
+  cap-web:
+    container_name: cap-web
+    image: cap-web-docker:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: 'mysql://root:@ps-mysql:3306/planetscale?ssl={"rejectUnauthorized":false}'
+      DATABASE_MIGRATION_URL: 'mysql://root:@ps-mysql:3306/planetscale?ssl={"rejectUnauthorized":false}'
+      NEXTAUTH_URL: http://localhost:3000
+      DOCKER_BUILD: true
+      # CHANGE THESE TO YOUR OWN VALUES
+      DATABASE_ENCRYPTION_KEY: c7a1e98e1e5e4cec5a3fbf5eaf502d262fb99807ae2be8ee70537409e29cb6f9
+      NEXTAUTH_SECRET: c7a1e98e1e5e4cec5a3fbf5eaf502d262fb99807ae2be8ee70537409e29cb6f9
+      # CHANGE THESE TO MATCH YOUR MINIO or S3 STORAGE SETUP
+      CAP_AWS_ACCESS_KEY: capS3root
+      CAP_AWS_SECRET_KEY: capS3root
+      CAP_AWS_BUCKET: capso
+      CAP_AWS_REGION: us-east-1
+      CAP_AWS_ENDPOINT: http://minio:3902
+    ports:
+      - 3000:3000
+
+  ps-mysql:
+    container_name: mysql-primary-db
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      # CHANGE THESE TO YOUR OWN VALUES - BE SURE TO SET A PASSWORD FOR THE ROOT USER
+      MYSQL_DATABASE: planetscale
+      MYSQL_ROOT_HOST: "%"
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+    command:
+      [
+        "--max_connections=1000",
+        "--default-authentication-plugin=mysql_native_password",
+      ]
+    expose:
+      - 3306
+    volumes:
+      - ps-mysql:/var/lib/mysql
+
+  # Local S3 Strorage
+  minio:
+    container_name: minio-storage
+    image: "bitnami/minio:latest"
+    restart: unless-stopped
+    ports:
+      - "3902:3902"
+      - "3903:3903"
+    environment:
+      - MINIO_API_PORT_NUMBER=3902
+      - MINIO_CONSOLE_PORT_NUMBER=3903
+      # CHANGE THESE TO YOUR OWN VALUES
+      - MINIO_ROOT_USER=capS3root
+      - MINIO_ROOT_PASSWORD=capS3root
+    volumes:
+      - minio-data:/bitnami/minio/data
+      - minio-certs:/certs
+
+  # DISABLE THIS IF YOU ARE NOT USING MINIO VIA THIS DOCKER COMPOSE FILE
+  createbuckets:
+    container_name: minio-bucket-creation
+    image: minio/mc
+    depends_on:
+      - minio
+    # CHANGE THE ENTRYPIONT "/usr/bin/mc alias set myminio http://minio:3902 capS3root capS3root;" TO USE MINIO USERNAME AND PASSWORD.
+    entrypoint: >
+      /bin/sh -c "
+      sleep 10;
+      /usr/bin/mc alias set myminio http://minio:3902 capS3root capS3root;
+      /usr/bin/mc mb myminio/capso;
+      echo '{\"Version\": \"2012-10-17\",\"Statement\": [{\"Effect\": \"Allow\",\"Principal\": {\"AWS\": [\"*\"]},\"Action\": [\"s3:GetObject\"],\"Resource\": [\"arn:aws:s3:::capso/*\"]}]}' > /tmp/policy.json;
+      /usr/bin/mc anonymous set-json /tmp/policy.json myminio/capso;
+      exit 0;
+      "
+volumes:
+  ps-mysql:
+  # REMOVE THESE IF YOU ARE NOT USING MINIO VIA THIS DOCKER COMPOSE FILE
+  minio-data:
+  minio-certs:
