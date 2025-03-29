@@ -73,7 +73,7 @@
     "@types/uuid": "^9.0.8",
     "cross-env": "^7.0.3",
     "typescript": "^5.7.2",
-    "vite": "^5.4.3",
+    "vite": "^6.0.0",
     "vite-tsconfig-paths": "^5.0.1"
   }
 }
