@@ -2323,11 +2323,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 WindowEvent::Destroyed => {
                     if let Ok(window_id) = CapWindowId::from_str(label) {
                         match window_id {
-                            CapWindowId::Main => {
-                                if let Some(w) = CapWindowId::Camera.get(app) {
-                                    w.close().ok();
-                                }
-                            }
                             CapWindowId::Editor { .. } => {
                                 tokio::spawn(EditorInstances::remove(window.clone()));
                             }
