@@ -78,7 +78,7 @@ impl RecordStart {
             RecordingOptions {
                 capture_target: target_info,
                 camera_label: camera.as_ref().map(|c| c.camera_info.human_name()),
-                audio_input_name: None,
+                mic_name: None,
                 mode: RecordingMode::Studio,
                 capture_system_audio: self.system_audio,
             },

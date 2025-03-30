@@ -192,7 +192,7 @@ pub async fn spawn_instant_recording_actor(
                 recording_dir,
                 capture_target: options.capture_target,
                 video_info,
-                audio_input_name: options.audio_input_name,
+                audio_input_name: options.mic_name,
             };
 
             let mut state = InstantRecordingActorState::Recording {

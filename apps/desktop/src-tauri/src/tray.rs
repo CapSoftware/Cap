@@ -115,7 +115,8 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             let app_handle = app.clone();
             move |app: &AppHandle, event| match TrayItem::try_from(event.id) {
                 Ok(TrayItem::OpenCap) => {
-                    ShowCapWindow::Main.show(&app_handle).ok();
+                    let app = app.clone();
+                    tokio::spawn(async move { ShowCapWindow::Main.show(&app).await });
                 }
                 Ok(TrayItem::StartNewRecording) => {
                     let _ = RequestStartRecording.emit(&app_handle);
@@ -136,9 +137,10 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                     .emit(&app_handle);
                 }
                 Ok(TrayItem::OpenSettings) => {
-                    ShowCapWindow::Settings { page: None }
-                        .show(&app_handle)
-                        .ok();
+                    let app = app.clone();
+                    tokio::spawn(
+                        async move { ShowCapWindow::Settings { page: None }.show(&app).await },
+                    );
                 }
                 Ok(TrayItem::Quit) => {
                     app.exit(0);

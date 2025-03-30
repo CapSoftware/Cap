@@ -204,7 +204,7 @@ pub async fn start_recording(
                 // Allow the recording to proceed without error for any signed-in user
                 _ => {
                     // User is not signed in
-                    ShowCapWindow::SignIn.show(&app).ok();
+                    let _ = ShowCapWindow::SignIn.show(&app).await;
                     return Err("Please sign in to use instant recording".to_string());
                 }
             }
@@ -251,7 +251,7 @@ pub async fn start_recording(
                         recording_dir.clone(),
                         recording_options.clone(),
                         state.camera_feed.clone(),
-                        state.audio_input_feed.clone(),
+                        state.mic_feed.clone(),
                     )
                     .await
                     .map_err(|e| {
@@ -271,7 +271,7 @@ pub async fn start_recording(
                             id.clone(),
                             recording_dir.clone(),
                             recording_options.clone(),
-                            state.audio_input_feed.as_ref(),
+                            state.mic_feed.as_ref(),
                         )
                         .await
                         .map_err(|e| {
@@ -333,9 +333,9 @@ pub async fn start_recording(
     if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
         window.eval("window.location.reload()").ok();
     } else {
-        ShowCapWindow::InProgressRecording { position: None }
+        let _ = ShowCapWindow::InProgressRecording { position: None }
             .show(&app)
-            .ok();
+            .await;
     }
 
     AppSounds::StartRecording.play();
@@ -406,7 +406,11 @@ async fn handle_recording_end(
     if let Some(window) = CapWindowId::Main.get(&app) {
         window.unminimize().ok();
     } else {
-        CapWindowId::Camera.get(&app).map(|v| v.close());
+        CapWindowId::Camera.get(&app).map(|v| {
+            let _ = v.close();
+        });
+        state.remove_camera_feed();
+        state.remove_mic_feed();
     }
 
     // Play sound to indicate recording has stopped
@@ -584,10 +588,14 @@ async fn handle_recording_finish(
             .unwrap_or(PostStudioRecordingBehaviour::OpenEditor)
         {
             PostStudioRecordingBehaviour::OpenEditor => {
-                open_editor(app.clone(), id.clone());
+                let _ = ShowCapWindow::Editor {
+                    project_id: id.clone(),
+                }
+                .show(&app)
+                .await;
             }
             PostStudioRecordingBehaviour::ShowOverlay => {
-                ShowCapWindow::RecordingsOverlay.show(&app).ok();
+                let _ = ShowCapWindow::RecordingsOverlay.show(&app).await;
 
                 let app = AppHandle::clone(app);
                 tokio::spawn(async move {

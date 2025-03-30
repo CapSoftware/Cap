@@ -89,8 +89,8 @@ async setPlayheadPosition(frameNumber: number) : Promise<null> {
 async setProjectConfig(config: ProjectConfiguration) : Promise<null> {
     return await TAURI_INVOKE("set_project_config", { config });
 },
-async openEditor(id: string) : Promise<void> {
-    await TAURI_INVOKE("open_editor", { id });
+async openEditor(id: string) : Promise<null> {
+    return await TAURI_INVOKE("open_editor", { id });
 },
 async openPermissionSettings(permission: OSPermission) : Promise<void> {
     await TAURI_INVOKE("open_permission_settings", { permission });
@@ -149,8 +149,8 @@ async setTheme(theme: AppTheme) : Promise<void> {
 async globalMessageDialog(message: string) : Promise<void> {
     await TAURI_INVOKE("global_message_dialog", { message });
 },
-async showWindow(window: ShowCapWindow) : Promise<void> {
-    await TAURI_INVOKE("show_window", { window });
+async showWindow(window: ShowCapWindow) : Promise<null> {
+    return await TAURI_INVOKE("show_window", { window });
 },
 async writeClipboardString(text: string) : Promise<null> {
     return await TAURI_INVOKE("write_clipboard_string", { text });
@@ -292,7 +292,7 @@ export type RecordingMeta = (StudioRecordingMeta | InstantRecordingMeta) & { pre
 export type RecordingMetaChanged = { id: string }
 export type RecordingMetaWithType = ((StudioRecordingMeta | InstantRecordingMeta) & { pretty_name: string; sharing?: SharingMeta | null }) & { type: RecordingType }
 export type RecordingMode = "studio" | "instant"
-export type RecordingOptions = { captureTarget: ScreenCaptureTarget; audioInputName: string | null; cameraLabel: string | null; captureSystemAudio?: boolean; mode: RecordingMode }
+export type RecordingOptions = { captureTarget: ScreenCaptureTarget; micName: string | null; cameraLabel: string | null; captureSystemAudio?: boolean; mode: RecordingMode }
 export type RecordingOptionsChanged = null
 export type RecordingStarted = null
 export type RecordingStopped = { path: string }
