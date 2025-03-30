@@ -171,7 +171,7 @@ export function Player() {
   });
 
   return (
-    <div class="flex flex-col flex-1 bg-gray-100 dark:bg-gray-100 rounded-xl">
+    <div class="flex flex-col flex-1 bg-gray-100 dark:bg-gray-100 rounded-xl shadow-sm">
       <div class="flex gap-3 justify-center p-3">
         <AspectRatioSelect />
   <EditorButton

@@ -12,7 +12,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import titlebarState from "~/utils/titlebar-state";
 import { cx } from "cva";
 
-export default function (props: ComponentProps<"div">) {
+export default function (props: ComponentProps<"div"> & { maximizable?: boolean }) {
   const [local, otherProps] = splitProps(props, ["class"]);
   const currentWindow = getCurrentWindow();
   const [focused, setFocus] = createSignal(true);
@@ -28,7 +28,7 @@ export default function (props: ComponentProps<"div">) {
   return (
     <div
       class={cx(
-        "h-full align-baseline cursor-default rounded-none select-none *:outline-none *:transition-all *:duration-200",
+        "flex flex-row items-stretch h-full align-baseline cursor-default rounded-none select-none *:outline-none *:transition-all *:duration-200",
         local.class,
         focused()
           ? "*:text-black-transparent-80"
@@ -47,9 +47,9 @@ export default function (props: ComponentProps<"div">) {
       >
         <icons.minimizeWin />
       </ControlButton>
-      <Show when={titlebarState.maximizable || !titlebarState.hideMaximize}>
+      <Show when={titlebarState.maximizable || !titlebarState.hideMaximize || props.maximizable}>
         <ControlButton
-          disabled={!titlebarState.maximizable}
+          disabled={!titlebarState.maximizable || props.maximizable === false}
           onClick={
             titlebarState.maximizable
               ? titlebarState.maximized

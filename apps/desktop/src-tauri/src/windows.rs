@@ -1,16 +1,19 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
-use crate::{fake_window, general_settings::AppTheme, permissions};
+use crate::{fake_window, general_settings::AppTheme, permissions, App, ArcLock};
 use cap_flags::FLAGS;
 use cap_media::sources::CaptureScreen;
+use futures::pin_mut;
 use serde::Deserialize;
 use specta::Type;
-use std::{path::PathBuf, str::FromStr};
+use std::{path::PathBuf, str::FromStr, sync::Arc};
 use tauri::{
     AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder, Wry,
 };
+use tokio::sync::RwLock;
+use tracing::debug;
 
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
@@ -90,6 +93,8 @@ impl CapWindowId {
             Self::Editor { .. } => "Cap Editor".to_string(),
             Self::SignIn => "Cap Sign In".to_string(),
             Self::ModeSelect => "Cap Mode Selection".to_string(),
+            Self::Camera => "Cap Camera".to_string(),
+            Self::RecordingsOverlay => "Cap Recordings Overlay".to_string(),
             _ => "Cap".to_string(),
         }
     }
@@ -115,8 +120,7 @@ impl CapWindowId {
     #[cfg(target_os = "macos")]
     pub fn traffic_lights_position(&self) -> Option<Option<LogicalPosition<f64>>> {
         match self {
-            Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 40.0))),
-            Self::Setup => Some(Some(LogicalPosition::new(14.0, 24.0))),
+            Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 32.0))),
             Self::InProgressRecording => Some(Some(LogicalPosition::new(-100.0, -100.0))),
             Self::Camera
             | Self::WindowCaptureOccluder
@@ -158,7 +162,7 @@ pub enum ShowCapWindow {
 }
 
 impl ShowCapWindow {
-    pub fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
+    pub async fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
         if let Some(window) = self.id().get(app) {
             window.set_focus().ok();
             return Ok(window);
@@ -179,14 +183,30 @@ impl ShowCapWindow {
                 .build()?,
             Self::Main => {
                 if permissions::do_permissions_check(false).necessary_granted() {
-                    self.window_builder(app, "/")
+                    let window = self
+                        .window_builder(app, "/")
                         .resizable(false)
                         .maximized(false)
                         .maximizable(false)
                         .center()
-                        .build()?
+                        .build()?;
+
+                    let state = app.state::<Arc<RwLock<App>>>();
+                    let state = &mut *state.write().await;
+
+                    let _ = state.create_camera_feed().await;
+
+                    Box::pin(
+                        Self::Camera {
+                            ws_port: state.camera_ws_port,
+                        }
+                        .show(&app),
+                    )
+                    .await?;
+
+                    window
                 } else {
-                    Self::Setup.show(app)?
+                    Box::pin(Self::Setup.show(app)).await?
                 }
             }
             Self::SignIn => self
@@ -209,15 +229,9 @@ impl ShowCapWindow {
                 let window = self
                     .window_builder(app, format!("/editor?id={project_id}"))
                     .maximizable(true)
-                    .transparent(cfg!(target_os = "macos"))
                     .inner_size(1240.0, 800.0)
                     .center()
                     .build()?;
-
-                let _ = window.set_effects(tauri::utils::config::WindowEffectsConfig {
-                    effects: vec![tauri::window::Effect::HudWindow],
-                    ..Default::default()
-                });
 
                 window
             }
@@ -250,7 +264,6 @@ impl ShowCapWindow {
                     .shadow(false)
                     .fullscreen(false)
                     .always_on_top(true)
-                    .title("Cap Camera")
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)
                     .position(
@@ -451,7 +464,8 @@ impl ShowCapWindow {
             }
         };
 
-        window.hide().ok();
+        // removing this for now as it causes windows to just stay hidden sometimes -_-
+        // window.hide().ok();
 
         #[cfg(target_os = "macos")]
         if let Some(position) = id.traffic_lights_position() {
@@ -623,5 +637,21 @@ impl MonitorExt for Monitor {
         ]
         .into_iter()
         .any(|(x, y)| x >= left && x < right && y >= top && y < bottom)
+    }
+}
+
+#[specta::specta]
+#[tauri::command(async)]
+pub fn set_window_transparent(window: tauri::Window, value: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        let ns_win = window
+            .ns_window()
+            .expect("Failed to get native window handle")
+            as *const objc2_app_kit::NSWindow;
+
+        unsafe {
+            (*ns_win).setOpaque(!value);
+        }
     }
 }

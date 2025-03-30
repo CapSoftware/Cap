@@ -1,10 +1,12 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use crate::{
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
-    general_settings::GeneralSettingsStore,
+    general_settings::{
+        GeneralSettingsStore, MainWindowRecordingStartBehaviour, PostStudioRecordingBehaviour,
+    },
     open_editor, open_external_link,
     presets::PresetsStore,
     upload::{get_s3_config, prepare_screenshot_upload, upload_video, InstantMultipartUpload},
@@ -202,7 +204,7 @@ pub async fn start_recording(
                 // Allow the recording to proceed without error for any signed-in user
                 _ => {
                     // User is not signed in
-                    ShowCapWindow::SignIn.show(&app).ok();
+                    let _ = ShowCapWindow::SignIn.show(&app).await;
                     return Err("Please sign in to use instant recording".to_string());
                 }
             }
@@ -217,6 +219,7 @@ pub async fn start_recording(
         let _ = ShowCapWindow::WindowCaptureOccluder.show(&app);
     }
 
+    let (finish_upload_tx, finish_upload_rx) = flume::bounded(1);
     let progressive_upload = video_upload_info
         .as_ref()
         .filter(|_| matches!(recording_options.mode, RecordingMode::Instant))
@@ -226,6 +229,7 @@ pub async fn start_recording(
                 id.clone(),
                 recording_dir.join("content/output.mp4"),
                 video_upload_info.clone(),
+                Some(finish_upload_rx),
             )
         });
 
@@ -247,7 +251,7 @@ pub async fn start_recording(
                         recording_dir.clone(),
                         recording_options.clone(),
                         state.camera_feed.clone(),
-                        state.audio_input_feed.clone(),
+                        state.mic_feed.clone(),
                     )
                     .await
                     .map_err(|e| {
@@ -267,7 +271,7 @@ pub async fn start_recording(
                             id.clone(),
                             recording_dir.clone(),
                             recording_options.clone(),
-                            state.audio_input_feed.as_ref(),
+                            state.mic_feed.as_ref(),
                         )
                         .await
                         .map_err(|e| {
@@ -301,6 +305,8 @@ pub async fn start_recording(
             fail!("recording::wait_actor_done");
             actor_done_rx.await.ok();
 
+            let _ = finish_upload_tx.send(());
+
             let mut state = state_mtx.write().await;
 
             // this clears the current recording for us
@@ -309,15 +315,27 @@ pub async fn start_recording(
     });
 
     if let Some(window) = CapWindowId::Main.get(&app) {
-        window.minimize().ok();
+        match GeneralSettingsStore::get(&app)
+            .ok()
+            .flatten()
+            .map(|s| s.main_window_recording_start_behaviour)
+            .unwrap_or_default()
+        {
+            MainWindowRecordingStartBehaviour::Close => {
+                let _ = window.close();
+            }
+            MainWindowRecordingStartBehaviour::Minimise => {
+                let _ = window.minimize();
+            }
+        }
     }
 
     if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
         window.eval("window.location.reload()").ok();
     } else {
-        ShowCapWindow::InProgressRecording { position: None }
+        let _ = ShowCapWindow::InProgressRecording { position: None }
             .show(&app)
-            .ok();
+            .await;
     }
 
     AppSounds::StartRecording.play();
@@ -375,31 +393,28 @@ async fn handle_recording_end(
     // Clear current recording, just in case :)
     state.current_recording.take();
 
+    if let Some(recording) = recording {
+        handle_recording_finish(&app, recording).await?;
+    };
+
+    let _ = state.recording_logging_handle.reload(None);
+
     if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
-        window.hide().unwrap();
+        let _ = window.close();
     }
 
     if let Some(window) = CapWindowId::Main.get(&app) {
         window.unminimize().ok();
+    } else {
+        CapWindowId::Camera.get(&app).map(|v| {
+            let _ = v.close();
+        });
+        state.remove_camera_feed();
+        state.remove_mic_feed();
     }
-
-    // Store the link for opening later if we have one from an instant recording
-    let mut shareable_link = None;
-
-    if let Some(recording) = recording {
-        shareable_link = handle_recording_finish(&app, recording).await?;
-    };
-
-    state.recording_logging_handle.reload(None);
 
     // Play sound to indicate recording has stopped
     AppSounds::StopRecording.play();
-
-    // Now that recording has fully stopped and sound has played, open the link if available
-    if let Some(link) = shareable_link {
-        // Open link after sound plays, giving user clear indication recording has ended
-        open_external_link(app.clone(), link).ok();
-    }
 
     CurrentRecordingChanged.emit(&app).ok();
 
@@ -410,7 +425,7 @@ async fn handle_recording_end(
 async fn handle_recording_finish(
     app: &AppHandle,
     completed_recording: CompletedRecording,
-) -> Result<Option<String>, String> {
+) -> Result<(), String> {
     let recording_dir = completed_recording.project_path().clone();
     let id = completed_recording.id().clone();
 
@@ -434,8 +449,6 @@ async fn handle_recording_finish(
     let display_screenshot = screenshots_dir.join("display.jpg");
     create_screenshot(display_output_path, display_screenshot.clone(), None).await?;
 
-    let mut shareable_link = None;
-
     let (meta_inner, sharing) = match completed_recording {
         CompletedRecording::Studio(recording) => {
             let recordings = ProjectRecordings::new(&recording_dir, &recording.meta);
@@ -448,19 +461,6 @@ async fn handle_recording_finish(
 
             config.write(&recording_dir).map_err(|e| e.to_string())?;
 
-            if let Some(settings) = GeneralSettingsStore::get(&app).ok().flatten() {
-                if settings.open_editor_after_recording {
-                    open_editor(app.clone(), id.clone());
-                }
-            };
-
-            ShowCapWindow::RecordingsOverlay.show(&app).ok();
-
-            let _ = NewStudioRecordingAdded {
-                path: recording_dir.clone(),
-            }
-            .emit(app);
-
             (RecordingMetaInner::Studio(recording.meta), None)
         }
         CompletedRecording::Instant {
@@ -468,13 +468,16 @@ async fn handle_recording_finish(
             progressive_upload,
             video_upload_info,
         } => {
-            shareable_link = Some(video_upload_info.link.clone());
+            // shareable_link = Some(video_upload_info.link.clone());
             let app = app.clone();
             let output_path = recording_dir.join("content/output.mp4");
 
-            {
+            let _ = open_external_link(app.clone(), video_upload_info.link.clone());
+
+            spawn_actor({
                 let video_upload_info = video_upload_info.clone();
-                spawn_actor(async move {
+
+                async move {
                     if let Some(progressive_upload) = progressive_upload {
                         let video_upload_succeeded = match progressive_upload
                             .handle
@@ -540,12 +543,14 @@ async fn handle_recording_finish(
                                         "Final video upload with screenshot completed successfully"
                                     )
                                 }
-                                Err(e) => error!("Error in final upload with screenshot: {}", e),
+                                Err(e) => {
+                                    error!("Error in final upload with screenshot: {}", e)
+                                }
                             }
                         }
                     }
-                });
-            }
+                }
+            });
 
             (
                 RecordingMetaInner::Instant(recording.meta),
@@ -563,7 +568,7 @@ async fn handle_recording_finish(
     .emit(app);
 
     let meta = RecordingMeta {
-        project_path: recording_dir,
+        project_path: recording_dir.clone(),
         sharing,
         pretty_name: format!(
             "Cap {}",
@@ -575,7 +580,37 @@ async fn handle_recording_finish(
     meta.save_for_project()
         .map_err(|e| format!("Failed to save recording meta: {e}"))?;
 
-    Ok(shareable_link)
+    if let RecordingMetaInner::Studio(_) = meta.inner {
+        match GeneralSettingsStore::get(&app)
+            .ok()
+            .flatten()
+            .map(|v| v.post_studio_recording_behaviour)
+            .unwrap_or(PostStudioRecordingBehaviour::OpenEditor)
+        {
+            PostStudioRecordingBehaviour::OpenEditor => {
+                let _ = ShowCapWindow::Editor {
+                    project_id: id.clone(),
+                }
+                .show(&app)
+                .await;
+            }
+            PostStudioRecordingBehaviour::ShowOverlay => {
+                let _ = ShowCapWindow::RecordingsOverlay.show(&app).await;
+
+                let app = AppHandle::clone(app);
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+                    let _ = NewStudioRecordingAdded {
+                        path: recording_dir.clone(),
+                    }
+                    .emit(&app);
+                });
+            }
+        };
+    }
+
+    Ok(())
 }
 
 fn generate_zoom_segments_from_clicks(

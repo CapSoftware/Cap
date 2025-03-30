@@ -5,12 +5,15 @@ import { vValidator } from '@hono/valibot-validator';
 import * as v from 'valibot';
 import * as jose from 'jose';
 import { createMiddleware } from 'hono/factory';
+import { App, Octokit, RequestError } from 'octokit';
 
 const DISCORD_APP_ID = '1334742236096757861';
 const PUBLIC_KEY = 'fea8bb4c1432223609db5a37e074c5a5474b89bf4bea12515bc4e09d564e4f61';
 
 const GITHUB_ORG = 'CapSoftware';
 const GITHUB_REPO = 'Cap';
+const GITHUB_APP_ID = 1196731;
+const GITHUB_APP_INSTALLATION = 63538726;
 const WORKFLOW_FILE = 'publish.yml';
 
 const CHANNEL_MESSAGE_WITH_SOURCE = 4;
@@ -34,10 +37,11 @@ type InteractionBody = {
 
 const app = new Hono<{ Bindings: Env }>();
 
-app.post('/', async (c) => {
+app.post('/interactions', async (c) => {
 	const body = await c.req.json();
 
-	if (!verifyRequest(c.req.raw, body)) return new Response('Invalid signature', { status: 401 });
+	const verification = await verifyRequest(c.req.raw, body);
+	if (!verification) return new Response('Invalid signature', { status: 401 });
 
 	// Ping
 	if (body.type === 1) return Response.json({ type: 1 });
@@ -45,6 +49,7 @@ app.post('/', async (c) => {
 	// Slash command
 	if (body.type === 2) {
 		const response = await handleCommand(body, c.env);
+		console.log({ response });
 		return Response.json(response);
 	}
 });
@@ -160,31 +165,33 @@ export default app;
 async function handleCommand(interaction: InteractionBody, env: Env) {
 	const { data } = interaction;
 
+	const app = new App({
+		appId: GITHUB_APP_ID,
+		privateKey: env.GITHUB_APP_PRIVATE_KEY.trim(),
+	});
+
+	const octokit = await app.getInstallationOctokit(GITHUB_APP_INSTALLATION);
+
 	switch (data.name) {
 		case 'release': {
 			await env.release_discord_interactions.put(interaction.id, JSON.stringify(interaction));
 
-			const workflowResponse = await fetch(
-				`https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/actions/workflows/${WORKFLOW_FILE}/dispatches`,
-				{
-					method: 'POST',
-					body: JSON.stringify({ ref: 'main', inputs: { interactionId: interaction.id } }),
-					headers: {
-						Accept: 'application/vnd.github+json',
-						Authorization: `Bearer ${env.GITHUB_TOKEN}`,
-						'X-GitHub-Api-Version': '2022-11-28',
-						'User-Agent': 'CapBot',
-					},
-				}
-			);
+			try {
+				await octokit.rest.actions.createWorkflowDispatch({
+					owner: GITHUB_ORG,
+					repo: GITHUB_REPO,
+					workflow_id: WORKFLOW_FILE,
+					ref: 'main',
+					inputs: { interactionId: interaction.id },
+				});
 
-			if (workflowResponse.status !== 204)
-				return { type: 4, data: { content: `Failed to start release workflow: ${await workflowResponse.text()}` } };
-
-			return {
-				type: CHANNEL_MESSAGE_WITH_SOURCE,
-				data: releaseWorkflowStartedMessageData(),
-			};
+				return {
+					type: CHANNEL_MESSAGE_WITH_SOURCE,
+					data: releaseWorkflowStartedMessageData(),
+				};
+			} catch (e) {
+				return { type: 4, data: { content: `Failed to start release workflow: ${e}` } };
+			}
 		}
 		default: {
 			return { type: 4, data: { content: `Unknown command ${data.name}` } };

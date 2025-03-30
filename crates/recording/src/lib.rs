@@ -22,7 +22,8 @@ pub enum RecordingMode {
 #[serde(rename_all = "camelCase")]
 pub struct RecordingOptions {
     pub capture_target: ScreenCaptureTarget,
-    pub audio_input_name: Option<String>,
+    #[serde(alias = "audio_input_name")]
+    pub mic_name: Option<String>,
     pub camera_label: Option<String>,
     #[serde(default)]
     pub capture_system_audio: bool,
@@ -53,8 +54,8 @@ impl RecordingOptions {
         self.camera_label.as_deref()
     }
 
-    pub fn audio_input_name(&self) -> Option<&str> {
-        self.audio_input_name.as_deref()
+    pub fn mic_name(&self) -> Option<&str> {
+        self.mic_name.as_deref()
     }
 }
 

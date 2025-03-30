@@ -28,7 +28,8 @@ export type CurrentDialog =
   | { type: "createPreset" }
   | { type: "renamePreset"; presetIndex: number }
   | { type: "deletePreset"; presetIndex: number }
-  | { type: "crop"; position: XY<number>; size: XY<number> };
+  | { type: "crop"; position: XY<number>; size: XY<number> }
+  | { type: "export" };
 
 export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
 
@@ -83,6 +84,57 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
     const [previewTime, setPreviewTime] = createSignal<number>();
     const [playbackTime, setPlaybackTime] = createSignal<number>(0);
     const [playing, setPlaying] = createSignal(false);
+
+
+    //Export states
+
+    const [exportProgress, setExportProgress] = createSignal<{
+      totalFrames: number;
+      renderedFrames: number;
+    } | null>(null);
+
+      type ExportState =
+  | { type: "idle" }
+  | { type: "starting" }
+  | { type: "rendering"}
+  | { type: "saving"; done: boolean };
+
+type CopyState =
+  | { type: "idle" }
+  | { type: "starting" }
+  | { type: "rendering"}
+  | { type: "copying" }
+  | { type: "copied" };
+
+  const [exportState, setExportState] = createStore<ExportState>({
+    type: "idle",
+  });
+
+  const [copyState, setCopyState] = createStore<CopyState>({
+    type: "idle",
+  });
+
+  const [uploadState, setUploadState] = createStore<
+    | { type: "idle" }
+    | { type: "starting" }
+    | { type: "rendering" }
+    | { type: "uploading"; progress: number }
+    | { type: "link-copied" }
+  >({ type: "idle" });
+
+
+//This is used in ShareButton.tsx to notify the component that the metadata has changed, from ExportDialog.tsx
+//When a video is uploaded, the metadata is updated
+
+
+  const [lastMetaUpdate, setLastMetaUpdate] = createSignal<{ videoId: string; timestamp: number } | null>(null);
+
+  const metaUpdateStore = {
+    notifyUpdate: (videoId: string) => {
+      setLastMetaUpdate({ videoId, timestamp: Date.now() });
+    },
+    getLastUpdate: lastMetaUpdate
+  };
 
     createEffect(
       on(playing, () => {
@@ -168,8 +220,19 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       setProject,
       selectedTab,
       backgroundTab,
+      exportProgress,
+      setExportProgress,
+      copyState,
+      setCopyState,
+      uploadState,
+      setUploadState,
+      exportState,
+      setExportState,
       setBackgroundTab,
       setSelectedTab,
+      metaUpdateStore,
+      lastMetaUpdate,
+      setLastMetaUpdate,
       history: createStoreHistory(project, setProject),
       playbackTime,
       setPlaybackTime,
@@ -328,3 +391,4 @@ export const [SegmentContextProvider, useSegmentContext] =
   createContextProvider((props: { width: Accessor<number> }) => {
     return props;
   }, null!);
+

@@ -72,7 +72,7 @@ export default function () {
           captureTarget,
           mode: options.data?.mode ?? "studio",
           cameraLabel: options.data?.cameraLabel ?? null,
-          audioInputName: options.data?.audioInputName ?? null,
+          micName: options.data?.micName ?? null,
           captureSystemAudio: options.data?.captureSystemAudio,
         });
       } else {
@@ -103,7 +103,7 @@ export default function () {
     const currentWindow = getCurrentWindow();
     const MAIN_WINDOW_SIZE = {
       width: 300,
-      height: 290 + (window.FLAGS.systemAudioRecording ? 60 : 0),
+      height: 290 + (window.FLAGS.systemAudioRecording ? 50 : 0),
     };
 
     // Set initial size
@@ -133,9 +133,13 @@ export default function () {
       unlistenFocus();
       unlistenResize();
     };
-    setTitlebar("hideMaximize", true);
-    setTitlebar(
-      "items",
+
+    return null;
+  });
+
+  useWindowChrome({
+    hideMaximize: true,
+    items: (
       <div
         dir={ostype() === "windows" ? "rtl" : "rtl"}
         class="flex gap-1 items-center mx-2"
@@ -207,9 +211,7 @@ export default function () {
           </button>
         )}
       </div>
-    );
-
-    return null;
+    ),
   });
 
   return (
@@ -323,8 +325,8 @@ import { type as ostype, platform } from "@tauri-apps/plugin-os";
 import * as updater from "@tauri-apps/plugin-updater";
 import { Transition } from "solid-transition-group";
 
-import { setTitlebar } from "~/utils/titlebar-state";
 import { apiClient } from "~/utils/web-api";
+import { useWindowChrome } from "./Context";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -755,11 +757,8 @@ function MicrophoneSelect(props: {
   const [isInitialized, setIsInitialized] = createSignal(false);
 
   const value = createMemo(() => {
-    if (!props.options?.audioInputName) return null;
-    return (
-      devices.data?.find((d) => d.name === props.options?.audioInputName) ??
-      null
-    );
+    if (!props.options?.micName) return null;
+    return devices.data?.find((d) => d.name === props.options?.micName) ?? null;
   });
 
   const requestPermission = useRequestPermission();
@@ -775,7 +774,7 @@ function MicrophoneSelect(props: {
 
     await props.setOptions.mutateAsync({
       ...props.options,
-      audioInputName: item ? item.name : null,
+      micName: item ? item.name : null,
     });
     if (!item) setDbs();
 
@@ -789,12 +788,12 @@ function MicrophoneSelect(props: {
   onMount(() => {
     const listener = (event: Event) => {
       const dbs = (event as CustomEvent<number>).detail;
-      if (!props.options?.audioInputName) setDbs();
+      if (!props.options?.micName) setDbs();
       else setDbs(dbs);
     };
 
     events.audioInputLevelChange.listen((dbs) => {
-      if (!props.options?.audioInputName) setDbs();
+      if (!props.options?.micName) setDbs();
       else setDbs(dbs.payload);
     });
 
@@ -809,7 +808,7 @@ function MicrophoneSelect(props: {
 
   // Initialize audio input if needed - only once when component mounts
   onMount(() => {
-    const audioInput = props.options?.audioInputName;
+    const audioInput = props.options?.micName;
     if (!audioInput || !permissionGranted() || isInitialized()) return;
 
     setIsInitialized(true);
@@ -828,14 +827,14 @@ function MicrophoneSelect(props: {
           Promise.all([
             CheckMenuItem.new({
               text: NO_MICROPHONE,
-              checked: !props.options?.audioInputName,
+              checked: !props.options?.micName,
               action: () => handleMicrophoneChange(null),
             }),
             PredefinedMenuItem.new({ item: "Separator" }),
             ...(devices.data ?? []).map((o) =>
               CheckMenuItem.new({
                 text: o.name,
-                checked: o.name === props.options?.audioInputName,
+                checked: o.name === props.options?.micName,
                 action: () => handleMicrophoneChange(o),
               })
             ),
@@ -858,19 +857,19 @@ function MicrophoneSelect(props: {
         </Show>
         <IconCapMicrophone class="text-gray-400 size-[1.25rem]" />
         <span class="flex-1 text-left truncate">
-          {props.options?.audioInputName ?? NO_MICROPHONE}
+          {props.options?.micName ?? NO_MICROPHONE}
         </span>
         <TargetSelectInfoPill
-          value={props.options?.audioInputName ?? null}
+          value={props.options?.micName ?? null}
           permissionGranted={permissionGranted()}
           requestPermission={() => requestPermission("microphone")}
           onClick={(e) => {
             if (!props.options) return;
-            if (props.options?.audioInputName) {
+            if (props.options?.micName) {
               e.stopPropagation();
               props.setOptions.mutate({
                 ...props.options,
-                audioInputName: null,
+                micName: null,
               });
             }
           }}

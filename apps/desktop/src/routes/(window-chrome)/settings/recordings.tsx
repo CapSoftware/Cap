@@ -110,7 +110,9 @@ export default function Recordings() {
     trackEvent("recording_editor_clicked", {
       recording_id: fileName.replace(".cap", ""),
     });
-    commands.openEditor(fileName.replace(".cap", ""));
+    commands.showWindow({
+      Editor: { project_id: fileName.replace(".cap", "") },
+    });
   };
 
   return (
@@ -220,12 +222,6 @@ function RecordingItem(props: {
             onClick={() => props.onOpenEditor()}
           >
             <IconLucideEdit class="size-4" />
-          </TooltipIconButton>
-          <TooltipIconButton
-            tooltipText="Show recordings overlay"
-            onClick={() => props.onClick()}
-          >
-            <IconLucideEye class="size-4" />
           </TooltipIconButton>
           <Show when={props.recording.meta.sharing}>
             {(sharing) => (

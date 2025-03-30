@@ -1,27 +1,28 @@
 import { Button } from "@cap/ui-solid";
 import { createMutation } from "@tanstack/solid-query";
-import { createResource, createSignal, Show } from "solid-js";
+import { createEffect, createResource, createSignal, Show } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import Tooltip from "~/components/Tooltip";
 
 import { Channel } from "@tauri-apps/api/core";
 import { createProgressBar } from "~/routes/editor/utils";
 import { authStore } from "~/store";
-import { trackEvent } from "~/utils/analytics";
 import { commands, events, RenderProgress } from "~/utils/tauri";
 import { useEditorContext } from "./context";
-import { RESOLUTION_OPTIONS, ResolutionOption } from "./Header";
+import { RESOLUTION_OPTIONS } from "./Header";
 import { Dialog, DialogContent } from "./ui";
 
-function ShareButton(props: {
-  selectedResolution: () => ResolutionOption;
-  selectedFps: () => number;
-}) {
-  const { videoId, project } = useEditorContext();
+function ShareButton() {
+  const { videoId, metaUpdateStore } = useEditorContext();
   const [recordingMeta, metaActions] = createResource(() =>
     commands.getRecordingMeta(videoId, "recording")
   );
   const [copyPressed, setCopyPressed] = createSignal(false);
+  const selectedFps = Number(localStorage.getItem("cap-export-fps")) || 30;
+  const selectedResolution =
+    RESOLUTION_OPTIONS.find(
+      (opt) => opt.value === localStorage.getItem("cap-export-resolution")
+    ) || RESOLUTION_OPTIONS[0];
 
   const uploadVideo = createMutation(() => ({
     mutationFn: async () => {
@@ -35,12 +36,6 @@ function ShareButton(props: {
         await commands.showWindow("SignIn");
         throw new Error("You need to sign in to share recordings");
       }
-
-      trackEvent("create_shareable_link_clicked", {
-        resolution: props.selectedResolution().value,
-        fps: props.selectedFps(),
-        has_existing_auth: !!existingAuth,
-      });
 
       const meta = recordingMeta();
       if (!meta) {
@@ -100,18 +95,10 @@ function ShareButton(props: {
             );
         };
 
-        await commands.exportVideo(
-          videoId,
-          progress,
-          true,
-          props.selectedFps(),
-          {
-            x: props.selectedResolution()?.width || RESOLUTION_OPTIONS[0].width,
-            y:
-              props.selectedResolution()?.height ||
-              RESOLUTION_OPTIONS[0].height,
-          }
-        );
+        await commands.exportVideo(videoId, progress, true, selectedFps, {
+          x: selectedResolution.width,
+          y: selectedResolution.height,
+        });
 
         setUploadState({ type: "uploading", progress: 0 });
 
@@ -175,31 +162,17 @@ function ShareButton(props: {
     return 100;
   });
 
+  // Watch for metadata updates
+  createEffect(() => {
+    const update = metaUpdateStore.getLastUpdate();
+    if (update && update.videoId === videoId) {
+      metaActions.refetch();
+    }
+  });
+
   return (
     <div class="relative">
-      <Show
-        when={recordingMeta.latest?.sharing}
-        fallback={
-          <Button
-            disabled={uploadVideo.isPending}
-            onClick={(e) => uploadVideo.mutate()}
-            variant="primary"
-            class="flex gap-2 items-center !py-2"
-          >
-            {!uploadVideo.isPending ? (
-              <>
-                <IconCapLink class="size-5" />
-                <span>Shareable Link</span>
-              </>
-            ) : (
-              <>
-                <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
-                <span>Uploading Cap</span>
-              </>
-            )}
-          </Button>
-        }
-      >
+      <Show when={recordingMeta.latest?.sharing}>
         {(sharing) => {
           const url = () => new URL(sharing().link);
           const copyLink = () => {
@@ -218,7 +191,7 @@ function ShareButton(props: {
               >
                 <Button
                   disabled={uploadVideo.isPending}
-                  onClick={(e) => uploadVideo.mutate()}
+                  onClick={() => uploadVideo.mutate()}
                   variant="primary"
                   class="flex justify-center items-center size-[41px] !px-0 !py-0 space-x-1 rounded-xl"
                 >
@@ -244,9 +217,8 @@ function ShareButton(props: {
                   </a>
                   {/** Copy button */}
                   <Tooltip content="Copy link">
-                    <Button
-                      variant="secondary"
-                      class="flex justify-center items-center size-[22px] text-gray-500  !px-0 !py-0 rounded-[5px] dark:bg-black-transparent-10 dark:hover:bg-black-transparent-40 bg-gray-200 hover:bg-gray-300"
+                    <div
+                      class="flex justify-center items-center rounded-lg size-[22px] text-gray-500 !px-0 !py-0 dark:bg-black-transparent-10 dark:hover:bg-black-transparent-40 bg-gray-200 hover:bg-gray-300"
                       onClick={copyLink}
                     >
                       {!copyPressed() ? (
@@ -254,7 +226,7 @@ function ShareButton(props: {
                       ) : (
                         <IconLucideCheck class="size-2.5 svgpathanimation" />
                       )}
-                    </Button>
+                    </div>
                   </Tooltip>
                 </div>
               </Tooltip>

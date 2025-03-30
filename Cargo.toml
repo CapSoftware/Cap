@@ -18,7 +18,7 @@ tokio = { version = "1.39.3", features = [
 	"rt-multi-thread",
 	"time",
 ] }
-tauri = { version = "2.3.0", features = ["specta"] }
+tauri = { version = "2.4.0", features = ["specta"] }
 specta = { version = "=2.0.0-rc.20", features = [
 	"derive",
 	"serde_json",
@@ -46,3 +46,7 @@ cidre = { git = "https://github.com/yury/cidre", rev = "ef04aaabe14ffbbce4a33097
 windows = "0.58.0"
 windows-sys = "0.59.0"
 windows-capture = "1.4.2"
+
+[patch.crates-io]
+screencapturekit = { git = "https://github.com/CapSoftware/screencapturekit-rs", rev = "7ff1e103742e56c8f6c2e940b5e52684ed0bed69" } # branch = "cap-main"
+wry = { git = "https://github.com/CapSoftware/wry", rev = "293f510" }                                                               # branch = "cap"

@@ -42,7 +42,7 @@ export default function Titlebar() {
   );
 }
 
-function WindowControls(props: ComponentProps<"div">) {
+export function WindowControls(props: ComponentProps<"div">) {
   const [local, otherProps] = splitProps(props, ["class"]);
   const ostype = type();
 

@@ -5,18 +5,13 @@ import { remove } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
-import {
-  batch,
-  createEffect,
-  createSignal,
-  onCleanup,
-  onMount,
-} from "solid-js";
+import { ComponentProps, onCleanup, onMount } from "solid-js";
 
-import Titlebar from "~/components/titlebar/Titlebar";
-import { initializeTitlebar, setTitlebar } from "~/utils/titlebar-state";
+import { Button } from "@cap/ui-solid";
+import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import { trackEvent } from "~/utils/analytics";
+import { initializeTitlebar } from "~/utils/titlebar-state";
 import { useEditorContext } from "./context";
-import ExportButton from "./ExportButton";
 import PresetsDropdown from "./PresetsDropdown";
 import ShareButton from "./ShareButton";
 import { EditorButton } from "./ui";
@@ -41,23 +36,8 @@ export interface ExportEstimates {
 }
 
 export function Header() {
-  const editorContext = useEditorContext();
-
-  const [selectedFps, setSelectedFps] = createSignal(
-    Number(localStorage.getItem("cap-export-fps")) || 30
-  );
-  const [selectedResolution, setSelectedResolution] =
-    createSignal<ResolutionOption>(
-      RESOLUTION_OPTIONS.find(
-        (opt) => opt.value === localStorage.getItem("cap-export-resolution")
-      ) || RESOLUTION_OPTIONS[0]
-    );
-
-  // Save settings when they change
-  createEffect(() => {
-    localStorage.setItem("cap-export-fps", selectedFps().toString());
-    localStorage.setItem("cap-export-resolution", selectedResolution().value);
-  });
+  const { editorInstance, history, setDialog, exportProgress } =
+    useEditorContext();
 
   let unlistenTitlebar: UnlistenFn | undefined;
   onMount(async () => {
@@ -65,74 +45,41 @@ export function Header() {
   });
   onCleanup(() => unlistenTitlebar?.());
 
-  batch(() => {
-    setTitlebar("height", "60px");
-    setTitlebar("border", true);
-    setTitlebar("transparent", true);
-    setTitlebar(
-      "items",
-      <div
-        data-tauri-drag-region
-        class={cx(
-          "flex flex-row justify-end items-center w-full cursor-default pr-5",
-          ostype() === "windows" ? "pl-[4.3rem]" : "pl-[1.25rem]"
-        )}
-      >
-        <div class="flex relative z-20 flex-row gap-3 items-center font-medium">
-          <ShareButton
-            selectedResolution={selectedResolution}
-            selectedFps={selectedFps}
-          />
-          <ExportButton
-            selectedResolution={selectedResolution()}
-            selectedFps={selectedFps()}
-            setSelectedFps={setSelectedFps}
-            setSelectedResolution={setSelectedResolution}
-          />
-        </div>
-      </div>
-    );
-  });
-
   return (
-    <div data-tauri-drag-region class="relative w-full">
+    <div
+      data-tauri-drag-region
+      class="flex relative flex-row items-center w-full h-14"
+    >
       <div
         data-tauri-drag-region
-        class={cx(
-          "flex absolute z-10 gap-4 items-start w-full h-full",
-          ostype() === "windows" ? "left-4" : "left-[5.5rem]"
-        )}
+        class={cx("flex flex-row flex-1 gap-2 items-center px-4 h-full")}
       >
-        <div class="flex gap-2 items-center h-full">
-          <EditorButton
-            onClick={async () => {
-              const currentWindow = getCurrentWindow();
-              if (!editorContext?.editorInstance.path) return;
-              if (
-                !(await ask("Are you sure you want to delete this recording?"))
-              )
-                return;
-              await remove(editorContext?.editorInstance.path, {
-                recursive: true,
-              });
-              await currentWindow.close();
-            }}
-            tooltipText="Delete recording"
-            leftIcon={<IconCapTrash class="w-5" />}
-          />
-          <EditorButton
-            onClick={() =>
-              revealItemInDir(`${editorContext.editorInstance.path}/`)
-            }
-            tooltipText="Open recording bundle"
-            leftIcon={<IconLucideFolder class="w-5" />}
-          />
+        {ostype() === "macos" && <div class="h-full w-[4rem]" />}
+        <EditorButton
+          onClick={async () => {
+            const currentWindow = getCurrentWindow();
+            if (!editorInstance.path) return;
+            if (!(await ask("Are you sure you want to delete this recording?")))
+              return;
+            await remove(editorInstance.path, {
+              recursive: true,
+            });
+            await currentWindow.close();
+          }}
+          tooltipText="Delete recording"
+          leftIcon={<IconCapTrash class="w-5" />}
+        />
+        <EditorButton
+          onClick={() => revealItemInDir(`${editorInstance.path}/`)}
+          tooltipText="Open recording bundle"
+          leftIcon={<IconLucideFolder class="w-5" />}
+        />
 
-          <p class="text-sm text-gray-500">
-            {editorContext.editorInstance.prettyName}
-            <span class="text-sm text-gray-400">.cap</span>
-          </p>
-          {/* <ErrorBoundary fallback={<></>}>
+        <p class="text-sm text-gray-500">
+          {editorInstance.prettyName}
+          <span class="text-sm text-gray-400">.cap</span>
+        </p>
+        {/* <ErrorBoundary fallback={<></>}>
             <Suspense>
               <span
                 onClick={async () => {
@@ -154,23 +101,7 @@ export function Header() {
               </span>
             </Suspense>
           </ErrorBoundary> */}
-        </div>
-      </div>
-      <TopBar />
-      <Titlebar />
-    </div>
-  );
-}
-
-function TopBar() {
-  const editorContext = useEditorContext();
-
-  return (
-    <div
-      data-tauri-drag-region
-      class="flex absolute inset-x-0 z-10 items-center mx-auto h-full w-fit"
-    >
-      <div class="flex gap-4 items-center px-4 h-full">
+        <div data-tauri-drag-region class="flex-1 h-full" />
         <EditorButton
           tooltipText="Captions"
           leftIcon={<IconCapCaptions class="w-5" />}
@@ -183,24 +114,84 @@ function TopBar() {
         />
       </div>
 
-      <div class="flex gap-4 items-center px-4 my-2 border-r border-l border-r-black-transparent-10 border-l-black-transparent-10">
+      <div
+        data-tauri-drag-region
+        class="flex flex-col justify-center px-4 border-x border-black-transparent-10"
+      >
         <PresetsDropdown />
       </div>
 
-      <div class="flex gap-4 items-center px-4 h-full">
+      <div
+        data-tauri-drag-region
+        class={cx(
+          "flex-1 h-full flex flex-row items-center gap-2 pl-2",
+          ostype() !== "windows" && "pr-2"
+        )}
+      >
         <EditorButton
-          onClick={() => editorContext.history.undo()}
-          disabled={!editorContext.history.canUndo()}
+          onClick={() => history.undo()}
+          disabled={!history.canUndo()}
           tooltipText="Undo"
           leftIcon={<IconCapUndo class="w-5" />}
         />
         <EditorButton
-          onClick={() => editorContext.history.redo()}
-          disabled={!editorContext.history.canRedo()}
+          onClick={() => history.redo()}
+          disabled={!history.canRedo()}
           tooltipText="Redo"
           leftIcon={<IconCapRedo class="w-5" />}
         />
+        <div data-tauri-drag-region class="flex-1 h-full" />
+        <ShareButton />
+        <Button
+          variant="lightdark"
+          class={cx("flex gap-2 justify-center")}
+          onClick={() => {
+            trackEvent("export_button_clicked");
+            setDialog({
+              type: "export",
+              open: true,
+            });
+          }}
+        >
+          <UploadIcon class="text-gray-50 size-5" />
+          Export
+        </Button>
+        {ostype() === "windows" && <CaptionControlsWindows11 />}
       </div>
     </div>
   );
 }
+
+const UploadIcon = (props: ComponentProps<"svg">) => {
+  const { exportProgress } = useEditorContext();
+  return (
+    <svg
+      width={20}
+      height={20}
+      viewBox="0 0 20 20"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      {...props}
+    >
+      {/* Bottom part (the base) */}
+      <path
+        d="M16.6667 10.625V14.1667C16.6667 15.5474 15.5474 16.6667 14.1667 16.6667H5.83333C4.45262 16.6667 3.33333 15.5474 3.33333 14.1667V10.625"
+        stroke="currentColor"
+        stroke-width={1.66667}
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        class="upload-base"
+      />
+
+      {/* Arrow part */}
+      <path
+        d="M9.99999 3.33333V12.7083M9.99999 3.33333L13.75 7.08333M9.99999 3.33333L6.24999 7.08333"
+        stroke="currentColor"
+        stroke-width={1.66667}
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        class={cx(exportProgress() !== null ? "bounce" : "")}
+      />
+    </svg>
+  );
+};

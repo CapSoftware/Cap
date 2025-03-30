@@ -23,10 +23,9 @@ use crate::{
     MediaError,
 };
 
-static EXCLUDED_WINDOWS: [&str; 4] = [
-    "Cap",
+static EXCLUDED_WINDOWS: &[&str] = &[
     "Cap Camera",
-    "Cap Recordings",
+    "Cap Recordings Overlay",
     "Cap In Progress Recording",
 ];
 
