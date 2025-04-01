@@ -9,7 +9,9 @@ import type { Metadata } from "next";
 import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "./AuthProvider";
 import { PostHogProvider, Providers } from "./providers";
-import { serverEnv } from "@cap/env";
+import { clientEnv, serverEnv } from "@cap/env";
+import { PublicEnvContext } from "@/utils/public-env";
+import { S3_BUCKET_URL } from "@cap/utils";
 
 export const metadata: Metadata = {
   title: "Cap — Beautiful screen recordings, owned by you.",
@@ -68,20 +70,28 @@ export default async function RootLayout({
       <body>
         <PostHogProvider>
           <AuthProvider>
-            <Providers
-              userId={user?.id}
-              intercomHash={intercomHash}
-              name={`${user?.name ?? ""} ${user?.lastName ?? ""}`}
-              email={user?.email ?? ""}
+            <PublicEnvContext
+              value={{
+                webUrl: serverEnv.WEB_URL,
+                awsBucket: serverEnv.CAP_AWS_BUCKET,
+                s3BucketUrl: S3_BUCKET_URL,
+              }}
             >
-              <Toaster />
-              <main className="overflow-hidden w-full">
-                <Navbar auth={user ? true : false} />
-                {children}
-                <Footer />
-              </main>
-              <BentoScript user={user} />
-            </Providers>
+              <Providers
+                userId={user?.id}
+                intercomHash={intercomHash}
+                name={`${user?.name ?? ""} ${user?.lastName ?? ""}`}
+                email={user?.email ?? ""}
+              >
+                <Toaster />
+                <main className="overflow-hidden w-full">
+                  <Navbar auth={user ? true : false} />
+                  {children}
+                  <Footer />
+                </main>
+                <BentoScript user={user} />
+              </Providers>
+            </PublicEnvContext>
           </AuthProvider>
         </PostHogProvider>
       </body>

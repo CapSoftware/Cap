@@ -20,7 +20,6 @@ interface CapCardProps {
     totalReactions: number;
     sharedSpaces: { id: string; name: string }[];
     ownerName: string;
-    url: string;
   };
   analytics: number;
   onDelete: (videoId: string) => Promise<void>;

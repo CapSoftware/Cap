@@ -12,6 +12,7 @@ import { desc, eq, sql, count, or } from "drizzle-orm";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { clientEnv, serverEnv } from "@cap/env";
 
 export const metadata: Metadata = {
   title: "My Caps — Cap",
@@ -97,11 +98,6 @@ export default async function CapsPage({
     ...video,
     sharedSpaces: video.sharedSpaces.filter((space) => space.id !== null),
     ownerName: video.ownerName ?? "",
-    url: activeSpace?.space.customDomain
-      ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
-      : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-      ? `https://cap.link/${cap.id}`
-      : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`,
   }));
 
   return (

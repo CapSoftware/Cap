@@ -13,7 +13,7 @@ import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
 import type { Metadata, ResolvingMetadata } from "next";
 import { notFound } from "next/navigation";
 import { ImageViewer } from "./_components/ImageViewer";
-import { clientEnv } from "@cap/env";
+import { clientEnv, serverEnv } from "@cap/env";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -73,9 +73,7 @@ export async function generateMetadata(
       title: "Cap: This video is private",
       description: "This video is private and cannot be shared.",
       openGraph: {
-        images: [
-          `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/og?videoId=${videoId}`,
-        ],
+        images: [`${serverEnv.WEB_URL}/api/video/og?videoId=${videoId}`],
       },
     };
   }
@@ -88,9 +86,7 @@ export async function generateMetadata(
     title: video.name + " | Cap Recording",
     description: "Watch this video on Cap",
     openGraph: {
-      images: [
-        `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/og?videoId=${videoId}`,
-      ],
+      images: [`${serverEnv.WEB_URL}/api/video/og?videoId=${videoId}`],
     },
   };
 }
@@ -182,7 +178,7 @@ export default async function ShareVideoPage(props: Props) {
   ) {
     console.log("[ShareVideoPage] Creating MUX job for video:", videoId);
     const res = await fetch(
-      `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/upload/mux/create?videoId=${videoId}&userId=${video.ownerId}`,
+      `${serverEnv.WEB_URL}/api/upload/mux/create?videoId=${videoId}&userId=${video.ownerId}`,
       {
         method: "GET",
         credentials: "include",
@@ -196,7 +192,7 @@ export default async function ShareVideoPage(props: Props) {
   if (video.transcriptionStatus !== "COMPLETE") {
     console.log("[ShareVideoPage] Starting transcription for video:", videoId);
     fetch(
-      `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/transcribe?videoId=${videoId}&userId=${video.ownerId}`,
+      `${serverEnv.WEB_URL}/api/video/transcribe?videoId=${videoId}&userId=${video.ownerId}`,
       {
         method: "GET",
         credentials: "include",
@@ -232,7 +228,7 @@ export default async function ShareVideoPage(props: Props) {
   if (video.isScreenshot === true) {
     console.log("[ShareVideoPage] Fetching screenshot for video:", videoId);
     const res = await fetch(
-      `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/screenshot?userId=${video.ownerId}&screenshotId=${videoId}`,
+      `${serverEnv.WEB_URL}/api/screenshot?userId=${video.ownerId}&screenshotId=${videoId}`,
       {
         method: "GET",
         credentials: "include",
@@ -254,7 +250,7 @@ export default async function ShareVideoPage(props: Props) {
 
   console.log("[ShareVideoPage] Fetching individual files for video:", videoId);
   // const individualFiles = await fetch(
-  //   `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/individual-files?videoId=${videoId}`,
+  //   `${serverEnv.WEB_URL}/api/video/individual-files?videoId=${videoId}`,
   //   {
   //     method: "GET",
   //     credentials: "include",
@@ -264,7 +260,7 @@ export default async function ShareVideoPage(props: Props) {
 
   console.log("[ShareVideoPage] Fetching analytics for video:", videoId);
   const analyticsResponse = await fetch(
-    `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/analytics?videoId=${videoId}`,
+    `${serverEnv.WEB_URL}/api/video/analytics?videoId=${videoId}`,
     {
       method: "GET",
       credentials: "include",

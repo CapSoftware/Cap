@@ -1,7 +1,7 @@
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
 import { getBlogPosts } from "@/utils/blog";
 import { calculateReadingTime } from "@/utils/readTime";
-import { clientEnv } from "@cap/env";
+import { clientEnv, serverEnv } from "@cap/env";
 import { format, parseISO } from "date-fns";
 import type { Metadata } from "next";
 import { MDXRemote } from "next-mdx-remote/rsc";
@@ -24,7 +24,7 @@ export async function generateMetadata({
   }
 
   let { title, publishedAt: publishedTime, description, image } = post.metadata;
-  let ogImage = `${clientEnv.NEXT_PUBLIC_WEB_URL}${image}`;
+  let ogImage = `${serverEnv.WEB_URL}${image}`;
 
   return {
     title,
@@ -34,7 +34,7 @@ export async function generateMetadata({
       description,
       type: "article",
       publishedTime,
-      url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/blog/${post.slug}`,
+      url: `${serverEnv.WEB_URL}/blog/${post.slug}`,
       images: [
         {
           url: ogImage,
@@ -87,10 +87,7 @@ export default async function PostPage({ params }: PostProps) {
           </header>
           <hr className="my-6" />
           <MDXRemote source={post.content} />
-          <Share
-            post={post}
-            url={`${clientEnv.NEXT_PUBLIC_WEB_URL}/blog/${post.slug}`}
-          />
+          <Share post={post} url={`${serverEnv.WEB_URL}/blog/${post.slug}`} />
         </div>
       </article>
       <div className="mb-4 wrapper">

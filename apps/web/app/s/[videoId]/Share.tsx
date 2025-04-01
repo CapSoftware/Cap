@@ -139,7 +139,7 @@ export const Share: React.FC<ShareProps> = ({
       <div className="py-4 mt-auto">
         <a
           target="_blank"
-          href={`${clientEnv.NEXT_PUBLIC_WEB_URL}?ref=video_${data.id}`}
+          href={`/?ref=video_${data.id}`}
           className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 bg-gray-100 rounded-full new-card-style w-fit"
         >
           <span className="text-sm">Recorded with</span>

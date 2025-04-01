@@ -1,62 +1,62 @@
-import { clientEnv } from "@cap/env";
+import { clientEnv, serverEnv } from "@cap/env";
 
 export async function uploadToS3({
-  filename,
-  blobData,
-  userId,
-  duration,
-  resolution,
-  videoCodec,
-  audioCodec,
-  awsBucket,
-  awsRegion,
+	filename,
+	blobData,
+	userId,
+	duration,
+	resolution,
+	videoCodec,
+	audioCodec,
+	awsBucket,
+	awsRegion,
 }: {
-  filename: string;
-  blobData: Blob;
-  userId: string;
-  duration?: string;
-  resolution?: string;
-  videoCodec?: string;
-  audioCodec?: string;
-  awsBucket: string;
-  awsRegion: string;
+	filename: string;
+	blobData: Blob;
+	userId: string;
+	duration?: string;
+	resolution?: string;
+	videoCodec?: string;
+	audioCodec?: string;
+	awsBucket: string;
+	awsRegion: string;
 }) {
-  const response = await fetch(
-    `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/upload/signed`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        userId: userId,
-        fileKey: filename,
-        duration: duration,
-        resolution: resolution,
-        videoCodec: videoCodec,
-        audioCodec: audioCodec,
-        awsBucket: awsBucket,
-        awsRegion: awsRegion,
-      }),
-    }
-  );
+	const response = await fetch(
+		`${serverEnv.WEB_URL}/api/upload/signed`,
+		{
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				userId: userId,
+				fileKey: filename,
+				duration: duration,
+				resolution: resolution,
+				videoCodec: videoCodec,
+				audioCodec: audioCodec,
+				awsBucket: awsBucket,
+				awsRegion: awsRegion,
+			}),
+		}
+	);
 
-  const { presignedPostData } = await response.json();
+	const { presignedPostData } = await response.json();
 
-  const formData = new FormData();
-  Object.entries(presignedPostData.fields).forEach(([key, value]) => {
-    formData.append(key, value as string);
-  });
-  formData.append("file", blobData);
+	const formData = new FormData();
+	Object.entries(presignedPostData.fields).forEach(([key, value]) => {
+		formData.append(key, value as string);
+	});
+	formData.append("file", blobData);
 
-  const uploadResponse = await fetch(presignedPostData.url, {
-    method: "POST",
-    body: formData,
-  });
+	const uploadResponse = await fetch(presignedPostData.url, {
+		method: "POST",
+		body: formData,
+	});
 
-  if (!uploadResponse.ok) {
-    return false;
-  }
+	if (!uploadResponse.ok) {
+		return false;
+	}
 
-  return true;
+	return true;
 }

@@ -33,14 +33,11 @@ export const ShareHeader = ({
 
   const handleBlur = async () => {
     setIsEditing(false);
-    const response = await fetch(
-      `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/title`,
-      {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, videoId: data.id }),
-      }
-    );
+    const response = await fetch(`/api/video/title`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, videoId: data.id }),
+    });
 
     if (response.status === 429) {
       toast.error("Too many requests - please try again later.");
@@ -91,7 +88,7 @@ export const ShareHeader = ({
       ? `https://${customDomain}/s/${data.id}`
       : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
       ? `https://cap.link/${data.id}`
-      : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${data.id}`;
+      : `${location.origin}/s/${data.id}`;
   };
 
   const getDisplayLink = () => {
@@ -99,7 +96,7 @@ export const ShareHeader = ({
       ? `${customDomain}/s/${data.id}`
       : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
       ? `cap.link/${data.id}`
-      : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${data.id}`;
+      : `${location.origin}/s/${data.id}`;
   };
 
   return (
@@ -175,7 +172,7 @@ export const ShareHeader = ({
                 <div className="hidden md:flex">
                   <Button
                     onClick={() => {
-                      push(`${clientEnv.NEXT_PUBLIC_WEB_URL}/dashboard`);
+                      push("/dashboard");
                     }}
                   >
                     Go to Dashboard

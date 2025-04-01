@@ -177,8 +177,8 @@ async function getData(videoId: string) {
   if (!result) return;
 
   const defaultBucket = {
-    name: clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET,
-    region: clientEnv.NEXT_PUBLIC_CAP_AWS_REGION,
+    name: serverEnv.CAP_AWS_BUCKET,
+    region: serverEnv.CAP_AWS_REGION,
     accessKeyId: serverEnv.CAP_AWS_ACCESS_KEY,
     secretAccessKey: serverEnv.CAP_AWS_SECRET_KEY,
   };

@@ -83,22 +83,19 @@ export const Toolbar = ({
     const timestamp = getTimestamp();
     console.log("Current timestamp:", timestamp);
 
-    const response = await fetch(
-      `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/comment`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          type: "emoji",
-          content: emoji,
-          videoId: data.id,
-          parentCommentId: null,
-          timestamp: timestamp,
-        }),
-      }
-    );
+    const response = await fetch("/api/video/comment", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "emoji",
+        content: emoji,
+        videoId: data.id,
+        parentCommentId: null,
+        timestamp: timestamp,
+      }),
+    });
 
     if (response.status === 429) {
       toast.error("Too many requests - please try again later.");

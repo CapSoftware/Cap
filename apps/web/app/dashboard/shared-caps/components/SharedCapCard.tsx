@@ -5,6 +5,7 @@ import moment from "moment";
 import { Tooltip } from "react-tooltip";
 import { serverEnv, clientEnv, NODE_ENV } from "@cap/env";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
+import { usePublicEnv } from "@/utils/public-env";
 interface SharedCapCardProps {
   cap: {
     id: string;
@@ -27,6 +28,7 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(cap.name);
   const { activeSpace } = useSharedContext();
+  const publicEnv = usePublicEnv();
 
   const displayCount =
     analytics === 0
@@ -45,7 +47,7 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
             ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
             : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
             ? `https://cap.link/${cap.id}`
-            : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
+            : `${publicEnv.webUrl}/s/${cap.id}`
         }
       >
         <VideoThumbnail

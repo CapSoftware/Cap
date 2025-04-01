@@ -4,7 +4,7 @@ import { videos } from "@cap/database/schema";
 import { useState, useEffect } from "react";
 import { MessageSquare } from "lucide-react";
 import { S3_BUCKET_URL } from "@cap/utils";
-import { clientEnv } from "@cap/env";
+import { usePublicEnv } from "@/utils/public-env";
 
 interface TranscriptProps {
   data: typeof videos.$inferSelect;
@@ -119,19 +119,18 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
   const [isTranscriptionProcessing, setIsTranscriptionProcessing] =
     useState(false);
 
+  const publicEnv = usePublicEnv();
+
   useEffect(() => {
     const fetchTranscript = async () => {
       let transcriptionUrl;
 
-      if (
-        data.bucket &&
-        data.awsBucket !== clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET
-      ) {
+      if (data.bucket && data.awsBucket !== publicEnv.awsBucket) {
         // For custom S3 buckets, fetch through the API
         transcriptionUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&fileType=transcription`;
       } else {
         // For default Cap storage
-        transcriptionUrl = `${S3_BUCKET_URL}/${data.ownerId}/${data.id}/transcription.vtt`;
+        transcriptionUrl = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/transcription.vtt`;
       }
 
       try {
@@ -188,9 +187,9 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
     // Re-fetch the transcript
     const fetchTranscript = async () => {
       const transcriptionUrl =
-        data.bucket && data.awsBucket !== clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET
+        data.bucket && data.awsBucket !== publicEnv.awsBucket
           ? `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&fileType=transcription`
-          : `${S3_BUCKET_URL}/${data.ownerId}/${data.id}/transcription.vtt`;
+          : `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/transcription.vtt`;
 
       try {
         const response = await fetch(transcriptionUrl);

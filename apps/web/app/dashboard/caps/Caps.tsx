@@ -17,7 +17,6 @@ type VideoData = {
   totalReactions: number;
   sharedSpaces: { id: string; name: string }[];
   ownerName: string;
-  url: string;
 }[];
 
 export const Caps = ({

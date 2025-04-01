@@ -1,7 +1,7 @@
 import { apiClient } from "@/utils/web-api";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
-import { clientEnv, NODE_ENV } from "@cap/env";
+import { NODE_ENV } from "@cap/env";
 import { Logo, LogoSpinner } from "@cap/ui";
 import { isUserOnProPlan, S3_BUCKET_URL } from "@cap/utils";
 import clsx from "clsx";
@@ -25,6 +25,7 @@ import { Tooltip } from "react-tooltip";
 import { fromVtt, Subtitle } from "subtitles-parser-vtt";
 import { MP4VideoPlayer } from "./MP4VideoPlayer";
 import { VideoPlayer } from "./VideoPlayer";
+import { usePublicEnv } from "@/utils/public-env";
 
 declare global {
   interface Window {
@@ -125,7 +126,7 @@ export const ShareVideo = forwardRef<
 
     // Pre-fetch the first thumbnail to check if it exists
     if (data.source.type === "desktopMP4") {
-      const thumbUrl = `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&thumbnailTime=0`;
+      const thumbUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&thumbnailTime=0`;
 
       // Check if the thumbnail exists
       fetch(thumbUrl, { method: "HEAD" })
@@ -442,7 +443,7 @@ export const ShareVideo = forwardRef<
       const scrubVideo = document.createElement("video");
 
       // Use the same MP4 source construction as the main video
-      const mp4Source = `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
+      const mp4Source = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
 
       scrubVideo.src = mp4Source;
       scrubVideo.crossOrigin = "anonymous";
@@ -737,7 +738,10 @@ export const ShareVideo = forwardRef<
     setSeeking(true);
   };
 
-  const handleSeekMouseUp = (event: React.MouseEvent | React.TouchEvent, isTouch = false) => {
+  const handleSeekMouseUp = (
+    event: React.MouseEvent | React.TouchEvent,
+    isTouch = false
+  ) => {
     if (!seeking) return;
     setSeeking(false);
     const seekBar = event.currentTarget;
@@ -887,19 +891,18 @@ export const ShareVideo = forwardRef<
     return hoursValue * 3600 + minutesValue * 60 + secondsValue;
   };
 
+  const publicEnv = usePublicEnv();
+
   useEffect(() => {
     const fetchSubtitles = async () => {
       let transcriptionUrl;
 
-      if (
-        data.bucket &&
-        data.awsBucket !== clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET
-      ) {
+      if (data.bucket && data.awsBucket !== publicEnv.awsBucket) {
         // For custom S3 buckets, fetch through the API
         transcriptionUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&fileType=transcription`;
       } else {
         // For default Cap storage
-        transcriptionUrl = `${S3_BUCKET_URL}/${data.ownerId}/${data.id}/transcription.vtt`;
+        transcriptionUrl = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/transcription.vtt`;
       }
 
       try {
@@ -1029,18 +1032,18 @@ export const ShareVideo = forwardRef<
   let videoSrc: string;
 
   if (data.source.type === "desktopMP4") {
-    videoSrc = `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
+    videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
   } else if (
     // v.cap.so is only available in prod
     NODE_ENV === "development" ||
     ((data.skipProcessing === true || data.jobStatus !== "COMPLETE") &&
       data.source.type === "MediaConvert")
   ) {
-    videoSrc = `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
+    videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
   } else if (data.source.type === "MediaConvert") {
-    videoSrc = `${S3_BUCKET_URL}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`;
+    videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`;
   } else {
-    videoSrc = `${S3_BUCKET_URL}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
+    videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
   }
 
   return (
@@ -1249,8 +1252,11 @@ export const ShareVideo = forwardRef<
             style={{ width: `${watchedPercentage}%` }}
           />
           <div
-            className={clsx("drag-button absolute top-2.5 z-20 -mt-1.5 -ml-2 w-4 h-4 bg-white rounded-full  cursor-pointer focus:outline-none", 
-              seeking ? "scale-125 transition-transform ring-blue-300 ring-offset-2 ring-2" : ""
+            className={clsx(
+              "drag-button absolute top-2.5 z-20 -mt-1.5 -ml-2 w-4 h-4 bg-white rounded-full  cursor-pointer focus:outline-none",
+              seeking
+                ? "scale-125 transition-transform ring-blue-300 ring-offset-2 ring-2"
+                : ""
             )}
             tabIndex={0}
             style={{ left: `${watchedPercentage}%` }}
