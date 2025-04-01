@@ -23,6 +23,9 @@ export function identifyUser(userId: string, properties?: Record<string, any>) {
   }
 }
 
-export function trackEvent(eventName: string, properties?: Record<string, any>) {
+export function trackEvent(
+  eventName: string,
+  properties?: Record<string, any>
+) {
   posthog.capture(eventName, { ...properties, platform: "web" });
-} 
+}

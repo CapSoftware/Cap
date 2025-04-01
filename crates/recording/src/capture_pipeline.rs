@@ -1,4 +1,8 @@
-use std::{future::Future, path::PathBuf, sync::Arc};
+use std::{
+    future::Future,
+    path::PathBuf,
+    sync::{atomic::AtomicBool, Arc},
+};
 
 use cap_media::{
     data::AudioInfo,
@@ -40,6 +44,7 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         audio: Option<&AudioInputFeed>,
         system_audio: Option<(Receiver<(ffmpeg::frame::Audio, f64)>, AudioInfo)>,
         output_path: PathBuf,
+        pause_flag: Arc<AtomicBool>,
     ) -> impl Future<Output = Result<CapturePipelineBuilder, MediaError>> + Send
     where
         Self: Sized;
@@ -67,14 +72,6 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
         let (timestamp_tx, timestamp_rx) = flume::bounded(1);
 
         builder.spawn_task("screen_capture_encoder", move |ready| {
-            let start = std::time::SystemTime::now();
-            let start_time_unix = start
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("Time went backwards")
-                .as_secs_f64();
-            let start_cmtime = cidre::cm::Clock::host_time_clock().time();
-            let start_cmtime = start_cmtime.value as f64 / start_cmtime.scale as f64;
-
             let mut timestamp_tx = Some(timestamp_tx);
             let _ = ready.send(Ok(()));
 
@@ -102,6 +99,7 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
         audio: Option<&AudioInputFeed>,
         system_audio: Option<(Receiver<(ffmpeg::frame::Audio, f64)>, AudioInfo)>,
         output_path: PathBuf,
+        pause_flag: Arc<AtomicBool>,
     ) -> Result<CapturePipelineBuilder, MediaError> {
         let (audio_tx, audio_rx) = flume::bounded(64);
         let mut audio_mixer = AudioMixer::new(audio_tx);
@@ -150,6 +148,12 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
             let _ = ready.send(Ok(()));
             while let Ok((frame, unix_time)) = source.1.recv() {
                 if let Ok(mut mp4) = mp4.lock() {
+                    if pause_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                        mp4.pause();
+                    } else {
+                        mp4.resume();
+                    }
+
                     mp4.queue_video_frame(frame.as_ref());
                 }
             }
@@ -213,6 +217,7 @@ impl MakeCapturePipeline for AVFrameCapture {
         audio: Option<&AudioInputFeed>,
         system_audio: Option<(Receiver<(ffmpeg::frame::Audio, f64)>, AudioInfo)>,
         output_path: PathBuf,
+        pause_flag: Arc<AtomicBool>,
     ) -> Result<CapturePipelineBuilder, MediaError>
     where
         Self: Sized,

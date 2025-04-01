@@ -85,7 +85,6 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
     const [playbackTime, setPlaybackTime] = createSignal<number>(0);
     const [playing, setPlaying] = createSignal(false);
 
-
     //Export states
 
     const [exportProgress, setExportProgress] = createSignal<{
@@ -93,48 +92,49 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       renderedFrames: number;
     } | null>(null);
 
-      type ExportState =
-  | { type: "idle" }
-  | { type: "starting" }
-  | { type: "rendering"}
-  | { type: "saving"; done: boolean };
+    type ExportState =
+      | { type: "idle" }
+      | { type: "starting" }
+      | { type: "rendering" }
+      | { type: "saving"; done: boolean };
 
-type CopyState =
-  | { type: "idle" }
-  | { type: "starting" }
-  | { type: "rendering"}
-  | { type: "copying" }
-  | { type: "copied" };
+    type CopyState =
+      | { type: "idle" }
+      | { type: "starting" }
+      | { type: "rendering" }
+      | { type: "copying" }
+      | { type: "copied" };
 
-  const [exportState, setExportState] = createStore<ExportState>({
-    type: "idle",
-  });
+    const [exportState, setExportState] = createStore<ExportState>({
+      type: "idle",
+    });
 
-  const [copyState, setCopyState] = createStore<CopyState>({
-    type: "idle",
-  });
+    const [copyState, setCopyState] = createStore<CopyState>({
+      type: "idle",
+    });
 
-  const [uploadState, setUploadState] = createStore<
-    | { type: "idle" }
-    | { type: "starting" }
-    | { type: "rendering" }
-    | { type: "uploading"; progress: number }
-    | { type: "link-copied" }
-  >({ type: "idle" });
+    const [uploadState, setUploadState] = createStore<
+      | { type: "idle" }
+      | { type: "starting" }
+      | { type: "rendering" }
+      | { type: "uploading"; progress: number }
+      | { type: "link-copied" }
+    >({ type: "idle" });
 
+    //This is used in ShareButton.tsx to notify the component that the metadata has changed, from ExportDialog.tsx
+    //When a video is uploaded, the metadata is updated
 
-//This is used in ShareButton.tsx to notify the component that the metadata has changed, from ExportDialog.tsx
-//When a video is uploaded, the metadata is updated
+    const [lastMetaUpdate, setLastMetaUpdate] = createSignal<{
+      videoId: string;
+      timestamp: number;
+    } | null>(null);
 
-
-  const [lastMetaUpdate, setLastMetaUpdate] = createSignal<{ videoId: string; timestamp: number } | null>(null);
-
-  const metaUpdateStore = {
-    notifyUpdate: (videoId: string) => {
-      setLastMetaUpdate({ videoId, timestamp: Date.now() });
-    },
-    getLastUpdate: lastMetaUpdate
-  };
+    const metaUpdateStore = {
+      notifyUpdate: (videoId: string) => {
+        setLastMetaUpdate({ videoId, timestamp: Date.now() });
+      },
+      getLastUpdate: lastMetaUpdate,
+    };
 
     createEffect(
       on(playing, () => {
@@ -391,4 +391,3 @@ export const [SegmentContextProvider, useSegmentContext] =
   createContextProvider((props: { width: Accessor<number> }) => {
     return props;
   }, null!);
-
