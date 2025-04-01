@@ -58,7 +58,7 @@ export default function () {
   >([]);
 
   const isAudioEnabled = () => {
-    return options.data?.audioInputName != null;
+    return options.data?.micName != null;
   };
 
   createTimer(

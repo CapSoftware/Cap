@@ -236,7 +236,6 @@ function DiscordBot() {
             namespaceId: "846b080b86914e2ba666d35acee35c9a",
           },
         ];
-        args.observability = { enabled: true };
         args.secretTextBindings = [
           {
             name: "DISCORD_BOT_TOKEN",

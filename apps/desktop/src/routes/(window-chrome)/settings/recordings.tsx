@@ -110,7 +110,9 @@ export default function Recordings() {
     trackEvent("recording_editor_clicked", {
       recording_id: fileName.replace(".cap", ""),
     });
-    commands.openEditor(fileName.replace(".cap", ""));
+    commands.showWindow({
+      Editor: { project_id: fileName.replace(".cap", "") },
+    });
   };
 
   return (

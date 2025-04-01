@@ -1,16 +1,19 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
-use crate::{fake_window, general_settings::AppTheme, permissions};
+use crate::{fake_window, general_settings::AppTheme, permissions, App, ArcLock};
 use cap_flags::FLAGS;
 use cap_media::sources::CaptureScreen;
+use futures::pin_mut;
 use serde::Deserialize;
 use specta::Type;
-use std::{path::PathBuf, str::FromStr};
+use std::{path::PathBuf, str::FromStr, sync::Arc};
 use tauri::{
     AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder, Wry,
 };
+use tokio::sync::RwLock;
+use tracing::debug;
 
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
@@ -159,7 +162,7 @@ pub enum ShowCapWindow {
 }
 
 impl ShowCapWindow {
-    pub fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
+    pub async fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
         if let Some(window) = self.id().get(app) {
             window.set_focus().ok();
             return Ok(window);
@@ -180,14 +183,30 @@ impl ShowCapWindow {
                 .build()?,
             Self::Main => {
                 if permissions::do_permissions_check(false).necessary_granted() {
-                    self.window_builder(app, "/")
+                    let window = self
+                        .window_builder(app, "/")
                         .resizable(false)
                         .maximized(false)
                         .maximizable(false)
                         .center()
-                        .build()?
+                        .build()?;
+
+                    let state = app.state::<Arc<RwLock<App>>>();
+                    let state = &mut *state.write().await;
+
+                    let _ = state.create_camera_feed().await;
+
+                    Box::pin(
+                        Self::Camera {
+                            ws_port: state.camera_ws_port,
+                        }
+                        .show(&app),
+                    )
+                    .await?;
+
+                    window
                 } else {
-                    Self::Setup.show(app)?
+                    Box::pin(Self::Setup.show(app)).await?
                 }
             }
             Self::SignIn => self
@@ -445,7 +464,8 @@ impl ShowCapWindow {
             }
         };
 
-        window.hide().ok();
+        // removing this for now as it causes windows to just stay hidden sometimes -_-
+        // window.hide().ok();
 
         #[cfg(target_os = "macos")]
         if let Some(position) = id.traffic_lights_position() {

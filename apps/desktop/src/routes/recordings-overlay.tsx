@@ -332,7 +332,9 @@ export default function () {
                                     }
                                   })
                                 );
-                                commands.openEditor(mediaId);
+                                commands.showWindow({
+                                  Editor: { project_id: mediaId },
+                                });
                               }}
                             >
                               <IconCapEditor class="size-[1rem]" />
