@@ -157,10 +157,6 @@ impl MP4AVAssetWriterEncoder {
     }
 
     pub fn queue_video_frame(&mut self, frame: &cidre::cm::SampleBuf) {
-        println!(
-            "video: {:?}",
-            frame.pts().value as f64 / frame.pts().scale as f64
-        );
         if self.is_paused || !self.video_input.is_ready_for_more_media_data() {
             return;
         }
@@ -193,13 +189,10 @@ impl MP4AVAssetWriterEncoder {
     }
 
     pub fn queue_audio_frame(&mut self, frame: FFAudio) -> Result<(), MediaError> {
-        println!(
-            "audio: {:?}",
-            frame.pts().unwrap() as f64 / AV_TIME_BASE_Q.den as f64
-        );
         if self.is_paused {
             return Ok(());
         }
+
         let Some(audio_input) = &mut self.audio_input else {
             return Err(MediaError::Any("No audio input"));
         };
@@ -242,7 +235,7 @@ impl MP4AVAssetWriterEncoder {
         let format_desc = cm::AudioFormatDesc::with_asbd(&audio_desc)
             .map_err(|_| MediaError::Any("Failed to create audio format desc"))?;
 
-        let pts = cm::Time::new(frame.pts().unwrap_or(0), 1_000_000).add(first_timestamp);
+        let pts = cm::Time::new(frame.pts().unwrap_or(0), AV_TIME_BASE_Q.den);
 
         let pts = self
             .start_time

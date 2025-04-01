@@ -254,7 +254,7 @@ impl MakeCapturePipeline for AVFrameCapture {
                 let _ = ready.send(Ok(()));
                 while let Ok(frame) = audio_rx.recv() {
                     if let Ok(mut mp4) = mp4.lock() {
-                        mp4.queue_audio_frame(dbg!(frame));
+                        mp4.queue_audio_frame(frame);
                     }
                 }
             });
@@ -266,6 +266,12 @@ impl MakeCapturePipeline for AVFrameCapture {
             let _ = ready.send(Ok(()));
             while let Ok((frame, unix_time)) = source.1.recv() {
                 if let Ok(mut mp4) = mp4.lock() {
+                    if pause_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                        mp4.pause();
+                    } else {
+                        mp4.resume();
+                    }
+
                     mp4.queue_video_frame(frame);
                 }
             }
@@ -283,10 +289,10 @@ type ScreenCaptureReturn<T> = (
     Receiver<(<T as ScreenCaptureFormat>::VideoFormat, f64)>,
 );
 
-#[cfg(target_os = "macos")]
-pub type ScreenCaptureMethod = CMSampleBufferCapture;
+// #[cfg(target_os = "macos")]
+// pub type ScreenCaptureMethod = CMSampleBufferCapture;
 
-#[cfg(not(target_os = "macos"))]
+// #[cfg(not(target_os = "macos"))]
 pub type ScreenCaptureMethod = AVFrameCapture;
 
 pub fn create_screen_capture(
@@ -298,32 +304,15 @@ pub fn create_screen_capture(
 ) -> Result<ScreenCaptureReturn<ScreenCaptureMethod>, RecordingError> {
     let (video_tx, video_rx) = flume::bounded(16);
 
-    #[cfg(target_os = "macos")]
-    {
-        ScreenCaptureSource::<cap_media::sources::CMSampleBufferCapture>::init(
-            capture_target,
-            None,
-            show_camera,
-            force_show_cursor,
-            max_fps,
-            video_tx,
-            audio_tx,
-        )
-        .map(|v| (v, video_rx))
-        .map_err(|e| RecordingError::Media(MediaError::TaskLaunch(e)))
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        ScreenCaptureSource::<cap_media::sources::AVFrameCapture>::init(
-            capture_target,
-            None,
-            show_camera,
-            force_show_cursor,
-            max_fps,
-            video_tx,
-            audio_tx,
-        )
-        .map(|v| (v, video_rx))
-        .map_err(|e| RecordingError::Media(MediaError::TaskLaunch(e)))
-    }
+    ScreenCaptureSource::<ScreenCaptureMethod>::init(
+        capture_target,
+        None,
+        show_camera,
+        force_show_cursor,
+        max_fps,
+        video_tx,
+        audio_tx,
+    )
+    .map(|v| (v, video_rx))
+    .map_err(|e| RecordingError::Media(MediaError::TaskLaunch(e)))
 }

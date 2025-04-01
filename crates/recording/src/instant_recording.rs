@@ -213,7 +213,7 @@ pub async fn spawn_instant_recording_actor(
             'outer: loop {
                 state = match state {
                     InstantRecordingActorState::Recording {
-                        mut pipeline,
+                        pipeline,
                         mut pipeline_done_rx,
                         segment_start_time,
                     } => {
