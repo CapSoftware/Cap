@@ -17,9 +17,9 @@ import {
 } from "solid-js";
 import { createStore } from "solid-js/store";
 
-import { Tooltip } from "@kobalte/core";
 import { makePersisted } from "@solid-primitives/storage";
 import Cropper, { cropToFloor } from "~/components/Cropper";
+import Tooltip from "~/components/Tooltip";
 import { events, type Crop } from "~/utils/tauri";
 import { ConfigSidebar } from "./ConfigSidebar";
 import {
@@ -318,14 +318,22 @@ function Dialogs() {
                 return (
                   <>
                     <Dialog.Header>
-                      <div class="flex flex-row space-x-[0.75rem]">
-                        <div class="flex flex-row items-center space-x-[0.5rem] text-gray-400">
+                      <div class="flex flex-row space-x-[2rem]">
+                        <div class="flex flex-row items-center space-x-[0.75rem] text-gray-400">
                           <span>Size</span>
                           <div class="w-[3.25rem]">
                             <Input
                               class="bg-transparent dark:!text-[#ababab]"
                               value={adjustedCrop().size.x}
-                              disabled
+                              onChange={(e) =>
+                                setCrop((c) => ({
+                                  ...c,
+                                  size: {
+                                    ...c.size,
+                                    x: Number(e.currentTarget.value),
+                                  },
+                                }))
+                              }
                             />
                           </div>
                           <span>x</span>
@@ -333,17 +341,33 @@ function Dialogs() {
                             <Input
                               class="bg-transparent dark:!text-[#ababab]"
                               value={adjustedCrop().size.y}
-                              disabled
+                              onChange={(e) =>
+                                setCrop((c) => ({
+                                  ...c,
+                                  size: {
+                                    ...c.size,
+                                    y: Number(e.currentTarget.value),
+                                  },
+                                }))
+                              }
                             />
                           </div>
                         </div>
-                        <div class="flex flex-row items-center space-x-[0.5rem] text-gray-400">
+                        <div class="flex flex-row items-center space-x-[0.75rem] text-gray-400">
                           <span>Position</span>
                           <div class="w-[3.25rem]">
                             <Input
                               class="bg-transparent dark:!text-[#ababab]"
                               value={adjustedCrop().position.x}
-                              disabled
+                              onChange={(e) =>
+                                setCrop((c) => ({
+                                  ...c,
+                                  position: {
+                                    ...c.position,
+                                    x: Number(e.currentTarget.value),
+                                  },
+                                }))
+                              }
                             />
                           </div>
                           <span>x</span>
@@ -351,54 +375,52 @@ function Dialogs() {
                             <Input
                               class="w-[3.25rem] bg-transparent dark:!text-[#ababab]"
                               value={adjustedCrop().position.y}
-                              disabled
+                              onChange={(e) =>
+                                setCrop((c) => ({
+                                  ...c,
+                                  position: {
+                                    ...c.position,
+                                    y: Number(e.currentTarget.value),
+                                  },
+                                }))
+                              }
                             />
                           </div>
                         </div>
-                        <div class="flex flex-row items-center space-x-[0.5rem] text-gray-400">
-                          <Tooltip.Root openDelay={500}>
-                            <Tooltip.Trigger
-                              class="flex fixed flex-row items-center w-8 h-8"
-                              tabIndex={-1}
-                            >
-                              <button
-                                type="button"
-                                class={`flex items-center justify-center text-center rounded-[0.5rem] h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-300 outline-none transition-colors duration-200 ${
-                                  cropOptions.showGrid
-                                    ? "bg-gray-200 text-blue-300"
-                                    : "text-gray-500"
-                                }`}
-                                onClick={() =>
-                                  setCropOptions("showGrid", (s) => !s)
-                                }
-                              >
-                                <IconCapPadding class="w-4" />
-                              </button>
-                            </Tooltip.Trigger>
-                            <Tooltip.Portal>
-                              <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
-                                Rule of Thirds
-                                <Tooltip.Arrow class="fill-gray-500" />
-                              </Tooltip.Content>
-                            </Tooltip.Portal>
-                          </Tooltip.Root>
-                        </div>
                       </div>
-                      <EditorButton
-                        leftIcon={<IconCapCircleX />}
-                        class="ml-auto"
-                        onClick={() =>
-                          setCrop({
-                            position: { x: 0, y: 0 },
-                            size: {
-                              x: display.width,
-                              y: display.height,
-                            },
-                          })
-                        }
-                      >
-                        Reset
-                      </EditorButton>
+                      <div class="flex flex-row gap-3 justify-end items-center w-full">
+                        <div class="flex flex-row items-center space-x-[0.5rem] text-gray-400">
+                          <Tooltip content="Rule of Thirds">
+                            <button
+                              type="button"
+                              class={`flex items-center bg-gray-200 justify-center text-center rounded-[0.5rem] h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-300 outline-none transition-colors duration-200 ${
+                                cropOptions.showGrid
+                                  ? "bg-gray-200 text-blue-300 border-blue-300"
+                                  : "text-gray-500"
+                              }`}
+                              onClick={() =>
+                                setCropOptions("showGrid", (s) => !s)
+                              }
+                            >
+                              <IconCapPadding class="w-4" />
+                            </button>
+                          </Tooltip>
+                        </div>
+                        <EditorButton
+                          leftIcon={<IconCapCircleX />}
+                          onClick={() =>
+                            setCrop({
+                              position: { x: 0, y: 0 },
+                              size: {
+                                x: display.width,
+                                y: display.height,
+                              },
+                            })
+                          }
+                        >
+                          Reset
+                        </EditorButton>
+                      </div>
                     </Dialog.Header>
                     <Dialog.Content>
                       <div class="flex flex-row justify-center">

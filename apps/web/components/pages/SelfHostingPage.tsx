@@ -16,7 +16,7 @@ interface FeatureCardProps {
   imageHeight?: string;
 }
 
-const FeatureCard: React.FC<FeatureCardProps> = ({
+export const FeatureCard: React.FC<FeatureCardProps> = ({
   title,
   description,
   imagePath,
