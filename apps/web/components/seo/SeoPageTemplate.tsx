@@ -3,6 +3,7 @@
 import { Button } from "@cap/ui";
 import { SeoPageContent } from "@/components/seo/types";
 import { useEffect } from "react";
+import MuxPlayer from "@mux/mux-player-react";
 
 const renderHTML = (content: string) => {
   const styledContent = content.replace(
@@ -103,31 +104,7 @@ export const SeoPageTemplate = ({
       }
     };
 
-    // Add scroll reveal animations
-    const observerOptions = {
-      root: null,
-      rootMargin: "0px",
-      threshold: 0.1,
-    };
-
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting) {
-          entry.target.classList.add("animate-fade-in");
-          observer.unobserve(entry.target);
-        }
-      });
-    }, observerOptions);
-
-    document.querySelectorAll(".reveal-on-scroll").forEach((el) => {
-      observer.observe(el);
-    });
-
     animateClouds();
-
-    return () => {
-      observer.disconnect();
-    };
   }, []);
 
   return (
@@ -137,13 +114,13 @@ export const SeoPageTemplate = ({
         <div className="w-full relative z-10 flex">
           <div className="wrapper wrapper-sm mx-auto flex items-center">
             <div className="mb-auto text-center">
-              <h1 className="fade-in-down text-[2.25rem] leading-[2.75rem] md:text-[3.5rem] md:leading-[4rem] font-bold relative z-10 mb-6 text-gray-800 drop-shadow-sm">
+              <h1 className="text-[2.25rem] leading-[2.75rem] md:text-[3.5rem] md:leading-[4rem] font-bold relative z-10 mb-6 text-gray-800 drop-shadow-sm">
                 {content.title}
               </h1>
-              <p className="fade-in-down animate-delay-1 text-black/70 sm:text-xl max-w-2xl mx-auto mb-10 leading-relaxed">
+              <p className="text-black/70 sm:text-xl max-w-2xl mx-auto mb-10 leading-relaxed">
                 {content.description}
               </p>
-              <div className="fade-in-up animate-delay-2">
+              <div>
                 <div className="flex flex-col sm:flex-row items-center justify-center space-y-2 sm:space-y-0 sm:space-x-4">
                   <Button
                     variant="primary"
@@ -195,7 +172,7 @@ export const SeoPageTemplate = ({
       {/* Main Content */}
       <div className="wrapper py-24 bg-gradient-to-b from-white to-gray-50">
         {/* Features Section */}
-        <div className="mb-28 reveal-on-scroll opacity-0">
+        <div className="mb-28">
           <div className="text-center max-w-[800px] mx-auto mb-16">
             <h2 className="text-4xl font-bold text-gray-800 mb-6 relative inline-block">
               {content.featuresTitle}
@@ -227,8 +204,71 @@ export const SeoPageTemplate = ({
           </div>
         </div>
 
+        {/* Video Demonstration */}
+        {showVideo && (
+          <div className="mb-28">
+            <div className="text-center max-w-[800px] mx-auto mb-10">
+              <h2 className="text-4xl font-bold text-gray-800 mb-6 relative inline-block">
+                See Cap In Action
+                <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
+              </h2>
+              <p className="text-xl text-gray-600 leading-relaxed">
+                Watch how Cap makes screen recording simple, powerful, and
+                accessible.
+              </p>
+            </div>
+            <div className="max-w-2xl mx-auto">
+              <div className="rounded-xl overflow-hidden shadow-lg">
+                <MuxPlayer
+                  playbackId="A6oZoUWVZjOIVZB6XnBMLagYnXE6xhDhp8Hcyky018hk"
+                  metadataVideoTitle="Cap Demo"
+                  accentColor="#5C9FFF"
+                  style={{ aspectRatio: "16/9", width: "100%" }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Comparison Section */}
+        {content.comparison && content.comparisonTitle && (
+          <div className="mb-28">
+            <div className="text-center max-w-[800px] mx-auto mb-16">
+              <h2 className="text-4xl font-bold text-gray-800 mb-6 relative inline-block">
+                {content.comparisonTitle}
+                <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
+              </h2>
+              {content.comparisonDescription && (
+                <p className="text-xl text-gray-600 leading-relaxed">
+                  {renderHTML(content.comparisonDescription)}
+                </p>
+              )}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              {content.comparison.map((item, index) => (
+                <div
+                  key={index}
+                  className="p-8 bg-white rounded-2xl shadow-md hover:shadow-xl transition-all duration-300 border border-gray-100 hover:border-blue-100 transform hover:-translate-y-1"
+                >
+                  <div className="bg-indigo-50 w-12 h-12 flex items-center justify-center rounded-full mb-4">
+                    <span className="text-indigo-500 text-xl font-bold">
+                      {index + 1}
+                    </span>
+                  </div>
+                  <h3 className="text-xl mb-4 text-gray-800 font-semibold">
+                    {item.title}
+                  </h3>
+                  <p className="text-gray-600 leading-relaxed">
+                    {renderHTML(item.description)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Use Cases Section */}
-        <div className="mb-28 reveal-on-scroll opacity-0">
+        <div className="mb-28">
           <div className="text-center max-w-[800px] mx-auto mb-16">
             <h2 className="text-4xl font-bold text-gray-800 mb-6 relative inline-block">
               {content.useCasesTitle}
@@ -261,7 +301,7 @@ export const SeoPageTemplate = ({
         </div>
 
         {/* FAQ Section */}
-        <div className="mb-28 reveal-on-scroll opacity-0">
+        <div className="mb-28">
           <div className="text-center max-w-[800px] mx-auto mb-16">
             <h2 className="text-4xl font-bold text-gray-800 mb-6 relative inline-block">
               {content.faqsTitle}
@@ -287,7 +327,7 @@ export const SeoPageTemplate = ({
 
         {/* Final CTA Section */}
         <div
-          className="wrapper max-w-[1000px] mx-auto rounded-3xl overflow-hidden relative flex flex-col justify-center p-12 reveal-on-scroll opacity-0"
+          className="wrapper max-w-[1000px] mx-auto rounded-3xl overflow-hidden relative flex flex-col justify-center p-12"
           style={{
             minHeight: "300px",
             background:
