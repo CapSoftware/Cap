@@ -1,9 +1,9 @@
 use crate::{
     create_editor_instance_impl, get_video_metadata, recordings_path, windows::ShowCapWindow,
-    AuthStore, RenderProgress, VideoType,
+    RenderProgress, VideoType,
 };
 use cap_editor::EditorInstance;
-use cap_project::{ProjectConfiguration, RecordingMeta, XY};
+use cap_project::{RecordingMeta, XY};
 use std::path::PathBuf;
 use tauri::AppHandle;
 

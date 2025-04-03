@@ -1,14 +1,28 @@
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { createElementBounds } from "@solid-primitives/bounds";
-import { createEventListener } from "@solid-primitives/event-listener";
-import { Setter, Show, createEffect, createSignal } from "solid-js";
-
 import { cx } from "cva";
+import {
+  For,
+  Show,
+  Suspense,
+  createEffect,
+  createResource,
+  createSignal,
+  on,
+  onMount,
+  onCleanup,
+} from "solid-js";
+import { reconcile, createStore } from "solid-js/store";
+import { createEventListener } from "@solid-primitives/event-listener";
+
+
+
 import Tooltip from "~/components/Tooltip";
 import { commands } from "~/utils/tauri";
 import { FPS, OUTPUT_SIZE, useEditorContext } from "./context";
 import { ComingSoonTooltip, EditorButton, Slider } from "./ui";
 import { formatTime } from "./utils";
+import { captionsStore } from "~/store/captions";
 import AspectRatioSelect from "./AspectRatioSelect";
 
 export function Player() {
@@ -30,7 +44,69 @@ export function Player() {
     totalDuration,
     state,
     zoomOutLimit,
+    setProject,
   } = useEditorContext();
+
+  // Load captions on mount
+  onMount(async () => {
+    if (editorInstance && editorInstance.path) {
+      // Still load captions into the store since they will be used by the GPU renderer
+      await captionsStore.loadCaptions(editorInstance.path);
+      
+      // Synchronize captions settings with project configuration
+      // This ensures the GPU renderer will receive the caption settings
+      if (editorInstance && project) {
+        const updatedProject = {...project};
+        
+        // Add captions data to project configuration if it doesn't exist
+        if (!updatedProject.captions && captionsStore.state.segments.length > 0) {
+          updatedProject.captions = {
+            segments: captionsStore.state.segments.map(segment => ({
+              id: segment.id,
+              start: segment.start,
+              end: segment.end,
+              text: segment.text
+            })),
+            settings: {
+              enabled: captionsStore.state.settings.enabled,
+              font: captionsStore.state.settings.font,
+              size: captionsStore.state.settings.size,
+              color: captionsStore.state.settings.color,
+              backgroundColor: captionsStore.state.settings.backgroundColor,
+              backgroundOpacity: captionsStore.state.settings.backgroundOpacity,
+              position: captionsStore.state.settings.position,
+              bold: captionsStore.state.settings.bold,
+              italic: captionsStore.state.settings.italic,
+              outline: captionsStore.state.settings.outline,
+              outlineColor: captionsStore.state.settings.outlineColor,
+              exportWithSubtitles: captionsStore.state.settings.exportWithSubtitles
+            }
+          };
+          
+          // Update the project with captions data
+          setProject(updatedProject);
+          
+          // Save the updated project configuration
+          await commands.setProjectConfig(updatedProject);
+        }
+      }
+    }
+  });
+
+  // Continue to update current caption when playback time changes
+  // This is still needed for CaptionsTab to highlight the current caption
+  createEffect(() => {
+    const time = playbackTime();
+    // Only update captions if we have a valid time and segments exist
+    if (time !== undefined && time >= 0 && captionsStore.state.segments.length > 0) {
+      captionsStore.updateCurrentCaption(time);
+    }
+  });
+
+  const [canvasContainerRef, setCanvasContainerRef] =
+    createSignal<HTMLDivElement>();
+  const containerBounds = createElementBounds(canvasContainerRef);
+
 
   const splitButton = () => (
     <EditorButton<typeof KToggleButton>
@@ -98,28 +174,28 @@ export function Player() {
     <div class="flex flex-col flex-1 bg-gray-100 dark:bg-gray-100 rounded-xl shadow-sm">
       <div class="flex gap-3 justify-center p-3">
         <AspectRatioSelect />
-        <EditorButton
-          onClick={() => {
-            const display = editorInstance.recordings.segments[0].display;
-            setDialog({
-              open: true,
-              type: "crop",
-              position: {
-                ...(project.background.crop?.position ?? { x: 0, y: 0 }),
-              },
-              size: {
-                ...(project.background.crop?.size ?? {
-                  x: display.width,
-                  y: display.height,
-                }),
-              },
-            });
-          }}
-          leftIcon={<IconCapCrop class="w-5 text-gray-500" />}
-        >
-          Crop
-        </EditorButton>
-      </div>
+  <EditorButton
+            onClick={() => {
+              const display = editorInstance.recordings.segments[0].display;
+              setDialog({
+                open: true,
+                type: "crop",
+                position: {
+                  ...(project.background.crop?.position ?? { x: 0, y: 0 }),
+                },
+                size: {
+                  ...(project.background.crop?.size ?? {
+                    x: display.width,
+                    y: display.height,
+                  }),
+                },
+              });
+            }}
+            leftIcon={<IconCapCrop class="w-5 text-gray-500" />}
+          >
+            Crop
+          </EditorButton>
+        </div>
       <PreviewCanvas />
       <div class="flex z-10 overflow-hidden flex-row gap-3 justify-between items-center p-5">
         <div class="flex-1">
