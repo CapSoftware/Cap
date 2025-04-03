@@ -132,6 +132,11 @@ export const Footer = () => {
                 <a href="/screen-recorder-mac">Screen Recorder for Mac</a>
               </li>
               <li>
+                <a href="/screen-recorder-windows">
+                  Screen Recorder for Windows
+                </a>
+              </li>
+              <li>
                 <a href="/screen-recording-software">
                   Screen Recording Software
                 </a>
