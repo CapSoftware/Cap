@@ -14,10 +14,7 @@ import AspectRatioSelect from "./AspectRatioSelect";
 export function Player() {
   const {
     project,
-    videoId,
     editorInstance,
-    history,
-    latestFrame,
     setDialog,
     playbackTime,
     setPlaybackTime,
