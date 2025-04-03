@@ -361,10 +361,11 @@ impl AVAssetReaderDecoder {
                         }
 
                         if current_frame > requested_frame && sender.is_some() {
-                            if let Some((sender, last_sent_frame)) = last_sent_frame
-                                .borrow()
-                                .clone()
-                                .and_then(|l| Some((sender.take()?, l)))
+                            // not inlining this is important so that last_sent_frame is dropped before the sender is invoked
+                            let last_sent_frame = last_sent_frame.borrow().clone();
+
+                            if let Some((sender, last_sent_frame)) =
+                                last_sent_frame.and_then(|l| Some((sender.take()?, l)))
                             {
                                 // info!(
                                 //     "sending previous frame {} for {requested_frame}",
@@ -390,9 +391,9 @@ impl AVAssetReaderDecoder {
 
                     this.is_done = true;
 
-                    if let Some((sender, last_sent_frame)) =
-                        sender.take().zip(last_sent_frame.borrow().clone())
-                    {
+                    // not inlining this is important so that last_sent_frame is dropped before the sender is invoked
+                    let last_sent_frame = last_sent_frame.borrow().clone();
+                    if let Some((sender, last_sent_frame)) = sender.take().zip(last_sent_frame) {
                         // info!(
                         //     "sending hail mary frame {} for {requested_frame}",
                         //     last_sent_frame.0

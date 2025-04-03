@@ -77,13 +77,13 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 true,
                 None::<&str>,
             )?,
-            &MenuItem::with_id(
-                app,
-                TrayItem::TakeScreenshot,
-                "Take Screenshot",
-                true,
-                None::<&str>,
-            )?,
+            // &MenuItem::with_id(
+            //     app,
+            //     TrayItem::TakeScreenshot,
+            //     "Take Screenshot",
+            //     true,
+            //     None::<&str>,
+            // )?,
             &MenuItem::with_id(
                 app,
                 TrayItem::PreviousRecordings,

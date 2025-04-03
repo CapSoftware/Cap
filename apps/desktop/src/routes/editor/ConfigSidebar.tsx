@@ -442,7 +442,8 @@ export function ConfigSidebar() {
               <div
                 class={cx(
                   "flex justify-center relative border-transparent border z-10 items-center rounded-md size-9 transition will-change-transform",
-                  selectedTab() !== item.id && "group-hover:border-gray-300"
+                  selectedTab() !== item.id &&
+                    "group-hover:border-gray-300 group-disabled:border-none"
                 )}
               >
                 <Dynamic component={item.icon} />

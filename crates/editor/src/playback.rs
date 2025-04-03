@@ -94,7 +94,6 @@ impl Playback {
                         _ = stop_rx.changed() => { break; },
                         data = segment.decoders.get_frames(segment_time as f32, !project.camera.hide) => { data }
                     };
-                    debug!("decoded frame {segment_time} in {:?}", now.elapsed());
 
                     if let Some(segment_frames) = data {
                         let now = Instant::now();
@@ -109,11 +108,7 @@ impl Playback {
                         self.renderer
                             .render_frame(segment_frames, uniforms, segment.cursor.clone())
                             .await;
-
-                        debug!("rendered frame {segment_time} in {:?}", now.elapsed());
                     }
-
-                    debug!("frame {segment_time} done in {:?}", now.elapsed());
                 }
 
                 tokio::time::sleep_until(

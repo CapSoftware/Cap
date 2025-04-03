@@ -121,7 +121,7 @@ function Inner() {
     <>
       <Header />
       <div
-        class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-2 w-full leading-5 animate-in fade-in"
+        class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-4 w-full leading-5 animate-in fade-in"
         data-tauri-drag-region
       >
         <div class="flex overflow-hidden flex-col flex-1">

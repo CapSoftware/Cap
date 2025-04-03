@@ -153,6 +153,8 @@ async function main() {
   }
 
   if (hasDesktop) {
+    envs.RUST_BACKTRACE = "1";
+
     const values = await group(
       {
         VITE_VERCEL_AUTOMATION_BYPASS_SECRET: () => {

@@ -269,7 +269,7 @@ openEditorAfterRecording?: boolean }
 export type HapticPattern = "Alignment" | "LevelChange" | "Generic"
 export type HapticPerformanceTime = "Default" | "Now" | "DrawCompleted"
 export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
-export type HotkeyAction = "startRecording" | "stopRecording" | "restartRecording" | "takeScreenshot"
+export type HotkeyAction = "startRecording" | "stopRecording" | "restartRecording"
 export type HotkeysConfiguration = { show: boolean }
 export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } }
 export type InstantRecordingMeta = { fps: number; sample_rate: number | null }
