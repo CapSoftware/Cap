@@ -273,7 +273,7 @@ impl App {
         self.camera_feed.take();
     }
 
-    pub async fn create_camera_feed(&mut self) -> Result<(), String> {
+    pub async fn create_camera_feed(&mut self) -> Result<bool, String> {
         if let (Some(label), true) = (
             self.recording_options.camera_label(),
             self.camera_feed.is_none(),
@@ -285,9 +285,10 @@ impl App {
                     self.camera_feed = Some(Arc::new(Mutex::new(feed)));
                 })
                 .map_err(|e| e.to_string())?;
+            return Ok(true);
         }
 
-        Ok(())
+        Ok(false)
     }
 
     pub fn remove_mic_feed(&mut self) {
