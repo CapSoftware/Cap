@@ -22,7 +22,7 @@ import { Parallax, ParallaxProvider } from "react-scroll-parallax";
 import { LogoSection } from "../_components/LogoSection";
 import LeftBlueHue from "./LeftBlueHue";
 import PowerfulFeaturesSVG from "./PowerfulFeaturesSVG";
-
+import { FeatureCard } from "../SelfHostingPage";
 export const HomePage = () => {
   const [videoToggled, setVideoToggled] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -383,6 +383,68 @@ export const HomePage = () => {
               className="w-full h-auto max-h-[290px] object-cover"
               src="/features/open-source.png"
               alt="Open source Illustration"
+            />
+          </div>
+        </div>
+      </div>
+      <div className="pb-32 wrapper md:pb-40" id="features">
+        <div className="space-y-3">
+          {/* Section 1: 35% / 65% split */}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
+            <div className="md:col-span-5">
+              <FeatureCard
+                title="Privacy-first"
+                description="Host Cap on your own servers with complete data sovereignty. Maintain full control over your sensitive information and ensure compliance with your organization's security policies and regulatory requirements."
+                imagePath="/illustrations/privacy.webp"
+                imageAlt="Complete Control"
+                imageHeight="h-[280px]"
+              />
+            </div>
+            <div className="md:col-span-7">
+              <FeatureCard
+                title="Multi-Platform Support"
+                description="Self-hosted Cap works seamlessly across macOS and Windows, giving your team the flexibility to collaborate regardless of their device preference. Deploy once and enable your entire organization to capture, share, and collaborate from any device."
+                imagePath="/illustrations/multiplatmain.png"
+                bg="/illustrations/multiplatbg.webp"
+                imageAlt="Enterprise-Ready"
+                className="bg-[center_top_-90px] bg-no-repeat bg-cover lg:bg-[center_top_-60px]"
+                imageHeight="h-[280px]"
+              />
+            </div>
+          </div>
+
+          {/* Section 2: 65% / 35% split */}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
+            <div className="md:col-span-8">
+              <FeatureCard
+                title="Unlimited Recording and Cloud Storage"
+                bg="/illustrations/multiplatbg.webp"
+                description="Configure storage limits based on your infrastructure capacity. Self-hosting eliminates cloud storage fees and gives you complete control over retention policies, ideal for teams with high-volume recording needs or long-term archival requirements."
+                imagePath="/illustrations/cloud-feature.webp"
+                imageAlt="White Labeling"
+                imageHeight="h-[215px]"
+                className="lg:bg-[center_top_-150px] bg-[center_top_-120px] bg-no-repeat bg-cover"
+              />
+            </div>
+            <div className="md:col-span-4">
+              <FeatureCard
+                title="High-Quality Video Capture"
+                description="Deliver crystal-clear recordings to your team with self-hosted infrastructure optimized for your network. Eliminate quality degradation from third-party services and ensure consistent performance across your organization."
+                imagePath="/illustrations/video-capture.webp"
+                imageAlt="Data Sovereignty"
+                imageHeight="h-[224px]"
+              />
+            </div>
+          </div>
+
+          {/* Section 3: Full width */}
+          <div className="grid grid-cols-1">
+            <FeatureCard
+              title="Advanced Team Collaboration"
+              description="Enable seamless knowledge sharing across departments with customizable access controls and team workspaces. Self-hosted Cap provides enterprise-grade collaboration features that integrate with your existing authentication systems and team structure."
+              imagePath="/illustrations/collaboration.webp"
+              imageAlt="Dedicated Support"
+              imageHeight="h-[285px]"
             />
           </div>
         </div>
