@@ -533,16 +533,23 @@ enum CurrentRecordingTarget {
     Area { screen: u32, bounds: Bounds },
 }
 
+#[derive(Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+struct CurrentRecording {
+    target: CurrentRecordingTarget,
+    r#type: RecordingType,
+}
+
 #[tauri::command]
 #[specta::specta]
 async fn get_current_recording(
     state: MutableState<'_, App>,
-) -> Result<JsonValue<Option<CurrentRecordingTarget>>, ()> {
+) -> Result<JsonValue<Option<CurrentRecording>>, ()> {
     let state = state.read().await;
     Ok(JsonValue::new(&state.current_recording.as_ref().map(|r| {
         let bounds = r.bounds();
 
-        match r.capture_target() {
+        let target = match r.capture_target() {
             ScreenCaptureTarget::Screen { id } => CurrentRecordingTarget::Screen { id: *id },
             ScreenCaptureTarget::Window { id } => CurrentRecordingTarget::Window {
                 id: *id,
@@ -551,6 +558,14 @@ async fn get_current_recording(
             ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {
                 screen: *screen,
                 bounds: bounds.clone(),
+            },
+        };
+
+        CurrentRecording {
+            target,
+            r#type: match r {
+                InProgressRecording::Instant { .. } => RecordingType::Instant,
+                InProgressRecording::Studio { .. } => RecordingType::Studio,
             },
         }
     })))

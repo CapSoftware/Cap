@@ -1,15 +1,10 @@
 use std::{
-    cell::LazyCell,
     collections::BTreeMap,
     path::PathBuf,
     sync::{mpsc, Arc},
 };
 
-use ffmpeg::{
-    codec::{self, Capabilities},
-    format, frame, rescale, software, Codec, Rescale,
-};
-use ffmpeg_hw_device::{CodecContextExt, CodecExt, HwDevice};
+use ffmpeg::{codec, format, frame, software, Codec};
 use ffmpeg_sys_next::{avcodec_find_decoder, AVHWDeviceType};
 use log::debug;
 use tokio::sync::oneshot;

@@ -214,6 +214,8 @@ export default function () {
     ),
   });
 
+  const auth = authStore.createQuery();
+
   return (
     <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-[--gray-50] h-full text-[--text-primary]">
       {initialize()}
@@ -222,7 +224,11 @@ export default function () {
           <a
             class="*:w-[92px] *:h-auto text-[--text-primary]"
             target="_blank"
-            href={import.meta.env.VITE_SERVER_URL}
+            href={
+              auth.data
+                ? `${import.meta.env.VITE_SERVER_URL}/dashboard`
+                : import.meta.env.VITE_SERVER_URL
+            }
           >
             <IconCapLogoFullDark class="hidden dark:block" />
             <IconCapLogoFull class="block dark:hidden" />
@@ -279,14 +285,14 @@ export default function () {
             </>
           )}
         </Button>
-        <Button
+        {/* <Button
           disabled={isRecording()}
           variant="secondary"
           size="md"
           onClick={() => commands.takeScreenshot()}
         >
           <IconLucideCamera class="w-[1rem] h-[1rem]" />
-        </Button>
+        </Button> */}
       </div>
     </div>
   );
@@ -327,6 +333,7 @@ import { Transition } from "solid-transition-group";
 
 import { apiClient } from "~/utils/web-api";
 import { useWindowChrome } from "./Context";
+import { authStore } from "~/store";
 
 let hasChecked = false;
 function createUpdateCheck() {

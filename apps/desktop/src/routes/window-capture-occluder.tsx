@@ -16,11 +16,11 @@ export default function () {
 
   const bounds = () => {
     if (!currentRecording.data) return;
-    if ("window" in currentRecording.data) {
-      return currentRecording.data.window.bounds;
+    if ("window" in currentRecording.data.target) {
+      return currentRecording.data.target.window.bounds;
     }
-    if ("area" in currentRecording.data) {
-      return currentRecording.data.area.bounds;
+    if ("area" in currentRecording.data.target) {
+      return currentRecording.data.target.area.bounds;
     }
   };
 
