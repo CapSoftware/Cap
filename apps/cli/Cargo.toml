@@ -21,7 +21,7 @@ editor = "0.1.1"
 scap.workspace = true
 uuid = { version = "1.11.1", features = ["v4"] }
 ffmpeg = { workspace = true }
-tracing = "0.1.41"
+tracing.workspace = true
 tracing-subscriber = "0.3.19"
 nokhwa.workspace = true
 flume.workspace = true

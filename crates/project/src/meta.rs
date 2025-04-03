@@ -1,29 +1,23 @@
 use either::Either;
-use relative_path::{RelativePath, RelativePathBuf};
+use relative_path::RelativePathBuf;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
     collections::HashMap,
-    fs::File,
     path::{Path, PathBuf},
 };
 
 use crate::{CursorEvents, CursorImage, CursorImages, ProjectConfiguration, XY};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct Display {
+pub struct VideoMeta {
     #[specta(type = String)]
     pub path: RelativePathBuf,
     #[serde(default = "legacy_static_video_fps")]
     pub fps: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct CameraMeta {
-    #[specta(type = String)]
-    pub path: RelativePathBuf,
-    #[serde(default = "legacy_static_video_fps")]
-    pub fps: u32,
+    /// unix time of the first frame
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_time: Option<f64>,
 }
 
 fn legacy_static_video_fps() -> u32 {
@@ -34,6 +28,9 @@ fn legacy_static_video_fps() -> u32 {
 pub struct AudioMeta {
     #[specta(type = String)]
     pub path: RelativePathBuf,
+    /// unix time of the first frame
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_time: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -157,9 +154,9 @@ impl StudioRecordingMeta {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SingleSegment {
-    pub display: Display,
+    pub display: VideoMeta,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub camera: Option<CameraMeta>,
+    pub camera: Option<VideoMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio: Option<AudioMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -232,9 +229,9 @@ impl MultipleSegments {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct MultipleSegment {
-    pub display: Display,
+    pub display: VideoMeta,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub camera: Option<CameraMeta>,
+    pub camera: Option<VideoMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio: Option<AudioMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

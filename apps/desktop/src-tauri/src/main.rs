@@ -8,9 +8,9 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {
     // We have to hold onto the ClientInitGuard until the very end
-    let _guard = if dotenvy_macro::dotenv!("CAP_DESKTOP_SENTRY_URL") != "" {
+    let _guard = std::option_env!("CAP_DESKTOP_SENTRY_URL").map(|url| {
         Some(sentry::init((
-            dotenvy_macro::dotenv!("CAP_DESKTOP_SENTRY_URL"),
+            url,
             sentry::ClientOptions {
                 release: sentry::release_name!(),
                 debug: cfg!(debug_assertions),
@@ -36,9 +36,7 @@ fn main() {
                 ..Default::default()
             },
         )))
-    } else {
-        None
-    };
+    });
 
     let (layer, handle) = tracing_subscriber::reload::Layer::new(None::<DynLoggingLayer>);
 

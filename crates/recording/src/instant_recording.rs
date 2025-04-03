@@ -108,10 +108,10 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
     output_path: PathBuf,
     screen_source: (
         ScreenCaptureSource<TCaptureFormat>,
-        flume::Receiver<TCaptureFormat::VideoFormat>,
+        flume::Receiver<(TCaptureFormat::VideoFormat, f64)>,
     ),
     audio_input_feed: Option<&AudioInputFeed>,
-    system_audio: Option<Receiver<ffmpeg::frame::Audio>>,
+    system_audio: Option<Receiver<(ffmpeg::frame::Audio, f64)>>,
 ) -> Result<(InstantRecordingPipeline, oneshot::Receiver<()>), MediaError> {
     let clock = RealTimeClock::<()>::new();
     let pipeline_builder = Pipeline::builder(clock);
@@ -192,7 +192,7 @@ pub async fn spawn_instant_recording_actor(
                 recording_dir,
                 capture_target: options.capture_target,
                 video_info,
-                audio_input_name: options.audio_input_name,
+                audio_input_name: options.mic_name,
             };
 
             let mut state = InstantRecordingActorState::Recording {

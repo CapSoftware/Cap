@@ -912,7 +912,7 @@ dependencies = [
 name = "cap-audio"
 version = "0.1.0"
 dependencies = [
- "cidre 0.7.0",
+ "cidre",
  "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
  "tokio",
@@ -920,7 +920,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop"
-version = "0.3.29"
+version = "0.3.33"
 dependencies = [
  "anyhow",
  "axum",
@@ -954,7 +954,7 @@ dependencies = [
  "mp4",
  "nix 0.29.0",
  "objc",
- "objc2-app-kit 0.2.2",
+ "objc2-app-kit 0.3.0",
  "png",
  "rand 0.8.5",
  "relative-path",
@@ -978,6 +978,7 @@ dependencies = [
  "tauri-plugin-http",
  "tauri-plugin-notification",
  "tauri-plugin-oauth",
+ "tauri-plugin-opener",
  "tauri-plugin-os",
  "tauri-plugin-positioner",
  "tauri-plugin-process",
@@ -1069,7 +1070,7 @@ dependencies = [
  "cap-flags",
  "cap-gpu-converters",
  "cap-project",
- "cidre 0.6.0",
+ "cidre",
  "cocoa 0.26.0",
  "core-foundation 0.10.0",
  "core-graphics 0.24.0",
@@ -1118,6 +1119,7 @@ dependencies = [
  "cap-project",
  "cap-utils",
  "chrono",
+ "cidre",
  "cocoa 0.26.0",
  "device_query",
  "either",
@@ -1148,7 +1150,8 @@ dependencies = [
  "bytemuck",
  "cap-flags",
  "cap-project",
- "cidre 0.6.0",
+ "cap-video-decode",
+ "cidre",
  "ffmpeg-hw-device",
  "ffmpeg-next",
  "ffmpeg-sys-next",
@@ -1162,6 +1165,7 @@ dependencies = [
  "specta",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
  "wgpu",
 ]
 
@@ -1185,8 +1189,12 @@ dependencies = [
 name = "cap-video-decode"
 version = "0.1.0"
 dependencies = [
+ "cidre",
+ "ffmpeg-hw-device",
  "ffmpeg-next",
  "ffmpeg-sys-next",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1214,9 +1222,9 @@ dependencies = [
 
 [[package]]
 name = "cargo_toml"
-version = "0.21.0"
+version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fbd1fe9db3ebf71b89060adaf7b0504c2d6a425cf061313099547e382c2e472"
+checksum = "02260d489095346e5cafd04dea8e8cb54d1d74fcd759022a9b72986ebe9a1257"
 dependencies = [
  "serde",
  "toml",
@@ -1331,25 +1339,10 @@ name = "cidre"
 version = "0.6.0"
 source = "git+https://github.com/yury/cidre?rev=ef04aaabe14ffbbce4a330973a74b6d797d073ff#ef04aaabe14ffbbce4a330973a74b6d797d073ff"
 dependencies = [
- "cidre-macros 0.1.0 (git+https://github.com/yury/cidre?rev=ef04aaabe14ffbbce4a330973a74b6d797d073ff)",
+ "cidre-macros",
  "parking_lot",
  "tokio",
 ]
-
-[[package]]
-name = "cidre"
-version = "0.7.0"
-source = "git+https://github.com/yury/cidre?rev=b525fce737310f524e0159488f8a4e29685680bf#b525fce737310f524e0159488f8a4e29685680bf"
-dependencies = [
- "cidre-macros 0.1.0 (git+https://github.com/yury/cidre?rev=b525fce737310f524e0159488f8a4e29685680bf)",
- "parking_lot",
- "tokio",
-]
-
-[[package]]
-name = "cidre-macros"
-version = "0.1.0"
-source = "git+https://github.com/yury/cidre?rev=b525fce737310f524e0159488f8a4e29685680bf#b525fce737310f524e0159488f8a4e29685680bf"
 
 [[package]]
 name = "cidre-macros"
@@ -5150,9 +5143,9 @@ dependencies = [
 
 [[package]]
 name = "once_cell"
-version = "1.19.0"
+version = "1.21.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fdb12b2476b595f9358c5161aa467c2438859caa136dec86c26fdd2efe17b92"
+checksum = "c2806eaa3524762875e21c3dcd057bc4b7bfa01ce4da8d46be1cd43649e1cc6b"
 
 [[package]]
 name = "open"
@@ -6452,8 +6445,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "screencapturekit"
 version = "0.3.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd797e2f07759d67fc00c3085c55dae07c37e73dba29dc1159484cbb2946bd6f"
+source = "git+https://github.com/CapSoftware/screencapturekit-rs?rev=7ff1e103742e56c8f6c2e940b5e52684ed0bed69#7ff1e103742e56c8f6c2e940b5e52684ed0bed69"
 dependencies = [
  "block2 0.6.0",
  "core-foundation 0.10.0",
@@ -7268,9 +7260,9 @@ dependencies = [
 
 [[package]]
 name = "tao"
-version = "0.32.4"
+version = "0.32.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86e71522de6a4537e8f6a5750984dacdb231df3494c5ffbf065b76b9108a457e"
+checksum = "63c8b1020610b9138dd7b1e06cf259ae91aa05c30f3bd0d6b42a03997b92dec1"
 dependencies = [
  "bitflags 2.6.0",
  "core-foundation 0.10.0",
@@ -7347,9 +7339,9 @@ checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 
 [[package]]
 name = "tauri"
-version = "2.3.0"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f32eadd4a507f1b61e4fd1f792d0ed4184127a3241ff5bcb1848b9a574a58d6"
+checksum = "511dd38065a5d3b36c33cdba4362b99a40a5103bebcd4aebb930717e7c8ba292"
 dependencies = [
  "anyhow",
  "bytes",
@@ -7400,9 +7392,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-build"
-version = "2.0.6"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51a2e96f3c0baa0581656bb58e6fdd0f7c9c31eaf6721a0c08689d938fe85f2d"
+checksum = "7ffa8732a66f90903f5a585215f3cf1e87988d0359bc88c18a502efe7572c1de"
 dependencies = [
  "anyhow",
  "cargo_toml",
@@ -7422,9 +7414,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-codegen"
-version = "2.0.5"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e357ec3daf8faad1029bc7109e7f5b308ceb63b6073d110d7388923a4cce5e55"
+checksum = "c266a247f14d63f40c6282c2653a8bac5cc3d482ca562a003a88513653ea817a"
 dependencies = [
  "base64 0.22.1",
  "brotli",
@@ -7449,9 +7441,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-macros"
-version = "2.0.5"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "447ee4dd94690d77f1422f2b57e783c654ba75c535ad6f6e727887330804fff2"
+checksum = "f47a1cf94b3bd6c4dc37dce1a43fc96120ff29a91757f0ab3cf713c7ad846e7c"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -7463,8 +7455,8 @@ dependencies = [
 
 [[package]]
 name = "tauri-nspanel"
-version = "2.0.0-beta"
-source = "git+https://github.com/ahkohd/tauri-nspanel?branch=v2#07b1a04efee07c10b5eb4bfe3af71e32957d2d7a"
+version = "2.0.1"
+source = "git+https://github.com/ahkohd/tauri-nspanel?branch=v2#356843c8433f89feea4f0f666be8b8d73715a57a"
 dependencies = [
  "bitflags 2.6.0",
  "block",
@@ -7479,9 +7471,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin"
-version = "2.0.2"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fa4e6c94cb1d635f65a770c69e23de1bc054b0e4c554fa037a7cc7676333d39"
+checksum = "9972871fcbddf16618f70412d965d4d845cd4b76d03fff168709961ef71e5cdf"
 dependencies = [
  "anyhow",
  "glob",
@@ -7641,6 +7633,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauri-plugin-opener"
+version = "2.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2fdc6cb608e04b7d2b6d1f21e9444ad49245f6d03465ba53323d692d1ceb1a30"
+dependencies = [
+ "dunce",
+ "glob",
+ "objc2-app-kit 0.3.0",
+ "objc2-foundation 0.3.0",
+ "open",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.6",
+ "url",
+ "windows 0.60.0",
+ "zbus 5.3.0",
+]
+
+[[package]]
 name = "tauri-plugin-os"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7784,10 +7798,11 @@ dependencies = [
 
 [[package]]
 name = "tauri-runtime"
-version = "2.4.0"
+version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e758a405ab39e25f4d1235c5f06fe563f44b01ee18bbe38ddec5356d4f581908"
+checksum = "9e9c7bce5153f1ca7bc45eba37349b31ba50e975e28edc8b5766c5ec02b0b63a"
 dependencies = [
+ "cookie",
  "dpi",
  "gtk",
  "http",
@@ -7803,9 +7818,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-runtime-wry"
-version = "2.4.0"
+version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ef46e0c9c30d3524990cb10556f82cde0aa2281e9600e7ed2f499842db8b080"
+checksum = "087188020fd6facb8578fe9b38e81fa0fe5fb85744c73da51a299f94a530a1e3"
 dependencies = [
  "gtk",
  "http",
@@ -7814,6 +7829,7 @@ dependencies = [
  "objc2 0.6.0",
  "objc2-app-kit 0.3.0",
  "objc2-foundation 0.3.0",
+ "once_cell",
  "percent-encoding",
  "raw-window-handle",
  "softbuffer",
@@ -7857,10 +7873,11 @@ dependencies = [
 
 [[package]]
 name = "tauri-utils"
-version = "2.2.0"
+version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "107a959dbd5ff53d89a98f6f2e3e987c611334141a43630caae1d80e79446dd6"
+checksum = "82dcced4014e59af9790cc22f5d271df3be09ecd6728ec68861642553c8d01b7"
 dependencies = [
+ "anyhow",
  "brotli",
  "cargo_metadata",
  "ctor",
@@ -9078,7 +9095,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9786,9 +9803,8 @@ dependencies = [
 
 [[package]]
 name = "wry"
-version = "0.50.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a5eabce267929af61619166232d5221aeec2d7af8712bc33cf54a78416ad711"
+version = "0.50.5"
+source = "git+https://github.com/CapSoftware/wry?rev=293f510#293f510b4096444025110ab3b68722ddc5bc0b4d"
 dependencies = [
  "base64 0.22.1",
  "block2 0.6.0",

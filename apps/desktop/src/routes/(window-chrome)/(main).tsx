@@ -1,4 +1,5 @@
 import { Button } from "@cap/ui-solid";
+import { Tooltip } from "@kobalte/core";
 import { useNavigate } from "@solidjs/router";
 import {
   createMutation,
@@ -6,34 +7,33 @@ import {
   useQueryClient,
 } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { LogicalSize } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
-  Show,
+  ComponentProps,
   createEffect,
   createMemo,
   createResource,
   createSignal,
-  onMount,
-  onCleanup,
   ErrorBoundary,
+  onCleanup,
+  onMount,
+  Show,
   Suspense,
-  ComponentProps,
 } from "solid-js";
 import { createStore } from "solid-js/store";
-import { Tooltip } from "@kobalte/core";
 
+import Mode from "~/components/Mode";
 import { trackEvent } from "~/utils/analytics";
 import {
   createCurrentRecordingQuery,
-  createOptionsQuery,
-  listWindows,
-  listAudioDevices,
-  getPermissions,
-  createVideoDevicesQuery,
-  listScreens,
   createLicenseQuery,
+  createOptionsQuery,
+  createVideoDevicesQuery,
+  getPermissions,
+  listAudioDevices,
+  listScreens,
+  listWindows,
 } from "~/utils/queries";
 import {
   type CaptureScreen,
@@ -41,7 +41,6 @@ import {
   commands,
   events,
 } from "~/utils/tauri";
-import Mode from "~/components/Mode";
 
 export default function () {
   const { options, setOptions } = createOptionsQuery();
@@ -73,7 +72,7 @@ export default function () {
           captureTarget,
           mode: options.data?.mode ?? "studio",
           cameraLabel: options.data?.cameraLabel ?? null,
-          audioInputName: options.data?.audioInputName ?? null,
+          micName: options.data?.micName ?? null,
           captureSystemAudio: options.data?.captureSystemAudio,
         });
       } else {
@@ -104,7 +103,7 @@ export default function () {
     const currentWindow = getCurrentWindow();
     const MAIN_WINDOW_SIZE = {
       width: 300,
-      height: 290 + (window.FLAGS.systemAudioRecording ? 40 : 0),
+      height: 290 + (window.FLAGS.systemAudioRecording ? 50 : 0),
     };
 
     // Set initial size
@@ -134,12 +133,16 @@ export default function () {
       unlistenFocus();
       unlistenResize();
     };
-    setTitlebar("hideMaximize", true);
-    setTitlebar(
-      "items",
+
+    return null;
+  });
+
+  useWindowChrome({
+    hideMaximize: true,
+    items: (
       <div
         dir={ostype() === "windows" ? "rtl" : "rtl"}
-        class="flex mx-2 items-center gap-1"
+        class="flex gap-1 items-center mx-2"
       >
         <Tooltip.Root openDelay={0}>
           <Tooltip.Trigger>
@@ -150,11 +153,11 @@ export default function () {
               }
               class="flex items-center justify-center w-5 h-5 -ml-[1.5px]"
             >
-              <IconCapSettings class="size-5 text-gray-400 hover:text-gray-500" />
+              <IconCapSettings class="text-gray-400 size-5 hover:text-gray-500" />
             </button>
           </Tooltip.Trigger>
           <Tooltip.Portal>
-            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
               Settings
               <Tooltip.Arrow class="fill-gray-500" />
             </Tooltip.Content>
@@ -167,13 +170,13 @@ export default function () {
               onClick={() =>
                 commands.showWindow({ Settings: { page: "recordings" } })
               }
-              class="flex items-center justify-center w-5 h-5"
+              class="flex justify-center items-center w-5 h-5"
             >
-              <IconLucideSquarePlay class="size-5 text-gray-400 hover:text-gray-500" />
+              <IconLucideSquarePlay class="text-gray-400 size-5 hover:text-gray-500" />
             </button>
           </Tooltip.Trigger>
           <Tooltip.Portal>
-            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
               Previous Recordings
               <Tooltip.Arrow class="fill-gray-500" />
             </Tooltip.Content>
@@ -186,9 +189,9 @@ export default function () {
           <button
             type="button"
             onClick={() => commands.showWindow("Upgrade")}
-            class="relative flex items-center justify-center w-5 h-5"
+            class="flex relative justify-center items-center w-5 h-5"
           >
-            <IconLucideGift class="size-5 text-gray-400 hover:text-gray-500" />
+            <IconLucideGift class="text-gray-400 size-5 hover:text-gray-500" />
             <div
               style={{ "background-color": "#FF4747" }}
               class="block z-10 absolute top-0 right-0 size-1.5 rounded-full animate-bounce"
@@ -202,15 +205,13 @@ export default function () {
             onClick={() => {
               new WebviewWindow("debug", { url: "/debug" });
             }}
-            class="flex items-center justify-center w-5 h-5"
+            class="flex justify-center items-center w-5 h-5"
           >
-            <IconLucideBug class="size-5 text-gray-400 hover:text-gray-500" />
+            <IconLucideBug class="text-gray-400 size-5 hover:text-gray-500" />
           </button>
         )}
       </div>
-    );
-
-    return null;
+    ),
   });
 
   return (
@@ -223,8 +224,8 @@ export default function () {
             target="_blank"
             href={import.meta.env.VITE_SERVER_URL}
           >
-            <IconCapLogoFullDark class="dark:block hidden" />
-            <IconCapLogoFull class="dark:hidden block" />
+            <IconCapLogoFullDark class="hidden dark:block" />
+            <IconCapLogoFull class="block dark:hidden" />
           </a>
           <ErrorBoundary fallback={<></>}>
             <Suspense>
@@ -234,16 +235,17 @@ export default function () {
                     await commands.showWindow("Upgrade");
                   }
                 }}
-                class={`text-[0.6rem] ${license.data?.type === "pro"
+                class={`text-[0.6rem] ${
+                  license.data?.type === "pro"
                     ? "bg-[--blue-400] text-gray-50 dark:text-gray-500"
                     : "bg-gray-200 cursor-pointer hover:bg-gray-300"
-                  } rounded-lg px-1.5 py-0.5`}
+                } rounded-lg px-1.5 py-0.5`}
               >
                 {license.data?.type === "commercial"
                   ? "Commercial"
                   : license.data?.type === "pro"
-                    ? "Pro"
-                    : "Personal"}
+                  ? "Pro"
+                  : "Personal"}
               </span>
             </Suspense>
           </ErrorBoundary>
@@ -256,13 +258,13 @@ export default function () {
       {window.FLAGS.systemAudioRecording && (
         <SystemAudio options={options.data} setOptions={setOptions} />
       )}
-      <div class="w-full flex items-center space-x-1">
+      <div class="flex items-center space-x-1 w-full">
         <Button
           disabled={toggleRecording.isPending}
           variant={isRecording() ? "destructive" : "primary"}
           size="md"
           onClick={() => toggleRecording.mutate()}
-          class="flex-grow flex items-center justify-center"
+          class="flex flex-grow justify-center items-center"
         >
           {isRecording() ? (
             "Stop Recording"
@@ -311,20 +313,20 @@ function useRequestPermission() {
   return requestPermission;
 }
 
-import * as dialog from "@tauri-apps/plugin-dialog";
-import * as updater from "@tauri-apps/plugin-updater";
 import { makePersisted } from "@solid-primitives/storage";
-import { type as ostype, platform } from "@tauri-apps/plugin-os";
-import { Transition } from "solid-transition-group";
+import { UnlistenFn } from "@tauri-apps/api/event";
+import { CheckMenuItem, Menu, PredefinedMenuItem } from "@tauri-apps/api/menu";
 import {
   getCurrentWebviewWindow,
   WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
-import { UnlistenFn } from "@tauri-apps/api/event";
-import { CheckMenuItem, Menu, PredefinedMenuItem } from "@tauri-apps/api/menu";
+import * as dialog from "@tauri-apps/plugin-dialog";
+import { type as ostype, platform } from "@tauri-apps/plugin-os";
+import * as updater from "@tauri-apps/plugin-updater";
+import { Transition } from "solid-transition-group";
 
-import { setTitlebar } from "~/utils/titlebar-state";
 import { apiClient } from "~/utils/web-api";
+import { useWindowChrome } from "./Context";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -461,6 +463,11 @@ function TargetSelects(props: {
     return value;
   };
 
+  createEffect(() => {
+    screenValue();
+    windowValue();
+  });
+
   const windowValue = () => {
     const captureTarget = props.options?.captureTarget;
     if (captureTarget?.variant !== "window") return null;
@@ -488,7 +495,7 @@ function TargetSelects(props: {
   return (
     <div>
       <Tooltip.Root openDelay={500}>
-        <Tooltip.Trigger class="fixed flex flex-row items-center w-8 h-8">
+        <Tooltip.Trigger class="flex fixed flex-row items-center w-8 h-8">
           <Transition
             onEnter={(el, done) => {
               if (shouldAnimateAreaSelect)
@@ -555,10 +562,11 @@ function TargetSelects(props: {
                   )}
                 >
                   <IconCapCrop
-                    class={`w-[1rem] h-[1rem] ${areaSelection.pending
+                    class={`w-[1rem] h-[1rem] ${
+                      areaSelection.pending
                         ? "animate-gentle-bounce duration-1000 text-gray-500 mt-1"
                         : ""
-                      }`}
+                    }`}
                   />
                 </button>
               )}
@@ -566,20 +574,21 @@ function TargetSelects(props: {
           </Transition>
         </Tooltip.Trigger>
         <Tooltip.Portal>
-          <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+          <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
             {isTargetCaptureArea()
               ? "Remove selection"
               : areaSelection.pending
-                ? "Selecting area..."
-                : "Select area"}
+              ? "Selecting area..."
+              : "Select area"}
             <Tooltip.Arrow class="fill-gray-500" />
           </Tooltip.Content>
         </Tooltip.Portal>
       </Tooltip.Root>
 
       <div
-        class={`flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500 ${isTargetScreenOrArea() ? "ml-[2.4rem]" : ""
-          }`}
+        class={`flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500 ${
+          isTargetScreenOrArea() ? "ml-[2.4rem]" : ""
+        }`}
         style={{
           "transition-timing-function":
             "cubic-bezier(0.785, 0.135, 0.15, 0.86)",
@@ -594,7 +603,7 @@ function TargetSelects(props: {
                 : undefined,
           }}
         >
-          <div class="bg-gray-100 flex-1" />
+          <div class="flex-1 bg-gray-100" />
         </div>
         <TargetSelect<CaptureScreen>
           options={screens.data ?? []}
@@ -640,7 +649,11 @@ function TargetSelects(props: {
           placeholder="Window"
           optionsEmptyText="No windows found"
           selected={props.options?.captureTarget.variant === "window"}
-          getName={(value) => platform() === "windows" ? value.name : `${value.owner_name} | ${value.name}`}
+          getName={(value) =>
+            platform() === "windows"
+              ? value.name
+              : `${value.owner_name} | ${value.name}`
+          }
         />
       </div>
     </div>
@@ -711,12 +724,15 @@ function CameraSelect(props: {
           value={props.options?.cameraLabel ?? null}
           permissionGranted={permissionGranted()}
           requestPermission={() => requestPermission("camera")}
-          onClear={() => {
+          onClick={(e) => {
             if (!props.options) return;
-            props.setOptions.mutate({
-              ...props.options,
-              cameraLabel: null,
-            });
+            if (props.options.cameraLabel) {
+              e.stopPropagation();
+              props.setOptions.mutate({
+                ...props.options,
+                cameraLabel: null,
+              });
+            }
           }}
         />
       </button>
@@ -741,11 +757,8 @@ function MicrophoneSelect(props: {
   const [isInitialized, setIsInitialized] = createSignal(false);
 
   const value = createMemo(() => {
-    if (!props.options?.audioInputName) return null;
-    return (
-      devices.data?.find((d) => d.name === props.options?.audioInputName) ??
-      null
-    );
+    if (!props.options?.micName) return null;
+    return devices.data?.find((d) => d.name === props.options?.micName) ?? null;
   });
 
   const requestPermission = useRequestPermission();
@@ -761,7 +774,7 @@ function MicrophoneSelect(props: {
 
     await props.setOptions.mutateAsync({
       ...props.options,
-      audioInputName: item ? item.name : null,
+      micName: item ? item.name : null,
     });
     if (!item) setDbs();
 
@@ -775,12 +788,12 @@ function MicrophoneSelect(props: {
   onMount(() => {
     const listener = (event: Event) => {
       const dbs = (event as CustomEvent<number>).detail;
-      if (!props.options?.audioInputName) setDbs();
+      if (!props.options?.micName) setDbs();
       else setDbs(dbs);
     };
 
     events.audioInputLevelChange.listen((dbs) => {
-      if (!props.options?.audioInputName) setDbs();
+      if (!props.options?.micName) setDbs();
       else setDbs(dbs.payload);
     });
 
@@ -795,7 +808,7 @@ function MicrophoneSelect(props: {
 
   // Initialize audio input if needed - only once when component mounts
   onMount(() => {
-    const audioInput = props.options?.audioInputName;
+    const audioInput = props.options?.micName;
     if (!audioInput || !permissionGranted() || isInitialized()) return;
 
     setIsInitialized(true);
@@ -814,14 +827,14 @@ function MicrophoneSelect(props: {
           Promise.all([
             CheckMenuItem.new({
               text: NO_MICROPHONE,
-              checked: !props.options?.audioInputName,
+              checked: !props.options?.micName,
               action: () => handleMicrophoneChange(null),
             }),
             PredefinedMenuItem.new({ item: "Separator" }),
             ...(devices.data ?? []).map((o) =>
               CheckMenuItem.new({
                 text: o.name,
-                checked: o.name === props.options?.audioInputName,
+                checked: o.name === props.options?.micName,
                 action: () => handleMicrophoneChange(o),
               })
             ),
@@ -844,18 +857,21 @@ function MicrophoneSelect(props: {
         </Show>
         <IconCapMicrophone class="text-gray-400 size-[1.25rem]" />
         <span class="flex-1 text-left truncate">
-          {props.options?.audioInputName ?? NO_MICROPHONE}
+          {props.options?.micName ?? NO_MICROPHONE}
         </span>
         <TargetSelectInfoPill
-          value={props.options?.audioInputName ?? null}
+          value={props.options?.micName ?? null}
           permissionGranted={permissionGranted()}
           requestPermission={() => requestPermission("microphone")}
-          onClear={() => {
+          onClick={(e) => {
             if (!props.options) return;
-            props.setOptions.mutate({
-              ...props.options,
-              audioInputName: null,
-            });
+            if (props.options?.micName) {
+              e.stopPropagation();
+              props.setOptions.mutate({
+                ...props.options,
+                micName: null,
+              });
+            }
           }}
         />
       </button>
@@ -961,7 +977,7 @@ function TargetSelectInfoPill<T>(props: {
   value: T | null;
   permissionGranted: boolean;
   requestPermission: () => void;
-  onClear: () => void;
+  onClick: (e: MouseEvent) => void;
 }) {
   return (
     <InfoPill
@@ -972,21 +988,19 @@ function TargetSelectInfoPill<T>(props: {
         e.stopPropagation();
       }}
       onClick={(e) => {
-        e.stopPropagation();
-
         if (!props.permissionGranted) {
           props.requestPermission();
           return;
         }
 
-        props.onClear();
+        props.onClick(e);
       }}
     >
       {!props.permissionGranted
         ? "Request Permission"
         : props.value !== null
-          ? "On"
-          : "Off"}
+        ? "On"
+        : "Off"}
     </InfoPill>
   );
 }
@@ -1068,9 +1082,9 @@ function ChangelogButton() {
         <button
           type="button"
           onClick={handleChangelogClick}
-          class="relative flex items-center justify-center w-5 h-5"
+          class="flex relative justify-center items-center w-5 h-5"
         >
-          <IconLucideBell class="size-5 text-gray-400 hover:text-gray-500" />
+          <IconLucideBell class="text-gray-400 size-5 hover:text-gray-500" />
           {changelogState.hasUpdate && (
             <div
               style={{ "background-color": "#FF4747" }}
@@ -1080,7 +1094,7 @@ function ChangelogButton() {
         </button>
       </Tooltip.Trigger>
       <Tooltip.Portal>
-        <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+        <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
           Changelog
           <Tooltip.Arrow class="fill-gray-500" />
         </Tooltip.Content>

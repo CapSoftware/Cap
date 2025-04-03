@@ -58,7 +58,7 @@ export default function () {
   >([]);
 
   const isAudioEnabled = () => {
-    return options.data?.audioInputName != null;
+    return options.data?.micName != null;
   };
 
   createTimer(
@@ -144,7 +144,7 @@ export default function () {
       <div class="flex flex-row justify-between p-[0.25rem] flex-1">
         <button
           disabled={stopRecording.isPending}
-          class="py-[0.25rem] px-[0.5rem] text-red-300 dark:text-red-300 gap-[0.25rem] flex flex-row items-center rounded-lg"
+          class="py-[0.25rem] px-[0.5rem] text-red-300 gap-[0.25rem] flex flex-row items-center rounded-lg transition-opacity disabled:opacity-60"
           type="button"
           onClick={() => stopRecording.mutate()}
         >
