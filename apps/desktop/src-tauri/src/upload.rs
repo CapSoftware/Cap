@@ -933,7 +933,6 @@ impl InstantMultipartUpload {
                     }
                 }
             }
-            dbg!(realtime_is_done);
 
             // Check the file's current size
             if !file_path.exists() {

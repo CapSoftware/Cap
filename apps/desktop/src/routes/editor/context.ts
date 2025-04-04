@@ -85,7 +85,6 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 		const [playbackTime, setPlaybackTime] = createSignal<number>(0);
 		const [playing, setPlaying] = createSignal(false);
 
-
 		//Export states
 
 		const [exportProgress, setExportProgress] = createSignal<{
@@ -122,18 +121,19 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			| { type: "link-copied" }
 		>({ type: "idle" });
 
-
 		//This is used in ShareButton.tsx to notify the component that the metadata has changed, from ExportDialog.tsx
 		//When a video is uploaded, the metadata is updated
 
-
-		const [lastMetaUpdate, setLastMetaUpdate] = createSignal<{ videoId: string; timestamp: number } | null>(null);
+		const [lastMetaUpdate, setLastMetaUpdate] = createSignal<{
+			videoId: string;
+			timestamp: number;
+		} | null>(null);
 
 		const metaUpdateStore = {
 			notifyUpdate: (videoId: string) => {
 				setLastMetaUpdate({ videoId, timestamp: Date.now() });
 			},
-			getLastUpdate: lastMetaUpdate
+			getLastUpdate: lastMetaUpdate,
 		};
 
 		createEffect(

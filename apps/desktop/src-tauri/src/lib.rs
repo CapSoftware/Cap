@@ -285,6 +285,7 @@ impl App {
                     self.camera_feed = Some(Arc::new(Mutex::new(feed)));
                 })
                 .map_err(|e| e.to_string())?;
+
             return Ok(true);
         }
 
@@ -2400,12 +2401,12 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                     let state = app.state::<Arc<RwLock<App>>>();
                                     let app_state = &mut *state.write().await;
 
-                                    app_state.remove_mic_feed();
-                                    app_state.remove_camera_feed();
+                                    if app_state.current_recording.is_none() {
+                                        app_state.remove_mic_feed();
 
-                                    if let Some(camera) = CapWindowId::Camera.get(&app) {
-                                        if app_state.current_recording.is_none() {
+                                        if let Some(camera) = CapWindowId::Camera.get(&app) {
                                             let _ = camera.close();
+                                            app_state.remove_camera_feed();
                                         }
                                     }
                                 });
