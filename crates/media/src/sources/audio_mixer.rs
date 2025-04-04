@@ -2,7 +2,7 @@ use std::time::{Duration, SystemTime};
 
 use ffmpeg_sys_next::AV_TIME_BASE_Q;
 use flume::{Receiver, Sender};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::{
     data::{AudioInfo, FFAudio},
@@ -68,6 +68,8 @@ impl AudioMixer {
                     info.channel_layout().bits()
                 );
 
+                debug!("audio mixer input {i}: {args}");
+
                 filter_graph
                     .add(
                         &ffmpeg::filter::find("abuffer").expect("Failed to find abuffer filter"),
@@ -89,11 +91,14 @@ impl AudioMixer {
             )
             .unwrap();
 
+        let aformat_args = "sample_fmts=flt:sample_rates=48000:channel_layouts=stereo";
+        debug!("aformat args: {aformat_args}");
+
         let mut aformat = filter_graph
             .add(
                 &ffmpeg::filter::find("aformat").expect("Failed to find aformat filter"),
                 "aformat",
-                "sample_fmts=flt:sample_rates=48000:channel_layouts=stereo",
+                aformat_args,
             )
             .expect("Failed to add aformat filter");
 
@@ -131,8 +136,9 @@ impl AudioMixer {
                         Err(flume::TryRecvError::Disconnected) => return,
                         Err(flume::TryRecvError::Empty) => break,
                     };
+                    let frame = &value.0;
 
-                    abuffers[i].source().add(&value.0).unwrap();
+                    abuffers[i].source().add(&frame).unwrap();
                 }
             }
 

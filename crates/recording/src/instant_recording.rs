@@ -109,7 +109,7 @@ pub struct CompletedInstantRecording {
     pub meta: InstantRecordingMeta,
 }
 
-#[tracing::instrument(skip_all, name = "standalone")]
+#[tracing::instrument(skip_all, name = "instant")]
 async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
     output_path: PathBuf,
     screen_source: (

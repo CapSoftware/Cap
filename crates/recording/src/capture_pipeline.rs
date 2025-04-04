@@ -217,7 +217,7 @@ impl MakeCapturePipeline for AVFrameCapture {
         audio: Option<&AudioInputFeed>,
         system_audio: Option<(Receiver<(ffmpeg::frame::Audio, f64)>, AudioInfo)>,
         output_path: PathBuf,
-        pause_flag: Arc<AtomicBool>,
+        _pause_flag: Arc<AtomicBool>,
     ) -> Result<CapturePipelineBuilder, MediaError>
     where
         Self: Sized,
@@ -266,11 +266,11 @@ impl MakeCapturePipeline for AVFrameCapture {
             let _ = ready.send(Ok(()));
             while let Ok((frame, unix_time)) = source.1.recv() {
                 if let Ok(mut mp4) = mp4.lock() {
-                    if pause_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                        mp4.pause();
-                    } else {
-                        mp4.resume();
-                    }
+                    // if pause_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    //     mp4.pause();
+                    // } else {
+                    //     mp4.resume();
+                    // }
 
                     mp4.queue_video_frame(frame);
                 }
@@ -289,10 +289,10 @@ type ScreenCaptureReturn<T> = (
     Receiver<(<T as ScreenCaptureFormat>::VideoFormat, f64)>,
 );
 
-// #[cfg(target_os = "macos")]
-// pub type ScreenCaptureMethod = CMSampleBufferCapture;
+#[cfg(target_os = "macos")]
+pub type ScreenCaptureMethod = CMSampleBufferCapture;
 
-// #[cfg(not(target_os = "macos"))]
+#[cfg(not(target_os = "macos"))]
 pub type ScreenCaptureMethod = AVFrameCapture;
 
 pub fn create_screen_capture(
