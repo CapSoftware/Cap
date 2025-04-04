@@ -10,6 +10,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@aerofoil/rive-solid-canvas": "^2.1.4",
     "@cap/database": "workspace:*",
     "@cap/ui": "workspace:*",
     "@cap/ui-solid": "workspace:*",
