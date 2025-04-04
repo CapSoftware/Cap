@@ -577,7 +577,7 @@ export default function Page() {
                     open={openLicenseDialog}
                     onOpenChange={setOpenLicenseDialog}
                   />
-                  <div class="flex flex-col gap-4 items-center px-6 pt-0">
+                  <div class="flex flex-col gap-4 items-center">
                     <button
                       onClick={() => openCommercialCheckout.mutate()}
                       disabled={openCommercialCheckout.isPending}
@@ -618,7 +618,7 @@ export default function Page() {
                   }}
                   class="flex-grow p-3 h-[700px] flex-1 dark:bg-solid-white bg-gray-500 rounded-2xl border shadow-sm text-card-foreground md:p-3 border-gray-200 dark:border-[--gray-700]"
                 >
-                  <div class="space-y-5">
+                  <div class="flex flex-col justify-between space-y-5 h-full">
                     <div class="flex flex-col gap-6 items-center px-6">
                       <Pro class="w-[250px]" />
                       <div class="space-y-1 text-center">
@@ -658,25 +658,16 @@ export default function Page() {
                           </span>
                         </p>
                       </div>
-                    </div>
-
-                    <div class="flex items-center px-6">
-                      <div class="space-y-6">
-                        <div>
-                          <ul class="p-0 space-y-3 list-none">
-                            {proFeatures.map((feature) => (
-                              <li class="flex justify-start items-center dark:text-gray-50 text-solid-white">
-                                <div class="size-4 m-0 p-0 flex items-center dark:border-[--gray-500] justify-center">
-                                  <IconLucideCheck class="size-4" />
-                                </div>
-                                <span class="ml-2 text-[0.9rem]">
-                                  {feature}
-                                </span>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      </div>
+                      <ul class="flex flex-col gap-2 justify-center list-none">
+                        {proFeatures.map((feature) => (
+                          <li class="flex justify-start items-center dark:text-gray-50 text-solid-white">
+                            <div class="size-4 m-0 p-0 flex items-center dark:border-[--gray-500] justify-center">
+                              <IconLucideCheck class="size-4" />
+                            </div>
+                            <span class="ml-2 text-[0.9rem]">{feature}</span>
+                          </li>
+                        ))}
+                      </ul>
                     </div>
                     <Button
                       variant="primary"
