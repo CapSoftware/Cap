@@ -24,7 +24,7 @@ const ACTION_TEXT: Record<HotkeyAction, string> = {
   startRecording: "Start Recording",
   stopRecording: "Stop Recording",
   restartRecording: "Restart Recording",
-  takeScreenshot: "Take Screenshot",
+  // takeScreenshot: "Take Screenshot",
 };
 
 export default function () {
@@ -80,7 +80,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
               "startRecording",
               "stopRecording",
               "restartRecording",
-              "takeScreenshot",
+              // "takeScreenshot",
             ] as Array<HotkeyAction>
           }
         >

@@ -78,12 +78,12 @@ export default function Settings(props: RouteSectionProps) {
                   name: "Previous Recordings",
                   icon: IconLucideSquarePlay,
                 },
-                {
-                  type: "link",
-                  href: "screenshots",
-                  name: "Previous Screenshots",
-                  icon: IconLucideCamera,
-                },
+                // {
+                //   type: "link",
+                //   href: "screenshots",
+                //   name: "Previous Screenshots",
+                //   icon: IconLucideCamera,
+                // },
                 {
                   type: "link",
                   href: "integrations",

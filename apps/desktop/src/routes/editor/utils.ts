@@ -16,13 +16,13 @@ import { getCurrentWindow, ProgressBarStatus } from "@tauri-apps/api/window";
 import { createEffect } from "solid-js";
 
 export function createProgressBar(progress: () => number | undefined) {
-    const currentWindow = getCurrentWindow();
-  
-    createEffect(() => {
-      const p = progress();
-      console.log({ p });
-      if (p === undefined)
-        currentWindow.setProgressBar({ status: ProgressBarStatus.None });
-      else currentWindow.setProgressBar({ progress: Math.round(p) });
-    });
-  }
+  const currentWindow = getCurrentWindow();
+
+  createEffect(() => {
+    const p = progress();
+    console.log({ p });
+    if (p === undefined)
+      currentWindow.setProgressBar({ status: ProgressBarStatus.None });
+    else currentWindow.setProgressBar({ progress: Math.round(p) });
+  });
+}

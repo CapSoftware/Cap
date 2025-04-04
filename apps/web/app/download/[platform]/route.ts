@@ -13,14 +13,21 @@ export async function GET(
 
   // Define download URLs for different platforms
   const downloadUrls: Record<string, string> = {
-    "apple-intel": "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-x86_64",
-    intel: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-x86_64", // Keep for backward compatibility
+    "apple-intel":
+      "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-x86_64",
+    intel:
+      "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-x86_64", // Keep for backward compatibility
     mac: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-aarch64", // Default to Apple Silicon
-    macos: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-aarch64", // Default to Apple Silicon
-    "apple-silicon": "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-aarch64",
-    aarch64: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-aarch64",
-    x86_64: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-x86_64",
-    windows: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/nsis-x86_64",
+    macos:
+      "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-aarch64", // Default to Apple Silicon
+    "apple-silicon":
+      "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-aarch64",
+    aarch64:
+      "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-aarch64",
+    x86_64:
+      "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-x86_64",
+    windows:
+      "https://cdn.crabnebula.app/download/cap/cap/latest/platform/nsis-x86_64",
     win: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/nsis-x86_64",
   };
 
@@ -34,4 +41,4 @@ export async function GET(
 
   // Redirect to the appropriate download URL
   return NextResponse.redirect(downloadUrl);
-} 
+}

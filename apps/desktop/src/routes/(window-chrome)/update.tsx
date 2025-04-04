@@ -73,13 +73,11 @@ export default function () {
                 }
               >
                 <Match when={updateStatus()?.type === "done"}>
-                  <div class="flex flex-col gap-4">
+                  <div class="flex flex-col gap-4 items-center">
                     <p class="text-[--text-tertiary]">
                       Update has been installed. Restart Cap to finish updating.
                     </p>
-                    <div class="flex flex-row">
-                      <Button onClick={() => relaunch()}>Restart Now</Button>
-                    </div>
+                    <Button onClick={() => relaunch()}>Restart Now</Button>
                   </div>
                 </Match>
                 <Match

@@ -226,7 +226,6 @@ export function ZoomTrack(props: {
             >
               <SegmentHandle
                 position="start"
-                class="absolute opacity-0 group-hover:opacity-100"
                 onMouseDown={createMouseDownDrag(
                   () => {
                     const start = segment.start;
@@ -264,7 +263,7 @@ export function ZoomTrack(props: {
                 )}
               />
               <SegmentContent
-                class="flex justify-center items-center cursor-pointer"
+                class="flex justify-center items-center cursor-grab"
                 onMouseDown={createMouseDownDrag(
                   () => {
                     const original = { ...segment };
@@ -307,7 +306,7 @@ export function ZoomTrack(props: {
 
                   return (
                     <Show when={ctx.width() > 100}>
-                      <div class="flex flex-col gap-1 justify-center items-center text-xs text-gray-50 whitespace-nowrap dark:text-gray-500">
+                      <div class="flex flex-col gap-1 justify-center items-center text-xs text-gray-50 whitespace-nowrap dark:text-gray-500 animate-in fade-in">
                         <span class="opacity-70">Zoom</span>
                         <div class="flex gap-1 items-center text-md">
                           <IconLucideSearch class="size-3.5" />{" "}
@@ -320,7 +319,6 @@ export function ZoomTrack(props: {
               </SegmentContent>
               <SegmentHandle
                 position="end"
-                class="absolute opacity-0 group-hover:opacity-100"
                 onMouseDown={createMouseDownDrag(
                   () => {
                     const end = segment.end;

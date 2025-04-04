@@ -920,7 +920,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop"
-version = "0.3.33"
+version = "0.3.34"
 dependencies = [
  "anyhow",
  "axum",
@@ -6374,7 +6374,7 @@ dependencies = [
 [[package]]
 name = "scap"
 version = "0.0.8"
-source = "git+https://github.com/CapSoftware/scap?rev=212d7a3958662244b9c7218a90c9c770f07c4222#212d7a3958662244b9c7218a90c9c770f07c4222"
+source = "git+https://github.com/CapSoftware/scap?rev=d99830264854#d998302648546946ad08b7d92b4e65648e2b4f6b"
 dependencies = [
  "cocoa 0.25.0",
  "core-foundation 0.10.0",

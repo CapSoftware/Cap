@@ -61,11 +61,11 @@ export default function AppsTab() {
                 onClick={() => handleAppClick(app)}
                 disabled={isUpgraded.loading}
               >
-                {isUpgraded.loading 
-                  ? "Loading..." 
-                  : app.pro && !isUpgraded() 
-                    ? "Upgrade to Pro" 
-                    : "Configure"}
+                {isUpgraded.loading
+                  ? "Loading..."
+                  : app.pro && !isUpgraded()
+                  ? "Upgrade to Pro"
+                  : "Configure"}
               </Button>
             </div>
             <div class="p-2">

@@ -11,7 +11,7 @@ import { ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
 import { ClipTrack } from "./ClipTrack";
 import { useEditorContext } from "../context";
 
-const TIMELINE_PADDING = 8;
+const TIMELINE_PADDING = 16;
 
 export function Timeline() {
   const {
@@ -240,7 +240,7 @@ function TimelineMarkings() {
     return Array.from(
       { length: 2 + (state.timelineTransform.zoom + 5) / markingResolution() },
       (_, i) =>
-        state.timelineTransform.position - diff + i * markingResolution()
+        state.timelineTransform.position - diff + (i + 0) * markingResolution()
     );
   };
 
@@ -248,7 +248,7 @@ function TimelineMarkings() {
     <div class="relative mb-1 h-4 text-xs">
       <For each={timelineMarkings()}>
         {(second) => (
-          <>
+          <Show when={second > 0}>
             <div
               class="absolute bottom-1 left-0 text-center rounded-full w-1 h-1 bg-[--text-tertiary] text-[--text-tertiary]"
               style={{
@@ -264,7 +264,7 @@ function TimelineMarkings() {
                 </div>
               </Show>
             </div>
-          </>
+          </Show>
         )}
       </For>
     </div>

@@ -194,9 +194,7 @@ impl ShowCapWindow {
                     let state = app.state::<Arc<RwLock<App>>>();
                     let state = &mut *state.write().await;
 
-                    let created_feed = state.create_camera_feed().await.unwrap_or(false);
-
-                    if created_feed {
+                    if state.create_camera_feed().await.unwrap_or(false) {
                         Box::pin(
                             Self::Camera {
                                 ws_port: state.camera_ws_port,

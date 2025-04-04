@@ -48,7 +48,8 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
             <SegmentRoot
               class={cx(
                 "overflow-hidden border border-transparent transition-colors duration-300 group",
-                "hover:border-gray-500"
+                "hover:border-gray-500",
+                "bg-gradient-to-r timeline-gradient-border from-[#2675DB] via-[#4FA0FF] to-[#2675DB] shadow-[inset_0_5px_10px_5px_rgba(255,255,255,0.2)]"
               )}
               innerClass="ring-blue-300"
               segment={{
@@ -85,10 +86,7 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
 
               <SegmentHandle
                 position="start"
-                class={cx(
-                  "absolute inset-y-0 z-10 opacity-0",
-                  "group-hover:opacity-100"
-                )}
+                class="opacity-0 group-hover:opacity-100"
                 onMouseDown={(downEvent) => {
                   const start = segment.start;
 
@@ -147,7 +145,7 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                   });
                 }}
               />
-              <SegmentContent class="justify-center items-center relative dark:text-black-transparent-60 text-white-transparent-60 bg-gradient-to-r timeline-gradient-border from-[#2675DB] via-[#4FA0FF] to-[#2675DB] shadow-[inset_0_5px_10px_5px_rgba(255,255,255,0.2)]">
+              <SegmentContent class="justify-center items-center relative dark:text-black-transparent-60 text-white-transparent-60">
                 <Show when={segment.start > 0}>
                   <span class="text-black-transparent-60 text-[0.625rem] absolute top-[18px] left-5">
                     {formatTime(segment.start)}
@@ -177,10 +175,7 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
               </SegmentContent>
               <SegmentHandle
                 position="end"
-                class={cx(
-                  "absolute inset-y-0 z-10 opacity-0",
-                  "group-hover:opacity-100"
-                )}
+                class="opacity-0 group-hover:opacity-100"
                 onMouseDown={(downEvent) => {
                   const end = segment.end;
 

@@ -285,6 +285,7 @@ impl App {
                     self.camera_feed = Some(Arc::new(Mutex::new(feed)));
                 })
                 .map_err(|e| e.to_string())?;
+
             return Ok(true);
         }
 
@@ -533,16 +534,23 @@ enum CurrentRecordingTarget {
     Area { screen: u32, bounds: Bounds },
 }
 
+#[derive(Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+struct CurrentRecording {
+    target: CurrentRecordingTarget,
+    r#type: RecordingType,
+}
+
 #[tauri::command]
 #[specta::specta]
 async fn get_current_recording(
     state: MutableState<'_, App>,
-) -> Result<JsonValue<Option<CurrentRecordingTarget>>, ()> {
+) -> Result<JsonValue<Option<CurrentRecording>>, ()> {
     let state = state.read().await;
     Ok(JsonValue::new(&state.current_recording.as_ref().map(|r| {
         let bounds = r.bounds();
 
-        match r.capture_target() {
+        let target = match r.capture_target() {
             ScreenCaptureTarget::Screen { id } => CurrentRecordingTarget::Screen { id: *id },
             ScreenCaptureTarget::Window { id } => CurrentRecordingTarget::Window {
                 id: *id,
@@ -551,6 +559,14 @@ async fn get_current_recording(
             ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {
                 screen: *screen,
                 bounds: bounds.clone(),
+            },
+        };
+
+        CurrentRecording {
+            target,
+            r#type: match r {
+                InProgressRecording::Instant { .. } => RecordingType::Instant,
+                InProgressRecording::Studio { .. } => RecordingType::Studio,
             },
         }
     })))
@@ -2385,12 +2401,12 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                     let state = app.state::<Arc<RwLock<App>>>();
                                     let app_state = &mut *state.write().await;
 
-                                    app_state.remove_mic_feed();
-                                    app_state.remove_camera_feed();
+                                    if app_state.current_recording.is_none() {
+                                        app_state.remove_mic_feed();
 
-                                    if let Some(camera) = CapWindowId::Camera.get(&app) {
-                                        if app_state.current_recording.is_none() {
+                                        if let Some(camera) = CapWindowId::Camera.get(&app) {
                                             let _ = camera.close();
+                                            app_state.remove_camera_feed();
                                         }
                                     }
                                 });

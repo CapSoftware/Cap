@@ -48,7 +48,7 @@ pub enum HotkeyAction {
     StartRecording,
     StopRecording,
     RestartRecording,
-    TakeScreenshot,
+    // TakeScreenshot,
 }
 
 #[derive(Serialize, Deserialize, Type, Default)]
@@ -89,10 +89,9 @@ pub fn init(app: &AppHandle) {
                             }
                             HotkeyAction::RestartRecording => {
                                 let _ = RequestRestartRecording.emit(app);
-                            }
-                            HotkeyAction::TakeScreenshot => {
-                                let _ = RequestNewScreenshot.emit(app);
-                            }
+                            } // HotkeyAction::TakeScreenshot => {
+                              //     let _ = RequestNewScreenshot.emit(app);
+                              // }
                         }
                     }
                 }

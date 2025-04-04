@@ -737,7 +737,10 @@ export const ShareVideo = forwardRef<
     setSeeking(true);
   };
 
-  const handleSeekMouseUp = (event: React.MouseEvent | React.TouchEvent, isTouch = false) => {
+  const handleSeekMouseUp = (
+    event: React.MouseEvent | React.TouchEvent,
+    isTouch = false
+  ) => {
     if (!seeking) return;
     setSeeking(false);
     const seekBar = event.currentTarget;
@@ -1249,8 +1252,11 @@ export const ShareVideo = forwardRef<
             style={{ width: `${watchedPercentage}%` }}
           />
           <div
-            className={clsx("drag-button absolute top-2.5 z-20 -mt-1.5 -ml-2 w-4 h-4 bg-white rounded-full  cursor-pointer focus:outline-none", 
-              seeking ? "scale-125 transition-transform ring-blue-300 ring-offset-2 ring-2" : ""
+            className={clsx(
+              "drag-button absolute top-2.5 z-20 -mt-1.5 -ml-2 w-4 h-4 bg-white rounded-full  cursor-pointer focus:outline-none",
+              seeking
+                ? "scale-125 transition-transform ring-blue-300 ring-offset-2 ring-2"
+                : ""
             )}
             tabIndex={0}
             style={{ left: `${watchedPercentage}%` }}

@@ -13,9 +13,7 @@ const LeftLight = () => {
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
     >
-      <g
-        filter="url(#filter0_f_459_2098)"
-      >
+      <g filter="url(#filter0_f_459_2098)">
         <ellipse
           cx="293"
           cy="147"
