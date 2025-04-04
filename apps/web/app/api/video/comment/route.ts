@@ -50,7 +50,10 @@ async function handlePost(request: NextRequest) {
     if (type === "text" && userId !== "anonymous") {
       try {
         // Don't await this to avoid blocking the response
-        const absoluteUrl = new URL("/api/email/new-comment", clientEnv.NEXT_PUBLIC_WEB_URL).toString();
+        const absoluteUrl = new URL(
+          "/api/email/new-comment",
+          clientEnv.NEXT_PUBLIC_WEB_URL
+        ).toString();
         fetch(absoluteUrl, {
           method: "POST",
           headers: {

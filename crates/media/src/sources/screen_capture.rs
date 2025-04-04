@@ -1,4 +1,5 @@
 use cap_flags::FLAGS;
+use cidre::cm;
 use cpal::traits::{DeviceTrait, HostTrait};
 use ffmpeg::{format::Sample, frame::Audio, ChannelLayout};
 use ffmpeg_sys_next::AV_TIME_BASE_Q;
@@ -439,9 +440,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                                 }
                             }
 
-                            if let Err(_) =
-                                video_tx.send((buffer, 0.0 /* TODO: correct this */))
-                            {
+                            if let Err(_) = video_tx.send((buffer, 0.0)) {
                                 error!("Pipeline is unreachable. Shutting down recording.");
                                 return Some(ControlFlow::Break(()));
                             }
@@ -452,10 +451,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                 }
                 Ok(Frame::Audio(frame)) => {
                     if let Some(audio_tx) = &audio_tx {
-                        let _ = audio_tx.send((
-                            scap_audio_to_ffmpeg(frame),
-                            0.0, /* TODO: correct this */
-                        ));
+                        let _ = audio_tx.send((scap_audio_to_ffmpeg(frame), 0.0));
                     }
                     None
                 }
@@ -562,7 +558,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
 
     fn run(
         &mut self,
-        _: Self::Clock,
+        clock: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
     ) {
@@ -595,6 +591,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
 
                     match typ {
                         SCStreamOutputType::Screen => {
+                            println!("screen: {frame_time}");
                             let Some(pixel_buffer) = sample_buffer.image_buf() else {
                                 return Some(ControlFlow::Continue(()));
                             };
@@ -603,12 +600,13 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                                 return Some(ControlFlow::Continue(()));
                             }
 
-                            if let Err(_) = video_tx.send((sample_buffer, unix_timestamp)) {
+                            if let Err(_) = video_tx.send((sample_buffer, frame_time)) {
                                 eprintln!("Pipeline is unreachable. Shutting down recording.");
                                 return Some(ControlFlow::Continue(()));
                             }
                         }
                         SCStreamOutputType::Audio => {
+                            println!("audio: {frame_time}");
                             let Some(audio_tx) = &audio_tx else {
                                 return Some(ControlFlow::Continue(()));
                             };
@@ -630,14 +628,10 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                                 );
                             }
 
-                            frame.set_pts(Some(
-                                (sample_buffer.pts().value as f64
-                                    / sample_buffer.pts().scale as f64
-                                    * AV_TIME_BASE_Q.den as f64)
-                                    as i64,
-                            ));
+                            let timestamp = frame_time - start_cmtime;
+                            frame.set_pts(Some((frame_time * AV_TIME_BASE_Q.den as f64) as i64));
 
-                            let _ = audio_tx.send((frame, unix_timestamp));
+                            let _ = audio_tx.send((frame, timestamp));
                         }
                     }
 

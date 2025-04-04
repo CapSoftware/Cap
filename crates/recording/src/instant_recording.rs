@@ -1,6 +1,7 @@
 use std::{
     fs::File,
     path::PathBuf,
+    sync::{atomic::AtomicBool, Arc},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -28,6 +29,7 @@ use crate::{
 struct InstantRecordingPipeline {
     pub inner: Pipeline<RealTimeClock<()>>,
     pub output_path: PathBuf,
+    pub pause_flag: Arc<AtomicBool>,
 }
 
 enum InstantRecordingActorState {
@@ -36,7 +38,11 @@ enum InstantRecordingActorState {
         pipeline_done_rx: oneshot::Receiver<()>,
         segment_start_time: f64,
     },
-    Paused,
+    Paused {
+        pipeline: InstantRecordingPipeline,
+        pipeline_done_rx: oneshot::Receiver<()>,
+        segment_start_time: f64,
+    },
     Stopped,
 }
 
@@ -116,6 +122,7 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
     let clock = RealTimeClock::<()>::new();
     let pipeline_builder = Pipeline::builder(clock);
 
+    let pause_flag = Arc::new(AtomicBool::new(false));
     let system_audio = system_audio.map(|v| (v, screen_source.0.audio_info()));
     let pipeline_builder = TCaptureFormat::make_instant_mode_pipeline(
         pipeline_builder,
@@ -123,6 +130,7 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
         audio_input_feed,
         system_audio,
         output_path.clone(),
+        pause_flag.clone(),
     )
     .await?;
 
@@ -134,6 +142,7 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
         InstantRecordingPipeline {
             inner: pipeline,
             output_path,
+            pause_flag,
         },
         pipeline_done_rx,
     ))
@@ -204,7 +213,7 @@ pub async fn spawn_instant_recording_actor(
             'outer: loop {
                 state = match state {
                     InstantRecordingActorState::Recording {
-                        mut pipeline,
+                        pipeline,
                         mut pipeline_done_rx,
                         segment_start_time,
                     } => {
@@ -236,20 +245,15 @@ pub async fn spawn_instant_recording_actor(
 
                             break match msg {
                                 InstantRecordingActorControlMessage::Pause(tx) => {
-                                    InstantRecordingActorState::Recording {
+                                    pipeline
+                                        .pause_flag
+                                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                                    let _ = tx.send(Ok(()));
+                                    InstantRecordingActorState::Paused {
                                         pipeline,
                                         pipeline_done_rx,
                                         segment_start_time,
                                     }
-                                    // let res = shutdown(
-                                    //     pipeline,
-                                    //     &mut actor,
-                                    //     segment_start_time,
-                                    // )
-                                    // .await;
-
-                                    // tx.send(res.map_err(Into::into)).ok();
-                                    // InstantRecordingActorState::Paused
                                 }
                                 InstantRecordingActorControlMessage::Stop(tx) => {
                                     let res =
@@ -267,7 +271,11 @@ pub async fn spawn_instant_recording_actor(
                             };
                         }
                     }
-                    InstantRecordingActorState::Paused => {
+                    InstantRecordingActorState::Paused {
+                        pipeline,
+                        pipeline_done_rx,
+                        segment_start_time,
+                    } => {
                         info!("recording actor paused");
                         loop {
                             let Ok(msg) = ctrl_rx.recv_async().await else {
@@ -276,40 +284,21 @@ pub async fn spawn_instant_recording_actor(
 
                             break match msg {
                                 InstantRecordingActorControlMessage::Stop(tx) => {
-                                    tx.send(stop_recording(actor).await).ok();
+                                    let _ = tx.send(stop_recording(actor).await).ok();
                                     break 'outer;
                                 }
                                 InstantRecordingActorControlMessage::Resume(tx) => {
-                                    // let (state, res) = match create_pipeline(
-                                    //     &segments_dir,
-                                    //     &cursors_dir,
-                                    //     next_index,
-                                    //     screen_source.clone(),
-                                    //     camera_feed.as_deref(),
-                                    //     audio_input_feed.as_ref(),
-                                    //     cursors,
-                                    //     next_cursor_id,
-                                    // )
-                                    // .await
-                                    // {
-                                    //     Ok((pipeline, pipeline_done_rx)) => (
-                                    //         InstantRecordingActorState::Recording {
-                                    //             pipeline,
-                                    //             pipeline_done_rx,
-                                    //             index: next_index,
-                                    //             segment_start_time: current_time_f64(),
-                                    //         },
-                                    //         Ok(()),
-                                    //     ),
-                                    //     Err(e) => (
-                                    //         InstantRecordingActorState::Stopped,
-                                    //         Err(e.into()),
-                                    //     ),
-                                    // };
+                                    pipeline
+                                        .pause_flag
+                                        .store(false, std::sync::atomic::Ordering::SeqCst);
 
-                                    // tx.send(res).ok();
+                                    let _ = tx.send(Ok(()));
 
-                                    state
+                                    InstantRecordingActorState::Recording {
+                                        pipeline,
+                                        pipeline_done_rx,
+                                        segment_start_time,
+                                    }
                                 }
                                 _ => continue,
                             };

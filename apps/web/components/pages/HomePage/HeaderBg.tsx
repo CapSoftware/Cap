@@ -1,7 +1,7 @@
 const HeaderBg = () => {
   return (
     <svg
-    className="absolute top-0 left-0 pointer-events-none z-[10]"
+      className="absolute top-0 left-0 pointer-events-none z-[10]"
       width="1440"
       height="690"
       viewBox="0 0 1440 690"

@@ -517,7 +517,7 @@ async fn handle_recording_finish(
                                 .await;
 
                             match resp {
-                                Ok(r) if r.status() == 200 => {
+                                Ok(r) if r.status() == 204 => {
                                     info!("Screenshot uploaded successfully");
                                 }
                                 Ok(r) => {

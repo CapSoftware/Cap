@@ -1,5 +1,6 @@
 use std::{
     path::PathBuf,
+    ptr::null,
     sync::{Arc, Mutex},
 };
 
@@ -19,9 +20,12 @@ pub struct MP4AVAssetWriterEncoder {
     asset_writer: Retained<av::AssetWriter>,
     video_input: Retained<av::AssetWriterInput>,
     audio_input: Option<Retained<av::AssetWriterInput>>,
+    start_time: cm::Time,
     first_timestamp: Option<cm::Time>,
     last_timestamp: Option<cm::Time>,
     is_writing: bool,
+    is_paused: bool,
+    elapsed_duration: cm::Time,
 }
 
 impl MP4AVAssetWriterEncoder {
@@ -145,28 +149,50 @@ impl MP4AVAssetWriterEncoder {
             video_input,
             first_timestamp: None,
             last_timestamp: None,
-            is_writing: true,
+            is_writing: false,
+            is_paused: false,
+            start_time: cm::Time::zero(),
+            elapsed_duration: cm::Time::zero(),
         })
     }
 
     pub fn queue_video_frame(&mut self, frame: &cidre::cm::SampleBuf) {
-        if !self.video_input.is_ready_for_more_media_data() {
+        if self.is_paused || !self.video_input.is_ready_for_more_media_data() {
             return;
         }
 
         let time = frame.pts();
 
-        if self.first_timestamp.is_none() {
+        if !self.is_writing {
+            self.is_writing = true;
             self.asset_writer.start_session_at_src_time(time);
+            self.start_time = time;
+        }
+
+        if self.first_timestamp.is_none() {
             self.first_timestamp = Some(time);
         }
 
         self.last_timestamp = Some(time);
 
-        self.video_input.append_sample_buf(frame).ok();
+        let new_pts = self
+            .start_time
+            .add(time)
+            .sub(self.first_timestamp.unwrap())
+            .add(self.elapsed_duration);
+
+        let mut timing = frame.timing_info(0).unwrap();
+        timing.pts = new_pts;
+        let frame = frame.copy_with_new_timing(&[timing]).unwrap();
+
+        self.video_input.append_sample_buf(&frame).ok();
     }
 
     pub fn queue_audio_frame(&mut self, frame: FFAudio) -> Result<(), MediaError> {
+        if self.is_paused {
+            return Ok(());
+        }
+
         let Some(audio_input) = &mut self.audio_input else {
             return Err(MediaError::Any("No audio input"));
         };
@@ -209,29 +235,26 @@ impl MP4AVAssetWriterEncoder {
         let format_desc = cm::AudioFormatDesc::with_asbd(&audio_desc)
             .map_err(|_| MediaError::Any("Failed to create audio format desc"))?;
 
-        let buffer = unsafe {
-            result_unchecked(|res| {
-                cm::SampleBuf::create_in(
-                    None,
-                    Some(&block_buf),
-                    true,
-                    None,
-                    std::ptr::null(),
-                    Some(format_desc.as_ref()),
-                    frame.samples() as isize,
-                    1,
-                    &SampleTimingInfo {
-                        duration: cm::Time::new(1, frame.rate() as i32),
-                        pts: cm::Time::new(frame.pts().unwrap_or(0), 1_000_000)
-                            .add(first_timestamp),
-                        dts: cm::Time::invalid(),
-                    },
-                    0,
-                    std::ptr::null(),
-                    res,
-                )
-            })
-        }
+        let pts = cm::Time::new(frame.pts().unwrap_or(0), AV_TIME_BASE_Q.den);
+
+        let pts = self
+            .start_time
+            .add(pts)
+            .sub(first_timestamp)
+            .add(self.elapsed_duration);
+
+        let buffer = cm::SampleBuf::create(
+            Some(&block_buf),
+            true,
+            Some(format_desc.as_ref()),
+            frame.samples() as isize,
+            &[SampleTimingInfo {
+                duration: cm::Time::new(1, frame.rate() as i32),
+                pts,
+                dts: cm::Time::invalid(),
+            }],
+            &[],
+        )
         .map_err(|_| MediaError::Any("Failed to create sample buffer"))?;
 
         audio_input.append_sample_buf(&buffer).map_err(|_| {
@@ -239,6 +262,30 @@ impl MP4AVAssetWriterEncoder {
         })?;
 
         Ok(())
+    }
+
+    pub fn pause(&mut self) {
+        if self.is_paused {
+            return;
+        }
+
+        let clock = cm::Clock::host_time_clock();
+        let time = clock.time();
+
+        self.elapsed_duration = self
+            .elapsed_duration
+            .add(time.sub(self.first_timestamp.unwrap()));
+        self.first_timestamp = None;
+        self.last_timestamp = None;
+        self.is_paused = true;
+    }
+
+    pub fn resume(&mut self) {
+        if !self.is_paused {
+            return;
+        }
+
+        self.is_paused = false;
     }
 
     fn process_frame(&mut self) {}
@@ -261,14 +308,14 @@ impl MP4AVAssetWriterEncoder {
     }
 }
 
-use screencapturekit::output::CMSampleBuffer;
+use ffmpeg_sys_next::AV_TIME_BASE_Q;
 use tracing::{debug, info};
 
-impl PipelineSinkTask<cidre::arc::R<cidre::cm::SampleBuf>> for MP4AVAssetWriterEncoder {
+impl PipelineSinkTask<arc::R<cm::SampleBuf>> for MP4AVAssetWriterEncoder {
     fn run(
         &mut self,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
-        input: &flume::Receiver<cidre::arc::R<cidre::cm::SampleBuf>>,
+        input: &flume::Receiver<arc::R<cm::SampleBuf>>,
     ) {
         ready_signal.send(Ok(())).ok();
 
@@ -342,3 +389,76 @@ fn get_average_bitrate(width: f32, height: f32, fps: f32) -> f32 {
 //         assert!(fk_60 < 24_000_000.0);
 //     }
 // }
+
+trait SampleBufExt {
+    fn create(
+        data_buffer: Option<&cm::BlockBuf>,
+        data_ready: bool,
+        format_description: Option<&cm::FormatDesc>,
+        num_samples: cm::ItemCount,
+        sample_timings: &[cm::SampleTimingInfo],
+        sample_sizes: &[usize],
+    ) -> os::Result<arc::R<cm::SampleBuf>>;
+
+    fn copy_with_new_timing(
+        &self,
+        sample_timings: &[cm::SampleTimingInfo],
+    ) -> os::Result<arc::R<cm::SampleBuf>>;
+}
+
+impl SampleBufExt for cm::SampleBuf {
+    fn create(
+        data_buffer: Option<&cm::BlockBuf>,
+        data_ready: bool,
+        format_description: Option<&cm::FormatDesc>,
+        num_samples: cm::ItemCount,
+        sample_timings: &[cm::SampleTimingInfo],
+        sample_sizes: &[usize],
+    ) -> os::Result<arc::R<cm::SampleBuf>> {
+        unsafe {
+            result_unchecked(|res| {
+                Self::create_in(
+                    None,
+                    data_buffer,
+                    data_ready,
+                    None,
+                    std::ptr::null(),
+                    format_description,
+                    num_samples,
+                    sample_timings.len() as isize,
+                    sample_timings.as_ptr(),
+                    sample_sizes.len() as isize,
+                    sample_sizes.as_ptr(),
+                    res,
+                )
+            })
+        }
+    }
+
+    fn copy_with_new_timing(
+        &self,
+        sample_timings: &[cm::SampleTimingInfo],
+    ) -> os::Result<arc::R<cm::SampleBuf>> {
+        unsafe {
+            extern "C-unwind" {
+                fn CMSampleBufferCreateCopyWithNewTiming(
+                    allocator: Option<&cf::Allocator>,
+                    original_buf: &cm::SampleBuf,
+                    num_sample_timing_entries: cm::ItemCount,
+                    sample_timing_array: *const cm::SampleTimingInfo,
+                    sample_buffer_out: *mut Option<arc::R<cm::SampleBuf>>,
+                ) -> os::Status;
+            }
+
+            result_unchecked(|res| {
+                CMSampleBufferCreateCopyWithNewTiming(
+                    None,
+                    self,
+                    sample_timings.len() as isize,
+                    sample_timings.as_ptr(),
+                    res,
+                )
+            })
+        }
+    }
+}

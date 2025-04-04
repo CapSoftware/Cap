@@ -1,5 +1,6 @@
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
+use ffmpeg_sys_next::AV_TIME_BASE_Q;
 use flume::{Receiver, Sender};
 use tracing::warn;
 
@@ -71,7 +72,7 @@ impl AudioMixer {
                     .add(
                         &ffmpeg::filter::find("abuffer").expect("Failed to find abuffer filter"),
                         &format!("src{i}"),
-                        &args,
+                        &dbg!(args),
                     )
                     .unwrap()
             })
@@ -136,6 +137,9 @@ impl AudioMixer {
             }
 
             while abuffersink.sink().frame(&mut filtered).is_ok() {
+                let adjusted_pts =
+                    filtered.pts().unwrap() as f64 / 48000.0 * AV_TIME_BASE_Q.den as f64;
+                filtered.set_pts(Some(adjusted_pts as i64));
                 if self.output.send(filtered).is_err() {
                     warn!("Mixer unable to send output");
                     return;
