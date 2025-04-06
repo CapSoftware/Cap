@@ -394,7 +394,7 @@ export const HomePage = () => {
             <div className="md:col-span-5">
               <FeatureCard
                 title="Privacy-first"
-                description="Host Cap on your own servers with complete data sovereignty. Maintain full control over your sensitive information and ensure compliance with your organization's security policies and regulatory requirements."
+                description="Own your content with Cap's privacy-focused approach. Keep your sensitive information secure and maintain complete control over who can access your recordings - perfect for confidential client communications and internal team sharing."
                 imagePath="/illustrations/privacy.webp"
                 imageAlt="Complete Control"
                 imageHeight="h-[280px]"
@@ -403,7 +403,7 @@ export const HomePage = () => {
             <div className="md:col-span-7">
               <FeatureCard
                 title="Multi-Platform Support"
-                description="Self-hosted Cap works seamlessly across macOS and Windows, giving your team the flexibility to collaborate regardless of their device preference. Deploy once and enable your entire organization to capture, share, and collaborate from any device."
+                description="Cap works seamlessly across macOS and Windows, giving you the flexibility to create content on any device. Capture, share, and collaborate regardless of which platform you or your team prefers, ensuring smooth workflows and consistent experience everywhere."
                 imagePath="/illustrations/multiplatmain.png"
                 bg="/illustrations/multiplatbg.webp"
                 imageAlt="Enterprise-Ready"
@@ -417,9 +417,9 @@ export const HomePage = () => {
           <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
             <div className="md:col-span-8">
               <FeatureCard
-                title="Unlimited Recording and Cloud Storage"
+                title="Flexible Storage Options"
                 bg="/illustrations/multiplatbg.webp"
-                description="Configure storage limits based on your infrastructure capacity. Self-hosting eliminates cloud storage fees and gives you complete control over retention policies, ideal for teams with high-volume recording needs or long-term archival requirements."
+                description="Choose how and where you store your recordings. Cap offers both local and cloud storage options to suit your needs. Save space on your device or keep your entire content library accessible from anywhere - ideal for freelancers and growing teams with varied content creation needs."
                 imagePath="/illustrations/cloud-feature.webp"
                 imageAlt="White Labeling"
                 imageHeight="h-[215px]"
@@ -429,7 +429,7 @@ export const HomePage = () => {
             <div className="md:col-span-4">
               <FeatureCard
                 title="High-Quality Video Capture"
-                description="Deliver crystal-clear recordings to your team with self-hosted infrastructure optimized for your network. Eliminate quality degradation from third-party services and ensure consistent performance across your organization."
+                description="Deliver crystal-clear recordings that showcase your professionalism. Cap ensures exceptional quality for client presentations, tutorials, and team communications - making your content stand out whether you're a solo creator or a small business owner."
                 imagePath="/illustrations/video-capture.webp"
                 imageAlt="Data Sovereignty"
                 imageHeight="h-[224px]"
@@ -440,8 +440,8 @@ export const HomePage = () => {
           {/* Section 3: Full width */}
           <div className="grid grid-cols-1">
             <FeatureCard
-              title="Advanced Team Collaboration"
-              description="Enable seamless knowledge sharing across departments with customizable access controls and team workspaces. Self-hosted Cap provides enterprise-grade collaboration features that integrate with your existing authentication systems and team structure."
+              title="Seamless Team Collaboration"
+              description="Share knowledge effortlessly with your team or clients. Cap's intuitive sharing features make it easy to organize content, provide access to specific people, and track engagement. Perfect for small businesses and growing teams who need simple yet powerful collaboration tools."
               imagePath="/illustrations/collaboration.webp"
               imageAlt="Dedicated Support"
               imageHeight="h-[285px]"
