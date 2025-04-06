@@ -6,13 +6,12 @@ use std::{
     sync::{mpsc, Arc},
 };
 
-use ffmpeg::{codec, format, frame, software, time::current, Codec};
+use ffmpeg::{codec, format, frame, software, Codec};
 use ffmpeg_sys_next::{avcodec_find_decoder, AVHWDeviceType};
 use log::debug;
 use tokio::sync::oneshot;
-use tracing::error;
 
-use super::{pts_to_frame, DecodedFrame, VideoDecoderMessage, FRAME_CACHE_SIZE};
+use super::{pts_to_frame, VideoDecoderMessage, FRAME_CACHE_SIZE};
 
 #[derive(Clone)]
 struct ProcessedFrame {
@@ -20,15 +19,10 @@ struct ProcessedFrame {
     data: Arc<Vec<u8>>,
 }
 
-#[derive(Clone)]
-struct CachedFrame {
-    data: CachedFrameData,
-}
-
 impl CachedFrame {
     fn process(&mut self, width: u32, height: u32) -> ProcessedFrame {
-        match &mut self.data {
-            CachedFrameData::Raw { frame, number } => {
+        match self {
+            Self::Raw { frame, number } => {
                 let rgb_frame = if frame.format() != format::Pixel::RGBA {
                     // Reinitialize the scaler with the new input format
                     let mut scaler =
@@ -61,17 +55,17 @@ impl CachedFrame {
                     number: *number,
                 };
 
-                self.data = CachedFrameData::Processed(data.clone());
+                *self = Self::Processed(data.clone());
 
                 data
             }
-            CachedFrameData::Processed(data) => data.clone(),
+            Self::Processed(data) => data.clone(),
         }
     }
 }
 
 #[derive(Clone)]
-enum CachedFrameData {
+enum CachedFrame {
     Raw { frame: frame::Video, number: u32 },
     Processed(ProcessedFrame),
 }
@@ -106,7 +100,6 @@ impl FfmpegDecoder {
             // frames that are within render_more_margin of this frame won't trigger decode.
             let mut last_active_frame = None::<u32>;
 
-            let mut last_decoded_frame = None::<u32>;
             let last_sent_frame = Rc::new(RefCell::new(None::<ProcessedFrame>));
 
             let mut peekable_requests = PeekableReceiver { rx, peeked: None };
@@ -152,10 +145,8 @@ impl FfmpegDecoder {
                         {
                             debug!("seeking to {}", requested_frame);
 
-                            this.reset(requested_time);
+                            let _ = this.reset(requested_time);
                             frames = this.frames();
-
-                            last_decoded_frame = None;
                         }
 
                         last_active_frame = Some(requested_frame);
@@ -170,14 +161,10 @@ impl FfmpegDecoder {
                             let current_frame =
                                 pts_to_frame(frame.pts().unwrap() - start_time, time_base, fps);
 
-                            let mut cache_frame = CachedFrame {
-                                data: CachedFrameData::Raw {
-                                    frame,
-                                    number: current_frame,
-                                },
+                            let mut cache_frame = CachedFrame::Raw {
+                                frame,
+                                number: current_frame,
                             };
-
-                            last_decoded_frame = Some(current_frame);
 
                             // Handles frame skips.
                             // We use the cache instead of last_sent_frame as newer non-matching frames could have been decoded.
