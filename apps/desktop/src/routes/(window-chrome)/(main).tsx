@@ -42,6 +42,11 @@ import {
   events,
 } from "~/utils/tauri";
 
+const MAIN_WINDOW_SIZE = {
+  width: 300,
+  height: 290 + (window.FLAGS.systemAudioRecording ? 50 : 0),
+};
+
 export default function () {
   const { options, setOptions } = createOptionsQuery();
   const currentRecording = createCurrentRecordingQuery();
@@ -101,10 +106,6 @@ export default function () {
 
     // Enforce window size with multiple safeguards
     const currentWindow = getCurrentWindow();
-    const MAIN_WINDOW_SIZE = {
-      width: 300,
-      height: 290 + (window.FLAGS.systemAudioRecording ? 50 : 0),
-    };
 
     // Set initial size
     await currentWindow.setSize(

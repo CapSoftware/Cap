@@ -1,4 +1,9 @@
-import { createEffect, createSignal, type ComponentProps } from "solid-js";
+import {
+  createEffect,
+  createSignal,
+  onMount,
+  type ComponentProps,
+} from "solid-js";
 import { cx } from "cva";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { createTimer } from "@solid-primitives/timer";

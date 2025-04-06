@@ -590,7 +590,6 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
 
                     match typ {
                         SCStreamOutputType::Screen => {
-                            println!("screen: {frame_time}");
                             let Some(pixel_buffer) = sample_buffer.image_buf() else {
                                 return Some(ControlFlow::Continue(()));
                             };
