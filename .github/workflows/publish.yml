@@ -245,7 +245,7 @@ jobs:
                 body: JSON.stringify({
                   type: "release-done",
                   interactionId: "${{ inputs.interactionId }}",
-                  version: "${{ needs.draft.outputs.value }}",
+                  version: "${{ needs.draft.outputs.version }}",
                   releaseUrl: "${{ needs.draft.outputs.gh_release_url }}",
                   cnReleaseId
                 }),
