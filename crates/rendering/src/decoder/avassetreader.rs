@@ -4,7 +4,6 @@ use std::{
     path::PathBuf,
     rc::Rc,
     sync::{mpsc, Arc},
-    time::Instant,
 };
 
 use cidre::{
@@ -13,9 +12,8 @@ use cidre::{
 };
 use ffmpeg::{format, frame, Rational};
 use tokio::{runtime::Handle as TokioHandle, sync::oneshot};
-use tracing::{debug, info};
 
-use super::{pts_to_frame, DecodedFrame, VideoDecoderMessage, FRAME_CACHE_SIZE};
+use super::{pts_to_frame, VideoDecoderMessage, FRAME_CACHE_SIZE};
 
 #[derive(Clone)]
 struct ProcessedFrame {
@@ -189,7 +187,6 @@ impl CachedFrame {
 
 pub struct AVAssetReaderDecoder {
     inner: cap_video_decode::AVAssetReaderDecoder,
-    last_decoded_frame: Option<(u32, CachedFrame)>,
     is_done: bool,
 }
 
@@ -197,14 +194,12 @@ impl AVAssetReaderDecoder {
     fn new(path: PathBuf, tokio_handle: TokioHandle) -> Result<Self, String> {
         Ok(Self {
             inner: cap_video_decode::AVAssetReaderDecoder::new(path, tokio_handle)?,
-            last_decoded_frame: None,
             is_done: false,
         })
     }
 
     fn reset(&mut self, requested_time: f32) {
         let _ = self.inner.reset(requested_time);
-        self.last_decoded_frame = None;
     }
 
     pub fn spawn(
@@ -306,7 +301,6 @@ impl AVAssetReaderDecoder {
                             number: current_frame,
                         };
 
-                        this.last_decoded_frame = Some((current_frame, cache_frame.clone()));
                         this.is_done = false;
 
                         // Handles frame skips.

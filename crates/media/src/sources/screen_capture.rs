@@ -1,5 +1,4 @@
 use cap_flags::FLAGS;
-use cidre::cm;
 use cpal::traits::{DeviceTrait, HostTrait};
 use ffmpeg::{format::Sample, frame::Audio, ChannelLayout};
 use ffmpeg_sys_next::AV_TIME_BASE_Q;
