@@ -10,6 +10,7 @@ import { createTimer } from "@solid-primitives/timer";
 import { createMutation } from "@tanstack/solid-query";
 import { createStore, produce } from "solid-js/store";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import * as dialog from "@tauri-apps/plugin-dialog";
 
 import { commands, events } from "~/utils/tauri";
 import {
@@ -79,6 +80,13 @@ export default function () {
 
   const restartRecording = createMutation(() => ({
     mutationFn: async () => {
+      const shouldRestart = await dialog.confirm(
+        "Are you sure you want to restart the recording? The current recording will be discarded.",
+        { title: "Confirm Restart", okLabel: "Restart", cancelLabel: "Cancel" }
+      );
+
+      if (!shouldRestart) return;
+
       await events.requestRestartRecording.emit();
       setState("recording");
       setTime(Date.now());
