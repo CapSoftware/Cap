@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use cap_video_decode::AVAssetReaderDecoder;
+use cap_video_decode::FFmpegDecoder;
 
 #[tokio::main]
 async fn main() {
@@ -12,7 +12,7 @@ async fn main() {
 
         let path = args.next().unwrap();
 
-        let mut decoder = AVAssetReaderDecoder::new(path.into(), handle).unwrap();
+        let mut decoder = FFmpegDecoder::new(path, None).unwrap();
 
         let start = Instant::now();
 

@@ -6,7 +6,7 @@ use std::{
     sync::{mpsc, Arc},
 };
 
-use ffmpeg::{codec, format, frame, software, Codec};
+use ffmpeg::{codec, format, frame, software, time::current, Codec};
 use ffmpeg_sys_next::{avcodec_find_decoder, AVHWDeviceType};
 use log::debug;
 use tokio::sync::oneshot;
@@ -144,9 +144,9 @@ impl FfmpegDecoder {
                                 .borrow()
                                 .as_ref()
                                 .map(|last| {
-                                    requested_frame < last.number ||
-			                              // seek forward for big jumps. this threshold is arbitrary but should be derived from i-frames in future
-			                              requested_frame - last.number > FRAME_CACHE_SIZE as u32
+                                    requested_frame < last.number
+                                    // seek forward for big jumps. this threshold is arbitrary but should be derived from i-frames in future
+                                    || requested_frame - last.number > FRAME_CACHE_SIZE as u32
                                 })
                                 .unwrap_or(true)
                         {
