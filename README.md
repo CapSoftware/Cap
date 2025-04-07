@@ -12,16 +12,11 @@
     <b>Downloads for </b>
 		<a href="https://cap.so/download">macOS & Windows</a>
     <br />
-    <br />
-    <i>~ Cap is currently in public beta, and is available for macOS, Web and Windows. Linux builds are in development. Join the <a href="https://discord.gg/y8gdQ3WRN3">Cap Discord</a> to help test future releases and join the community. ~</i>
-    <br />
   </p>
 </p>
 <br/>
 
 [![Open Bounties](https://img.shields.io/endpoint?url=https%3A%2F%2Fconsole.algora.io%2Fapi%2Fshields%2FCapSoftware%2Fbounties%3Fstatus%3Dopen)](https://console.algora.io/org/CapSoftware/bounties?status=open)
-
-> NOTE: Cap is under active development, and is currently in public beta. This repository is updated regularly with changes and new releases.
 
 Cap is the open source alternative to Loom. It's a video messaging tool that allows you to record, edit and share videos in seconds.
 
