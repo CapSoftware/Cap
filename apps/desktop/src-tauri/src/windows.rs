@@ -188,6 +188,7 @@ impl ShowCapWindow {
                         .resizable(false)
                         .maximized(false)
                         .maximizable(false)
+                        .always_on_top(true)
                         .center()
                         .build()?;
 

@@ -51,6 +51,7 @@ pub enum StudioRecordingActorControlMessage {
     Pause(oneshot::Sender<Result<(), RecordingError>>),
     Resume(oneshot::Sender<Result<(), RecordingError>>),
     Stop(oneshot::Sender<Result<CompletedStudioRecording, RecordingError>>),
+    Cancel(oneshot::Sender<Result<(), RecordingError>>),
 }
 
 pub struct StudioRecordingActor {
@@ -122,6 +123,10 @@ impl StudioRecordingHandle {
     pub async fn resume(&self) -> Result<(), RecordingError> {
         send_message!(self.ctrl_tx, StudioRecordingActorControlMessage::Resume)
     }
+
+    pub async fn cancel(&self) -> Result<(), RecordingError> {
+        send_message!(self.ctrl_tx, StudioRecordingActorControlMessage::Cancel)
+    }
 }
 
 pub async fn spawn_studio_recording_actor(
@@ -129,9 +134,11 @@ pub async fn spawn_studio_recording_actor(
     recording_dir: PathBuf,
     options: RecordingOptions,
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
-    audio_input_feed: Option<AudioInputFeed>,
+    mic_feed: &Option<AudioInputFeed>,
 ) -> Result<(StudioRecordingHandle, tokio::sync::oneshot::Receiver<()>), RecordingError> {
     ensure_dir(&recording_dir)?;
+
+    dbg!(mic_feed.as_ref().unwrap().control_tx.receiver_count());
 
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
 
@@ -152,9 +159,10 @@ pub async fn spawn_studio_recording_actor(
         debug!("camera video info: {:#?}", camera_feed.video_info());
     }
 
-    if let Some(audio_feed) = &audio_input_feed {
+    if let Some(audio_feed) = mic_feed {
         debug!("mic audio info: {:#?}", audio_feed.audio_info())
     }
+    let audio_input_feed = mic_feed.clone();
 
     let index = 0;
     let (pipeline, pipeline_done_rx) = create_segment_pipeline(
@@ -162,7 +170,7 @@ pub async fn spawn_studio_recording_actor(
         &cursors_dir,
         index,
         &options,
-        audio_input_feed.as_ref(),
+        &audio_input_feed,
         camera_feed.as_deref(),
         Default::default(),
         index,
@@ -295,6 +303,13 @@ pub async fn spawn_studio_recording_actor(
 
                                     break 'outer;
                                 }
+                                StudioRecordingActorControlMessage::Cancel(tx) => {
+                                    let res = pipeline.inner.shutdown().await;
+
+                                    let _ = tx.send(res.map_err(Into::into));
+
+                                    return;
+                                }
                                 _ => continue,
                             };
                         }
@@ -321,7 +336,7 @@ pub async fn spawn_studio_recording_actor(
                                         &cursors_dir,
                                         next_index,
                                         &options,
-                                        audio_input_feed.as_ref(),
+                                        &audio_input_feed,
                                         camera_feed.as_deref(),
                                         cursors,
                                         next_cursor_id,
@@ -345,6 +360,11 @@ pub async fn spawn_studio_recording_actor(
                                     tx.send(res).ok();
 
                                     state
+                                }
+                                StudioRecordingActorControlMessage::Cancel(tx) => {
+                                    let _ = tx.send(Ok(()));
+
+                                    return;
                                 }
                                 _ => continue,
                             };
@@ -506,7 +526,7 @@ async fn create_segment_pipeline(
     cursors_dir: &PathBuf,
     index: u32,
     options: &RecordingOptions,
-    mic_feed: Option<&AudioInputFeed>,
+    mic_feed: &Option<AudioInputFeed>,
     camera_feed: Option<&Mutex<CameraFeed>>,
     prev_cursors: Cursors,
     next_cursors_id: u32,
