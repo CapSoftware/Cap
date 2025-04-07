@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { toast } from "react-hot-toast";
 import { Input, Label } from "@cap/ui";
 import { NODE_ENV } from "@cap/env";
+import { trackEvent } from "../utils/analytics";
 
 export function LoginForm() {
   const searchParams = useSearchParams();
@@ -69,6 +70,7 @@ export function LoginForm() {
   }, [emailSent]);
 
   const handleGoogleSignIn = () => {
+    trackEvent("auth_started", { method: "google", is_signup: true });
     signIn("google", {
       ...(next && next.length > 0 ? { callbackUrl: next } : {}),
     });
@@ -167,6 +169,10 @@ export function LoginForm() {
             if (!email) return;
 
             setLoading(true);
+            trackEvent("auth_started", {
+              method: "email",
+              is_signup: !oauthError,
+            });
             signIn("email", {
               email,
               redirect: false,
@@ -177,6 +183,9 @@ export function LoginForm() {
                 if (res?.ok && !res?.error) {
                   setEmail("");
                   setEmailSent(true);
+                  trackEvent("auth_email_sent", {
+                    email_domain: email.split("@")[1],
+                  });
                   toast.success("Email sent - check your inbox!");
                 } else {
                   toast.error("Error sending email - try again?");

@@ -24,7 +24,7 @@ import {
 import { createStore } from "solid-js/store";
 
 import Mode from "~/components/Mode";
-import { trackEvent } from "~/utils/analytics";
+import { identifyUser, trackEvent } from "~/utils/analytics";
 import {
   createCurrentRecordingQuery,
   createLicenseQuery,
@@ -89,6 +89,24 @@ export default function () {
   const license = createLicenseQuery();
 
   createUpdateCheck();
+
+  const auth = authStore.createQuery();
+
+  onMount(async () => {
+    if (auth.data?.user_id) {
+      const authSessionId = `${auth.data.user_id}-${auth.data.expires}`;
+      const trackedSession = localStorage.getItem("tracked_signin_session");
+
+      if (trackedSession !== authSessionId) {
+        console.log("New auth session detected, tracking sign in event");
+        identifyUser(auth.data.user_id);
+        trackEvent("user_signed_in", { platform: "desktop" });
+        localStorage.setItem("tracked_signin_session", authSessionId);
+      } else {
+        console.log("Auth session already tracked, skipping sign in event");
+      }
+    }
+  });
 
   let unlistenFn: UnlistenFn;
   onCleanup(() => unlistenFn?.());
@@ -214,8 +232,6 @@ export default function () {
       </div>
     ),
   });
-
-  const auth = authStore.createQuery();
 
   return (
     <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-[--gray-50] h-full text-[--text-primary]">

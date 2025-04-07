@@ -64,6 +64,7 @@
     "next-mdx-remote": "^4.4.1",
     "nextjs-cors": "^2.2.0",
     "posthog-js": "^1.215.3",
+    "posthog-node": "^4.11.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-email": "^1.10.1",
