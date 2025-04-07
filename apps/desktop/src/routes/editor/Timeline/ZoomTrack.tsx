@@ -118,27 +118,14 @@ export function ZoomTrack(props: {
         });
       }}
     >
-      <Show
-        when={!useTrackContext().trackState.draggingSegment && hoveredTime()}
+      <For
+        each={project.timeline?.zoomSegments}
+        fallback={
+          <div class="text-center text-sm text-[--text-tertiary] flex flex-col justify-center items-center inset-0 w-full bg-black-transparent-5 hover:opacity-30 transition-opacity rounded-xl">
+            Click to add zoom segment
+          </div>
+        }
       >
-        {(time) => (
-          <SegmentRoot
-            class="pointer-events-none"
-            innerClass="ring-red-300"
-            segment={{
-              start: time(),
-              end: time() + 1,
-            }}
-          >
-            <SegmentContent class="bg-gradient-to-r zoom-gradient-border hover:border duration-300 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]">
-              <p class="w-full text-center text-gray-50 dark:text-gray-500 text-md text-primary">
-                +
-              </p>
-            </SegmentContent>
-          </SegmentRoot>
-        )}
-      </Show>
-      <For each={project.timeline?.zoomSegments}>
         {(segment, i) => {
           const { setTrackState } = useTrackContext();
 
@@ -355,6 +342,26 @@ export function ZoomTrack(props: {
           );
         }}
       </For>
+      <Show
+        when={!useTrackContext().trackState.draggingSegment && hoveredTime()}
+      >
+        {(time) => (
+          <SegmentRoot
+            class="pointer-events-none"
+            innerClass="ring-red-300"
+            segment={{
+              start: time(),
+              end: time() + 1,
+            }}
+          >
+            <SegmentContent class="bg-gradient-to-r zoom-gradient-border hover:border duration-300 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]">
+              <p class="w-full text-center text-gray-50 dark:text-gray-500 text-md text-primary">
+                +
+              </p>
+            </SegmentContent>
+          </SegmentRoot>
+        )}
+      </Show>
     </TrackRoot>
   );
 }

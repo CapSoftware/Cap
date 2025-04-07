@@ -66,7 +66,7 @@ export function SegmentRoot(
       <div
         {...props}
         class={cx(
-          "absolute border rounded-[calc(0.75rem+1px)] inset-y-0 w-full",
+          "absolute border rounded-xl inset-y-0 w-full",
           props.class,
           isSelected() && "wobble-wrapper border border-gray-500"
         )}

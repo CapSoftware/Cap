@@ -176,6 +176,11 @@ const proFeatures = [
   "Priority support",
 ];
 
+import { RuntimeLoader } from "@rive-app/canvas";
+import riveWASMResource from "@rive-app/canvas/rive.wasm?url";
+
+RuntimeLoader.setWasmUrl(riveWASMResource);
+
 export default function Page() {
   const [isProAnnual, setIsProAnnual] = createSignal(true);
   const [isCommercialAnnual, setIsCommercialAnnual] = createSignal(true);
