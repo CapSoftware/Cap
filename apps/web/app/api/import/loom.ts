@@ -1,5 +1,4 @@
-import { type NextRequest } from "next/server";
-import { getCurrentUser } from "@cap/database/auth/session";
+import { zValidator } from "@hono/zod-validator";
 import {
   users,
   spaces,
@@ -11,32 +10,107 @@ import { db } from "@cap/database";
 import { eq, inArray, or } from "drizzle-orm";
 import { nanoId } from "@cap/database/helpers";
 import { z } from "zod";
+import { Hono } from "hono";
 
-export interface WorkspaceMember {
-  name: string;
-  email: string;
-  role: string;
-  dateJoined: string;
-  status: string;
-}
+import { withAuth } from "../utils";
 
-export interface VideoOwner {
-  name: string;
-  email: string;
-}
+const WorkspaceMember = z.object({
+  name: z.string(),
+  email: z.string().email(),
+  role: z.string(),
+  dateJoined: z.string(),
+  status: z.string(),
+});
 
-export interface Video {
-  id: string;
-  owner: VideoOwner;
-  title: string;
-}
+type WorkspaceMember = z.infer<typeof WorkspaceMember>;
 
-export interface LoomExportData {
-  workspaceMembers: WorkspaceMember[];
-  videos: Video[];
-  selectedWorkspaceId: string;
-  userEmail: string;
-}
+const Video = z.object({
+  id: z.string(),
+  owner: z.object({
+    name: z.string(),
+    email: z.string().email(),
+  }),
+  title: z.string(),
+});
+
+type Video = z.infer<typeof Video>;
+
+export const app = new Hono().use(withAuth);
+
+app.post(
+  "/",
+  zValidator(
+    "json",
+    z.object({
+      workspaceMembers: z.array(WorkspaceMember),
+      videos: z.array(Video),
+      selectedWorkspaceId: z.string(),
+      userEmail: z.string().email(),
+    })
+  ),
+  async (c) => {
+    try {
+      const user = c.get("user");
+      const body = c.req.valid("json");
+
+      let targetSpaceId: string;
+
+      const userSpaces = await db
+        .select({ spaceId: spaces.id })
+        .from(spaces)
+        .leftJoin(spaceMembers, eq(spaces.id, spaceMembers.spaceId))
+        .where(
+          or(eq(spaces.ownerId, user.id), eq(spaceMembers.userId, user.id))
+        );
+
+      const hasAccess = userSpaces.some(
+        (space) => space.spaceId === body.selectedWorkspaceId
+      );
+
+      if (hasAccess) {
+        targetSpaceId = body.selectedWorkspaceId;
+      } else {
+        console.warn(
+          `User ${user.id} attempted to import to workspace ${body.selectedWorkspaceId} without access`
+        );
+        return c.json(
+          { error: "You don't have access to the selected workspace" },
+          { status: 403 }
+        );
+      }
+
+      const userIds = await createUsersFromLoomWorkspaceMembers(
+        body.workspaceMembers,
+        targetSpaceId
+      );
+
+      await addUsersToOwnerWorkspace(userIds, user.id, targetSpaceId);
+
+      await importVideosFromLoom(
+        body.videos,
+        user.id,
+        targetSpaceId,
+        body.userEmail
+      );
+
+      return c.json({
+        success: true,
+        usersCreated: userIds.length,
+        videosImported: body.videos.length,
+        spaceId: targetSpaceId,
+      });
+    } catch (error) {
+      console.error("Error importing Loom data:", error);
+      return c.json(
+        {
+          error: "Failed to import data",
+          message: (error as Error).message,
+        },
+        { status: 500 }
+      );
+    }
+  }
+);
 
 /**
  * Creates user accounts for Loom workspace members
@@ -44,7 +118,7 @@ export interface LoomExportData {
 async function createUsersFromLoomWorkspaceMembers(
   workspaceMembers: WorkspaceMember[],
   workspaceId: string
-): Promise<string[]> {
+) {
   const emails = workspaceMembers.map((member) => member.email);
 
   const existingUsers = await db
@@ -69,7 +143,6 @@ async function createUsersFromLoomWorkspaceMembers(
       name: firstName,
       lastName: lastName,
       inviteQuota: 1,
-
       activeSpaceId: workspaceId,
     });
 
@@ -86,7 +159,7 @@ async function addUsersToOwnerWorkspace(
   userIds: string[],
   ownerId: string,
   spaceId: string
-): Promise<void> {
+) {
   const existingMembers = await db
     .select({ userId: spaceMembers.userId })
     .from(spaceMembers)
@@ -127,11 +200,7 @@ async function addUsersToOwnerWorkspace(
  * Downloads a video from Loom's CDN
  * This is an empty function as requested, to be implemented later
  */
-async function downloadVideoFromLoom(videoId: string): Promise<{
-  videoUrl: string;
-  thumbnailUrl: string;
-  metadata: Record<string, any>;
-}> {
+async function downloadVideoFromLoom(videoId: string) {
   // TODO: For cap.so team replace this actual upload to S3 implementation
 
   return {
@@ -152,7 +221,7 @@ async function importVideosFromLoom(
   ownerId: string,
   spaceId: string,
   userEmail: string
-): Promise<void> {
+) {
   for (const loomVideo of loomVideos) {
     try {
       const owner = loomVideo.owner;
@@ -203,102 +272,5 @@ async function importVideosFromLoom(
     } catch (error) {
       console.error(`Failed to import Loom video ${loomVideo.id}:`, error);
     }
-  }
-}
-
-const loomExportSchema = z.object({
-  workspaceMembers: z.array(
-    z.object({
-      name: z.string(),
-      email: z.string().email(),
-      role: z.string(),
-      dateJoined: z.string(),
-      status: z.string(),
-    })
-  ),
-  videos: z.array(
-    z.object({
-      id: z.string(),
-      owner: z.object({
-        name: z.string(),
-        email: z.string().email(),
-      }),
-      title: z.string(),
-    })
-  ),
-  selectedWorkspaceId: z.string(),
-  userEmail: z.string().email(),
-});
-
-export async function POST(request: NextRequest) {
-  try {
-    const user = await getCurrentUser();
-
-    if (!user || !user.id) {
-      console.error("User not found or unauthorized");
-      return Response.json({ error: "Unauthorized" }, { status: 401 });
-    }
-    const body = loomExportSchema.parse(await request.json());
-
-    let targetSpaceId: string;
-
-    const userSpaces = await db
-      .select({ spaceId: spaces.id })
-      .from(spaces)
-      .leftJoin(spaceMembers, eq(spaces.id, spaceMembers.spaceId))
-      .where(or(eq(spaces.ownerId, user.id), eq(spaceMembers.userId, user.id)));
-
-    const hasAccess = userSpaces.some(
-      (space) => space.spaceId === body.selectedWorkspaceId
-    );
-
-    if (hasAccess) {
-      targetSpaceId = body.selectedWorkspaceId;
-    } else {
-      console.warn(
-        `User ${user.id} attempted to import to workspace ${body.selectedWorkspaceId} without access`
-      );
-      return Response.json(
-        { error: "You don't have access to the selected workspace" },
-        { status: 403 }
-      );
-    }
-
-    const userIds = await createUsersFromLoomWorkspaceMembers(
-      body.workspaceMembers,
-      targetSpaceId
-    );
-
-    await addUsersToOwnerWorkspace(userIds, user.id, targetSpaceId);
-
-    await importVideosFromLoom(
-      body.videos,
-      user.id,
-      targetSpaceId,
-      body.userEmail
-    );
-
-    return Response.json(
-      {
-        success: true,
-        usersCreated: userIds.length,
-        videosImported: body.videos.length,
-        spaceId: targetSpaceId,
-      },
-      {
-        status: 200,
-      }
-    );
-  } catch (error) {
-    console.error("Error importing Loom data:", error);
-    return Response.json(
-      {
-        error: "Failed to import data",
-        message: (error as Error).message,
-      },
-      {
-        status: 500,
-      }
-    );
   }
 }
