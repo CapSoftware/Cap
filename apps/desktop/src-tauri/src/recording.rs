@@ -182,9 +182,7 @@ pub async fn start_recording(
         .map_err(|e| format!("Failed to reload logging layer: {e}"))?;
 
     let recording_options = recording_options.unwrap_or(state.recording_options.clone());
-    dbg!(&recording_options);
     state.recording_options = recording_options.clone();
-    dbg!(state.mic_feed.as_ref().unwrap().control_tx.receiver_count());
 
     if let Some(window) = CapWindowId::Camera.get(&app) {
         let _ =
