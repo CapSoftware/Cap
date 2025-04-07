@@ -1,10 +1,10 @@
 {
-  "name": "loom-importer-extension",
+  "name": "@cap/loom-importer-extension",
   "version": "0.0.0",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "watch": "vite build --watch",
+    "dev": "dotenv -e ../../.env -- vite",
+    "build": "dotenv -e ../../.env -- tsc && vite build",
+    "watch": "dotenv -e ../../.env -- vite build --watch",
     "type-check": "tsc --noEmit",
     "dev:extension": "echo '⚡ Building in watch mode. Load the extension from the dist folder in Chrome extensions page (chrome://extensions/)' && pnpm watch",
     "preview": "vite preview"
