@@ -21,9 +21,16 @@ export interface SeoPageContent {
   video: {
     url: string;
     thumbnail: string;
+    alt?: string;
   };
   cta: {
     title: string;
     buttonText: string;
   };
+  comparisonTitle?: string;
+  comparisonDescription?: string;
+  comparison?: {
+    title: string;
+    description: string;
+  }[];
 }

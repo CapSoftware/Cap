@@ -176,6 +176,7 @@ app.post(
 
         clearTimeout(timeoutId);
       } catch (error) {
+        console.log(error);
         clearTimeout(timeoutId);
         let errorMessage = "Failed to connect to S3";
 

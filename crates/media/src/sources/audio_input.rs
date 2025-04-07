@@ -26,13 +26,15 @@ impl LocalTimestamp for StreamInstant {
 pub struct AudioInputSource {
     feed_connection: AudioInputConnection,
     audio_info: AudioInfo,
+    tx: Sender<(FFAudio, f64)>,
 }
 
 impl AudioInputSource {
-    pub fn init(feed: &AudioInputFeed) -> Self {
+    pub fn init(feed: &AudioInputFeed, tx: Sender<(FFAudio, f64)>) -> Self {
         Self {
             feed_connection: feed.create_connection(),
             audio_info: feed.audio_info(),
+            tx,
         }
     }
 
@@ -43,7 +45,6 @@ impl AudioInputSource {
     fn process_frame(
         &self,
         clock: &mut RealTimeClock<StreamInstant>,
-        output: &Sender<FFAudio>,
         samples: AudioInputSamples,
     ) -> Result<(), MediaError> {
         match clock.timestamp_for(samples.info.timestamp().capture) {
@@ -52,7 +53,7 @@ impl AudioInputSource {
             }
             Some(timestamp) => {
                 let frame = self.audio_info.wrap_frame(&samples.data, timestamp);
-                if let Err(_) = output.send(frame) {
+                if let Err(_) = self.tx.send((frame, 0.0 /* TODO: correct this */)) {
                     return Err(MediaError::Any("Pipeline is unreachable! Stopping capture"));
                 }
             }
@@ -64,13 +65,12 @@ impl AudioInputSource {
     fn pause_and_drain_frames(
         &self,
         clock: &mut RealTimeClock<StreamInstant>,
-        output: &Sender<FFAudio>,
         frames_rx: Receiver<AudioInputSamples>,
     ) {
         let frames: Vec<AudioInputSamples> = frames_rx.drain().collect();
 
         for frame in frames {
-            if let Err(error) = self.process_frame(clock, output, frame) {
+            if let Err(error) = self.process_frame(clock, frame) {
                 eprintln!("{error}");
                 break;
             }
@@ -79,8 +79,6 @@ impl AudioInputSource {
 }
 
 impl PipelineSourceTask for AudioInputSource {
-    type Output = FFAudio;
-
     type Clock = RealTimeClock<StreamInstant>;
 
     fn run(
@@ -88,7 +86,6 @@ impl PipelineSourceTask for AudioInputSource {
         mut clock: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
-        output: Sender<Self::Output>,
     ) {
         info!("Preparing audio input source thread...");
 
@@ -104,7 +101,7 @@ impl PipelineSourceTask for AudioInputSource {
 
                     match samples.recv() {
                         Ok(samples) => {
-                            if let Err(error) = self.process_frame(&mut clock, &output, samples) {
+                            if let Err(error) = self.process_frame(&mut clock, samples) {
                                 error!("{error}");
                                 break;
                             }
@@ -117,7 +114,7 @@ impl PipelineSourceTask for AudioInputSource {
                 }
                 Some(Control::Shutdown) | None => {
                     if let Some(rx) = samples_rx.take() {
-                        self.pause_and_drain_frames(&mut clock, &output, rx);
+                        self.pause_and_drain_frames(&mut clock, rx);
                     }
                     break;
                 }

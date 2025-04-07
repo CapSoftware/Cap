@@ -1,8 +1,8 @@
 "use client";
 
-import Image from "next/image";
-import { MDXRemote } from "next-mdx-remote/rsc";
 import { getDocs } from "@/utils/blog";
+import { MDXRemote } from "next-mdx-remote/rsc";
+import Image from "next/image";
 
 export const DocPage = ({ docSlug }: { docSlug: string }) => {
   const doc = getDocs().find((doc) => doc.slug === docSlug);
@@ -12,11 +12,11 @@ export const DocPage = ({ docSlug }: { docSlug: string }) => {
   }
 
   return (
-    <article className="py-8 prose mx-auto">
+    <article className="py-32 mx-auto prose">
       {doc.metadata.image && (
         <div className="relative mb-12 h-[345px] w-full">
           <Image
-            className="m-0 w-full rounded-lg object-cover"
+            className="object-cover m-0 w-full rounded-lg"
             src={doc.metadata.image}
             alt={doc.metadata.title}
             fill

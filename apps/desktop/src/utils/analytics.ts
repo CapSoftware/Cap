@@ -27,7 +27,10 @@ export function identifyUser(userId: string, properties?: Record<string, any>) {
   }
 }
 
-export function trackEvent(eventName: string, properties?: Record<string, any>) {
+export function trackEvent(
+  eventName: string,
+  properties?: Record<string, any>
+) {
   if (!key || !host) return;
   posthog.capture(eventName, properties);
-} 
+}

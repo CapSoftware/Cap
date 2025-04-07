@@ -40,3 +40,6 @@ apps/storybook/storybook-static
 .cargo/config.toml
 tauri.windows.conf.json
 .vercel
+
+# sst
+.sst

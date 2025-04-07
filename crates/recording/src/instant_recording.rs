@@ -1,6 +1,7 @@
 use std::{
     fs::File,
     path::PathBuf,
+    sync::{atomic::AtomicBool, Arc},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -9,11 +10,13 @@ use cap_media::{
     feeds::AudioInputFeed,
     pipeline::{Pipeline, RealTimeClock},
     platform::Bounds,
-    sources::{AudioInputSource, ScreenCaptureSource, ScreenCaptureTarget},
+    sources::{AudioInputSource, AudioMixer, ScreenCaptureSource, ScreenCaptureTarget},
     MediaError,
 };
 use cap_project::InstantRecordingMeta;
 use cap_utils::{ensure_dir, spawn_actor};
+use ffmpeg::frame::Audio;
+use flume::{Receiver, Sender};
 use tokio::sync::oneshot;
 use tracing::{debug, error, info, instrument::WithSubscriber, trace, Instrument};
 use tracing_subscriber::{layer::SubscriberExt, Layer};
@@ -26,6 +29,7 @@ use crate::{
 struct InstantRecordingPipeline {
     pub inner: Pipeline<RealTimeClock<()>>,
     pub output_path: PathBuf,
+    pub pause_flag: Arc<AtomicBool>,
 }
 
 enum InstantRecordingActorState {
@@ -34,7 +38,11 @@ enum InstantRecordingActorState {
         pipeline_done_rx: oneshot::Receiver<()>,
         segment_start_time: f64,
     },
-    Paused,
+    Paused {
+        pipeline: InstantRecordingPipeline,
+        pipeline_done_rx: oneshot::Receiver<()>,
+        segment_start_time: f64,
+    },
     Stopped,
 }
 
@@ -68,12 +76,17 @@ impl InstantRecordingHandle {
     pub async fn resume(&self) -> Result<(), RecordingError> {
         send_message!(self.ctrl_tx, InstantRecordingActorControlMessage::Resume)
     }
+
+    pub async fn cancel(&self) -> Result<(), RecordingError> {
+        send_message!(self.ctrl_tx, InstantRecordingActorControlMessage::Cancel)
+    }
 }
 
 pub enum InstantRecordingActorControlMessage {
     Pause(oneshot::Sender<Result<(), RecordingError>>),
     Resume(oneshot::Sender<Result<(), RecordingError>>),
     Stop(oneshot::Sender<Result<CompletedInstantRecording, RecordingError>>),
+    Cancel(oneshot::Sender<Result<(), RecordingError>>),
 }
 
 impl std::fmt::Debug for InstantRecordingActorControlMessage {
@@ -82,6 +95,7 @@ impl std::fmt::Debug for InstantRecordingActorControlMessage {
             Self::Pause(_) => write!(f, "Pause"),
             Self::Resume(_) => write!(f, "Resume"),
             Self::Stop(_) => write!(f, "Stop"),
+            Self::Cancel(_) => write!(f, "Cancel"),
         }
     }
 }
@@ -101,22 +115,28 @@ pub struct CompletedInstantRecording {
     pub meta: InstantRecordingMeta,
 }
 
-#[tracing::instrument(skip_all, name = "standalone")]
+#[tracing::instrument(skip_all, name = "instant")]
 async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
     output_path: PathBuf,
-    screen_source: ScreenCaptureSource<TCaptureFormat>,
+    screen_source: (
+        ScreenCaptureSource<TCaptureFormat>,
+        flume::Receiver<(TCaptureFormat::VideoFormat, f64)>,
+    ),
     audio_input_feed: Option<&AudioInputFeed>,
-    capture_system_audio: bool,
+    system_audio: Option<Receiver<(ffmpeg::frame::Audio, f64)>>,
 ) -> Result<(InstantRecordingPipeline, oneshot::Receiver<()>), MediaError> {
     let clock = RealTimeClock::<()>::new();
     let pipeline_builder = Pipeline::builder(clock);
 
+    let pause_flag = Arc::new(AtomicBool::new(false));
+    let system_audio = system_audio.map(|v| (v, screen_source.0.audio_info()));
     let pipeline_builder = TCaptureFormat::make_instant_mode_pipeline(
         pipeline_builder,
         screen_source,
-        audio_input_feed.map(AudioInputSource::init),
-        capture_system_audio,
+        audio_input_feed,
+        system_audio,
         output_path.clone(),
+        pause_flag.clone(),
     )
     .await?;
 
@@ -128,6 +148,7 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
         InstantRecordingPipeline {
             inner: pipeline,
             output_path,
+            pause_flag,
         },
         pipeline_done_rx,
     ))
@@ -137,7 +158,7 @@ pub async fn spawn_instant_recording_actor(
     id: String,
     recording_dir: PathBuf,
     options: RecordingOptions,
-    audio_input_feed: Option<AudioInputFeed>,
+    audio_input_feed: Option<&AudioInputFeed>,
 ) -> Result<(InstantRecordingHandle, tokio::sync::oneshot::Receiver<()>), RecordingError> {
     ensure_dir(&recording_dir)?;
 
@@ -147,7 +168,15 @@ pub async fn spawn_instant_recording_actor(
 
     let content_dir = ensure_dir(&recording_dir.join("content"))?;
 
-    let screen_source = create_screen_capture(&options.capture_target, true, true, 30)?;
+    let system_audio = if options.capture_system_audio {
+        let (tx, rx) = flume::bounded(64);
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
+
+    let (screen_source, screen_rx) =
+        create_screen_capture(&options.capture_target, true, true, 30, system_audio.0)?;
 
     debug!("screen capture: {screen_source:#?}");
 
@@ -157,9 +186,9 @@ pub async fn spawn_instant_recording_actor(
 
     let (pipeline, pipeline_done_rx) = create_pipeline(
         content_dir.join("output.mp4"),
-        screen_source.clone(),
-        audio_input_feed.as_ref(),
-        options.capture_system_audio,
+        (screen_source.clone(), screen_rx.clone()),
+        audio_input_feed,
+        system_audio.1,
     )
     .await?;
 
@@ -178,7 +207,7 @@ pub async fn spawn_instant_recording_actor(
                 recording_dir,
                 capture_target: options.capture_target,
                 video_info,
-                audio_input_name: options.audio_input_name,
+                audio_input_name: options.mic_name,
             };
 
             let mut state = InstantRecordingActorState::Recording {
@@ -190,7 +219,7 @@ pub async fn spawn_instant_recording_actor(
             'outer: loop {
                 state = match state {
                     InstantRecordingActorState::Recording {
-                        mut pipeline,
+                        pipeline,
                         mut pipeline_done_rx,
                         segment_start_time,
                     } => {
@@ -222,20 +251,15 @@ pub async fn spawn_instant_recording_actor(
 
                             break match msg {
                                 InstantRecordingActorControlMessage::Pause(tx) => {
-                                    InstantRecordingActorState::Recording {
+                                    pipeline
+                                        .pause_flag
+                                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                                    let _ = tx.send(Ok(()));
+                                    InstantRecordingActorState::Paused {
                                         pipeline,
                                         pipeline_done_rx,
                                         segment_start_time,
                                     }
-                                    // let res = shutdown(
-                                    //     pipeline,
-                                    //     &mut actor,
-                                    //     segment_start_time,
-                                    // )
-                                    // .await;
-
-                                    // tx.send(res.map_err(Into::into)).ok();
-                                    // InstantRecordingActorState::Paused
                                 }
                                 InstantRecordingActorControlMessage::Stop(tx) => {
                                     let res =
@@ -249,12 +273,31 @@ pub async fn spawn_instant_recording_actor(
 
                                     break 'outer;
                                 }
+                                InstantRecordingActorControlMessage::Cancel(tx) => {
+                                    let res =
+                                        shutdown(pipeline, &mut actor, segment_start_time).await;
+
+                                    tx.send(res).ok();
+                                    return;
+                                }
                                 _ => continue,
                             };
                         }
                     }
-                    InstantRecordingActorState::Paused => {
+                    InstantRecordingActorState::Paused {
+                        pipeline,
+                        pipeline_done_rx,
+                        segment_start_time,
+                    } => {
                         info!("recording actor paused");
+
+                        async fn shutdown(
+                            mut pipeline: InstantRecordingPipeline,
+                        ) -> Result<(), RecordingError> {
+                            pipeline.inner.shutdown().await?;
+                            Ok(())
+                        }
+
                         loop {
                             let Ok(msg) = ctrl_rx.recv_async().await else {
                                 break 'outer;
@@ -262,41 +305,31 @@ pub async fn spawn_instant_recording_actor(
 
                             break match msg {
                                 InstantRecordingActorControlMessage::Stop(tx) => {
-                                    tx.send(stop_recording(actor).await).ok();
+                                    let _ = shutdown(pipeline).await;
+                                    let _ = tx.send(stop_recording(actor).await).ok();
+
                                     break 'outer;
                                 }
                                 InstantRecordingActorControlMessage::Resume(tx) => {
-                                    // let (state, res) = match create_pipeline(
-                                    //     &segments_dir,
-                                    //     &cursors_dir,
-                                    //     next_index,
-                                    //     screen_source.clone(),
-                                    //     camera_feed.as_deref(),
-                                    //     audio_input_feed.as_ref(),
-                                    //     cursors,
-                                    //     next_cursor_id,
-                                    // )
-                                    // .await
-                                    // {
-                                    //     Ok((pipeline, pipeline_done_rx)) => (
-                                    //         InstantRecordingActorState::Recording {
-                                    //             pipeline,
-                                    //             pipeline_done_rx,
-                                    //             index: next_index,
-                                    //             segment_start_time: current_time_f64(),
-                                    //         },
-                                    //         Ok(()),
-                                    //     ),
-                                    //     Err(e) => (
-                                    //         InstantRecordingActorState::Stopped,
-                                    //         Err(e.into()),
-                                    //     ),
-                                    // };
+                                    pipeline
+                                        .pause_flag
+                                        .store(false, std::sync::atomic::Ordering::SeqCst);
 
-                                    // tx.send(res).ok();
+                                    let _ = tx.send(Ok(()));
 
-                                    state
+                                    InstantRecordingActorState::Recording {
+                                        pipeline,
+                                        pipeline_done_rx,
+                                        segment_start_time,
+                                    }
                                 }
+                                InstantRecordingActorControlMessage::Cancel(tx) => {
+                                    let res = shutdown(pipeline).await;
+
+                                    tx.send(res).ok();
+                                    return;
+                                }
+
                                 _ => continue,
                             };
                         }

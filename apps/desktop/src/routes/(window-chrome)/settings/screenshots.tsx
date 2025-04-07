@@ -48,13 +48,13 @@ export default function Screenshots() {
   };
 
   return (
-    <div class="flex flex-col w-full h-full divide-y divide-gray-200 pt-1 pb-12">
-      <div class="flex-1 overflow-y-auto">
+    <div class="flex flex-col pt-1 pb-12 w-full h-full divide-y divide-gray-200">
+      <div class="overflow-y-auto relative flex-1">
         <ul class="p-[0.625rem] flex flex-col gap-[0.5rem] w-full">
           <Show
             when={fetchScreenshots.data && fetchScreenshots.data.length > 0}
             fallback={
-              <p class="text-center text-[--text-tertiary]">
+              <p class="text-center text-[--text-tertiary] absolute flex items-center justify-center w-full h-full">
                 No screenshots found
               </p>
             }
@@ -83,14 +83,14 @@ function ScreenshotItem(props: {
   const [imageExists, setImageExists] = createSignal(true);
 
   return (
-    <li class="w-full flex flex-row justify-between items-center p-2 hover:bg-gray-100 dark:hover:bg-gray-200 rounded">
+    <li class="flex flex-row justify-between items-center p-2 w-full rounded hover:bg-gray-100 dark:hover:bg-gray-200">
       <div class="flex items-center">
         <Show
           when={imageExists()}
-          fallback={<div class="w-8 h-8 bg-gray-400 mr-4 rounded" />}
+          fallback={<div class="mr-4 w-8 h-8 bg-gray-400 rounded" />}
         >
           <img
-            class="w-8 h-8 object-cover mr-4 rounded"
+            class="object-cover mr-4 w-8 h-8 rounded"
             alt="Screenshot thumbnail"
             src={`${convertFileSrc(
               props.screenshot.thumbnailPath

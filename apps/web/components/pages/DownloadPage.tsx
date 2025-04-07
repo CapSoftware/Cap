@@ -140,7 +140,7 @@ export const DownloadPage = () => {
 
         <PlatformIcons />
 
-        <div className="mt-6 fade-in-up animate-delay-2">
+        <div className="mt-6 pb-4 fade-in-up animate-delay-2">
           <h3 className="text-sm font-medium mb-2 text-gray-400">
             Other download options:
           </h3>
@@ -185,6 +185,46 @@ export const DownloadPage = () => {
                 </a>
               </>
             )}
+          </div>
+        </div>
+
+        {/* Discreet SEO Links */}
+        <div className="mt-32 pt-8 border-t border-gray-200 text-xs text-gray-500 opacity-70">
+          <div className="flex flex-wrap justify-center gap-x-4 gap-y-2 max-w-lg mx-auto">
+            <a
+              href="/screen-recorder"
+              className="hover:text-gray-400 hover:underline text-xs"
+            >
+              Screen Recorder
+            </a>
+            <span className="hidden md:inline">•</span>
+            <a
+              href="/free-screen-recorder"
+              className="hover:text-gray-400 hover:underline text-xs"
+            >
+              Free Screen Recorder
+            </a>
+            <span className="hidden md:inline">•</span>
+            <a
+              href="/screen-recorder-mac"
+              className="hover:text-gray-400 hover:underline text-xs"
+            >
+              Mac Screen Recorder
+            </a>
+            <span className="hidden md:inline">•</span>
+            <a
+              href="/screen-recorder-windows"
+              className="hover:text-gray-400 hover:underline text-xs"
+            >
+              Windows Screen Recorder
+            </a>
+            <span className="hidden md:inline">•</span>
+            <a
+              href="/screen-recording-software"
+              className="hover:text-gray-400 hover:underline text-xs"
+            >
+              Recording Software
+            </a>
           </div>
         </div>
       </div>

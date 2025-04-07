@@ -7,6 +7,7 @@ import { PostHogProvider as PHProvider } from "posthog-js/react";
 import { clientEnv } from "@cap/env";
 import PostHogPageView from "./PosthogPageView";
 import Intercom from "@intercom/messenger-js-sdk";
+import { usePathname } from "next/navigation";
 
 export function PostHogProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
@@ -37,21 +38,28 @@ export function AnalyticsProvider({
   name?: string;
   email?: string;
 }) {
-  if (intercomHash === "") {
-    Intercom({
-      app_id: "efxq71cv",
-      utm_source: "web",
-    });
-  } else {
-    Intercom({
-      app_id: "efxq71cv",
-      user_id: userId ?? "",
-      user_hash: intercomHash ?? "",
-      name: name,
-      email: email,
-      utm_source: "web",
-    });
-  }
+  const pathname = usePathname();
+  const isSharePage = pathname?.startsWith("/s/");
+
+  useEffect(() => {
+    if (!isSharePage) {
+      if (intercomHash === "") {
+        Intercom({
+          app_id: "efxq71cv",
+          utm_source: "web",
+        });
+      } else {
+        Intercom({
+          app_id: "efxq71cv",
+          user_id: userId ?? "",
+          user_hash: intercomHash ?? "",
+          name: name,
+          email: email,
+          utm_source: "web",
+        });
+      }
+    }
+  }, [intercomHash, userId, name, email, isSharePage]);
 
   useEffect(() => {
     if (!userId) {

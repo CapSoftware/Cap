@@ -6,3 +6,9 @@ edition = "2021"
 [dependencies]
 ffmpeg.workspace = true
 ffmpeg-sys-next.workspace = true
+ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
+tracing = "0.1.41"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cidre = { workspace = true }

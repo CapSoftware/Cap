@@ -1,6 +1,6 @@
 [package]
 name = "cap-desktop"
-version = "0.3.29"
+version = "0.3.38"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2021"
@@ -12,7 +12,7 @@ name = "cap_desktop"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.0.5", features = [] }
+tauri-build = { version = "2.1.0", features = [] }
 
 [target.'cfg(target_os = "macos")'.build-dependencies]
 swift-rs = { version = "1.0.6", features = ["build"] }
@@ -42,6 +42,7 @@ tauri-plugin-window-state = "2.2.0"
 tauri-plugin-positioner = "2.2.0"
 tauri-plugin-deep-link = "2.2.0"
 tauri-plugin-clipboard-manager = "2.2.1"
+tauri-plugin-opener = "2.2.6"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.111"
@@ -56,7 +57,7 @@ futures-intrusive = "0.5.0"
 anyhow.workspace = true
 futures = "0.3"
 axum = { version = "0.7.5", features = ["ws"] }
-tracing = "0.1.40"
+tracing.workspace = true
 tempfile = "3.9.0"
 ffmpeg.workspace = true
 chrono = { version = "0.4.31", features = ["serde"] }
@@ -93,7 +94,7 @@ md5 = "0.7.0"
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"
 core-foundation = "0.10.0"
-objc2-app-kit = { version = "0.2.2", features = [
+objc2-app-kit = { version = "0.3.0", features = [
 	"NSWindow",
 	"NSResponder",
 	"NSHapticFeedback",
@@ -122,3 +123,6 @@ codegen-units = 1 # Compile crates one after another so the compiler can optimiz
 lto = true        # Enables link to optimizations
 opt-level = "s"   # Optimize for binary size
 debug = true
+
+[lints]
+workspace = true

@@ -33,7 +33,7 @@
     "tauri-plugin-positioner-api": "^0.2.7",
     "tsconfig": "workspace:*",
     "typescript": "^5.7.2",
-    "vite": "^4.4.4",
+    "vite": "^6.0.0",
     "vite-tsconfig-paths": "^4.2.1"
   },
   "dependencies": {

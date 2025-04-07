@@ -27,7 +27,7 @@ serde = { version = "1", features = ["derive"] }
 specta.workspace = true
 tempfile = "3.12.0"
 thiserror.workspace = true
-tracing = { version = "0.1", features = ["release_max_level_info"] }
+tracing = { workspace = true, features = ["release_max_level_info"] }
 futures = "0.3.31"
 axum = { version = "0.7.9", features = ["macros", "ws"] }
 tokio.workspace = true
@@ -54,7 +54,7 @@ objc = "0.2.7"
 objc-foundation = "0.1.1"
 objc2-foundation = { version = "0.2.2", features = ["NSValue"] }
 nokhwa-bindings-macos.workspace = true
-screencapturekit = "0.2.8"
+screencapturekit = "0.3.5"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [
