@@ -76,12 +76,17 @@ impl InstantRecordingHandle {
     pub async fn resume(&self) -> Result<(), RecordingError> {
         send_message!(self.ctrl_tx, InstantRecordingActorControlMessage::Resume)
     }
+
+    pub async fn cancel(&self) -> Result<(), RecordingError> {
+        send_message!(self.ctrl_tx, InstantRecordingActorControlMessage::Cancel)
+    }
 }
 
 pub enum InstantRecordingActorControlMessage {
     Pause(oneshot::Sender<Result<(), RecordingError>>),
     Resume(oneshot::Sender<Result<(), RecordingError>>),
     Stop(oneshot::Sender<Result<CompletedInstantRecording, RecordingError>>),
+    Cancel(oneshot::Sender<Result<(), RecordingError>>),
 }
 
 impl std::fmt::Debug for InstantRecordingActorControlMessage {
@@ -90,6 +95,7 @@ impl std::fmt::Debug for InstantRecordingActorControlMessage {
             Self::Pause(_) => write!(f, "Pause"),
             Self::Resume(_) => write!(f, "Resume"),
             Self::Stop(_) => write!(f, "Stop"),
+            Self::Cancel(_) => write!(f, "Cancel"),
         }
     }
 }
@@ -267,6 +273,13 @@ pub async fn spawn_instant_recording_actor(
 
                                     break 'outer;
                                 }
+                                InstantRecordingActorControlMessage::Cancel(tx) => {
+                                    let res =
+                                        shutdown(pipeline, &mut actor, segment_start_time).await;
+
+                                    tx.send(res).ok();
+                                    return;
+                                }
                                 _ => continue,
                             };
                         }
@@ -277,6 +290,14 @@ pub async fn spawn_instant_recording_actor(
                         segment_start_time,
                     } => {
                         info!("recording actor paused");
+
+                        async fn shutdown(
+                            mut pipeline: InstantRecordingPipeline,
+                        ) -> Result<(), RecordingError> {
+                            pipeline.inner.shutdown().await?;
+                            Ok(())
+                        }
+
                         loop {
                             let Ok(msg) = ctrl_rx.recv_async().await else {
                                 break 'outer;
@@ -284,7 +305,9 @@ pub async fn spawn_instant_recording_actor(
 
                             break match msg {
                                 InstantRecordingActorControlMessage::Stop(tx) => {
+                                    let _ = shutdown(pipeline).await;
                                     let _ = tx.send(stop_recording(actor).await).ok();
+
                                     break 'outer;
                                 }
                                 InstantRecordingActorControlMessage::Resume(tx) => {
@@ -300,6 +323,13 @@ pub async fn spawn_instant_recording_actor(
                                         segment_start_time,
                                     }
                                 }
+                                InstantRecordingActorControlMessage::Cancel(tx) => {
+                                    let res = shutdown(pipeline).await;
+
+                                    tx.send(res).ok();
+                                    return;
+                                }
+
                                 _ => continue,
                             };
                         }

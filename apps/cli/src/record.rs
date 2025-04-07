@@ -83,7 +83,7 @@ impl RecordStart {
                 capture_system_audio: self.system_audio,
             },
             camera.map(|c| Arc::new(Mutex::new(c))),
-            None,
+            &None,
         )
         .await
         .map_err(|e| e.to_string())?;

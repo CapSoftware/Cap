@@ -17,7 +17,7 @@ pub struct AudioInputSamples {
     pub info: InputCallbackInfo,
 }
 
-enum AudioInputControl {
+pub enum AudioInputControl {
     Switch(String, Sender<Result<SupportedStreamConfig, MediaError>>),
     AttachSender(AudioInputSamplesSender),
     Shutdown,
@@ -47,7 +47,7 @@ pub const MAX_AUDIO_CHANNELS: u16 = 2;
 
 #[derive(Clone)]
 pub struct AudioInputFeed {
-    control_tx: Sender<AudioInputControl>,
+    pub control_tx: Sender<AudioInputControl>,
     audio_info: AudioInfo,
     // rx: Receiver<AudioInputSamples>,
 }
@@ -295,6 +295,7 @@ fn start_capturing(
                     info!("New audio sender attached");
                 }
                 Err(flume::TryRecvError::Disconnected) => {
+                    dbg!(control.sender_count());
                     warn!("Control receiver is unreachable! Shutting down audio capture");
                     return;
                 }

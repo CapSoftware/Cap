@@ -59,6 +59,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use std::collections::BTreeMap;
+use std::time::Duration;
 use std::{
     fs::File,
     future::Future,
@@ -76,6 +77,7 @@ use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::sync::{Mutex, RwLock};
+use tracing::debug;
 use tracing::info;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -97,7 +99,7 @@ pub struct App {
     #[serde(skip)]
     mic_feed: Option<AudioInputFeed>,
     #[serde(skip)]
-    audio_input_tx: AudioInputSamplesSender,
+    mic_samples_tx: AudioInputSamplesSender,
     #[serde(skip)]
     handle: AppHandle,
     #[serde(skip)]
@@ -240,8 +242,8 @@ impl App {
                 AudioInputFeed::init(new_input_name)
                     .await
                     .map_err(|e| e.to_string())
-                    .map(|feed| async {
-                        feed.add_sender(self.audio_input_tx.clone()).await.unwrap();
+                    .map(async |feed| {
+                        feed.add_sender(self.mic_samples_tx.clone()).await.unwrap();
                         *v = Some(feed);
                     })
                     .transpose_async()
@@ -252,6 +254,7 @@ impl App {
                 .await
                 .map_err(|e| e.to_string()),
             (None, _) => {
+                debug!("removing mic in set_start_recording_options");
                 self.remove_mic_feed();
                 Ok(())
             }
@@ -302,7 +305,7 @@ impl App {
                 .await
                 .map_err(|e| e.to_string())
                 .map(|feed| async {
-                    feed.add_sender(self.audio_input_tx.clone()).await.unwrap();
+                    feed.add_sender(self.mic_samples_tx.clone()).await.unwrap();
                     self.mic_feed = Some(feed);
                 })
                 .transpose_async()
@@ -467,19 +470,19 @@ async fn get_recording_options(
     let mut state = state.write().await;
 
     // If there's a saved audio input but no feed, initialize it
-    if let Some(audio_input_name) = state.recording_options.mic_name() {
-        if state.mic_feed.is_none() {
-            state.mic_feed = if let Ok(feed) = AudioInputFeed::init(audio_input_name)
-                .await
-                .map_err(|error| eprintln!("{error}"))
-            {
-                feed.add_sender(state.audio_input_tx.clone()).await.unwrap();
-                Some(feed)
-            } else {
-                None
-            };
-        }
-    }
+    // if let Some(audio_input_name) = state.recording_options.mic_name() {
+    //     if state.mic_feed.is_none() {
+    //         state.mic_feed = if let Ok(feed) = AudioInputFeed::init(audio_input_name)
+    //             .await
+    //             .map_err(|error| eprintln!("{error}"))
+    //         {
+    //             feed.add_sender(state.audio_input_tx.clone()).await.unwrap();
+    //             Some(feed)
+    //         } else {
+    //             None
+    //         };
+    //     }
+    // }
 
     Ok(state.recording_options.clone())
 }
@@ -2277,7 +2280,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     camera_tx,
                     camera_ws_port,
                     camera_feed: None,
-                    audio_input_tx,
+                    mic_samples_tx: audio_input_tx,
                     mic_feed: None,
                     recording_options: RecordingOptions {
                         capture_target: ScreenCaptureTarget::Screen { id: 0 },
@@ -2354,15 +2357,14 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 
                 // Stop and discard the current recording
                 {
-                    let mut app_state = state.write().await;
-                    if let Some(recording) = app_state.clear_current_recording() {
-                        CurrentRecordingChanged /*(JsonValue::new(&None))*/
-                            .emit(&app)
-                            .ok();
+                    if let Some(recording) = state.write().await.clear_current_recording() {
+                        CurrentRecordingChanged.emit(&app).ok();
 
-                        recording.stop().await.ok();
+                        let _ = recording.cancel().await;
                     }
                 }
+
+                tokio::time::sleep(Duration::from_millis(1000)).await;
 
                 if let Err(e) = recording::start_recording(app.clone(), state, None).await {
                     eprintln!("Failed to start new recording: {}", e);

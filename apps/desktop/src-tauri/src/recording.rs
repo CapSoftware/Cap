@@ -35,7 +35,6 @@ use cap_utils::{ensure_dir, spawn_actor};
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
 use tracing::{error, info};
-use tracing_subscriber::Layer;
 
 pub enum InProgressRecording {
     Instant {
@@ -83,6 +82,13 @@ impl InProgressRecording {
             },
             Self::Studio { handle } => CompletedRecording::Studio(handle.stop().await?),
         })
+    }
+
+    pub async fn cancel(self) -> Result<(), RecordingError> {
+        match self {
+            Self::Instant { handle, .. } => handle.cancel().await,
+            Self::Studio { handle } => handle.cancel().await,
+        }
     }
 
     pub fn bounds(&self) -> &Bounds {
@@ -176,7 +182,9 @@ pub async fn start_recording(
         .map_err(|e| format!("Failed to reload logging layer: {e}"))?;
 
     let recording_options = recording_options.unwrap_or(state.recording_options.clone());
+    dbg!(&recording_options);
     state.recording_options = recording_options.clone();
+    dbg!(state.mic_feed.as_ref().unwrap().control_tx.receiver_count());
 
     if let Some(window) = CapWindowId::Camera.get(&app) {
         let _ =
@@ -251,7 +259,7 @@ pub async fn start_recording(
                         recording_dir.clone(),
                         recording_options.clone(),
                         state.camera_feed.clone(),
-                        state.mic_feed.clone(),
+                        &state.mic_feed,
                     )
                     .await
                     .map_err(|e| {
@@ -303,7 +311,9 @@ pub async fn start_recording(
         let state_mtx = Arc::clone(&state_mtx);
         async move {
             fail!("recording::wait_actor_done");
-            actor_done_rx.await.ok();
+            let Ok(_) = dbg!(actor_done_rx.await) else {
+                return;
+            };
 
             let _ = finish_upload_tx.send(());
 
@@ -406,6 +416,7 @@ async fn handle_recording_end(
     if let Some(window) = CapWindowId::Main.get(&app) {
         window.unminimize().ok();
     } else {
+        println!("SPIEJWPFIJE");
         CapWindowId::Camera.get(&app).map(|v| {
             let _ = v.close();
         });
@@ -447,7 +458,11 @@ async fn handle_recording_finish(
     };
 
     let display_screenshot = screenshots_dir.join("display.jpg");
-    create_screenshot(display_output_path, display_screenshot.clone(), None).await?;
+    let screenshot_task = tokio::spawn(create_screenshot(
+        display_output_path,
+        display_screenshot.clone(),
+        None,
+    ));
 
     let (meta_inner, sharing) = match completed_recording {
         CompletedRecording::Studio(recording) => {
@@ -494,6 +509,8 @@ async fn handle_recording_finish(
                                 false
                             }
                         };
+
+                        let _ = screenshot_task.await;
 
                         if video_upload_succeeded {
                             let (screenshot_url, screenshot_form) = match prepare_screenshot_upload(
