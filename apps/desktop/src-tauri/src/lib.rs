@@ -176,7 +176,6 @@ impl App {
             .ok_or_else(|| "Failed to get capture target name".to_string())?;
 
         sentry::configure_scope(move |scope| {
-            dbg!(options.capture_target.get_title());
             let mut ctx = std::collections::BTreeMap::new();
             ctx.insert("capture_target".into(), capture_target_title.into());
             ctx.insert(

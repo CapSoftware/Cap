@@ -38,3 +38,6 @@ windows = { workspace = true, features = [
 	"Win32_Graphics_Gdi",
 	"Win32_UI_WindowsAndMessaging",
 ] }
+
+[lints]
+workspace = true

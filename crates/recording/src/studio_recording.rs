@@ -138,8 +138,6 @@ pub async fn spawn_studio_recording_actor(
 ) -> Result<(StudioRecordingHandle, tokio::sync::oneshot::Receiver<()>), RecordingError> {
     ensure_dir(&recording_dir)?;
 
-    dbg!(mic_feed.as_ref().unwrap().control_tx.receiver_count());
-
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
 
     trace!("creating recording actor");

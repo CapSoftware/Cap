@@ -837,7 +837,6 @@ impl InstantMultipartUpload {
         pre_created_video: VideoUploadInfo,
         realtime_video_done: Option<Receiver<()>>,
     ) -> Result<(), String> {
-        dbg!(&video_id, &file_path);
         use std::time::Duration;
         use tokio::sync::mpsc;
         use tokio::time::sleep;
@@ -1351,7 +1350,6 @@ impl InstantMultipartUpload {
             }
         };
 
-        dbg!(&complete_data);
         if let Some(location) = complete_data.get("location") {
             println!("Multipart upload complete. Final S3 location: {location}");
         } else {

@@ -309,7 +309,7 @@ pub async fn start_recording(
         let state_mtx = Arc::clone(&state_mtx);
         async move {
             fail!("recording::wait_actor_done");
-            let Ok(_) = dbg!(actor_done_rx.await) else {
+            let Ok(_) = actor_done_rx.await else {
                 return;
             };
 
