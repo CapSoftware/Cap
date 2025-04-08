@@ -100,7 +100,6 @@ const ExportDialog = () => {
   const [compression, setCompression] = createSignal(
     localStorage.getItem("cap-export-compression") || "social"
   );
-  const [uploadComplete, setUploadComplete] = createSignal(false);
 
   createEffect(() => {
     localStorage.setItem("cap-export-format", format());
@@ -284,7 +283,7 @@ const ExportDialog = () => {
 
   const uploadVideo = createMutation(() => ({
     mutationFn: async () => {
-      setUploadState({ type: "idle" });
+      setUploadState({ type: "starting" });
 
       console.log("Starting upload process...");
 
@@ -335,8 +334,6 @@ const ExportDialog = () => {
       });
 
       try {
-        setUploadState({ type: "starting" });
-
         // Setup progress listener before starting upload
 
         console.log("Starting actual upload...");
@@ -404,7 +401,7 @@ const ExportDialog = () => {
     },
     onSuccess: () => {
       metaActions.refetch();
-      setUploadComplete(true);
+      setUploadState({ type: "complete" });
       metaUpdateStore.notifyUpdate(videoId);
     },
     onError: (error) => {
@@ -413,9 +410,7 @@ const ExportDialog = () => {
       );
     },
     onSettled() {
-      setTimeout(() => {
-        uploadVideo.reset();
-      }, 2000);
+      uploadVideo.reset();
       setExportProgress(null);
     },
   }));
@@ -684,7 +679,7 @@ const ExportDialog = () => {
         <DialogContent
           title={"Export"}
           confirm={
-            <Show when={uploadComplete()}>
+            <Show when={uploadState.type === "complete"}>
               <div class="relative">
                 <a
                   href={recordingMeta()?.sharing?.link}
@@ -729,10 +724,9 @@ const ExportDialog = () => {
             </Show>
           }
           close={
-            <Show when={uploadComplete()}>
+            <Show when={uploadState.type === "complete"}>
               <Button
                 onClick={() => {
-                  setUploadComplete(false);
                   setUploadState({ type: "idle" });
                 }}
                 variant="secondary"
@@ -746,7 +740,7 @@ const ExportDialog = () => {
         >
           <div class="relative z-10 px-5 py-4 mx-auto space-y-6 w-full text-center">
             {/** Upload success */}
-            <Show when={uploadComplete()}>
+            <Show when={uploadState.type === "complete"}>
               <UploadingSuccessContent />
             </Show>
             {/** Copying to clipboard */}
@@ -757,7 +751,9 @@ const ExportDialog = () => {
             <Show
               when={
                 uploadState.type !== "idle" &&
-                (uploadVideo.isPending || uploadState.type === "starting")
+                (uploadVideo.isPending ||
+                  uploadState.type === "starting" ||
+                  uploadState.type === "rendering")
               }
             >
               <UploadingCapContent />

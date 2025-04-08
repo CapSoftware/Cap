@@ -119,6 +119,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			| { type: "rendering" }
 			| { type: "uploading"; progress: number }
 			| { type: "link-copied" }
+			| { type: "complete" }
 		>({ type: "idle" });
 
 		//This is used in ShareButton.tsx to notify the component that the metadata has changed, from ExportDialog.tsx
