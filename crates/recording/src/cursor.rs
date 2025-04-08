@@ -122,47 +122,6 @@ pub fn spawn_cursor_recorder(
                     // Get the actual mouse coordinates
                     let (mouse_x, mouse_y) = mouse_state.coords;
 
-                    #[cfg(windows)]
-                    let (mouse_x, mouse_y) = {
-                        // On Windows, ensure we're using the correct coordinate system
-                        // by getting the virtual screen metrics
-                        use windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics;
-                        use windows::Win32::UI::WindowsAndMessaging::{
-                            SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-                            SM_YVIRTUALSCREEN,
-                        };
-
-                        let virtual_screen_x = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
-                        let virtual_screen_y = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
-                        let virtual_screen_width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
-                        let virtual_screen_height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
-
-                        // If screen_bounds doesn't match the virtual screen, adjust the coordinates
-                        if (screen_bounds.x as i32 != virtual_screen_x
-                            || screen_bounds.y as i32 != virtual_screen_y
-                            || screen_bounds.width as i32 != virtual_screen_width
-                            || screen_bounds.height as i32 != virtual_screen_height)
-                            && screen_bounds.width > 0.0
-                            && screen_bounds.height > 0.0
-                        {
-                            // Convert to normalized coordinates in the virtual screen space first
-                            let norm_x = (mouse_x as f64 - virtual_screen_x as f64)
-                                / virtual_screen_width as f64;
-                            let norm_y = (mouse_y as f64 - virtual_screen_y as f64)
-                                / virtual_screen_height as f64;
-
-                            // Then convert to the target screen coordinates
-                            let adjusted_x =
-                                (norm_x * screen_bounds.width + screen_bounds.x) as i32;
-                            let adjusted_y =
-                                (norm_y * screen_bounds.height + screen_bounds.y) as i32;
-
-                            (adjusted_x, adjusted_y)
-                        } else {
-                            (mouse_x, mouse_y)
-                        }
-                    };
-
                     #[cfg(target_os = "macos")]
                     let (mouse_x, mouse_y) = {
                         let primary_bounds = cap_media::platform::primary_monitor_bounds();
@@ -175,7 +134,7 @@ pub fn spawn_cursor_recorder(
                         (mouse_x, mouse_y)
                     };
 
-                    #[cfg(not(any(windows, target_os = "macos")))]
+                    #[cfg(not(target_os = "macos"))]
                     let (mouse_x, mouse_y) = {
                         (
                             mouse_x - screen_bounds.x as i32,

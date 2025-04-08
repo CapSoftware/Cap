@@ -382,6 +382,12 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
         let video_tx = self.video_tx.clone();
         let audio_tx = self.audio_tx.clone();
 
+        let start_time_nanos = self
+            .start_time
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+
         inner(
             self,
             ready_signal,
@@ -391,6 +397,8 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                     if frame.height == 0 || frame.width == 0 {
                         return Some(ControlFlow::Continue(()));
                     }
+
+                    let elapsed_nanos = frame.display_time - start_time_nanos;
 
                     let raw_timestamp = RawNanoseconds(frame.display_time);
                     match clock.timestamp_for(raw_timestamp) {
@@ -443,7 +451,8 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                                 }
                             }
 
-                            if let Err(_) = video_tx.send((buffer, 0.0)) {
+                            let time_f = elapsed_nanos as f64 / 1_000_000_000.0;
+                            if let Err(_) = video_tx.send((buffer, time_f)) {
                                 error!("Pipeline is unreachable. Shutting down recording.");
                                 return Some(ControlFlow::Break(()));
                             }

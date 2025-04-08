@@ -31,8 +31,6 @@ impl H264Encoder {
         config: VideoInfo,
         output: &mut format::context::Output,
     ) -> Result<Self, MediaError> {
-        dbg!(config);
-
         let (codec, options) = get_codec_and_options(&config)?;
 
         let (format, converter) = if !codec
@@ -124,7 +122,6 @@ impl H264Encoder {
             frame
         };
 
-        dbg!(frame.pts());
         if let Err(e) = self.encoder.send_frame(&frame) {
             tracing::error!("Failed to send frame to encoder: {:?}", e);
             return;
