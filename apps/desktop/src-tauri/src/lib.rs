@@ -170,14 +170,13 @@ impl App {
         new_options: RecordingOptions,
     ) -> Result<(), String> {
         let options = new_options.clone();
-        let capture_target_title = options
-            .capture_target
-            .get_title()
-            .ok_or_else(|| "Failed to get capture target name".to_string())?;
+        let capture_target_title = options.capture_target.get_title();
 
         sentry::configure_scope(move |scope| {
             let mut ctx = std::collections::BTreeMap::new();
-            ctx.insert("capture_target".into(), capture_target_title.into());
+            if let Some(capture_target_title) = capture_target_title {
+                ctx.insert("capture_target".into(), capture_target_title.into());
+            }
             ctx.insert(
                 "camera".into(),
                 options.camera_label.unwrap_or("None".into()).into(),
