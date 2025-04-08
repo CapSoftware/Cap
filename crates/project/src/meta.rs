@@ -111,10 +111,12 @@ impl RecordingMeta {
 pub enum StudioRecordingMeta {
     SingleSegment {
         #[serde(flatten)]
+        #[specta(flatten)]
         segment: SingleSegment,
     },
     MultipleSegments {
         #[serde(flatten)]
+        #[specta(flatten)]
         inner: MultipleSegments,
     },
 }
@@ -125,7 +127,7 @@ impl StudioRecordingMeta {
             StudioRecordingMeta::SingleSegment { segment } => {
                 segment.camera.as_ref().map(|c| c.path.clone())
             }
-            StudioRecordingMeta::MultipleSegments { inner } => inner
+            StudioRecordingMeta::MultipleSegments { inner, .. } => inner
                 .segments
                 .first()
                 .and_then(|s| s.camera.as_ref().map(|c| c.path.clone())),
@@ -135,7 +137,7 @@ impl StudioRecordingMeta {
     pub fn min_fps(&self) -> u32 {
         match self {
             StudioRecordingMeta::SingleSegment { segment } => segment.display.fps,
-            StudioRecordingMeta::MultipleSegments { inner } => {
+            StudioRecordingMeta::MultipleSegments { inner, .. } => {
                 inner.segments.iter().map(|s| s.display.fps).min().unwrap()
             }
         }
@@ -144,7 +146,7 @@ impl StudioRecordingMeta {
     pub fn max_fps(&self) -> u32 {
         match self {
             StudioRecordingMeta::SingleSegment { segment } => segment.display.fps,
-            StudioRecordingMeta::MultipleSegments { inner } => {
+            StudioRecordingMeta::MultipleSegments { inner, .. } => {
                 inner.segments.iter().map(|s| s.display.fps).max().unwrap()
             }
         }
@@ -232,8 +234,8 @@ pub struct MultipleSegment {
     pub display: VideoMeta,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera: Option<VideoMeta>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub audio: Option<AudioMeta>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "audio")]
+    pub mic: Option<AudioMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_audio: Option<AudioMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -262,6 +264,24 @@ impl MultipleSegment {
                 CursorEvents::default()
             }
         }
+    }
+
+    pub fn latest_start_time(&self) -> Option<f64> {
+        let mut value = self.display.start_time?;
+
+        if let Some(camera) = &self.camera {
+            value = value.max(camera.start_time?);
+        }
+
+        if let Some(mic) = &self.mic {
+            value = value.max(mic.start_time?);
+        }
+
+        if let Some(system_audio) = &self.system_audio {
+            value = value.max(system_audio.start_time?);
+        }
+
+        Some(value)
     }
 }
 

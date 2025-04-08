@@ -87,6 +87,7 @@ pub async fn export_video(
         &editor_instance.segments,
         fps,
         resolution_base,
+        editor_instance.recordings.clone(),
     )
     .await
     .map_err(|e| {

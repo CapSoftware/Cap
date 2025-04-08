@@ -3,7 +3,7 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     path::PathBuf,
     sync::{atomic::AtomicBool, Arc},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use cap_media::platform::Bounds;
@@ -48,6 +48,7 @@ pub fn spawn_cursor_recorder(
     cursors_dir: PathBuf,
     prev_cursors: Cursors,
     next_cursor_id: u32,
+    start_time: SystemTime,
 ) -> CursorActor {
     let stop_signal = Arc::new(AtomicBool::new(false));
     let (tx, rx) = oneshot::channel();
@@ -68,12 +69,12 @@ pub fn spawn_cursor_recorder(
                 clicks: vec![],
             };
 
-            let start_time = Instant::now();
-
             while !stop_signal.load(std::sync::atomic::Ordering::Relaxed) {
-                let elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
+                let Ok(elapsed) = start_time.elapsed() else {
+                    continue;
+                };
+                let elapsed = elapsed.as_secs_f64() * 1000.0;
                 let mouse_state = device_state.get_mouse();
-                let unix_time = chrono::Utc::now().timestamp_millis() as f64;
 
                 let cursor_data = get_cursor_image_data();
                 let cursor_id = if let Some(data) = cursor_data {
@@ -214,8 +215,7 @@ pub fn spawn_cursor_recorder(
                     let mouse_event = CursorMoveEvent {
                         active_modifiers: vec![],
                         cursor_id: cursor_id.clone(),
-                        process_time_ms: elapsed,
-                        unix_time_ms: unix_time,
+                        time_ms: elapsed,
                         x,
                         y,
                     };
@@ -306,8 +306,7 @@ pub fn spawn_cursor_recorder(
                         active_modifiers: vec![],
                         cursor_num: num as u8,
                         cursor_id: cursor_id.clone(),
-                        process_time_ms: elapsed,
-                        unix_time_ms: unix_time,
+                        time_ms: elapsed,
                         x,
                         y,
                     };

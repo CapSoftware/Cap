@@ -11,8 +11,8 @@ use cap_project::{
     ProjectConfiguration, RecordingMeta, RecordingMetaInner, StudioRecordingMeta, XY,
 };
 use cap_rendering::{
-    ProjectUniforms, RecordingSegmentDecoders, RenderSegment, RenderVideoConstants, RenderedFrame,
-    SegmentVideoPaths,
+    ProjectRecordings, ProjectUniforms, RecordingSegmentDecoders, RenderSegment,
+    RenderVideoConstants, RenderedFrame, SegmentVideoPaths,
 };
 use futures::FutureExt;
 use image::{ImageBuffer, Rgba};
@@ -55,11 +55,12 @@ pub struct Exporter<TOnProgress> {
     render_constants: Arc<RenderVideoConstants>,
     fps: u32,
     resolution_base: XY<u32>,
+    recordings: Arc<ProjectRecordings>,
 }
 
 impl<TOnProgress> Exporter<TOnProgress>
 where
-    TOnProgress: Fn(u32) + Send + 'static,
+    TOnProgress: FnMut(u32) + Send + 'static,
 {
     pub async fn new(
         project: ProjectConfiguration,
@@ -71,6 +72,7 @@ where
         segments: &[Segment],
         fps: u32,
         resolution_base: XY<u32>,
+        recordings: Arc<ProjectRecordings>,
     ) -> Result<Self, ExportError> {
         let RecordingMetaInner::Studio(meta) = &recording_meta.inner else {
             return Err(ExportError::Other(
@@ -95,7 +97,7 @@ where
                         camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                     }
                 }
-                cap_project::StudioRecordingMeta::MultipleSegments { inner } => {
+                cap_project::StudioRecordingMeta::MultipleSegments { inner, .. } => {
                     let s = &inner.segments[i];
 
                     SegmentVideoPaths {
@@ -106,7 +108,7 @@ where
             };
             render_segments.push(RenderSegment {
                 cursor: s.cursor.clone(),
-                decoders: RecordingSegmentDecoders::new(&recording_meta, meta, segment_paths)
+                decoders: RecordingSegmentDecoders::new(&recording_meta, meta, segment_paths, i)
                     .await
                     .map_err(ExportError::Other)?,
             });
@@ -130,10 +132,11 @@ where
             output_size,
             fps,
             resolution_base,
+            recordings: recordings.clone(),
         })
     }
 
-    pub async fn export_with_custom_muxer(self) -> Result<PathBuf, ExportError> {
+    pub async fn export_with_custom_muxer(mut self) -> Result<PathBuf, ExportError> {
         let meta = match &self.recording_meta.inner {
             RecordingMetaInner::Studio(meta) => meta,
             _ => panic!("Not a studio recording"),
@@ -281,6 +284,7 @@ where
             self.render_segments,
             self.fps,
             self.resolution_base,
+            &self.recordings,
         )
         .then(|f| async { f.map_err(Into::into) });
 

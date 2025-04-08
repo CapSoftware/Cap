@@ -1405,7 +1405,8 @@ export function ConfigSidebar() {
           </Field>
         </KTabs.Content>
         <KTabs.Content value="cursor" class="flex flex-col gap-6">
-          {window.FLAGS.recordMouseState === true ? (
+          {editorInstance.meta.type === "multiple" &&
+          editorInstance.meta.segments[0].cursor ? (
             <>
               <Field name="Cursor" icon={<IconCapCursor />}>
                 <Subfield name="Hide cursor when not moving">

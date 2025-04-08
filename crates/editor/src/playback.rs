@@ -9,7 +9,6 @@ use cpal::{
     BufferSize, SampleFormat,
 };
 use tokio::{sync::watch, time::Instant};
-use tracing::debug;
 
 use crate::editor;
 use crate::editor_instance::Segment;
@@ -89,14 +88,12 @@ impl Playback {
                 if let Some((segment_time, segment_i)) = project.get_segment_time(time) {
                     let segment = &self.segments[segment_i as usize];
 
-                    let now = Instant::now();
                     let data = tokio::select! {
                         _ = stop_rx.changed() => { break; },
                         data = segment.decoders.get_frames(segment_time as f32, !project.camera.hide) => { data }
                     };
 
                     if let Some(segment_frames) = data {
-                        let now = Instant::now();
                         let uniforms = ProjectUniforms::new(
                             &self.render_constants,
                             &project,

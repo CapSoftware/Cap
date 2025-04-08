@@ -124,6 +124,7 @@ impl H264Encoder {
             frame
         };
 
+        dbg!(frame.pts());
         if let Err(e) = self.encoder.send_frame(&frame) {
             tracing::error!("Failed to send frame to encoder: {:?}", e);
             return;

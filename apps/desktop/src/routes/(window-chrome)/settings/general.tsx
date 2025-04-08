@@ -243,6 +243,12 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
               <IconCapChevronDown class="size-4" />
             </button>
           </Setting>
+          <ToggleSetting
+            label="Enable custom cursor capture in Studio Mode (Experimental)"
+            description="Whether Studio Mode recordings should capture cursor state separately, for customisation (size, smoothing) in the editor. Currently experimental as cursor events may not be captured accurately."
+            value={!!settings.customCursorCapture}
+            onChange={(value) => handleChange("customCursorCapture", value)}
+          />
         </div>
       </div>
     </div>

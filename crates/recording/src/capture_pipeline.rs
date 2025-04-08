@@ -2,6 +2,7 @@ use std::{
     future::Future,
     path::PathBuf,
     sync::{atomic::AtomicBool, Arc},
+    time::SystemTime,
 };
 
 use cap_media::{
@@ -110,7 +111,7 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
 
         if let Some(audio) = audio {
             let sink = audio_mixer.sink(audio.audio_info());
-            let source = AudioInputSource::init(audio, sink.tx);
+            let source = AudioInputSource::init(audio, sink.tx, SystemTime::now());
 
             builder.spawn_source("microphone_capture", source);
         }
@@ -231,7 +232,7 @@ impl MakeCapturePipeline for AVFrameCapture {
 
         if let Some(audio) = audio {
             let sink = audio_mixer.sink(audio.audio_info());
-            let source = AudioInputSource::init(audio, sink.tx);
+            let source = AudioInputSource::init(audio, sink.tx, SystemTime::now());
 
             builder.spawn_source("microphone_capture", source);
         }
@@ -301,6 +302,7 @@ pub fn create_screen_capture(
     force_show_cursor: bool,
     max_fps: u32,
     audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
+    start_time: SystemTime,
 ) -> Result<ScreenCaptureReturn<ScreenCaptureMethod>, RecordingError> {
     let (video_tx, video_rx) = flume::bounded(16);
 
@@ -312,6 +314,7 @@ pub fn create_screen_capture(
         max_fps,
         video_tx,
         audio_tx,
+        start_time,
     )
     .map(|v| (v, video_rx))
     .map_err(|e| RecordingError::Media(MediaError::TaskLaunch(e)))
