@@ -36,6 +36,7 @@ export const COMPRESSION_OPTIONS = [
 ] as const;
 
 export const FPS_OPTIONS = [
+  { label: "15 FPS", value: 15 },
   { label: "30 FPS", value: 30 },
   { label: "60 FPS", value: 60 },
 ] satisfies Array<{ label: string; value: number }>;
