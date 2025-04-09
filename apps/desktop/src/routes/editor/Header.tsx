@@ -76,7 +76,7 @@ export function Header() {
         />
 
         <p class="text-sm text-gray-500">
-          {editorInstance.prettyName}
+          {editorInstance.meta.prettyName}
           <span class="text-sm text-gray-400">.cap</span>
         </p>
         {/* <ErrorBoundary fallback={<></>}>

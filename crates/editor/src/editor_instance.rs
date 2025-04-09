@@ -20,7 +20,7 @@ pub struct EditorInstance {
     pub project_path: PathBuf,
     pub id: String,
     pub ws_port: u16,
-    pub recordings: ProjectRecordings,
+    pub recordings: Arc<ProjectRecordings>,
     pub renderer: Arc<editor::RendererHandle>,
     pub render_constants: Arc<RenderVideoConstants>,
     pub state: Arc<Mutex<EditorState>>,
@@ -52,7 +52,6 @@ impl EditorInstance {
         projects_path: PathBuf,
         video_id: &str,
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
-        get_is_upgraded: impl Fn() -> bool + Send + 'static,
     ) -> Result<Arc<Self>, String> {
         sentry::configure_scope(|scope| {
             scope.set_tag("crate", "editor");
@@ -78,7 +77,7 @@ impl EditorInstance {
             return Err("Cannot edit non-studio recordings".to_string());
         };
         let project = recording_meta.project_config();
-        let recordings = ProjectRecordings::new(&recording_meta.project_path, meta);
+        let recordings = Arc::new(ProjectRecordings::new(&recording_meta.project_path, meta)?);
 
         let render_options = RenderOptions {
             screen_size: XY::new(
@@ -108,7 +107,7 @@ impl EditorInstance {
             frame_tx,
             &recording_meta,
             meta,
-        ));
+        )?);
 
         let (preview_tx, preview_rx) = watch::channel(None);
 
@@ -132,10 +131,8 @@ impl EditorInstance {
             meta: recording_meta,
         });
 
-        this.state.lock().await.preview_task = Some(
-            this.clone()
-                .spawn_preview_renderer(preview_rx, get_is_upgraded),
-        );
+        this.state.lock().await.preview_task =
+            Some(this.clone().spawn_preview_renderer(preview_rx));
 
         Ok(this)
     }
@@ -244,7 +241,6 @@ impl EditorInstance {
     fn spawn_preview_renderer(
         self: Arc<Self>,
         mut preview_rx: watch::Receiver<Option<(u32, u32, XY<u32>)>>,
-        get_is_upgraded: impl Fn() -> bool + Send + 'static,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {
@@ -353,6 +349,7 @@ pub async fn create_segments(
                     display: recording_meta.path(&s.display.path),
                     camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                 },
+                0,
             )
             .await
             .map_err(|e| format!("SingleSegment / {e}"))?;
@@ -364,12 +361,12 @@ pub async fn create_segments(
                 decoders,
             }])
         }
-        cap_project::StudioRecordingMeta::MultipleSegments { inner } => {
+        cap_project::StudioRecordingMeta::MultipleSegments { inner, .. } => {
             let mut segments = vec![];
 
             for (i, s) in inner.segments.iter().enumerate() {
                 let audio = s
-                    .audio
+                    .mic
                     .as_ref()
                     .map(|audio| {
                         AudioData::from_file(recording_meta.path(&audio.path))
@@ -397,6 +394,7 @@ pub async fn create_segments(
                         display: recording_meta.path(&s.display.path),
                         camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                     },
+                    i,
                 )
                 .await
                 .map_err(|e| format!("MultipleSegments {i} / {e}"))?;

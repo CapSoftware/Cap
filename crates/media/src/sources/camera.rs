@@ -1,5 +1,5 @@
 use flume::{Receiver, Sender};
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 use tracing::{error, info};
 
 use crate::{
@@ -12,15 +12,17 @@ use crate::{
 pub struct CameraSource {
     feed_connection: CameraConnection,
     video_info: VideoInfo,
-    output: Sender<FFVideo>,
+    output: Sender<(FFVideo, f64)>,
+    start_time: SystemTime,
 }
 
 impl CameraSource {
-    pub fn init(feed: &CameraFeed, output: Sender<FFVideo>) -> Self {
+    pub fn init(feed: &CameraFeed, output: Sender<(FFVideo, f64)>, start_time: SystemTime) -> Self {
         Self {
             feed_connection: feed.create_connection(),
             video_info: feed.video_info(),
             output,
+            start_time,
         }
     }
 
@@ -37,17 +39,23 @@ impl CameraSource {
             mut frame,
             captured_at,
         } = camera_frame;
-        match clock.timestamp_for(captured_at) {
-            None => {
-                eprintln!("Clock is currently stopped. Dropping frames.");
-            }
-            Some(timestamp) => {
-                frame.set_pts(Some(timestamp));
-                if let Err(_) = self.output.send(frame) {
-                    return Err(MediaError::Any("Pipeline is unreachable! Stopping capture"));
-                }
-            }
+        // match clock.timestamp_for(captured_at) {
+        //     None => {
+        //         eprintln!("Clock is currently stopped. Dropping frames.");
+        //     }
+        //     Some(timestamp) => {
+        //         frame.set_pts(Some(timestamp));
+        if let Err(_) = self.output.send((
+            frame,
+            captured_at
+                .duration_since(self.start_time)
+                .unwrap()
+                .as_secs_f64(),
+        )) {
+            return Err(MediaError::Any("Pipeline is unreachable! Stopping capture"));
         }
+        // }
+        // }
 
         Ok(())
     }

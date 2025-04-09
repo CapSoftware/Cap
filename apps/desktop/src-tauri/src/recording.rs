@@ -246,6 +246,7 @@ pub async fn start_recording(
     // done in spawn to catch panics just in case
     let actor_done_rx = spawn_actor({
         let state_mtx = Arc::clone(&state_mtx);
+        let app = app.clone();
         async move {
             fail!("recording::spawn_actor");
             let mut state = state_mtx.write().await;
@@ -258,6 +259,11 @@ pub async fn start_recording(
                         recording_options.clone(),
                         state.camera_feed.clone(),
                         &state.mic_feed,
+                        GeneralSettingsStore::get(&app)
+                            .ok()
+                            .flatten()
+                            .map(|s| s.custom_cursor_capture)
+                            .unwrap_or_default(),
                     )
                     .await
                     .map_err(|e| {
@@ -446,7 +452,7 @@ async fn handle_recording_finish(
             StudioRecordingMeta::SingleSegment { segment } => {
                 segment.display.path.to_path(&recording_dir)
             }
-            StudioRecordingMeta::MultipleSegments { inner } => {
+            StudioRecordingMeta::MultipleSegments { inner, .. } => {
                 inner.segments[0].display.path.to_path(&recording_dir)
             }
         },
@@ -464,7 +470,7 @@ async fn handle_recording_finish(
 
     let (meta_inner, sharing) = match completed_recording {
         CompletedRecording::Studio(recording) => {
-            let recordings = ProjectRecordings::new(&recording_dir, &recording.meta);
+            let recordings = ProjectRecordings::new(&recording_dir, &recording.meta)?;
 
             let config = project_config_from_recording(
                 &recording,
@@ -532,7 +538,9 @@ async fn handle_recording_finish(
                                 .await;
 
                             match resp {
-                                Ok(r) if r.status() == 204 => {
+                                Ok(r)
+                                    if r.status().as_u16() >= 200 && r.status().as_u16() < 300 =>
+                                {
                                     info!("Screenshot uploaded successfully");
                                 }
                                 Ok(r) => {

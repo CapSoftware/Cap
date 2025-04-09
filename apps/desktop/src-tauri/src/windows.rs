@@ -189,6 +189,7 @@ impl ShowCapWindow {
                         .maximized(false)
                         .maximizable(false)
                         .always_on_top(true)
+                        .visible_on_all_workspaces(true)
                         .center()
                         .build()?;
 

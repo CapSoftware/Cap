@@ -57,9 +57,7 @@ export function Editor() {
 
               if (!editorInstance) return;
 
-              return {
-                editorInstance,
-              };
+              return { editorInstance };
             })()}
           >
             {(values) => (

@@ -84,6 +84,7 @@ impl RecordStart {
             },
             camera.map(|c| Arc::new(Mutex::new(c))),
             &None,
+            false,
         )
         .await
         .map_err(|e| e.to_string())?;

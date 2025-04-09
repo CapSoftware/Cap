@@ -266,7 +266,7 @@ pub fn monitor_bounds(id: u32) -> Bounds {
             return TRUE;
         }
 
-        let id = display_device.StateFlags as u32;
+        let id = hmonitor.0 as u32;
 
         if id == *target_id {
             let rect = minfo.monitorInfo.rcMonitor;

@@ -5,7 +5,7 @@ use flume::{Receiver, Sender, TryRecvError, TrySendError};
 use nokhwa::{pixel_format::RgbAFormat, utils::*, Camera};
 use std::{
     thread::{self, JoinHandle},
-    time::Instant,
+    time::{Instant, SystemTime},
 };
 use tracing::{debug, error, info, trace, warn};
 
@@ -26,7 +26,7 @@ enum CameraControl {
 #[derive(Clone)]
 pub struct RawCameraFrame {
     pub frame: FFVideo,
-    pub captured_at: Instant,
+    pub captured_at: SystemTime,
 }
 
 pub struct CameraConnection {
@@ -323,7 +323,7 @@ fn run_camera_feed(
 
         match camera.frame() {
             Ok(raw_buffer) => {
-                let captured_at = Instant::now();
+                let captured_at = SystemTime::now();
 
                 let frame = RawCameraFrame {
                     frame: buffer_to_ffvideo(raw_buffer),

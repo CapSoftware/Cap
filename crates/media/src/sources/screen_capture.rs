@@ -13,7 +13,7 @@ use scap::{
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::{collections::HashMap, ops::ControlFlow, sync::Arc};
+use std::{collections::HashMap, ops::ControlFlow, sync::Arc, time::SystemTime};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
@@ -133,6 +133,7 @@ pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
     video_tx: Sender<(TCaptureFormat::VideoFormat, f64)>,
     audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
     _phantom: std::marker::PhantomData<TCaptureFormat>,
+    start_time: SystemTime,
 }
 
 impl<T: ScreenCaptureFormat> std::fmt::Debug for ScreenCaptureSource<T> {
@@ -192,6 +193,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCapture
             video_tx: self.video_tx.clone(),
             audio_tx: self.audio_tx.clone(),
             _phantom: std::marker::PhantomData,
+            start_time: self.start_time.clone(),
         }
     }
 }
@@ -207,6 +209,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         max_fps: u32,
         video_tx: Sender<(TCaptureFormat::VideoFormat, f64)>,
         audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
+        start_time: SystemTime,
     ) -> Result<Self, String> {
         cap_fail::fail!("media::screen_capture::init");
 
@@ -231,6 +234,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             video_tx,
             audio_tx,
             _phantom: std::marker::PhantomData,
+            start_time,
         };
 
         let options = this.create_options(scap_target, crop_area, captures_audio)?;
@@ -340,7 +344,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 
         Ok(Options {
             fps: self.fps,
-            show_cursor: self.force_show_cursor || !FLAGS.record_mouse_state,
+            show_cursor: self.force_show_cursor,
             show_highlight: false,
             target: Some(target.clone()),
             crop_area,
@@ -378,6 +382,12 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
         let video_tx = self.video_tx.clone();
         let audio_tx = self.audio_tx.clone();
 
+        let start_time_nanos = self
+            .start_time
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+
         inner(
             self,
             ready_signal,
@@ -387,6 +397,8 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                     if frame.height == 0 || frame.width == 0 {
                         return Some(ControlFlow::Continue(()));
                     }
+
+                    let elapsed_nanos = frame.display_time - start_time_nanos;
 
                     let raw_timestamp = RawNanoseconds(frame.display_time);
                     match clock.timestamp_for(raw_timestamp) {
@@ -439,7 +451,8 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                                 }
                             }
 
-                            if let Err(_) = video_tx.send((buffer, 0.0)) {
+                            let time_f = elapsed_nanos as f64 / 1_000_000_000.0;
+                            if let Err(_) = video_tx.send((buffer, time_f)) {
                                 error!("Pipeline is unreachable. Shutting down recording.");
                                 return Some(ControlFlow::Break(()));
                             }
@@ -574,6 +587,12 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         let start_cmtime = cidre::cm::Clock::host_time_clock().time();
         let start_cmtime = start_cmtime.value as f64 / start_cmtime.scale as f64;
 
+        let start_time_f64 = self
+            .start_time
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+
         inner(
             self,
             ready_signal,
@@ -587,6 +606,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                     let frame_time =
                         sample_buffer.pts().value as f64 / sample_buffer.pts().scale as f64;
                     let unix_timestamp = start_time_unix + frame_time - start_cmtime;
+                    let relative_time = unix_timestamp - start_time_f64;
 
                     match typ {
                         SCStreamOutputType::Screen => {
@@ -598,13 +618,13 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                                 return Some(ControlFlow::Continue(()));
                             }
 
-                            if let Err(_) = video_tx.send((sample_buffer, frame_time)) {
+                            if let Err(_) = video_tx.send((sample_buffer, relative_time)) {
                                 eprintln!("Pipeline is unreachable. Shutting down recording.");
                                 return Some(ControlFlow::Continue(()));
                             }
                         }
                         SCStreamOutputType::Audio => {
-                            println!("audio: {frame_time}");
+                            // println!("audio: {frame_time}");
                             let Some(audio_tx) = &audio_tx else {
                                 return Some(ControlFlow::Continue(()));
                             };
@@ -626,10 +646,9 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                                 );
                             }
 
-                            let timestamp = frame_time - start_cmtime;
                             frame.set_pts(Some((frame_time * AV_TIME_BASE_Q.den as f64) as i64));
 
-                            let _ = audio_tx.send((frame, timestamp));
+                            let _ = audio_tx.send((frame, relative_time));
                         }
                     }
 

@@ -975,9 +975,9 @@ struct SerializedEditorInstance {
     frames_socket_url: String,
     recording_duration: f64,
     saved_project_config: ProjectConfiguration,
-    recordings: ProjectRecordings,
+    recordings: Arc<ProjectRecordings>,
     path: PathBuf,
-    pretty_name: String,
+    meta: RecordingMeta,
 }
 
 #[tauri::command]
@@ -1003,7 +1003,7 @@ async fn create_editor_instance(
         },
         recordings: editor_instance.recordings.clone(),
         path: editor_instance.project_path.clone(),
-        pretty_name: meta.pretty_name,
+        meta,
     })
 }
 
@@ -1077,7 +1077,7 @@ async fn get_video_metadata(
             StudioRecordingMeta::SingleSegment { segment } => {
                 vec![recording_meta.path(&segment.display.path)]
             }
-            StudioRecordingMeta::MultipleSegments { inner } => inner
+            StudioRecordingMeta::MultipleSegments { inner, .. } => inner
                 .segments
                 .iter()
                 .map(|s| recording_meta.path(&s.display.path))
@@ -2415,6 +2415,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                 tokio::spawn(EditorInstances::remove(window.clone()));
                             }
                             CapWindowId::Settings | CapWindowId::Upgrade => {
+                                if let Some(window) = CapWindowId::Main.get(&app) {
+                                    let _ = window.show();
+                                }
                                 // Don't quit the app when settings or upgrade window is closed
                                 return;
                             }
@@ -2492,26 +2495,12 @@ async fn create_editor_instance_impl(
 ) -> Result<Arc<EditorInstance>, String> {
     let app = app.clone();
 
-    let instance = EditorInstance::new(
-        recordings_path(&app),
-        video_id,
-        {
-            let app = app.clone();
-            move |state| {
-                EditorStateChanged::new(state).emit(&app).ok();
-            }
-        },
-        {
-            let app = app.clone();
-            move || {
-                AuthStore::get(&app)
-                    .ok()
-                    .flatten()
-                    .map(|s| s.is_upgraded())
-                    .unwrap_or(false)
-            }
-        },
-    )
+    let instance = EditorInstance::new(recordings_path(&app), video_id, {
+        let app = app.clone();
+        move |state| {
+            EditorStateChanged::new(state).emit(&app).ok();
+        }
+    })
     .await?;
 
     RenderFrameEvent::listen_any(&app, {

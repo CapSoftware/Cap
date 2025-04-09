@@ -167,9 +167,10 @@ export default function () {
           <Tooltip.Trigger>
             <button
               type="button"
-              onClick={() =>
-                commands.showWindow({ Settings: { page: "general" } })
-              }
+              onClick={async () => {
+                await commands.showWindow({ Settings: { page: "general" } });
+                getCurrentWindow().hide();
+              }}
               class="flex items-center justify-center w-5 h-5 -ml-[1.5px]"
             >
               <IconCapSettings class="text-gray-400 size-5 hover:text-gray-500" />
@@ -186,9 +187,10 @@ export default function () {
           <Tooltip.Trigger>
             <button
               type="button"
-              onClick={() =>
-                commands.showWindow({ Settings: { page: "recordings" } })
-              }
+              onClick={async () => {
+                await commands.showWindow({ Settings: { page: "recordings" } });
+                getCurrentWindow().hide();
+              }}
               class="flex justify-center items-center w-5 h-5"
             >
               <IconLucideSquarePlay class="text-gray-400 size-5 hover:text-gray-500" />
@@ -1074,6 +1076,7 @@ function ChangelogButton() {
 
   const handleChangelogClick = () => {
     commands.showWindow({ Settings: { page: "changelog" } });
+    getCurrentWindow().hide();
     const version = currentVersion();
     if (version) {
       setChangelogState({

@@ -423,7 +423,14 @@ export function ConfigSidebar() {
             //   icon: IconCapMessageBubble,
             // },
             { id: "audio" as const, icon: IconCapAudioOn },
-            { id: "cursor" as const, icon: IconCapCursor },
+            {
+              id: "cursor" as const,
+              icon: IconCapCursor,
+              disabled: !(
+                editorInstance.meta.type === "multiple" &&
+                editorInstance.meta.segments[0].cursor
+              ),
+            },
             // { id: "hotkeys" as const, icon: IconCapHotkeys },
           ]}
         >
@@ -1405,73 +1412,71 @@ export function ConfigSidebar() {
           </Field>
         </KTabs.Content>
         <KTabs.Content value="cursor" class="flex flex-col gap-6">
-          {window.FLAGS.recordMouseState === true ? (
-            <>
-              <Field name="Cursor" icon={<IconCapCursor />}>
-                <Subfield name="Hide cursor when not moving">
-                  <Toggle
-                    checked={project.cursor.hideWhenIdle}
-                    onChange={(v) => setProject("cursor", "hideWhenIdle", v)}
+          <Field name="Cursor" icon={<IconCapCursor />}>
+            <Subfield name="Hide cursor when not moving">
+              <Toggle
+                checked={project.cursor.hideWhenIdle}
+                onChange={(v) => setProject("cursor", "hideWhenIdle", v)}
+              />
+            </Subfield>
+          </Field>
+          <Field name="Size" icon={<IconCapEnlarge />}>
+            <Slider
+              value={[project.cursor.size]}
+              onChange={(v) => setProject("cursor", "size", v[0])}
+              minValue={20}
+              maxValue={300}
+              step={1}
+            />
+          </Field>
+          <KCollapsible open={!project.cursor.raw}>
+            <Field
+              name="Smooth Movement"
+              icon={<IconHugeiconsEaseCurveControlPoints />}
+              value={
+                <Toggle
+                  checked={!project.cursor.raw}
+                  onChange={(value) => {
+                    setProject("cursor", "raw", !value);
+                  }}
+                />
+              }
+            />
+            <KCollapsible.Content class="overflow-hidden border-b border-gray-200 opacity-0 transition-opacity animate-collapsible-up ui-expanded:animate-collapsible-down ui-expanded:opacity-100">
+              {/* if Content has padding or margin the animation doesn't look as good */}
+              <div class="flex flex-col gap-4 pt-4 pb-6">
+                <Field name="Tension">
+                  <Slider
+                    value={[project.cursor.tension]}
+                    onChange={(v) => setProject("cursor", "tension", v[0])}
+                    minValue={1}
+                    maxValue={500}
+                    step={1}
                   />
-                </Subfield>
-              </Field>
-              <Field name="Size" icon={<IconCapEnlarge />}>
-                <Slider
-                  value={[project.cursor.size]}
-                  onChange={(v) => setProject("cursor", "size", v[0])}
-                  minValue={20}
-                  maxValue={300}
-                  step={1}
-                />
-              </Field>
-              <KCollapsible open={!project.cursor.raw}>
-                <Field
-                  name="Smooth Movement"
-                  icon={<IconHugeiconsEaseCurveControlPoints />}
-                  value={
-                    <Toggle
-                      checked={!project.cursor.raw}
-                      onChange={(value) => {
-                        setProject("cursor", "raw", !value);
-                      }}
-                    />
-                  }
-                />
-                <KCollapsible.Content class="overflow-hidden border-b border-gray-200 opacity-0 transition-opacity animate-collapsible-up ui-expanded:animate-collapsible-down ui-expanded:opacity-100">
-                  {/* if Content has padding or margin the animation doesn't look as good */}
-                  <div class="flex flex-col gap-4 pt-4 pb-6">
-                    <Field name="Tension">
-                      <Slider
-                        value={[project.cursor.tension]}
-                        onChange={(v) => setProject("cursor", "tension", v[0])}
-                        minValue={1}
-                        maxValue={500}
-                        step={1}
-                      />
-                    </Field>
-                    <Field name="Friction">
-                      <Slider
-                        value={[project.cursor.friction]}
-                        onChange={(v) => setProject("cursor", "friction", v[0])}
-                        minValue={0}
-                        maxValue={50}
-                        step={0.1}
-                      />
-                    </Field>
-                    <Field name="Mass">
-                      <Slider
-                        value={[project.cursor.mass]}
-                        onChange={(v) => setProject("cursor", "mass", v[0])}
-                        minValue={0.1}
-                        maxValue={10}
-                        step={0.01}
-                      />
-                    </Field>
-                  </div>
-                </KCollapsible.Content>
-              </KCollapsible>
+                </Field>
+                <Field name="Friction">
+                  <Slider
+                    value={[project.cursor.friction]}
+                    onChange={(v) => setProject("cursor", "friction", v[0])}
+                    minValue={0}
+                    maxValue={50}
+                    step={0.1}
+                  />
+                </Field>
+                <Field name="Mass">
+                  <Slider
+                    value={[project.cursor.mass]}
+                    onChange={(v) => setProject("cursor", "mass", v[0])}
+                    minValue={0.1}
+                    maxValue={10}
+                    step={0.01}
+                  />
+                </Field>
+              </div>
+            </KCollapsible.Content>
+          </KCollapsible>
 
-              {/* <Field name="Motion Blur">
+          {/* <Field name="Motion Blur">
                 <Slider
                   value={[project.cursor.motionBlur]}
                   onChange={(v) => setProject("cursor", "motionBlur", v[0])}
@@ -1480,7 +1485,7 @@ export function ConfigSidebar() {
                   step={0.001}
                 />
               </Field> */}
-              {/* <Field name="Animation Style" icon={<IconLucideRabbit />}>
+          {/* <Field name="Animation Style" icon={<IconLucideRabbit />}>
             <RadioGroup
               defaultValue="regular"
               value={project.cursor.animationStyle}
@@ -1525,13 +1530,6 @@ export function ConfigSidebar() {
               ))}
             </RadioGroup>
           </Field> */}
-            </>
-          ) : (
-            <div class="flex flex-col gap-2 justify-center items-center p-4 text-gray-400">
-              <IconCapCursor class="size-6" />
-              <span>Cursor settings coming soon</span>
-            </div>
-          )}
         </KTabs.Content>
         <KTabs.Content value="hotkeys">
           <Field name="Hotkeys" icon={<IconCapHotkeys />}>

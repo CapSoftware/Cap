@@ -162,6 +162,8 @@ pub async fn spawn_instant_recording_actor(
 ) -> Result<(InstantRecordingHandle, tokio::sync::oneshot::Receiver<()>), RecordingError> {
     ensure_dir(&recording_dir)?;
 
+    let start_time = SystemTime::now();
+
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
 
     trace!("creating recording actor");
@@ -175,8 +177,14 @@ pub async fn spawn_instant_recording_actor(
         (None, None)
     };
 
-    let (screen_source, screen_rx) =
-        create_screen_capture(&options.capture_target, true, true, 30, system_audio.0)?;
+    let (screen_source, screen_rx) = create_screen_capture(
+        &options.capture_target,
+        true,
+        true,
+        30,
+        system_audio.0,
+        start_time,
+    )?;
 
     debug!("screen capture: {screen_source:#?}");
 
