@@ -30,21 +30,8 @@ impl CameraSource {
         self.video_info
     }
 
-    fn process_frame(
-        &self,
-        clock: &mut RealTimeClock<Instant>,
-        camera_frame: RawCameraFrame,
-    ) -> Result<(), MediaError> {
-        let RawCameraFrame {
-            mut frame,
-            captured_at,
-        } = camera_frame;
-        // match clock.timestamp_for(captured_at) {
-        //     None => {
-        //         eprintln!("Clock is currently stopped. Dropping frames.");
-        //     }
-        //     Some(timestamp) => {
-        //         frame.set_pts(Some(timestamp));
+    fn process_frame(&self, camera_frame: RawCameraFrame) -> Result<(), MediaError> {
+        let RawCameraFrame { frame, captured_at } = camera_frame;
         if let Err(_) = self.output.send((
             frame,
             captured_at
@@ -54,22 +41,16 @@ impl CameraSource {
         )) {
             return Err(MediaError::Any("Pipeline is unreachable! Stopping capture"));
         }
-        // }
-        // }
 
         Ok(())
     }
 
-    fn pause_and_drain_frames(
-        &self,
-        clock: &mut RealTimeClock<Instant>,
-        frames_rx: Receiver<RawCameraFrame>,
-    ) {
+    fn pause_and_drain_frames(&self, frames_rx: Receiver<RawCameraFrame>) {
         let frames: Vec<RawCameraFrame> = frames_rx.drain().collect();
         drop(frames_rx);
 
         for frame in frames {
-            if let Err(error) = self.process_frame(clock, frame) {
+            if let Err(error) = self.process_frame(frame) {
                 eprintln!("{error}");
                 break;
             }
@@ -83,7 +64,7 @@ impl PipelineSourceTask for CameraSource {
     // #[tracing::instrument(skip_all)]
     fn run(
         &mut self,
-        mut clock: Self::Clock,
+        _: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
     ) {
@@ -99,7 +80,7 @@ impl PipelineSourceTask for CameraSource {
             match control_signal.last() {
                 Some(Control::Play) => match frames.drain().last().or_else(|| frames.recv().ok()) {
                     Some(frame) => {
-                        if let Err(error) = self.process_frame(&mut clock, frame) {
+                        if let Err(error) = self.process_frame(frame) {
                             eprintln!("{error}");
                             break;
                         }
@@ -111,7 +92,7 @@ impl PipelineSourceTask for CameraSource {
                 },
                 Some(Control::Shutdown) | None => {
                     if let Some(rx) = frames_rx.take() {
-                        self.pause_and_drain_frames(&mut clock, rx);
+                        self.pause_and_drain_frames(rx);
                     }
                     info!("Camera source stopped");
                     break;

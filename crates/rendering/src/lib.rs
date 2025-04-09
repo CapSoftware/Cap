@@ -229,7 +229,6 @@ pub async fn render_video_to_channel(
             .get_frames(segment_time as f32, !project.camera.hide)
             .await
         {
-            println!("decoded frames in {:?}", now.elapsed());
             let uniforms =
                 ProjectUniforms::new(&constants, &project, frame_number, fps, resolution_base);
             let now = Instant::now();
@@ -238,7 +237,6 @@ pub async fn render_video_to_channel(
                 .render(segment_frames, uniforms, &segment.cursor)
                 .await?;
 
-            println!("rendered frame in {:?}", now.elapsed());
             if frame.width == 0 || frame.height == 0 {
                 continue;
             }

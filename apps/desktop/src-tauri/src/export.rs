@@ -98,10 +98,7 @@ pub async fn export_video(
     let result = exporter.export_with_custom_muxer().await;
 
     match result {
-        Ok(_) => {
-            ShowCapWindow::RecordingsOverlay.show(&app).await.ok();
-            Ok(output_path)
-        }
+        Ok(_) => Ok(output_path),
         Err(e) => {
             sentry::capture_message(&e.to_string(), sentry::Level::Error);
             Err(e.to_string())

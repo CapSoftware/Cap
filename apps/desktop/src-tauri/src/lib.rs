@@ -1516,6 +1516,8 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
 
         use cap_project::*;
         RecordingMeta {
+            platform: Some(Platform::default()),
+
             project_path: recording_dir.clone(),
             sharing: None,
             pretty_name: screenshot_name,

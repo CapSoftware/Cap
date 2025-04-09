@@ -2267,16 +2267,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dirs-next"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b98cf8ebf19c3d1b223e151f99a4f9f0690dca41414773390fc824184ac833e1"
-dependencies = [
- "cfg-if 1.0.0",
- "dirs-sys-next",
-]
-
-[[package]]
 name = "dirs-sys"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2284,19 +2274,8 @@ checksum = "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab"
 dependencies = [
  "libc",
  "option-ext",
- "redox_users 0.5.0",
+ "redox_users",
  "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "dirs-sys-next"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ebda144c4fe02d1f7ea1a7d9641b6fc6b580adcfa024ae48797ecdeb6825b4d"
-dependencies = [
- "libc",
- "redox_users 0.4.6",
- "winapi",
 ]
 
 [[package]]
@@ -4176,14 +4155,13 @@ checksum = "c41e0c4fef86961ac6d6f8a82609f55f31b05e4fce149ac5710e439df7619ba4"
 
 [[package]]
 name = "mac-notification-sys"
-version = "0.6.2"
+version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dce8f34f3717aa37177e723df6c1fc5fb02b2a1087374ea3fe0ea42316dc8f91"
+checksum = "0b95dfb34071d1592b45622bf93e315e3a72d414b6782aca9a015c12bec367ef"
 dependencies = [
  "cc",
- "dirs-next",
- "objc-foundation",
- "objc_id",
+ "objc2 0.6.0",
+ "objc2-foundation 0.3.0",
  "time",
 ]
 
@@ -4590,7 +4568,7 @@ checksum = "72ef4a56884ca558e5ddb05a1d1e7e1bfd9a68d9ed024c21704cc98872dae1bb"
 [[package]]
 name = "nokhwa"
 version = "0.10.3"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=e309b938ccd6#e309b938ccd6d17afac4017b11e7bda9f6cd9f35"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=b9c8079e82e2#b9c8079e82e27f0d0f8870d0b40f19dad7cae64c"
 dependencies = [
  "flume 0.10.14",
  "image 0.24.9",
@@ -4606,7 +4584,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-bindings-linux"
 version = "0.1.0"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=e309b938ccd6#e309b938ccd6d17afac4017b11e7bda9f6cd9f35"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=b9c8079e82e2#b9c8079e82e27f0d0f8870d0b40f19dad7cae64c"
 dependencies = [
  "nokhwa-core",
  "v4l",
@@ -4616,7 +4594,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-bindings-macos"
 version = "0.2.0"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=e309b938ccd6#e309b938ccd6d17afac4017b11e7bda9f6cd9f35"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=b9c8079e82e2#b9c8079e82e27f0d0f8870d0b40f19dad7cae64c"
 dependencies = [
  "block",
  "cocoa-foundation 0.1.2",
@@ -4631,7 +4609,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-bindings-windows"
 version = "0.4.0"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=e309b938ccd6#e309b938ccd6d17afac4017b11e7bda9f6cd9f35"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=b9c8079e82e2#b9c8079e82e27f0d0f8870d0b40f19dad7cae64c"
 dependencies = [
  "nokhwa-core",
  "once_cell",
@@ -4641,7 +4619,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-core"
 version = "0.1.0"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=e309b938ccd6#e309b938ccd6d17afac4017b11e7bda9f6cd9f35"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=b9c8079e82e2#b9c8079e82e27f0d0f8870d0b40f19dad7cae64c"
 dependencies = [
  "bytes",
  "image 0.24.9",
@@ -6054,17 +6032,6 @@ dependencies = [
 
 [[package]]
 name = "redox_users"
-version = "0.4.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba009ff324d1fc1b900bd1fdb31564febe58a8ccc8a6fdbb93b543d33b13ca43"
-dependencies = [
- "getrandom 0.2.15",
- "libredox",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "redox_users"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd6f9d3d47bdd2ad6945c5015a226ec6155d0bcdfd8f7cd29f86b71f8de99d2b"
@@ -6374,7 +6341,7 @@ dependencies = [
 [[package]]
 name = "scap"
 version = "0.0.8"
-source = "git+https://github.com/CapSoftware/scap?rev=d99830264854#d998302648546946ad08b7d92b4e65648e2b4f6b"
+source = "git+https://github.com/CapSoftware/scap?rev=e7897ad88d1b#e7897ad88d1b641a69cbf0f1ef3c5ae8b813309f"
 dependencies = [
  "cocoa 0.25.0",
  "core-foundation 0.10.0",

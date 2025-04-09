@@ -382,11 +382,12 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
         let video_tx = self.video_tx.clone();
         let audio_tx = self.audio_tx.clone();
 
-        let start_time_nanos = self
-            .start_time
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos() as u64;
+        let start_time = self.start_time;
+        // let start_time_nanos = self
+        //     .start_time
+        //     .duration_since(SystemTime::UNIX_EPOCH)
+        //     .unwrap()
+        //     .as_nanos() as u64;
 
         inner(
             self,
@@ -398,72 +399,58 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                         return Some(ControlFlow::Continue(()));
                     }
 
-                    let elapsed_nanos = frame.display_time - start_time_nanos;
+                    let elapsed = frame.display_time.duration_since(start_time).unwrap();
 
-                    let raw_timestamp = RawNanoseconds(frame.display_time);
-                    match clock.timestamp_for(raw_timestamp) {
-                        None => {
-                            warn!("Clock is currently stopped. Dropping frames.");
-                            None
-                        }
-                        Some(timestamp) => {
-                            let mut buffer = FFVideo::new(
-                                video_info.pixel_format,
-                                video_info.width,
-                                video_info.height,
+                    let mut buffer =
+                        FFVideo::new(video_info.pixel_format, video_info.width, video_info.height);
+
+                    let bytes_per_pixel = 4;
+                    let width_in_bytes = frame.width as usize * bytes_per_pixel;
+                    let height = frame.height as usize;
+
+                    let src_data = &frame.data;
+
+                    let src_stride = src_data.len() / height;
+                    let dst_stride = buffer.stride(0);
+
+                    if src_data.len() < src_stride * height {
+                        warn!("Frame data size mismatch.");
+                        return Some(ControlFlow::Continue(()));
+                    }
+
+                    if src_stride < width_in_bytes {
+                        warn!("Source stride is less than expected width in bytes.");
+                        return Some(ControlFlow::Continue(()));
+                    }
+
+                    if buffer.data(0).len() < dst_stride * height {
+                        warn!("Destination data size mismatch.");
+                        return Some(ControlFlow::Continue(()));
+                    }
+
+                    {
+                        let dst_data = buffer.data_mut(0);
+
+                        for y in 0..height {
+                            let src_offset = y * src_stride;
+                            let dst_offset = y * dst_stride;
+                            dst_data[dst_offset..dst_offset + width_in_bytes].copy_from_slice(
+                                &src_data[src_offset..src_offset + width_in_bytes],
                             );
-                            buffer.set_pts(Some(timestamp));
-
-                            let bytes_per_pixel = 4;
-                            let width_in_bytes = frame.width as usize * bytes_per_pixel;
-                            let height = frame.height as usize;
-
-                            let src_data = &frame.data;
-
-                            let src_stride = src_data.len() / height;
-                            let dst_stride = buffer.stride(0);
-
-                            if src_data.len() < src_stride * height {
-                                warn!("Frame data size mismatch.");
-                                return Some(ControlFlow::Continue(()));
-                            }
-
-                            if src_stride < width_in_bytes {
-                                warn!("Source stride is less than expected width in bytes.");
-                                return Some(ControlFlow::Continue(()));
-                            }
-
-                            if buffer.data(0).len() < dst_stride * height {
-                                warn!("Destination data size mismatch.");
-                                return Some(ControlFlow::Continue(()));
-                            }
-
-                            {
-                                let dst_data = buffer.data_mut(0);
-
-                                for y in 0..height {
-                                    let src_offset = y * src_stride;
-                                    let dst_offset = y * dst_stride;
-                                    dst_data[dst_offset..dst_offset + width_in_bytes]
-                                        .copy_from_slice(
-                                            &src_data[src_offset..src_offset + width_in_bytes],
-                                        );
-                                }
-                            }
-
-                            let time_f = elapsed_nanos as f64 / 1_000_000_000.0;
-                            if let Err(_) = video_tx.send((buffer, time_f)) {
-                                error!("Pipeline is unreachable. Shutting down recording.");
-                                return Some(ControlFlow::Break(()));
-                            }
-
-                            None
                         }
                     }
+
+                    if let Err(_) = video_tx.send((buffer, elapsed.as_secs_f64())) {
+                        error!("Pipeline is unreachable. Shutting down recording.");
+                        return Some(ControlFlow::Break(()));
+                    }
+
+                    None
                 }
                 Ok(Frame::Audio(frame)) => {
                     if let Some(audio_tx) = &audio_tx {
-                        let _ = audio_tx.send((scap_audio_to_ffmpeg(frame), 0.0));
+                        let elapsed = frame.time().duration_since(start_time).unwrap();
+                        let _ = audio_tx.send((scap_audio_to_ffmpeg(frame), elapsed.as_secs_f64()));
                     }
                     None
                 }
