@@ -2227,6 +2227,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                 .show(&app_handle)
                                 .await
                                 .ok();
+                            if let Some(main_window) = CapWindowId::Main.get(&app_handle) {
+                                main_window.close().ok();
+                            }
                         });
                         return;
                     }
@@ -2487,17 +2490,25 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                     let mp4_path = path.join("content/output.mp4");
 
                                     if mp4_path.exists() && mp4_path.is_file() {
-                                        // Open the MP4 file with the system's default video player
                                         let _ = app_handle
                                             .shell()
                                             .open(mp4_path.to_str().unwrap_or_default(), None);
+                                        if let Some(main_window) =
+                                            CapWindowId::Main.get(&app_handle)
+                                        {
+                                            main_window.close().ok();
+                                        }
                                     } else {
-                                        // Proceed with opening the editor as before
                                         tokio::spawn(async move {
                                             ShowCapWindow::Editor { project_id }
                                                 .show(&app_handle)
                                                 .await
                                                 .ok();
+                                            if let Some(main_window) =
+                                                CapWindowId::Main.get(&app_handle)
+                                            {
+                                                main_window.close().ok();
+                                            }
                                         });
                                     }
                                 }
