@@ -2414,9 +2414,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 .await;
             });
 
-            // Tauri v2 handles file associations through the fileAssociations configuration
-            // and file drop events are handled in the on_window_event handler
-
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -2549,10 +2546,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     let handle = handle.clone();
                     let _ = tokio::spawn(async move { ShowCapWindow::Main.show(&handle).await });
                 }
-            }
-            tauri::RunEvent::Ready => {
-                // Nothing special to do on ready - the file associations are configured
-                // in tauri.conf.json and the single-instance plugin will handle file opening
             }
             tauri::RunEvent::ExitRequested { code, api, .. } => {
                 if code.is_none() {
