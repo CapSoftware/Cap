@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
 import { serverEnv } from "@cap/env";
-import { PostHog } from 'posthog-node';
+import { PostHog } from "posthog-node";
 
 const relevantEvents = new Set([
   "checkout.session.completed",
@@ -198,25 +198,25 @@ export const POST = async (req: Request) => {
         try {
           // Initialize server-side PostHog
           const serverPostHog = new PostHog(
-            process.env.NEXT_PUBLIC_POSTHOG_KEY || '',
-            { host: process.env.NEXT_PUBLIC_POSTHOG_HOST || '' }
+            process.env.NEXT_PUBLIC_POSTHOG_KEY || "",
+            { host: process.env.NEXT_PUBLIC_POSTHOG_HOST || "" }
           );
-          
+
           // Track subscription completed event
           serverPostHog.capture({
             distinctId: dbUser.id,
-            event: 'subscription_completed',
+            event: "subscription_completed",
             properties: {
               subscription_id: subscription.id,
               subscription_status: subscription.status,
               invite_quota: inviteQuota,
               price_id: subscription.items.data[0]?.price.id,
               quantity: inviteQuota,
-              platform: 'web',
-              is_first_subscription: true
-            }
+              platform: "web",
+              is_first_subscription: true,
+            },
           });
-          
+
           // Shutdown the client
           await serverPostHog.shutdown();
           console.log("Successfully tracked subscription event in PostHog");

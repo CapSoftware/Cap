@@ -8,12 +8,12 @@ let isPostHogInitialized = false;
 
 if (key && host) {
   try {
-    posthog.init(key, { 
+    posthog.init(key, {
       api_host: host,
       capture_pageview: false,
       loaded: (posthogInstance) => {
         isPostHogInitialized = true;
-      }
+      },
     });
     console.log("PostHog initialization started");
   } catch (error) {
@@ -26,7 +26,7 @@ export function initAnonymousUser() {
     console.warn("Cannot initialize anonymous user - missing key or host");
     return;
   }
-  
+
   try {
     const anonymousId = localStorage.getItem("anonymous_id") ?? uuid();
     localStorage.setItem("anonymous_id", anonymousId);
@@ -42,7 +42,7 @@ export function identifyUser(userId: string, properties?: Record<string, any>) {
     console.warn("Cannot identify user - missing key or host");
     return;
   }
-  
+
   try {
     const currentId = posthog.get_distinct_id();
     const anonymousId = localStorage.getItem("anonymous_id");
@@ -71,10 +71,13 @@ export function trackEvent(
   properties?: Record<string, any>
 ) {
   if (!key || !host) {
-    console.warn("PostHog event not captured - missing key or host:", eventName);
+    console.warn(
+      "PostHog event not captured - missing key or host:",
+      eventName
+    );
     return;
   }
-  
+
   try {
     if (!isPostHogInitialized) {
       console.warn(`PostHog not initialized yet, queuing event: ${eventName}`);
@@ -85,7 +88,7 @@ export function trackEvent(
       }, 1000);
       return;
     }
-    
+
     const eventProperties = { ...properties, platform: "desktop" };
     console.log(`Capturing event ${eventName}:`, eventProperties);
     posthog.capture(eventName, eventProperties);

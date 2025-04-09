@@ -37,14 +37,14 @@ type InteractionBody = {
 
 type MessageComponent =
 	| {
-		type: 1;
-		components: Array<Exclude<MessageComponent, { type: 1 }>>;
-	}
+			type: 1;
+			components: Array<Exclude<MessageComponent, { type: 1 }>>;
+	  }
 	| ({
-		type: 2;
-		label?: string;
-		disabled?: boolean;
-	} & ({ style: 1 | 2 | 3 | 4; custom_id: string } | { style: 5; url: string } | { style: 6; sku_id: string }));
+			type: 2;
+			label?: string;
+			disabled?: boolean;
+	  } & ({ style: 1 | 2 | 3 | 4; custom_id: string } | { style: 5; url: string } | { style: 6; sku_id: string }));
 
 type Message = {
 	content?: string;

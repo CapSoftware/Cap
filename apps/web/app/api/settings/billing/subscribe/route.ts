@@ -37,11 +37,11 @@ export async function POST(request: NextRequest) {
 
   try {
     // Track subscription initiated event
-    if (typeof window !== 'undefined') {
+    if (typeof window !== "undefined") {
       posthog.capture("subscription_initiated", {
         price_id: priceId,
         quantity: quantity,
-        platform: "web"
+        platform: "web",
       });
     }
 
