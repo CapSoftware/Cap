@@ -22,8 +22,8 @@ use cap_media::{
     sources::{CaptureScreen, CaptureWindow},
 };
 use cap_project::{
-    ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta, StudioRecordingMeta,
-    TimelineConfiguration, TimelineSegment, ZoomSegment,
+    Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta,
+    StudioRecordingMeta, TimelineConfiguration, TimelineSegment, ZoomSegment,
 };
 use cap_recording::{
     instant_recording::{CompletedInstantRecording, InstantRecordingHandle},
@@ -591,6 +591,7 @@ async fn handle_recording_finish(
     .emit(app);
 
     let meta = RecordingMeta {
+        platform: Some(Platform::default()),
         project_path: recording_dir.clone(),
         sharing,
         pretty_name: format!(

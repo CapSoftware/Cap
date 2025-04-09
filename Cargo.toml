@@ -26,11 +26,11 @@ specta = { version = "=2.0.0-rc.20", features = [
 ] }
 
 scap = { git = "https://github.com/CapSoftware/scap", rev = "d99830264854" }
-nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "e309b938ccd6", features = [
+nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2", features = [
 	"input-native",
 	"serialize",
 ] }
-nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "e309b938ccd6" }
+nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2" }
 wgpu = "22.1.0"
 flume = "0.11.0"
 thiserror = "1.0"

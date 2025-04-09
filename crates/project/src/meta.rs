@@ -40,7 +40,24 @@ pub struct SharingMeta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub enum Platform {
+    MacOS,
+    Windows,
+}
+
+impl Default for Platform {
+    fn default() -> Self {
+        #[cfg(windows)]
+        return Self::Windows;
+
+        #[cfg(target_os = "macos")]
+        return Self::MacOS;
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct RecordingMeta {
+    pub platform: Option<Platform>,
     // this field is just for convenience, it shouldn't be persisted
     #[serde(skip_serializing, default)]
     pub project_path: PathBuf,
