@@ -106,11 +106,6 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
         let (audio_tx, audio_rx) = flume::bounded(64);
         let mut audio_mixer = AudioMixer::new(audio_tx);
 
-        // TODO:
-        // use relative timestamp when sending to mixer ✅
-        // adjust relative timestamp to host clock time when sending to encoder
-        //   - requires associating relative timestamp of first frame with its pts
-
         if let Some(system_audio) = system_audio {
             audio_mixer.add_source(system_audio.1, system_audio.0);
         }
