@@ -1,7 +1,8 @@
-use std::{sync::Arc, time::Duration};
+use std::{ops::Mul, sync::Arc, time::Duration};
 
 use cap_media::data::{AudioInfo, AudioInfoError, FromSampleBytes};
 use cap_media::feeds::{AudioPlaybackBuffer, AudioTrack};
+use cap_media::MediaError;
 use cap_project::{ProjectConfiguration, XY};
 use cap_rendering::{ProjectUniforms, RenderVideoConstants};
 use cpal::{
@@ -150,46 +151,80 @@ impl AudioPlayback {
     fn spawn(self) {
         let handle = tokio::runtime::Handle::current();
 
-        if self.segments[0].is_empty() {
+        if self.segments.is_empty() || self.segments[0].is_empty() {
+            println!("No audio segments found, skipping audio playback thread.");
             return;
         }
 
         std::thread::spawn(move || {
             let host = cpal::default_host();
-            let device = host.default_output_device().unwrap();
-            println!("Output device: {}", device.name().unwrap());
-            let supported_config = device
-                .default_output_config()
-                .expect("Failed to get default output format");
+            let device = match host.default_output_device() {
+                Some(d) => d,
+                None => {
+                    eprintln!("No default output device found. Skipping audio playback.");
+                    return;
+                }
+            };
+            println!(
+                "Output device: {}",
+                device.name().unwrap_or_else(|_| "unknown".to_string())
+            );
+            let supported_config = match device.default_output_config() {
+                Ok(sc) => sc,
+                Err(e) => {
+                    eprintln!(
+                        "Failed to get default output config: {}. Skipping audio playback.",
+                        e
+                    );
+                    return;
+                }
+            };
 
-            let (mut stop_rx, stream) = match supported_config.sample_format() {
-                // SampleFormat::I8 => create_stream::<i8>(shared_data),
+            let result = match supported_config.sample_format() {
                 SampleFormat::I16 => self.create_stream::<i16>(device, supported_config),
                 SampleFormat::I32 => self.create_stream::<i32>(device, supported_config),
-                SampleFormat::I64 => self.create_stream::<i64>(device, supported_config),
-                SampleFormat::U8 => self.create_stream::<u8>(device, supported_config),
-                // SampleFormat::U16 => create_stream::<u16>(shared_data),
-                // SampleFormat::U32 => create_stream::<u32>(shared_data),
-                // SampleFormat::U64 => create_stream::<u64>(shared_data),
                 SampleFormat::F32 => self.create_stream::<f32>(device, supported_config),
-                SampleFormat::F64 => self.create_stream::<f64>(device, supported_config),
-                _ => unimplemented!(),
+                format => {
+                    eprintln!(
+                        "Unsupported sample format {:?} for simplified volume adjustment, skipping audio playback.",
+                        format
+                    );
+                    return;
+                }
+            };
+
+            let (mut stop_rx, stream) = match result {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!(
+                        "Failed to create audio stream: {}. Skipping audio playback.",
+                        e
+                    );
+                    return;
+                }
+            };
+
+            if let Err(e) = stream.play() {
+                eprintln!(
+                    "Failed to play audio stream: {}. Skipping audio playback.",
+                    e
+                );
+                return;
             }
-            .unwrap();
 
-            stream.play().unwrap();
-
-            handle.block_on(stop_rx.changed()).ok();
-
-            stream.pause().ok();
+            let _ = handle.block_on(stop_rx.changed());
+            println!("Audio playback thread finished.");
         });
     }
 
-    fn create_stream<T: FromSampleBytes>(
+    fn create_stream<T>(
         self,
         device: cpal::Device,
         supported_config: cpal::SupportedStreamConfig,
-    ) -> Result<(watch::Receiver<bool>, cpal::Stream), AudioInfoError> {
+    ) -> Result<(watch::Receiver<bool>, cpal::Stream), MediaError>
+    where
+        T: FromSampleBytes + cpal::Sample,
+    {
         let AudioPlayback {
             stop_rx,
             start_frame_number,
@@ -202,41 +237,65 @@ impl AudioPlayback {
         let mut output_info = AudioInfo::from_stream_config(&supported_config);
         output_info.sample_format = output_info.sample_format.packed();
 
-        // TODO: Get fps and duration from video (once we start supporting other frame rates)
-        // Also, it's a bit weird that self.duration can ever be infinity to begin with, since
-        // pre-recorded videos are obviously a fixed size
         let mut audio_renderer = AudioPlaybackBuffer::new(segments, output_info);
         let playhead = f64::from(start_frame_number) / f64::from(fps);
         audio_renderer.set_playhead(playhead, &project.borrow());
 
-        // Prerender enough for smooth playback
-        // disabled bc it causes weirdness during playback atm
-        // while !audio_renderer.buffer_reaching_limit() {
-        //     audio_renderer.render(project.borrow().timeline());
-        // }
-
         let mut config = supported_config.config();
-        // Low-latency playback
         config.buffer_size = BufferSize::Fixed(AudioPlaybackBuffer::<T>::PLAYBACK_SAMPLES_COUNT);
 
-        let stream = device
-            .build_output_stream(
-                &config,
-                move |buffer: &mut [T], _info| {
-                    let project = project.borrow();
-                    audio_renderer.render(&project);
-                    audio_renderer.fill(buffer);
+        let stream_result = device.build_output_stream(
+            &config,
+            move |buffer: &mut [T], _info| {
+                let project = project.borrow();
+                audio_renderer.render(&project);
+                audio_renderer.fill(buffer);
 
-                    if project.audio.mute {
-                        for sample in buffer.iter_mut() {
-                            *sample = T::EQUILIBRIUM;
-                        }
+                if project.audio.mute {
+                    for sample in buffer.iter_mut() {
+                        *sample = T::EQUILIBRIUM;
                     }
-                },
-                |_| {},
-                None,
-            )
-            .unwrap();
+                } else if project.audio.volume != 1.0 {
+                    let volume = project.audio.volume as f32;
+
+                    match supported_config.sample_format() {
+                        SampleFormat::F32 => {
+                            if T::FORMAT == SampleFormat::F32 {
+                                let f32_buffer: &mut [f32] = unsafe { std::mem::transmute(buffer) };
+                                for sample in f32_buffer.iter_mut() {
+                                    *sample *= volume;
+                                }
+                            }
+                        }
+                        SampleFormat::I16 => {
+                            if T::FORMAT == SampleFormat::I16 {
+                                let i16_buffer: &mut [i16] = unsafe { std::mem::transmute(buffer) };
+                                for sample in i16_buffer.iter_mut() {
+                                    let val = *sample as f32 * volume;
+                                    *sample = val.clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+                                }
+                            }
+                        }
+                        SampleFormat::I32 => {
+                            if T::FORMAT == SampleFormat::I32 {
+                                let i32_buffer: &mut [i32] = unsafe { std::mem::transmute(buffer) };
+                                for sample in i32_buffer.iter_mut() {
+                                    let val = *sample as f32 * volume;
+                                    *sample = val.clamp(i32::MIN as f32, i32::MAX as f32) as i32;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            },
+            |_err| eprintln!("Audio stream error: {}", _err),
+            None,
+        );
+
+        let stream = stream_result.map_err(|e| {
+            MediaError::TaskLaunch(format!("Failed to build audio output stream: {}", e))
+        })?;
 
         Ok((stop_rx, stream))
     }

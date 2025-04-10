@@ -1410,6 +1410,20 @@ export function ConfigSidebar() {
               </ComingSoonTooltip> */}
             </div>
           </Field>
+          <Field name="Volume" icon={<IconLucideVolume2 class="size-4" />}>
+            <Slider
+              value={[
+                project.audio.volume === undefined || project.audio.volume === 0
+                  ? 1.0
+                  : project.audio.volume,
+              ]}
+              onChange={(v) => setProject("audio", "volume", v[0])}
+              minValue={0}
+              maxValue={2}
+              step={0.01}
+              formatTooltip={(v) => `${Math.round(v * 100)}%`}
+            />
+          </Field>
         </KTabs.Content>
         <KTabs.Content value="cursor" class="flex flex-col gap-6">
           <Field name="Cursor" icon={<IconCapCursor />}>
