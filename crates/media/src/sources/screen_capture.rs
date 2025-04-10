@@ -450,7 +450,11 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                 Ok(Frame::Audio(frame)) => {
                     if let Some(audio_tx) = &audio_tx {
                         let elapsed = frame.time().duration_since(start_time).unwrap();
-                        let _ = audio_tx.send((scap_audio_to_ffmpeg(frame), elapsed.as_secs_f64()));
+                        let mut frame = scap_audio_to_ffmpeg(frame);
+                        frame.set_pts(Some(
+                            (elapsed.as_secs_f64() * AV_TIME_BASE_Q.den as f64) as i64,
+                        ));
+                        let _ = audio_tx.send((frame, elapsed.as_secs_f64()));
                     }
                     None
                 }
@@ -611,7 +615,6 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                             }
                         }
                         SCStreamOutputType::Audio => {
-                            // println!("audio: {frame_time}");
                             let Some(audio_tx) = &audio_tx else {
                                 return Some(ControlFlow::Continue(()));
                             };
@@ -633,7 +636,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                                 );
                             }
 
-                            frame.set_pts(Some((frame_time * AV_TIME_BASE_Q.den as f64) as i64));
+                            frame.set_pts(Some((relative_time * AV_TIME_BASE_Q.den as f64) as i64));
 
                             let _ = audio_tx.send((frame, relative_time));
                         }

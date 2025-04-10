@@ -177,9 +177,8 @@ impl MP4AVAssetWriterEncoder {
 
         let new_pts = self
             .start_time
-            .add(time)
-            .sub(self.first_timestamp.unwrap())
-            .add(self.elapsed_duration);
+            .add(self.elapsed_duration)
+            .add(time.sub(self.first_timestamp.unwrap()));
 
         let mut timing = frame.timing_info(0).unwrap();
         timing.pts = new_pts;
@@ -200,10 +199,6 @@ impl MP4AVAssetWriterEncoder {
         if !audio_input.is_ready_for_more_media_data() {
             return Err(MediaError::Any("Not ready for more media data"));
         }
-
-        let Some(first_timestamp) = self.first_timestamp else {
-            return Ok(());
-        };
 
         let audio_desc = cat::audio::StreamBasicDesc::common_f32(
             frame.rate() as f64,
@@ -235,13 +230,12 @@ impl MP4AVAssetWriterEncoder {
         let format_desc = cm::AudioFormatDesc::with_asbd(&audio_desc)
             .map_err(|_| MediaError::Any("Failed to create audio format desc"))?;
 
-        let pts = cm::Time::new(frame.pts().unwrap_or(0), AV_TIME_BASE_Q.den);
+        let time = cm::Time::new(frame.pts().unwrap_or(0), AV_TIME_BASE_Q.den);
 
         let pts = self
             .start_time
-            .add(pts)
-            .sub(first_timestamp)
-            .add(self.elapsed_duration);
+            .add(self.elapsed_duration)
+            .add(time.sub(self.first_timestamp.unwrap()));
 
         let buffer = cm::SampleBuf::create(
             Some(&block_buf),

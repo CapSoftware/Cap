@@ -18,6 +18,7 @@ use cap_media::{
 };
 use ffmpeg::ffi::AV_TIME_BASE_Q;
 use flume::{Receiver, Sender};
+use tokio::sync::oneshot;
 use tracing::error;
 
 use crate::RecordingError;
@@ -105,6 +106,11 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
         let (audio_tx, audio_rx) = flume::bounded(64);
         let mut audio_mixer = AudioMixer::new(audio_tx);
 
+        // TODO:
+        // use relative timestamp when sending to mixer ✅
+        // adjust relative timestamp to host clock time when sending to encoder
+        //   - requires associating relative timestamp of first frame with its pts
+
         if let Some(system_audio) = system_audio {
             audio_mixer.add_source(system_audio.1, system_audio.0);
         }
@@ -128,13 +134,38 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
             )?,
         ));
 
+        use cidre::cm;
+
+        let (first_frame_tx, mut first_frame_rx) = oneshot::channel::<(cm::Time, f64)>();
+
         if has_audio_sources {
             builder.spawn_source("audio_mixer", audio_mixer);
 
             let mp4 = mp4.clone();
             builder.spawn_task("audio_encoding", move |ready| {
                 let _ = ready.send(Ok(()));
-                while let Ok(frame) = audio_rx.recv() {
+                let mut time = None;
+
+                while let Ok(mut frame) = audio_rx.recv() {
+                    let pts = frame.pts().unwrap();
+
+                    if let Ok(first_time) = first_frame_rx.try_recv() {
+                        time = Some(first_time);
+                    };
+
+                    let Some(time) = time else {
+                        continue;
+                    };
+
+                    let elapsed = (pts as f64 / AV_TIME_BASE_Q.den as f64) - time.1;
+
+                    let time = time.0.add(cm::Time::new(
+                        (elapsed * time.0.scale as f64 + time.1 * time.0.scale as f64) as i64,
+                        time.0.scale,
+                    ));
+
+                    frame.set_pts(Some(time.value / (time.scale / AV_TIME_BASE_Q.den) as i64));
+
                     if let Ok(mut mp4) = mp4.lock() {
                         if let Err(e) = mp4.queue_audio_frame(frame) {
                             error!("{e}");
@@ -145,6 +176,7 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
             });
         }
 
+        let mut first_frame_tx = Some(first_frame_tx);
         builder.spawn_task("screen_capture_encoder", move |ready| {
             let _ = ready.send(Ok(()));
             while let Ok((frame, unix_time)) = source.1.recv() {
@@ -153,6 +185,10 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
                         mp4.pause();
                     } else {
                         mp4.resume();
+                    }
+
+                    if let Some(first_frame_tx) = first_frame_tx.take() {
+                        let _ = first_frame_tx.send((frame.pts(), unix_time));
                     }
 
                     mp4.queue_video_frame(frame.as_ref());
