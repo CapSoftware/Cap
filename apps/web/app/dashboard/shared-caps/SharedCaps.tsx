@@ -5,6 +5,7 @@ import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayou
 import { SharedCapCard } from "./components/SharedCapCard";
 import { EmptySharedCapState } from "./components/EmptySharedCapState";
 import { CapPagination } from "../caps/components/CapPagination";
+import { VideoMetadata } from "@cap/database/types";
 
 type SharedVideoData = {
   id: string;
@@ -14,6 +15,7 @@ type SharedVideoData = {
   totalComments: number;
   totalReactions: number;
   ownerName: string | null;
+  metadata?: VideoMetadata;
 }[];
 
 export const SharedCaps = ({

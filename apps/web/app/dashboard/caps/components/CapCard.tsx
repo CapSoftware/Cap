@@ -10,6 +10,8 @@ import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
 import { useRouter } from "next/navigation"; // Add this import
 import { serverEnv, clientEnv, NODE_ENV } from "@cap/env";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
+import { VideoMetadata } from "@cap/database/types";
+
 interface CapCardProps {
   cap: {
     id: string;
@@ -20,6 +22,7 @@ interface CapCardProps {
     totalReactions: number;
     sharedSpaces: { id: string; name: string }[];
     ownerName: string;
+    metadata?: VideoMetadata;
   };
   analytics: number;
   onDelete: (videoId: string) => Promise<void>;
@@ -34,10 +37,19 @@ export const CapCard: React.FC<CapCardProps> = ({
   userId,
   userSpaces,
 }) => {
+  const effectiveDate = cap.metadata?.customCreatedAt
+    ? new Date(cap.metadata.customCreatedAt)
+    : cap.createdAt;
+
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(cap.name);
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
   const [sharedSpaces, setSharedSpaces] = useState(cap.sharedSpaces);
+  const [isDateEditing, setIsDateEditing] = useState(false);
+  const [dateValue, setDateValue] = useState(
+    moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss")
+  );
+  const [showFullDate, setShowFullDate] = useState(false);
   const router = useRouter();
   const { activeSpace } = useSharedContext();
 
@@ -113,6 +125,72 @@ export const CapCard: React.FC<CapCardProps> = ({
     router.refresh(); // Add this line to refresh the page
   };
 
+  const handleDateClick = () => {
+    if (userId === cap.ownerId) {
+      if (!isDateEditing) {
+        setIsDateEditing(true);
+      }
+    } else {
+      setShowFullDate(!showFullDate);
+    }
+  };
+
+  const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setDateValue(e.target.value);
+  };
+
+  const handleDateBlur = async () => {
+    const isValidDate = moment(dateValue).isValid();
+
+    if (!isValidDate) {
+      toast.error("Invalid date format. Please use YYYY-MM-DD HH:mm:ss");
+      setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss"));
+      setIsDateEditing(false);
+      return;
+    }
+
+    const selectedDate = moment(dateValue);
+    const currentDate = moment();
+
+    if (selectedDate.isAfter(currentDate)) {
+      toast.error("Cannot set a date in the future");
+      setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss"));
+      setIsDateEditing(false);
+      return;
+    }
+
+    const response = await fetch(
+      `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/date`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          date: moment(dateValue).toISOString(),
+          videoId: cap.id,
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      toast.error("Failed to update date - please try again.");
+      return;
+    }
+
+    toast.success("Video date updated");
+    setIsDateEditing(false);
+    router.refresh();
+  };
+
+  const handleDateKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleDateBlur();
+    } else if (e.key === "Escape") {
+      setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss"));
+      setIsDateEditing(false);
+    }
+  };
+
   return (
     <div
       className="rounded-xl border-[1px] border-gray-200 relative"
@@ -136,7 +214,7 @@ export const CapCard: React.FC<CapCardProps> = ({
         />
       </a>
       <div className="flex flex-col p-4">
-        <div className="mb-2">
+        <div className="mb-1">
           <div>
             <span className="text-[0.875rem] leading-[1.25rem] text-gray-400">
               {isOwner ? cap.ownerName : cap.sharedSpaces[0]?.name}
@@ -154,11 +232,11 @@ export const CapCard: React.FC<CapCardProps> = ({
             onBlur={handleTitleBlur}
             onKeyDown={handleTitleKeyDown}
             autoFocus
-            className="text-[0.875rem] leading-[1.25rem] text-gray-500 font-medium box-border"
+            className="text-[0.875rem] leading-[1.25rem] text-gray-500 font-medium box-border mb-1"
           />
         ) : (
           <p
-            className="text-[0.875rem] leading-[1.25rem] text-gray-500 font-medium"
+            className="text-[0.875rem] leading-[1.25rem] text-gray-500 font-medium mb-1"
             onClick={() => {
               if (userId === cap.ownerId) {
                 setIsEditing(true);
@@ -168,15 +246,33 @@ export const CapCard: React.FC<CapCardProps> = ({
             {title}
           </p>
         )}
-        <p>
-          <span
-            className="text-[0.875rem] leading-[1.25rem] text-gray-400"
-            data-tooltip-id={cap.id + "_createdAt"}
-            data-tooltip-content={`Cap created at ${cap.createdAt}`}
-          >
-            {moment(cap.createdAt).fromNow()}
-          </span>
-          <Tooltip id={cap.id + "_createdAt"} />
+        <p className="mb-1">
+          {isDateEditing ? (
+            <div className="flex items-center">
+              <input
+                type="text"
+                value={dateValue}
+                onChange={handleDateChange}
+                onBlur={handleDateBlur}
+                onKeyDown={handleDateKeyDown}
+                autoFocus
+                className="text-[0.875rem] leading-[1.25rem] text-gray-400 bg-transparent focus:outline-none"
+                placeholder="YYYY-MM-DD HH:mm:ss"
+              />
+            </div>
+          ) : (
+            <span
+              className="text-[0.875rem] leading-[1.25rem] text-gray-400 cursor-pointer flex items-center"
+              onClick={handleDateClick}
+              data-tooltip-id={cap.id + "_createdAt"}
+              data-tooltip-content={`Cap created at ${effectiveDate}`}
+            >
+              {showFullDate
+                ? moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss")
+                : moment(effectiveDate).fromNow()}
+            </span>
+          )}
+          <Tooltip className="z-50" id={cap.id + "_createdAt"} />
         </p>
         <CapCardAnalytics
           capId={cap.id}
