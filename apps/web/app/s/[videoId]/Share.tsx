@@ -53,6 +53,10 @@ export const Share: React.FC<ShareProps> = ({
   domainVerified,
 }) => {
   const [analytics, setAnalytics] = useState(initialAnalytics);
+  // Use custom date from metadata if it exists, similar to CapCard.tsx
+  const effectiveDate = data.metadata?.customCreatedAt
+    ? new Date(data.metadata.customCreatedAt)
+    : data.createdAt;
 
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -92,7 +96,7 @@ export const Share: React.FC<ShareProps> = ({
     <div className="min-h-screen flex flex-col bg-[#F7F8FA]">
       <div className="container flex-1 px-4 py-4 mx-auto">
         <ShareHeader
-          data={data}
+          data={{ ...data, createdAt: effectiveDate }}
           user={user}
           individualFiles={individualFiles}
           customDomain={customDomain}
@@ -117,7 +121,7 @@ export const Share: React.FC<ShareProps> = ({
 
             <div className="flex flex-col lg:w-80">
               <Sidebar
-                data={data}
+                data={{ ...data, createdAt: effectiveDate }}
                 user={user}
                 comments={comments}
                 analytics={analytics}
