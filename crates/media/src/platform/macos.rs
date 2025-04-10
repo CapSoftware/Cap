@@ -300,52 +300,14 @@ pub fn display_names() -> HashMap<u32, String> {
 }
 
 pub fn monitor_bounds(id: u32) -> Bounds {
-    use cocoa::appkit::NSScreen;
-    use cocoa::base::nil;
-    use cocoa::foundation::{NSArray, NSDictionary, NSString};
+    let primary_bounds = primary_monitor_bounds();
 
-    unsafe {
-        let screens = NSScreen::screens(nil);
-        let screen_count = NSArray::count(screens);
+    let mut bounds = raw_monitor_bounds(id);
 
-        let primary_bounds = primary_monitor_bounds();
+    bounds.y *= -1.0;
+    bounds.y -= bounds.height - primary_bounds.height;
 
-        for i in 0..screen_count {
-            let screen: *mut objc::runtime::Object = screens.objectAtIndex(i);
-
-            let device_description = NSScreen::deviceDescription(screen);
-            let num = NSDictionary::valueForKey_(
-                device_description,
-                NSString::alloc(nil).init_str("NSScreenNumber"),
-            ) as id;
-            let num: *const objc2_foundation::NSNumber = num.cast();
-            let num = { &*num };
-            let num = num.as_u32();
-
-            if num == id {
-                let frame = NSScreen::frame(screen);
-
-                let mut ret = Bounds {
-                    x: frame.origin.x,
-                    y: frame.origin.y,
-                    width: frame.size.width,
-                    height: frame.size.height,
-                };
-
-                ret.y *= -1.0;
-                ret.y -= ret.height - primary_bounds.height;
-
-                return ret;
-            }
-        }
-
-        Bounds {
-            x: 0.0,
-            y: 0.0,
-            width: 0.0,
-            height: 0.0,
-        }
-    }
+    bounds
 }
 
 pub fn raw_monitor_bounds(id: u32) -> Bounds {
@@ -356,8 +318,6 @@ pub fn raw_monitor_bounds(id: u32) -> Bounds {
     unsafe {
         let screens = NSScreen::screens(nil);
         let screen_count = NSArray::count(screens);
-
-        let primary_bounds = primary_monitor_bounds();
 
         for i in 0..screen_count {
             let screen: *mut objc::runtime::Object = screens.objectAtIndex(i);
