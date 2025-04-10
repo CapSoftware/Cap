@@ -281,6 +281,14 @@ impl Default for ShadowConfiguration {
 pub struct AudioConfiguration {
     pub mute: bool,
     pub improve: bool,
+    #[serde(default = "AudioConfiguration::default_volume")]
+    pub volume: f32,
+}
+
+impl AudioConfiguration {
+    fn default_volume() -> f32 {
+        1.0
+    }
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
