@@ -1,7 +1,7 @@
 use cap_flags::FLAGS;
 use cpal::traits::{DeviceTrait, HostTrait};
 use ffmpeg::{format::Sample, frame::Audio, ChannelLayout};
-use ffmpeg_sys_next::AV_TIME_BASE_Q;
+use ffmpeg_sys_next::{AV_TIMECODE_STR_SIZE, AV_TIME_BASE_Q};
 use flume::Sender;
 use scap::{
     capturer::{
@@ -439,6 +439,10 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                             );
                         }
                     }
+
+                    buffer.set_pts(Some(
+                        (elapsed.as_secs_f64() * AV_TIME_BASE_Q.den as f64) as i64,
+                    ));
 
                     if let Err(_) = video_tx.send((buffer, elapsed.as_secs_f64())) {
                         error!("Pipeline is unreachable. Shutting down recording.");
