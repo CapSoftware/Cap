@@ -420,7 +420,6 @@ async fn handle_recording_end(
     if let Some(window) = CapWindowId::Main.get(&app) {
         window.unminimize().ok();
     } else {
-        println!("SPIEJWPFIJE");
         CapWindowId::Camera.get(&app).map(|v| {
             let _ = v.close();
         });
