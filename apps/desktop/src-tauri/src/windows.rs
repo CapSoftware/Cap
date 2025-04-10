@@ -3,7 +3,11 @@
 
 use crate::{fake_window, general_settings::AppTheme, permissions, App, ArcLock};
 use cap_flags::FLAGS;
-use cap_media::sources::CaptureScreen;
+use cap_media::{
+    platform::{monitor_bounds, raw_monitor_bounds},
+    sources::CaptureScreen,
+};
+use cap_project::XY;
 use futures::pin_mut;
 use serde::Deserialize;
 use specta::Type;
@@ -26,7 +30,7 @@ pub enum CapWindowId {
     Settings,
     Editor { project_id: String },
     RecordingsOverlay,
-    WindowCaptureOccluder,
+    WindowCaptureOccluder { screen_id: u32 },
     CaptureArea,
     Camera,
     InProgressRecording,
@@ -44,7 +48,6 @@ impl FromStr for CapWindowId {
             "main" => Self::Main,
             "settings" => Self::Settings,
             "camera" => Self::Camera,
-            "window-capture-occluder" => Self::WindowCaptureOccluder,
             "capture-area" => Self::CaptureArea,
             "in-progress-recording" => Self::InProgressRecording,
             "recordings-overlay" => Self::RecordingsOverlay,
@@ -53,6 +56,12 @@ impl FromStr for CapWindowId {
             "mode-select" => Self::ModeSelect,
             s if s.starts_with("editor-") => Self::Editor {
                 project_id: s.replace("editor-", ""),
+            },
+            s if s.starts_with("window-capture-occluder-") => Self::WindowCaptureOccluder {
+                screen_id: s
+                    .replace("window-capture-occluder-", "")
+                    .parse::<u32>()
+                    .map_err(|e| e.to_string())?,
             },
             _ => return Err(format!("unknown window label: {}", s)),
         })
@@ -66,7 +75,9 @@ impl std::fmt::Display for CapWindowId {
             Self::Main => write!(f, "main"),
             Self::Settings => write!(f, "settings"),
             Self::Camera => write!(f, "camera"),
-            Self::WindowCaptureOccluder => write!(f, "window-capture-occluder"),
+            Self::WindowCaptureOccluder { screen_id } => {
+                write!(f, "window-capture-occluder-{screen_id}")
+            }
             Self::CaptureArea => write!(f, "capture-area"),
             Self::InProgressRecording => write!(f, "in-progress-recording"),
             Self::RecordingsOverlay => write!(f, "recordings-overlay"),
@@ -87,7 +98,7 @@ impl CapWindowId {
         match self {
             Self::Setup => "Cap Setup".to_string(),
             Self::Settings => "Cap Settings".to_string(),
-            Self::WindowCaptureOccluder => "Cap Window Capture Occluder".to_string(),
+            Self::WindowCaptureOccluder { .. } => "Cap Window Capture Occluder".to_string(),
             Self::CaptureArea => "Cap Capture Area".to_string(),
             Self::InProgressRecording => "Cap In Progress Recording".to_string(),
             Self::Editor { .. } => "Cap Editor".to_string(),
@@ -123,7 +134,7 @@ impl CapWindowId {
             Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 32.0))),
             Self::InProgressRecording => Some(Some(LogicalPosition::new(-100.0, -100.0))),
             Self::Camera
-            | Self::WindowCaptureOccluder
+            | Self::WindowCaptureOccluder { .. }
             | Self::CaptureArea
             | Self::RecordingsOverlay => None,
             _ => Some(None),
@@ -152,7 +163,7 @@ pub enum ShowCapWindow {
     Settings { page: Option<String> },
     Editor { project_id: String },
     RecordingsOverlay,
-    WindowCaptureOccluder,
+    WindowCaptureOccluder { screen_id: u32 },
     CaptureArea { screen_id: u32 },
     Camera { ws_port: u16 },
     InProgressRecording { position: Option<(f64, f64)> },
@@ -299,7 +310,15 @@ impl ShowCapWindow {
 
                 window
             }
-            Self::WindowCaptureOccluder => {
+            Self::WindowCaptureOccluder { screen_id } => {
+                let bounds = raw_monitor_bounds(*screen_id);
+
+                dbg!(app
+                    .monitor_from_point(bounds.x + bounds.width, bounds.y + bounds.height)
+                    .ok()
+                    .flatten()
+                    .map(|m| *m.position()));
+
                 let mut window_builder = self
                     .window_builder(app, "/window-capture-occluder")
                     .maximized(false)
@@ -310,11 +329,8 @@ impl ShowCapWindow {
                     .visible_on_all_workspaces(true)
                     .content_protected(true)
                     .skip_taskbar(true)
-                    .inner_size(
-                        (monitor.size().width as f64) / monitor.scale_factor(),
-                        (monitor.size().height as f64) / monitor.scale_factor(),
-                    )
-                    .position(0.0, 0.0)
+                    .inner_size(bounds.width, bounds.height)
+                    .position(bounds.x, -bounds.y)
                     .transparent(true);
 
                 let window = window_builder.build()?;
@@ -523,7 +539,11 @@ impl ShowCapWindow {
                 project_id: project_id.clone(),
             },
             ShowCapWindow::RecordingsOverlay => CapWindowId::RecordingsOverlay,
-            ShowCapWindow::WindowCaptureOccluder => CapWindowId::WindowCaptureOccluder,
+            ShowCapWindow::WindowCaptureOccluder { screen_id } => {
+                CapWindowId::WindowCaptureOccluder {
+                    screen_id: *screen_id,
+                }
+            }
             ShowCapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
             ShowCapWindow::Camera { .. } => CapWindowId::Camera,
             ShowCapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,

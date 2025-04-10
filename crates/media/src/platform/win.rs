@@ -305,6 +305,10 @@ pub fn monitor_bounds(id: u32) -> Bounds {
     lparams.1.unwrap()
 }
 
+pub fn raw_monitor_bounds(id: u32) -> Bounds {
+    monitor_bounds(id)
+}
+
 pub fn display_names() -> HashMap<u32, String> {
     let mut names = HashMap::new();
 

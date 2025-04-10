@@ -42,6 +42,8 @@ pub fn get_on_screen_windows() -> Vec<Window> {
             false => CFArrayGetCount(cf_win_array),
         };
 
+        let primary_monitor_bounds = primary_monitor_bounds();
+
         for i in 0..window_count {
             let window_cf_dictionary_ref =
                 CFArrayGetValueAtIndex(cf_win_array, i) as CFDictionaryRef;
@@ -78,7 +80,16 @@ pub fn get_on_screen_windows() -> Vec<Window> {
                         Some(value) => value,
                         None => continue,
                     };
-                if let Some(bounds) = get_window_bounds(window_cf_dictionary_ref) {
+
+                let Some(display) =
+                    display_for_window(window_id).map(|display| monitor_bounds(display.id))
+                else {
+                    continue;
+                };
+                if let Some(mut bounds) = get_window_bounds(window_cf_dictionary_ref) {
+                    bounds.x -= display.x;
+                    bounds.y -= display.y;
+
                     windows.push(Window {
                         window_id,
                         name,
@@ -296,6 +307,57 @@ pub fn monitor_bounds(id: u32) -> Bounds {
     unsafe {
         let screens = NSScreen::screens(nil);
         let screen_count = NSArray::count(screens);
+
+        let primary_bounds = primary_monitor_bounds();
+
+        for i in 0..screen_count {
+            let screen: *mut objc::runtime::Object = screens.objectAtIndex(i);
+
+            let device_description = NSScreen::deviceDescription(screen);
+            let num = NSDictionary::valueForKey_(
+                device_description,
+                NSString::alloc(nil).init_str("NSScreenNumber"),
+            ) as id;
+            let num: *const objc2_foundation::NSNumber = num.cast();
+            let num = { &*num };
+            let num = num.as_u32();
+
+            if num == id {
+                let frame = NSScreen::frame(screen);
+
+                let mut ret = Bounds {
+                    x: frame.origin.x,
+                    y: frame.origin.y,
+                    width: frame.size.width,
+                    height: frame.size.height,
+                };
+
+                ret.y *= -1.0;
+                ret.y -= ret.height - primary_bounds.height;
+
+                return ret;
+            }
+        }
+
+        Bounds {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        }
+    }
+}
+
+pub fn raw_monitor_bounds(id: u32) -> Bounds {
+    use cocoa::appkit::NSScreen;
+    use cocoa::base::nil;
+    use cocoa::foundation::{NSArray, NSDictionary, NSString};
+
+    unsafe {
+        let screens = NSScreen::screens(nil);
+        let screen_count = NSArray::count(screens);
+
+        let primary_bounds = primary_monitor_bounds();
 
         for i in 0..screen_count {
             let screen: *mut objc::runtime::Object = screens.objectAtIndex(i);

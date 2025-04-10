@@ -30,6 +30,7 @@ use cap_media::feeds::RawCameraFrame;
 use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::frame_ws::WSFrame;
 use cap_media::platform::Bounds;
+use cap_media::sources::list_screens;
 use cap_media::sources::CaptureScreen;
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
 use cap_project::RecordingMetaInner;
@@ -147,21 +148,28 @@ impl App {
             current_recording.capture_target(),
             ScreenCaptureTarget::Window { .. } | ScreenCaptureTarget::Area { .. }
         ) {
-            let _ = ShowCapWindow::WindowCaptureOccluder.show(&self.handle);
+            for screen in list_screens() {
+                let _ = ShowCapWindow::WindowCaptureOccluder {
+                    screen_id: screen.0.id,
+                }
+                .show(&self.handle);
+            }
         } else {
-            self.close_occluder_window();
+            self.close_occluder_windows();
         }
     }
 
     pub fn clear_current_recording(&mut self) -> Option<InProgressRecording> {
-        self.close_occluder_window();
+        self.close_occluder_windows();
 
         self.current_recording.take()
     }
 
-    fn close_occluder_window(&self) {
-        if let Some(window) = CapWindowId::WindowCaptureOccluder.get(&self.handle) {
-            window.close().ok();
+    fn close_occluder_windows(&self) {
+        for (label, window) in self.handle.webview_windows() {
+            if label.starts_with("window-capture-occluder") {
+                let _ = window.close();
+            }
         }
     }
 
@@ -2243,7 +2251,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 })
                 .with_denylist(&[
                     CapWindowId::Setup.label().as_str(),
-                    CapWindowId::WindowCaptureOccluder.label().as_str(),
+                    "window-capture-occluder",
+                    // CapWindowId::WindowCaptureOccluder.label().as_str(),
                     CapWindowId::CaptureArea.label().as_str(),
                     CapWindowId::Camera.label().as_str(),
                     CapWindowId::RecordingsOverlay.label().as_str(),
@@ -2252,6 +2261,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 ])
                 .map_label(|label| match label {
                     label if label.starts_with("editor-") => "editor",
+                    label if label.starts_with("window-capture-occluder-") => {
+                        "window-capture-occluder"
+                    }
                     _ => label,
                 })
                 .build(),
