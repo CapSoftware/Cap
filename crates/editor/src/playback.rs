@@ -184,6 +184,9 @@ impl AudioPlayback {
                 SampleFormat::I16 => self.create_stream::<i16>(device, supported_config),
                 SampleFormat::I32 => self.create_stream::<i32>(device, supported_config),
                 SampleFormat::F32 => self.create_stream::<f32>(device, supported_config),
+                SampleFormat::I64 => self.create_stream::<i64>(device, supported_config),
+                SampleFormat::U8 => self.create_stream::<u8>(device, supported_config),
+                SampleFormat::F64 => self.create_stream::<f64>(device, supported_config),
                 format => {
                     eprintln!(
                         "Unsupported sample format {:?} for simplified volume adjustment, skipping audio playback.",
@@ -267,6 +270,14 @@ impl AudioPlayback {
                                 }
                             }
                         }
+                        SampleFormat::F64 => {
+                            if T::FORMAT == SampleFormat::F64 {
+                                let f64_buffer: &mut [f64] = unsafe { std::mem::transmute(buffer) };
+                                for sample in f64_buffer.iter_mut() {
+                                    *sample *= volume as f64;
+                                }
+                            }
+                        }
                         SampleFormat::I16 => {
                             if T::FORMAT == SampleFormat::I16 {
                                 let i16_buffer: &mut [i16] = unsafe { std::mem::transmute(buffer) };
@@ -282,6 +293,24 @@ impl AudioPlayback {
                                 for sample in i32_buffer.iter_mut() {
                                     let val = *sample as f32 * volume;
                                     *sample = val.clamp(i32::MIN as f32, i32::MAX as f32) as i32;
+                                }
+                            }
+                        }
+                        SampleFormat::I64 => {
+                            if T::FORMAT == SampleFormat::I64 {
+                                let i64_buffer: &mut [i64] = unsafe { std::mem::transmute(buffer) };
+                                for sample in i64_buffer.iter_mut() {
+                                    let val = *sample as f64 * volume as f64;
+                                    *sample = val.clamp(i64::MIN as f64, i64::MAX as f64) as i64;
+                                }
+                            }
+                        }
+                        SampleFormat::U8 => {
+                            if T::FORMAT == SampleFormat::U8 {
+                                let u8_buffer: &mut [u8] = unsafe { std::mem::transmute(buffer) };
+                                for sample in u8_buffer.iter_mut() {
+                                    let val = *sample as f32 * volume;
+                                    *sample = val.clamp(u8::MIN as f32, u8::MAX as f32) as u8;
                                 }
                             }
                         }
