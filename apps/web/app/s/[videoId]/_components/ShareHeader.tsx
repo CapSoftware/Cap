@@ -9,6 +9,7 @@ import { Copy, Loader2 } from "lucide-react";
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
 import { clientEnv, NODE_ENV } from "@cap/env";
+import { editTitle } from "@/actions/videos/edit-title";
 
 export const ShareHeader = ({
   data,
@@ -33,28 +34,18 @@ export const ShareHeader = ({
 
   const handleBlur = async () => {
     setIsEditing(false);
-    const response = await fetch(
-      `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/title`,
-      {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, videoId: data.id }),
+
+    try {
+      await editTitle(data.id, title);
+      toast.success("Video title updated");
+      refresh();
+    } catch (error) {
+      if (error instanceof Error) {
+        toast.error(error.message);
+      } else {
+        toast.error("Failed to update title - please try again.");
       }
-    );
-
-    if (response.status === 429) {
-      toast.error("Too many requests - please try again later.");
-      return;
     }
-
-    if (!response.ok) {
-      toast.error("Failed to update title - please try again.");
-      return;
-    }
-
-    toast.success("Video title updated");
-
-    refresh();
   };
 
   const handleKeyDown = async (event: { key: string }) => {

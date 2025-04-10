@@ -5,12 +5,14 @@ import { CapCardAnalytics } from "@/app/dashboard/caps/components/CapCardAnalyti
 import { toast } from "react-hot-toast";
 import moment from "moment";
 import { Tooltip } from "react-tooltip";
-import { ShareIcon, ChevronDown } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
-import { useRouter } from "next/navigation"; // Add this import
-import { serverEnv, clientEnv, NODE_ENV } from "@cap/env";
+import { useRouter } from "next/navigation";
+import { clientEnv, NODE_ENV } from "@cap/env";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { VideoMetadata } from "@cap/database/types";
+import { editDate } from "@/actions/videos/edit-date";
+import { editTitle } from "@/actions/videos/edit-title";
 
 interface CapCardProps {
   cap: {
@@ -59,21 +61,18 @@ export const CapCard: React.FC<CapCardProps> = ({
       return;
     }
 
-    const response = await fetch(
-      `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/title`,
-      {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, videoId: cap.id }),
+    try {
+      await editTitle(cap.id, title);
+      toast.success("Video title updated");
+      setIsEditing(false);
+      router.refresh();
+    } catch (error) {
+      if (error instanceof Error) {
+        toast.error(error.message);
+      } else {
+        toast.error("Failed to update title - please try again.");
       }
-    );
-    if (!response.ok) {
-      toast.error("Failed to update title - please try again.");
-      return;
     }
-
-    toast.success("Video title updated");
-    setIsEditing(false);
   };
 
   const handleTitleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -159,26 +158,18 @@ export const CapCard: React.FC<CapCardProps> = ({
       return;
     }
 
-    const response = await fetch(
-      `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/date`,
-      {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          date: moment(dateValue).toISOString(),
-          videoId: cap.id,
-        }),
+    try {
+      await editDate(cap.id, selectedDate.toISOString());
+      toast.success("Video date updated");
+      setIsDateEditing(false);
+      router.refresh();
+    } catch (error) {
+      if (error instanceof Error) {
+        toast.error(error.message);
+      } else {
+        toast.error("Failed to update date - please try again.");
       }
-    );
-
-    if (!response.ok) {
-      toast.error("Failed to update date - please try again.");
-      return;
     }
-
-    toast.success("Video date updated");
-    setIsDateEditing(false);
-    router.refresh();
   };
 
   const handleDateKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {

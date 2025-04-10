@@ -9,6 +9,7 @@ import { ShareHeader } from "./_components/ShareHeader";
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import { Toolbar } from "./_components/Toolbar";
+import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
   authorName: string | null;
@@ -64,15 +65,11 @@ export const Share: React.FC<ShareProps> = ({
   useEffect(() => {
     const fetchViewCount = async () => {
       try {
-        const response = await fetch(`/api/video/analytics?videoId=${data.id}`);
-        if (!response.ok) {
-          throw new Error("Failed to fetch analytics");
-        }
-        const viewData = await response.json();
+        const result = await getVideoAnalytics(data.id);
 
         setAnalytics((prev) => ({
           ...prev,
-          views: viewData.count || 0,
+          views: result.count || 0,
         }));
       } catch (error) {
         console.error("Error fetching view count:", error);

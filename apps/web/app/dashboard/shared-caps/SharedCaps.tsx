@@ -6,6 +6,7 @@ import { SharedCapCard } from "./components/SharedCapCard";
 import { EmptySharedCapState } from "./components/EmptySharedCapState";
 import { CapPagination } from "../caps/components/CapPagination";
 import { VideoMetadata } from "@cap/database/types";
+import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 
 type SharedVideoData = {
   id: string;
@@ -40,15 +41,8 @@ export const SharedCaps = ({
       const analyticsData: Record<string, number> = {};
 
       for (const video of data) {
-        const response = await fetch(
-          `/api/video/analytics?videoId=${video.id}`,
-          {
-            cache: "force-cache",
-          }
-        );
-        const data = await response.json();
-
-        analyticsData[video.id] = data.count || 0;
+        const result = await getVideoAnalytics(video.id);
+        analyticsData[video.id] = result.count || 0;
       }
       setAnalytics(analyticsData);
     };
