@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --primary: #005cb1;
+  --primary-2: #004c93;
+  --primary-3: #003b73;
+  --secondary: #2eb4ff;
+  --secondary-2: #1696e0;
+  --secondary-3: #117ebd;
+  --tertiary: #c5eaff;
+  --tertiary-2: #d3e5ff;
+  --tertiary-3: #e0edff;
+  --filler: #efefef;
+  --filler-2: #e4e4e4;
+  --filler-3: #e2e2e2;
+  --filler-txt: #b3b3b3;
+  --text-primary: #0d1b2a;
+  --text-secondary: #ffffff;
+  --header-height: 80px;
+  --vh100-offset: calc(100vh - var(--header-height));
+  --foreground-rgb: #000000;
+  --background-start-rgb: 214, 219, 220;
+  --background-end-rgb: 255, 255, 255;
+}
