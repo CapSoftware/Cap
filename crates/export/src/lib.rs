@@ -220,31 +220,6 @@ where
                         .map(|mut frame| {
                             let pts = ((frame_number * frame.rate()) as f64 / fps as f64) as i64;
                             frame.set_pts(Some(pts));
-
-                            if !project.audio.mute && project.audio.volume != 1.0 {
-                                let volume = project.audio.volume as f32;
-                                let bytes_per_sample = 4;
-                                let total_samples = frame.samples() * frame.channels() as usize;
-                                let sample_buffer_size = total_samples * bytes_per_sample;
-
-                                if sample_buffer_size <= frame.data(0).len() {
-                                    let mut samples = unsafe {
-                                        cast_bytes_to_f32_slice(
-                                            &frame.data(0)[0..sample_buffer_size],
-                                        )
-                                    }
-                                    .to_vec();
-
-                                    for sample in samples.iter_mut() {
-                                        *sample *= volume;
-                                    }
-
-                                    frame.data_mut(0)[0..sample_buffer_size].copy_from_slice(
-                                        unsafe { cast_f32_slice_to_bytes(&samples) },
-                                    );
-                                }
-                            }
-
                             frame
                         });
 

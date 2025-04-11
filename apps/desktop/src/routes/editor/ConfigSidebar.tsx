@@ -1395,8 +1395,11 @@ export function ConfigSidebar() {
           </Field>
         </KTabs.Content>
         <KTabs.Content value="audio" class="flex flex-col gap-6">
-          <Field name="Audio" icon={<IconCapAudioOn />}>
-            <div class="flex flex-col gap-3">
+          <Field
+            name="Audio Controls"
+            icon={<IconLucideVolume2 class="size-4" />}
+          >
+            <div class="space-y-2">
               <Subfield name="Mute Audio">
                 <Toggle
                   checked={project.audio.mute}
@@ -1410,18 +1413,42 @@ export function ConfigSidebar() {
               </ComingSoonTooltip> */}
             </div>
           </Field>
-          <Field name="Volume" icon={<IconLucideVolume2 class="size-4" />}>
+          <Field
+            name="Microphone Volume"
+            icon={<IconCapMicrophone class="size-4" />}
+          >
             <Slider
               value={[
-                project.audio.volume === undefined || project.audio.volume === 0
-                  ? 1.0
-                  : project.audio.volume,
+                project.audio.micVolumeDb === undefined
+                  ? 0.0
+                  : project.audio.micVolumeDb,
               ]}
-              onChange={(v) => setProject("audio", "volume", v[0])}
-              minValue={0}
-              maxValue={2}
-              step={0.01}
-              formatTooltip={(v) => `${Math.round(v * 100)}%`}
+              onChange={(v) => setProject("audio", "micVolumeDb", v[0])}
+              minValue={-30}
+              maxValue={10}
+              step={0.1}
+              formatTooltip={(v) =>
+                v <= -30 ? "Muted" : `${v > 0 ? "+" : ""}${v.toFixed(1)} dB`
+              }
+            />
+          </Field>
+          <Field
+            name="System Audio Volume"
+            icon={<IconLucideMonitor class="size-4" />}
+          >
+            <Slider
+              value={[
+                project.audio.systemVolumeDb === undefined
+                  ? 0.0
+                  : project.audio.systemVolumeDb,
+              ]}
+              onChange={(v) => setProject("audio", "systemVolumeDb", v[0])}
+              minValue={-30}
+              maxValue={10}
+              step={0.1}
+              formatTooltip={(v) =>
+                v <= -30 ? "Muted" : `${v > 0 ? "+" : ""}${v.toFixed(1)} dB`
+              }
             />
           </Field>
         </KTabs.Content>

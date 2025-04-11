@@ -276,18 +276,39 @@ impl Default for ShadowConfiguration {
     }
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioConfiguration {
     pub mute: bool,
     pub improve: bool,
-    #[serde(default = "AudioConfiguration::default_volume")]
-    pub volume: f32,
+    #[serde(default = "AudioConfiguration::default_mic_volume_db")]
+    pub mic_volume_db: f32,
+    #[serde(default = "AudioConfiguration::default_system_volume_db")]
+    pub system_volume_db: f32,
 }
 
 impl AudioConfiguration {
-    fn default_volume() -> f32 {
-        1.0
+    fn default_mic_volume_db() -> f32 {
+        0.0
+    }
+
+    fn default_system_volume_db() -> f32 {
+        0.0
+    }
+
+    pub fn db_to_linear(db: f32) -> f32 {
+        10.0_f32.powf(db / 20.0)
+    }
+}
+
+impl Default for AudioConfiguration {
+    fn default() -> Self {
+        Self {
+            mute: false,
+            improve: false,
+            mic_volume_db: Self::default_mic_volume_db(),
+            system_volume_db: Self::default_system_volume_db(),
+        }
     }
 }
 
