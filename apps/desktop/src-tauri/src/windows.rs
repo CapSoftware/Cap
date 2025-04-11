@@ -3,10 +3,7 @@
 
 use crate::{fake_window, general_settings::AppTheme, permissions, App, ArcLock};
 use cap_flags::FLAGS;
-use cap_media::{
-    platform::{logical_monitor_bounds, MonitorHandle},
-    sources::CaptureScreen,
-};
+use cap_media::{platform::logical_monitor_bounds, sources::CaptureScreen};
 use futures::pin_mut;
 use serde::Deserialize;
 use specta::Type;
@@ -310,7 +307,7 @@ impl ShowCapWindow {
                 window
             }
             Self::WindowCaptureOccluder { screen_id } => {
-                let Some(bounds) = logical_monitor_bounds(MonitorHandle(*screen_id)) else {
+                let Some(bounds) = logical_monitor_bounds(*screen_id) else {
                     return Err(tauri::Error::WindowNotFound);
                 };
 

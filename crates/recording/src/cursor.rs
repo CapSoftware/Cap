@@ -116,7 +116,6 @@ pub fn spawn_cursor_recorder(
                 } else {
                     "default".to_string()
                 };
-                // dbg!(&mouse_state, &screen_bounds);
 
                 if mouse_state.coords != last_mouse_state.coords {
                     // Get the actual mouse coordinates

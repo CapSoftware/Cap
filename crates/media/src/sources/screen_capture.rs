@@ -19,7 +19,7 @@ use tracing::{debug, error, info, trace, warn};
 use crate::{
     data::{AudioInfo, FFVideo, PlanarData, RawVideoFormat, VideoInfo},
     pipeline::{clock::*, control::Control, task::PipelineSourceTask},
-    platform::{self, logical_monitor_bounds, Bounds, MonitorHandle, Window},
+    platform::{self, logical_monitor_bounds, Bounds, Window},
     MediaError,
 };
 
@@ -171,7 +171,7 @@ impl ScreenCaptureFormat for AVFrameCapture {
 
         info.sample_format = Sample::F32(ffmpeg::format::sample::Type::Packed);
 
-        dbg!(info)
+        info
     }
 }
 
@@ -241,8 +241,12 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 
         this.options = Arc::new(options);
 
-        let [frame_width, frame_height] = get_output_frame_size(&this.options);
-        this.video_info = VideoInfo::from_raw(RawVideoFormat::Bgra, frame_width, frame_height, fps);
+        this.video_info = VideoInfo::from_raw(
+            RawVideoFormat::Bgra,
+            bounds.width as u32,
+            bounds.height as u32,
+            fps,
+        );
 
         Ok(this)
     }
@@ -271,24 +275,48 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                     unreachable!()
                 };
 
-                let monitor_bounds =
-                    logical_monitor_bounds(MonitorHandle(display.raw_handle.id)).unwrap();
+                let id = {
+                    #[cfg(target_os = "macos")]
+                    {
+                        display.raw_handle.id
+                    }
+
+                    #[cfg(windows)]
+                    {
+                        display.raw_handle.0 as u32
+                    }
+                };
+
+                let monitor_bounds = logical_monitor_bounds(id).unwrap();
 
                 window_info.bounds.x -= monitor_bounds.position.x;
                 window_info.bounds.y -= monitor_bounds.position.y;
 
+                fn div_by_2able(n: f64) -> f64 {
+                    n + n % 2.0
+                }
+
                 let crop = Area {
                     size: Size {
-                        width: window_info.bounds.width,
-                        height: window_info.bounds.height,
+                        width: div_by_2able(window_info.bounds.width),
+                        height: div_by_2able(window_info.bounds.height),
                     },
                     origin: Point {
-                        x: window_info.bounds.x,
-                        y: window_info.bounds.y,
+                        x: div_by_2able(window_info.bounds.x),
+                        y: div_by_2able(window_info.bounds.y),
                     },
                 };
 
-                (Target::Display(display), window_info.bounds, Some(crop))
+                (
+                    Target::Display(display),
+                    Bounds {
+                        x: crop.origin.x,
+                        y: crop.origin.y,
+                        width: crop.size.width,
+                        height: crop.size.height,
+                    },
+                    Some(crop),
+                )
             }
             ScreenCaptureTarget::Screen { id } => {
                 let screens = list_screens();
@@ -357,7 +385,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             crop_area,
             output_type: self.output_type.unwrap_or(FrameType::BGRAFrame),
             output_resolution: self.output_resolution.unwrap_or(ScapResolution::Captured),
-            excluded_targets: Some(excluded_targets),
+            excluded_targets: (!excluded_targets.is_empty()).then(|| excluded_targets),
             captures_audio,
             exclude_current_process_audio: true,
         })

@@ -32,6 +32,7 @@ use cap_recording::{
 };
 use cap_rendering::ProjectRecordings;
 use cap_utils::{ensure_dir, spawn_actor};
+use scap::Target;
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
 use tracing::{error, info};
@@ -220,7 +221,18 @@ pub async fn start_recording(
 
     match &recording_options.capture_target {
         ScreenCaptureTarget::Window { id } => {
+            #[cfg(target_os = "macos")]
             let display = display_for_window(*id).unwrap().id;
+
+            #[cfg(windows)]
+            let display = {
+                let Target::Window(target) = recording_options.capture_target.get_target().unwrap()
+                else {
+                    unreachable!();
+                };
+                display_for_window(target.raw_handle).unwrap().0 as u32
+            };
+
             let _ = ShowCapWindow::WindowCaptureOccluder { screen_id: display }
                 .show(&app)
                 .await;

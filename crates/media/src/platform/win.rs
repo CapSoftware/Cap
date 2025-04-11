@@ -3,7 +3,7 @@ use std::ffi::{c_void, OsString};
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 
-use super::{Bounds, CursorShape, Window};
+use super::{Bounds, CursorShape, LogicalBounds, LogicalPosition, LogicalSize, Window};
 
 use tracing::debug;
 use windows::core::{PCWSTR, PWSTR};
@@ -193,8 +193,6 @@ pub fn get_on_screen_windows() -> Vec<Window> {
             dpi => dpi,
         } as i32;
 
-        let scale_factor = dpi as f64 / BASE_DPI as f64;
-
         let mut rect = RECT::default();
         DwmGetWindowAttribute(
             hwnd,
@@ -204,10 +202,10 @@ pub fn get_on_screen_windows() -> Vec<Window> {
         )
         .ok();
 
-        let rect_left = rect.left as f64 / scale_factor;
-        let rect_top = rect.top as f64 / scale_factor;
-        let rect_right = rect.right as f64 / scale_factor;
-        let rect_bottom = rect.bottom as f64 / scale_factor;
+        let rect_left = rect.left as f64;
+        let rect_top = rect.top as f64;
+        let rect_right = rect.right as f64;
+        let rect_bottom = rect.bottom as f64;
 
         let window = Window {
             window_id: hwnd.0 as u32,
@@ -303,6 +301,20 @@ pub fn monitor_bounds(id: u32) -> Bounds {
     }
 
     lparams.1.unwrap()
+}
+
+pub fn logical_monitor_bounds(id: u32) -> Option<LogicalBounds> {
+    let bounds = monitor_bounds(id);
+    Some(LogicalBounds {
+        position: LogicalPosition {
+            x: bounds.x,
+            y: bounds.y,
+        },
+        size: LogicalSize {
+            width: bounds.width,
+            height: bounds.height,
+        },
+    })
 }
 
 pub fn display_names() -> HashMap<u32, String> {
