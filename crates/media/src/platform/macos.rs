@@ -18,7 +18,9 @@ use core_graphics::{
 pub use nokhwa_bindings_macos::{AVAuthorizationStatus, AVMediaType};
 use std::{collections::HashMap, ffi::c_void};
 
-use crate::platform::{Bounds, Window};
+use crate::platform::{Bounds, LogicalPosition, LogicalSize, Window};
+
+use super::LogicalBounds;
 
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
@@ -382,5 +384,100 @@ pub fn primary_monitor_bounds() -> Bounds {
         y: bounds.origin.y,
         width: width as f64,
         height: height as f64,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MonitorHandle(pub u32);
+
+impl MonitorHandle {
+    pub fn primary() -> Self {
+        let display = CGDisplay::main();
+        Self(display.id)
+    }
+
+    pub fn list_all() -> Vec<Self> {
+        use cocoa::appkit::NSScreen;
+        use cocoa::base::nil;
+        use cocoa::foundation::{NSArray, NSDictionary, NSString};
+
+        let mut ret = vec![];
+
+        unsafe {
+            let screens = NSScreen::screens(nil);
+            let screen_count = NSArray::count(screens);
+
+            for i in 0..screen_count {
+                let screen: *mut objc::runtime::Object = screens.objectAtIndex(i);
+
+                let device_description = NSScreen::deviceDescription(screen);
+                let num = NSDictionary::valueForKey_(
+                    device_description,
+                    NSString::alloc(nil).init_str("NSScreenNumber"),
+                ) as id;
+                let num: *const objc2_foundation::NSNumber = num.cast();
+                let num = { &*num };
+                let num = num.as_u32();
+
+                ret.push(Self(num));
+            }
+
+            ret
+        }
+    }
+}
+
+pub fn logical_monitor_bounds(monitor_id: MonitorHandle) -> Option<LogicalBounds> {
+    use cocoa::appkit::NSScreen;
+    use cocoa::base::nil;
+    use cocoa::foundation::{NSArray, NSDictionary, NSString};
+
+    unsafe {
+        let screens = NSScreen::screens(nil);
+        let screen_count = NSArray::count(screens);
+
+        for i in 0..screen_count {
+            let screen: *mut objc::runtime::Object = screens.objectAtIndex(i);
+
+            let device_description = NSScreen::deviceDescription(screen);
+            let num = NSDictionary::valueForKey_(
+                device_description,
+                NSString::alloc(nil).init_str("NSScreenNumber"),
+            ) as id;
+            let num: *const objc2_foundation::NSNumber = num.cast();
+            let num = { &*num };
+            let num = num.as_u32();
+
+            if num == monitor_id.0 {
+                let frame = NSScreen::frame(screen);
+
+                return Some(LogicalBounds {
+                    position: LogicalPosition {
+                        x: frame.origin.x,
+                        y: frame.origin.y
+                            + (CGDisplay::main().pixels_high() as f64 - frame.size.height),
+                    },
+                    size: LogicalSize {
+                        width: frame.size.width,
+                        height: frame.size.height,
+                    },
+                });
+            }
+        }
+
+        None
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn bruh() {
+        dbg!(MonitorHandle::list_all()
+            .into_iter()
+            .map(logical_monitor_bounds)
+            .collect::<Vec<_>>());
     }
 }

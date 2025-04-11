@@ -19,7 +19,7 @@ use tracing::{debug, error, info, trace, warn};
 use crate::{
     data::{AudioInfo, FFVideo, PlanarData, RawVideoFormat, VideoInfo},
     pipeline::{clock::*, control::Control, task::PipelineSourceTask},
-    platform::{self, Bounds, Window},
+    platform::{self, logical_monitor_bounds, Bounds, MonitorHandle, Window},
     MediaError,
 };
 
@@ -260,10 +260,22 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             ScreenCaptureTarget::Window { id } => {
                 let windows = list_windows();
 
-                let (window_info, target) = windows
+                let (mut window_info, target) = windows
                     .into_iter()
                     .find(|t| t.0.id == *id)
                     .ok_or_else(|| "Capture window not found".to_string())?;
+
+                let Target::Display(display) = display_for_target(&target, &targets)
+                    .ok_or_else(|| "Screen for capture window not found".to_string())?
+                else {
+                    unreachable!()
+                };
+
+                let monitor_bounds =
+                    logical_monitor_bounds(MonitorHandle(display.raw_handle.id)).unwrap();
+
+                window_info.bounds.x -= monitor_bounds.position.x;
+                window_info.bounds.y -= monitor_bounds.position.y;
 
                 let crop = Area {
                     size: Size {
@@ -276,12 +288,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                     },
                 };
 
-                (
-                    display_for_target(&target, &targets)
-                        .ok_or_else(|| "Screen for capture window not found".to_string())?,
-                    window_info.bounds,
-                    Some(crop),
-                )
+                (Target::Display(display), window_info.bounds, Some(crop))
             }
             ScreenCaptureTarget::Screen { id } => {
                 let screens = list_screens();

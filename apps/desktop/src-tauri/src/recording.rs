@@ -16,7 +16,7 @@ use crate::{
     RecordingStarted, RecordingStopped, VideoUploadInfo,
 };
 use cap_fail::fail;
-use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
+use cap_media::{feeds::CameraFeed, platform::display_for_window, sources::ScreenCaptureTarget};
 use cap_media::{
     platform::Bounds,
     sources::{CaptureScreen, CaptureWindow},
@@ -218,11 +218,19 @@ pub async fn start_recording(
         RecordingMode::Studio => None,
     };
 
-    if matches!(
-        recording_options.capture_target,
-        ScreenCaptureTarget::Window { .. } | ScreenCaptureTarget::Area { .. }
-    ) {
-        let _ = ShowCapWindow::WindowCaptureOccluder.show(&app);
+    match &recording_options.capture_target {
+        ScreenCaptureTarget::Window { id } => {
+            let display = display_for_window(*id).unwrap().id;
+            let _ = ShowCapWindow::WindowCaptureOccluder { screen_id: display }
+                .show(&app)
+                .await;
+        }
+        ScreenCaptureTarget::Area { screen, .. } => {
+            let _ = ShowCapWindow::WindowCaptureOccluder { screen_id: *screen }
+                .show(&app)
+                .await;
+        }
+        _ => {}
     }
 
     let (finish_upload_tx, finish_upload_rx) = flume::bounded(1);

@@ -95,3 +95,21 @@ pub enum CursorShape {
     /// Couldn't get the cursor shape.
     Unknown,
 }
+
+#[derive(Debug, Clone, Copy)]
+pub struct LogicalPosition {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LogicalSize {
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LogicalBounds {
+    pub position: LogicalPosition,
+    pub size: LogicalSize,
+}
