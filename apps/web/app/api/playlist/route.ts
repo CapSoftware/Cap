@@ -85,11 +85,54 @@ export async function GET(request: NextRequest) {
 
   if (!bucket || video.awsBucket === clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET) {
     if (video.source.type === "desktopMP4") {
+      if (videoType === "mp4") {
+        // Add specific headers for MP4 videos to enable embedding
+        const playlistUrl = await getSignedUrl(
+          s3Client,
+          new GetObjectCommand({
+            Bucket,
+            Key: `${userId}/${videoId}/result.mp4`,
+          }),
+          { expiresIn: 3600 }
+        );
+
+        // Check if this is a direct access from a third-party site by examining the Referer header
+        const referer = request.headers.get("referer");
+        const isEmbedded = referer && !referer.includes(request.headers.get("host") || "");
+        
+        const corsHeaders = {
+          ...getHeaders(origin),
+          ...CACHE_CONTROL_HEADERS,
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Content-Type": "video/mp4",
+          "X-Content-Type-Options": "nosniff",
+        };
+
+        return new Response(null, {
+          status: 302,
+          headers: {
+            ...corsHeaders,
+            Location: playlistUrl,
+          },
+        });
+      }
+
+      const playlistUrl = await getSignedUrl(
+        s3Client,
+        new GetObjectCommand({
+          Bucket,
+          Key: `${userId}/${videoId}/result.mp4`,
+        }),
+        { expiresIn: 3600 }
+      );
+
       return new Response(null, {
         status: 302,
         headers: {
           ...getHeaders(origin),
-          Location: `${S3_BUCKET_URL}/${userId}/${videoId}/result.mp4`,
+          Location: playlistUrl,
           ...CACHE_CONTROL_HEADERS,
         },
       });
