@@ -427,7 +427,7 @@ impl MonitorHandle {
     }
 }
 
-pub fn logical_monitor_bounds(monitor_id: MonitorHandle) -> Option<LogicalBounds> {
+pub fn logical_monitor_bounds(monitor_id: u32) -> Option<LogicalBounds> {
     use cocoa::appkit::NSScreen;
     use cocoa::base::nil;
     use cocoa::foundation::{NSArray, NSDictionary, NSString};
@@ -448,7 +448,7 @@ pub fn logical_monitor_bounds(monitor_id: MonitorHandle) -> Option<LogicalBounds
             let num = { &*num };
             let num = num.as_u32();
 
-            if num == monitor_id.0 {
+            if num == monitor_id {
                 let frame = NSScreen::frame(screen);
 
                 return Some(LogicalBounds {
@@ -477,7 +477,7 @@ mod test {
     fn bruh() {
         dbg!(MonitorHandle::list_all()
             .into_iter()
-            .map(logical_monitor_bounds)
+            .map(|v| logical_monitor_bounds(v.0))
             .collect::<Vec<_>>());
     }
 }
