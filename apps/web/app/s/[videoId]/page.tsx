@@ -81,15 +81,6 @@ export async function generateMetadata(
     };
   }
 
-  // Get thumbnail URL
-  const thumbnailUrl = `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/og?videoId=${videoId}`;
-
-  // Get direct MP4 URL
-  const videoUrl = `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${video.ownerId}&videoId=${video.id}&videoType=mp4`;
-
-  // Full page URL for embedding
-  const pageUrl = `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${videoId}`;
-
   console.log(
     "[generateMetadata] Returning public metadata for video:",
     video.name
@@ -98,58 +89,10 @@ export async function generateMetadata(
     title: video.name + " | Cap Recording",
     description: "Watch this video on Cap",
     openGraph: {
-      title: video.name,
-      description: "Watch this video on Cap",
-      url: pageUrl,
-      images: [thumbnailUrl],
-      type: "video.other",
-      videos: [
-        {
-          url: videoUrl,
-          width: 1280,
-          height: 720,
-          type: "video/mp4",
-        },
+      images: [
+        `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/og?videoId=${videoId}`,
       ],
     },
-    twitter: {
-      card: "player",
-      site: "@cap_hq",
-      title: video.name,
-      description: "Watch this video on Cap",
-      images: [thumbnailUrl],
-      players: [
-        {
-          playerUrl: pageUrl,
-          streamUrl: videoUrl,
-          width: 1280,
-          height: 720,
-        },
-      ],
-    },
-    other: {
-      "video:duration": Math.floor(video?.metadata?.duration || 0).toString(),
-      "og:video:duration": Math.floor(
-        video?.metadata?.duration || 0
-      ).toString(),
-      "og:video:url": videoUrl,
-      "og:video:secure_url": videoUrl,
-      "og:video:type": "video/mp4",
-      "og:video:width": "1280",
-      "og:video:height": "720",
-    },
-    metadataBase: new URL(clientEnv.NEXT_PUBLIC_WEB_URL),
-    alternates: {
-      canonical: `/s/${videoId}`,
-    },
-    icons: {
-      icon: "/favicon.ico",
-    },
-    viewport: {
-      width: "device-width",
-      initialScale: 1,
-    },
-    assets: [thumbnailUrl],
   };
 }
 

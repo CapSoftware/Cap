@@ -7,7 +7,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { clientEnv } from "@cap/env";
 
 interface MP4VideoPlayerProps {
   videoSrc: string;
@@ -23,33 +22,8 @@ export const MP4VideoPlayer = memo(
     const [isLoaded, setIsLoaded] = useState(false);
     const [currentSrc, setCurrentSrc] = useState(videoSrc);
     const lastAttemptTime = useRef<number>(Date.now());
-    const [thumbnailSrc, setThumbnailSrc] = useState<string | undefined>(
-      undefined
-    );
 
     useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
-
-    // Extract userId and videoId from the URL
-    const userId = videoSrc.split("userId=")[1]?.split("&")[0];
-    const videoId = videoSrc.split("videoId=")[1]?.split("&")[0];
-
-    // Fetch the thumbnail
-    useEffect(() => {
-      if (userId && videoId) {
-        fetch(
-          `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/thumbnail?userId=${userId}&videoId=${videoId}`
-        )
-          .then((response) => response.json())
-          .then((data) => {
-            if (data.screen) {
-              setThumbnailSrc(data.screen);
-            }
-          })
-          .catch((error) => {
-            console.error("Error fetching thumbnail:", error);
-          });
-      }
-    }, [userId, videoId]);
 
     const fetchNewUrl = useCallback(async () => {
       try {
@@ -59,19 +33,23 @@ export const MP4VideoPlayer = memo(
           ? `${videoSrc}&_t=${timestamp}`
           : `${videoSrc}?_t=${timestamp}`;
 
-        // With the updated API, we can now use the original URL directly
-        // Our API proxies the content rather than redirecting
-        setCurrentSrc(urlWithTimestamp);
-        return urlWithTimestamp;
+        const response = await fetch(urlWithTimestamp, { method: "HEAD" });
+
+        if (response.redirected) {
+          // If the API redirected us, use the redirected URL
+          setCurrentSrc(response.url);
+          return response.url;
+        } else {
+          // If no redirect (which is unusual for desktopMP4), just use the original URL
+          return urlWithTimestamp;
+        }
       } catch (error) {
-        console.error("Error updating video URL:", error);
-        // Return the original URL with timestamp if anything fails
+        console.error("Error fetching new video URL:", error);
+        // Return the original URL with timestamp if fetch fails
         const timestamp = new Date().getTime();
-        const fallbackUrl = videoSrc.includes("?")
+        return videoSrc.includes("?")
           ? `${videoSrc}&_t=${timestamp}`
           : `${videoSrc}?_t=${timestamp}`;
-        setCurrentSrc(fallbackUrl);
-        return fallbackUrl;
       }
     }, [videoSrc]);
 
@@ -251,8 +229,6 @@ export const MP4VideoPlayer = memo(
         playsInline
         controls={false}
         muted
-        crossOrigin="anonymous"
-        poster={thumbnailSrc}
       >
         <source src={currentSrc} type="video/mp4" />
       </video>

@@ -85,72 +85,11 @@ export async function GET(request: NextRequest) {
 
   if (!bucket || video.awsBucket === clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET) {
     if (video.source.type === "desktopMP4") {
-      if (videoType === "mp4") {
-        // Add specific headers for MP4 videos to enable embedding
-        const playlistUrl = await getSignedUrl(
-          s3Client,
-          new GetObjectCommand({
-            Bucket,
-            Key: `${userId}/${videoId}/result.mp4`,
-          }),
-          { expiresIn: 3600 }
-        );
-
-        // Set very permissive CORS headers to ensure cross-origin access works
-        const corsHeaders = {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization, Range, X-Requested-With",
-          "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges",
-          "Content-Type": "video/mp4",
-          "X-Content-Type-Options": "nosniff",
-          "Access-Control-Max-Age": "86400",
-          ...CACHE_CONTROL_HEADERS,
-        };
-
-        // Always proxy the content to avoid CORS issues with S3
-        try {
-          // Proxy the S3 content through our API to avoid CORS issues
-          const s3Response = await fetch(playlistUrl);
-          
-          if (!s3Response.ok) {
-            console.error(`S3 responded with ${s3Response.status}: ${s3Response.statusText}`);
-            throw new Error(`S3 error: ${s3Response.status}`);
-          }
-          
-          const data = await s3Response.arrayBuffer();
-          
-          return new Response(data, {
-            status: 200,
-            headers: corsHeaders
-          });
-        } catch (error) {
-          console.error("Error proxying S3 content:", error);
-          // Fall back to redirect if proxying fails
-          return new Response(null, {
-            status: 302,
-            headers: {
-              ...corsHeaders,
-              Location: playlistUrl,
-            },
-          });
-        }
-      }
-
-      const playlistUrl = await getSignedUrl(
-        s3Client,
-        new GetObjectCommand({
-          Bucket,
-          Key: `${userId}/${videoId}/result.mp4`,
-        }),
-        { expiresIn: 3600 }
-      );
-
       return new Response(null, {
         status: 302,
         headers: {
           ...getHeaders(origin),
-          Location: playlistUrl,
+          Location: `${S3_BUCKET_URL}/${userId}/${videoId}/result.mp4`,
           ...CACHE_CONTROL_HEADERS,
         },
       });

@@ -221,20 +221,13 @@ export const ShareVideo = forwardRef<
       if (videoRef.current) {
         setLongestDuration(videoRef.current.duration);
         setVideoMetadataLoaded(true);
-
-        // If we have the metadata, we should be able to display the poster frame
-        // even if the video isn't fully playable yet
-        setTimeout(() => {
-          // Set a timeout to reduce flicker between black screen and poster
-          setIsLoading(false);
-        }, 100);
+        // Don't set isLoading to false here
       }
     };
 
     const onCanPlay = () => {
       setVideoMetadataLoaded(true);
       setVideoReadyToPlay(true);
-      setIsLoading(false); // Ensure loading is false once playable
 
       // If the video is already playing (user clicked play before it was ready),
       // ensure it actually starts playing now
@@ -251,6 +244,11 @@ export const ShareVideo = forwardRef<
           videoRef.current.currentTime = currentPosition;
         }
       }
+
+      // Set a small delay before removing the loading state to ensure smooth transition
+      setTimeout(() => {
+        setIsLoading(false);
+      }, 100);
     };
 
     const videoElement = videoRef.current;
@@ -268,7 +266,7 @@ export const ShareVideo = forwardRef<
         videoElement.removeEventListener("canplay", onCanPlay);
       }
     };
-  }, [isPlaying]);
+  }, []);
 
   const handlePlayPauseClick = async () => {
     const videoElement = videoRef.current;
@@ -1054,14 +1052,14 @@ export const ShareVideo = forwardRef<
       className="overflow-hidden relative w-full h-full rounded-lg shadow-lg group"
     >
       <div
-        className={`absolute inset-0 flex items-center justify-center z-10 bg-black/50 transition-opacity duration-300 ${
+        className={`absolute inset-0 flex items-center justify-center z-10 bg-black transition-opacity duration-300 ${
           isLoading ? "opacity-100" : "opacity-0 pointer-events-none"
         }`}
       >
         <LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
       </div>
       <div className="relative w-full h-full">
-        <div className="absolute inset-0">
+        <div className="absolute inset-0 bg-black">
           {data.source.type === "desktopMP4" ? (
             <MP4VideoPlayer ref={videoRef} videoSrc={videoSrc} />
           ) : (
