@@ -2209,7 +2209,34 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 
     #[allow(unused_mut)]
     let mut builder =
-        tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            let cap_file = args
+                .iter()
+                .find(|arg| arg.ends_with(".cap"))
+                .map(|arg| std::path::PathBuf::from(arg));
+
+            if let Some(path) = cap_file {
+                if path.exists() && path.is_file() {
+                    if let Some(file_name) = path.file_stem() {
+                        let project_id = file_name.to_string_lossy().to_string();
+                        println!("Opening .cap file: {}", project_id);
+
+                        let app_handle = app.clone();
+                        tokio::spawn(async move {
+                            ShowCapWindow::Editor { project_id }
+                                .show(&app_handle)
+                                .await
+                                .ok();
+                            if let Some(main_window) = CapWindowId::Main.get(&app_handle) {
+                                main_window.close().ok();
+                            }
+                        });
+                        return;
+                    }
+                }
+            }
+
+            // Default behavior if no .cap file was passed
             let _ = ShowCapWindow::Main.show(app);
         }));
 
@@ -2290,7 +2317,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         capture_system_audio: false,
                     },
                     current_recording: None,
-                    recording_logging_handle,
+                    recording_logging_handle: recording_logging_handle.clone(),
                 })));
 
                 app.manage(Arc::new(RwLock::new(
@@ -2445,6 +2472,44 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         if window_id.activates_dock() {
                             app.set_activation_policy(tauri::ActivationPolicy::Regular)
                                 .ok();
+                        }
+                    }
+                }
+                WindowEvent::DragDrop(event) => {
+                    if let tauri::DragDropEvent::Drop { paths, .. } = event {
+                        if let Some(path) = paths.first() {
+                            if path.extension().map_or(false, |ext| ext == "cap") {
+                                if let Some(file_name) = path.file_stem() {
+                                    let project_id = file_name.to_string_lossy().to_string();
+                                    let app_handle = app.clone();
+
+                                    // Check if content/output.mp4 exists inside the .cap folder
+                                    let mp4_path = path.join("content/output.mp4");
+
+                                    if mp4_path.exists() && mp4_path.is_file() {
+                                        let _ = app_handle
+                                            .shell()
+                                            .open(mp4_path.to_str().unwrap_or_default(), None);
+                                        if let Some(main_window) =
+                                            CapWindowId::Main.get(&app_handle)
+                                        {
+                                            main_window.close().ok();
+                                        }
+                                    } else {
+                                        tokio::spawn(async move {
+                                            ShowCapWindow::Editor { project_id }
+                                                .show(&app_handle)
+                                                .await
+                                                .ok();
+                                            if let Some(main_window) =
+                                                CapWindowId::Main.get(&app_handle)
+                                            {
+                                                main_window.close().ok();
+                                            }
+                                        });
+                                    }
+                                }
+                            }
                         }
                     }
                 }
