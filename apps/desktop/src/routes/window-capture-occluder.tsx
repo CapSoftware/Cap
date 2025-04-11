@@ -1,6 +1,6 @@
 import { getAllWindows } from "@tauri-apps/api/window";
 import { type as ostype } from "@tauri-apps/plugin-os";
-import { onMount, Show, Suspense } from "solid-js";
+import { Show, Suspense } from "solid-js";
 import CropAreaRenderer from "~/components/CropAreaRenderer";
 import { createCurrentRecordingQuery } from "~/utils/queries";
 

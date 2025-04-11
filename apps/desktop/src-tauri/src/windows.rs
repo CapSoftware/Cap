@@ -179,7 +179,7 @@ impl ShowCapWindow {
         }
 
         let id = self.id();
-        let monitor = dbg!(app.available_monitors().unwrap())[1].clone();
+        let monitor = app.primary_monitor().unwrap().unwrap();
 
         let window = match self {
             Self::Setup => self

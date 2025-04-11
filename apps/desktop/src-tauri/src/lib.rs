@@ -139,11 +139,9 @@ pub struct VideoUploadInfo {
 
 impl App {
     pub fn set_current_recording(&mut self, actor: InProgressRecording) {
-        let current_recording = self.current_recording.insert(actor);
+        self.current_recording.insert(actor);
 
         CurrentRecordingChanged.emit(&self.handle).ok();
-
-        self.close_occluder_windows();
     }
 
     pub fn clear_current_recording(&mut self) -> Option<InProgressRecording> {
