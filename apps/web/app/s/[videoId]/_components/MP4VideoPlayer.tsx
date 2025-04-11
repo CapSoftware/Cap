@@ -59,23 +59,19 @@ export const MP4VideoPlayer = memo(
           ? `${videoSrc}&_t=${timestamp}`
           : `${videoSrc}?_t=${timestamp}`;
 
-        const response = await fetch(urlWithTimestamp, { method: "HEAD" });
-
-        if (response.redirected) {
-          // If the API redirected us, use the redirected URL
-          setCurrentSrc(response.url);
-          return response.url;
-        } else {
-          // If no redirect (which is unusual for desktopMP4), just use the original URL
-          return urlWithTimestamp;
-        }
+        // With the updated API, we can now use the original URL directly
+        // Our API proxies the content rather than redirecting
+        setCurrentSrc(urlWithTimestamp);
+        return urlWithTimestamp;
       } catch (error) {
-        console.error("Error fetching new video URL:", error);
-        // Return the original URL with timestamp if fetch fails
+        console.error("Error updating video URL:", error);
+        // Return the original URL with timestamp if anything fails
         const timestamp = new Date().getTime();
-        return videoSrc.includes("?")
+        const fallbackUrl = videoSrc.includes("?")
           ? `${videoSrc}&_t=${timestamp}`
           : `${videoSrc}?_t=${timestamp}`;
+        setCurrentSrc(fallbackUrl);
+        return fallbackUrl;
       }
     }, [videoSrc]);
 

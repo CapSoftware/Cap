@@ -96,27 +96,45 @@ export async function GET(request: NextRequest) {
           { expiresIn: 3600 }
         );
 
-        // Check if this is a direct access from a third-party site by examining the Referer header
-        const referer = request.headers.get("referer");
-        const isEmbedded = referer && !referer.includes(request.headers.get("host") || "");
-        
+        // Set very permissive CORS headers to ensure cross-origin access works
         const corsHeaders = {
-          ...getHeaders(origin),
-          ...CACHE_CONTROL_HEADERS,
           "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization, Range, X-Requested-With",
+          "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges",
           "Content-Type": "video/mp4",
           "X-Content-Type-Options": "nosniff",
+          "Access-Control-Max-Age": "86400",
+          ...CACHE_CONTROL_HEADERS,
         };
 
-        return new Response(null, {
-          status: 302,
-          headers: {
-            ...corsHeaders,
-            Location: playlistUrl,
-          },
-        });
+        // Always proxy the content to avoid CORS issues with S3
+        try {
+          // Proxy the S3 content through our API to avoid CORS issues
+          const s3Response = await fetch(playlistUrl);
+          
+          if (!s3Response.ok) {
+            console.error(`S3 responded with ${s3Response.status}: ${s3Response.statusText}`);
+            throw new Error(`S3 error: ${s3Response.status}`);
+          }
+          
+          const data = await s3Response.arrayBuffer();
+          
+          return new Response(data, {
+            status: 200,
+            headers: corsHeaders
+          });
+        } catch (error) {
+          console.error("Error proxying S3 content:", error);
+          // Fall back to redirect if proxying fails
+          return new Response(null, {
+            status: 302,
+            headers: {
+              ...corsHeaders,
+              Location: playlistUrl,
+            },
+          });
+        }
       }
 
       const playlistUrl = await getSignedUrl(
