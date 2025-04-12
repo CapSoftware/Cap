@@ -2299,7 +2299,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         capture_system_audio: false,
                     },
                     current_recording: None,
-                    recording_logging_handle: recording_logging_handle.clone(),
+                    recording_logging_handle,
                 })));
 
                 app.manage(Arc::new(RwLock::new(
