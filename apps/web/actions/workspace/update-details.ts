@@ -1,25 +1,30 @@
-import { type NextRequest } from "next/server";
+'use server';
+
 import { getCurrentUser } from "@cap/database/auth/session";
 import { spaces } from "@cap/database/schema";
 import { db } from "@cap/database";
 import { eq } from "drizzle-orm";
+import { revalidatePath } from "next/cache";
 
-export async function POST(request: NextRequest) {
+export async function updateWorkspaceDetails(
+  workspaceName: string,
+  allowedEmailDomain: string,
+  spaceId: string
+) {
   const user = await getCurrentUser();
-  const { workspaceName, allowedEmailDomain, spaceId } = await request.json();
 
   if (!user) {
-    return Response.json({ error: true }, { status: 401 });
+    throw new Error("Unauthorized");
   }
 
   const space = await db.select().from(spaces).where(eq(spaces.id, spaceId));
 
-  if (!space) {
-    return Response.json({ error: true }, { status: 404 });
+  if (!space || space.length === 0) {
+    throw new Error("Workspace not found");
   }
 
-  if (space.length > 0 && space[0]?.ownerId !== user.id) {
-    return Response.json({ error: true }, { status: 403 });
+  if (space[0]?.ownerId !== user.id) {
+    throw new Error("Only the owner can update workspace details");
   }
 
   await db
@@ -30,5 +35,7 @@ export async function POST(request: NextRequest) {
     })
     .where(eq(spaces.id, spaceId));
 
-  return Response.json(true, { status: 200 });
-}
+  revalidatePath('/dashboard/settings/workspace');
+  
+  return { success: true };
+} 

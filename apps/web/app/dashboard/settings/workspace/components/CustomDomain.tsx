@@ -8,6 +8,9 @@ import { toast } from "react-hot-toast";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { RefreshCw, CheckCircle, XCircle, Copy, Check } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { updateDomain } from "@/actions/workspace/update-domain";
+import { checkWorkspaceDomain } from "@/actions/workspace/check-domain";
+import { removeWorkspaceDomain } from "@/actions/workspace/remove-domain";
 
 type DomainVerification = {
   type: string;
@@ -90,20 +93,7 @@ export function CustomDomain() {
     if (!activeSpace?.space.id || !activeSpace?.space.customDomain) return;
     setVerifying(true);
     try {
-      const response = await fetch(
-        `/api/settings/workspace/domain?spaceId=${activeSpace.space.id}`,
-        {
-          cache: "no-store",
-          next: {
-            revalidate: 0,
-          },
-        }
-      );
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to check domain verification");
-      }
+      const data = await checkWorkspaceDomain(activeSpace.space.id);
 
       setIsVerified(data.verified);
       setDomainConfig(data.config);
@@ -204,20 +194,10 @@ export function CustomDomain() {
     setDomain(cleanedDomain); // Update the input to show the cleaned domain
 
     try {
-      const response = await fetch("/api/settings/workspace/domain", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          domain: cleanedDomain,
-          spaceId: activeSpace?.space.id,
-        }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to update domain");
-      }
+      const data = await updateDomain(
+        cleanedDomain,
+        activeSpace?.space.id as string
+      );
 
       toast.success("Domain settings updated");
       router.refresh();
@@ -273,17 +253,7 @@ export function CustomDomain() {
 
     setLoading(true);
     try {
-      const response = await fetch("/api/settings/workspace/domain", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          spaceId: activeSpace?.space.id,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to remove domain");
-      }
+      await removeWorkspaceDomain(activeSpace?.space.id as string);
 
       // Clear polling when domain is removed
       if (pollInterval.current) {

@@ -8,6 +8,7 @@ import { toast } from "react-hot-toast";
 import { Input, Label } from "@cap/ui";
 import { NODE_ENV } from "@cap/env";
 import { trackEvent } from "../utils/analytics";
+import { getSpace } from "@/actions/workspace/get-space";
 
 export function LoginForm() {
   const searchParams = useSearchParams();
@@ -84,14 +85,8 @@ export function LoginForm() {
     }
 
     try {
-      const response = await fetch(
-        `/api/settings/workspace/lookup?spaceId=${encodeURIComponent(spaceId)}`
-      );
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to look up workspace");
-      }
+      const data = await getSpace(spaceId);
+      setSpaceName(data.name);
 
       signIn("workos", undefined, {
         organization: data.organizationId,
