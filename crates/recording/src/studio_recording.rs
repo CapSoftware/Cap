@@ -191,6 +191,8 @@ pub async fn spawn_studio_recording_actor(
 
     let bounds = pipeline.screen.bounds;
 
+    debug!("screen bounds: {bounds:?}");
+
     spawn_actor({
         let options = options.clone();
         let fps = pipeline.screen.video_info.fps();
