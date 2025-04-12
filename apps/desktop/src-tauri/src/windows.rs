@@ -228,6 +228,10 @@ impl ShowCapWindow {
                 .center()
                 .build()?,
             Self::Editor { project_id } => {
+                if let Some(main) = CapWindowId::Main.get(app) {
+                    let _ = main.close();
+                };
+
                 let window = self
                     .window_builder(app, format!("/editor?id={project_id}"))
                     .maximizable(true)

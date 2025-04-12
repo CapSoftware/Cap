@@ -2210,34 +2210,16 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
     #[allow(unused_mut)]
     let mut builder =
         tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            let cap_file = args
+            let Some(cap_file) = args
                 .iter()
                 .find(|arg| arg.ends_with(".cap"))
-                .map(|arg| std::path::PathBuf::from(arg));
+                .map(PathBuf::from)
+            else {
+                let _ = ShowCapWindow::Main.show(app);
+                return;
+            };
 
-            if let Some(path) = cap_file {
-                if path.exists() && path.is_file() {
-                    if let Some(file_name) = path.file_stem() {
-                        let project_id = file_name.to_string_lossy().to_string();
-                        println!("Opening .cap file: {}", project_id);
-
-                        let app_handle = app.clone();
-                        tokio::spawn(async move {
-                            ShowCapWindow::Editor { project_id }
-                                .show(&app_handle)
-                                .await
-                                .ok();
-                            if let Some(main_window) = CapWindowId::Main.get(&app_handle) {
-                                main_window.close().ok();
-                            }
-                        });
-                        return;
-                    }
-                }
-            }
-
-            // Default behavior if no .cap file was passed
-            let _ = ShowCapWindow::Main.show(app);
+            let _ = open_project_from_path(&cap_file, app.clone());
         }));
 
     #[cfg(target_os = "macos")]
@@ -2477,39 +2459,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 }
                 WindowEvent::DragDrop(event) => {
                     if let tauri::DragDropEvent::Drop { paths, .. } = event {
-                        if let Some(path) = paths.first() {
-                            if path.extension().map_or(false, |ext| ext == "cap") {
-                                if let Some(file_name) = path.file_stem() {
-                                    let project_id = file_name.to_string_lossy().to_string();
-                                    let app_handle = app.clone();
-
-                                    // Check if content/output.mp4 exists inside the .cap folder
-                                    let mp4_path = path.join("content/output.mp4");
-
-                                    if mp4_path.exists() && mp4_path.is_file() {
-                                        let _ = app_handle
-                                            .shell()
-                                            .open(mp4_path.to_str().unwrap_or_default(), None);
-                                        if let Some(main_window) =
-                                            CapWindowId::Main.get(&app_handle)
-                                        {
-                                            main_window.close().ok();
-                                        }
-                                    } else {
-                                        tokio::spawn(async move {
-                                            ShowCapWindow::Editor { project_id }
-                                                .show(&app_handle)
-                                                .await
-                                                .ok();
-                                            if let Some(main_window) =
-                                                CapWindowId::Main.get(&app_handle)
-                                            {
-                                                main_window.close().ok();
-                                            }
-                                        });
-                                    }
-                                }
-                            }
+                        for path in paths {
+                            let _ = open_project_from_path(path, app.clone());
                         }
                     }
                 }
@@ -2671,4 +2622,34 @@ impl<F: Future<Output = T>, T, E> TransposeAsync for Result<F, E> {
             }
         }
     }
+}
+
+fn open_project_from_path(path: &PathBuf, app: AppHandle) -> Result<(), String> {
+    let meta = RecordingMeta::load_for_project(path)?;
+
+    match &meta.inner {
+        RecordingMetaInner::Studio(_) => {
+            let project_id = path
+                .file_stem()
+                .ok_or_else(|| "No file stem".to_string())?
+                .to_string_lossy()
+                .to_string();
+
+            tokio::spawn(async move { ShowCapWindow::Editor { project_id }.show(&app).await });
+        }
+        RecordingMetaInner::Instant(_) => {
+            let mp4_path = path.join("content/output.mp4");
+
+            if mp4_path.exists() && mp4_path.is_file() {
+                let _ = app
+                    .shell()
+                    .open(mp4_path.to_str().unwrap_or_default(), None);
+                if let Some(main_window) = CapWindowId::Main.get(&app) {
+                    main_window.close().ok();
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
