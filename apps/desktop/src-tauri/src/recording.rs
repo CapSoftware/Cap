@@ -7,7 +7,7 @@ use crate::{
     general_settings::{
         GeneralSettingsStore, MainWindowRecordingStartBehaviour, PostStudioRecordingBehaviour,
     },
-    open_editor, open_external_link,
+    open_external_link,
     presets::PresetsStore,
     upload::{get_s3_config, prepare_screenshot_upload, upload_video, InstantMultipartUpload},
     web_api,
@@ -15,6 +15,7 @@ use crate::{
     App, CurrentRecordingChanged, DynLoggingLayer, MutableState, NewStudioRecordingAdded,
     RecordingStarted, RecordingStopped, VideoUploadInfo,
 };
+use base64::{prelude::BASE64_STANDARD, Engine};
 use cap_fail::fail;
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
 use cap_media::{
@@ -613,7 +614,7 @@ async fn handle_recording_finish(
         {
             PostStudioRecordingBehaviour::OpenEditor => {
                 let _ = ShowCapWindow::Editor {
-                    project_id: id.clone(),
+                    project_path: recording_dir,
                 }
                 .show(&app)
                 .await;

@@ -575,6 +575,15 @@ dependencies = [
 
 [[package]]
 name = "base64"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b25d992356d2eb0ed82172f5248873db5560c4721f564b13cb5193bda5e668e"
+dependencies = [
+ "byteorder",
+]
+
+[[package]]
+name = "base64"
 version = "0.21.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
@@ -955,6 +964,7 @@ dependencies = [
  "nix 0.29.0",
  "objc",
  "objc2-app-kit 0.3.0",
+ "paths-as-strings",
  "png",
  "rand 0.8.5",
  "relative-path",
@@ -5318,6 +5328,15 @@ name = "pathdiff"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8835116a5c179084a830efb3adc117ab007512b535bc1a21c991d3b32a6b44dd"
+
+[[package]]
+name = "paths-as-strings"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7963201bed34799ddd0f54a2e1e4c5082313ca260db118822109f344f13b285c"
+dependencies = [
+ "base64 0.10.1",
+]
 
 [[package]]
 name = "peeking_take_while"
