@@ -18,7 +18,6 @@ use tokio::sync::{mpsc, watch, Mutex};
 
 pub struct EditorInstance {
     pub project_path: PathBuf,
-    // pub id: String,
     pub ws_port: u16,
     pub recordings: Arc<ProjectRecordings>,
     pub renderer: Arc<editor::RendererHandle>,
@@ -101,7 +100,6 @@ impl EditorInstance {
         let (preview_tx, preview_rx) = watch::channel(None);
 
         let this = Arc::new(Self {
-            // id: video_id.to_string(),
             project_path,
             recordings,
             ws_port,
