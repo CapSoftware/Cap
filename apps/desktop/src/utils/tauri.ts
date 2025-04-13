@@ -222,7 +222,7 @@ uploadProgress: "upload-progress"
 export type AppTheme = "system" | "light" | "dark"
 export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
 export type Audio = { duration: number; sample_rate: number; channels: number; start_time: number }
-export type AudioConfiguration = { mute: boolean; improve: boolean }
+export type AudioConfiguration = { mute: boolean; improve: boolean; micVolumeDb?: number; systemVolumeDb?: number }
 export type AudioInputLevelChange = number
 export type AudioMeta = { path: string; 
 /**

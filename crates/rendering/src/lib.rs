@@ -426,15 +426,7 @@ impl RenderVideoConstants {
         recording_meta: &RecordingMeta,
         meta: &StudioRecordingMeta,
     ) -> HashMap<String, CursorTexture> {
-        println!("Starting to load cursor textures");
-        println!("Project path: {:?}", recording_meta.project_path);
-        // println!("Cursor images to load: {:?}", cursor.cursor_images);
-
         let mut textures = HashMap::new();
-
-        // Create the full path to the cursors directory
-        let cursors_dir = recording_meta.project_path.join("content").join("cursors");
-        println!("Cursors directory: {:?}", cursors_dir);
 
         let cursor_images = match &meta {
             StudioRecordingMeta::SingleSegment { .. } => Default::default(),
@@ -444,26 +436,13 @@ impl RenderVideoConstants {
         };
 
         for (cursor_id, cursor) in &cursor_images.0 {
-            println!(
-                "Loading cursor image: {} -> {}",
-                cursor_id,
-                cursor.path.display()
-            );
-
-            println!("Full cursor path: {:?}", cursor);
-
             if !cursor.path.exists() {
-                println!("Cursor image file does not exist: {:?}", cursor);
                 continue;
             }
 
             match image::open(&cursor.path) {
                 Ok(img) => {
                     let dimensions = img.dimensions();
-                    println!(
-                        "Loaded cursor image dimensions: {}x{}",
-                        dimensions.0, dimensions.1
-                    );
 
                     let rgba = img.into_rgba8();
 
