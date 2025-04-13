@@ -68,7 +68,7 @@ type ExportToOption = (typeof EXPORT_TO_OPTIONS)[number]["value"];
 
 const ExportDialog = () => {
   const {
-    videoId,
+    path,
     prettyName,
     setDialog,
     exportState,
@@ -115,15 +115,13 @@ const ExportDialog = () => {
 
   const [exportEstimates] = createResource(
     () => ({
-      videoId,
       resolution: {
         x: selectedResolution().width,
         y: selectedResolution().height,
       },
       fps: selectedFps(),
     }),
-    (params) =>
-      commands.getExportEstimates(params.videoId, params.resolution, params.fps)
+    (params) => commands.getExportEstimates(path, params.resolution, params.fps)
   );
   const exportButtonIcon: Record<"file" | "clipboard" | "link", JSX.Element> = {
     file: <IconCapFile class="text-solid-white size-4" />,
@@ -167,7 +165,7 @@ const ExportDialog = () => {
 
         // First try to get existing rendered video
         const outputPath = await commands.exportVideo(
-          videoId,
+          path,
           progress,
           true,
           selectedFps(),
@@ -200,7 +198,7 @@ const ExportDialog = () => {
   }));
 
   const [recordingMeta, metaActions] = createResource(() =>
-    commands.getRecordingMeta(videoId, "recording")
+    commands.getRecordingMeta(path, "recording")
   );
 
   const exportWithSettings = createMutation(() => ({
@@ -248,7 +246,7 @@ const ExportDialog = () => {
 
       try {
         const videoPath = await commands.exportVideo(
-          videoId,
+          path,
           progress,
           true,
           selectedFps(),
@@ -307,7 +305,7 @@ const ExportDialog = () => {
         throw new Error("Recording metadata not available");
       }
 
-      const metadata = await commands.getVideoMetadata(videoId, null);
+      const metadata = await commands.getVideoMetadata(path);
       const plan = await commands.checkUpgradedAndUpdate();
       const canShare = {
         allowed: plan || metadata.duration < 300,
@@ -366,7 +364,7 @@ const ExportDialog = () => {
             );
         };
 
-        await commands.exportVideo(videoId, progress, true, selectedFps(), {
+        await commands.exportVideo(path, progress, true, selectedFps(), {
           x: selectedResolution().width,
           y: selectedResolution().height,
         });
@@ -375,8 +373,8 @@ const ExportDialog = () => {
 
         // Now proceed with upload
         const result = recordingMeta()?.sharing
-          ? await commands.uploadExportedVideo(videoId, "Reupload")
-          : await commands.uploadExportedVideo(videoId, {
+          ? await commands.uploadExportedVideo(path, "Reupload")
+          : await commands.uploadExportedVideo(path, {
               Initial: { pre_created_video: null },
             });
 
@@ -403,7 +401,7 @@ const ExportDialog = () => {
     onSuccess: () => {
       metaActions.refetch();
       setUploadState({ type: "complete" });
-      metaUpdateStore.notifyUpdate(videoId);
+      metaUpdateStore.notifyUpdate(path);
     },
     onError: (error) => {
       commands.globalMessageDialog(

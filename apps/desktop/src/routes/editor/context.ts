@@ -306,16 +306,16 @@ function transformMeta(instance: SerializedEditorInstance) {
 export type TransformedMeta = ReturnType<typeof transformMeta>;
 
 export const [EditorInstanceContextProvider, useEditorInstanceContext] =
-  createContextProvider((props: { videoId: string }) => {
+  createContextProvider((props: { path: string }) => {
     const [latestFrame, setLatestFrame] = createLazySignal<{
       width: number;
       data: ImageData;
     }>();
 
     const [editorInstance] = createResource(async () => {
-      const instance = await commands.createEditorInstance(props.videoId);
+      const instance = await commands.createEditorInstance();
 
-      const [ws, isConnected] = createImageDataWS(
+      const [_ws, isConnected] = createImageDataWS(
         instance.framesSocketUrl,
         setLatestFrame
       );
@@ -338,7 +338,7 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 
     return {
       editorInstance,
-      videoId: props.videoId,
+      path: props.path,
       latestFrame,
       presets: createPresets(),
       prettyName: () => editorInstance()?.meta.prettyName ?? "Cap Recording",

@@ -13,9 +13,11 @@ import { RESOLUTION_OPTIONS } from "./Header";
 import { Dialog, DialogContent } from "./ui";
 
 function ShareButton() {
-  const { videoId, metaUpdateStore } = useEditorContext();
+  const { editorInstance, metaUpdateStore } = useEditorContext();
+  const path = editorInstance.path;
+
   const [recordingMeta, metaActions] = createResource(() =>
-    commands.getRecordingMeta(videoId, "recording")
+    commands.getRecordingMeta(path, "recording")
   );
   const [copyPressed, setCopyPressed] = createSignal(false);
   const selectedFps = Number(localStorage.getItem("cap-export-fps")) || 30;
@@ -43,7 +45,7 @@ function ShareButton() {
         throw new Error("Recording metadata not available");
       }
 
-      const metadata = await commands.getVideoMetadata(videoId, null);
+      const metadata = await commands.getVideoMetadata(path);
       const plan = await commands.checkUpgradedAndUpdate();
       const canShare = {
         allowed: plan || metadata.duration < 300,
@@ -95,7 +97,7 @@ function ShareButton() {
             );
         };
 
-        await commands.exportVideo(videoId, progress, true, selectedFps, {
+        await commands.exportVideo(path, progress, true, selectedFps, {
           x: selectedResolution.width,
           y: selectedResolution.height,
         });
@@ -104,8 +106,8 @@ function ShareButton() {
 
         // Now proceed with upload
         const result = recordingMeta()?.sharing
-          ? await commands.uploadExportedVideo(videoId, "Reupload")
-          : await commands.uploadExportedVideo(videoId, {
+          ? await commands.uploadExportedVideo(path, "Reupload")
+          : await commands.uploadExportedVideo(path, {
               Initial: { pre_created_video: null },
             });
 
@@ -165,9 +167,7 @@ function ShareButton() {
   // Watch for metadata updates
   createEffect(() => {
     const update = metaUpdateStore.getLastUpdate();
-    if (update && update.videoId === videoId) {
-      metaActions.refetch();
-    }
+    if (update) metaActions.refetch();
   });
 
   return (
