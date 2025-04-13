@@ -1,15 +1,16 @@
-use std::{ops::Mul, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
-use cap_media::data::{AudioInfo, AudioInfoError, FromSampleBytes};
-use cap_media::feeds::{AudioPlaybackBuffer, AudioTrack};
+use cap_media::data::{AudioInfo, FromSampleBytes};
+use cap_media::feeds::{AudioPlaybackBuffer, AudioSegment, AudioSegmentTrack};
 use cap_media::MediaError;
-use cap_project::{ProjectConfiguration, XY};
+use cap_project::{AudioConfiguration, ProjectConfiguration, XY};
 use cap_rendering::{ProjectUniforms, RenderVideoConstants};
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     BufferSize, SampleFormat,
 };
 use tokio::{sync::watch, time::Instant};
+use tracing::{error, info};
 
 use crate::editor;
 use crate::editor_instance::Segment;
@@ -61,11 +62,18 @@ impl Playback {
                 segments: self
                     .segments
                     .iter()
-                    .map(|s| {
-                        [s.audio.clone(), s.system_audio.clone()]
-                            .into_iter()
-                            .flatten()
-                            .collect::<Vec<_>>()
+                    .map(|s| AudioSegment {
+                        tracks: [
+                            s.audio
+                                .clone()
+                                .map(|a| AudioSegmentTrack::new(a, |c| c.mic_volume_db)),
+                            s.system_audio
+                                .clone()
+                                .map(|a| AudioSegmentTrack::new(a, |c| c.system_volume_db)),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .collect::<Vec<_>>(),
                     })
                     .collect::<Vec<_>>(),
                 stop_rx: stop_rx.clone(),
@@ -140,7 +148,7 @@ impl PlaybackHandle {
 }
 
 struct AudioPlayback {
-    segments: Vec<AudioTrack>,
+    segments: Vec<AudioSegment>,
     stop_rx: watch::Receiver<bool>,
     start_frame_number: u32,
     project: watch::Receiver<ProjectConfiguration>,
@@ -151,8 +159,8 @@ impl AudioPlayback {
     fn spawn(self) {
         let handle = tokio::runtime::Handle::current();
 
-        if self.segments.is_empty() || self.segments[0].is_empty() {
-            println!("No audio segments found, skipping audio playback thread.");
+        if self.segments.is_empty() || self.segments[0].tracks.is_empty() {
+            info!("No audio segments found, skipping audio playback thread.");
             return;
         }
 
@@ -161,18 +169,14 @@ impl AudioPlayback {
             let device = match host.default_output_device() {
                 Some(d) => d,
                 None => {
-                    eprintln!("No default output device found. Skipping audio playback.");
+                    error!("No default output device found. Skipping audio playback.");
                     return;
                 }
             };
-            println!(
-                "Output device: {}",
-                device.name().unwrap_or_else(|_| "unknown".to_string())
-            );
             let supported_config = match device.default_output_config() {
                 Ok(sc) => sc,
                 Err(e) => {
-                    eprintln!(
+                    error!(
                         "Failed to get default output config: {}. Skipping audio playback.",
                         e
                     );
@@ -188,7 +192,7 @@ impl AudioPlayback {
                 SampleFormat::U8 => self.create_stream::<u8>(device, supported_config),
                 SampleFormat::F64 => self.create_stream::<f64>(device, supported_config),
                 format => {
-                    eprintln!(
+                    error!(
                         "Unsupported sample format {:?} for simplified volume adjustment, skipping audio playback.",
                         format
                     );
@@ -199,7 +203,7 @@ impl AudioPlayback {
             let (mut stop_rx, stream) = match result {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!(
+                    error!(
                         "Failed to create audio stream: {}. Skipping audio playback.",
                         e
                     );
@@ -208,7 +212,7 @@ impl AudioPlayback {
             };
 
             if let Err(e) = stream.play() {
-                eprintln!(
+                error!(
                     "Failed to play audio stream: {}. Skipping audio playback.",
                     e
                 );
@@ -216,7 +220,7 @@ impl AudioPlayback {
             }
 
             let _ = handle.block_on(stop_rx.changed());
-            println!("Audio playback thread finished.");
+            info!("Audio playback thread finished.");
         });
     }
 
@@ -247,12 +251,26 @@ impl AudioPlayback {
         let mut config = supported_config.config();
         config.buffer_size = BufferSize::Fixed(AudioPlaybackBuffer::<T>::PLAYBACK_SAMPLES_COUNT);
 
+        let mut elapsed = 0;
+        let mut prev_audio_config = project.borrow().audio.clone();
+
         let stream_result = device.build_output_stream(
             &config,
             move |buffer: &mut [T], _info| {
                 let project = project.borrow();
+
+                if prev_audio_config != project.audio {
+                    audio_renderer.set_playhead(
+                        playhead + elapsed as f64 / output_info.sample_rate as f64,
+                        &project,
+                    );
+                    prev_audio_config = project.audio.clone();
+                }
+
                 audio_renderer.render(&project);
                 audio_renderer.fill(buffer);
+
+                elapsed += buffer.len() / output_info.channels;
             },
             |_err| eprintln!("Audio stream error: {}", _err),
             None,

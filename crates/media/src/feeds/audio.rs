@@ -1,5 +1,5 @@
 use cap_audio::AudioData;
-use cap_project::{ProjectConfiguration, TimelineConfiguration};
+use cap_project::{AudioConfiguration, ProjectConfiguration, TimelineConfiguration};
 use ffmpeg::{
     codec::decoder,
     format::{
@@ -118,7 +118,7 @@ fn decode_audio_to_f32(
 }
 
 pub struct AudioRenderer {
-    data: Vec<AudioTrack>,
+    data: Vec<AudioSegment>,
     cursor: AudioRendererCursor,
     // sum of `frame.samples()` that have elapsed
     // this * channel count = cursor
@@ -132,7 +132,30 @@ pub struct AudioRendererCursor {
     samples: usize,
 }
 
-pub type AudioTrack = Vec<Arc<AudioData>>;
+#[derive(Clone)]
+pub struct AudioSegment {
+    pub tracks: Vec<AudioSegmentTrack>,
+}
+
+#[derive(Clone)]
+pub struct AudioSegmentTrack {
+    data: Arc<AudioData>,
+    get_gain: fn(&AudioConfiguration) -> f32,
+}
+
+impl AudioSegmentTrack {
+    pub fn new(data: Arc<AudioData>, get_gain: fn(&AudioConfiguration) -> f32) -> Self {
+        Self { data, get_gain }
+    }
+
+    pub fn data(&self) -> &Arc<AudioData> {
+        &self.data
+    }
+
+    pub fn gain(&self, config: &AudioConfiguration) -> f32 {
+        (self.get_gain)(config)
+    }
+}
 
 impl AudioRenderer {
     pub const SAMPLE_FORMAT: avformat::Sample = AudioData::SAMPLE_FORMAT;
@@ -143,7 +166,7 @@ impl AudioRenderer {
         AudioInfo::new(Self::SAMPLE_FORMAT, Self::SAMPLE_RATE, Self::CHANNELS).unwrap()
     }
 
-    pub fn new(data: Vec<AudioTrack>) -> Self {
+    pub fn new(data: Vec<AudioSegment>) -> Self {
         Self {
             data,
             cursor: AudioRendererCursor {
@@ -167,16 +190,6 @@ impl AudioRenderer {
                 samples: self.elapsed_samples,
             },
         };
-    }
-
-    // Check if we have multiple audio tracks (typically mic + system audio)
-    pub fn has_multiple_tracks(&self) -> bool {
-        if self.data.is_empty() {
-            return false;
-        }
-
-        // Typically the first track is mic and others are system audio
-        self.data[self.cursor.segment_index as usize].len() > 1
     }
 
     fn adjust_cursor(&mut self, timeline: &TimelineConfiguration) {
@@ -243,16 +256,17 @@ impl AudioRenderer {
         }
         let channels: usize = 2;
 
-        let track_datas = self.data[self.cursor.segment_index as usize]
-            .iter()
-            .map(|t| t.as_ref())
-            .collect::<Vec<_>>();
+        let tracks = &self.data[self.cursor.segment_index as usize].tracks;
 
-        if track_datas.is_empty() {
+        if tracks.is_empty() {
             return None;
         }
 
-        let max_samples = track_datas.iter().map(|t| t.sample_count()).min().unwrap();
+        let max_samples = tracks
+            .iter()
+            .map(|t| t.data().sample_count())
+            .min()
+            .unwrap();
 
         if self.cursor.samples >= max_samples {
             self.elapsed_samples += max_samples;
@@ -265,84 +279,22 @@ impl AudioRenderer {
 
         let mut ret = vec![0.0; samples * 2];
 
+        let track_datas = tracks
+            .iter()
+            .map(|t| {
+                (
+                    t.data().as_ref(),
+                    if project.audio.mute {
+                        f32::NEG_INFINITY
+                    } else {
+                        t.gain(&project.audio)
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+
         let actual_sample_count =
-            cap_audio::render_audio(track_datas.as_slice(), start.samples, samples, 0, &mut ret);
-
-        // Apply volume adjustments in dB if not muted
-        if !project.audio.mute {
-            let system_gain = if project.audio.system_volume_db <= -30.0 {
-                0.0 // Fully mute when at minimum
-            } else if project.audio.system_volume_db == 0.0 {
-                1.0
-            } else {
-                cap_project::AudioConfiguration::db_to_linear(project.audio.system_volume_db)
-            };
-
-            let mic_gain = if project.audio.mic_volume_db <= -30.0 {
-                0.0 // Fully mute when at minimum
-            } else if project.audio.mic_volume_db == 0.0 {
-                1.0
-            } else {
-                cap_project::AudioConfiguration::db_to_linear(project.audio.mic_volume_db)
-            };
-
-            if track_datas.len() > 1 {
-                if let Some(first_track) = track_datas.first() {
-                    let first_track_samples = first_track.sample_count();
-                    let first_track_channels = first_track.channels() as usize;
-
-                    for i in 0..actual_sample_count {
-                        let mut left = 0.0;
-                        let mut right = 0.0;
-
-                        if first_track_channels == 1 {
-                            if start.samples + i < first_track_samples {
-                                let sample =
-                                    first_track.samples()[start.samples + i] * 0.707 * mic_gain;
-                                left += sample;
-                                right += sample;
-                            }
-                        } else if first_track_channels == 2 {
-                            if (start.samples + i) * 2 + 1 < first_track.samples().len() {
-                                left += first_track.samples()[(start.samples + i) * 2] * mic_gain;
-                                right +=
-                                    first_track.samples()[(start.samples + i) * 2 + 1] * mic_gain;
-                            }
-                        }
-
-                        for track in track_datas.iter().skip(1) {
-                            let track_channels = track.channels() as usize;
-                            if track_channels == 1 {
-                                if start.samples + i < track.sample_count() {
-                                    let sample =
-                                        track.samples()[start.samples + i] * 0.707 * system_gain;
-                                    left += sample;
-                                    right += sample;
-                                }
-                            } else if track_channels == 2 {
-                                if (start.samples + i) * 2 + 1 < track.samples().len() {
-                                    left += track.samples()[(start.samples + i) * 2] * system_gain;
-                                    right +=
-                                        track.samples()[(start.samples + i) * 2 + 1] * system_gain;
-                                }
-                            }
-                        }
-
-                        ret[i * 2] = left;
-                        ret[i * 2 + 1] = right;
-                    }
-                }
-            } else {
-                let volume = system_gain * mic_gain;
-                for sample in ret.iter_mut() {
-                    *sample *= volume;
-                }
-            }
-        } else {
-            for sample in ret.iter_mut() {
-                *sample = 0.0;
-            }
-        }
+            cap_audio::render_audio(&track_datas, start.samples, samples, 0, &mut ret);
 
         self.elapsed_samples += actual_sample_count;
         self.cursor.samples += actual_sample_count;
@@ -365,7 +317,7 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
     pub const PLAYBACK_SAMPLES_COUNT: u32 = 256;
     const PROCESSING_SAMPLES_COUNT: u32 = 1024;
 
-    pub fn new(data: Vec<AudioTrack>, output_info: AudioInfo) -> Self {
+    pub fn new(data: Vec<AudioSegment>, output_info: AudioInfo) -> Self {
         // println!("Input info: {:?}", data[0][0].info);
         println!("Output info: {:?}", output_info);
 
@@ -390,8 +342,6 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
         self.resampler.reset();
         self.resampled_buffer.clear();
         self.frame_buffer.set_playhead(playhead, project);
-
-        println!("Successful seek to sample {:?}", self.frame_buffer.cursor);
     }
 
     pub fn buffer_reaching_limit(&self) -> bool {

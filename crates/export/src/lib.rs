@@ -4,11 +4,12 @@ use cap_media::{
         cast_bytes_to_f32_slice, cast_f32_slice_to_bytes, AudioInfo, RawVideoFormat, VideoInfo,
     },
     encoders::{H264Encoder, MP4Input, OpusEncoder},
-    feeds::{AudioRenderer, AudioTrack},
+    feeds::{AudioRenderer, AudioSegment, AudioSegmentTrack},
     MediaError,
 };
 use cap_project::{
-    ProjectConfiguration, RecordingMeta, RecordingMetaInner, StudioRecordingMeta, XY,
+    AudioConfiguration, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
+    StudioRecordingMeta, XY,
 };
 use cap_rendering::{
     ProjectRecordings, ProjectUniforms, RecordingSegmentDecoders, RenderSegment,
@@ -45,7 +46,7 @@ pub enum ExportError {
 
 pub struct Exporter<TOnProgress> {
     render_segments: Vec<RenderSegment>,
-    audio_segments: Vec<AudioTrack>,
+    audio_segments: Vec<AudioSegment>,
     output_size: (u32, u32),
     output_path: PathBuf,
     project: ProjectConfiguration,
@@ -112,12 +113,19 @@ where
                     .await
                     .map_err(ExportError::Other)?,
             });
-            audio_segments.push(
-                [s.audio.clone(), s.system_audio.clone()]
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>(),
-            );
+            audio_segments.push(AudioSegment {
+                tracks: [
+                    s.audio
+                        .clone()
+                        .map(|a| AudioSegmentTrack::new(a, |c| c.mic_volume_db)),
+                    s.system_audio
+                        .clone()
+                        .map(|a| AudioSegmentTrack::new(a, |c| c.system_volume_db)),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>(),
+            });
         }
 
         Ok(Self {

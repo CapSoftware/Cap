@@ -1418,11 +1418,8 @@ export function ConfigSidebar() {
             icon={<IconCapMicrophone class="size-4" />}
           >
             <Slider
-              value={[
-                project.audio.micVolumeDb === undefined
-                  ? 0.0
-                  : project.audio.micVolumeDb,
-              ]}
+              disabled={project.audio.mute}
+              value={[project.audio.micVolumeDb ?? 0]}
               onChange={(v) => setProject("audio", "micVolumeDb", v[0])}
               minValue={-30}
               maxValue={10}
@@ -1432,25 +1429,24 @@ export function ConfigSidebar() {
               }
             />
           </Field>
-          <Field
-            name="System Audio Volume"
-            icon={<IconLucideMonitor class="size-4" />}
-          >
-            <Slider
-              value={[
-                project.audio.systemVolumeDb === undefined
-                  ? 0.0
-                  : project.audio.systemVolumeDb,
-              ]}
-              onChange={(v) => setProject("audio", "systemVolumeDb", v[0])}
-              minValue={-30}
-              maxValue={10}
-              step={0.1}
-              formatTooltip={(v) =>
-                v <= -30 ? "Muted" : `${v > 0 ? "+" : ""}${v.toFixed(1)} dB`
-              }
-            />
-          </Field>
+          {editorInstance.meta.hasSystemAudio && (
+            <Field
+              name="System Audio Volume"
+              icon={<IconLucideMonitor class="size-4" />}
+            >
+              <Slider
+                disabled={project.audio.mute}
+                value={[project.audio.systemVolumeDb ?? 0]}
+                onChange={(v) => setProject("audio", "systemVolumeDb", v[0])}
+                minValue={-30}
+                maxValue={10}
+                step={0.1}
+                formatTooltip={(v) =>
+                  v <= -30 ? "Muted" : `${v > 0 ? "+" : ""}${v.toFixed(1)} dB`
+                }
+              />
+            </Field>
+          )}
         </KTabs.Content>
         <KTabs.Content value="cursor" class="flex flex-col gap-6">
           <Field name="Cursor" icon={<IconCapCursor />}>

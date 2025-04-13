@@ -285,7 +285,22 @@ function transformMeta(instance: SerializedEditorInstance) {
     } as unknown as SingleSegment & { type: "single" };
   }
 
-  return { ...meta, prettyName: instance.meta.pretty_name };
+  return {
+    ...meta,
+    prettyName: instance.meta.pretty_name,
+    hasCamera: (() => {
+      if (meta.type === "single") return !!meta.camera;
+      return !!meta.segments[0].camera;
+    })(),
+    hasSystemAudio: (() => {
+      if (meta.type === "single") return false;
+      return !!meta.segments[0].system_audio;
+    })(),
+    hasMicrophone: (() => {
+      if (meta.type === "single") return !!meta.audio;
+      return !!meta.segments[0].mic;
+    })(),
+  };
 }
 
 export type TransformedMeta = ReturnType<typeof transformMeta>;
