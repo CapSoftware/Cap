@@ -5,6 +5,8 @@ import moment from "moment";
 import { Tooltip } from "react-tooltip";
 import { serverEnv, clientEnv, NODE_ENV } from "@cap/env";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
+import { VideoMetadata } from "@cap/database/types";
+
 interface SharedCapCardProps {
   cap: {
     id: string;
@@ -14,6 +16,7 @@ interface SharedCapCardProps {
     totalComments: number;
     totalReactions: number;
     ownerName: string | null;
+    metadata?: VideoMetadata;
   };
   analytics: number;
   spaceName: string;
@@ -24,6 +27,11 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
   analytics,
   spaceName,
 }) => {
+  // Get the effective date (custom or original)
+  const effectiveDate = cap.metadata?.customCreatedAt
+    ? new Date(cap.metadata.customCreatedAt)
+    : cap.createdAt;
+
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(cap.name);
   const { activeSpace } = useSharedContext();
@@ -76,9 +84,9 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
           <span
             className="text-[0.875rem] leading-[1.25rem] text-gray-400"
             data-tooltip-id={cap.id + "_createdAt"}
-            data-tooltip-content={`Cap created at ${cap.createdAt}`}
+            data-tooltip-content={`Cap created at ${effectiveDate}`}
           >
-            {moment(cap.createdAt).fromNow()}
+            {moment(effectiveDate).fromNow()}
           </span>
           <Tooltip id={cap.id + "_createdAt"} />
         </p>

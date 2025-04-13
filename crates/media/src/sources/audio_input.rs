@@ -2,6 +2,7 @@ use std::time::SystemTime;
 
 use cap_fail::fail;
 use cpal::{Device, StreamInstant, SupportedStreamConfig};
+use ffmpeg_sys_next::AV_TIME_BASE_Q;
 use flume::{Receiver, Sender};
 use indexmap::IndexMap;
 use tracing::{error, info};
@@ -75,7 +76,10 @@ impl AudioInputSource {
             .as_secs_f64()
             - self.start_time;
 
-        let frame = self.audio_info.wrap_frame(&samples.data, 0);
+        let frame = self.audio_info.wrap_frame(
+            &samples.data,
+            (elapsed.as_secs_f64() * AV_TIME_BASE_Q.den as f64) as i64,
+        );
         if let Err(_) = self.tx.send((frame, timestamp)) {
             return Err(MediaError::Any("Pipeline is unreachable! Stopping capture"));
         }

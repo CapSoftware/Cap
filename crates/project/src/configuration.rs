@@ -411,6 +411,7 @@ impl TimelineConfiguration {
 
         for segment in self.segments.iter() {
             if frame_time < accum_duration + segment.duration() {
+                dbg!(frame_time, accum_duration);
                 return segment
                     .interpolate_time(frame_time - accum_duration)
                     .map(|t| (t, segment.recording_segment));

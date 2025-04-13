@@ -16,7 +16,7 @@ use crate::{
     RecordingStarted, RecordingStopped, VideoUploadInfo,
 };
 use cap_fail::fail;
-use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
+use cap_media::{feeds::CameraFeed, platform::display_for_window, sources::ScreenCaptureTarget};
 use cap_media::{
     platform::Bounds,
     sources::{CaptureScreen, CaptureWindow},
@@ -32,6 +32,7 @@ use cap_recording::{
 };
 use cap_rendering::ProjectRecordings;
 use cap_utils::{ensure_dir, spawn_actor};
+use scap::Target;
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
 use tracing::{error, info};
@@ -218,11 +219,30 @@ pub async fn start_recording(
         RecordingMode::Studio => None,
     };
 
-    if matches!(
-        recording_options.capture_target,
-        ScreenCaptureTarget::Window { .. } | ScreenCaptureTarget::Area { .. }
-    ) {
-        let _ = ShowCapWindow::WindowCaptureOccluder.show(&app);
+    match &recording_options.capture_target {
+        ScreenCaptureTarget::Window { id } => {
+            #[cfg(target_os = "macos")]
+            let display = display_for_window(*id).unwrap().id;
+
+            #[cfg(windows)]
+            let display = {
+                let Target::Window(target) = recording_options.capture_target.get_target().unwrap()
+                else {
+                    unreachable!();
+                };
+                display_for_window(target.raw_handle).unwrap().0 as u32
+            };
+
+            let _ = ShowCapWindow::WindowCaptureOccluder { screen_id: display }
+                .show(&app)
+                .await;
+        }
+        ScreenCaptureTarget::Area { screen, .. } => {
+            let _ = ShowCapWindow::WindowCaptureOccluder { screen_id: *screen }
+                .show(&app)
+                .await;
+        }
+        _ => {}
     }
 
     let (finish_upload_tx, finish_upload_rx) = flume::bounded(1);
@@ -420,7 +440,6 @@ async fn handle_recording_end(
     if let Some(window) = CapWindowId::Main.get(&app) {
         window.unminimize().ok();
     } else {
-        println!("SPIEJWPFIJE");
         CapWindowId::Camera.get(&app).map(|v| {
             let _ = v.close();
         });
