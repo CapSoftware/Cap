@@ -144,29 +144,22 @@ pub struct VideoUploadInfo {
 
 impl App {
     pub fn set_current_recording(&mut self, actor: InProgressRecording) {
-        let current_recording = self.current_recording.insert(actor);
+        self.current_recording.insert(actor);
 
         CurrentRecordingChanged.emit(&self.handle).ok();
-
-        if matches!(
-            current_recording.capture_target(),
-            ScreenCaptureTarget::Window { .. } | ScreenCaptureTarget::Area { .. }
-        ) {
-            let _ = ShowCapWindow::WindowCaptureOccluder.show(&self.handle);
-        } else {
-            self.close_occluder_window();
-        }
     }
 
     pub fn clear_current_recording(&mut self) -> Option<InProgressRecording> {
-        self.close_occluder_window();
+        self.close_occluder_windows();
 
         self.current_recording.take()
     }
 
-    fn close_occluder_window(&self) {
-        if let Some(window) = CapWindowId::WindowCaptureOccluder.get(&self.handle) {
-            window.close().ok();
+    fn close_occluder_windows(&self) {
+        for window in self.handle.webview_windows() {
+            if window.0.starts_with("window-capture-occluder-") {
+                let _ = window.1.close();
+            }
         }
     }
 
@@ -2135,7 +2128,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 })
                 .with_denylist(&[
                     CapWindowId::Setup.label().as_str(),
-                    CapWindowId::WindowCaptureOccluder.label().as_str(),
+                    "window-capture-occluder",
+                    // CapWindowId::WindowCaptureOccluder.label().as_str(),
                     CapWindowId::CaptureArea.label().as_str(),
                     CapWindowId::Camera.label().as_str(),
                     CapWindowId::RecordingsOverlay.label().as_str(),
@@ -2144,6 +2138,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 ])
                 .map_label(|label| match label {
                     label if label.starts_with("editor-") => "editor",
+                    label if label.starts_with("window-capture-occluder-") => {
+                        "window-capture-occluder"
+                    }
                     _ => label,
                 })
                 .build(),

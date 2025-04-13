@@ -176,7 +176,7 @@ impl AudioRenderer {
         // this will only seek if there is a significant change in actual vs expected next sample
         // (corresponding to a trim or split point). Currently this change is at least 0.2 seconds
         // - not sure we offer that much precision in the editor even!
-        let new_cursor = match timeline.get_segment_time(playhead) {
+        let new_cursor = match dbg!(timeline.get_segment_time(dbg!(playhead))) {
             Some((segment_time, segment_i)) => AudioRendererCursor {
                 segment_index: segment_i,
                 samples: self.playhead_to_samples(segment_time),
@@ -245,7 +245,7 @@ impl AudioRenderer {
         let max_samples = track_datas.iter().map(|t| t.sample_count()).min().unwrap();
 
         if self.cursor.samples >= max_samples {
-            self.elapsed_samples += max_samples;
+            self.elapsed_samples += samples;
             return None;
         }
 

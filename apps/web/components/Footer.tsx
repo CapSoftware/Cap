@@ -141,6 +141,9 @@ export const Footer = () => {
                   Screen Recording Software
                 </a>
               </li>
+              <li>
+                <a href="/loom-alternative">Cap vs Loom</a>
+              </li>
             </ul>
           </div>
         </div>

@@ -9,6 +9,7 @@ import { ShareHeader } from "./_components/ShareHeader";
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import { Toolbar } from "./_components/Toolbar";
+import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
   authorName: string | null;
@@ -52,6 +53,10 @@ export const Share: React.FC<ShareProps> = ({
   domainVerified,
 }) => {
   const [analytics, setAnalytics] = useState(initialAnalytics);
+  // Use custom date from metadata if it exists, similar to CapCard.tsx
+  const effectiveDate = data.metadata?.customCreatedAt
+    ? new Date(data.metadata.customCreatedAt)
+    : data.createdAt;
 
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -64,15 +69,11 @@ export const Share: React.FC<ShareProps> = ({
   useEffect(() => {
     const fetchViewCount = async () => {
       try {
-        const response = await fetch(`/api/video/analytics?videoId=${data.id}`);
-        if (!response.ok) {
-          throw new Error("Failed to fetch analytics");
-        }
-        const viewData = await response.json();
+        const result = await getVideoAnalytics(data.id);
 
         setAnalytics((prev) => ({
           ...prev,
-          views: viewData.count || 0,
+          views: result.count || 0,
         }));
       } catch (error) {
         console.error("Error fetching view count:", error);
@@ -95,7 +96,7 @@ export const Share: React.FC<ShareProps> = ({
     <div className="min-h-screen flex flex-col bg-[#F7F8FA]">
       <div className="container flex-1 px-4 py-4 mx-auto">
         <ShareHeader
-          data={data}
+          data={{ ...data, createdAt: effectiveDate }}
           user={user}
           individualFiles={individualFiles}
           customDomain={customDomain}
@@ -120,7 +121,7 @@ export const Share: React.FC<ShareProps> = ({
 
             <div className="flex flex-col lg:w-80">
               <Sidebar
-                data={data}
+                data={{ ...data, createdAt: effectiveDate }}
                 user={user}
                 comments={comments}
                 analytics={analytics}
