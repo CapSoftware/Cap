@@ -516,12 +516,11 @@ impl ShowCapWindow {
     ) -> WebviewWindowBuilder<'a, Wry, AppHandle<Wry>> {
         let id = self.id(app);
 
-        let mut builder =
-            WebviewWindow::builder(app, dbg!(id.label()), WebviewUrl::App(url.into()))
-                .title(id.title())
-                .visible(false)
-                .accept_first_mouse(true)
-                .shadow(true);
+        let mut builder = WebviewWindow::builder(app, id.label(), WebviewUrl::App(url.into()))
+            .title(id.title())
+            .visible(false)
+            .accept_first_mouse(true)
+            .shadow(true);
 
         if let Some(min) = id.min_size() {
             builder = builder
