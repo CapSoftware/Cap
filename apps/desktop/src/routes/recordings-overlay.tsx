@@ -122,7 +122,7 @@ export default function () {
                   if (!isRecording) return null;
 
                   const result = await commands
-                    .getVideoMetadata(media.path, null)
+                    .getVideoMetadata(media.path)
                     .catch((e) => {
                       console.error(`Failed to get metadata: ${e}`);
                     });
@@ -333,7 +333,7 @@ export default function () {
                                   })
                                 );
                                 commands.showWindow({
-                                  Editor: { project_id: mediaId },
+                                  Editor: { project_path: media.path },
                                 });
                               }}
                             >
@@ -722,7 +722,7 @@ function createRecordingMutations(
         throw new Error("You need to sign in to share recordings");
       }
 
-      const metadata = await commands.getVideoMetadata(media.path, null);
+      const metadata = await commands.getVideoMetadata(media.path);
       const plan = await commands.checkUpgradedAndUpdate();
       const canShare = {
         allowed: plan || metadata.duration < 300,

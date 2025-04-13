@@ -77,6 +77,14 @@
         "bannerPath": "assets/wix-banner.bmp",
         "dialogImagePath": "assets/wix-dialog.bmp"
       }
-    }
+    },
+    "fileAssociations": [
+      {
+        "ext": ["cap"],
+        "name": "Cap Project",
+        "mimeType": "application/x-cap-project",
+        "role": "Editor"
+      }
+    ]
   }
 }

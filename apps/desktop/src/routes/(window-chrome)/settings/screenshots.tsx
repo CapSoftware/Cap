@@ -5,7 +5,6 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { commands, events } from "~/utils/tauri";
 
 type MediaEntry = {
-  id: string;
   path: string;
   prettyName: string;
   isNew: boolean;
@@ -24,10 +23,9 @@ export default function Screenshots() {
         );
       const screenshots = await Promise.all(
         result.map(async (file) => {
-          const [id, pngPath, meta] = file;
+          const [pngPath, meta] = file;
 
           return {
-            id,
             path: pngPath,
             prettyName: meta.pretty_name,
             isNew: false,

@@ -25,7 +25,6 @@ import { commands, events, RecordingMetaWithType } from "~/utils/tauri";
 
 type Recording = {
   meta: RecordingMetaWithType;
-  id: string;
   path: string;
   prettyName: string;
   thumbnailPath: string;
@@ -55,12 +54,11 @@ const recordingsQuery = queryOptions({
 
     const recordings = await Promise.all(
       result.map(async (file) => {
-        const [id, path, meta] = file;
+        const [path, meta] = file;
         const thumbnailPath = `${path}/screenshots/display.jpg`;
 
         return {
           meta,
-          id,
           path,
           prettyName: meta.pretty_name,
           thumbnailPath,
@@ -90,28 +88,24 @@ export default function Recordings() {
   });
 
   const handleRecordingClick = (recording: Recording) => {
-    trackEvent("recording_view_clicked", { recording_id: recording.id });
+    trackEvent("recording_view_clicked");
     events.newStudioRecordingAdded.emit({ path: recording.path });
   };
 
   const handleOpenFolder = (path: string) => {
-    trackEvent("recording_folder_clicked", { path });
+    trackEvent("recording_folder_clicked");
     commands.openFilePath(path);
   };
 
   const handleCopyVideoToClipboard = (path: string) => {
-    trackEvent("recording_copy_clicked", { path });
+    trackEvent("recording_copy_clicked");
     commands.copyVideoToClipboard(path);
   };
 
-  const handleOpenEditor = (id: string) => {
-    const normalizedPath = id.replace(/\\/g, "/");
-    const fileName = normalizedPath.split("/").pop() || "";
-    trackEvent("recording_editor_clicked", {
-      recording_id: fileName.replace(".cap", ""),
-    });
+  const handleOpenEditor = (path: string) => {
+    trackEvent("recording_editor_clicked");
     commands.showWindow({
-      Editor: { project_id: fileName.replace(".cap", "") },
+      Editor: { project_path: path },
     });
   };
 
@@ -238,7 +232,10 @@ function RecordingItem(props: {
           {(_) => {
             const reupload = createMutation(() => ({
               mutationFn: () => {
-                return commands.reuploadInstantVideo(props.recording.id);
+                return commands.uploadExportedVideo(
+                  props.recording.path,
+                  "Reupload"
+                );
               },
             }));
 

@@ -7,7 +7,12 @@ use cap_media::{platform::logical_monitor_bounds, sources::CaptureScreen};
 use futures::pin_mut;
 use serde::Deserialize;
 use specta::Type;
-use std::{path::PathBuf, str::FromStr, sync::Arc};
+use std::{
+    ops::Deref,
+    path::PathBuf,
+    str::FromStr,
+    sync::{atomic::AtomicU32, Arc, Mutex},
+};
 use tauri::{
     AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder, Wry,
@@ -24,7 +29,7 @@ pub enum CapWindowId {
     Setup,
     Main,
     Settings,
-    Editor { project_id: String },
+    Editor { id: u32 },
     RecordingsOverlay,
     WindowCaptureOccluder { screen_id: u32 },
     CaptureArea,
@@ -51,7 +56,10 @@ impl FromStr for CapWindowId {
             "signin" => Self::SignIn,
             "mode-select" => Self::ModeSelect,
             s if s.starts_with("editor-") => Self::Editor {
-                project_id: s.replace("editor-", ""),
+                id: s
+                    .replace("editor-", "")
+                    .parse::<u32>()
+                    .map_err(|e| e.to_string())?,
             },
             s if s.starts_with("window-capture-occluder-") => Self::WindowCaptureOccluder {
                 screen_id: s
@@ -80,7 +88,7 @@ impl std::fmt::Display for CapWindowId {
             Self::Upgrade => write!(f, "upgrade"),
             Self::SignIn => write!(f, "signin"),
             Self::ModeSelect => write!(f, "mode-select"),
-            Self::Editor { project_id } => write!(f, "editor-{}", project_id),
+            Self::Editor { id } => write!(f, "editor-{id}"),
         }
     }
 }
@@ -157,7 +165,7 @@ pub enum ShowCapWindow {
     Setup,
     Main,
     Settings { page: Option<String> },
-    Editor { project_id: String },
+    Editor { project_path: PathBuf },
     RecordingsOverlay,
     WindowCaptureOccluder { screen_id: u32 },
     CaptureArea { screen_id: u32 },
@@ -170,13 +178,26 @@ pub enum ShowCapWindow {
 
 impl ShowCapWindow {
     pub async fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
-        if let Some(window) = self.id().get(app) {
+        if let Self::Editor { project_path } = self {
+            let state = app.state::<EditorWindowIds>();
+            let mut s = state.ids.lock().unwrap();
+            if s.iter().find(|(path, _)| path == project_path).is_none() {
+                s.push((
+                    project_path.clone(),
+                    state
+                        .counter
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+                ));
+            }
+        }
+
+        if let Some(window) = self.id(app).get(app) {
             window.set_focus().ok();
             return Ok(window);
         }
 
-        let id = self.id();
-        let monitor = app.primary_monitor().unwrap().unwrap();
+        let id = self.id(app);
+        let monitor = app.primary_monitor()?.unwrap();
 
         let window = match self {
             Self::Setup => self
@@ -234,9 +255,13 @@ impl ShowCapWindow {
                 .maximized(false)
                 .center()
                 .build()?,
-            Self::Editor { project_id } => {
+            Self::Editor { .. } => {
+                if let Some(main) = CapWindowId::Main.get(app) {
+                    let _ = main.close();
+                };
+
                 let window = self
-                    .window_builder(app, format!("/editor?id={project_id}"))
+                    .window_builder(app, "/editor")
                     .maximizable(true)
                     .inner_size(1240.0, 800.0)
                     .center()
@@ -489,7 +514,7 @@ impl ShowCapWindow {
         app: &'a AppHandle<Wry>,
         url: impl Into<PathBuf>,
     ) -> WebviewWindowBuilder<'a, Wry, AppHandle<Wry>> {
-        let id = self.id();
+        let id = self.id(app);
 
         let mut builder = WebviewWindow::builder(app, id.label(), WebviewUrl::App(url.into()))
             .title(id.title())
@@ -522,14 +547,17 @@ impl ShowCapWindow {
         builder
     }
 
-    pub fn id(&self) -> CapWindowId {
+    pub fn id(&self, app: &AppHandle) -> CapWindowId {
         match self {
             ShowCapWindow::Setup => CapWindowId::Setup,
             ShowCapWindow::Main => CapWindowId::Main,
             ShowCapWindow::Settings { .. } => CapWindowId::Settings,
-            ShowCapWindow::Editor { project_id } => CapWindowId::Editor {
-                project_id: project_id.clone(),
-            },
+            ShowCapWindow::Editor { project_path } => {
+                let state = app.state::<EditorWindowIds>();
+                let s = state.ids.lock().unwrap();
+                let id = s.iter().find(|(path, _)| path == project_path).unwrap().1;
+                CapWindowId::Editor { id }
+            }
             ShowCapWindow::RecordingsOverlay => CapWindowId::RecordingsOverlay,
             ShowCapWindow::WindowCaptureOccluder { screen_id } => {
                 CapWindowId::WindowCaptureOccluder {
@@ -666,5 +694,17 @@ pub fn set_window_transparent(window: tauri::Window, value: bool) {
         unsafe {
             (*ns_win).setOpaque(!value);
         }
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct EditorWindowIds {
+    pub ids: Arc<Mutex<Vec<(PathBuf, u32)>>>,
+    pub counter: Arc<AtomicU32>,
+}
+
+impl EditorWindowIds {
+    pub fn get(app: &AppHandle) -> Self {
+        app.state::<EditorWindowIds>().deref().clone()
     }
 }

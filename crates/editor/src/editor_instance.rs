@@ -18,7 +18,6 @@ use tokio::sync::{mpsc, watch, Mutex};
 
 pub struct EditorInstance {
     pub project_path: PathBuf,
-    pub id: String,
     pub ws_port: u16,
     pub recordings: Arc<ProjectRecordings>,
     pub renderer: Arc<editor::RendererHandle>,
@@ -49,23 +48,12 @@ impl EditorInstance {
     }
 
     pub async fn new(
-        projects_path: PathBuf,
-        video_id: &str,
+        project_path: PathBuf,
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
     ) -> Result<Arc<Self>, String> {
         sentry::configure_scope(|scope| {
             scope.set_tag("crate", "editor");
         });
-
-        let project_path = projects_path.join(format!(
-            "{}{}",
-            video_id,
-            if video_id.ends_with(".cap") {
-                ""
-            } else {
-                ".cap"
-            }
-        ));
 
         if !project_path.exists() {
             println!("Video path {} not found!", project_path.display());
@@ -112,7 +100,6 @@ impl EditorInstance {
         let (preview_tx, preview_rx) = watch::channel(None);
 
         let this = Arc::new(Self {
-            id: video_id.to_string(),
             project_path,
             recordings,
             ws_port,
@@ -137,8 +124,8 @@ impl EditorInstance {
         Ok(this)
     }
 
-    pub fn meta(&self) -> RecordingMeta {
-        self.meta.clone()
+    pub fn meta(&self) -> &RecordingMeta {
+        &self.meta
     }
 
     pub async fn dispose(&self) {
@@ -307,7 +294,10 @@ impl Drop for EditorInstance {
     fn drop(&mut self) {
         // TODO: Ensure that *all* resources have been released by this point?
         // For now the `dispose` method is adequate.
-        println!("*** Editor instance {} has been released. ***", self.id);
+        println!(
+            "*** Editor instance has been released: {:?} ***",
+            self.project_path
+        );
     }
 }
 
