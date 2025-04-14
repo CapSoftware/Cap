@@ -6,6 +6,6 @@ pub struct Flags {
 }
 
 pub const FLAGS: Flags = Flags {
-    system_audio_recording: cfg!(debug_assertions),
+    system_audio_recording: true,
     split: false,
 };
