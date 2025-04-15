@@ -1,9 +1,9 @@
 "use client";
-import { createContext, useContext } from "react";
-import AdminDesktopNav from "@/app/dashboard/_components/AdminNavbar/AdminDesktopNav";
 import AdminMobileNav from "@/app/dashboard/_components/AdminNavbar/AdminMobileNav";
-import { users, spaces } from "@cap/database/schema";
 import { Space } from "@/app/dashboard/layout";
+import { users } from "@cap/database/schema";
+import { createContext, useContext } from "react";
+import AdminDesktopNav from "./AdminNavbar/AdminDesktopNav";
 
 type SharedContext = {
   spaceData: Space[] | null;
@@ -29,11 +29,11 @@ export default function DynamicSharedLayout({
 }) {
   return (
     <Context.Provider value={{ spaceData, activeSpace, user, isSubscribed }}>
-      <div className="dashboard-layout h-screen min-h-full flex">
+      <div className="flex h-screen min-h-full dashboard-layout">
         <AdminDesktopNav />
-        <div className="flex-1 overflow-auto focus:outline-none">
+        <div className="overflow-auto flex-1 focus:outline-none">
           <AdminMobileNav />
-          <main className="min-h-screen w-full">{children}</main>
+          <main className="w-full min-h-screen">{children}</main>
         </div>
       </div>
     </Context.Provider>

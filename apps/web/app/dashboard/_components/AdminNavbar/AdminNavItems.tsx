@@ -9,6 +9,7 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
+  Tooltip,
 } from "@cap/ui";
 import { classNames } from "@cap/utils";
 import {
@@ -37,6 +38,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@cap/ui";
+import clsx from "clsx";
 import { signOut } from "next-auth/react";
 import { updateActiveSpace } from "./server";
 
@@ -74,7 +76,7 @@ const Download = ({ className }: { className: string }) => (
   </svg>
 );
 
-export const AdminNavItems = () => {
+export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const { spaceData, activeSpace, user, isSubscribed } = useSharedContext();
@@ -106,16 +108,20 @@ export const AdminNavItems = () => {
       icon: Building,
       subNav: [],
     },
-    user.email.endsWith("@cap.so") && {
-      name: "Admin",
-      href: "/dashboard/admin",
-      icon: () => {},
-      subNav: [],
-    },
-  ].filter(Boolean);
+    ...(user.email.endsWith("@cap.so")
+      ? [
+          {
+            name: "Admin",
+            href: "/dashboard/admin",
+            icon: Building, // Using Building icon as a fallback
+            subNav: [],
+          },
+        ]
+      : []),
+  ];
 
   const navItemClass =
-    "flex items-center justify-start py-2 px-3 rounded-2xl outline-none tracking-tight w-full";
+    "flex items-center justify-start py-2 px-3 rounded-2xl outline-none tracking-tight w-full overflow-hidden";
 
   const [dialogOpen, setDialogOpen] = useState(false);
 
@@ -141,7 +147,7 @@ export const AdminNavItems = () => {
               </div>
             </div>
           </PopoverTrigger>
-          <PopoverContent className="z-10 p-0 mt-2 w-[calc(100%-20%)] mx-auto bg-white">
+          <PopoverContent className="z-10 p-0 mt-2 w-[calc(100%-10%)] mx-auto bg-white">
             <Command>
               <CommandInput placeholder="Search spaces..." />
               <CommandEmpty>No spaces found</CommandEmpty>
@@ -169,7 +175,7 @@ export const AdminNavItems = () => {
                   );
                 })}
                 <DialogTrigger className="w-full">
-                  <CommandItem className="rounded-lg bg-filler aria-selected:bg-gray-200">
+                  <CommandItem className="bg-gray-100 rounded-lg border border-gray-200 aria-selected:bg-gray-200">
                     <Plus className="mr-1 w-4 h-auto" />
                     <span className="text-sm">Add new space</span>
                   </CommandItem>
@@ -183,44 +189,60 @@ export const AdminNavItems = () => {
         className="flex flex-col justify-between w-full h-full"
         aria-label="Sidebar"
       >
-        <div className="mt-8 space-y-2.5">
+        <div
+          className={clsx("mt-8 space-y-2.5", collapsed ? "items-center" : "")}
+        >
           {manageNavigation.map((item) => (
             <div key={item.name}>
-              <Link
-                passHref
-                prefetch={false}
-                href={item.href}
-                className={classNames(
-                  pathname.includes(item.href)
-                    ? "bg-white text-gray-400 border-[1px] border-gray-200 shadow-[0_1.5px_3px_0px] shadow-gray-200"
-                    : "hover:opacity-75",
-                  navItemClass
-                )}
-              >
-                <item.icon
-                  className={classNames("flex-shrink-0 w-5 h-5 stroke-[1.5px]")}
-                  aria-hidden="true"
-                />
-                <span className="text-base ml-2.5 text-gray-400">
-                  {item.name}
-                </span>
-              </Link>
+              <div className="flex justify-center">
+                <Tooltip content={item.name} disable={collapsed === false}>
+                  <Link
+                    passHref
+                    prefetch={false}
+                    href={item.href}
+                    className={classNames(
+                      pathname.includes(item.href)
+                        ? "bg-white text-gray-400 border-[1px] border-gray-200 shadow-[0_1.5px_3px_0px] shadow-gray-200"
+                        : "hover:opacity-75",
+                      navItemClass
+                    )}
+                  >
+                    <item.icon
+                      className={classNames(
+                        "flex-shrink-0 w-5 h-5 stroke-[1.5px]"
+                      )}
+                      aria-hidden="true"
+                    />
+                    <span className="text-base ml-2.5 text-gray-400 truncate">
+                      {item.name}
+                    </span>
+                  </Link>
+                </Tooltip>
+              </div>
             </div>
           ))}
         </div>
         <div className="mt-auto">
           <div className="pb-5 mb-3 w-full border-b-2 border-gray-200 border-dotted">
-            <UsageButton subscribed={isSubscribed} />
+            <UsageButton collapsed={collapsed} subscribed={isSubscribed} />
           </div>
           <Popover open={menuOpen} onOpenChange={setMenuOpen}>
             <PopoverTrigger asChild>
-              <div className="flex justify-between items-center p-2 rounded-lg transition-colors cursor-pointer hover:bg-gray-100">
-                <div className="flex items-center">
-                  <Avatar name={user.name ?? "User"} className="w-8 h-8" />
-                  <span className="ml-2 text-sm">{user.name ?? "User"}</span>
+              {collapsed ? (
+                <Tooltip content={user.name ?? "User"}>
+                  <div className="flex justify-center items-center p-2 rounded-lg transition-colors cursor-pointer hover:bg-gray-100">
+                    <Avatar name={user.name ?? "User"} className="w-8 h-8" />
+                  </div>
+                </Tooltip>
+              ) : (
+                <div className="flex justify-between items-center p-2 rounded-lg transition-colors cursor-pointer hover:bg-gray-100">
+                  <div className="flex items-center">
+                    <Avatar name={user.name ?? "User"} className="w-8 h-8" />
+                    <span className="ml-2 text-sm">{user.name ?? "User"}</span>
+                  </div>
+                  <MoreVertical className="w-5 h-5 text-gray-500 group-hover:text-gray-500" />
                 </div>
-                <MoreVertical className="w-5 h-5 text-gray-500 group-hover:text-gray-500" />
-              </div>
+              )}
             </PopoverTrigger>
             <PopoverContent className="p-1 w-48 bg-gray-100">
               <Command>

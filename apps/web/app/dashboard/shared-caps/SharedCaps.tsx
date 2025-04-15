@@ -1,12 +1,13 @@
 "use client";
+import { getVideoAnalytics } from "@/actions/videos/get-analytics";
+import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
+import { VideoMetadata } from "@cap/database/types";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
-import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { SharedCapCard } from "./components/SharedCapCard";
-import { EmptySharedCapState } from "./components/EmptySharedCapState";
+import DashboardInner from "../_components/DashboardInner";
 import { CapPagination } from "../caps/components/CapPagination";
-import { VideoMetadata } from "@cap/database/types";
-import { getVideoAnalytics } from "@/actions/videos/get-analytics";
+import { EmptySharedCapState } from "./components/EmptySharedCapState";
+import { SharedCapCard } from "./components/SharedCapCard";
 
 type SharedVideoData = {
   id: string;
@@ -51,33 +52,30 @@ export const SharedCaps = ({
   }, [data]);
 
   return (
-    <div className="flex flex-col min-h-[calc(100vh-30px)] h-full">
-      <div className="mb-3">
-        <h1 className="text-3xl font-medium">Shared Caps</h1>
-      </div>
-      <div className="flex-grow flex inner">
-        {data.length === 0 ? (
-          <EmptySharedCapState spaceName={activeSpace?.space.name || ""} />
-        ) : (
-          <div className="flex flex-col w-full h-full">
-            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
-              {data.map((cap) => (
-                <SharedCapCard
-                  key={cap.id}
-                  cap={cap}
-                  analytics={analytics[cap.id] || 0}
-                  spaceName={activeSpace?.space.name || ""}
-                />
-              ))}
-            </div>
-            {(data.length > limit || data.length === limit || page !== 1) && (
-              <div className="mt-4">
-                <CapPagination currentPage={page} totalPages={totalPages} />
-              </div>
-            )}
+    <DashboardInner
+      title="Shared Caps"
+      emptyCondition={data.length === 0}
+      emptyComponent={
+        <EmptySharedCapState spaceName={activeSpace?.space.name || ""} />
+      }
+    >
+      <div className="flex flex-col w-full h-full">
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
+          {data.map((cap) => (
+            <SharedCapCard
+              key={cap.id}
+              cap={cap}
+              analytics={analytics[cap.id] || 0}
+              spaceName={activeSpace?.space.name || ""}
+            />
+          ))}
+        </div>
+        {(data.length > limit || data.length === limit || page !== 1) && (
+          <div className="mt-4">
+            <CapPagination currentPage={page} totalPages={totalPages} />
           </div>
         )}
       </div>
-    </div>
+    </DashboardInner>
   );
 };
