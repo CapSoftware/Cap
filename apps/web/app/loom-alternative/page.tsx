@@ -15,7 +15,7 @@ export const metadata: Metadata = {
     siteName: "Cap",
     images: [
       {
-        url: "https://cap.so/og/loom-alternative.png",
+        url: "https://cap.so/og.png",
         width: 1200,
         height: 630,
         alt: "Cap: The Best Loom Alternative",
@@ -29,7 +29,7 @@ export const metadata: Metadata = {
     title: "The Ultimate Loom Alternative: Cap Screen Recorder",
     description:
       "Looking for the best Loom alternative? Discover Cap, the open-source, privacy-focused screen recorder for Mac & Windows.",
-    images: ["https://cap.so/og/loom-alternative.png"],
+    images: ["https://cap.so/og.png"],
   },
 };
 
