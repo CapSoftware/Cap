@@ -1,6 +1,10 @@
 import { Button } from "@cap/ui-solid";
+import { Select as KSelect } from "@kobalte/core/select";
+import { createMutation } from "@tanstack/solid-query";
+import { Channel } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
+import { cx } from "cva";
 import {
-  createEffect,
   createResource,
   createSignal,
   For,
@@ -8,11 +12,6 @@ import {
   Show,
   ValidComponent,
 } from "solid-js";
-import { Select as KSelect } from "@kobalte/core/select";
-import { createMutation } from "@tanstack/solid-query";
-import { Channel } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
-import { cx } from "cva";
 import { createStore, produce } from "solid-js/store";
 
 import Tooltip from "~/components/Tooltip";
@@ -20,13 +19,12 @@ import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { commands, events, RenderProgress } from "~/utils/tauri";
 import { useEditorContext } from "./context";
-import { RESOLUTION_OPTIONS, ResolutionOption } from "./Header";
+import { RESOLUTION_OPTIONS } from "./Header";
 import {
   DialogContent,
   MenuItem,
   MenuItemList,
   PopperContent,
-  topLeftAnimateClasses,
   topSlideAnimateClasses,
 } from "./ui";
 
@@ -167,6 +165,12 @@ const ExportDialog = () => {
         throw error;
       }
     },
+    onError: (error) => {
+      commands.globalMessageDialog(
+        error instanceof Error ? error.message : "Failed to copy recording"
+      );
+      setCopyState({ type: "idle" });
+    },
     onSuccess() {
       setCopyState({
         type: "copied",
@@ -254,6 +258,12 @@ const ExportDialog = () => {
       } catch (error) {
         throw error;
       }
+    },
+    onError: (error) => {
+      commands.globalMessageDialog(
+        error instanceof Error ? error.message : "Failed to export recording"
+      );
+      setExportState({ type: "idle" });
     },
     onSettled() {
       setTimeout(() => {
@@ -393,6 +403,7 @@ const ExportDialog = () => {
       commands.globalMessageDialog(
         error instanceof Error ? error.message : "Failed to upload recording"
       );
+      setUploadState({ type: "idle" });
     },
     onSettled() {
       uploadVideo.reset();
