@@ -1,19 +1,4 @@
 "use client";
-import { usePathname, useRouter } from "next/navigation";
-import {
-  Plus,
-  LogOut,
-  ChevronDown,
-  User,
-  MoreVertical,
-  Settings,
-  MessageSquare,
-  Share2,
-  Check,
-  Building,
-} from "lucide-react";
-import Link from "next/link";
-import { classNames } from "@cap/utils";
 import {
   Command,
   CommandEmpty,
@@ -21,10 +6,30 @@ import {
   CommandInput,
   CommandItem,
   DialogTrigger,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
 } from "@cap/ui";
-import { Popover, PopoverContent, PopoverTrigger } from "@cap/ui";
+import { classNames } from "@cap/utils";
+import {
+  Building,
+  Check,
+  ChevronDown,
+  LogOut,
+  MessageSquare,
+  MoreVertical,
+  Plus,
+  Settings,
+  Share2,
+} from "lucide-react";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
+import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
+import { NewSpace } from "@/components/forms/NewSpace";
+import { UsageButton } from "@/components/UsageButton";
 import {
   Dialog,
   DialogContent,
@@ -32,12 +37,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@cap/ui";
-import { NewSpace } from "@/components/forms/NewSpace";
 import { signOut } from "next-auth/react";
-import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { UsageButton } from "@/components/UsageButton";
 import { updateActiveSpace } from "./server";
-import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 
 const Clapperboard = ({ className }: { className: string }) => (
   <svg
@@ -114,23 +115,23 @@ export const AdminNavItems = () => {
   ].filter(Boolean);
 
   const navItemClass =
-    "flex items-center justify-start py-2 px-3 rounded-full outline-none tracking-tight w-full";
+    "flex items-center justify-start py-2 px-3 rounded-2xl outline-none tracking-tight w-full";
 
   const [dialogOpen, setDialogOpen] = useState(false);
 
   return (
     <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-      <div className="w-full py-3 my-4 border-b-2 border-t-2 border-gray-300 border-dotted">
+      <div className="px-3 py-2.5 w-full rounded-2xl border border-gray-200">
         <Popover open={open} onOpenChange={setOpen}>
           <PopoverTrigger asChild>
             <div
-              className="flex items-center justify-between cursor-pointer"
+              className="flex justify-between items-center cursor-pointer"
               role="combobox"
               aria-expanded={open}
             >
               <div className="flex items-center w-full text-left">
                 <div>
-                  <p className="text-[0.875rem]">
+                  <p className="text-sm font-medium">
                     {activeSpace?.space.name ?? "No space found"}
                   </p>
                 </div>
@@ -140,10 +141,10 @@ export const AdminNavItems = () => {
               </div>
             </div>
           </PopoverTrigger>
-          <PopoverContent className="w-full p-0 z-10 bg-white">
+          <PopoverContent className="z-10 p-0 mt-2 w-[calc(100%-20%)] mx-auto bg-white">
             <Command>
               <CommandInput placeholder="Search spaces..." />
-              <CommandEmpty>No spaces found.</CommandEmpty>
+              <CommandEmpty>No spaces found</CommandEmpty>
               <CommandGroup>
                 {spaceData?.map((space) => {
                   const isSelected = activeSpace?.space.id === space.space.id;
@@ -168,9 +169,9 @@ export const AdminNavItems = () => {
                   );
                 })}
                 <DialogTrigger className="w-full">
-                  <CommandItem className=" bg-filler aria-selected:bg-gray-200 rounded-lg">
-                    <Plus className="w-4 h-auto mr-1" />
-                    <span className="text-[0.875rem]">Add new space</span>
+                  <CommandItem className="rounded-lg bg-filler aria-selected:bg-gray-200">
+                    <Plus className="mr-1 w-4 h-auto" />
+                    <span className="text-sm">Add new space</span>
                   </CommandItem>
                 </DialogTrigger>
               </CommandGroup>
@@ -179,10 +180,10 @@ export const AdminNavItems = () => {
         </Popover>
       </div>
       <nav
-        className="w-full flex flex-col justify-between h-full"
+        className="flex flex-col justify-between w-full h-full"
         aria-label="Sidebar"
       >
-        <div className="space-y-1">
+        <div className="mt-8 space-y-2.5">
           {manageNavigation.map((item) => (
             <div key={item.name}>
               <Link
@@ -191,69 +192,68 @@ export const AdminNavItems = () => {
                 href={item.href}
                 className={classNames(
                   pathname.includes(item.href)
-                    ? "bg-white text-black border-[1px] border-gray-200"
-                    : "opacity-50 hover:opacity-75",
+                    ? "bg-white text-gray-400 border-[1px] border-gray-200 shadow-[0_1.5px_3px_0px] shadow-gray-200"
+                    : "hover:opacity-75",
                   navItemClass
                 )}
               >
                 <item.icon
-                  className={classNames(
-                    "flex-shrink-0 w-5 h-5 stroke-[1.5px]",
-                    pathname.includes(item.href) ? "text-black" : ""
-                  )}
+                  className={classNames("flex-shrink-0 w-5 h-5 stroke-[1.5px]")}
                   aria-hidden="true"
                 />
-                <span className="text-base ml-2.5 text-black">{item.name}</span>
+                <span className="text-base ml-2.5 text-gray-400">
+                  {item.name}
+                </span>
               </Link>
             </div>
           ))}
         </div>
         <div className="mt-auto">
-          <div className="w-full mb-3 pb-5 border-b-2 border-gray-200 border-dotted">
+          <div className="pb-5 mb-3 w-full border-b-2 border-gray-200 border-dotted">
             <UsageButton subscribed={isSubscribed} />
           </div>
           <Popover open={menuOpen} onOpenChange={setMenuOpen}>
             <PopoverTrigger asChild>
-              <div className="flex items-center justify-between cursor-pointer hover:bg-gray-100 p-2 rounded-lg transition-colors">
+              <div className="flex justify-between items-center p-2 rounded-lg transition-colors cursor-pointer hover:bg-gray-100">
                 <div className="flex items-center">
-                  <Avatar name={user.name ?? "User"} className="h-8 w-8" />
+                  <Avatar name={user.name ?? "User"} className="w-8 h-8" />
                   <span className="ml-2 text-sm">{user.name ?? "User"}</span>
                 </div>
-                <MoreVertical className="h-5 w-5 text-gray-500 group-hover:text-gray-500" />
+                <MoreVertical className="w-5 h-5 text-gray-500 group-hover:text-gray-500" />
               </div>
             </PopoverTrigger>
-            <PopoverContent className="bg-gray-100 w-48 p-1">
+            <PopoverContent className="p-1 w-48 bg-gray-100">
               <Command>
                 <CommandGroup>
                   <CommandItem
-                    className="py-2 px-2 rounded-lg hover:bg-gray-200 cursor-pointer group"
+                    className="px-2 py-2 rounded-lg cursor-pointer hover:bg-gray-200 group"
                     onSelect={() => {
                       router.push("/dashboard/settings");
                       setMenuOpen(false);
                     }}
                   >
-                    <Settings className="mr-2 h-4 w-4 text-gray-400 group-hover:text-gray-500" />
-                    <span className="text-gray-400 group-hover:text-gray-500 text-sm">
+                    <Settings className="mr-2 w-4 h-4 text-gray-400 group-hover:text-gray-500" />
+                    <span className="text-sm text-gray-400 group-hover:text-gray-500">
                       Settings
                     </span>
                   </CommandItem>
                   <CommandItem
-                    className="py-2 px-2 rounded-lg hover:bg-gray-200 cursor-pointer group"
+                    className="px-2 py-2 rounded-lg cursor-pointer hover:bg-gray-200 group"
                     onSelect={() =>
                       window.open("https://cap.link/discord", "_blank")
                     }
                   >
-                    <MessageSquare className="mr-2 h-4 w-4 text-gray-400 group-hover:text-gray-500" />
-                    <span className="text-gray-400 group-hover:text-gray-500 text-sm">
+                    <MessageSquare className="mr-2 w-4 h-4 text-gray-400 group-hover:text-gray-500" />
+                    <span className="text-sm text-gray-400 group-hover:text-gray-500">
                       Chat Support
                     </span>
                   </CommandItem>
                   <CommandItem
-                    className="py-2 px-2 rounded-lg hover:bg-gray-200 cursor-pointer group"
+                    className="px-2 py-2 rounded-lg cursor-pointer hover:bg-gray-200 group"
                     onSelect={() => signOut()}
                   >
-                    <LogOut className="mr-2 h-4 w-4 text-gray-400 group-hover:text-gray-500" />
-                    <span className="text-gray-400 group-hover:text-gray-500 text-sm">
+                    <LogOut className="mr-2 w-4 h-4 text-gray-400 group-hover:text-gray-500" />
+                    <span className="text-sm text-gray-400 group-hover:text-gray-500">
                       Sign Out
                     </span>
                   </CommandItem>

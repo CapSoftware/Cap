@@ -1,13 +1,13 @@
 "use client";
-import { useRouter, useSearchParams } from "next/navigation";
-import toast from "react-hot-toast";
-import { useEffect, useState } from "react";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { CapCard } from "./components/CapCard";
-import { EmptyCapState } from "./components/EmptyCapState";
-import { CapPagination } from "./components/CapPagination";
 import { apiClient } from "@/utils/web-api";
 import { VideoMetadata } from "@cap/database/types";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
+import toast from "react-hot-toast";
+import { CapCard } from "./components/CapCard";
+import { CapPagination } from "./components/CapPagination";
+import { EmptyCapState } from "./components/EmptyCapState";
 
 type VideoData = {
   id: string;
@@ -80,16 +80,16 @@ export const Caps = ({
   };
 
   return (
-    <div className="flex flex-col min-h-[calc(100vh-30px)] h-full">
-      <div className="mb-3">
-        <h1 className="text-3xl font-medium">My Caps</h1>
+    <div className="h-[100vh] flex flex-col items-between gap-5 pt-5">
+      <div className="h-[5vh] flex items-center">
+        <p className="text-3xl text-gray-500">My Caps</p>
       </div>
-      <div className="flex-grow flex inner">
+      <div className="flex flex-grow h-[90vh] bg-gray-100 rounded-t-2xl p-8 border-[1px] border-gray-200">
         {data.length === 0 ? (
           <EmptyCapState userName={user?.name || ""} />
         ) : (
           <div className="flex flex-col w-full h-full">
-            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
               {data.map((cap) => (
                 <CapCard
                   key={cap.id}

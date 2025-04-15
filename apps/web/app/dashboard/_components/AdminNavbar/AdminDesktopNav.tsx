@@ -6,13 +6,13 @@ import { AdminNavItems } from "./AdminNavItems";
 export const AdminDesktopNav = () => {
   return (
     <>
-      <div className="hidden lg:flex lg:flex-shrink-0 group h-full">
-        <div className="flex flex-col w-64">
-          <div className="flex flex-col flex-grow pt-8 pb-4 overflow-y-auto h-full">
-            <div className="flex flex-col justify-top items-start flex-shrink-0 px-4 h-full">
-              <div className="flex justify-start w-full">
+      <div className="hidden h-full lg:flex lg:flex-shrink-0 group">
+        <div className="flex flex-col w-[200px]">
+          <div className="flex overflow-y-auto flex-col flex-grow h-full">
+            <div className="flex flex-col flex-shrink-0 items-start px-4 h-full justify-top">
+              <div className="flex justify-center w-full h-[10vh] items-center">
                 <Link href="/dashboard">
-                  <Logo className="h-9 w-auto" />
+                  <Logo className="w-auto h-9" />
                 </Link>
               </div>
               <AdminNavItems />

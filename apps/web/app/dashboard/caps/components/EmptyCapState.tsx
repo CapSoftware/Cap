@@ -14,7 +14,7 @@ export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
   return (
     <div className="flex flex-col justify-center items-center w-full">
       <div className="flex flex-col gap-3 items-center text-center">
-        <div className="mx-auto w-full max-w-[300px] flex justify-center items-center">
+        <div className="mx-auto w-full mb-10 max-w-[450px] flex justify-center items-center">
           <EmptyCap className="h-[150px] w-[400px]" />
         </div>
         <div className="flex flex-col items-center">
