@@ -6,6 +6,7 @@ import {
   RadioGroup as KRadioGroup,
   RadioGroup,
 } from "@kobalte/core/radio-group";
+import { Select as KSelect } from "@kobalte/core/select";
 import { Tabs as KTabs } from "@kobalte/core/tabs";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { createWritableMemo } from "@solid-primitives/memo";
@@ -16,6 +17,7 @@ import { cx } from "cva";
 import {
   For,
   Show,
+  ValidComponent,
   batch,
   createEffect,
   createMemo,
@@ -27,10 +29,10 @@ import {
 } from "solid-js";
 import { produce } from "solid-js/store";
 import { Dynamic } from "solid-js/web";
-
 import { createElementBounds } from "@solid-primitives/bounds";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import toast from "solid-toast";
+
 import colorBg from "~/assets/illustrations/color.webp";
 import gradientBg from "~/assets/illustrations/gradient.webp";
 import imageBg from "~/assets/illustrations/image.webp";
@@ -39,6 +41,7 @@ import { generalSettingsStore } from "~/store";
 import {
   type BackgroundSource,
   type CursorAnimationStyle,
+  StereoMode,
   commands,
 } from "~/utils/tauri";
 import { BACKGROUND_THEMES, useEditorContext } from "./context";
@@ -53,9 +56,13 @@ import {
   ComingSoonTooltip,
   EditorButton,
   Field,
+  MenuItem,
+  MenuItemList,
+  PopperContent,
   Slider,
   Subfield,
   Toggle,
+  topSlideAnimateClasses,
 } from "./ui";
 
 const BACKGROUND_SOURCES = {
@@ -171,6 +178,12 @@ const WALLPAPER_NAMES = [
   "orange/8",
   "orange/9",
 ] as const;
+
+const STEREO_MODES = [
+  { name: "Stereo", value: "stereo" },
+  { name: "Mono L", value: "monoL" },
+  { name: "Mono R", value: "monoR" },
+] satisfies Array<{ name: string; value: StereoMode }>;
 
 export function ConfigSidebar() {
   const {
@@ -1406,6 +1419,68 @@ export function ConfigSidebar() {
                   onChange={(v) => setProject("audio", "mute", v)}
                 />
               </Subfield>
+              {editorInstance.recordings.segments[0].mic?.channels === 2 && (
+                <Subfield name="Microphone Stereo Mode">
+                  <KSelect<{ name: string; value: StereoMode }>
+                    options={STEREO_MODES}
+                    optionValue="value"
+                    optionTextValue="name"
+                    value={STEREO_MODES.find(
+                      (v) => v.value === project.audio.micStereoMode
+                    )}
+                    onChange={(v) => {
+                      if (v) setProject("audio", "micStereoMode", v.value);
+                    }}
+                    disallowEmptySelection
+                    itemComponent={(props) => (
+                      <MenuItem<typeof KSelect.Item>
+                        as={KSelect.Item}
+                        item={props.item}
+                      >
+                        <KSelect.ItemLabel class="flex-1">
+                          {props.item.rawValue.name}
+                        </KSelect.ItemLabel>
+                      </MenuItem>
+                    )}
+                  >
+                    <KSelect.Trigger class="flex flex-row gap-2 items-center px-2 w-full h-8 bg-gray-200 rounded-lg transition-colors disabled:text-gray-400">
+                      <KSelect.Value<{
+                        name: string;
+                        value: StereoMode;
+                      }> class="flex-1 text-sm text-left truncate text-[--gray-500] font-normal">
+                        {(state) => <span>{state.selectedOption().name}</span>}
+                      </KSelect.Value>
+                      <KSelect.Icon<ValidComponent>
+                        as={(props) => (
+                          <IconCapChevronDown
+                            {...props}
+                            class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]"
+                          />
+                        )}
+                      />
+                    </KSelect.Trigger>
+                    <KSelect.Portal>
+                      <PopperContent<typeof KSelect.Content>
+                        as={KSelect.Content}
+                        class={cx(topSlideAnimateClasses, "z-50")}
+                      >
+                        <MenuItemList<typeof KSelect.Listbox>
+                          class="overflow-y-auto max-h-32"
+                          as={KSelect.Listbox}
+                        />
+                      </PopperContent>
+                    </KSelect.Portal>
+                  </KSelect>
+                </Subfield>
+              )}
+
+              {/* <Subfield name="Mute Audio">
+                <Toggle
+                  checked={project.audio.mute}
+                  onChange={(v) => setProject("audio", "mute", v)}
+                />
+              </Subfield> */}
+
               {/* <ComingSoonTooltip>
                 <Subfield name="Improve Mic Quality">
                   <Toggle disabled />

@@ -223,7 +223,6 @@ pub async fn render_video_to_channel(
             std::mem::replace(&mut frame_number, prev + 1)
         };
 
-        let now = Instant::now();
         if let Some(segment_frames) = segment
             .decoders
             .get_frames(segment_time as f32, !project.camera.hide)
@@ -231,7 +230,6 @@ pub async fn render_video_to_channel(
         {
             let uniforms =
                 ProjectUniforms::new(&constants, &project, frame_number, fps, resolution_base);
-            let now = Instant::now();
 
             let frame = frame_renderer
                 .render(segment_frames, uniforms, &segment.cursor)

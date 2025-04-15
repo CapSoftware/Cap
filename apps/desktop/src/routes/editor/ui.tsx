@@ -42,13 +42,8 @@ export function Subfield(
   props: ParentProps<{ name: string; class?: string; required?: boolean }>
 ) {
   return (
-    <div
-      class={cx(
-        "flex flex-row font-medium justify-between items-center text-gray-500",
-        props.class
-      )}
-    >
-      <span>
+    <div class={cx("flex flex-row justify-between items-center", props.class)}>
+      <span class="font-medium text-gray-500">
         {props.name}
         {props.required && (
           <span class="ml-[2px] text-xs text-blue-500">*</span>
@@ -447,6 +442,9 @@ export const topCenterAnimateClasses =
 
 export const topRightAnimateClasses =
   "ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95 origin-top-right";
+
+export const topSlideAnimateClasses =
+  "ui-expanded:animate-in ui-expanded:fade-in ui-expanded:slide-in-from-top-1 ui-closed:animate-out ui-closed:fade-out ui-closed:slide-out-to-top-1 origin-top-center";
 
 export function ComingSoonTooltip(
   props: ComponentProps<typeof KTooltip> & any

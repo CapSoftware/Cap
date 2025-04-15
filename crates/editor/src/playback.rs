@@ -14,6 +14,7 @@ use tracing::{error, info};
 
 use crate::editor;
 use crate::editor_instance::Segment;
+use crate::segments::get_audio_segments;
 
 pub struct Playback {
     pub renderer: Arc<editor::RendererHandle>,
@@ -59,23 +60,7 @@ impl Playback {
             };
 
             AudioPlayback {
-                segments: self
-                    .segments
-                    .iter()
-                    .map(|s| AudioSegment {
-                        tracks: [
-                            s.audio
-                                .clone()
-                                .map(|a| AudioSegmentTrack::new(a, |c| c.mic_volume_db)),
-                            s.system_audio
-                                .clone()
-                                .map(|a| AudioSegmentTrack::new(a, |c| c.system_volume_db)),
-                        ]
-                        .into_iter()
-                        .flatten()
-                        .collect::<Vec<_>>(),
-                    })
-                    .collect::<Vec<_>>(),
+                segments: get_audio_segments(&self.segments),
                 stop_rx: stop_rx.clone(),
                 start_frame_number: self.start_frame_number,
                 project: self.project.clone(),
