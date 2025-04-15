@@ -6,7 +6,8 @@
     "dev": "dotenv -e ../../.env -- next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "compress-images": "bash tools/compress-images.sh"
   },
   "dependencies": {
     "@aws-sdk/client-cloudfront": "^3.565.0",
