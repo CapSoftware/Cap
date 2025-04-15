@@ -1412,81 +1412,79 @@ export function ConfigSidebar() {
             name="Audio Controls"
             icon={<IconLucideVolume2 class="size-4" />}
           >
-            <div class="space-y-2">
-              <Subfield name="Mute Audio">
-                <Toggle
-                  checked={project.audio.mute}
-                  onChange={(v) => setProject("audio", "mute", v)}
-                />
-              </Subfield>
-              {editorInstance.recordings.segments[0].mic?.channels === 2 && (
-                <Subfield name="Microphone Stereo Mode">
-                  <KSelect<{ name: string; value: StereoMode }>
-                    options={STEREO_MODES}
-                    optionValue="value"
-                    optionTextValue="name"
-                    value={STEREO_MODES.find(
-                      (v) => v.value === project.audio.micStereoMode
-                    )}
-                    onChange={(v) => {
-                      if (v) setProject("audio", "micStereoMode", v.value);
-                    }}
-                    disallowEmptySelection
-                    itemComponent={(props) => (
-                      <MenuItem<typeof KSelect.Item>
-                        as={KSelect.Item}
-                        item={props.item}
-                      >
-                        <KSelect.ItemLabel class="flex-1">
-                          {props.item.rawValue.name}
-                        </KSelect.ItemLabel>
-                      </MenuItem>
-                    )}
-                  >
-                    <KSelect.Trigger class="flex flex-row gap-2 items-center px-2 w-full h-8 bg-gray-200 rounded-lg transition-colors disabled:text-gray-400">
-                      <KSelect.Value<{
-                        name: string;
-                        value: StereoMode;
-                      }> class="flex-1 text-sm text-left truncate text-[--gray-500] font-normal">
-                        {(state) => <span>{state.selectedOption().name}</span>}
-                      </KSelect.Value>
-                      <KSelect.Icon<ValidComponent>
-                        as={(props) => (
-                          <IconCapChevronDown
-                            {...props}
-                            class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]"
-                          />
-                        )}
-                      />
-                    </KSelect.Trigger>
-                    <KSelect.Portal>
-                      <PopperContent<typeof KSelect.Content>
-                        as={KSelect.Content}
-                        class={cx(topSlideAnimateClasses, "z-50")}
-                      >
-                        <MenuItemList<typeof KSelect.Listbox>
-                          class="overflow-y-auto max-h-32"
-                          as={KSelect.Listbox}
+            <Subfield name="Mute Audio">
+              <Toggle
+                checked={project.audio.mute}
+                onChange={(v) => setProject("audio", "mute", v)}
+              />
+            </Subfield>
+            {editorInstance.recordings.segments[0].mic?.channels === 2 && (
+              <Subfield name="Microphone Stereo Mode">
+                <KSelect<{ name: string; value: StereoMode }>
+                  options={STEREO_MODES}
+                  optionValue="value"
+                  optionTextValue="name"
+                  value={STEREO_MODES.find(
+                    (v) => v.value === project.audio.micStereoMode
+                  )}
+                  onChange={(v) => {
+                    if (v) setProject("audio", "micStereoMode", v.value);
+                  }}
+                  disallowEmptySelection
+                  itemComponent={(props) => (
+                    <MenuItem<typeof KSelect.Item>
+                      as={KSelect.Item}
+                      item={props.item}
+                    >
+                      <KSelect.ItemLabel class="flex-1">
+                        {props.item.rawValue.name}
+                      </KSelect.ItemLabel>
+                    </MenuItem>
+                  )}
+                >
+                  <KSelect.Trigger class="flex flex-row gap-2 items-center px-2 w-full h-8 bg-gray-200 rounded-lg transition-colors disabled:text-gray-400">
+                    <KSelect.Value<{
+                      name: string;
+                      value: StereoMode;
+                    }> class="flex-1 text-sm text-left truncate text-[--gray-500] font-normal">
+                      {(state) => <span>{state.selectedOption().name}</span>}
+                    </KSelect.Value>
+                    <KSelect.Icon<ValidComponent>
+                      as={(props) => (
+                        <IconCapChevronDown
+                          {...props}
+                          class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]"
                         />
-                      </PopperContent>
-                    </KSelect.Portal>
-                  </KSelect>
-                </Subfield>
-              )}
+                      )}
+                    />
+                  </KSelect.Trigger>
+                  <KSelect.Portal>
+                    <PopperContent<typeof KSelect.Content>
+                      as={KSelect.Content}
+                      class={cx(topSlideAnimateClasses, "z-50")}
+                    >
+                      <MenuItemList<typeof KSelect.Listbox>
+                        class="overflow-y-auto max-h-32"
+                        as={KSelect.Listbox}
+                      />
+                    </PopperContent>
+                  </KSelect.Portal>
+                </KSelect>
+              </Subfield>
+            )}
 
-              {/* <Subfield name="Mute Audio">
+            {/* <Subfield name="Mute Audio">
                 <Toggle
                   checked={project.audio.mute}
                   onChange={(v) => setProject("audio", "mute", v)}
                 />
               </Subfield> */}
 
-              {/* <ComingSoonTooltip>
+            {/* <ComingSoonTooltip>
                 <Subfield name="Improve Mic Quality">
                   <Toggle disabled />
                 </Subfield>
               </ComingSoonTooltip> */}
-            </div>
           </Field>
           <Field
             name="Microphone Volume"
