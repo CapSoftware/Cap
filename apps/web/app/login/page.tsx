@@ -1,8 +1,9 @@
+import { getCurrentUser } from "@cap/database/auth/session";
 import { Button, LogoBadge } from "@cap/ui";
+import Link from "next/link";
+import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { LoginForm } from "./form";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { redirect } from "next/navigation";
 
 export default async function LoginPage() {
   const session = await getCurrentUser();
@@ -12,16 +13,14 @@ export default async function LoginPage() {
   }
 
   return (
-    <div className="muted-custom-bg w-full h-screen flex items-center justify-center">
-      <div className="w-full max-w-lg relative overflow-hidden sm:rounded-2xl p-4 space-y-4">
-        <a href="/">
-          <LogoBadge className="h-12 w-auto fade-in-down" />
-        </a>
-        <div className="text-left flex flex-col items-start justify-center space-y-3">
-          <h1 className="text-3xl font-semibold fade-in-down animate-delay-1">
-            Sign in to Cap.
-          </h1>
-          <p className="text-2xl text-gray-500 fade-in-down animate-delay-1">
+    <div className="flex justify-center items-center w-full h-screen">
+      <div className="overflow-hidden relative w-[calc(100%-2%)] p-[28px] max-w-[472px] space-y-[28px] bg-gray-100 border border-gray-200 rounded-2xl">
+        <Link href="/">
+          <LogoBadge className="w-[72px] mx-auto" />
+        </Link>
+        <div className="flex flex-col justify-center items-center text-left">
+          <h1 className="text-2xl font-semibold">Sign in to Cap</h1>
+          <p className="text-[16px] text-gray-400">
             Beautiful screen recordings, owned by you.
           </p>
         </div>
@@ -32,7 +31,7 @@ export default async function LoginPage() {
                 <Button disabled={true} variant="primary" />
                 <Button disabled={true} variant="secondary" />
                 <Button disabled={true} variant="destructive" />
-                <div className="mx-auto h-5 w-3/4 rounded-lg bg-gray-100" />
+                <div className="mx-auto w-3/4 h-5 bg-gray-100 rounded-lg" />
               </>
             }
           >

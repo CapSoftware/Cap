@@ -36,7 +36,6 @@
 body,
 html {
   color: #000000;
-  font-family: var(--font-geist-sans) !important;
   background-color: white;
 }
 
@@ -109,6 +108,20 @@ a.bg-primary:hover {
 
 .animated-yaxis {
   animation: animatedyaxis 6s ease infinite forwards;
+}
+
+.button-gradient-border::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: 16px;
+  background: linear-gradient(to bottom, #ffffff40 70%, #ffffff00 100%);
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
 }
 
 @media (prefers-color-scheme: dark) {

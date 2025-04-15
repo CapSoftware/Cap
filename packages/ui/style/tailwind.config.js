@@ -118,7 +118,7 @@ module.exports = function (app, options) {
             "conic-gradient(from 180deg at 50% 50%, var(--tw-gradient-stops))",
         },
         fontFamily: {
-          primary: ['var(--font-geist-sans)', 'sans-serif'],
+          primary: ['var(--font-sf-pro-display)', 'sans-serif'],
         },
         keyframes: {
           flyEmoji: {

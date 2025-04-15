@@ -1,17 +1,7 @@
 "use client";
 
 import { users } from "@cap/database/schema";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-  Button,
-  Input,
-  Label,
-} from "@cap/ui";
+import { Button, CardContent, Input, Label } from "@cap/ui";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import toast from "react-hot-toast";
@@ -59,39 +49,38 @@ export const Onboarding = ({
   };
 
   return (
-    <form onSubmit={handleSubmit}>
-      <Card noStyle>
-        <CardContent>
-          <div className="space-y-3">
-            <div className="flex flex-col space-y-1 items-center">
-              <Label htmlFor="firstName">First name *</Label>
-              <Input
-                type="text"
-                id="firstName"
-                name="firstName"
-                required
-                value={firstNameInput}
-                onChange={(e) => setFirstNameInput(e.target.value)}
-              />
-            </div>
-            <div className="flex flex-col space-y-1 items-center">
-              <Label htmlFor="lastName">Last name</Label>
-              <Input type="text" id="lastName" name="lastName" />
-            </div>
+    <form
+      className="relative w-[calc(100%-2%)] p-[28px] max-w-[472px] bg-gray-100 border border-gray-200 rounded-2xl"
+      onSubmit={handleSubmit}
+    >
+      <CardContent>
+        <div className="space-y-3">
+          <div className="flex flex-col space-y-1">
+            <Label htmlFor="firstName">First name *</Label>
+            <Input
+              type="text"
+              id="firstName"
+              name="firstName"
+              required
+              value={firstNameInput}
+              onChange={(e) => setFirstNameInput(e.target.value)}
+            />
           </div>
-        </CardContent>
-        <CardFooter className="border-t px-6 py-4">
-          <Button
-            disabled={!firstNameInput}
-            className="mx-auto"
-            type="submit"
-            size="lg"
-            spinner={loading}
-          >
-            Complete
-          </Button>
-        </CardFooter>
-      </Card>
+          <div className="flex flex-col space-y-1">
+            <Label htmlFor="lastName">Last name</Label>
+            <Input type="text" id="lastName" name="lastName" />
+          </div>
+        </div>
+      </CardContent>
+      <Button
+        disabled={!firstNameInput}
+        className="mx-auto"
+        type="submit"
+        size="sm"
+        spinner={loading}
+      >
+        Complete
+      </Button>
     </form>
   );
 };

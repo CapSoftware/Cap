@@ -1,14 +1,17 @@
 "use client";
 
-import { Button } from "@cap/ui";
+import { getSpace } from "@/actions/workspace/get-space";
+import { NODE_ENV } from "@cap/env";
+import { Button, Input, Label } from "@cap/ui";
+import { faArrowLeft } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { LucideArrowUpRight, LucideMail } from "lucide-react";
 import { signIn } from "next-auth/react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { toast } from "react-hot-toast";
-import { Input, Label } from "@cap/ui";
-import { NODE_ENV } from "@cap/env";
 import { trackEvent } from "../utils/analytics";
-import { getSpace } from "@/actions/workspace/get-space";
 
 export function LoginForm() {
   const searchParams = useSearchParams();
@@ -100,64 +103,7 @@ export function LoginForm() {
 
   return (
     <>
-      <div className="flex flex-col space-y-3 fade-in-down animate-delay-2">
-        {!oauthError && (
-          <>
-            {showOrgInput === false && (
-              <Button
-                variant="dark"
-                size="lg"
-                className="h-12 text-lg flex items-center justify-center space-x-2"
-                onClick={handleGoogleSignIn}
-                disabled={loading}
-              >
-                <svg
-                  className="w-4 h-4"
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 12 12"
-                >
-                  <g fill="#E1E1E6" clipPath="url(#clip0)">
-                    <path d="M11.762 6.138c0-.408-.033-.818-.104-1.22h-5.66V7.23H9.24a2.78 2.78 0 0 1-1.2 1.823v1.5h1.934c1.135-1.046 1.788-2.589 1.788-4.414"></path>
-                    <path d="M5.999 12c1.618 0 2.983-.531 3.977-1.448l-1.933-1.5c-.538.367-1.233.574-2.042.574-1.565 0-2.892-1.056-3.369-2.476H.637v1.545A6 6 0 0 0 6 12"></path>
-                    <path d="M2.63 7.15a3.6 3.6 0 0 1 0-2.297V3.307H.637a6 6 0 0 0 0 5.388z"></path>
-                    <path d="M5.999 2.374a3.26 3.26 0 0 1 2.302.9l1.713-1.713A5.77 5.77 0 0 0 5.999 0 6 6 0 0 0 .637 3.307L2.63 4.852C3.104 3.43 4.434 2.374 6 2.374"></path>
-                  </g>
-                  <defs>
-                    <clipPath id="clip0">
-                      <path fill="#fff" d="M0 0h11.762v12H0z"></path>
-                    </clipPath>
-                  </defs>
-                </svg>
-                <span className="text-gray-50">Continue with Google</span>
-              </Button>
-            )}
-
-            {showOrgInput === false && (
-              <div className="relative">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-blue-100" />
-                </div>
-                <div className="relative flex justify-center">
-                  <span className="bg-white px-2 text-gray-500 rounded-xl text-xs">
-                    Or
-                  </span>
-                </div>
-              </div>
-            )}
-          </>
-        )}
-
-        {oauthError && (
-          <div className="mb-4 p-4 bg-red-600 rounded-lg">
-            <p className="text-sm text-gray-50">
-              It looks like you've previously used this email to sign up via
-              email login. Please enter your email below to receive a sign in
-              link.
-            </p>
-          </div>
-        )}
-
+      <div className="flex flex-col space-y-3">
         <form
           onSubmit={async (e) => {
             e.preventDefault();
@@ -196,8 +142,8 @@ export function LoginForm() {
         >
           {showOrgInput === false && (
             <>
-              <div>
-                <input
+              <div className="flex flex-col space-y-3">
+                <Input
                   id="email"
                   name="email"
                   autoFocus
@@ -210,108 +156,158 @@ export function LoginForm() {
                   onChange={(e) => {
                     setEmail(e.target.value);
                   }}
-                  className="block w-full appearance-none rounded-full border border-gray-300 px-3 h-12 placeholder-gray-400 shadow-sm focus:border-black focus:outline-none focus:ring-black text-lg"
                 />
-                {NODE_ENV === "development" && (
-                  <div className="py-3 px-6 flex items-center justify-center bg-red-600 rounded-xl mt-3">
-                    <p className="text-white text-lg">
+                <Button
+                  variant="primary"
+                  type="submit"
+                  disabled={loading || emailSent}
+                  icon={<LucideMail size={16} />}
+                >
+                  {emailSent
+                    ? NODE_ENV === "development"
+                      ? "Email sent to your terminal"
+                      : "Email sent to your inbox"
+                    : "Login with email"}
+                </Button>
+                {/* {NODE_ENV === "development" && (
+                  <div className="flex justify-center items-center px-6 py-3 mt-3 bg-red-600 rounded-xl">
+                    <p className="text-lg text-white">
                       <span className="font-bold text-white">
                         Development mode:
                       </span>{" "}
                       Auth URL will be logged to your dev console.
                     </p>
                   </div>
-                )}
+                )} */}
               </div>
-              <Button
-                variant="primary"
-                size="lg"
-                className="h-12 text-lg"
-                type="submit"
-                disabled={loading || emailSent}
-              >
-                {emailSent
-                  ? NODE_ENV === "development"
-                    ? "Email sent to your terminal"
-                    : "Email sent to your inbox"
-                  : "Continue with Email"}
-              </Button>
             </>
           )}
-
           {showOrgInput === false && (
-            <Button
-              variant="white"
-              size="sm"
-              className="h-9 text-lg flex items-center justify-center space-x-2 border-gray-300"
-              onClick={() => setShowOrgInput(true)}
-              disabled={loading}
-            >
-              <span className="text-gray-500">Continue with SAML SSO</span>
-            </Button>
+            <div className="flex gap-4 items-center">
+              <span className="flex-1 h-px bg-gray-200" />
+              <p className="text-sm text-center text-gray-400">OR</p>
+              <span className="flex-1 h-px bg-gray-200" />
+            </div>
+          )}
+          {showOrgInput === false && (
+            <div className="flex flex-col gap-3 justify-center items-center">
+              {!oauthError && (
+                <>
+                  {showOrgInput === false && (
+                    <Button
+                      variant="red"
+                      className="flex justify-center items-center space-x-2 w-full text-sm"
+                      onClick={handleGoogleSignIn}
+                      disabled={loading}
+                    >
+                      <svg
+                        width="15"
+                        height="16"
+                        viewBox="0 0 15 16"
+                        fill="none"
+                        className="mr-1"
+                        xmlns="http://www.w3.org/2000/svg"
+                      >
+                        <path
+                          d="M15 8.1754C15 12.4546 12.0215 15.5 7.62295 15.5C3.40574 15.5 0 12.1492 0 8C0 3.85081 3.40574 0.5 7.62295 0.5C9.67623 0.5 11.4037 1.24093 12.7346 2.4627L10.6598 4.4254C7.9457 1.84879 2.89857 3.78427 2.89857 8C2.89857 10.6159 5.02254 12.7359 7.62295 12.7359C10.6414 12.7359 11.7725 10.6069 11.9508 9.50302H7.62295V6.92339H14.8801C14.9508 7.30746 15 7.67641 15 8.1754Z"
+                          fill="white"
+                        />
+                      </svg>
+                      Login with Google
+                    </Button>
+                  )}
+                </>
+              )}
+
+              {oauthError && (
+                <div className="p-4 mb-4 bg-red-600 rounded-lg">
+                  <p className="text-sm text-gray-50">
+                    It looks like you've previously used this email to sign up
+                    via email login. Please enter your email below to receive a
+                    sign in link.
+                  </p>
+                </div>
+              )}
+              <Button
+                variant="white"
+                className="w-full"
+                onClick={() => setShowOrgInput(true)}
+                disabled={loading}
+              >
+                <LucideArrowUpRight size={20} />
+                Login with SAML SSO
+              </Button>
+            </div>
           )}
         </form>
         {showOrgInput && (
-          <form onSubmit={handleSpaceLookup} className="space-y-2">
-            <div>
-              <Label htmlFor="spaceId">Space ID</Label>
-              <Input
-                id="spaceId"
-                value={spaceId}
-                onChange={(e) => setSpaceId(e.target.value)}
-                className="w-full max-w-full"
-              />
+          <>
+            <div
+              onClick={() => setShowOrgInput(false)}
+              className="flex absolute top-2 left-6 gap-2 items-center text-gray-500 transition-colors duration-300 cursor-pointer hover:text-gray-400"
+            >
+              <FontAwesomeIcon className="w-3" icon={faArrowLeft} />
+              <p className="text-sm text-inherit">Back</p>
             </div>
-            {spaceName && (
-              <p className="text-sm text-gray-500">
-                Signing in to: {spaceName}
-              </p>
-            )}
-            <div>
-              <Button
-                type="submit"
-                variant="dark"
-                className="w-full max-w-full"
-              >
-                Continue with SSO
-              </Button>
-            </div>
-          </form>
+            <form onSubmit={handleSpaceLookup} className="space-y-2">
+              <div>
+                <Label htmlFor="spaceId">Space ID</Label>
+                <Input
+                  id="spaceId"
+                  value={spaceId}
+                  onChange={(e) => setSpaceId(e.target.value)}
+                  className="w-full max-w-full"
+                />
+              </div>
+              {spaceName && (
+                <p className="text-sm text-gray-500">
+                  Signing in to: {spaceName}
+                </p>
+              )}
+              <div>
+                <Button
+                  type="submit"
+                  variant="dark"
+                  className="w-full max-w-full"
+                >
+                  Continue with SSO
+                </Button>
+              </div>
+            </form>
+          </>
         )}
-        <p className="text-xs text-gray-500 pt-2">
+        <p className="text-xs text-center text-gray-400">
           By typing your email and clicking continue, you acknowledge that you
           have both read and agree to Cap's{" "}
-          <a
+          <Link
             href="/terms"
             target="_blank"
-            className="text-gray-600 font-semibold text-xs"
+            className="text-xs font-semibold text-gray-500 hover:text-blue-300"
           >
             Terms of Service
-          </a>{" "}
+          </Link>{" "}
           and{" "}
-          <a
+          <Link
             href="/privacy"
             target="_blank"
-            className="text-gray-600 font-semibold text-xs"
+            className="text-xs font-semibold text-gray-500 hover:text-blue-300"
           >
             Privacy Policy
-          </a>
+          </Link>
           .
         </p>
       </div>
       {emailSent && (
-        <div>
-          <button
-            className="mt-5 text-sm text-gray-500 underline hover:text-black"
-            onClick={() => {
-              setEmailSent(false);
-              setEmail("");
-              setLoading(false);
-            }}
-          >
-            Click to restart sign in process.
-          </button>
-        </div>
+        <button
+          className="pt-3 mx-auto text-sm text-gray-500 underline hover:text-gray-400"
+          onClick={() => {
+            setEmailSent(false);
+            setEmail("");
+            setLoading(false);
+          }}
+        >
+          Click to restart sign in process
+        </button>
       )}
     </>
   );
