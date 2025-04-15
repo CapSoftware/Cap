@@ -44,10 +44,8 @@ import {
 } from "./ui";
 
 export function Editor() {
-  const [params] = useSearchParams<{ path: string }>();
-
   return (
-    <EditorInstanceContextProvider path={params.path!}>
+    <EditorInstanceContextProvider>
       <Show
         when={(() => {
           const ctx = useEditorInstanceContext();

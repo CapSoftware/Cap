@@ -1,4 +1,4 @@
-use cap_editor::Segment;
+use cap_editor::{get_audio_segments, Segment};
 use cap_media::{
     data::{
         cast_bytes_to_f32_slice, cast_f32_slice_to_bytes, AudioInfo, RawVideoFormat, VideoInfo,
@@ -88,7 +88,6 @@ where
             ProjectUniforms::get_output_size(&render_constants.options, &project, resolution_base);
 
         let mut render_segments = vec![];
-        let mut audio_segments = vec![];
 
         for (i, s) in segments.iter().enumerate() {
             let segment_paths = match &meta {
@@ -113,19 +112,6 @@ where
                     .await
                     .map_err(ExportError::Other)?,
             });
-            audio_segments.push(AudioSegment {
-                tracks: [
-                    s.audio
-                        .clone()
-                        .map(|a| AudioSegmentTrack::new(a, |c| c.mic_volume_db)),
-                    s.system_audio
-                        .clone()
-                        .map(|a| AudioSegmentTrack::new(a, |c| c.system_volume_db)),
-                ]
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>(),
-            });
         }
 
         Ok(Self {
@@ -136,7 +122,7 @@ where
             recording_meta,
             render_constants,
             render_segments,
-            audio_segments,
+            audio_segments: get_audio_segments(segments),
             output_size,
             fps,
             resolution_base,

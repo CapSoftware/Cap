@@ -1,4 +1,4 @@
-use cap_audio::AudioData;
+use cap_audio::{AudioData, StereoMode};
 use cap_project::{AudioConfiguration, ProjectConfiguration, TimelineConfiguration};
 use ffmpeg::{
     codec::decoder,
@@ -141,11 +141,20 @@ pub struct AudioSegment {
 pub struct AudioSegmentTrack {
     data: Arc<AudioData>,
     get_gain: fn(&AudioConfiguration) -> f32,
+    get_stereo_mode: fn(&AudioConfiguration) -> StereoMode,
 }
 
 impl AudioSegmentTrack {
-    pub fn new(data: Arc<AudioData>, get_gain: fn(&AudioConfiguration) -> f32) -> Self {
-        Self { data, get_gain }
+    pub fn new(
+        data: Arc<AudioData>,
+        get_gain: fn(&AudioConfiguration) -> f32,
+        get_stereo_mode: fn(&AudioConfiguration) -> StereoMode,
+    ) -> Self {
+        Self {
+            data,
+            get_gain,
+            get_stereo_mode,
+        }
     }
 
     pub fn data(&self) -> &Arc<AudioData> {
@@ -154,6 +163,10 @@ impl AudioSegmentTrack {
 
     pub fn gain(&self, config: &AudioConfiguration) -> f32 {
         (self.get_gain)(config)
+    }
+
+    pub fn stereo_mode(&self, config: &AudioConfiguration) -> StereoMode {
+        (self.get_stereo_mode)(config)
     }
 }
 
@@ -289,6 +302,7 @@ impl AudioRenderer {
                     } else {
                         t.gain(&project.audio)
                     },
+                    t.stereo_mode(&project.audio),
                 )
             })
             .collect::<Vec<_>>();

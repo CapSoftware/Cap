@@ -306,7 +306,7 @@ function transformMeta(instance: SerializedEditorInstance) {
 export type TransformedMeta = ReturnType<typeof transformMeta>;
 
 export const [EditorInstanceContextProvider, useEditorInstanceContext] =
-  createContextProvider((props: { path: string }) => {
+  createContextProvider(() => {
     const [latestFrame, setLatestFrame] = createLazySignal<{
       width: number;
       data: ImageData;
@@ -338,7 +338,6 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 
     return {
       editorInstance,
-      path: props.path,
       latestFrame,
       presets: createPresets(),
       prettyName: () => editorInstance()?.meta.prettyName ?? "Cap Recording",
