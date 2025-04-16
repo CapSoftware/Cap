@@ -3,6 +3,9 @@ name = "cap-video-decode"
 version = "0.1.0"
 edition = "2021"
 
+[lints]
+workspace = true
+
 [dependencies]
 ffmpeg.workspace = true
 ffmpeg-sys-next.workspace = true

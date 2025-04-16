@@ -295,7 +295,6 @@ fn start_capturing(
                     info!("New audio sender attached");
                 }
                 Err(flume::TryRecvError::Disconnected) => {
-                    dbg!(control.sender_count());
                     warn!("Control receiver is unreachable! Shutting down audio capture");
                     return;
                 }

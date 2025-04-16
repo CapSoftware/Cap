@@ -95,7 +95,7 @@ const ExportDialog = () => {
   const selectedStyle =
     "ring-1 ring-offset-2 ring-offset-gray-200 bg-gray-300 ring-gray-500";
 
-  const path = editorInstance.path;
+  const projectPath = editorInstance.path;
 
   const [exportEstimates] = createResource(
     () => ({
@@ -105,7 +105,8 @@ const ExportDialog = () => {
       },
       fps: settings.fps,
     }),
-    (params) => commands.getExportEstimates(path, params.resolution, params.fps)
+    (params) =>
+      commands.getExportEstimates(projectPath, params.resolution, params.fps)
   );
   const exportButtonIcon: Record<"file" | "clipboard" | "link", JSX.Element> = {
     file: <IconCapFile class="text-solid-white size-4" />,
@@ -149,7 +150,7 @@ const ExportDialog = () => {
 
         // First try to get existing rendered video
         const outputPath = await commands.exportVideo(
-          path,
+          projectPath,
           progress,
           settings.fps,
           {
@@ -187,23 +188,23 @@ const ExportDialog = () => {
   }));
 
   const [recordingMeta, metaActions] = createResource(() =>
-    commands.getRecordingMeta(path, "recording")
+    commands.getRecordingMeta(projectPath, "recording")
   );
 
   const exportWithSettings = createMutation(() => ({
     mutationFn: async () => {
       setExportState({ type: "idle" });
 
-      const path = await save({
+      const outputPath = await save({
         filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
         defaultPath: `~/Desktop/${prettyName()}.mp4`,
       });
-      if (!path) return;
+      if (!outputPath) return;
 
       trackEvent("export_started", {
         resolution: settings.resolution,
         fps: settings.fps,
-        path: path,
+        path: outputPath,
       });
 
       setExportState({ type: "starting" });
@@ -235,7 +236,7 @@ const ExportDialog = () => {
 
       try {
         const videoPath = await commands.exportVideo(
-          path,
+          projectPath,
           progress,
           settings.fps,
           {
@@ -246,7 +247,7 @@ const ExportDialog = () => {
 
         setExportState({ type: "saving", done: false });
 
-        await commands.copyFileToPath(videoPath, path);
+        await commands.copyFileToPath(videoPath, outputPath);
 
         setExportState({ type: "saving", done: true });
         //needs to be here so if the user cancels file selection the dialog does not close
@@ -298,7 +299,7 @@ const ExportDialog = () => {
         throw new Error("Recording metadata not available");
       }
 
-      const metadata = await commands.getVideoMetadata(path);
+      const metadata = await commands.getVideoMetadata(projectPath);
       const plan = await commands.checkUpgradedAndUpdate();
       const canShare = {
         allowed: plan || metadata.duration < 300,
@@ -357,7 +358,7 @@ const ExportDialog = () => {
             );
         };
 
-        await commands.exportVideo(path, progress, settings.fps, {
+        await commands.exportVideo(projectPath, progress, settings.fps, {
           x: settings.resolution.width,
           y: settings.resolution.height,
         });
@@ -366,8 +367,8 @@ const ExportDialog = () => {
 
         // Now proceed with upload
         const result = recordingMeta()?.sharing
-          ? await commands.uploadExportedVideo(path, "Reupload")
-          : await commands.uploadExportedVideo(path, {
+          ? await commands.uploadExportedVideo(projectPath, "Reupload")
+          : await commands.uploadExportedVideo(projectPath, {
               Initial: { pre_created_video: null },
             });
 
@@ -393,7 +394,7 @@ const ExportDialog = () => {
     onSuccess: () => {
       metaActions.refetch();
       setUploadState({ type: "complete" });
-      metaUpdateStore.notifyUpdate(path);
+      metaUpdateStore.notifyUpdate(projectPath);
     },
     onError: (error) => {
       commands.globalMessageDialog(

@@ -1,12 +1,9 @@
-use cap_flags::FLAGS;
 use cpal::traits::{DeviceTrait, HostTrait};
-use ffmpeg::{format::Sample, frame::Audio, ChannelLayout};
-use ffmpeg_sys_next::{AV_TIMECODE_STR_SIZE, AV_TIME_BASE_Q};
+use ffmpeg::{format::Sample, ChannelLayout};
+use ffmpeg_sys_next::AV_TIME_BASE_Q;
 use flume::Sender;
 use scap::{
-    capturer::{
-        get_output_frame_size, Area, Capturer, Options, Point, Resolution as ScapResolution, Size,
-    },
+    capturer::{Area, Capturer, Options, Point, Resolution as ScapResolution, Size},
     frame::{Frame, FrameType, VideoFrame},
     Target,
 };
@@ -219,6 +216,10 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             get_target_fps(&scap_target).ok_or_else(|| "Failed to get target fps".to_string())?;
         let fps = fps.min(max_fps);
 
+        if fps > 0 {
+            return Err("FPS must be greater than 0".to_string());
+        }
+
         let captures_audio = audio_tx.is_some();
 
         let mut this = Self {
@@ -418,11 +419,6 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
         let audio_tx = self.audio_tx.clone();
 
         let start_time = self.start_time;
-        // let start_time_nanos = self
-        //     .start_time
-        //     .duration_since(SystemTime::UNIX_EPOCH)
-        //     .unwrap()
-        //     .as_nanos() as u64;
 
         inner(
             self,
@@ -520,15 +516,11 @@ fn inner<T: ScreenCaptureFormat>(
         _ => None,
     };
 
-    assert!(source.options.fps > 0);
-
     let mut capturer = match Capturer::build(source.options.as_ref().clone()) {
         Ok(capturer) => capturer,
         Err(e) => {
             error!("Failed to build capturer: {e}");
-            ready_signal
-                .send(Err(MediaError::Any("Failed to build capturer")))
-                .ok();
+            let _ = ready_signal.send(Err(MediaError::Any("Failed to build capturer")));
             return;
         }
     };
@@ -536,9 +528,7 @@ fn inner<T: ScreenCaptureFormat>(
     info!("Capturer built");
 
     let mut capturing = false;
-    ready_signal.send(Ok(())).ok();
-
-    let t = std::time::Instant::now();
+    let _ = ready_signal.send(Ok(()));
 
     loop {
         match control_signal.last() {
