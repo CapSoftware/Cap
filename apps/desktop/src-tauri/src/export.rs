@@ -1,6 +1,5 @@
 use crate::{create_editor_instance_impl, get_video_metadata, RenderProgress};
-use cap_editor::EditorInstance;
-use cap_project::{ProjectConfiguration, RecordingMeta, XY};
+use cap_project::{RecordingMeta, XY};
 use std::path::PathBuf;
 use tauri::AppHandle;
 
@@ -8,24 +7,26 @@ use tauri::AppHandle;
 #[specta::specta]
 pub async fn export_video(
     app: AppHandle,
-    path: PathBuf,
+    project_path: PathBuf,
     progress: tauri::ipc::Channel<RenderProgress>,
     fps: u32,
     resolution_base: XY<u32>,
 ) -> Result<PathBuf, String> {
-    let editor_instance = create_editor_instance_impl(&app, path.clone()).await?;
+    let editor_instance = create_editor_instance_impl(&app, project_path.clone()).await?;
 
-    let screen_metadata = get_video_metadata(path.clone()).await.map_err(|e| {
-        sentry::capture_message(
-            &format!("Failed to get video metadata: {}", e),
-            sentry::Level::Error,
-        );
-        "Failed to read video metadata. The recording may be from an incompatible version."
-            .to_string()
-    })?;
+    let screen_metadata = get_video_metadata(project_path.clone())
+        .await
+        .map_err(|e| {
+            sentry::capture_message(
+                &format!("Failed to get video metadata: {}", e),
+                sentry::Level::Error,
+            );
+            "Failed to read video metadata. The recording may be from an incompatible version."
+                .to_string()
+        })?;
 
     // Get camera metadata if it exists
-    let camera_metadata = get_video_metadata(path.clone()).await.ok();
+    let camera_metadata = get_video_metadata(project_path.clone()).await.ok();
 
     // Use the longer duration between screen and camera
     let duration = screen_metadata.duration.max(
