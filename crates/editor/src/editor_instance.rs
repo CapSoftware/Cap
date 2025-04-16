@@ -35,18 +35,6 @@ pub struct EditorInstance {
 }
 
 impl EditorInstance {
-    pub fn project_path(projects_path: &PathBuf, video_id: &str) -> PathBuf {
-        projects_path.join(format!(
-            "{}{}",
-            video_id,
-            if video_id.ends_with(".cap") {
-                ""
-            } else {
-                ".cap"
-            }
-        ))
-    }
-
     pub async fn new(
         project_path: PathBuf,
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,

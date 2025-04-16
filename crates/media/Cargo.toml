@@ -68,3 +68,6 @@ windows = { workspace = true, features = [
 	"Win32_Media_MediaFoundation",
 ] }
 windows-capture = { workspace = true }
+
+[lints]
+workspace = true

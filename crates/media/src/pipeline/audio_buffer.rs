@@ -68,7 +68,6 @@ impl AudioBuffer {
             return None;
         }
 
-        dbg!(self.frame_size, drain);
         let actual_samples_per_channel = if drain {
             (self.len() / self.config.channels).min(self.frame_size)
         } else {
