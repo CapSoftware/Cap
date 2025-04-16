@@ -4,6 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import "@total-typescript/ts-reset/filter-boolean";
 import { createResource, For, Show, Suspense } from "solid-js";
 import toast from "solid-toast";
+import { SignInButton } from "~/components/SignInButton";
 
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
@@ -136,13 +137,17 @@ export default function Settings(props: RouteSectionProps) {
             )}
           </For>
         </ul>
-        <div class="p-[0.625rem]">
+        <div class="p-[0.625rem] text-left flex flex-col">
           <Show when={version()}>
             {(v) => <p class="mb-1 text-xs text-gray-400">v{v()}</p>}
           </Show>
-          <Button onClick={handleAuth} variant="secondary" class="w-full">
-            {auth.data ? "Sign Out" : "Sign In"}
-          </Button>
+          {auth.data ? (
+            <Button onClick={handleAuth} variant="secondary" class="w-full">
+              Sign Out
+            </Button>
+          ) : (
+            <SignInButton>Sign In</SignInButton>
+          )}
         </div>
       </div>
       <div class="overflow-y-hidden flex-1 bg-gray-50 animate-in">
