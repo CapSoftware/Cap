@@ -9,27 +9,16 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-  Tooltip,
 } from "@cap/ui";
 import { classNames } from "@cap/utils";
-import {
-  Building,
-  Check,
-  ChevronDown,
-  LogOut,
-  MessageSquare,
-  MoreVertical,
-  Plus,
-  Settings,
-  Share2,
-} from "lucide-react";
+import { Building, Check, ChevronDown, Plus, Share2 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 import { NewSpace } from "@/components/forms/NewSpace";
+import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
 import {
   Dialog,
@@ -39,7 +28,6 @@ import {
   DialogTitle,
 } from "@cap/ui";
 import clsx from "clsx";
-import { signOut } from "next-auth/react";
 import { updateActiveSpace } from "./server";
 
 const Clapperboard = ({ className }: { className: string }) => (
@@ -154,7 +142,6 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
               <CommandGroup>
                 {spaceData?.map((space) => {
                   const isSelected = activeSpace?.space.id === space.space.id;
-
                   return (
                     <CommandItem
                       key={space.space.name + "-space"}
@@ -223,66 +210,12 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
           ))}
         </div>
         <div className="mt-auto">
-          <div className="pb-5 mb-3 w-full border-b-2 border-gray-200 border-dotted">
-            <UsageButton collapsed={collapsed} subscribed={isSubscribed} />
+          <div className="pb-5 mb-3 w-full">
+            <UsageButton
+              collapsed={collapsed ?? false}
+              subscribed={isSubscribed}
+            />
           </div>
-          <Popover open={menuOpen} onOpenChange={setMenuOpen}>
-            <PopoverTrigger asChild>
-              {collapsed ? (
-                <Tooltip content={user.name ?? "User"}>
-                  <div className="flex justify-center items-center p-2 rounded-lg transition-colors cursor-pointer hover:bg-gray-100">
-                    <Avatar name={user.name ?? "User"} className="w-8 h-8" />
-                  </div>
-                </Tooltip>
-              ) : (
-                <div className="flex justify-between items-center p-2 rounded-lg transition-colors cursor-pointer hover:bg-gray-100">
-                  <div className="flex items-center">
-                    <Avatar name={user.name ?? "User"} className="w-8 h-8" />
-                    <span className="ml-2 text-sm">{user.name ?? "User"}</span>
-                  </div>
-                  <MoreVertical className="w-5 h-5 text-gray-500 group-hover:text-gray-500" />
-                </div>
-              )}
-            </PopoverTrigger>
-            <PopoverContent className="p-1 w-48 bg-gray-100">
-              <Command>
-                <CommandGroup>
-                  <CommandItem
-                    className="px-2 py-2 rounded-lg cursor-pointer hover:bg-gray-200 group"
-                    onSelect={() => {
-                      router.push("/dashboard/settings");
-                      setMenuOpen(false);
-                    }}
-                  >
-                    <Settings className="mr-2 w-4 h-4 text-gray-400 group-hover:text-gray-500" />
-                    <span className="text-sm text-gray-400 group-hover:text-gray-500">
-                      Settings
-                    </span>
-                  </CommandItem>
-                  <CommandItem
-                    className="px-2 py-2 rounded-lg cursor-pointer hover:bg-gray-200 group"
-                    onSelect={() =>
-                      window.open("https://cap.link/discord", "_blank")
-                    }
-                  >
-                    <MessageSquare className="mr-2 w-4 h-4 text-gray-400 group-hover:text-gray-500" />
-                    <span className="text-sm text-gray-400 group-hover:text-gray-500">
-                      Chat Support
-                    </span>
-                  </CommandItem>
-                  <CommandItem
-                    className="px-2 py-2 rounded-lg cursor-pointer hover:bg-gray-200 group"
-                    onSelect={() => signOut()}
-                  >
-                    <LogOut className="mr-2 w-4 h-4 text-gray-400 group-hover:text-gray-500" />
-                    <span className="text-sm text-gray-400 group-hover:text-gray-500">
-                      Sign Out
-                    </span>
-                  </CommandItem>
-                </CommandGroup>
-              </Command>
-            </PopoverContent>
-          </Popover>
         </div>
       </nav>
       <DialogContent>

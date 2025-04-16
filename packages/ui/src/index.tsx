@@ -22,7 +22,6 @@ export * from "./components/Pagination";
 export * from "./components/Popover";
 export * from "./components/Switch";
 export * from "./components/Table";
-export * from "./components/Tooltip";
 
 // Forms & Inputs
 export * from "./components/input/Form";

@@ -46,7 +46,6 @@
     "@radix-ui/react-popover": "^1.0.7",
     "@radix-ui/react-slot": "^1.0.2",
     "@radix-ui/react-switch": "^1.1.0",
-    "@radix-ui/react-tooltip": "^1.2.0",
     "@tailwindcss/typography": "^0.5.9",
     "class-variance-authority": "^0.7.0",
     "cmdk": "^0.2.0",

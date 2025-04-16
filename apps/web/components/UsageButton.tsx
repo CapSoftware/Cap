@@ -1,4 +1,5 @@
-import { Button, Tooltip } from "@cap/ui";
+import { Tooltip } from "@/components/Tooltip";
+import { Button } from "@cap/ui";
 import { faArrowUp, faCheck } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";

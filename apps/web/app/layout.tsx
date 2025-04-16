@@ -4,6 +4,7 @@ import { Footer } from "@/components/Footer";
 import { Navbar } from "@/components/Navbar";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { serverEnv } from "@cap/env";
+import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import crypto from "crypto";
 import type { Metadata } from "next";
 import localFont from "next/font/local";
@@ -85,24 +86,26 @@ export default async function RootLayout({
         <meta name="theme-color" content="#ffffff" />
       </head>
       <body>
-        <PostHogProvider>
-          <AuthProvider>
-            <Providers
-              userId={user?.id}
-              intercomHash={intercomHash}
-              name={`${user?.name ?? ""} ${user?.lastName ?? ""}`}
-              email={user?.email ?? ""}
-            >
-              <Toaster />
-              <main className="overflow-hidden w-full">
-                <Navbar auth={user ? true : false} />
-                {children}
-                <Footer />
-              </main>
-              <BentoScript user={user} />
-            </Providers>
-          </AuthProvider>
-        </PostHogProvider>
+        <TooltipPrimitive.Provider>
+          <PostHogProvider>
+            <AuthProvider>
+              <Providers
+                userId={user?.id}
+                intercomHash={intercomHash}
+                name={`${user?.name ?? ""} ${user?.lastName ?? ""}`}
+                email={user?.email ?? ""}
+              >
+                <Toaster />
+                <main className="overflow-hidden w-full">
+                  <Navbar auth={user ? true : false} />
+                  {children}
+                  <Footer />
+                </main>
+                <BentoScript user={user} />
+              </Providers>
+            </AuthProvider>
+          </PostHogProvider>
+        </TooltipPrimitive.Provider>
       </body>
     </html>
   );

@@ -1,37 +1,44 @@
 "use client";
 
-import React, { ReactNode } from "react";
-import { Tooltip as ReactTooltip } from "react-tooltip";
+import { classNames } from "@cap/utils";
+import * as TooltipPrimitive from "@radix-ui/react-tooltip";
+import * as React from "react";
 
-interface TooltipProps {
-  children: ReactNode;
-  content: string;
-  id?: string;
-  className?: string;
-}
-
-export const Tooltip = ({
+const Tooltip = ({
   children,
   content,
-  id,
   className,
-}: TooltipProps) => {
-  const tooltipId = id || `tooltip-${Math.random().toString(36).substring(2, 9)}`;
-
+  position = "top",
+  disable,
+}: {
+  children: React.ReactNode;
+  content: string;
+  className?: string;
+  position?: "top" | "bottom" | "left" | "right";
+  disable?: boolean;
+}) => {
   return (
-    <>
-      <div
-        data-tooltip-id={tooltipId}
-        data-tooltip-content={content}
-        className={className}
-      >
+    <TooltipPrimitive.Root>
+      <TooltipPrimitive.Trigger disabled={disable} asChild>
         {children}
-      </div>
-      <ReactTooltip
-        id={tooltipId}
-        place="right"
-        className="z-50 px-2 py-1 text-xs border border-gray-200 bg-gray-50 text-gray-600 rounded shadow-lg"
-      />
-    </>
+      </TooltipPrimitive.Trigger>
+      <TooltipPrimitive.Portal>
+        <TooltipPrimitive.Content
+          side={position}
+          className={classNames(
+            "select-none rounded bg-white px-[15px] py-2.5 text-[15px] leading-none text-violet11 shadow-[hsl(206_22%_7%_/_35%)_0px_10px_38px_-10px,_hsl(206_22%_7%_/_20%)_0px_10px_20px_-15px] will-change-[transform,opacity] data-[state=delayed-open]:data-[side=bottom]:animate-slideUpAndFade data-[state=delayed-open]:data-[side=left]:animate-slideRightAndFade data-[state=delayed-open]:data-[side=right]:animate-slideLeftAndFade data-[state=delayed-open]:data-[side=top]:animate-slideDownAndFade",
+            className
+          )}
+          sideOffset={5}
+        >
+          {content}
+          <TooltipPrimitive.Arrow className="fill-white" />
+        </TooltipPrimitive.Content>
+      </TooltipPrimitive.Portal>
+    </TooltipPrimitive.Root>
   );
-}
+};
+
+Tooltip.displayName = TooltipPrimitive.Root.displayName;
+
+export { Tooltip };
