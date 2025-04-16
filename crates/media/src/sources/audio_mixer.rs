@@ -74,7 +74,7 @@ impl AudioMixer {
                     .add(
                         &ffmpeg::filter::find("abuffer").expect("Failed to find abuffer filter"),
                         &format!("src{i}"),
-                        &dbg!(args),
+                        &args,
                     )
                     .unwrap()
             })

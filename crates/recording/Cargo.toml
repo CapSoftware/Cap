@@ -3,6 +3,9 @@ name = "cap-recording"
 version = "0.1.0"
 edition = "2021"
 
+[lints]
+workspace = true
+
 [dependencies]
 cap-project = { path = "../project" }
 cap-media = { path = "../media" }
@@ -38,6 +41,3 @@ windows = { workspace = true, features = [
 	"Win32_Graphics_Gdi",
 	"Win32_UI_WindowsAndMessaging",
 ] }
-
-[lints]
-workspace = true
