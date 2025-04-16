@@ -216,7 +216,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             get_target_fps(&scap_target).ok_or_else(|| "Failed to get target fps".to_string())?;
         let fps = fps.min(max_fps);
 
-        if fps > 0 {
+        if !(fps > 0) {
             return Err("FPS must be greater than 0".to_string());
         }
 
