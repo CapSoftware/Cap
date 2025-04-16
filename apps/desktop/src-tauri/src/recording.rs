@@ -212,7 +212,6 @@ pub async fn start_recording(
                 // Allow the recording to proceed without error for any signed-in user
                 _ => {
                     // User is not signed in
-                    let _ = ShowCapWindow::SignIn.show(&app).await;
                     return Err("Please sign in to use instant recording".to_string());
                 }
             }

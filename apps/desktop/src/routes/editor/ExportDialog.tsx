@@ -1,31 +1,31 @@
 import { Button } from "@cap/ui-solid";
-import {
-  createEffect,
-  createResource,
-  createSignal,
-  For,
-  JSX,
-  Show,
-} from "solid-js";
-
 import { Select as KSelect } from "@kobalte/core/select";
 import { createMutation } from "@tanstack/solid-query";
 import { Channel } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
-import { produce } from "solid-js/store";
+import {
+  createResource,
+  createSignal,
+  For,
+  JSX,
+  Show,
+  ValidComponent,
+} from "solid-js";
+import { createStore, produce } from "solid-js/store";
+
 import Tooltip from "~/components/Tooltip";
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { commands, events, RenderProgress } from "~/utils/tauri";
 import { useEditorContext } from "./context";
-import { RESOLUTION_OPTIONS, ResolutionOption } from "./Header";
+import { RESOLUTION_OPTIONS } from "./Header";
 import {
   DialogContent,
   MenuItem,
   MenuItemList,
   PopperContent,
-  topLeftAnimateClasses,
+  topSlideAnimateClasses,
 } from "./ui";
 
 export const COMPRESSION_OPTIONS = [
@@ -68,7 +68,6 @@ type ExportToOption = (typeof EXPORT_TO_OPTIONS)[number]["value"];
 
 const ExportDialog = () => {
   const {
-    path,
     prettyName,
     setDialog,
     exportState,
@@ -80,46 +79,31 @@ const ExportDialog = () => {
     uploadState,
     setUploadState,
     metaUpdateStore,
+    editorInstance,
   } = useEditorContext();
-  const [format, setFormat] = createSignal(
-    localStorage.getItem("cap-export-format") || "mp4"
-  );
-  const [copyPressed, setCopyPressed] = createSignal(false);
 
-  const [selectedFps, setSelectedFps] = createSignal(
-    Number(localStorage.getItem("cap-export-fps") || 30)
-  );
-  const [exportTo, setExportTo] = createSignal<ExportToOption>(
-    (localStorage.getItem("cap-export-to") as ExportToOption) || "file"
-  );
-  const [selectedResolution, setSelectedResolution] =
-    createSignal<ResolutionOption>(
-      RESOLUTION_OPTIONS.find(
-        (opt) => opt.value === localStorage.getItem("cap-export-resolution")
-      ) || RESOLUTION_OPTIONS[0]
-    );
-  const [compression, setCompression] = createSignal(
-    localStorage.getItem("cap-export-compression") || "social"
-  );
-
-  createEffect(() => {
-    localStorage.setItem("cap-export-format", format());
-    localStorage.setItem("cap-export-to", exportTo());
-    localStorage.setItem("cap-export-fps", selectedFps().toString());
-    localStorage.setItem("cap-export-resolution", selectedResolution().value);
-    localStorage.setItem("cap-export-compression", compression());
+  const [settings, setSettings] = createStore({
+    format: "mp4",
+    fps: 30,
+    exportTo: "file" as ExportToOption,
+    resolution: RESOLUTION_OPTIONS[0],
+    compression: "social",
   });
+
+  const [copyPressed, setCopyPressed] = createSignal(false);
 
   const selectedStyle =
     "ring-1 ring-offset-2 ring-offset-gray-200 bg-gray-300 ring-gray-500";
 
+  const path = editorInstance.path;
+
   const [exportEstimates] = createResource(
     () => ({
       resolution: {
-        x: selectedResolution().width,
-        y: selectedResolution().height,
+        x: settings.resolution.width,
+        y: settings.resolution.height,
       },
-      fps: selectedFps(),
+      fps: settings.fps,
     }),
     (params) => commands.getExportEstimates(path, params.resolution, params.fps)
   );
@@ -167,11 +151,10 @@ const ExportDialog = () => {
         const outputPath = await commands.exportVideo(
           path,
           progress,
-          true,
-          selectedFps(),
+          settings.fps,
           {
-            x: selectedResolution().width,
-            y: selectedResolution().height,
+            x: settings.resolution.width,
+            y: settings.resolution.height,
           }
         );
 
@@ -180,6 +163,12 @@ const ExportDialog = () => {
         console.error("Error in copy media:", error);
         throw error;
       }
+    },
+    onError: (error) => {
+      commands.globalMessageDialog(
+        error instanceof Error ? error.message : "Failed to copy recording"
+      );
+      setCopyState({ type: "idle" });
     },
     onSuccess() {
       setCopyState({
@@ -212,8 +201,8 @@ const ExportDialog = () => {
       if (!path) return;
 
       trackEvent("export_started", {
-        resolution: selectedResolution().value,
-        fps: selectedFps(),
+        resolution: settings.resolution,
+        fps: settings.fps,
         path: path,
       });
 
@@ -248,11 +237,10 @@ const ExportDialog = () => {
         const videoPath = await commands.exportVideo(
           path,
           progress,
-          true,
-          selectedFps(),
+          settings.fps,
           {
-            x: selectedResolution().width,
-            y: selectedResolution().height,
+            x: settings.resolution.width,
+            y: settings.resolution.height,
           }
         );
 
@@ -268,6 +256,12 @@ const ExportDialog = () => {
       } catch (error) {
         throw error;
       }
+    },
+    onError: (error) => {
+      commands.globalMessageDialog(
+        error instanceof Error ? error.message : "Failed to export recording"
+      );
+      setExportState({ type: "idle" });
     },
     onSettled() {
       setTimeout(() => {
@@ -289,13 +283,12 @@ const ExportDialog = () => {
       // Check authentication first
       const existingAuth = await authStore.get();
       if (!existingAuth) {
-        await commands.showWindow("SignIn");
         throw new Error("You need to sign in to share recordings");
       }
 
       trackEvent("create_shareable_link_clicked", {
-        resolution: selectedResolution().value,
-        fps: selectedFps(),
+        resolution: settings.resolution,
+        fps: settings.fps,
         has_existing_auth: !!existingAuth,
       });
 
@@ -364,9 +357,9 @@ const ExportDialog = () => {
             );
         };
 
-        await commands.exportVideo(path, progress, true, selectedFps(), {
-          x: selectedResolution().width,
-          y: selectedResolution().height,
+        await commands.exportVideo(path, progress, settings.fps, {
+          x: settings.resolution.width,
+          y: settings.resolution.height,
         });
 
         setUploadState({ type: "uploading", progress: 0 });
@@ -379,7 +372,6 @@ const ExportDialog = () => {
             });
 
         if (result === "NotAuthenticated") {
-          await commands.showWindow("SignIn");
           throw new Error("You need to sign in to share recordings");
         } else if (result === "PlanCheckFailed")
           throw new Error("Failed to verify your subscription status");
@@ -407,6 +399,7 @@ const ExportDialog = () => {
       commands.globalMessageDialog(
         error instanceof Error ? error.message : "Failed to upload recording"
       );
+      setUploadState({ type: "idle" });
     },
     onSettled() {
       uploadVideo.reset();
@@ -430,16 +423,17 @@ const ExportDialog = () => {
               class="flex gap-2 items-center"
               variant="primary"
               onClick={() => {
-                if (exportTo() === "file") {
+                if (settings.exportTo === "file") {
                   exportWithSettings.mutate();
-                } else if (exportTo() === "link") {
+                } else if (settings.exportTo === "link") {
                   uploadVideo.mutate();
                 } else {
                   copy.mutate();
                 }
               }}
             >
-              {exportButtonIcon[exportTo()]} Export to {exportTo()}
+              {exportButtonIcon[settings.exportTo]} Export to{" "}
+              {settings.exportTo}
             </Button>
           }
           leftFooterContent={
@@ -523,11 +517,11 @@ const ExportDialog = () => {
                         <Tooltip content={"Coming soon"}>
                           <Button
                             variant="secondary"
-                            onClick={() => setFormat(option.value)}
+                            onClick={() => setSettings("format", option.value)}
                             disabled={option.disabled}
                             autofocus={false}
                             class={cx(
-                              format() === option.value && selectedStyle
+                              settings.format === option.value && selectedStyle
                             )}
                           >
                             {option.label}
@@ -536,9 +530,11 @@ const ExportDialog = () => {
                       ) : (
                         <Button
                           variant="secondary"
-                          onClick={() => setFormat(option.value)}
+                          onClick={() => setSettings("format", option.value)}
                           autofocus={false}
-                          class={cx(format() === option.value && selectedStyle)}
+                          class={cx(
+                            settings.format === option.value && selectedStyle
+                          )}
                         >
                           {option.label}
                         </Button>
@@ -557,13 +553,13 @@ const ExportDialog = () => {
                   optionValue="value"
                   optionTextValue="label"
                   placeholder="Select FPS"
-                  value={FPS_OPTIONS.find((opt) => opt.value === selectedFps())}
+                  value={FPS_OPTIONS.find((opt) => opt.value === settings.fps)}
                   onChange={(option) => {
-                    const fps = option?.value ?? 30;
+                    const value = option?.value ?? 30;
                     trackEvent("export_fps_changed", {
-                      fps: fps,
+                      fps: value,
                     });
-                    setSelectedFps(fps);
+                    setSettings("fps", value);
                   }}
                   itemComponent={(props) => (
                     <MenuItem<typeof KSelect.Item>
@@ -582,14 +578,19 @@ const ExportDialog = () => {
                     > class="flex-1 text-sm text-left truncate text-[--gray-500]">
                       {(state) => <span>{state.selectedOption()?.label}</span>}
                     </KSelect.Value>
-                    <KSelect.Icon>
-                      <IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
-                    </KSelect.Icon>
+                    <KSelect.Icon<ValidComponent>
+                      as={(props) => (
+                        <IconCapChevronDown
+                          {...props}
+                          class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]"
+                        />
+                      )}
+                    />
                   </KSelect.Trigger>
                   <KSelect.Portal>
                     <PopperContent<typeof KSelect.Content>
                       as={KSelect.Content}
-                      class={cx(topLeftAnimateClasses, "z-50")}
+                      class={cx(topSlideAnimateClasses, "z-50")}
                     >
                       <MenuItemList<typeof KSelect.Listbox>
                         class="overflow-y-auto max-h-32"
@@ -608,10 +609,10 @@ const ExportDialog = () => {
                   <For each={EXPORT_TO_OPTIONS}>
                     {(option) => (
                       <Button
-                        onClick={() => setExportTo(option.value)}
+                        onClick={() => setSettings("exportTo", option.value)}
                         class={cx(
                           "flex gap-2 items-center",
-                          exportTo() === option.value && selectedStyle
+                          settings.exportTo === option.value && selectedStyle
                         )}
                         variant="secondary"
                       >
@@ -631,7 +632,7 @@ const ExportDialog = () => {
                   <For each={COMPRESSION_OPTIONS}>
                     {(option) => (
                       <Button
-                        onClick={() => setCompression(option.value)}
+                        onClick={() => setSettings("compression", option.value)}
                         variant="secondary"
                         disabled
                       >
@@ -652,11 +653,11 @@ const ExportDialog = () => {
                       <Button
                         class={cx(
                           "flex-1",
-                          selectedResolution().value === option.value &&
+                          settings.resolution.value === option.value &&
                             selectedStyle
                         )}
                         variant="secondary"
-                        onClick={() => setSelectedResolution(option)}
+                        onClick={() => setSettings("resolution", option)}
                       >
                         {option.label}
                       </Button>

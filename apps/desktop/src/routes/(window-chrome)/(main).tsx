@@ -42,14 +42,17 @@ import {
   events,
 } from "~/utils/tauri";
 
-const MAIN_WINDOW_SIZE = {
-  width: 300,
-  height: 290 + (window.FLAGS.systemAudioRecording ? 50 : 0),
-};
+function getWindowSize(systemAudioRecording: boolean) {
+  return {
+    width: 300,
+    height: 290 + (systemAudioRecording ? 50 : 0),
+  };
+}
 
 export default function () {
   const { options, setOptions } = createOptionsQuery();
   const currentRecording = createCurrentRecordingQuery();
+  const generalSettings = generalSettingsStore.createQuery();
 
   const isRecording = () => !!currentRecording.data;
 
@@ -125,27 +128,26 @@ export default function () {
     // Enforce window size with multiple safeguards
     const currentWindow = getCurrentWindow();
 
-    // Set initial size
-    await currentWindow.setSize(
-      new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height)
-    );
-
     // Check size when app regains focus
     const unlistenFocus = await currentWindow.onFocusChanged(
       ({ payload: focused }) => {
         if (focused) {
-          currentWindow.setSize(
-            new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height)
+          const size = getWindowSize(
+            generalSettings.data?.systemAudioCapture ?? false
           );
+
+          currentWindow.setSize(new LogicalSize(size.width, size.height));
         }
       }
     );
 
     // Listen for resize events
     const unlistenResize = await currentWindow.onResized(() => {
-      currentWindow.setSize(
-        new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height)
+      const size = getWindowSize(
+        generalSettings.data?.systemAudioCapture ?? false
       );
+
+      currentWindow.setSize(new LogicalSize(size.width, size.height));
     });
 
     unlistenFn = () => {
@@ -235,6 +237,13 @@ export default function () {
     ),
   });
 
+  createEffect(() => {
+    const size = getWindowSize(
+      generalSettings.data?.systemAudioCapture ?? false
+    );
+    getCurrentWindow().setSize(new LogicalSize(size.width, size.height));
+  });
+
   return (
     <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-[--gray-50] h-full text-[--text-primary]">
       {initialize()}
@@ -280,30 +289,38 @@ export default function () {
       <TargetSelects options={options.data} setOptions={setOptions} />
       <CameraSelect options={options.data} setOptions={setOptions} />
       <MicrophoneSelect options={options.data} setOptions={setOptions} />
-      {window.FLAGS.systemAudioRecording && (
+      {generalSettings.data?.systemAudioCapture && (
         <SystemAudio options={options.data} setOptions={setOptions} />
       )}
       <div class="flex items-center space-x-1 w-full">
-        <Button
-          disabled={toggleRecording.isPending}
-          variant={isRecording() ? "destructive" : "primary"}
-          size="md"
-          onClick={() => toggleRecording.mutate()}
-          class="flex flex-grow justify-center items-center"
-        >
-          {isRecording() ? (
-            "Stop Recording"
-          ) : (
-            <>
-              {options.data?.mode === "instant" ? (
-                <IconCapInstant class="w-[0.8rem] h-[0.8rem] mr-1.5" />
-              ) : (
-                <IconCapFilmCut class="w-[0.8rem] h-[0.8rem] mr-2 -mt-[1.5px]" />
-              )}
-              Start Recording
-            </>
-          )}
-        </Button>
+        {options.data?.mode === "instant" && !auth.data ? (
+          <SignInButton>
+            Sign In for{" "}
+            <IconCapInstant class="size-[0.8rem] ml-[0.14rem] mr-0.5" />
+            Instant Mode
+          </SignInButton>
+        ) : (
+          <Button
+            disabled={toggleRecording.isPending}
+            variant={isRecording() ? "destructive" : "primary"}
+            size="md"
+            onClick={() => toggleRecording.mutate()}
+            class="flex flex-grow justify-center items-center"
+          >
+            {isRecording() ? (
+              "Stop Recording"
+            ) : (
+              <>
+                {options.data?.mode === "instant" ? (
+                  <IconCapInstant class="size-[0.8rem] mr-1.5" />
+                ) : (
+                  <IconCapFilmCut class="size-[0.8rem] mr-2 -mt-[1.5px]" />
+                )}
+                Start Recording
+              </>
+            )}
+          </Button>
+        )}
         {/* <Button
           disabled={isRecording()}
           variant="secondary"
@@ -352,7 +369,8 @@ import { Transition } from "solid-transition-group";
 
 import { apiClient } from "~/utils/web-api";
 import { useWindowChrome } from "./Context";
-import { authStore } from "~/store";
+import { authStore, generalSettingsStore } from "~/store";
+import { SignInButton } from "~/components/SignInButton";
 
 let hasChecked = false;
 function createUpdateCheck() {

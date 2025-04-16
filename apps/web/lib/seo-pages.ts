@@ -23,6 +23,10 @@ import {
   LoomAlternativePage,
   loomAlternativeContent,
 } from "@/components/pages/seo/LoomAlternativePage";
+import {
+  RemoteTeamCollaborationPage,
+  remoteTeamCollaborationContent,
+} from "@/components/pages/seo/RemoteTeamCollaborationPage";
 
 export const seoPages: Record<
   string,
@@ -54,6 +58,10 @@ export const seoPages: Record<
   "loom-alternative": {
     component: LoomAlternativePage,
     content: loomAlternativeContent,
+  },
+  "solutions/remote-team-collaboration": {
+    component: RemoteTeamCollaborationPage,
+    content: remoteTeamCollaborationContent,
   },
 };
 

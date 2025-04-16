@@ -53,8 +53,8 @@ async focusCapturesPanel() : Promise<void> {
 async getCurrentRecording() : Promise<JsonValue<CurrentRecording | null>> {
     return await TAURI_INVOKE("get_current_recording");
 },
-async exportVideo(path: string, progress: TAURI_CHANNEL<RenderProgress>, force: boolean, fps: number, resolutionBase: XY<number>) : Promise<string> {
-    return await TAURI_INVOKE("export_video", { path, progress, force, fps, resolutionBase });
+async exportVideo(path: string, progress: TAURI_CHANNEL<RenderProgress>, fps: number, resolutionBase: XY<number>) : Promise<string> {
+    return await TAURI_INVOKE("export_video", { path, progress, fps, resolutionBase });
 },
 async getExportEstimates(path: string, resolution: XY<number>, fps: number) : Promise<ExportEstimates> {
     return await TAURI_INVOKE("get_export_estimates", { path, resolution, fps });
@@ -222,7 +222,7 @@ uploadProgress: "upload-progress"
 export type AppTheme = "system" | "light" | "dark"
 export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
 export type Audio = { duration: number; sample_rate: number; channels: number; start_time: number }
-export type AudioConfiguration = { mute: boolean; improve: boolean; micVolumeDb?: number; systemVolumeDb?: number }
+export type AudioConfiguration = { mute: boolean; improve: boolean; micVolumeDb?: number; micStereoMode?: StereoMode; systemVolumeDb?: number }
 export type AudioInputLevelChange = number
 export type AudioMeta = { path: string; 
 /**
@@ -253,7 +253,7 @@ export type Cursors = { [key in string]: string } | { [key in string]: CursorMet
 export type EditorStateChanged = { playhead_position: number }
 export type ExportEstimates = { duration_seconds: number; estimated_time_seconds: number; estimated_size_mb: number }
 export type Flags = { systemAudioRecording: boolean; split: boolean }
-export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; hapticsEnabled?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; customCursorCapture?: boolean; 
+export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; hapticsEnabled?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; customCursorCapture?: boolean; systemAudioCapture?: boolean; 
 /**
  * @deprecated
  */
@@ -303,8 +303,9 @@ export type SegmentRecordings = { display: Video; camera: Video | null; mic: Aud
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordings; path: string; meta: RecordingMeta }
 export type ShadowConfiguration = { size: number; opacity: number; blur: number }
 export type SharingMeta = { id: string; link: string }
-export type ShowCapWindow = "Setup" | "Main" | { Settings: { page: string | null } } | { Editor: { project_path: string } } | "RecordingsOverlay" | { WindowCaptureOccluder: { screen_id: number } } | { CaptureArea: { screen_id: number } } | { Camera: { ws_port: number } } | { InProgressRecording: { position: [number, number] | null } } | "Upgrade" | "SignIn" | "ModeSelect"
+export type ShowCapWindow = "Setup" | "Main" | { Settings: { page: string | null } } | { Editor: { project_path: string } } | "RecordingsOverlay" | { WindowCaptureOccluder: { screen_id: number } } | { CaptureArea: { screen_id: number } } | { Camera: { ws_port: number } } | { InProgressRecording: { position: [number, number] | null } } | "Upgrade" | "ModeSelect"
 export type SingleSegment = { display: VideoMeta; camera?: VideoMeta | null; audio?: AudioMeta | null; cursor?: string | null }
+export type StereoMode = "stereo" | "monoL" | "monoR"
 export type StudioRecordingMeta = { segment: SingleSegment } | { inner: MultipleSegments }
 export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments: ZoomSegment[] }
 export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number }

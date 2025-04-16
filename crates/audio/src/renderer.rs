@@ -1,8 +1,14 @@
 use crate::AudioData;
 
+pub enum StereoMode {
+    Stereo,
+    MonoL,
+    MonoR,
+}
+
 // Renders a combination of audio tracks into a single stereo buffer
 pub fn render_audio(
-    tracks: &[(&AudioData, f32)],
+    tracks: &[(&AudioData, f32, StereoMode)],
     offset: usize,
     samples: usize,
     out_offset: usize,
@@ -37,9 +43,25 @@ pub fn render_audio(
             if track.0.channels() == 1 {
                 left += track.0.samples()[offset + i] * 0.707 * gain;
                 right += track.0.samples()[offset + i] * 0.707 * gain;
-            } else {
-                left += track.0.samples()[offset * 2 + i * 2] * gain;
-                right += track.0.samples()[offset * 2 + i * 2 + 1] * gain;
+            } else if track.0.channels() == 2 {
+                let base_idx = offset * 2 + i * 2;
+                let l_sample = track.0.samples()[base_idx];
+                let r_sample = track.0.samples()[base_idx + 1];
+
+                match track.2 {
+                    StereoMode::Stereo => {
+                        left += l_sample * gain;
+                        right += r_sample * gain;
+                    }
+                    StereoMode::MonoL => {
+                        left += l_sample * gain;
+                        right += l_sample * gain;
+                    }
+                    StereoMode::MonoR => {
+                        left += r_sample * gain;
+                        right += r_sample * gain;
+                    }
+                }
             }
         }
 

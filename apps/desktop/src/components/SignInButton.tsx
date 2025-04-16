@@ -2,18 +2,20 @@ import { Button } from "@cap/ui-solid";
 import { createMutation } from "@tanstack/solid-query";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Window } from "@tauri-apps/api/window";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import * as shell from "@tauri-apps/plugin-shell";
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ComponentProps } from "solid-js";
 import { authStore } from "~/store";
 import { identifyUser, trackEvent } from "~/utils/analytics";
 import { clientEnv } from "~/utils/env";
 import { commands } from "~/utils/tauri";
 import callbackTemplate from "./callback.template";
 
-export default function Page() {
+export function SignInButton(
+  props: Omit<ComponentProps<typeof Button>, "onClick">
+) {
   const signIn = createMutation(() => ({
     mutationFn: async (abort: AbortController) => {
       const platform = import.meta.env.DEV ? "web" : "desktop";
@@ -28,45 +30,27 @@ export default function Page() {
 
       await processAuthData(await session.complete());
 
-      await commands.showWindow("Main");
-
-      // Add a small delay to ensure window is ready
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
-      const mainWindow = await Window.getByLabel("main");
-      mainWindow?.setFocus();
-
-      getCurrentWindow().close();
+      getCurrentWindow().setFocus();
     },
   }));
 
   return (
-    <div class="flex flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] flex-1 bg-gray-100">
-      <div class="space-y-[0.375rem] flex-1">
-        <IconCapLogo class="size-[3rem]" />
-        <h1 class="text-[1rem] font-[700] text-black-transparent-80">
-          Sign in to Cap
-        </h1>
-        <p class="text-gray-400">Beautiful screen recordings, owned by you.</p>
-      </div>
-      {signIn.isPending ? (
-        <Button
-          variant="secondary"
-          onClick={() => {
-            signIn.variables.abort();
-            signIn.reset();
-          }}
-        >
-          Cancel sign in
-        </Button>
-      ) : (
-        <div class="flex flex-col gap-2">
-          <Button onClick={() => signIn.mutate(new AbortController())}>
-            Sign in with your browser
-          </Button>
-        </div>
-      )}
-    </div>
+    <Button
+      size="md"
+      class="flex flex-grow justify-center items-center"
+      {...props}
+      variant={signIn.isPending ? "secondary" : props.variant}
+      onClick={() => {
+        if (signIn.isPending) {
+          signIn.variables.abort();
+          signIn.reset();
+        } else {
+          signIn.mutate(new AbortController());
+        }
+      }}
+    >
+      {signIn.isPending ? "Cancel Sign In" : props.children ?? "Sign In"}
+    </Button>
   );
 }
 
