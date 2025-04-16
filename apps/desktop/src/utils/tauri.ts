@@ -53,8 +53,8 @@ async focusCapturesPanel() : Promise<void> {
 async getCurrentRecording() : Promise<JsonValue<CurrentRecording | null>> {
     return await TAURI_INVOKE("get_current_recording");
 },
-async exportVideo(path: string, progress: TAURI_CHANNEL<RenderProgress>, force: boolean, fps: number, resolutionBase: XY<number>) : Promise<string> {
-    return await TAURI_INVOKE("export_video", { path, progress, force, fps, resolutionBase });
+async exportVideo(path: string, progress: TAURI_CHANNEL<RenderProgress>, fps: number, resolutionBase: XY<number>) : Promise<string> {
+    return await TAURI_INVOKE("export_video", { path, progress, fps, resolutionBase });
 },
 async getExportEstimates(path: string, resolution: XY<number>, fps: number) : Promise<ExportEstimates> {
     return await TAURI_INVOKE("get_export_estimates", { path, resolution, fps });
@@ -303,7 +303,7 @@ export type SegmentRecordings = { display: Video; camera: Video | null; mic: Aud
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordings; path: string; meta: RecordingMeta }
 export type ShadowConfiguration = { size: number; opacity: number; blur: number }
 export type SharingMeta = { id: string; link: string }
-export type ShowCapWindow = "Setup" | "Main" | { Settings: { page: string | null } } | { Editor: { project_path: string } } | "RecordingsOverlay" | { WindowCaptureOccluder: { screen_id: number } } | { CaptureArea: { screen_id: number } } | { Camera: { ws_port: number } } | { InProgressRecording: { position: [number, number] | null } } | "Upgrade" | "SignIn" | "ModeSelect"
+export type ShowCapWindow = "Setup" | "Main" | { Settings: { page: string | null } } | { Editor: { project_path: string } } | "RecordingsOverlay" | { WindowCaptureOccluder: { screen_id: number } } | { CaptureArea: { screen_id: number } } | { Camera: { ws_port: number } } | { InProgressRecording: { position: [number, number] | null } } | "Upgrade" | "ModeSelect"
 export type SingleSegment = { display: VideoMeta; camera?: VideoMeta | null; audio?: AudioMeta | null; cursor?: string | null }
 export type StereoMode = "stereo" | "monoL" | "monoR"
 export type StudioRecordingMeta = { segment: SingleSegment } | { inner: MultipleSegments }

@@ -36,7 +36,6 @@ pub enum CapWindowId {
     Camera,
     InProgressRecording,
     Upgrade,
-    SignIn,
     ModeSelect,
 }
 
@@ -53,7 +52,6 @@ impl FromStr for CapWindowId {
             "in-progress-recording" => Self::InProgressRecording,
             "recordings-overlay" => Self::RecordingsOverlay,
             "upgrade" => Self::Upgrade,
-            "signin" => Self::SignIn,
             "mode-select" => Self::ModeSelect,
             s if s.starts_with("editor-") => Self::Editor {
                 id: s
@@ -86,7 +84,6 @@ impl std::fmt::Display for CapWindowId {
             Self::InProgressRecording => write!(f, "in-progress-recording"),
             Self::RecordingsOverlay => write!(f, "recordings-overlay"),
             Self::Upgrade => write!(f, "upgrade"),
-            Self::SignIn => write!(f, "signin"),
             Self::ModeSelect => write!(f, "mode-select"),
             Self::Editor { id } => write!(f, "editor-{id}"),
         }
@@ -106,7 +103,6 @@ impl CapWindowId {
             Self::CaptureArea => "Cap Capture Area".to_string(),
             Self::InProgressRecording => "Cap In Progress Recording".to_string(),
             Self::Editor { .. } => "Cap Editor".to_string(),
-            Self::SignIn => "Cap Sign In".to_string(),
             Self::ModeSelect => "Cap Mode Selection".to_string(),
             Self::Camera => "Cap Camera".to_string(),
             Self::RecordingsOverlay => "Cap Recordings Overlay".to_string(),
@@ -122,7 +118,6 @@ impl CapWindowId {
                 | Self::Editor { .. }
                 | Self::Settings
                 | Self::Upgrade
-                | Self::SignIn
                 | Self::ModeSelect
         )
     }
@@ -149,7 +144,6 @@ impl CapWindowId {
         Some(match self {
             Self::Setup => (600.0, 600.0),
             Self::Main => (300.0, 360.0),
-            Self::SignIn => (300.0, 360.0),
             Self::Editor { .. } => (1275.0, 800.0),
             Self::Settings => (600.0, 450.0),
             Self::Camera => (460.0, 920.0),
@@ -172,7 +166,6 @@ pub enum ShowCapWindow {
     Camera { ws_port: u16 },
     InProgressRecording { position: Option<(f64, f64)> },
     Upgrade,
-    SignIn,
     ModeSelect,
 }
 
@@ -239,13 +232,6 @@ impl ShowCapWindow {
                     Box::pin(Self::Setup.show(app)).await?
                 }
             }
-            Self::SignIn => self
-                .window_builder(app, "/signin")
-                .resizable(false)
-                .maximized(false)
-                .maximizable(false)
-                .center()
-                .build()?,
             Self::Settings { page } => self
                 .window_builder(
                     app,
@@ -568,7 +554,6 @@ impl ShowCapWindow {
             ShowCapWindow::Camera { .. } => CapWindowId::Camera,
             ShowCapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
             ShowCapWindow::Upgrade => CapWindowId::Upgrade,
-            ShowCapWindow::SignIn => CapWindowId::SignIn,
             ShowCapWindow::ModeSelect => CapWindowId::ModeSelect,
         }
     }

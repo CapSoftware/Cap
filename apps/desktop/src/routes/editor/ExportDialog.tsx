@@ -151,7 +151,6 @@ const ExportDialog = () => {
         const outputPath = await commands.exportVideo(
           path,
           progress,
-          true,
           settings.fps,
           {
             x: settings.resolution.width,
@@ -238,7 +237,6 @@ const ExportDialog = () => {
         const videoPath = await commands.exportVideo(
           path,
           progress,
-          true,
           settings.fps,
           {
             x: settings.resolution.width,
@@ -285,7 +283,6 @@ const ExportDialog = () => {
       // Check authentication first
       const existingAuth = await authStore.get();
       if (!existingAuth) {
-        await commands.showWindow("SignIn");
         throw new Error("You need to sign in to share recordings");
       }
 
@@ -360,7 +357,7 @@ const ExportDialog = () => {
             );
         };
 
-        await commands.exportVideo(path, progress, true, settings.fps, {
+        await commands.exportVideo(path, progress, settings.fps, {
           x: settings.resolution.width,
           y: settings.resolution.height,
         });
@@ -375,7 +372,6 @@ const ExportDialog = () => {
             });
 
         if (result === "NotAuthenticated") {
-          await commands.showWindow("SignIn");
           throw new Error("You need to sign in to share recordings");
         } else if (result === "PlanCheckFailed")
           throw new Error("Failed to verify your subscription status");

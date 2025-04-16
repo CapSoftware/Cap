@@ -35,7 +35,6 @@ function ShareButton() {
       // Check authentication first
       const existingAuth = await authStore.get();
       if (!existingAuth) {
-        await commands.showWindow("SignIn");
         throw new Error("You need to sign in to share recordings");
       }
 
@@ -97,7 +96,7 @@ function ShareButton() {
             );
         };
 
-        await commands.exportVideo(path, progress, true, selectedFps, {
+        await commands.exportVideo(path, progress, selectedFps, {
           x: selectedResolution.width,
           y: selectedResolution.height,
         });
@@ -112,7 +111,6 @@ function ShareButton() {
             });
 
         if (result === "NotAuthenticated") {
-          await commands.showWindow("SignIn");
           throw new Error("You need to sign in to share recordings");
         } else if (result === "PlanCheckFailed")
           throw new Error("Failed to verify your subscription status");

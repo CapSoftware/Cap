@@ -293,26 +293,34 @@ export default function () {
         <SystemAudio options={options.data} setOptions={setOptions} />
       )}
       <div class="flex items-center space-x-1 w-full">
-        <Button
-          disabled={toggleRecording.isPending}
-          variant={isRecording() ? "destructive" : "primary"}
-          size="md"
-          onClick={() => toggleRecording.mutate()}
-          class="flex flex-grow justify-center items-center"
-        >
-          {isRecording() ? (
-            "Stop Recording"
-          ) : (
-            <>
-              {options.data?.mode === "instant" ? (
-                <IconCapInstant class="w-[0.8rem] h-[0.8rem] mr-1.5" />
-              ) : (
-                <IconCapFilmCut class="w-[0.8rem] h-[0.8rem] mr-2 -mt-[1.5px]" />
-              )}
-              Start Recording
-            </>
-          )}
-        </Button>
+        {options.data?.mode === "instant" && !auth.data ? (
+          <SignInButton>
+            Sign In for{" "}
+            <IconCapInstant class="size-[0.8rem] ml-[0.14rem] mr-0.5" />
+            Instant Mode
+          </SignInButton>
+        ) : (
+          <Button
+            disabled={toggleRecording.isPending}
+            variant={isRecording() ? "destructive" : "primary"}
+            size="md"
+            onClick={() => toggleRecording.mutate()}
+            class="flex flex-grow justify-center items-center"
+          >
+            {isRecording() ? (
+              "Stop Recording"
+            ) : (
+              <>
+                {options.data?.mode === "instant" ? (
+                  <IconCapInstant class="size-[0.8rem] mr-1.5" />
+                ) : (
+                  <IconCapFilmCut class="size-[0.8rem] mr-2 -mt-[1.5px]" />
+                )}
+                Start Recording
+              </>
+            )}
+          </Button>
+        )}
         {/* <Button
           disabled={isRecording()}
           variant="secondary"
@@ -362,6 +370,7 @@ import { Transition } from "solid-transition-group";
 import { apiClient } from "~/utils/web-api";
 import { useWindowChrome } from "./Context";
 import { authStore, generalSettingsStore } from "~/store";
+import { SignInButton } from "~/components/SignInButton";
 
 let hasChecked = false;
 function createUpdateCheck() {
