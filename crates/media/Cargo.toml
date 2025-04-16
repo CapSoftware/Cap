@@ -5,6 +5,9 @@ description = "A modular multimedia processing library"
 edition = "2021"
 rust-version = "1.80"
 
+[lints]
+workspace = true
+
 [features]
 default = []
 debug-logging = [] # Feature flag to control debug logging
@@ -68,6 +71,3 @@ windows = { workspace = true, features = [
 	"Win32_Media_MediaFoundation",
 ] }
 windows-capture = { workspace = true }
-
-[lints]
-workspace = true
