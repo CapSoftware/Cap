@@ -24,8 +24,6 @@ export default function Settings(props: RouteSectionProps) {
     if (auth.data) {
       trackEvent("user_signed_out", { platform: "desktop" });
       authStore.set(undefined);
-    } else {
-      commands.showWindow("SignIn");
     }
   };
 

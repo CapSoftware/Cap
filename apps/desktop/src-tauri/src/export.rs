@@ -10,7 +10,6 @@ pub async fn export_video(
     app: AppHandle,
     path: PathBuf,
     progress: tauri::ipc::Channel<RenderProgress>,
-    force: bool,
     fps: u32,
     resolution_base: XY<u32>,
 ) -> Result<PathBuf, String> {
@@ -38,11 +37,6 @@ pub async fn export_video(
     let total_frames = editor_instance.get_total_frames(fps);
 
     let output_path = editor_instance.meta().output_path();
-
-    // If the file exists and we're not forcing a re-render, return it
-    if output_path.exists() && !force {
-        return Ok(output_path);
-    }
 
     progress
         .send(RenderProgress::EstimatedTotalFrames { total_frames })
