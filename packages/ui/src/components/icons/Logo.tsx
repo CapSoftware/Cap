@@ -14,7 +14,7 @@ export const Logo = ({
   const viewBoxDimensions = hideLogoName ? "0 0 40 40" : "0 0 120 40";
 
   return (
-    <div className="flex items-center space-x-1">
+    <div className="flex items-center">
       <svg
         viewBox={viewBoxDimensions}
         xmlns="http://www.w3.org/2000/svg"

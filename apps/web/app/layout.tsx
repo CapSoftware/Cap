@@ -96,7 +96,7 @@ export default async function RootLayout({
                 email={user?.email ?? ""}
               >
                 <Toaster />
-                <main className="overflow-hidden w-full">
+                <main className="overflow-x-hidden w-full">
                   <Navbar auth={user ? true : false} />
                   {children}
                   <Footer />

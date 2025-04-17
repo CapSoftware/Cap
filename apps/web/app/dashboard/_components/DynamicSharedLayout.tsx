@@ -31,7 +31,7 @@ export default function DynamicSharedLayout({
     <Context.Provider value={{ spaceData, activeSpace, user, isSubscribed }}>
       <div className="flex h-screen min-h-full dashboard-layout">
         <AdminDesktopNav />
-        <div className="overflow-auto flex-1 focus:outline-none">
+        <div className="flex-1 focus:outline-none">
           <AdminMobileNav />
           <main className="w-full min-h-screen">{children}</main>
         </div>

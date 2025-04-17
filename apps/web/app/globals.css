@@ -110,6 +110,71 @@ a.bg-primary:hover {
   animation: animatedyaxis 6s ease infinite forwards;
 }
 
+.TooltipContent[data-side="left"] {
+  animation: slideLeft 0.2s ease-out;
+}
+
+.TooltipContent[data-side="right"] {
+  animation: slideRight 0.2s ease-out;
+}
+
+.TooltipContent[data-side="top"] {
+  animation: slideUp 0.2s ease-out;
+}
+
+.TooltipContent[data-side="bottom"] {
+  animation: slideDown 0.2s ease-out;
+}
+
+.TooltipContent {
+	transform-origin: var(--radix-tooltip-content-transform-origin);
+}
+
+@keyframes slideRight {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    transform: translateX(0px);
+    opacity: 1;
+  }
+}
+
+@keyframes slideLeft {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  to {
+    transform: translateX(0px);
+    opacity: 1;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    transform: translateY(0px);
+    opacity: 1;
+  }
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    transform: translateY(0px);
+    opacity: 1;
+  }
+}
+
+
 .button-gradient-border::before {
   content: '';
   position: absolute;
