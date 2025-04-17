@@ -427,7 +427,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
             |capturer| match capturer.get_next_frame() {
                 Ok(Frame::Video(VideoFrame::BGRA(frame))) => {
                     if frame.height == 0 || frame.width == 0 {
-                        return Some(ControlFlow::Continue(()));
+                        return ControlFlow::Continue(());
                     }
 
                     let elapsed = frame.display_time.duration_since(start_time).unwrap();
@@ -446,17 +446,17 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
 
                     if src_data.len() < src_stride * height {
                         warn!("Frame data size mismatch.");
-                        return Some(ControlFlow::Continue(()));
+                        return ControlFlow::Continue(());
                     }
 
                     if src_stride < width_in_bytes {
                         warn!("Source stride is less than expected width in bytes.");
-                        return Some(ControlFlow::Continue(()));
+                        return ControlFlow::Continue(());
                     }
 
                     if buffer.data(0).len() < dst_stride * height {
                         warn!("Destination data size mismatch.");
-                        return Some(ControlFlow::Continue(()));
+                        return ControlFlow::Continue(());
                     }
 
                     {
@@ -477,10 +477,10 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
 
                     if let Err(_) = video_tx.send((buffer, elapsed.as_secs_f64())) {
                         error!("Pipeline is unreachable. Shutting down recording.");
-                        return Some(ControlFlow::Break(()));
+                        return ControlFlow::Break(());
                     }
 
-                    None
+                    ControlFlow::Continue(())
                 }
                 Ok(Frame::Audio(frame)) => {
                     if let Some(audio_tx) = &audio_tx {
@@ -491,12 +491,12 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                         ));
                         let _ = audio_tx.send((frame, elapsed.as_secs_f64()));
                     }
-                    None
+                    ControlFlow::Continue(())
                 }
                 Ok(_) => panic!("Unsupported video format"),
                 Err(error) => {
                     error!("Capture error: {error}");
-                    Some(ControlFlow::Break(()))
+                    ControlFlow::Break(())
                 }
             },
         )
@@ -507,7 +507,7 @@ fn inner<T: ScreenCaptureFormat>(
     source: &mut ScreenCaptureSource<T>,
     ready_signal: crate::pipeline::task::PipelineReadySignal,
     mut control_signal: crate::pipeline::control::PipelineControlSignal,
-    mut get_frame: impl FnMut(&mut Capturer) -> Option<ControlFlow<()>>,
+    mut get_frame: impl FnMut(&mut Capturer) -> ControlFlow<()>,
 ) {
     trace!("Preparing screen capture source thread...");
 
@@ -520,7 +520,7 @@ fn inner<T: ScreenCaptureFormat>(
         Ok(capturer) => capturer,
         Err(e) => {
             error!("Failed to build capturer: {e}");
-            let _ = ready_signal.send(Err(MediaError::Any("Failed to build capturer")));
+            let _ = ready_signal.send(Err(MediaError::Any("Failed to build capturer".into())));
             return;
         }
     };
@@ -552,13 +552,13 @@ fn inner<T: ScreenCaptureFormat>(
                 }
 
                 match get_frame(&mut capturer) {
-                    Some(ControlFlow::Break(_)) => {
+                    ControlFlow::Break(_) => {
+                        warn!("breaking from loop");
                         break;
                     }
-                    Some(ControlFlow::Continue(_)) => {
+                    ControlFlow::Continue(_) => {
                         continue;
                     }
-                    None => {}
                 }
             }
         }
@@ -631,21 +631,21 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                     match typ {
                         SCStreamOutputType::Screen => {
                             let Some(pixel_buffer) = sample_buffer.image_buf() else {
-                                return Some(ControlFlow::Continue(()));
+                                return ControlFlow::Continue(());
                             };
 
                             if pixel_buffer.height() == 0 || pixel_buffer.width() == 0 {
-                                return Some(ControlFlow::Continue(()));
+                                return ControlFlow::Continue(());
                             }
 
                             if let Err(_) = video_tx.send((sample_buffer, relative_time)) {
-                                eprintln!("Pipeline is unreachable. Shutting down recording.");
-                                return Some(ControlFlow::Continue(()));
+                                error!("Pipeline is unreachable. Shutting down recording.");
+                                return ControlFlow::Continue(());
                             }
                         }
                         SCStreamOutputType::Audio => {
                             let Some(audio_tx) = &audio_tx else {
-                                return Some(ControlFlow::Continue(()));
+                                return ControlFlow::Continue(());
                             };
 
                             let buf_list = sample_buffer.audio_buf_list::<2>().unwrap();
@@ -671,11 +671,11 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                         }
                     }
 
-                    None
+                    ControlFlow::Continue(())
                 }
                 Err(error) => {
                     eprintln!("Capture error: {error}");
-                    Some(ControlFlow::Break(()))
+                    ControlFlow::Break(())
                 }
             },
         )

@@ -61,7 +61,10 @@ impl AudioInputFeed {
         trace!("Initializing audio input feed with device");
         debug!(selected_input);
 
-        fail_err!("media::feeds::audio_input::init", MediaError::Any(""));
+        fail_err!(
+            "media::feeds::audio_input::init",
+            MediaError::Any("".into())
+        );
 
         let (device, config) = Self::list_devices()
             .swap_remove_entry(selected_input)
@@ -154,7 +157,7 @@ impl AudioInputFeed {
     pub async fn switch_input(&mut self, name: &str) -> Result<(), MediaError> {
         fail_err!(
             "media::feeds::audio_input::switch_input",
-            MediaError::Any("")
+            MediaError::Any("".into())
         );
 
         let (tx, rx) = flume::bounded(1);
