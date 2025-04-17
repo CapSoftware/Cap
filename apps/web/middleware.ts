@@ -4,6 +4,7 @@ import { db } from "@cap/database";
 import { spaces } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { serverEnv } from "@cap/env";
+import { getToken } from "next-auth/jwt";
 
 const mainDomains = [
   "cap.so",
@@ -20,8 +21,14 @@ export async function middleware(request: NextRequest) {
 
   if (!hostname) return NextResponse.next();
 
-  // Skip for main domains
   if (mainDomains.some((d) => hostname.includes(d))) {
+    const token = await getToken({ req: request });
+
+    if (token && path === "/") {
+      const redirectUrl = new URL("/dashboard/caps", request.url);
+      return NextResponse.redirect(redirectUrl);
+    }
+
     return NextResponse.next();
   }
 
