@@ -36,8 +36,7 @@ export interface ExportEstimates {
 }
 
 export function Header() {
-  const { editorInstance, history, setDialog, exportProgress } =
-    useEditorContext();
+  const { editorInstance, history, setDialog } = useEditorContext();
 
   let unlistenTitlebar: UnlistenFn | undefined;
   onMount(async () => {
