@@ -52,7 +52,10 @@ impl CameraFeed {
     pub async fn init(selected_camera: &str) -> Result<CameraFeed, MediaError> {
         trace!("Initializing camera feed for: {}", selected_camera);
 
-        fail_err!("media::feeds::camera::init", MediaError::Any("forced fail"));
+        fail_err!(
+            "media::feeds::camera::init",
+            MediaError::Any("forced fail".into())
+        );
 
         let camera_info = find_camera(selected_camera)?;
         let (control, control_receiver) = flume::bounded(1);
@@ -90,7 +93,7 @@ impl CameraFeed {
     pub async fn switch_cameras(&mut self, camera_name: &str) -> Result<(), MediaError> {
         fail_err!(
             "media::feeds::camera::switch_cameras",
-            MediaError::Any("forced fail")
+            MediaError::Any("forced fail".into())
         );
 
         let current_camera_name = self.camera_info.human_name();
@@ -105,7 +108,7 @@ impl CameraFeed {
             let (camera_info, video_info) = result_rx
                 .recv_async()
                 .await
-                .map_err(|_| MediaError::Any("Failed to prepare camera feed"))??;
+                .map_err(|_| MediaError::Any("Failed to prepare camera feed".into()))??;
 
             self.camera_info = camera_info;
             self.video_info = video_info;
@@ -193,7 +196,7 @@ async fn start_capturing(
     let video_info = ready_rx
         .recv_async()
         .await
-        .map_err(|_| MediaError::Any("Failed to prepare camera feed"))??;
+        .map_err(|_| MediaError::Any("Failed to prepare camera feed".into()))??;
 
     Ok(video_info)
     // Ok((video_info, join_handle))
