@@ -22,7 +22,10 @@ export async function middleware(request: NextRequest) {
   if (!hostname) return NextResponse.next();
 
   if (mainDomains.some((d) => hostname.includes(d))) {
-    const token = await getToken({ req: request });
+    const token = await getToken({
+      req: request,
+      secret: serverEnv.NEXTAUTH_SECRET,
+    });
 
     if (token && path === "/") {
       const redirectUrl = new URL("/dashboard/caps", request.url);
