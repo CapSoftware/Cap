@@ -16,8 +16,9 @@ const mainDomains = [
 ].filter(Boolean) as string[];
 
 export async function middleware(request: NextRequest) {
-  const hostname = request.headers.get("host");
-  const path = request.nextUrl.pathname;
+  const url = new URL(request.url);
+  const hostname = url.hostname;
+  const path = url.pathname;
 
   if (!hostname) return NextResponse.next();
 
