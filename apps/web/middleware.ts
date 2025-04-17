@@ -6,21 +6,34 @@ import { eq } from "drizzle-orm";
 import { serverEnv } from "@cap/env";
 import { getToken } from "next-auth/jwt";
 
+const mainDomains = [
+  "cap.so",
+  "cap.link",
+  "localhost",
+  serverEnv.VERCEL_URL,
+  serverEnv.VERCEL_BRANCH_URL,
+  serverEnv.VERCEL_PROJECT_PRODUCTION_URL,
+].filter(Boolean) as string[];
+
 export async function middleware(request: NextRequest) {
   const url = new URL(request.url);
   const hostname = url.hostname;
   const path = url.pathname;
 
-  if(path === "/") {
+  if (!hostname) return NextResponse.next();
+
+  if (mainDomains.some((d) => hostname.includes(d))) {
     const token = await getToken({
       req: request,
       secret: serverEnv.NEXTAUTH_SECRET,
     });
-  
-    if (token) {
+
+    if (token && path === "/") {
       const redirectUrl = new URL("/dashboard/caps", request.url);
       return NextResponse.redirect(redirectUrl);
     }
+
+    return NextResponse.next();
   }
 
   // We're on a custom domain at this point
