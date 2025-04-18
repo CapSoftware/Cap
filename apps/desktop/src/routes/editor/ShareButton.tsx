@@ -234,13 +234,7 @@ function ShareButton() {
       </Show>
       <Dialog.Root open={!uploadVideo.isIdle}>
         <DialogContent
-          title={
-            uploadState.type === "uploading"
-              ? "Creating Shareable Link"
-              : uploadState.type === "link-copied"
-              ? "Link Copied"
-              : "Exporting Recording"
-          }
+          title={"Reupload Recording"}
           confirm={<></>}
           close={<></>}
           class="text-gray-500 bg-gray-600 dark:text-gray-500"

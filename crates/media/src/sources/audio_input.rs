@@ -81,7 +81,9 @@ impl AudioInputSource {
             (elapsed.as_secs_f64() * AV_TIME_BASE_Q.den as f64) as i64,
         );
         if let Err(_) = self.tx.send((frame, timestamp)) {
-            return Err(MediaError::Any("Pipeline is unreachable! Stopping capture"));
+            return Err(MediaError::Any(
+                "Pipeline is unreachable! Stopping capture".into(),
+            ));
         }
 
         Ok(())

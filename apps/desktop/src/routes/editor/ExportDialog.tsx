@@ -14,6 +14,7 @@ import {
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 
+import { makePersisted } from "@solid-primitives/storage";
 import Tooltip from "~/components/Tooltip";
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
@@ -82,13 +83,16 @@ const ExportDialog = () => {
     editorInstance,
   } = useEditorContext();
 
-  const [settings, setSettings] = createStore({
-    format: "mp4",
-    fps: 30,
-    exportTo: "file" as ExportToOption,
-    resolution: RESOLUTION_OPTIONS[0],
-    compression: "social",
-  });
+  const [settings, setSettings] = makePersisted(
+    createStore({
+      format: "mp4",
+      fps: 30,
+      exportTo: "file" as ExportToOption,
+      resolution: { label: "720p", value: "720p", width: 1280, height: 720 },
+      compression: "social",
+    }),
+    { name: "export_settings" }
+  );
 
   const [copyPressed, setCopyPressed] = createSignal(false);
 
@@ -408,6 +412,8 @@ const ExportDialog = () => {
     },
   }));
 
+  console.log(settings.resolution.label);
+
   return (
     <>
       <Show
@@ -654,8 +660,9 @@ const ExportDialog = () => {
                       <Button
                         class={cx(
                           "flex-1",
-                          settings.resolution.value === option.value &&
-                            selectedStyle
+                          settings.resolution.value === option.value
+                            ? selectedStyle
+                            : ""
                         )}
                         variant="secondary"
                         onClick={() => setSettings("resolution", option)}
@@ -889,12 +896,41 @@ const UploadingSuccessContent = () => {
 };
 
 const UploadingCapContent = () => {
+  const { exportProgress, uploadState } = useEditorContext();
   return (
-    <div class="flex gap-2 justify-center items-center">
-      <IconLucideLoaderCircle class="animate-spin size-7" />
+    <div class="flex flex-col gap-4 justify-center items-center">
       <h1 class="text-lg font-medium text-center text-gray-500">
-        Uploading Cap
+        Uploading Cap...
       </h1>
+      <div class="w-full bg-gray-200 rounded-full h-2.5">
+        <div
+          class="bg-blue-300 h-2.5 rounded-full"
+          style={{
+            width: `${
+              uploadState.type === "uploading"
+                ? uploadState.progress
+                : uploadState.type === "rendering"
+                ? Math.min(
+                    ((exportProgress()?.renderedFrames ?? 0) /
+                      (exportProgress()?.totalFrames ?? 0)) *
+                      100,
+                    100
+                  )
+                : 0
+            }%`,
+          }}
+        />
+      </div>
+      <p class="text-xs">
+        {uploadState.type == "idle" || uploadState.type === "starting"
+          ? "Preparing to render..."
+          : uploadState.type === "rendering"
+          ? `Rendering video (${exportProgress()?.renderedFrames}/${
+              exportProgress()?.totalFrames
+            } frames)`
+          : uploadState.type === "uploading" &&
+            `Uploading - ${Math.floor(uploadState.progress)}%`}
+      </p>
     </div>
   );
 };

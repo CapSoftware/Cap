@@ -39,7 +39,9 @@ impl CameraSource {
                 .unwrap()
                 .as_secs_f64(),
         )) {
-            return Err(MediaError::Any("Pipeline is unreachable! Stopping capture"));
+            return Err(MediaError::Any(
+                "Pipeline is unreachable! Stopping capture".into(),
+            ));
         }
 
         Ok(())
