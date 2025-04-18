@@ -6,6 +6,7 @@ import {
   RadioGroup as KRadioGroup,
   RadioGroup,
 } from "@kobalte/core/radio-group";
+import { Select as KSelect } from "@kobalte/core/select";
 import { Tabs as KTabs } from "@kobalte/core/tabs";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { createWritableMemo } from "@solid-primitives/memo";
@@ -16,6 +17,7 @@ import { cx } from "cva";
 import {
   For,
   Show,
+  ValidComponent,
   batch,
   createEffect,
   createMemo,
@@ -27,10 +29,10 @@ import {
 } from "solid-js";
 import { produce } from "solid-js/store";
 import { Dynamic } from "solid-js/web";
-
 import { createElementBounds } from "@solid-primitives/bounds";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import toast from "solid-toast";
+
 import colorBg from "~/assets/illustrations/color.webp";
 import gradientBg from "~/assets/illustrations/gradient.webp";
 import imageBg from "~/assets/illustrations/image.webp";
@@ -39,6 +41,7 @@ import { generalSettingsStore } from "~/store";
 import {
   type BackgroundSource,
   type CursorAnimationStyle,
+  StereoMode,
   commands,
 } from "~/utils/tauri";
 import { BACKGROUND_THEMES, useEditorContext } from "./context";
@@ -53,9 +56,13 @@ import {
   ComingSoonTooltip,
   EditorButton,
   Field,
+  MenuItem,
+  MenuItemList,
+  PopperContent,
   Slider,
   Subfield,
   Toggle,
+  topSlideAnimateClasses,
 } from "./ui";
 
 const BACKGROUND_SOURCES = {
@@ -171,6 +178,12 @@ const WALLPAPER_NAMES = [
   "orange/8",
   "orange/9",
 ] as const;
+
+const STEREO_MODES = [
+  { name: "Stereo", value: "stereo" },
+  { name: "Mono L", value: "monoL" },
+  { name: "Mono R", value: "monoR" },
+] satisfies Array<{ name: string; value: StereoMode }>;
 
 export function ConfigSidebar() {
   const {
@@ -423,7 +436,14 @@ export function ConfigSidebar() {
             //   icon: IconCapMessageBubble,
             // },
             { id: "audio" as const, icon: IconCapAudioOn },
-            { id: "cursor" as const, icon: IconCapCursor },
+            {
+              id: "cursor" as const,
+              icon: IconCapCursor,
+              disabled: !(
+                editorInstance.meta.type === "multiple" &&
+                editorInstance.meta.segments[0].cursor
+              ),
+            },
             // { id: "hotkeys" as const, icon: IconCapHotkeys },
           ]}
         >
@@ -1388,90 +1408,185 @@ export function ConfigSidebar() {
           </Field>
         </KTabs.Content>
         <KTabs.Content value="audio" class="flex flex-col gap-6">
-          <Field name="Audio" icon={<IconCapAudioOn />}>
-            <div class="flex flex-col gap-3">
-              <Subfield name="Mute Audio">
+          <Field
+            name="Audio Controls"
+            icon={<IconLucideVolume2 class="size-4" />}
+          >
+            <Subfield name="Mute Audio">
+              <Toggle
+                checked={project.audio.mute}
+                onChange={(v) => setProject("audio", "mute", v)}
+              />
+            </Subfield>
+            {editorInstance.recordings.segments[0].mic?.channels === 2 && (
+              <Subfield name="Microphone Stereo Mode">
+                <KSelect<{ name: string; value: StereoMode }>
+                  options={STEREO_MODES}
+                  optionValue="value"
+                  optionTextValue="name"
+                  value={STEREO_MODES.find(
+                    (v) => v.value === project.audio.micStereoMode
+                  )}
+                  onChange={(v) => {
+                    if (v) setProject("audio", "micStereoMode", v.value);
+                  }}
+                  disallowEmptySelection
+                  itemComponent={(props) => (
+                    <MenuItem<typeof KSelect.Item>
+                      as={KSelect.Item}
+                      item={props.item}
+                    >
+                      <KSelect.ItemLabel class="flex-1">
+                        {props.item.rawValue.name}
+                      </KSelect.ItemLabel>
+                    </MenuItem>
+                  )}
+                >
+                  <KSelect.Trigger class="flex flex-row gap-2 items-center px-2 w-full h-8 bg-gray-200 rounded-lg transition-colors disabled:text-gray-400">
+                    <KSelect.Value<{
+                      name: string;
+                      value: StereoMode;
+                    }> class="flex-1 text-sm text-left truncate text-[--gray-500] font-normal">
+                      {(state) => <span>{state.selectedOption().name}</span>}
+                    </KSelect.Value>
+                    <KSelect.Icon<ValidComponent>
+                      as={(props) => (
+                        <IconCapChevronDown
+                          {...props}
+                          class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]"
+                        />
+                      )}
+                    />
+                  </KSelect.Trigger>
+                  <KSelect.Portal>
+                    <PopperContent<typeof KSelect.Content>
+                      as={KSelect.Content}
+                      class={cx(topSlideAnimateClasses, "z-50")}
+                    >
+                      <MenuItemList<typeof KSelect.Listbox>
+                        class="overflow-y-auto max-h-32"
+                        as={KSelect.Listbox}
+                      />
+                    </PopperContent>
+                  </KSelect.Portal>
+                </KSelect>
+              </Subfield>
+            )}
+
+            {/* <Subfield name="Mute Audio">
                 <Toggle
                   checked={project.audio.mute}
                   onChange={(v) => setProject("audio", "mute", v)}
                 />
-              </Subfield>
-              {/* <ComingSoonTooltip>
+              </Subfield> */}
+
+            {/* <ComingSoonTooltip>
                 <Subfield name="Improve Mic Quality">
                   <Toggle disabled />
                 </Subfield>
               </ComingSoonTooltip> */}
-            </div>
           </Field>
+          <Field
+            name="Microphone Volume"
+            icon={<IconCapMicrophone class="size-4" />}
+          >
+            <Slider
+              disabled={project.audio.mute}
+              value={[project.audio.micVolumeDb ?? 0]}
+              onChange={(v) => setProject("audio", "micVolumeDb", v[0])}
+              minValue={-30}
+              maxValue={10}
+              step={0.1}
+              formatTooltip={(v) =>
+                v <= -30 ? "Muted" : `${v > 0 ? "+" : ""}${v.toFixed(1)} dB`
+              }
+            />
+          </Field>
+          {editorInstance.meta.hasSystemAudio && (
+            <Field
+              name="System Audio Volume"
+              icon={<IconLucideMonitor class="size-4" />}
+            >
+              <Slider
+                disabled={project.audio.mute}
+                value={[project.audio.systemVolumeDb ?? 0]}
+                onChange={(v) => setProject("audio", "systemVolumeDb", v[0])}
+                minValue={-30}
+                maxValue={10}
+                step={0.1}
+                formatTooltip={(v) =>
+                  v <= -30 ? "Muted" : `${v > 0 ? "+" : ""}${v.toFixed(1)} dB`
+                }
+              />
+            </Field>
+          )}
         </KTabs.Content>
         <KTabs.Content value="cursor" class="flex flex-col gap-6">
-          {window.FLAGS.recordMouseState === true ? (
-            <>
-              <Field name="Cursor" icon={<IconCapCursor />}>
-                <Subfield name="Hide cursor when not moving">
-                  <Toggle
-                    checked={project.cursor.hideWhenIdle}
-                    onChange={(v) => setProject("cursor", "hideWhenIdle", v)}
+          <Field name="Cursor" icon={<IconCapCursor />}>
+            <Subfield name="Hide cursor when not moving">
+              <Toggle
+                checked={project.cursor.hideWhenIdle}
+                onChange={(v) => setProject("cursor", "hideWhenIdle", v)}
+              />
+            </Subfield>
+          </Field>
+          <Field name="Size" icon={<IconCapEnlarge />}>
+            <Slider
+              value={[project.cursor.size]}
+              onChange={(v) => setProject("cursor", "size", v[0])}
+              minValue={20}
+              maxValue={300}
+              step={1}
+            />
+          </Field>
+          <KCollapsible open={!project.cursor.raw}>
+            <Field
+              name="Smooth Movement"
+              icon={<IconHugeiconsEaseCurveControlPoints />}
+              value={
+                <Toggle
+                  checked={!project.cursor.raw}
+                  onChange={(value) => {
+                    setProject("cursor", "raw", !value);
+                  }}
+                />
+              }
+            />
+            <KCollapsible.Content class="overflow-hidden border-b border-gray-200 opacity-0 transition-opacity animate-collapsible-up ui-expanded:animate-collapsible-down ui-expanded:opacity-100">
+              {/* if Content has padding or margin the animation doesn't look as good */}
+              <div class="flex flex-col gap-4 pt-4 pb-6">
+                <Field name="Tension">
+                  <Slider
+                    value={[project.cursor.tension]}
+                    onChange={(v) => setProject("cursor", "tension", v[0])}
+                    minValue={1}
+                    maxValue={500}
+                    step={1}
                   />
-                </Subfield>
-              </Field>
-              <Field name="Size" icon={<IconCapEnlarge />}>
-                <Slider
-                  value={[project.cursor.size]}
-                  onChange={(v) => setProject("cursor", "size", v[0])}
-                  minValue={20}
-                  maxValue={300}
-                  step={1}
-                />
-              </Field>
-              <KCollapsible open={!project.cursor.raw}>
-                <Field
-                  name="Smooth Movement"
-                  icon={<IconHugeiconsEaseCurveControlPoints />}
-                  value={
-                    <Toggle
-                      checked={!project.cursor.raw}
-                      onChange={(value) => {
-                        setProject("cursor", "raw", !value);
-                      }}
-                    />
-                  }
-                />
-                <KCollapsible.Content class="overflow-hidden border-b border-gray-200 opacity-0 transition-opacity animate-collapsible-up ui-expanded:animate-collapsible-down ui-expanded:opacity-100">
-                  {/* if Content has padding or margin the animation doesn't look as good */}
-                  <div class="flex flex-col gap-4 pt-4 pb-6">
-                    <Field name="Tension">
-                      <Slider
-                        value={[project.cursor.tension]}
-                        onChange={(v) => setProject("cursor", "tension", v[0])}
-                        minValue={1}
-                        maxValue={500}
-                        step={1}
-                      />
-                    </Field>
-                    <Field name="Friction">
-                      <Slider
-                        value={[project.cursor.friction]}
-                        onChange={(v) => setProject("cursor", "friction", v[0])}
-                        minValue={0}
-                        maxValue={50}
-                        step={0.1}
-                      />
-                    </Field>
-                    <Field name="Mass">
-                      <Slider
-                        value={[project.cursor.mass]}
-                        onChange={(v) => setProject("cursor", "mass", v[0])}
-                        minValue={0.1}
-                        maxValue={10}
-                        step={0.01}
-                      />
-                    </Field>
-                  </div>
-                </KCollapsible.Content>
-              </KCollapsible>
+                </Field>
+                <Field name="Friction">
+                  <Slider
+                    value={[project.cursor.friction]}
+                    onChange={(v) => setProject("cursor", "friction", v[0])}
+                    minValue={0}
+                    maxValue={50}
+                    step={0.1}
+                  />
+                </Field>
+                <Field name="Mass">
+                  <Slider
+                    value={[project.cursor.mass]}
+                    onChange={(v) => setProject("cursor", "mass", v[0])}
+                    minValue={0.1}
+                    maxValue={10}
+                    step={0.01}
+                  />
+                </Field>
+              </div>
+            </KCollapsible.Content>
+          </KCollapsible>
 
-              {/* <Field name="Motion Blur">
+          {/* <Field name="Motion Blur">
                 <Slider
                   value={[project.cursor.motionBlur]}
                   onChange={(v) => setProject("cursor", "motionBlur", v[0])}
@@ -1480,7 +1595,7 @@ export function ConfigSidebar() {
                   step={0.001}
                 />
               </Field> */}
-              {/* <Field name="Animation Style" icon={<IconLucideRabbit />}>
+          {/* <Field name="Animation Style" icon={<IconLucideRabbit />}>
             <RadioGroup
               defaultValue="regular"
               value={project.cursor.animationStyle}
@@ -1525,13 +1640,6 @@ export function ConfigSidebar() {
               ))}
             </RadioGroup>
           </Field> */}
-            </>
-          ) : (
-            <div class="flex flex-col gap-2 justify-center items-center p-4 text-gray-400">
-              <IconCapCursor class="size-6" />
-              <span>Cursor settings coming soon</span>
-            </div>
-          )}
         </KTabs.Content>
         <KTabs.Content value="hotkeys">
           <Field name="Hotkeys" icon={<IconCapHotkeys />}>

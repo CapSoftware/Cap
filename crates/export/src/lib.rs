@@ -1,18 +1,19 @@
-use cap_editor::Segment;
+use cap_editor::{get_audio_segments, Segment};
 use cap_media::{
     data::{
         cast_bytes_to_f32_slice, cast_f32_slice_to_bytes, AudioInfo, RawVideoFormat, VideoInfo,
     },
     encoders::{H264Encoder, MP4Input, OpusEncoder},
-    feeds::{AudioRenderer, AudioTrack},
+    feeds::{AudioRenderer, AudioSegment, AudioSegmentTrack},
     MediaError,
 };
 use cap_project::{
-    ProjectConfiguration, RecordingMeta, RecordingMetaInner, StudioRecordingMeta, XY,
+    AudioConfiguration, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
+    StudioRecordingMeta, XY,
 };
 use cap_rendering::{
-    ProjectUniforms, RecordingSegmentDecoders, RenderSegment, RenderVideoConstants, RenderedFrame,
-    SegmentVideoPaths,
+    ProjectRecordings, ProjectUniforms, RecordingSegmentDecoders, RenderSegment,
+    RenderVideoConstants, RenderedFrame, SegmentVideoPaths,
 };
 use futures::FutureExt;
 use image::{ImageBuffer, Rgba};
@@ -45,7 +46,7 @@ pub enum ExportError {
 
 pub struct Exporter<TOnProgress> {
     render_segments: Vec<RenderSegment>,
-    audio_segments: Vec<AudioTrack>,
+    audio_segments: Vec<AudioSegment>,
     output_size: (u32, u32),
     output_path: PathBuf,
     project: ProjectConfiguration,
@@ -55,11 +56,12 @@ pub struct Exporter<TOnProgress> {
     render_constants: Arc<RenderVideoConstants>,
     fps: u32,
     resolution_base: XY<u32>,
+    recordings: Arc<ProjectRecordings>,
 }
 
 impl<TOnProgress> Exporter<TOnProgress>
 where
-    TOnProgress: Fn(u32) + Send + 'static,
+    TOnProgress: FnMut(u32) + Send + 'static,
 {
     pub async fn new(
         project: ProjectConfiguration,
@@ -71,6 +73,7 @@ where
         segments: &[Segment],
         fps: u32,
         resolution_base: XY<u32>,
+        recordings: Arc<ProjectRecordings>,
     ) -> Result<Self, ExportError> {
         let RecordingMetaInner::Studio(meta) = &recording_meta.inner else {
             return Err(ExportError::Other(
@@ -85,7 +88,6 @@ where
             ProjectUniforms::get_output_size(&render_constants.options, &project, resolution_base);
 
         let mut render_segments = vec![];
-        let mut audio_segments = vec![];
 
         for (i, s) in segments.iter().enumerate() {
             let segment_paths = match &meta {
@@ -95,7 +97,7 @@ where
                         camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                     }
                 }
-                cap_project::StudioRecordingMeta::MultipleSegments { inner } => {
+                cap_project::StudioRecordingMeta::MultipleSegments { inner, .. } => {
                     let s = &inner.segments[i];
 
                     SegmentVideoPaths {
@@ -106,16 +108,10 @@ where
             };
             render_segments.push(RenderSegment {
                 cursor: s.cursor.clone(),
-                decoders: RecordingSegmentDecoders::new(&recording_meta, meta, segment_paths)
+                decoders: RecordingSegmentDecoders::new(&recording_meta, meta, segment_paths, i)
                     .await
                     .map_err(ExportError::Other)?,
             });
-            audio_segments.push(
-                [s.audio.clone(), s.system_audio.clone()]
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>(),
-            );
         }
 
         Ok(Self {
@@ -126,14 +122,15 @@ where
             recording_meta,
             render_constants,
             render_segments,
-            audio_segments,
+            audio_segments: get_audio_segments(segments),
             output_size,
             fps,
             resolution_base,
+            recordings: recordings.clone(),
         })
     }
 
-    pub async fn export_with_custom_muxer(self) -> Result<PathBuf, ExportError> {
+    pub async fn export_with_custom_muxer(mut self) -> Result<PathBuf, ExportError> {
         let meta = match &self.recording_meta.inner {
             RecordingMetaInner::Studio(meta) => meta,
             _ => panic!("Not a studio recording"),
@@ -234,7 +231,6 @@ where
                     frame_count += 1;
                 }
 
-                // Save the first frame as a screenshot and thumbnail
                 if let Some(frame) = first_frame {
                     let rgb_img = ImageBuffer::<image::Rgb<u8>, Vec<u8>>::from_raw(
                         frame.width,
@@ -281,6 +277,7 @@ where
             self.render_segments,
             self.fps,
             self.resolution_base,
+            &self.recordings,
         )
         .then(|f| async { f.map_err(Into::into) });
 

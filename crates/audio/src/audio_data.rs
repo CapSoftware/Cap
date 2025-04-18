@@ -1,6 +1,7 @@
 use ffmpeg::{
     codec as avcodec,
     format::{self as avformat},
+    ChannelLayout,
 };
 use std::path::Path;
 
@@ -31,6 +32,9 @@ impl AudioData {
                 .audio()
                 .map_err(|e| format!("Set Parameters / {e}"))?;
 
+            if decoder.channel_layout().is_empty() {
+                decoder.set_channel_layout(ChannelLayout::default(decoder.channels() as i32));
+            }
             decoder.set_packet_time_base(input_stream.time_base());
 
             let mut resampler = ffmpeg::software::resampler(
@@ -63,7 +67,7 @@ impl AudioData {
                 while let Ok(_) = decoder.receive_frame(&mut decoded_frame) {
                     let resample_delay = resampler
                         .run(&decoded_frame, &mut resampled_frame)
-                        .map_err(|e| format!("Run Resampler / {e}"))?;
+                        .map_err(|e| format!("Run Resampler / {e:?}"))?;
 
                     let slice = &resampled_frame.data(0)
                         [0..resampled_frame.samples() * 4 * resampled_frame.channels() as usize];

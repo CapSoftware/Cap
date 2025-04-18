@@ -107,8 +107,6 @@ export default function () {
             <For each={allMedia()}>
               {(media) => {
                 const [ref, setRef] = createSignal<HTMLElement | null>(null);
-                const normalizedPath = media.path.replace(/\\/g, "/");
-                const mediaId = normalizedPath.split("/").pop()?.split(".")[0]!;
 
                 const type = media.type ?? "recording";
                 const isRecording = type !== "screenshot";
@@ -122,7 +120,7 @@ export default function () {
                   if (!isRecording) return null;
 
                   const result = await commands
-                    .getVideoMetadata(media.path, null)
+                    .getVideoMetadata(media.path)
                     .catch((e) => {
                       console.error(`Failed to get metadata: ${e}`);
                     });
@@ -147,17 +145,9 @@ export default function () {
 
                 createFakeWindowBounds(ref, () => media.path);
 
-                const fileId =
-                  type === "recording"
-                    ? mediaId
-                    : normalizedPath
-                        .split("screenshots/")[1]
-                        .split("/")[0]
-                        .replace(".cap", "");
-
                 const recordingMeta = createQuery(() => ({
-                  queryKey: ["recordingMeta", fileId],
-                  queryFn: () => commands.getRecordingMeta(fileId, type),
+                  queryKey: ["recordingMeta", media.path],
+                  queryFn: () => commands.getRecordingMeta(media.path, type),
                 }));
 
                 return (
@@ -333,7 +323,7 @@ export default function () {
                                   })
                                 );
                                 commands.showWindow({
-                                  Editor: { project_id: mediaId },
+                                  Editor: { project_path: media.path },
                                 });
                               }}
                             >
@@ -554,24 +544,12 @@ function createRecordingMutations(
   media: MediaEntry,
   onEvent: (e: "upgradeRequired") => void
 ) {
-  const presets = createPresets();
-
-  const normalizedPath = media.path.replace(/\\/g, "/");
-  const mediaId = normalizedPath.split("/").pop()?.split(".")[0]!;
   const type = media.type ?? "recording";
   const isRecording = type !== "screenshot";
 
-  const fileId =
-    type === "recording"
-      ? mediaId
-      : normalizedPath
-          .split("screenshots/")[1]
-          .split("/")[0]
-          .replace(".cap", "");
-
   const recordingMeta = createQuery(() => ({
-    queryKey: ["recordingMeta", fileId],
-    queryFn: () => commands.getRecordingMeta(fileId, type),
+    queryKey: ["recordingMeta", media.path],
+    queryFn: () => commands.getRecordingMeta(media.path, type),
   }));
 
   const copy = createMutation(() => ({
@@ -587,9 +565,8 @@ function createRecordingMutations(
 
           // First try to get existing rendered video
           const outputPath = await commands.exportVideo(
-            mediaId,
+            media.path,
             progress,
-            false,
             FPS,
             OUTPUT_SIZE
           );
@@ -679,9 +656,8 @@ function createRecordingMutations(
 
         // Always force re-render when saving
         const outputPath = await commands.exportVideo(
-          mediaId,
+          media.path,
           progress,
-          true, // Force re-render
           FPS,
           OUTPUT_SIZE
         );
@@ -718,11 +694,10 @@ function createRecordingMutations(
       // Check authentication first
       const existingAuth = await authStore.get();
       if (!existingAuth) {
-        await commands.showWindow("SignIn");
         throw new Error("You need to sign in to share recordings");
       }
 
-      const metadata = await commands.getVideoMetadata(media.path, null);
+      const metadata = await commands.getVideoMetadata(media.path);
       const plan = await commands.checkUpgradedAndUpdate();
       const canShare = {
         allowed: plan || metadata.duration < 300,
@@ -769,13 +744,7 @@ function createRecordingMutations(
           );
 
           // First try to get existing rendered video
-          await commands.exportVideo(
-            mediaId,
-            progress,
-            false,
-            FPS,
-            OUTPUT_SIZE
-          );
+          await commands.exportVideo(media.path, progress, FPS, OUTPUT_SIZE);
           console.log("Using existing rendered video");
 
           // Show quick progress animation for existing video
@@ -795,7 +764,7 @@ function createRecordingMutations(
             state: { type: "uploading", progress: 0 },
           });
 
-          res = await commands.uploadExportedVideo(mediaId, {
+          res = await commands.uploadExportedVideo(media.path, {
             Initial: { pre_created_video: null },
           });
         } else {

@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
 import { serverEnv } from "@cap/env";
+import { PostHog } from "posthog-node";
 
 const relevantEvents = new Set([
   "checkout.session.completed",
@@ -192,6 +193,37 @@ export const POST = async (req: Request) => {
           .where(eq(users.id, dbUser.id));
 
         console.log("Successfully updated user in database");
+
+        // Add server-side PostHog tracking here:
+        try {
+          // Initialize server-side PostHog
+          const serverPostHog = new PostHog(
+            process.env.NEXT_PUBLIC_POSTHOG_KEY || "",
+            { host: process.env.NEXT_PUBLIC_POSTHOG_HOST || "" }
+          );
+
+          // Track subscription completed event
+          serverPostHog.capture({
+            distinctId: dbUser.id,
+            event: "subscription_completed",
+            properties: {
+              subscription_id: subscription.id,
+              subscription_status: subscription.status,
+              invite_quota: inviteQuota,
+              price_id: subscription.items.data[0]?.price.id,
+              quantity: inviteQuota,
+              platform: "web",
+              is_first_subscription: true,
+            },
+          });
+
+          // Shutdown the client
+          await serverPostHog.shutdown();
+          console.log("Successfully tracked subscription event in PostHog");
+        } catch (error) {
+          console.error("Error tracking subscription in PostHog:", error);
+          // Don't throw - we don't want to fail the webhook because of analytics
+        }
       }
 
       if (event.type === "customer.subscription.updated") {

@@ -144,8 +144,6 @@ impl OpusEncoder {
         output_stream.set_time_base(FFRational(1, output_config.rate()));
         output_stream.set_parameters(&encoder);
 
-        dbg!(tag, encoder.format());
-
         Ok(Self {
             tag,
             buffer: VecDeque::new(),

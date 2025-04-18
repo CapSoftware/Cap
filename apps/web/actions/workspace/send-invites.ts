@@ -1,4 +1,5 @@
-import { type NextRequest } from "next/server";
+'use server';
+
 import { getCurrentUser } from "@cap/database/auth/session";
 import { spaces, spaceInvites } from "@cap/database/schema";
 import { db } from "@cap/database";
@@ -7,35 +8,30 @@ import { nanoId } from "@cap/database/helpers";
 import { sendEmail } from "@cap/database/emails/config";
 import { WorkspaceInvite } from "@cap/database/emails/workspace-invite";
 import { clientEnv } from "@cap/env";
+import { revalidatePath } from "next/cache";
 
-export async function POST(request: NextRequest) {
-  console.log("POST request received for workspace invite");
+export async function sendWorkspaceInvites(
+  invitedEmails: string[],
+  spaceId: string
+) {
   const user = await getCurrentUser();
-  const { invitedEmails, spaceId } = await request.json();
-  console.log(`Received invitedEmails: ${invitedEmails}, spaceId: ${spaceId}`);
 
   if (!user) {
-    console.error("User not found");
-    return Response.json({ error: true }, { status: 401 });
+    throw new Error("Unauthorized");
   }
 
-  console.log(`User found: ${user.id}`);
-
   const space = await db.select().from(spaces).where(eq(spaces.id, spaceId));
-  console.log(`Space query result:`, space);
 
   if (!space || space.length === 0) {
-    console.error(`Space not found for spaceId: ${spaceId}`);
-    return Response.json({ error: true }, { status: 404 });
+    throw new Error("Workspace not found");
   }
 
   if (space[0]?.ownerId !== user.id) {
-    console.error(`User ${user.id} is not the owner of space ${spaceId}`);
-    return Response.json({ error: true }, { status: 403 });
+    throw new Error("Only the owner can send workspace invites");
   }
 
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  const validEmails = invitedEmails.filter((email: string) =>
+  const validEmails = invitedEmails.filter((email) =>
     emailRegex.test(email.trim())
   );
 
@@ -62,6 +58,7 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  console.log("Workspace invites created and emails sent successfully");
-  return Response.json(true, { status: 200 });
-}
+  revalidatePath('/dashboard/settings/workspace');
+  
+  return { success: true };
+} 

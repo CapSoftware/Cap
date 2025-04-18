@@ -28,7 +28,8 @@
       "@/components/*": ["components/*"],
       "@/pages/*": ["components/pages/*"],
       "@/utils/*": ["utils/*"],
-      "@/lib/*": ["lib/*"]
+      "@/lib/*": ["lib/*"],
+      "@/actions/*": ["actions/*"]
     }
   },
 

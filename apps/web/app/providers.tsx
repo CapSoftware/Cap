@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { identifyUser, initAnonymousUser } from "./utils/analytics";
+import { identifyUser, initAnonymousUser, trackEvent } from "./utils/analytics";
 import posthog from "posthog-js";
 import { PostHogProvider as PHProvider } from "posthog-js/react";
 import { clientEnv } from "@cap/env";
@@ -11,10 +11,26 @@ import { usePathname } from "next/navigation";
 
 export function PostHogProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
-    posthog.init(clientEnv.NEXT_PUBLIC_POSTHOG_KEY as string, {
-      api_host: clientEnv.NEXT_PUBLIC_POSTHOG_HOST as string,
-      capture_pageview: false,
-    });
+    const key = clientEnv.NEXT_PUBLIC_POSTHOG_KEY;
+    const host = clientEnv.NEXT_PUBLIC_POSTHOG_HOST;
+
+    if (key && host) {
+      try {
+        posthog.init(key, {
+          api_host: host,
+          capture_pageview: false,
+          loaded: (posthogInstance) => {
+            console.log("PostHog loaded and ready to capture events");
+          },
+        });
+      } catch (error) {
+        console.error("Failed to initialize PostHog:", error);
+      }
+    } else {
+      console.error(
+        "Missing PostHog environment variables. Events will not be tracked."
+      );
+    }
   }, []);
 
   return (
@@ -65,7 +81,17 @@ export function AnalyticsProvider({
     if (!userId) {
       initAnonymousUser();
     } else {
+      // Track if this is the first time a user is being identified
+      const isNewUser = !localStorage.getItem("user_identified");
+
       identifyUser(userId);
+
+      if (isNewUser) {
+        localStorage.setItem("user_identified", "true");
+        trackEvent("user_signed_up");
+      }
+
+      trackEvent("user_signed_in");
     }
   }, [userId]);
 

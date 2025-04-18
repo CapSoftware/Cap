@@ -1,9 +1,12 @@
 [package]
 name = "cap-desktop"
-version = "0.3.38"
+version = "0.3.41"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2021"
+
+[lints]
+workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -123,6 +126,3 @@ codegen-units = 1 # Compile crates one after another so the compiler can optimiz
 lto = true        # Enables link to optimizations
 opt-level = "s"   # Optimize for binary size
 debug = true
-
-[lints]
-workspace = true

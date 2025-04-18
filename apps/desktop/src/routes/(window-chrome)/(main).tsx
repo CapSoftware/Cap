@@ -24,7 +24,7 @@ import {
 import { createStore } from "solid-js/store";
 
 import Mode from "~/components/Mode";
-import { trackEvent } from "~/utils/analytics";
+import { identifyUser, trackEvent } from "~/utils/analytics";
 import {
   createCurrentRecordingQuery,
   createLicenseQuery,
@@ -42,14 +42,17 @@ import {
   events,
 } from "~/utils/tauri";
 
-const MAIN_WINDOW_SIZE = {
-  width: 300,
-  height: 290 + (window.FLAGS.systemAudioRecording ? 50 : 0),
-};
+function getWindowSize(systemAudioRecording: boolean) {
+  return {
+    width: 300,
+    height: 290 + (systemAudioRecording ? 50 : 0),
+  };
+}
 
 export default function () {
   const { options, setOptions } = createOptionsQuery();
   const currentRecording = createCurrentRecordingQuery();
+  const generalSettings = generalSettingsStore.createQuery();
 
   const isRecording = () => !!currentRecording.data;
 
@@ -90,6 +93,24 @@ export default function () {
 
   createUpdateCheck();
 
+  const auth = authStore.createQuery();
+
+  onMount(async () => {
+    if (auth.data?.user_id) {
+      const authSessionId = `${auth.data.user_id}-${auth.data.expires}`;
+      const trackedSession = localStorage.getItem("tracked_signin_session");
+
+      if (trackedSession !== authSessionId) {
+        console.log("New auth session detected, tracking sign in event");
+        identifyUser(auth.data.user_id);
+        trackEvent("user_signed_in", { platform: "desktop" });
+        localStorage.setItem("tracked_signin_session", authSessionId);
+      } else {
+        console.log("Auth session already tracked, skipping sign in event");
+      }
+    }
+  });
+
   let unlistenFn: UnlistenFn;
   onCleanup(() => unlistenFn?.());
   const [initialize] = createResource(async () => {
@@ -107,27 +128,26 @@ export default function () {
     // Enforce window size with multiple safeguards
     const currentWindow = getCurrentWindow();
 
-    // Set initial size
-    await currentWindow.setSize(
-      new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height)
-    );
-
     // Check size when app regains focus
     const unlistenFocus = await currentWindow.onFocusChanged(
       ({ payload: focused }) => {
         if (focused) {
-          currentWindow.setSize(
-            new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height)
+          const size = getWindowSize(
+            generalSettings.data?.systemAudioCapture ?? false
           );
+
+          currentWindow.setSize(new LogicalSize(size.width, size.height));
         }
       }
     );
 
     // Listen for resize events
     const unlistenResize = await currentWindow.onResized(() => {
-      currentWindow.setSize(
-        new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height)
+      const size = getWindowSize(
+        generalSettings.data?.systemAudioCapture ?? false
       );
+
+      currentWindow.setSize(new LogicalSize(size.width, size.height));
     });
 
     unlistenFn = () => {
@@ -149,9 +169,10 @@ export default function () {
           <Tooltip.Trigger>
             <button
               type="button"
-              onClick={() =>
-                commands.showWindow({ Settings: { page: "general" } })
-              }
+              onClick={async () => {
+                await commands.showWindow({ Settings: { page: "general" } });
+                getCurrentWindow().hide();
+              }}
               class="flex items-center justify-center w-5 h-5 -ml-[1.5px]"
             >
               <IconCapSettings class="text-gray-400 size-5 hover:text-gray-500" />
@@ -168,9 +189,10 @@ export default function () {
           <Tooltip.Trigger>
             <button
               type="button"
-              onClick={() =>
-                commands.showWindow({ Settings: { page: "recordings" } })
-              }
+              onClick={async () => {
+                await commands.showWindow({ Settings: { page: "recordings" } });
+                getCurrentWindow().hide();
+              }}
               class="flex justify-center items-center w-5 h-5"
             >
               <IconLucideSquarePlay class="text-gray-400 size-5 hover:text-gray-500" />
@@ -215,7 +237,12 @@ export default function () {
     ),
   });
 
-  const auth = authStore.createQuery();
+  createEffect(() => {
+    const size = getWindowSize(
+      generalSettings.data?.systemAudioCapture ?? false
+    );
+    getCurrentWindow().setSize(new LogicalSize(size.width, size.height));
+  });
 
   return (
     <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-[--gray-50] h-full text-[--text-primary]">
@@ -262,30 +289,38 @@ export default function () {
       <TargetSelects options={options.data} setOptions={setOptions} />
       <CameraSelect options={options.data} setOptions={setOptions} />
       <MicrophoneSelect options={options.data} setOptions={setOptions} />
-      {window.FLAGS.systemAudioRecording && (
+      {generalSettings.data?.systemAudioCapture && (
         <SystemAudio options={options.data} setOptions={setOptions} />
       )}
       <div class="flex items-center space-x-1 w-full">
-        <Button
-          disabled={toggleRecording.isPending}
-          variant={isRecording() ? "destructive" : "primary"}
-          size="md"
-          onClick={() => toggleRecording.mutate()}
-          class="flex flex-grow justify-center items-center"
-        >
-          {isRecording() ? (
-            "Stop Recording"
-          ) : (
-            <>
-              {options.data?.mode === "instant" ? (
-                <IconCapInstant class="w-[0.8rem] h-[0.8rem] mr-1.5" />
-              ) : (
-                <IconCapFilmCut class="w-[0.8rem] h-[0.8rem] mr-2 -mt-[1.5px]" />
-              )}
-              Start Recording
-            </>
-          )}
-        </Button>
+        {options.data?.mode === "instant" && !auth.data ? (
+          <SignInButton>
+            Sign In for{" "}
+            <IconCapInstant class="size-[0.8rem] ml-[0.14rem] mr-0.5" />
+            Instant Mode
+          </SignInButton>
+        ) : (
+          <Button
+            disabled={toggleRecording.isPending}
+            variant={isRecording() ? "destructive" : "primary"}
+            size="md"
+            onClick={() => toggleRecording.mutate()}
+            class="flex flex-grow justify-center items-center"
+          >
+            {isRecording() ? (
+              "Stop Recording"
+            ) : (
+              <>
+                {options.data?.mode === "instant" ? (
+                  <IconCapInstant class="size-[0.8rem] mr-1.5" />
+                ) : (
+                  <IconCapFilmCut class="size-[0.8rem] mr-2 -mt-[1.5px]" />
+                )}
+                Start Recording
+              </>
+            )}
+          </Button>
+        )}
         {/* <Button
           disabled={isRecording()}
           variant="secondary"
@@ -334,7 +369,8 @@ import { Transition } from "solid-transition-group";
 
 import { apiClient } from "~/utils/web-api";
 import { useWindowChrome } from "./Context";
-import { authStore } from "~/store";
+import { authStore, generalSettingsStore } from "~/store";
+import { SignInButton } from "~/components/SignInButton";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -1058,6 +1094,7 @@ function ChangelogButton() {
 
   const handleChangelogClick = () => {
     commands.showWindow({ Settings: { page: "changelog" } });
+    getCurrentWindow().hide();
     const version = currentVersion();
     if (version) {
       setChangelogState({

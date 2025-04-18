@@ -42,13 +42,8 @@ export function Subfield(
   props: ParentProps<{ name: string; class?: string; required?: boolean }>
 ) {
   return (
-    <div
-      class={cx(
-        "flex flex-row font-medium justify-between items-center text-gray-500",
-        props.class
-      )}
-    >
-      <span>
+    <div class={cx("flex flex-row justify-between items-center", props.class)}>
+      <span class="font-medium text-gray-500">
         {props.name}
         {props.required && (
           <span class="ml-[2px] text-xs text-blue-500">*</span>
@@ -90,7 +85,7 @@ export function Slider(
     <KSlider
       {...props}
       class={cx(
-        "relative px-1 h-4 flex flex-row justify-stretch items-center",
+        "relative px-1 h-8 flex flex-row justify-stretch items-center",
         props.class
       )}
       onChange={(v) => {
@@ -104,25 +99,18 @@ export function Slider(
       }}
     >
       <KSlider.Track
-        class="h-[0.3rem] transition-[height] relative mx-1 bg-gray-200 rounded-full w-full"
+        class="h-[0.3rem] cursor-pointer transition-[height] relative mx-1 bg-gray-200 rounded-full w-full before:content-[''] before:absolute before:inset-0 before:-top-3 before:-bottom-3"
         onPointerDown={() => {
           setDragging(true);
-          console.log("set dragging true");
           createRoot((dispose) => {
             createEventListener(window, "mouseup", () => {
               setDragging(false);
-              console.log("set dragging false");
               dispose();
             });
           });
         }}
       >
-        <KSlider.Fill
-          onPointerDown={() => {
-            console.log("MOUSE DOWN FILL");
-          }}
-          class="absolute -ml-2 h-full bg-blue-300 rounded-full ui-disabled:bg-gray-300"
-        />
+        <KSlider.Fill class="absolute -ml-2 h-full bg-blue-300 rounded-full ui-disabled:bg-gray-300" />
         <Tooltip
           open={dragging() ? true : undefined}
           getAnchorRect={() => {
@@ -147,14 +135,12 @@ export function Slider(
             ref={setThumbRef}
             onPointerDown={() => {
               setDragging(true);
-              console.log("set dragging true");
             }}
             onPointerUp={() => {
               setDragging(false);
-              console.log("set dragging false");
             }}
             class={cx(
-              "bg-solid-white shadow-xl border border-gray-300 rounded-full outline-none size-4 -top-[6.3px] ui-disabled:bg-gray-400"
+              "bg-solid-white shadow-xl border border-gray-300 rounded-full outline-none size-4 -top-[6.3px] ui-disabled:bg-gray-400 after:content-[''] after:absolute after:inset-0 after:-m-3 after:cursor-pointer"
             )}
           />
         </Tooltip>
@@ -447,6 +433,9 @@ export const topCenterAnimateClasses =
 
 export const topRightAnimateClasses =
   "ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95 origin-top-right";
+
+export const topSlideAnimateClasses =
+  "ui-expanded:animate-in ui-expanded:fade-in ui-expanded:slide-in-from-top-1 ui-closed:animate-out ui-closed:fade-out ui-closed:slide-out-to-top-1 origin-top-center";
 
 export function ComingSoonTooltip(
   props: ComponentProps<typeof KTooltip> & any

@@ -13,9 +13,11 @@ import { RESOLUTION_OPTIONS } from "./Header";
 import { Dialog, DialogContent } from "./ui";
 
 function ShareButton() {
-  const { videoId, metaUpdateStore } = useEditorContext();
+  const { editorInstance, metaUpdateStore } = useEditorContext();
+  const path = editorInstance.path;
+
   const [recordingMeta, metaActions] = createResource(() =>
-    commands.getRecordingMeta(videoId, "recording")
+    commands.getRecordingMeta(path, "recording")
   );
   const [copyPressed, setCopyPressed] = createSignal(false);
   const selectedFps = Number(localStorage.getItem("cap-export-fps")) || 30;
@@ -33,7 +35,6 @@ function ShareButton() {
       // Check authentication first
       const existingAuth = await authStore.get();
       if (!existingAuth) {
-        await commands.showWindow("SignIn");
         throw new Error("You need to sign in to share recordings");
       }
 
@@ -43,7 +44,7 @@ function ShareButton() {
         throw new Error("Recording metadata not available");
       }
 
-      const metadata = await commands.getVideoMetadata(videoId, null);
+      const metadata = await commands.getVideoMetadata(path);
       const plan = await commands.checkUpgradedAndUpdate();
       const canShare = {
         allowed: plan || metadata.duration < 300,
@@ -95,7 +96,7 @@ function ShareButton() {
             );
         };
 
-        await commands.exportVideo(videoId, progress, true, selectedFps, {
+        await commands.exportVideo(path, progress, selectedFps, {
           x: selectedResolution.width,
           y: selectedResolution.height,
         });
@@ -104,13 +105,12 @@ function ShareButton() {
 
         // Now proceed with upload
         const result = recordingMeta()?.sharing
-          ? await commands.uploadExportedVideo(videoId, "Reupload")
-          : await commands.uploadExportedVideo(videoId, {
+          ? await commands.uploadExportedVideo(path, "Reupload")
+          : await commands.uploadExportedVideo(path, {
               Initial: { pre_created_video: null },
             });
 
         if (result === "NotAuthenticated") {
-          await commands.showWindow("SignIn");
           throw new Error("You need to sign in to share recordings");
         } else if (result === "PlanCheckFailed")
           throw new Error("Failed to verify your subscription status");
@@ -165,9 +165,7 @@ function ShareButton() {
   // Watch for metadata updates
   createEffect(() => {
     const update = metaUpdateStore.getLastUpdate();
-    if (update && update.videoId === videoId) {
-      metaActions.refetch();
-    }
+    if (update) metaActions.refetch();
   });
 
   return (
@@ -236,13 +234,7 @@ function ShareButton() {
       </Show>
       <Dialog.Root open={!uploadVideo.isIdle}>
         <DialogContent
-          title={
-            uploadState.type === "uploading"
-              ? "Creating Shareable Link"
-              : uploadState.type === "link-copied"
-              ? "Link Copied"
-              : "Exporting Recording"
-          }
+          title={"Reupload Recording"}
           confirm={<></>}
           close={<></>}
           class="text-gray-500 bg-gray-600 dark:text-gray-500"

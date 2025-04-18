@@ -14,6 +14,7 @@ import type { Metadata, ResolvingMetadata } from "next";
 import { notFound } from "next/navigation";
 import { ImageViewer } from "./_components/ImageViewer";
 import { clientEnv } from "@cap/env";
+import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -252,27 +253,9 @@ export default async function ShareVideoPage(props: Props) {
     );
   }
 
-  console.log("[ShareVideoPage] Fetching individual files for video:", videoId);
-  // const individualFiles = await fetch(
-  //   `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/individual-files?videoId=${videoId}`,
-  //   {
-  //     method: "GET",
-  //     credentials: "include",
-  //     cache: "no-store",
-  //   }
-  // ).then((res) => res.json());
-
   console.log("[ShareVideoPage] Fetching analytics for video:", videoId);
-  const analyticsResponse = await fetch(
-    `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/analytics?videoId=${videoId}`,
-    {
-      method: "GET",
-      credentials: "include",
-      cache: "no-store",
-    }
-  );
+  const analyticsData = await getVideoAnalytics(videoId);
 
-  const analyticsData = await analyticsResponse.json();
   const initialAnalytics = {
     views: analyticsData.count || 0,
     comments: commentsQuery.filter((c) => c.type === "text").length,

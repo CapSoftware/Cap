@@ -44,33 +44,25 @@ import {
 } from "./ui";
 
 export function Editor() {
-  const [params] = useSearchParams<{ id: string }>();
-
   return (
-    <Show when={params.id} fallback="No video id available" keyed>
-      {(videoId) => (
-        <EditorInstanceContextProvider videoId={videoId}>
-          <Show
-            when={(() => {
-              const ctx = useEditorInstanceContext();
-              const editorInstance = ctx.editorInstance();
+    <EditorInstanceContextProvider>
+      <Show
+        when={(() => {
+          const ctx = useEditorInstanceContext();
+          const editorInstance = ctx.editorInstance();
 
-              if (!editorInstance) return;
+          if (!editorInstance) return;
 
-              return {
-                editorInstance,
-              };
-            })()}
-          >
-            {(values) => (
-              <EditorContextProvider {...values()}>
-                <Inner />
-              </EditorContextProvider>
-            )}
-          </Show>
-        </EditorInstanceContextProvider>
-      )}
-    </Show>
+          return { editorInstance };
+        })()}
+      >
+        {(values) => (
+          <EditorContextProvider {...values()}>
+            <Inner />
+          </EditorContextProvider>
+        )}
+      </Show>
+    </EditorInstanceContextProvider>
   );
 }
 

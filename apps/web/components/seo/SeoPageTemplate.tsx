@@ -4,6 +4,7 @@ import { Button } from "@cap/ui";
 import { SeoPageContent } from "@/components/seo/types";
 import { useEffect } from "react";
 import MuxPlayer from "@mux/mux-player-react";
+import { motion } from "framer-motion";
 
 const renderHTML = (content: string) => {
   const styledContent = content.replace(
@@ -12,6 +13,62 @@ const renderHTML = (content: string) => {
   );
 
   return <span dangerouslySetInnerHTML={{ __html: styledContent }} />;
+};
+
+// Left Blue Hue Component
+const LeftBlueHue = () => {
+  return (
+    <svg
+      className="absolute top-10 -left-24 z-0 opacity-20 pointer-events-none md:opacity-100"
+      width="1276"
+      height="690"
+      viewBox="0 0 1276 690"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <g filter="url(#blue-hue-filter)">
+        <ellipse
+          cx="592"
+          cy="339"
+          rx="584"
+          ry="251"
+          transform="rotate(180 592 339)"
+          fill="url(#blue-hue-gradient)"
+        />
+      </g>
+      <defs>
+        <filter
+          id="blue-hue-filter"
+          x="-92"
+          y="-12"
+          width="1368"
+          height="702"
+          filterUnits="userSpaceOnUse"
+          colorInterpolationFilters="sRGB"
+        >
+          <feFlood floodOpacity="0" result="BackgroundImageFix" />
+          <feBlend
+            mode="normal"
+            in="SourceGraphic"
+            in2="BackgroundImageFix"
+            result="shape"
+          />
+          <feGaussianBlur stdDeviation="50" result="blur-effect" />
+        </filter>
+        <linearGradient
+          id="blue-hue-gradient"
+          x1="1102.5"
+          y1="339"
+          x2="157.5"
+          y2="375.5"
+          gradientUnits="userSpaceOnUse"
+        >
+          <stop stopColor="#75A3FE" />
+          <stop offset="1" stopColor="white" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+    </svg>
+  );
 };
 
 export const SeoPageTemplate = ({
@@ -23,55 +80,8 @@ export const SeoPageTemplate = ({
 }) => {
   useEffect(() => {
     const animateClouds = () => {
-      const cloud1 = document.getElementById("cloud-1");
-      const cloud2 = document.getElementById("cloud-2");
-      const cloud3 = document.getElementById("cloud-3");
       const cloud4 = document.getElementById("cloud-4");
       const cloud5 = document.getElementById("cloud-5");
-
-      if (cloud1 && cloud2 && cloud3) {
-        cloud1.animate(
-          [
-            { transform: "translateX(0) translateY(0)" },
-            { transform: "translateX(-30px) translateY(10px)" },
-            { transform: "translateX(30px) translateY(-10px)" },
-            { transform: "translateX(0) translateY(0)" },
-          ],
-          {
-            duration: 20000,
-            iterations: Infinity,
-            easing: "ease-in-out",
-          }
-        );
-
-        cloud2.animate(
-          [
-            { transform: "translateX(0) translateY(0)" },
-            { transform: "translateX(20px) translateY(-15px)" },
-            { transform: "translateX(-20px) translateY(15px)" },
-            { transform: "translateX(0) translateY(0)" },
-          ],
-          {
-            duration: 25000,
-            iterations: Infinity,
-            easing: "ease-in-out",
-          }
-        );
-
-        cloud3.animate(
-          [
-            { transform: "translateX(0) translateY(0)" },
-            { transform: "translateX(15px) translateY(20px)" },
-            { transform: "translateX(-15px) translateY(-20px)" },
-            { transform: "translateX(0) translateY(0)" },
-          ],
-          {
-            duration: 30000,
-            iterations: Infinity,
-            easing: "ease-in-out",
-          }
-        );
-      }
 
       if (cloud4 && cloud5) {
         cloud4.animate(
@@ -109,68 +119,214 @@ export const SeoPageTemplate = ({
 
   return (
     <>
-      {/* Hero Section with Clouds */}
-      <div className="-mt-[80px] bg-gradient-to-b from-blue-400/30 via-blue-500/40 to-blue-600/30 min-h-screen md:min-h-[calc(100vh+20px)] relative flex items-center overflow-hidden">
-        <div className="w-full relative z-10 flex">
-          <div className="wrapper wrapper-sm mx-auto flex items-center">
-            <div className="mb-auto text-center">
-              <h1 className="text-[2.25rem] leading-[2.75rem] md:text-[3.5rem] md:leading-[4rem] font-bold relative z-10 mb-6 text-gray-800 drop-shadow-sm">
-                {content.title}
-              </h1>
-              <p className="text-black/70 sm:text-xl max-w-2xl mx-auto mb-10 leading-relaxed">
-                {content.description}
-              </p>
-              <div>
-                <div className="flex flex-col sm:flex-row items-center justify-center space-y-2 sm:space-y-0 sm:space-x-4">
-                  <Button
-                    variant="primary"
-                    href="/download"
-                    size="lg"
-                    className="shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all duration-300 px-8 py-3"
-                  >
-                    {content.cta.buttonText}
-                  </Button>
-                </div>
-              </div>
-            </div>
+      <div
+        className="relative overflow-hidden mt-[60px]"
+        style={{ height: "calc(100vh - 60px)" }}
+      >
+        <div className="relative z-10 px-5 w-full h-full flex flex-col justify-center">
+          <div className="mx-auto text-center wrapper wrapper-sm">
+            <h1 className="fade-in-down text-[2.25rem] leading-[2.75rem] md:text-[3.5rem] md:leading-[4rem] relative z-10 text-black mb-6">
+              {content.title}
+            </h1>
+            <p className="mx-auto mb-10 max-w-2xl text-md sm:text-xl text-zinc-500 fade-in-down animate-delay-1">
+              {content.description}
+            </p>
+          </div>
+          <div className="flex flex-col justify-center items-center space-y-2 fade-in-up animate-delay-2 sm:flex-row sm:space-y-0 sm:space-x-4">
+            <Button
+              variant="radialblue"
+              href="/download"
+              size="lg"
+              className="relative z-[20] w-full font-medium text-md sm:w-auto shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all duration-300"
+            >
+              {content.cta.buttonText}
+            </Button>
           </div>
         </div>
 
-        {/* Clouds */}
-        <div
-          id="cloud-1"
-          className="absolute top-0 -right-20 opacity-80 transition-transform duration-700 ease-in-out"
-        >
+        {/** Header BG */}
+        <div className="w-full mx-auto overflow-hidden h-[830px] absolute top-0 left-0 z-0">
+          <motion.div
+            animate={{
+              x: [0, "30vw"],
+              top: 340,
+              opacity: [0.7, 0.5],
+            }}
+            transition={{
+              duration: 6,
+              repeat: Infinity,
+              repeatType: "reverse",
+              ease: "linear",
+            }}
+            className="absolute opacity-70 top-[340px] -left-[200px] z-[9]
+            w-full max-w-[1800px] h-[100px] bg-gradient-to-l from-transparent via-white/90 to-white"
+            style={{
+              borderRadius: "100%",
+              mixBlendMode: "plus-lighter",
+              filter: "blur(50px)",
+            }}
+          />
+          <motion.div
+            initial={{
+              right: -200,
+              top: 150,
+              opacity: 0.25,
+            }}
+            animate={{
+              right: [-200, 400],
+              opacity: [0.25, 0.1, 0.25],
+            }}
+            transition={{
+              duration: 6,
+              repeat: Infinity,
+              repeatType: "reverse",
+              ease: "linear",
+            }}
+            className="absolute mix-blend-plus-lighter z-[9] w-full max-w-[800px] h-[200px]
+            blur-[60px] rounded-full bg-gradient-to-r from-transparent via-white to-white"
+          />
+
+          <LeftBlueHue />
+
+          {/** Clouds - Exactly matching HomePage */}
+          <motion.img
+            style={{
+              mixBlendMode: "plus-lighter",
+            }}
+            initial={{
+              right: 100,
+              top: 50,
+              rotate: 180,
+            }}
+            animate={{
+              x: "-100vw",
+            }}
+            transition={{
+              duration: 500,
+              repeat: Infinity,
+              repeatType: "reverse",
+              ease: "linear",
+            }}
+            className="absolute w-full max-w-[500px] z-[5] select-none"
+            src="/illustrations/bottomcloud.webp"
+            alt="bottomcloudthree"
+          />
+          <motion.img
+            style={{
+              mixBlendMode: "plus-lighter",
+            }}
+            animate={{
+              x: [0, "100vw"],
+            }}
+            transition={{
+              duration: 300,
+              repeat: Infinity,
+              repeatType: "reverse",
+            }}
+            className="absolute
+            top-[180px] w-full max-w-[280px] z-[4] right-[60px] md:right-[600px] select-none"
+            src="/illustrations/smallcloudthree.webp"
+            alt="smallcloudfour"
+          />
+          <motion.img
+            style={{
+              mixBlendMode: "screen",
+            }}
+            animate={{
+              x: [0, "100vw"],
+            }}
+            transition={{
+              duration: 100,
+              repeat: Infinity,
+              repeatType: "reverse",
+              ease: "linear",
+            }}
+            className="absolute top-[20px] left-[-60px] md:left-[-400px] select-none z-[5] pointer-events-none"
+            src="/illustrations/bottomcloud.webp"
+            alt="bottomcloudthree"
+          />
           <img
-            className="max-w-[60vw] md:max-w-[40vw] h-auto"
-            src="/illustrations/cloud-1.png"
-            alt="Cloud Decoration One"
+            className="absolute
+            top-[180px] w-full max-w-[400px] z-0 select-none right-[60px] opacity-30 pointer-events-none"
+            src="/illustrations/smallcloudthree.webp"
+            alt="smallcloudthree"
+          />
+          <motion.img
+            style={{
+              mixBlendMode: "screen",
+            }}
+            animate={{
+              x: [0, "-100vw"],
+            }}
+            transition={{
+              duration: 120,
+              repeat: Infinity,
+              repeatType: "reverse",
+              ease: "linear",
+            }}
+            className="absolute
+            bottom-[240px] w-full max-w-[430px] z-[1] right-[40px] select-none opacity-80 brightness-125 pointer-events-none"
+            src="/illustrations/smallcloudtwo.webp"
+            alt="smallcloudtwo"
+          />
+          <img
+            style={{
+              mixBlendMode: "screen",
+            }}
+            className="absolute
+            w-full max-w-[500px] top-[210px] right-[300px] z-[2] select-none brightness-125 pointer-events-none"
+            src="/illustrations/chipcloud.webp"
+            alt="chipcloudtwo"
+          />
+          <motion.img
+            style={{
+              mixBlendMode: "screen",
+            }}
+            initial={{
+              x: -200,
+              rotate: 180,
+            }}
+            animate={{
+              x: [-200, "100vw"],
+            }}
+            transition={{
+              duration: 200,
+              repeat: Infinity,
+              repeatType: "reverse",
+              ease: "linear",
+            }}
+            className="absolute
+            w-full max-w-[500px] bottom-[15px] select-none left-[-200px] lg:left-[30px] z-[10] pointer-events-none"
+            src="/illustrations/chipcloud.webp"
+            alt="chipcloudfour"
+          />
+          <img
+            className="absolute
+            w-full max-w-[500px] top-[160px] select-none mix-blend-screen left-[-200px] lg:left-[30px] z-[10] pointer-events-none"
+            src="/illustrations/chipcloud.webp"
+            alt="chipcloud"
+          />
+          <img
+            className="absolute bottom-[-200px] -left-[500px] select-none z-[5] pointer-events-none"
+            src="/illustrations/bottomcloud.webp"
+            alt="bottomcloud"
+          />
+          <img
+            className="absolute bottom-[-90px] right-[-400px] select-none z-[5] pointer-events-none"
+            src="/illustrations/bottomcloud.webp"
+            alt="bottomcloudtwo"
           />
         </div>
+
+        {/** Right Blue Hue */}
         <div
-          id="cloud-2"
-          className="absolute top-0 left-0 opacity-80 transition-transform duration-700 ease-in-out"
-        >
-          <img
-            className="max-w-[60vw] md:max-w-[40vw] h-auto"
-            src="/illustrations/cloud-2.png"
-            alt="Cloud Decoration Two"
-          />
-        </div>
-        <div
-          id="cloud-3"
-          className="absolute -bottom-20 left-0 opacity-80 transition-transform duration-700 ease-in-out"
-        >
-          <img
-            className="max-w-[60vw] md:max-w-[100vw] h-auto"
-            src="/illustrations/cloud-3.png"
-            alt="Cloud Decoration Three"
-          />
-        </div>
+          className="w-[868px] h-[502px] bg-gradient-to-l rounded-full blur-[100px]
+          absolute top-20 z-[0] right-0 from-[#A6D7FF] to-transparent"
+        />
       </div>
 
       {/* Main Content */}
-      <div className="wrapper py-24 bg-gradient-to-b from-white to-gray-50">
+      <div className="wrapper py-24 bg-gradient-to-b from-white to-gray-50 relative z-10">
         {/* Features Section */}
         <div className="mb-28">
           <div className="text-center max-w-[800px] mx-auto mb-16">
@@ -267,6 +423,86 @@ export const SeoPageTemplate = ({
           </div>
         )}
 
+        {/* Recording Modes Section */}
+        {content.recordingModes && (
+          <div className="mb-28">
+            <div className="text-center max-w-[800px] mx-auto mb-16">
+              <h2 className="text-4xl font-bold text-gray-800 mb-6 relative inline-block">
+                {content.recordingModes.title}
+                <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
+              </h2>
+              <p className="text-xl text-gray-600 leading-relaxed">
+                {renderHTML(content.recordingModes.description)}
+              </p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl mx-auto">
+              {content.recordingModes.modes.map((mode, index) => (
+                <div
+                  key={index}
+                  className="p-8 bg-blue-50/50 rounded-2xl shadow-md hover:shadow-xl transition-all duration-300 border border-blue-100/20 transform hover:-translate-y-1"
+                >
+                  <div className="bg-blue-500 w-12 h-12 flex items-center justify-center rounded-full mb-4">
+                    <span className="text-white text-xl font-bold">
+                      {index + 1}
+                    </span>
+                  </div>
+                  <h3 className="text-xl mb-4 text-blue-700 font-semibold">
+                    {mode.title}
+                  </h3>
+                  <p className="text-gray-600 leading-relaxed">
+                    {renderHTML(mode.description)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Comparison Table Section */}
+        {content.comparisonTable && (
+          <div className="mb-28">
+            <div className="text-center max-w-[800px] mx-auto mb-16">
+              <h2 className="text-4xl font-bold text-gray-800 mb-6 relative inline-block">
+                {content.comparisonTable.title}
+                <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
+              </h2>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full max-w-4xl mx-auto bg-white rounded-xl shadow-md">
+                <thead className="bg-blue-50">
+                  <tr>
+                    {content.comparisonTable.headers.map((header, index) => (
+                      <th
+                        key={index}
+                        className="py-4 px-6 text-left text-gray-700 font-semibold border-b border-gray-200"
+                      >
+                        {header}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {content.comparisonTable.rows.map((row, rowIndex) => (
+                    <tr
+                      key={rowIndex}
+                      className={rowIndex % 2 === 0 ? "bg-white" : "bg-gray-50"}
+                    >
+                      {row.map((cell, cellIndex) => (
+                        <td
+                          key={cellIndex}
+                          className="py-4 px-6 border-b border-gray-200"
+                        >
+                          {cell}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {/* Use Cases Section */}
         <div className="mb-28">
           <div className="text-center max-w-[800px] mx-auto mb-16">
@@ -299,6 +535,66 @@ export const SeoPageTemplate = ({
             ))}
           </div>
         </div>
+
+        {/* Testimonials Section */}
+        {content.testimonials && (
+          <div className="mb-28">
+            <div className="text-center max-w-[800px] mx-auto mb-16">
+              <h2 className="text-4xl font-bold text-gray-800 mb-6 relative inline-block">
+                {content.testimonials.title}
+                <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
+              </h2>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+              {content.testimonials.items.map((testimonial, index) => (
+                <div
+                  key={index}
+                  className="p-8 bg-white rounded-2xl shadow-md hover:shadow-xl transition-all duration-300 border border-gray-100"
+                >
+                  <div className="mb-4 text-blue-500">
+                    <svg
+                      className="w-10 h-10"
+                      fill="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path d="M3.691 6.292C5.094 4.771 7.217 4 10.066 4h.141c.297 0 .54.24.54.531v5.297c0 .297-.243.531-.54.531h-3.908c-.297 0-.54.244-.54.543v3.2c0 1.793 1.464 3.2 3.277 3.2h.544c.296 0 .54.234.54.531v5.297c0 .297-.244.531-.54.531h-.544c-5.847 0-10-4.153-10-10v-6.4c0-.936.174-1.791.594-2.569zm16 0C21.094 4.771 23.217 4 26.066 4h.141c.297 0 .54.24.54.531v5.297c0 .297-.243.531-.54.531h-3.908c-.297 0-.54.244-.54.543v3.2c0 1.793 1.464 3.2 3.277 3.2h.544c.296 0 .54.234.54.531v5.297c0 .297-.244.531-.54.531h-.544c-5.847 0-10-4.153-10-10v-6.4c0-.936.174-1.791.594-2.569z"></path>
+                    </svg>
+                  </div>
+                  <p className="text-gray-700 italic mb-4 leading-relaxed">
+                    "{testimonial.quote}"
+                  </p>
+                  <p className="text-gray-600 font-semibold">
+                    {testimonial.author}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Migration Guide Section */}
+        {content.migrationGuide && (
+          <div className="mb-28">
+            <div className="text-center max-w-[800px] mx-auto mb-16">
+              <h2 className="text-4xl font-bold text-gray-800 mb-6 relative inline-block">
+                {content.migrationGuide.title}
+                <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
+              </h2>
+            </div>
+            <div className="max-w-3xl mx-auto bg-white p-8 rounded-2xl shadow-md">
+              <ol className="list-none">
+                {content.migrationGuide.steps.map((step, index) => (
+                  <li key={index} className="mb-6 flex items-start">
+                    <div className="bg-blue-500 text-white rounded-full w-8 h-8 flex items-center justify-center mr-4 flex-shrink-0 mt-1">
+                      {index + 1}
+                    </div>
+                    <p className="text-gray-700 mt-1">{step}</p>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          </div>
+        )}
 
         {/* FAQ Section */}
         <div className="mb-28">
@@ -378,18 +674,42 @@ export const SeoPageTemplate = ({
       </div>
 
       <style jsx global>{`
-        @keyframes fade-in {
+        @keyframes fade-in-down {
           0% {
             opacity: 0;
-            transform: translateY(20px);
+            transform: translateY(-10px);
           }
           100% {
             opacity: 1;
             transform: translateY(0);
           }
         }
-        .animate-fade-in {
-          animation: fade-in 0.8s ease-out forwards;
+
+        @keyframes fade-in-up {
+          0% {
+            opacity: 0;
+            transform: translateY(10px);
+          }
+          100% {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+
+        .fade-in-down {
+          animation: fade-in-down 0.8s ease-out forwards;
+        }
+
+        .fade-in-up {
+          animation: fade-in-up 0.8s ease-out forwards;
+        }
+
+        .animate-delay-1 {
+          animation-delay: 0.1s;
+        }
+
+        .animate-delay-2 {
+          animation-delay: 0.2s;
         }
       `}</style>
     </>

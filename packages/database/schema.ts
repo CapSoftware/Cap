@@ -14,6 +14,7 @@ import {
 } from "drizzle-orm/mysql-core";
 import { relations } from "drizzle-orm/relations";
 import { nanoIdLength } from "./helpers";
+import { VideoMetadata } from "./types";
 
 const nanoId = customType<{ data: string; notNull: true }>({
   dataType() {
@@ -198,7 +199,7 @@ export const videos = mysqlTable(
     awsRegion: varchar("awsRegion", { length: 255 }),
     awsBucket: varchar("awsBucket", { length: 255 }),
     bucket: nanoIdNullable("bucket"),
-    metadata: json("metadata"),
+    metadata: json("metadata").$type<VideoMetadata>(),
     public: boolean("public").notNull().default(true),
     videoStartTime: varchar("videoStartTime", { length: 255 }),
     audioStartTime: varchar("audioStartTime", { length: 255 }),

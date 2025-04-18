@@ -3,6 +3,85 @@
 import { usePathname } from "next/navigation";
 import { Logo, LogoBadge } from "@cap/ui";
 
+type FooterLink = {
+  label: string;
+  href: string;
+  isExternal?: boolean;
+};
+
+const footerLinks = {
+  product: [
+    { label: "Blog", href: "/blog" },
+    { label: "Docs", href: "/docs" },
+    { label: "Pricing", href: "/pricing" },
+    { label: "Download", href: "/download" },
+    {
+      label: "Open Source",
+      href: "https://github.com/CapSoftware/Cap",
+      isExternal: true,
+    },
+    { label: "Self-hosting", href: "/self-hosting" },
+    {
+      label: "Join the community",
+      href: "https://discord.gg/y8gdQ3WRN3",
+      isExternal: true,
+    },
+  ] as FooterLink[],
+  help: [
+    { label: "FAQs", href: "/faq" },
+    { label: "Email Support", href: "mailto:hello@cap.so" },
+    {
+      label: "Chat Support",
+      href: "https://discord.gg/y8gdQ3WRN3",
+      isExternal: true,
+    },
+    {
+      label: "System Status",
+      href: "https://cap.openstatus.dev/",
+      isExternal: true,
+    },
+  ] as FooterLink[],
+  socials: [
+    { label: "X (@Cap)", href: "https://x.com/cap", isExternal: true },
+    {
+      label: "Discord",
+      href: "https://discord.gg/y8gdQ3WRN3",
+      isExternal: true,
+    },
+    {
+      label: "LinkedIn",
+      href: "https://www.linkedin.com/company/caprecorder/",
+      isExternal: true,
+    },
+  ] as FooterLink[],
+  useCases: [
+    {
+      label: "Remote Team Collaboration",
+      href: "/solutions/remote-team-collaboration",
+    },
+    {
+      label: "Employee Onboarding Platform",
+      href: "/solutions/employee-onboarding-platform",
+    },
+    {
+      label: "Daily Standup Software",
+      href: "/solutions/daily-standup-software",
+    },
+    {
+      label: "Online Classroom Tools",
+      href: "/solutions/online-classroom-tools",
+    },
+  ] as FooterLink[],
+  additional: [
+    { label: "Screen Recorder", href: "/screen-recorder" },
+    { label: "Free Screen Recorder", href: "/free-screen-recorder" },
+    { label: "Screen Recorder for Mac", href: "/screen-recorder-mac" },
+    { label: "Screen Recorder for Windows", href: "/screen-recorder-windows" },
+    { label: "Screen Recording Software", href: "/screen-recording-software" },
+    { label: "Cap vs Loom", href: "/loom-alternative" },
+  ] as FooterLink[],
+};
+
 export const Footer = () => {
   const pathname = usePathname();
 
@@ -48,100 +127,81 @@ export const Footer = () => {
           <div className="space-y-4 col-span-12 sm:col-span-6 lg:col-span-2">
             <h3 className="text-lg font-semibold">Product</h3>
             <ul className="space-y-2">
-              <li>
-                <a href="/blog">Blog</a>
-              </li>
-              <li>
-                <a href="/docs">Docs</a>
-              </li>
-              <li>
-                <a href="/pricing">Pricing</a>
-              </li>
-              <li>
-                <a href="/download">Download</a>
-              </li>
-              <li>
-                <a href="https://github.com/CapSoftware/Cap" target="_blank">
-                  Open Source
-                </a>
-              </li>
-              <li>
-                <a href="/self-hosting">Self-hosting</a>
-              </li>
-              <li>
-                <a href="https://discord.gg/y8gdQ3WRN3" target="_blank">
-                  Join the community
-                </a>
-              </li>
+              {footerLinks.product.map((link, index) => (
+                <li key={index}>
+                  <a
+                    href={link.href}
+                    target={link.isExternal ? "_blank" : undefined}
+                  >
+                    {link.label}
+                  </a>
+                </li>
+              ))}
             </ul>
           </div>
           <div className="space-y-4 col-span-12 sm:col-span-6 lg:col-span-2">
             <h3 className="text-lg font-semibold">Help</h3>
             <ul className="space-y-2">
-              <li>
-                <a href="/faq">FAQs</a>
-              </li>
-              <li>
-                <a href="mailto:hello@cap.so">Email Support</a>
-              </li>
-              <li>
-                <a href="https://discord.gg/y8gdQ3WRN3" target="_blank">
-                  Chat Support
-                </a>
-              </li>
-              <li>
-                <a href="https://cap.openstatus.dev/" target="_blank">
-                  System Status
-                </a>
-              </li>
+              {footerLinks.help.map((link, index) => (
+                <li key={index}>
+                  <a
+                    href={link.href}
+                    target={link.isExternal ? "_blank" : undefined}
+                  >
+                    {link.label}
+                  </a>
+                </li>
+              ))}
             </ul>
           </div>
           <div className="space-y-4 col-span-12 sm:col-span-6 lg:col-span-2">
             <h3 className="text-lg font-semibold">Socials</h3>
             <ul className="space-y-2">
-              <li>
-                <a href="https://x.com/cap" target="_blank">
-                  X (@Cap)
-                </a>
-              </li>
-              <li>
-                <a href="https://discord.gg/y8gdQ3WRN3" target="_blank">
-                  Discord
-                </a>
-              </li>
-              <li>
-                <a
-                  href="https://www.linkedin.com/company/caprecorder/"
-                  target="_blank"
-                >
-                  LinkedIn
-                </a>
-              </li>
+              {footerLinks.socials.map((link, index) => (
+                <li key={index}>
+                  <a
+                    href={link.href}
+                    target={link.isExternal ? "_blank" : undefined}
+                  >
+                    {link.label}
+                  </a>
+                </li>
+              ))}
             </ul>
           </div>
-          <div className="space-y-4 col-span-12 sm:col-span-6 lg:col-span-5">
-            <h3 className="text-lg font-semibold">Additional Links</h3>
-            <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <li>
-                <a href="/screen-recorder">Screen Recorder</a>
-              </li>
-              <li>
-                <a href="/free-screen-recorder">Free Screen Recorder</a>
-              </li>
-              <li>
-                <a href="/screen-recorder-mac">Screen Recorder for Mac</a>
-              </li>
-              <li>
-                <a href="/screen-recorder-windows">
-                  Screen Recorder for Windows
-                </a>
-              </li>
-              <li>
-                <a href="/screen-recording-software">
-                  Screen Recording Software
-                </a>
-              </li>
-            </ul>
+          <div className="space-y-4 col-span-12 sm:col-span-6 lg:col-span-12">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">Additional Links</h3>
+                <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {footerLinks.additional.map((link, index) => (
+                    <li key={index}>
+                      <a
+                        href={link.href}
+                        target={link.isExternal ? "_blank" : undefined}
+                      >
+                        {link.label}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">Use Cases</h3>
+                <ul className="grid grid-cols-1 gap-2">
+                  {footerLinks.useCases.map((link, index) => (
+                    <li key={index}>
+                      <a
+                        href={link.href}
+                        target={link.isExternal ? "_blank" : undefined}
+                      >
+                        {link.label}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
           </div>
         </div>
       </div>
