@@ -2,15 +2,15 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const fetchCache = "force-no-store";
 
-import { useState, useEffect, useRef } from "react";
-import { Button, Input, Label } from "@cap/ui";
-import { toast } from "react-hot-toast";
-import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { RefreshCw, CheckCircle, XCircle, Copy, Check } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { updateDomain } from "@/actions/workspace/update-domain";
 import { checkWorkspaceDomain } from "@/actions/workspace/check-domain";
 import { removeWorkspaceDomain } from "@/actions/workspace/remove-domain";
+import { updateDomain } from "@/actions/workspace/update-domain";
+import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
+import { Button, Input, Label } from "@cap/ui";
+import { Check, CheckCircle, Copy, RefreshCw, XCircle } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "react-hot-toast";
 
 type DomainVerification = {
   type: string;
@@ -165,7 +165,7 @@ export function CustomDomain() {
             Please upgrade to{" "}
             <a
               href="/pricing"
-              className="text-blue-500 font-medium hover:text-blue-600"
+              className="font-medium text-blue-500 hover:text-blue-600"
               onClick={(e) => {
                 e.preventDefault();
                 toast.dismiss(t.id);
@@ -230,7 +230,7 @@ export function CustomDomain() {
             Please upgrade to{" "}
             <a
               href="/pricing"
-              className="text-blue-500 font-medium hover:text-blue-600"
+              className="font-medium text-blue-500 hover:text-blue-600"
               onClick={(e) => {
                 e.preventDefault();
                 toast.dismiss(t.id);
@@ -278,7 +278,7 @@ export function CustomDomain() {
         <Label htmlFor="customDomain" className="text-sm font-medium">
           Add your custom domain here
         </Label>
-        <div className="mt-2 flex gap-2">
+        <div className="flex gap-2 items-center mt-2">
           <Input
             type="text"
             id="customDomain"
@@ -288,7 +288,12 @@ export function CustomDomain() {
             disabled={loading}
             className="flex-1"
           />
-          <Button type="button" onClick={handleSubmit} disabled={loading}>
+          <Button
+            variant="dark"
+            type="button"
+            onClick={handleSubmit}
+            disabled={loading}
+          >
             {loading ? "Saving..." : "Save"}
           </Button>
           {activeSpace?.space.customDomain && (
@@ -300,9 +305,9 @@ export function CustomDomain() {
               className="w-[105px]"
             >
               {verifying ? (
-                <RefreshCw className="mr-2 h-6 w-6 animate-spin" />
+                <RefreshCw className="mr-2 w-6 h-6 animate-spin" />
               ) : (
-                <RefreshCw className="mr-2 h-6 w-6" />
+                <RefreshCw className="mr-2 w-6 h-6" />
               )}
               Refresh
             </Button>
@@ -320,12 +325,12 @@ export function CustomDomain() {
         </div>
         {activeSpace?.space.customDomain && (
           <div className="mt-4 space-y-4">
-            <div className="flex items-center gap-2">
+            <div className="flex gap-2 items-center">
               {isVerified ? (
                 <>
                   <div className="flex items-center gap-1.5 text-green-500 bg-green-100 px-2.5 py-1.5 rounded-md text-sm">
-                    <CheckCircle className="h-4 w-4" />
-                    <span className="font-medium text-green-500 text-sm">
+                    <CheckCircle className="w-4 h-4" />
+                    <span className="text-sm font-medium text-green-500">
                       Domain verified
                     </span>
                   </div>
@@ -333,8 +338,8 @@ export function CustomDomain() {
               ) : (
                 <>
                   <div className="flex items-center gap-1.5 text-red-600 bg-red-50 px-2.5 py-1.5 rounded-md text-sm">
-                    <XCircle className="h-4 w-4" />
-                    <span className="font-medium text-red-500 text-sm">
+                    <XCircle className="w-4 h-4" />
+                    <span className="text-sm font-medium text-red-500">
                       Domain not verified
                     </span>
                   </div>
@@ -342,7 +347,7 @@ export function CustomDomain() {
               )}
             </div>
             {!isVerified && domainConfig?.verification?.[0] && (
-              <div className="rounded-lg border border-gray-200 overflow-hidden">
+              <div className="overflow-hidden rounded-lg border border-gray-200">
                 <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
                   <h4 className="font-medium text-gray-900">
                     DNS Configuration Required
@@ -366,7 +371,7 @@ export function CustomDomain() {
                       <dt className="text-sm font-medium text-gray-500">
                         Name
                       </dt>
-                      <dd className="flex items-center gap-2 text-sm text-gray-900">
+                      <dd className="flex gap-2 items-center text-sm text-gray-900">
                         <div className="flex items-center gap-1.5 bg-gray-50 px-2 py-1 rounded flex-1 min-w-0">
                           <code className="truncate">
                             {domainConfig?.verification?.[0]?.domain}
@@ -379,13 +384,13 @@ export function CustomDomain() {
                                   domainConfig?.verification?.[0]?.domain;
                                 if (domain) handleCopy(domain, "name");
                               }}
-                              className="p-1 hover:bg-gray-100 rounded-md transition-colors shrink-0"
+                              className="p-1 rounded-md transition-colors hover:bg-gray-100 shrink-0"
                               title="Copy to clipboard"
                             >
                               {copiedField === "name" ? (
-                                <Check className="h-4 w-4 text-green-500" />
+                                <Check className="w-4 h-4 text-green-500" />
                               ) : (
-                                <Copy className="h-4 w-4 text-gray-500" />
+                                <Copy className="w-4 h-4 text-gray-500" />
                               )}
                             </button>
                           )}
@@ -396,7 +401,7 @@ export function CustomDomain() {
                       <dt className="text-sm font-medium text-gray-500">
                         Value
                       </dt>
-                      <dd className="flex items-center gap-2 text-sm text-gray-900">
+                      <dd className="flex gap-2 items-center text-sm text-gray-900">
                         <div className="flex items-center gap-1.5 bg-gray-50 p-2 rounded flex-1 min-w-0">
                           <code className="font-mono text-xs break-all">
                             {domainConfig?.verification?.[0]?.value}
@@ -409,13 +414,13 @@ export function CustomDomain() {
                                   domainConfig?.verification?.[0]?.value;
                                 if (value) handleCopy(value, "value");
                               }}
-                              className="p-1 hover:bg-gray-100 rounded-md transition-colors shrink-0"
+                              className="p-1 rounded-md transition-colors hover:bg-gray-100 shrink-0"
                               title="Copy to clipboard"
                             >
                               {copiedField === "value" ? (
-                                <Check className="h-4 w-4 text-green-500" />
+                                <Check className="w-4 h-4 text-green-500" />
                               ) : (
-                                <Copy className="h-4 w-4 text-gray-500" />
+                                <Copy className="w-4 h-4 text-gray-500" />
                               )}
                             </button>
                           )}
@@ -430,7 +435,7 @@ export function CustomDomain() {
             {!isVerified &&
               !domainConfig?.verification?.[0] &&
               domainConfig?.requiredAValue && (
-                <div className="rounded-lg border border-gray-200 overflow-hidden mt-4">
+                <div className="overflow-hidden mt-4 rounded-lg border border-gray-200">
                   <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
                     <h4 className="font-medium text-gray-900">
                       DNS Configuration Required
@@ -483,7 +488,7 @@ export function CustomDomain() {
                         <dt className="text-sm font-medium text-gray-500">
                           Required
                         </dt>
-                        <dd className="flex items-center gap-2">
+                        <dd className="flex gap-2 items-center">
                           <div className="flex items-center gap-1.5 bg-gray-50 px-2 py-1 rounded flex-1 min-w-0">
                             <code className="text-sm text-gray-900">
                               {domainConfig.requiredAValue || "Loading..."}
@@ -498,13 +503,13 @@ export function CustomDomain() {
                                     "value"
                                   )
                                 }
-                                className="p-1 hover:bg-gray-100 rounded-md transition-colors shrink-0"
+                                className="p-1 rounded-md transition-colors hover:bg-gray-100 shrink-0"
                                 title="Copy to clipboard"
                               >
                                 {copiedField === "value" ? (
-                                  <Check className="h-4 w-4 text-green-500" />
+                                  <Check className="w-4 h-4 text-green-500" />
                                 ) : (
-                                  <Copy className="h-4 w-4 text-gray-500" />
+                                  <Copy className="w-4 h-4 text-gray-500" />
                                 )}
                               </button>
                             )}

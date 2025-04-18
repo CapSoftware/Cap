@@ -1,5 +1,5 @@
-import { forwardRef } from "react";
 import { classNames } from "@cap/utils";
+import { forwardRef } from "react";
 
 const Card = forwardRef<
   HTMLDivElement,
@@ -77,9 +77,9 @@ CardFooter.displayName = "CardFooter";
 
 export {
   Card,
-  CardHeader,
-  CardFooter,
-  CardTitle,
-  CardDescription,
   CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
 };

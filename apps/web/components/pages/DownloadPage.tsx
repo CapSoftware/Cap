@@ -1,42 +1,20 @@
 "use client";
 
-import { Button, LogoBadge } from "@cap/ui";
-import { useEffect, useState } from "react";
 import {
-  detectPlatform,
   getDownloadButtonText,
   getDownloadUrl,
   getPlatformIcon,
   getVersionText,
   PlatformIcons,
 } from "@/utils/platform";
+import { Button } from "@cap/ui";
+import { useDetectPlatform } from "hooks/useDetectPlatform";
+import { useState } from "react";
 
 export const DownloadPage = () => {
-  const [loading, setLoading] = useState(true);
-  const [platform, setPlatform] = useState<string | null>(null);
-  const [isIntel, setIsIntel] = useState(false);
+  const { platform, isIntel } = useDetectPlatform();
   const [showDebug, setShowDebug] = useState(false);
-
-  useEffect(() => {
-    const detectUserPlatform = async () => {
-      try {
-        const { platform, isIntel } = await detectPlatform();
-        setPlatform(platform);
-        setIsIntel(isIntel);
-      } catch (error) {
-        console.error("Error detecting platform:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    detectUserPlatform();
-  }, []);
-
-  const simulatePlatform = (newPlatform: string, newIsIntel: boolean) => {
-    setPlatform(newPlatform);
-    setIsIntel(newIsIntel);
-  };
+  const loading = platform === null;
 
   return (
     <div className="pt-32 pb-16 wrapper wrapper-sm md:py-32">
@@ -44,18 +22,17 @@ export const DownloadPage = () => {
         {/* Debug toggle button in top-right corner */}
         <button
           onClick={() => setShowDebug(!showDebug)}
-          className="absolute top-4 right-4 text-xs text-gray-400 hover:text-gray-300 bg-gray-800 px-2 py-1 rounded"
+          className="absolute top-4 right-4 px-2 py-1 text-xs text-gray-400 bg-gray-800 rounded hover:text-gray-300"
         >
           {showDebug ? "Hide Debug" : "Debug"}
         </button>
 
         {/* Debug panel */}
         {showDebug && (
-          <div className="fixed top-10 right-4 bg-gray-800 p-3 rounded shadow-lg z-50 text-left">
-            <div className="text-xs text-gray-300 mb-2">Platform Simulator</div>
+          <div className="fixed right-4 top-10 z-50 p-3 text-left bg-gray-800 rounded shadow-lg">
+            <div className="mb-2 text-xs text-gray-300">Platform Simulator</div>
             <div className="space-y-2">
               <button
-                onClick={() => simulatePlatform("windows", false)}
                 className={`text-xs px-2 py-1 rounded w-full text-left ${
                   platform === "windows"
                     ? "bg-blue-600"
@@ -65,7 +42,6 @@ export const DownloadPage = () => {
                 Windows (Beta)
               </button>
               <button
-                onClick={() => simulatePlatform("macos", true)}
                 className={`text-xs px-2 py-1 rounded w-full text-left ${
                   platform === "macos" && isIntel
                     ? "bg-blue-600"
@@ -75,7 +51,6 @@ export const DownloadPage = () => {
                 macOS (Intel)
               </button>
               <button
-                onClick={() => simulatePlatform("macos", false)}
                 className={`text-xs px-2 py-1 rounded w-full text-left ${
                   platform === "macos" && !isIntel
                     ? "bg-blue-600"
@@ -84,7 +59,7 @@ export const DownloadPage = () => {
               >
                 macOS (Apple Silicon)
               </button>
-              <div className="text-xs text-gray-400 mt-2">
+              <div className="mt-2 text-xs text-gray-400">
                 Current: {platform}{" "}
                 {platform === "macos" &&
                   (isIntel ? "(Intel)" : "(Apple Silicon)")}
@@ -106,7 +81,7 @@ export const DownloadPage = () => {
               variant="radialblue"
               size="lg"
               href={getDownloadUrl(platform, isIntel)}
-              className="font-medium flex items-center justify-center text-white py-6"
+              className="flex justify-center items-center py-6 font-medium text-white"
             >
               {!loading && getPlatformIcon(platform)}
               {getDownloadButtonText(platform, loading, isIntel)}
@@ -125,10 +100,10 @@ export const DownloadPage = () => {
                   loop
                   muted
                   playsInline
-                  className="w-full rounded-md shadow-md mx-auto"
+                  className="mx-auto w-full rounded-md shadow-md"
                   style={{ maxWidth: "300px" }}
                 />
-                <p className="text-sm text-gray-400 mt-2">
+                <p className="mt-2 text-sm text-gray-400">
                   Whilst Cap for Windows is in early beta, after downloading and
                   running the app, follow the steps above to whitelist Cap on
                   your PC.
@@ -140,15 +115,15 @@ export const DownloadPage = () => {
 
         <PlatformIcons />
 
-        <div className="mt-6 pb-4 fade-in-up animate-delay-2">
-          <h3 className="text-sm font-medium mb-2 text-gray-400">
+        <div className="pb-4 mt-6 fade-in-up animate-delay-2">
+          <h3 className="mb-2 text-sm font-medium text-gray-400">
             Other download options:
           </h3>
-          <div className="flex flex-col md:flex-row justify-center items-center gap-3">
+          <div className="flex flex-col gap-3 justify-center items-center md:flex-row">
             {platform !== "windows" && (
               <a
                 href="/download/windows"
-                className="text-sm text-gray-400 hover:underline transition-all"
+                className="text-sm text-gray-400 transition-all hover:underline"
               >
                 Windows (Beta)
               </a>
@@ -156,7 +131,7 @@ export const DownloadPage = () => {
             {platform === "macos" && isIntel && (
               <a
                 href="/download/apple-silicon"
-                className="text-sm text-gray-400 hover:underline transition-all"
+                className="text-sm text-gray-400 transition-all hover:underline"
               >
                 Apple Silicon
               </a>
@@ -164,7 +139,7 @@ export const DownloadPage = () => {
             {platform === "macos" && !isIntel && (
               <a
                 href="/download/apple-intel"
-                className="text-sm text-gray-400 hover:underline transition-all"
+                className="text-sm text-gray-400 transition-all hover:underline"
               >
                 Apple Intel
               </a>
@@ -173,13 +148,13 @@ export const DownloadPage = () => {
               <>
                 <a
                   href="/download/apple-silicon"
-                  className="text-sm text-gray-400 hover:underline transition-all"
+                  className="text-sm text-gray-400 transition-all hover:underline"
                 >
                   Apple Silicon
                 </a>
                 <a
                   href="/download/apple-intel"
-                  className="text-sm text-gray-400 hover:underline transition-all"
+                  className="text-sm text-gray-400 transition-all hover:underline"
                 >
                   Apple Intel
                 </a>
@@ -189,39 +164,39 @@ export const DownloadPage = () => {
         </div>
 
         {/* Discreet SEO Links */}
-        <div className="mt-32 pt-8 border-t border-gray-200 text-xs text-gray-500 opacity-70">
-          <div className="flex flex-wrap justify-center gap-x-4 gap-y-2 max-w-lg mx-auto">
+        <div className="pt-8 mt-32 text-xs text-gray-500 border-t border-gray-200 opacity-70">
+          <div className="flex flex-wrap gap-y-2 gap-x-4 justify-center mx-auto max-w-lg">
             <a
               href="/screen-recorder"
-              className="hover:text-gray-400 hover:underline text-xs"
+              className="text-xs hover:text-gray-400 hover:underline"
             >
               Screen Recorder
             </a>
             <span className="hidden md:inline">•</span>
             <a
               href="/free-screen-recorder"
-              className="hover:text-gray-400 hover:underline text-xs"
+              className="text-xs hover:text-gray-400 hover:underline"
             >
               Free Screen Recorder
             </a>
             <span className="hidden md:inline">•</span>
             <a
               href="/screen-recorder-mac"
-              className="hover:text-gray-400 hover:underline text-xs"
+              className="text-xs hover:text-gray-400 hover:underline"
             >
               Mac Screen Recorder
             </a>
             <span className="hidden md:inline">•</span>
             <a
               href="/screen-recorder-windows"
-              className="hover:text-gray-400 hover:underline text-xs"
+              className="text-xs hover:text-gray-400 hover:underline"
             >
               Windows Screen Recorder
             </a>
             <span className="hidden md:inline">•</span>
             <a
               href="/screen-recording-software"
-              className="hover:text-gray-400 hover:underline text-xs"
+              className="text-xs hover:text-gray-400 hover:underline"
             >
               Recording Software
             </a>

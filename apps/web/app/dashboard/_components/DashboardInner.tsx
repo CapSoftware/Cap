@@ -13,6 +13,7 @@ import { useState } from "react";
 
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
+import clsx from "clsx";
 import { signOut } from "next-auth/react";
 import Link from "next/link";
 
@@ -23,19 +24,27 @@ export default function DashboardInner({
   emptyComponent,
 }: {
   children: React.ReactNode;
-  title: string;
+  title?: string;
   emptyCondition?: boolean;
   emptyComponent?: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-5 pt-5 min-h-screen">
+    <div className="flex flex-col pt-5 min-h-screen lg:gap-5">
       {/* Top Bar */}
-      <div className="h-[8vh] lg:h-[5vh] border-b lg:border-0 border-gray-200 w-full mt-4 lg:mt-0 fixed top-12 lg:top-0 bg-gray-50 z-10 lg:relative flex items-center justify-between px-5 lg:pr-8 lg:pl-0">
-        <p className="text-xl text-gray-500">{title}</p>
+      <div
+        className={clsx(
+          "flex sticky z-10 justify-between items-center px-5 mt-10 w-full h-16 bg-gray-50 border-b border-gray-200 lg:border-b-0 lg:pl-0 lg:pr-5 lg:top-0 lg:relative top-[64px] lg:mt-0 lg:h-8"
+        )}
+      >
+        <p className="relative text-xl text-gray-500 lg:text-2xl">{title}</p>
         <User />
       </div>
       {/* Content Area */}
-      <div className="flex overflow-auto flex-col flex-1 p-5 pb-5 bg-gray-100 border border-gray-200 mt-[120px] lg:mt-0 lg:rounded-tl-2xl lg:p-8">
+      <div
+        className={clsx(
+          "flex overflow-auto flex-col flex-1 p-5 pb-5 bg-gray-100 border border-gray-200 lg:rounded-tl-2xl lg:p-8"
+        )}
+      >
         {emptyCondition ? (
           emptyComponent
         ) : (
@@ -57,7 +66,7 @@ const User = () => {
             <Avatar
               letterClass="text-xs lg:text-md"
               name={user.name ?? "User"}
-              className="size-[24px] lg:size-[36px]"
+              className="size-[24px]"
             />
             <span className="ml-2 text-sm lg:ml-3 lg:text-md">
               {user.name ?? "User"}
@@ -66,12 +75,12 @@ const User = () => {
           <MoreVertical className="w-5 h-5 text-gray-400 group-hover:text-gray-500" />
         </div>
       </PopoverTrigger>
-      <PopoverContent className="p-1 w-48 bg-gray-100">
+      <PopoverContent className="p-1 w-48 bg-gray-50">
         <Command>
           <CommandGroup>
             <Link href="/dashboard/settings">
               <CommandItem
-                className="px-2 py-2 rounded-lg cursor-pointer hover:bg-gray-200 group"
+                className="px-2 py-2 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-100 group"
                 onSelect={() => {
                   setMenuOpen(false);
                 }}
@@ -83,7 +92,7 @@ const User = () => {
               </CommandItem>
             </Link>
             <CommandItem
-              className="px-2 py-2 rounded-lg cursor-pointer hover:bg-gray-200 group"
+              className="px-2 py-2 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-100 group"
               onSelect={() => window.open("https://cap.link/discord", "_blank")}
             >
               <MessageSquare className="mr-2 w-4 h-4 text-gray-400 group-hover:text-gray-500" />
@@ -92,7 +101,7 @@ const User = () => {
               </span>
             </CommandItem>
             <CommandItem
-              className="px-2 py-2 rounded-lg cursor-pointer hover:bg-gray-200 group"
+              className="px-2 py-2 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-100 group"
               onSelect={() => signOut()}
             >
               <LogOut className="mr-2 w-4 h-4 text-gray-400 group-hover:text-gray-500" />

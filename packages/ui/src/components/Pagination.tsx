@@ -1,5 +1,5 @@
-import * as React from "react";
 import { ChevronLeft, ChevronRight, MoreHorizontal } from "lucide-react";
+import * as React from "react";
 
 import { classNames } from "@cap/utils";
 import { ButtonProps, buttonVariants } from "./Button";
@@ -8,7 +8,7 @@ const Pagination = ({ className, ...props }: React.ComponentProps<"nav">) => (
   <nav
     role="navigation"
     aria-label="pagination"
-    className={classNames("mx-auto flex w-full justify-center", className)}
+    className={classNames("flex justify-center mx-auto w-full", className)}
     {...props}
   />
 );
@@ -20,7 +20,7 @@ const PaginationContent = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <ul
     ref={ref}
-    className={classNames("flex flex-row items-center gap-1", className)}
+    className={classNames("flex flex-row gap-2 items-center", className)}
     {...props}
   />
 ));
@@ -49,7 +49,7 @@ const PaginationLink = ({
     aria-current={isActive ? "page" : undefined}
     className={classNames(
       buttonVariants({
-        variant: isActive ? "primary" : "white",
+        variant: isActive ? "dark" : "white",
         size,
       }),
       className
@@ -69,7 +69,7 @@ const PaginationPrevious = ({
     className={classNames("gap-1 pl-2.5", className)}
     {...props}
   >
-    <ChevronLeft className="h-4 w-4" />
+    <ChevronLeft className="w-4 h-4" />
     <span>Previous</span>
   </PaginationLink>
 );
@@ -86,7 +86,7 @@ const PaginationNext = ({
     {...props}
   >
     <span>Next</span>
-    <ChevronRight className="h-4 w-4" />
+    <ChevronRight className="w-4 h-4" />
   </PaginationLink>
 );
 PaginationNext.displayName = "PaginationNext";
@@ -98,12 +98,12 @@ const PaginationEllipsis = ({
   <span
     aria-hidden
     className={classNames(
-      "flex h-9 w-9 items-center justify-center",
+      "flex justify-center items-center w-9 h-9",
       className
     )}
     {...props}
   >
-    <MoreHorizontal className="h-4 w-4" />
+    <MoreHorizontal className="w-4 h-4" />
     <span className="sr-only">More pages</span>
   </span>
 );

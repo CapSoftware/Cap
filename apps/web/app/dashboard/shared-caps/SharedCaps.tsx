@@ -2,7 +2,7 @@
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { VideoMetadata } from "@cap/database/types";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import DashboardInner from "../_components/DashboardInner";
 import { CapPagination } from "../caps/components/CapPagination";
@@ -23,17 +23,14 @@ type SharedVideoData = {
 export const SharedCaps = ({
   data,
   count,
-  activeSpaceId,
 }: {
   data: SharedVideoData;
   count: number;
-  activeSpaceId: string;
 }) => {
-  const { refresh } = useRouter();
   const params = useSearchParams();
   const page = Number(params.get("page")) || 1;
   const [analytics, setAnalytics] = useState<Record<string, number>>({});
-  const { user, activeSpace } = useSharedContext();
+  const { activeSpace } = useSharedContext();
   const limit = 15;
   const totalPages = Math.ceil(count / limit);
 
@@ -60,7 +57,7 @@ export const SharedCaps = ({
       }
     >
       <div className="flex flex-col w-full h-full">
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {data.map((cap) => (
             <SharedCapCard
               key={cap.id}

@@ -261,7 +261,7 @@ export const CapCard: React.FC<CapCardProps> = ({
               : "Shared with you"}
           </Button>
           <Button
-            onClick={() => onDelete(cap.id)}
+            onClick={() => onDelete?.(cap.id)}
             className="flex-1 h-10 rounded-xl"
             variant="white"
             size="sm"

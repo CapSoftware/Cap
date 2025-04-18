@@ -1,13 +1,24 @@
 "use client";
 
+import { manageBilling } from "@/actions/workspace/manage-billing";
+import { removeWorkspaceInvite } from "@/actions/workspace/remove-invite";
+import { sendWorkspaceInvites } from "@/actions/workspace/send-invites";
+import { updateWorkspaceDetails } from "@/actions/workspace/update-details";
+import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
+import { Tooltip } from "@/components/Tooltip";
 import {
-  Card,
+  Button,
   CardContent,
   CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
-  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
   Input,
   Label,
   Table,
@@ -16,24 +27,12 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
 } from "@cap/ui";
-import { useRouter } from "next/navigation";
-import { useState, useRef } from "react";
-import toast from "react-hot-toast";
-import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { format } from "date-fns";
-import { Tooltip } from "react-tooltip";
+import { useRouter } from "next/navigation";
+import { useRef, useState } from "react";
+import toast from "react-hot-toast";
 import { CustomDomain } from "./components/CustomDomain";
-import { updateWorkspaceDetails } from "@/actions/workspace/update-details";
-import { sendWorkspaceInvites } from "@/actions/workspace/send-invites";
-import { removeWorkspaceInvite } from "@/actions/workspace/remove-invite";
-import { manageBilling } from "@/actions/workspace/manage-billing";
 
 export const Workspace = () => {
   const { spaceData, activeSpace, user } = useSharedContext();
@@ -193,7 +192,7 @@ export const Workspace = () => {
                 if (!isOwner) showOwnerToast();
               }}
             />
-            <p className="text-sm text-gray-400 mt-1">
+            <p className="mt-1 text-sm text-gray-400">
               Only users with email addresses from this domain will be able to
               access videos shared in this workspace. Leave empty to allow all
               users.
@@ -201,11 +200,11 @@ export const Workspace = () => {
           </div>
         </div>
       </CardContent>
-      <CardFooter className="border-b px-6 pt-0 pb-6">
+      <CardFooter className="px-6 pt-0 pb-6 border-b">
         <Button
           type="submit"
           size="sm"
-          variant="gray"
+          variant="dark"
           disabled={!isOwner}
           onClick={() => {
             if (!isOwner) showOwnerToast();
@@ -224,10 +223,10 @@ export const Workspace = () => {
             <CustomDomain />
           </div>
         </CardContent>
-        <CardFooter className="border-b px-6 pt-0 pb-2"></CardFooter>
+        <CardFooter className="px-6 pt-0 pb-2 border-b"></CardFooter>
       </>
       <CardHeader>
-        <div className="flex items-center justify-between">
+        <div className="flex justify-between items-center">
           <div>
             <CardTitle>Workspace Members</CardTitle>
             <CardDescription>Manage your workspace members.</CardDescription>
@@ -248,18 +247,20 @@ export const Workspace = () => {
       </CardHeader>
       <CardContent>
         <div className="flex items-center space-x-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="primary"
-            disabled={!isOwner || loading}
-            onClick={handleManageBilling}
-            data-tooltip-id="purchase-seats-tooltip"
-            data-tooltip-content='Once inside the Stripe dashboard, click "Manage Plan", then increase quantity of subscriptions to purchase more seats.'
+          <Tooltip
+            position="top"
+            content="Once inside the Stripe dashboard, click 'Manage Plan', then increase quantity of subscriptions to purchase more seats"
           >
-            {loading ? "Loading..." : "Purchase more seats"}
-          </Button>
-          <Tooltip id="purchase-seats-tooltip" place="top" />
+            <Button
+              type="button"
+              size="sm"
+              variant="primary"
+              disabled={!isOwner || loading}
+              onClick={handleManageBilling}
+            >
+              {loading ? "Loading..." : "+ Purchase more seats"}
+            </Button>
+          </Tooltip>
           <Button
             type="button"
             size="sm"
@@ -392,7 +393,7 @@ export const Workspace = () => {
               {inviteEmails.map((email) => (
                 <div
                   key={email}
-                  className="flex items-center justify-between bg-gray-100 p-2 rounded"
+                  className="flex justify-between items-center p-2 bg-gray-100 rounded"
                 >
                   <span>{email}</span>
                   <Button

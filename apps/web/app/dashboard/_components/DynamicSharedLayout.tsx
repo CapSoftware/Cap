@@ -2,7 +2,7 @@
 import AdminMobileNav from "@/app/dashboard/_components/AdminNavbar/AdminMobileNav";
 import { Space } from "@/app/dashboard/layout";
 import { users } from "@cap/database/schema";
-import { createContext, useContext } from "react";
+import React, { createContext, useContext } from "react";
 import AdminDesktopNav from "./AdminNavbar/AdminDesktopNav";
 
 type SharedContext = {
@@ -28,13 +28,26 @@ export default function DynamicSharedLayout({
   isSubscribed: SharedContext["isSubscribed"];
 }) {
   return (
-    <Context.Provider value={{ spaceData, activeSpace, user, isSubscribed }}>
-      <div className="flex h-screen min-h-full dashboard-layout">
-        <AdminDesktopNav />
-        <div className="flex-1 focus:outline-none">
+    <Context.Provider
+      value={{
+        spaceData,
+        activeSpace,
+        user,
+        isSubscribed,
+      }}
+    >
+      {/* CSS Grid layout for dashboard */}
+      <div className="grid grid-cols-[auto,1fr] grid-rows-[auto,1fr] h-screen min-h-screen">
+        {/* Sidebar */}
+        <aside className="z-10 col-span-1 row-span-2">
+          <AdminDesktopNav />
+        </aside>
+        {/* Header/topbar is now expected to be rendered by children if needed */}
+        {/* Main content area */}
+        <main className="overflow-y-auto col-span-1 row-span-2 focus:outline-none">
           <AdminMobileNav />
-          <main className="w-full min-h-screen">{children}</main>
-        </div>
+          {children}
+        </main>
       </div>
     </Context.Provider>
   );

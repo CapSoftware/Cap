@@ -180,7 +180,7 @@ a.bg-primary:hover {
   position: absolute;
   inset: 0;
   padding: 1px;
-  border-radius: 16px;
+  border-radius: 12px;
   background: linear-gradient(to bottom, #ffffff40 70%, #ffffff00 100%);
   -webkit-mask:
     linear-gradient(#fff 0 0) content-box,

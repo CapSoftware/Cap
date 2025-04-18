@@ -31,11 +31,11 @@ export const Caps = ({
   count: number;
   userSpaces: { id: string; name: string }[];
 }) => {
-  const { refresh, replace } = useRouter();
+  const { refresh } = useRouter();
   const params = useSearchParams();
   const page = Number(params.get("page")) || 1;
   const [analytics, setAnalytics] = useState<Record<string, number>>({});
-  const { user, activeSpace } = useSharedContext();
+  const { user } = useSharedContext();
   const limit = 15;
   const totalPages = Math.ceil(count / limit);
 
@@ -100,7 +100,7 @@ export const Caps = ({
           ))}
         </div>
         {(data.length > limit || data.length === limit || page !== 1) && (
-          <div className="mt-4">
+          <div className="mt-10">
             <CapPagination currentPage={page} totalPages={totalPages} />
           </div>
         )}

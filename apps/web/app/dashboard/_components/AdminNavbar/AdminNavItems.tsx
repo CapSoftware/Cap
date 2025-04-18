@@ -117,7 +117,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                 </div>
               </div>
             </PopoverTrigger>
-            <PopoverContent className="z-[60] p-0 mt-2 w-[calc(100%-12px)] mx-auto bg-white">
+            <PopoverContent className="z-[60] p-0 mt-3 w-[calc(100%-12px)] mx-auto bg-white">
               <Command>
                 <CommandInput placeholder="Search spaces..." />
                 <CommandEmpty>No spaces found</CommandEmpty>
