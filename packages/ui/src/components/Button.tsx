@@ -24,7 +24,7 @@ const buttonVariants = cva(
         gray: "bg-gray-100 text-gray-500 hover:bg-gray-200 disabled:bg-gray-100 border-transparent",
         dark: "bg-gradient-to-t from-[#0f0f0f] to-[#404040] shadow-[0_0_0_1px] hover:brightness-110 shadow-[#383838] text-gray-50 hover:bg-[#383838] disabled:bg-[#383838] border-transparent",
         radialblue:
-          "text-gray-50 disabled:bg-gray-100 border-0 [background:radial-gradient(90%_100%_at_15%_12%,#9BC4FF_0%,#3588FF_100%)] border-transparent hover:opacity-80",
+          "text-gray-50 border shadow-[0_0_0_1px] shadow-blue-400 disabled:bg-gray-100 border-0 [background:radial-gradient(90%_100%_at_15%_12%,#9BC4FF_0%,#3588FF_100%)] border-transparent hover:opacity-80",
       },
       size: {
         xs: "text-[0.75rem] h-[32px] px-[0.5rem] ",
