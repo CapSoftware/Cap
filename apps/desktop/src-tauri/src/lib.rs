@@ -975,7 +975,6 @@ struct SerializedEditorInstance {
     saved_project_config: ProjectConfiguration,
     recordings: Arc<ProjectRecordings>,
     path: PathBuf,
-    meta: RecordingMeta,
 }
 
 #[tauri::command]
@@ -1011,8 +1010,13 @@ async fn create_editor_instance(window: Window) -> Result<SerializedEditorInstan
         },
         recordings: editor_instance.recordings.clone(),
         path: editor_instance.project_path.clone(),
-        meta: meta.clone(),
     })
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn get_editor_meta(editor: WindowEditorInstance) -> Result<RecordingMeta, String> {
+    Ok(editor.meta().clone())
 }
 
 #[tauri::command]
@@ -1140,11 +1144,10 @@ fn focus_captures_panel(app: AppHandle) {
 }
 
 #[derive(Serialize, Deserialize, specta::Type, Clone)]
-#[serde(tag = "type")]
-pub enum RenderProgress {
-    Starting { total_frames: u32 },
-    EstimatedTotalFrames { total_frames: u32 },
-    FrameRendered { current_frame: u32 },
+#[serde(tag = "type", rename_all = "camelCase")]
+pub struct FramesRendered {
+    rendered_count: u32,
+    total_frames: u32,
 }
 
 #[tauri::command]
@@ -1946,28 +1949,6 @@ fn configure_logging(folder: &PathBuf) -> tracing_appender::non_blocking::Worker
 
 #[tauri::command]
 #[specta::specta]
-async fn get_wallpaper_path(app: AppHandle, filename: String) -> Result<String, String> {
-    let resource_path = app
-        .path()
-        .resource_dir()
-        .map_err(|_| "Failed to get resource dir".to_string())?
-        .join("assets")
-        .join("backgrounds")
-        .join(if filename.ends_with(".jpg") {
-            filename
-        } else {
-            format!("{}.jpg", filename)
-        });
-
-    if resource_path.exists() {
-        Ok(resource_path.to_string_lossy().to_string())
-    } else {
-        Err(format!("Resource not found: {:?}", resource_path))
-    }
-}
-
-#[tauri::command]
-#[specta::specta]
 async fn update_auth_plan(app: AppHandle) {
     AuthStore::update_auth_plan(&app).await.ok();
 }
@@ -2036,11 +2017,11 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             show_window,
             write_clipboard_string,
             platform::perform_haptic_feedback,
-            get_wallpaper_path,
             list_fails,
             set_fail,
             update_auth_plan,
-            set_window_transparent
+            set_window_transparent,
+            get_editor_meta
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,

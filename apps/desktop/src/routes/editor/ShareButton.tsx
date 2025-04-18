@@ -1,23 +1,23 @@
 import { Button } from "@cap/ui-solid";
 import { createMutation } from "@tanstack/solid-query";
 import { createEffect, createResource, createSignal, Show } from "solid-js";
-import { createStore, produce } from "solid-js/store";
-import Tooltip from "~/components/Tooltip";
+import { createStore, produce, reconcile } from "solid-js/store";
 
-import { Channel } from "@tauri-apps/api/core";
+import Tooltip from "~/components/Tooltip";
 import { createProgressBar } from "~/routes/editor/utils";
 import { authStore } from "~/store";
-import { commands, events, RenderProgress } from "~/utils/tauri";
+import { commands, events } from "~/utils/tauri";
 import { useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
 import { Dialog, DialogContent } from "./ui";
+import { exportVideo } from "~/utils/export";
 
 function ShareButton() {
   const { editorInstance, metaUpdateStore } = useEditorContext();
-  const path = editorInstance.path;
+  const projectPath = editorInstance.path;
 
   const [recordingMeta, metaActions] = createResource(() =>
-    commands.getRecordingMeta(path, "recording")
+    commands.getRecordingMeta(projectPath, "recording")
   );
   const [copyPressed, setCopyPressed] = createSignal(false);
   const selectedFps = Number(localStorage.getItem("cap-export-fps")) || 30;
@@ -44,7 +44,7 @@ function ShareButton() {
         throw new Error("Recording metadata not available");
       }
 
-      const metadata = await commands.getVideoMetadata(path);
+      const metadata = await commands.getVideoMetadata(projectPath);
       const plan = await commands.checkUpgradedAndUpdate();
       const canShare = {
         allowed: plan || metadata.duration < 300,
@@ -78,35 +78,32 @@ function ShareButton() {
 
         console.log("Starting actual upload...");
 
-        const progress = new Channel<RenderProgress>();
-
-        progress.onmessage = (msg) => {
-          if (msg.type === "EstimatedTotalFrames")
-            setUploadState({
-              type: "rendering",
-              renderedFrames: 0,
-              totalFrames: msg.total_frames,
-            });
-          else
+        await exportVideo(
+          projectPath,
+          {
+            fps: selectedFps,
+            resolution_base: {
+              x: selectedResolution.width,
+              y: selectedResolution.height,
+            },
+          },
+          (msg) => {
             setUploadState(
-              produce((state) => {
-                if (msg.type === "FrameRendered" && state.type === "rendering")
-                  state.renderedFrames = msg.current_frame;
+              reconcile({
+                type: "rendering",
+                renderedFrames: msg.renderedCount,
+                totalFrames: msg.totalFrames,
               })
             );
-        };
-
-        await commands.exportVideo(path, progress, selectedFps, {
-          x: selectedResolution.width,
-          y: selectedResolution.height,
-        });
+          }
+        );
 
         setUploadState({ type: "uploading", progress: 0 });
 
         // Now proceed with upload
         const result = recordingMeta()?.sharing
-          ? await commands.uploadExportedVideo(path, "Reupload")
-          : await commands.uploadExportedVideo(path, {
+          ? await commands.uploadExportedVideo(projectPath, "Reupload")
+          : await commands.uploadExportedVideo(projectPath, {
               Initial: { pre_created_video: null },
             });
 

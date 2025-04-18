@@ -51,9 +51,15 @@ export function Editor() {
           const ctx = useEditorInstanceContext();
           const editorInstance = ctx.editorInstance();
 
-          if (!editorInstance) return;
+          if (!editorInstance || !ctx.metaQuery.data) return;
 
-          return { editorInstance };
+          return {
+            editorInstance,
+            meta: ctx.metaQuery.data,
+            refetchMeta: async () => {
+              await ctx.metaQuery.refetch();
+            },
+          };
         })()}
       >
         {(values) => (
@@ -67,20 +73,17 @@ export function Editor() {
 }
 
 function Inner() {
-  const { project, previewTime, playbackTime, setPlaybackTime, playing } =
-    useEditorContext();
+  const { project, editorState, setEditorState } = useEditorContext();
 
-  onMount(() => {
+  onMount(() =>
     events.editorStateChanged.listen((e) => {
       renderFrame.clear();
-      untrack(() => {
-        setPlaybackTime(e.payload.playhead_position / FPS);
-      });
-    });
-  });
+      setEditorState("playbackTime", e.payload.playhead_position / FPS);
+    })
+  );
 
   const renderFrame = throttle((time: number) => {
-    if (!playing()) {
+    if (!editorState.playing) {
       events.renderFrameEvent.emit({
         frame_number: Math.max(Math.floor(time * FPS), 0),
         fps: FPS,
@@ -90,14 +93,14 @@ function Inner() {
   }, 1000 / FPS);
 
   const frameNumberToRender = createMemo(() => {
-    const preview = previewTime();
-    if (preview !== undefined) return preview;
-    return playbackTime();
+    const preview = editorState.previewTime;
+    if (preview !== null) return preview;
+    return editorState.playbackTime;
   });
 
   createEffect(
     on(frameNumberToRender, (number) => {
-      if (playing()) return;
+      if (editorState.playing) return;
       renderFrame(number);
     })
   );
@@ -105,7 +108,7 @@ function Inner() {
   createEffect(
     on(
       () => trackDeep(project),
-      () => renderFrame(playbackTime())
+      () => renderFrame(editorState.playbackTime)
     )
   );
 

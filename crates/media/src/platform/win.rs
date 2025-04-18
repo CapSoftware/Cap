@@ -331,23 +331,20 @@ pub fn display_names() -> HashMap<u32, String> {
     names
 }
 
-pub fn get_display_refresh_rate(monitor: HMONITOR) -> Option<u32> {
+pub fn get_display_refresh_rate(monitor: HMONITOR) -> Result<u32, String> {
     let mut monitorinfoexw: MONITORINFOEXW = unsafe { std::mem::zeroed() };
     monitorinfoexw.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
 
-    if let Err(_) =
-        unsafe { GetMonitorInfoW(monitor, &mut monitorinfoexw.monitorInfo as *mut MONITORINFO) }
-            .ok()
-    {
-        return None;
-    }
+    unsafe { GetMonitorInfoW(monitor, &mut monitorinfoexw.monitorInfo as *mut MONITORINFO) }
+        .ok()
+        .map_err(|e| e.to_string())?;
 
     let mut dev_mode: DEVMODEW = unsafe { std::mem::zeroed() };
     dev_mode.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
 
     let device_name = PCWSTR::from_raw(monitorinfoexw.szDevice.as_ptr());
 
-    if let Err(_) = unsafe {
+    unsafe {
         EnumDisplaySettingsW(
             device_name,
             windows::Win32::Graphics::Gdi::ENUM_CURRENT_SETTINGS,
@@ -355,11 +352,9 @@ pub fn get_display_refresh_rate(monitor: HMONITOR) -> Option<u32> {
         )
     }
     .ok()
-    {
-        return None;
-    }
+    .map_err(|e| e.to_string())?;
 
-    Some(dev_mode.dmDisplayFrequency)
+    Ok(dev_mode.dmDisplayFrequency)
 }
 
 pub fn display_for_window(window: HWND) -> Option<HMONITOR> {

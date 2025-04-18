@@ -17,9 +17,9 @@ import {
   Show,
 } from "solid-js";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-
 import { ask } from "@tauri-apps/plugin-dialog";
 import * as shell from "@tauri-apps/plugin-shell";
+
 import { trackEvent } from "~/utils/analytics";
 import { commands, events, RecordingMetaWithType } from "~/utils/tauri";
 
@@ -193,7 +193,6 @@ function RecordingItem(props: {
         </Show>
         <div class="flex flex-col gap-2">
           <span>{props.recording.prettyName}</span>
-          {/** Tag */}
           <div
             class={cx(
               "px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-500 rounded-full w-fit",
@@ -211,12 +210,6 @@ function RecordingItem(props: {
       </div>
       <div class="flex items-center gap-2">
         <Show when={type() === "studio"}>
-          <TooltipIconButton
-            tooltipText="Edit"
-            onClick={() => props.onOpenEditor()}
-          >
-            <IconLucideEdit class="size-4" />
-          </TooltipIconButton>
           <Show when={props.recording.meta.sharing}>
             {(sharing) => (
               <TooltipIconButton
@@ -227,6 +220,12 @@ function RecordingItem(props: {
               </TooltipIconButton>
             )}
           </Show>
+          <TooltipIconButton
+            tooltipText="Edit"
+            onClick={() => props.onOpenEditor()}
+          >
+            <IconLucideEdit class="size-4" />
+          </TooltipIconButton>
         </Show>
         <Show when={type() === "instant"}>
           {(_) => {
