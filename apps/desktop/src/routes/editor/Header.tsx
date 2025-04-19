@@ -23,11 +23,11 @@ export type ResolutionOption = {
   height: number;
 };
 
-export const RESOLUTION_OPTIONS: ResolutionOption[] = [
-  { label: "720p", value: "720p", width: 1280, height: 720 },
-  { label: "1080p", value: "1080p", width: 1920, height: 1080 },
-  { label: "4K", value: "4k", width: 3840, height: 2160 },
-];
+export const RESOLUTION_OPTIONS = {
+  _720p: { label: "720p", value: "720p", width: 1280, height: 720 },
+  _1080p: { label: "1080p", value: "1080p", width: 1920, height: 1080 },
+  _4k: { label: "4K", value: "4k", width: 3840, height: 2160 },
+};
 
 export interface ExportEstimates {
   duration_seconds: number;

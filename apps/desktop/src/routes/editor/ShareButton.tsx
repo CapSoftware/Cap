@@ -13,20 +13,10 @@ import { Dialog, DialogContent } from "./ui";
 import { exportVideo } from "~/utils/export";
 
 function ShareButton() {
-  const { editorInstance, metaUpdateStore } = useEditorContext();
+  const { editorInstance, meta } = useEditorContext();
   const projectPath = editorInstance.path;
 
-  const [recordingMeta, metaActions] = createResource(() =>
-    commands.getRecordingMeta(projectPath, "recording")
-  );
-  const [copyPressed, setCopyPressed] = createSignal(false);
-  const selectedFps = Number(localStorage.getItem("cap-export-fps")) || 30;
-  const selectedResolution =
-    RESOLUTION_OPTIONS.find(
-      (opt) => opt.value === localStorage.getItem("cap-export-resolution")
-    ) || RESOLUTION_OPTIONS[0];
-
-  const uploadVideo = createMutation(() => ({
+  const upload = createMutation(() => ({
     mutationFn: async () => {
       setUploadState({ type: "idle" });
 
@@ -36,12 +26,6 @@ function ShareButton() {
       const existingAuth = await authStore.get();
       if (!existingAuth) {
         throw new Error("You need to sign in to share recordings");
-      }
-
-      const meta = recordingMeta();
-      if (!meta) {
-        console.error("No recording metadata available");
-        throw new Error("Recording metadata not available");
       }
 
       const metadata = await commands.getVideoMetadata(projectPath);
@@ -81,10 +65,10 @@ function ShareButton() {
         await exportVideo(
           projectPath,
           {
-            fps: selectedFps,
+            fps: 30,
             resolution_base: {
-              x: selectedResolution.width,
-              y: selectedResolution.height,
+              x: RESOLUTION_OPTIONS._1080p.width,
+              y: RESOLUTION_OPTIONS._1080p.height,
             },
           },
           (msg) => {
@@ -101,7 +85,7 @@ function ShareButton() {
         setUploadState({ type: "uploading", progress: 0 });
 
         // Now proceed with upload
-        const result = recordingMeta()?.sharing
+        const result = meta?.sharing
           ? await commands.uploadExportedVideo(projectPath, "Reupload")
           : await commands.uploadExportedVideo(projectPath, {
               Initial: { pre_created_video: null },
@@ -117,17 +101,9 @@ function ShareButton() {
         setUploadState({ type: "link-copied" });
 
         return result;
-      } catch (error) {
-        console.error("Upload error:", error);
-        throw error instanceof Error
-          ? error
-          : new Error("Failed to upload recording");
       } finally {
         unlisten();
       }
-    },
-    onSuccess: () => {
-      metaActions.refetch();
     },
     onError: (error) => {
       commands.globalMessageDialog(
@@ -137,7 +113,7 @@ function ShareButton() {
     onSettled() {
       setTimeout(() => {
         setUploadState({ type: "idle" });
-        uploadVideo.reset();
+        upload.reset();
       }, 2000);
     },
   }));
@@ -151,25 +127,19 @@ function ShareButton() {
   >({ type: "idle" });
 
   createProgressBar(() => {
-    if (uploadVideo.isIdle || uploadState.type === "idle") return;
     if (uploadState.type === "starting") return 0;
     if (uploadState.type === "rendering")
       return (uploadState.renderedFrames / uploadState.totalFrames) * 100;
     if (uploadState.type === "uploading") return uploadState.progress;
-    return 100;
-  });
-
-  // Watch for metadata updates
-  createEffect(() => {
-    const update = metaUpdateStore.getLastUpdate();
-    if (update) metaActions.refetch();
   });
 
   return (
     <div class="relative">
-      <Show when={recordingMeta.latest?.sharing}>
+      <Show when={meta?.sharing}>
         {(sharing) => {
           const url = () => new URL(sharing().link);
+
+          const [copyPressed, setCopyPressed] = createSignal(false);
           const copyLink = () => {
             navigator.clipboard.writeText(sharing().link);
             setCopyPressed(true);
@@ -177,20 +147,21 @@ function ShareButton() {
               setCopyPressed(false);
             }, 2000);
           };
+
           return (
             <div class="flex gap-3 items-center">
               <Tooltip
                 content={
-                  uploadVideo.isPending ? "Reuploading video" : "Reupload video"
+                  upload.isPending ? "Reuploading video" : "Reupload video"
                 }
               >
                 <Button
-                  disabled={uploadVideo.isPending}
-                  onClick={() => uploadVideo.mutate()}
+                  disabled={upload.isPending}
+                  onClick={() => upload.mutate()}
                   variant="primary"
                   class="flex justify-center items-center size-[41px] !px-0 !py-0 space-x-1 rounded-xl"
                 >
-                  {uploadVideo.isPending ? (
+                  {upload.isPending ? (
                     <IconLucideLoaderCircle class="animate-spin size-4" />
                   ) : (
                     <IconLucideRotateCcw class="size-4" />
@@ -229,7 +200,7 @@ function ShareButton() {
           );
         }}
       </Show>
-      <Dialog.Root open={!uploadVideo.isIdle}>
+      <Dialog.Root open={!upload.isIdle}>
         <DialogContent
           title={"Reupload Recording"}
           confirm={<></>}

@@ -30,7 +30,7 @@ import {
   useEditorContext,
   useEditorInstanceContext,
 } from "./context";
-import ExportDialog from "./ExportDialog";
+import { ExportDialog } from "./ExportDialog";
 import { Header } from "./Header";
 import { Player } from "./Player";
 import { Timeline } from "./Timeline";
@@ -161,7 +161,7 @@ function Dialogs() {
         {(dialog) => (
           <Switch>
             <Match when={dialog().type === "export"}>
-              {(_) => <ExportDialog />}
+              <ExportDialog />
             </Match>
             <Match when={dialog().type === "createPreset"}>
               {(_) => {

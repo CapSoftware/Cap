@@ -2154,7 +2154,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     mic_samples_tx: audio_input_tx,
                     mic_feed: None,
                     recording_options: RecordingOptions {
-                        capture_target: ScreenCaptureTarget::Screen { id: 0 },
+                        capture_target: ScreenCaptureTarget::default(),
                         camera_label: None,
                         mic_name: None,
                         mode: RecordingMode::Studio,

@@ -48,7 +48,7 @@ pub struct CaptureArea {
     pub bounds: Bounds,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase", tag = "variant")]
 pub enum ScreenCaptureTarget {
     Window { id: u32 },
@@ -57,6 +57,13 @@ pub enum ScreenCaptureTarget {
 }
 
 impl ScreenCaptureTarget {
+    // only available on mac and windows
+    pub fn primary_display() -> Self {
+        ScreenCaptureTarget::Screen {
+            id: scap::get_main_display().id,
+        }
+    }
+
     pub fn get_target(&self) -> Option<scap::Target> {
         let targets = scap::get_all_targets();
 
