@@ -408,7 +408,6 @@ pub async fn spawn_studio_recording_actor(
 pub struct CompletedStudioRecording {
     pub id: String,
     pub project_path: PathBuf,
-    pub display_source: ScreenCaptureTarget,
     pub meta: StudioRecordingMeta,
     pub cursor_data: cap_project::CursorImages,
     pub segments: Vec<StudioRecordingSegment>,
@@ -488,7 +487,7 @@ async fn stop_recording(
         project_path: actor.recording_dir.clone(),
         meta,
         cursor_data: Default::default(),
-        display_source: actor.options.capture_target,
+        // display_source: actor.options.capture_target,
         segments: actor.segments,
     })
 }

@@ -22,7 +22,8 @@ export function ZoomTrack(props: {
   onDragStateChanged: (v: ZoomSegmentDragState) => void;
   handleUpdatePlayhead: (e: MouseEvent) => void;
 }) {
-  const { project, setProject, history, setState, state } = useEditorContext();
+  const { project, setProject, projectHistory, setEditorState, editorState } =
+    useEditorContext();
 
   const { duration, secsPerPixel } = useTimelineContext();
 
@@ -41,7 +42,7 @@ export function ZoomTrack(props: {
 
         let time =
           (e.clientX - bounds.left) * secsPerPixel() +
-          state.timelineTransform.position;
+          editorState.timeline.transform.position;
 
         const nextSegmentIndex = project.timeline?.zoomSegments?.findIndex(
           (s) => time < s.start
@@ -150,7 +151,7 @@ export function ZoomTrack(props: {
 
               setTrackState("draggingSegment", true);
 
-              const resumeHistory = history.pause();
+              const resumeHistory = projectHistory.pause();
 
               props.onDragStateChanged({ type: "movePending" });
 
@@ -158,7 +159,7 @@ export function ZoomTrack(props: {
                 resumeHistory();
                 if (!moved) {
                   e.stopPropagation();
-                  setState("timelineSelection", {
+                  setEditorState("timeline", "selection", {
                     type: "zoom",
                     index: i(),
                   });

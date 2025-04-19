@@ -14,11 +14,9 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
     project,
     setProject,
     editorInstance,
-    history,
-    split,
-    state,
+    projectHistory,
+    editorState,
     totalDuration,
-    previewTime,
   } = useEditorContext();
 
   const { secsPerPixel, duration } = useTimelineContext();
@@ -27,11 +25,10 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
     project.timeline?.segments ?? [{ start: 0, end: duration(), timescale: 1 }];
 
   function onHandleReleased() {
-    if (
-      state.timelineTransform.position + state.timelineTransform.zoom >
-      totalDuration() + 4
-    ) {
-      state.timelineTransform.updateZoom(totalDuration(), previewTime()!);
+    const { transform } = editorState.timeline;
+
+    if (transform.position + transform.zoom > totalDuration() + 4) {
+      transform.updateZoom(totalDuration(), editorState.previewTime!);
     }
   }
 
@@ -58,7 +55,7 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                 end: segment.end - segment.start + prevDuration(),
               }}
               onMouseDown={(e) => {
-                if (!split()) return;
+                if (editorState.timeline.interactMode !== "split") return;
                 e.stopPropagation();
 
                 const rect = e.currentTarget.getBoundingClientRect();
@@ -131,7 +128,7 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                     );
                   }
 
-                  const resumeHistory = history.pause();
+                  const resumeHistory = projectHistory.pause();
                   createRoot((dispose) => {
                     createEventListenerMap(window, {
                       mousemove: update,
@@ -216,7 +213,7 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                     );
                   }
 
-                  const resumeHistory = history.pause();
+                  const resumeHistory = projectHistory.pause();
                   createRoot((dispose) => {
                     createEventListenerMap(window, {
                       mousemove: update,
@@ -239,17 +236,16 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
 }
 
 function Markings(props: { segment: TimelineSegment; prevDuration: number }) {
-  const { state } = useEditorContext();
+  const { editorState } = useEditorContext();
   const { secsPerPixel, markingResolution } = useTimelineContext();
 
   const markings = () => {
     const resolution = markingResolution();
 
+    const { transform } = editorState.timeline;
     const visibleMin =
-      state.timelineTransform.position -
-      props.prevDuration +
-      props.segment.start;
-    const visibleMax = visibleMin + state.timelineTransform.zoom;
+      transform.position - props.prevDuration + props.segment.start;
+    const visibleMax = visibleMin + transform.zoom;
 
     const start = Math.floor(visibleMin / resolution);
 
