@@ -46,5 +46,6 @@ export async function maybeProtectedHeaders() {
 export async function protectedHeaders() {
   const { authorization } = await maybeProtectedHeaders();
   if (!authorization) throw new Error("Not authorized");
+  console.log({ authorization });
   return { authorization };
 }

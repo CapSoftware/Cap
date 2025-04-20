@@ -1,6 +1,7 @@
-import { getAllWindows } from "@tauri-apps/api/window";
+import { getAllWindows, getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrent } from "@tauri-apps/plugin-deep-link";
 import { type as ostype } from "@tauri-apps/plugin-os";
-import { onMount, Show, Suspense } from "solid-js";
+import { createResource, Show, Suspense } from "solid-js";
 import CropAreaRenderer from "~/components/CropAreaRenderer";
 import { createCurrentRecordingQuery } from "~/utils/queries";
 
@@ -16,13 +17,16 @@ export default function () {
 
   const bounds = () => {
     if (!currentRecording.data) return;
-    if ("window" in currentRecording.data) {
-      return currentRecording.data.window.bounds;
+    if ("window" in currentRecording.data.target) {
+      return currentRecording.data.target.window.bounds;
     }
-    if ("area" in currentRecording.data) {
-      return currentRecording.data.area.bounds;
+    if ("area" in currentRecording.data.target) {
+      return currentRecording.data.target.area.bounds;
     }
   };
+
+
+  const [scale] = createResource(() => getCurrentWindow().scaleFactor(), { initialValue: 0 });
 
   return (
     <Suspense>
@@ -37,8 +41,13 @@ export default function () {
 
           return (
             <CropAreaRenderer
-              bounds={bounds()}
-              borderRadius={ostype() === "macos" ? 9 : 7}
+              bounds={ostype() === "macos" ? bounds() : {
+                x: bounds().x / scale(),
+                y: bounds().y / scale(),
+                width: bounds().width / scale(),
+                height: bounds().height / scale()
+              }}
+            // no border radius as that should be added in editor
             />
           );
         }}

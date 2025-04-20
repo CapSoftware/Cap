@@ -6,10 +6,14 @@ use wgpu::{include_wgsl, util::DeviceExt, FilterMode};
 
 use crate::{
     frame_pipeline::{FramePipeline, FramePipelineState},
-    spring_mass_damper::SpringMassDamperSimulation,
+    spring_mass_damper::{SpringMassDamperSimulation, SpringMassDamperSimulationConfig},
     zoom::InterpolatedZoom,
     Coord, DecodedSegmentFrames, ProjectUniforms, RawDisplayUVSpace, STANDARD_CURSOR_HEIGHT,
 };
+
+const CURSOR_CLICK_DURATION: f64 = 0.25;
+const CURSOR_CLICK_DURATION_MS: f64 = CURSOR_CLICK_DURATION * 1000.0;
+const CLICK_SHRINK_SIZE: f32 = 0.7;
 
 pub struct CursorLayer {
     uniform_buffer: wgpu::Buffer,
@@ -29,7 +33,7 @@ impl CursorLayer {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: Some(std::num::NonZeroU64::new(112).unwrap()),
+                        min_binding_size: None, // Some(std::num::NonZeroU64::new(80).unwrap()),
                     },
                     count: None,
                 },
@@ -144,15 +148,17 @@ impl CursorLayer {
             constants,
             ..
         } = &pipeline.state;
-        let segment_time = segment_frames.segment_time;
+        let time_s = segment_frames.recording_time;
 
+        let cursor_settings = &uniforms.project.cursor;
         let Some(interpolated_cursor) = interpolate_cursor(
             cursor,
-            segment_time,
-            uniforms.project.cursor.tension,
-            uniforms.project.cursor.mass,
-            uniforms.project.cursor.friction,
-            uniforms.project.cursor.raw,
+            time_s,
+            (!cursor_settings.raw).then(|| SpringMassDamperSimulationConfig {
+                tension: cursor_settings.tension,
+                mass: cursor_settings.mass,
+                friction: cursor_settings.friction,
+            }),
         ) else {
             return;
         };
@@ -165,80 +171,60 @@ impl CursorLayer {
 
         let speed = (velocity[0] * velocity[0] + velocity[1] * velocity[1]).sqrt();
         let motion_blur_amount = (speed * 0.3).min(1.0) * 0.0; // uniforms.project.cursor.motion_blur;
-        let cursor_event = find_cursor_event(&cursor, segment_time);
+        let last_move_event = find_cursor_move(&cursor, time_s);
 
-        let last_click_time = cursor
-            .clicks
-            .iter()
-            .filter(|click| click.down && click.process_time_ms <= (segment_time as f64) * 1000.0)
-            .max_by_key(|click| click.process_time_ms as i64)
-            .map(|click| ((segment_time as f64) * 1000.0 - click.process_time_ms) as f32 / 1000.0)
-            .unwrap_or(1.0);
-
-        let Some(cursor_texture) = constants.cursor_textures.get(&cursor_event.cursor_id) else {
+        let Some(cursor_texture) = constants.cursor_textures.get(&last_move_event.cursor_id) else {
             return;
         };
 
-        let cursor_size = cursor_texture.inner.size();
-        let aspect_ratio = cursor_size.width as f32 / cursor_size.height as f32;
+        let cursor_base_size_px = {
+            let cursor_texture_size = cursor_texture.inner.size();
+            let cursor_texture_size_aspect =
+                cursor_texture_size.width as f32 / cursor_texture_size.height as f32;
 
-        let cursor_size_percentage = if uniforms.cursor_size <= 0.0 {
-            100.0
-        } else {
-            uniforms.cursor_size / 100.0
+            let cursor_size_percentage = if uniforms.cursor_size <= 0.0 {
+                100.0
+            } else {
+                uniforms.cursor_size / 100.0
+            };
+
+            XY::new(
+                STANDARD_CURSOR_HEIGHT * cursor_texture_size_aspect * cursor_size_percentage,
+                STANDARD_CURSOR_HEIGHT * cursor_size_percentage,
+            )
         };
 
-        let normalized_size = [
-            STANDARD_CURSOR_HEIGHT * aspect_ratio * cursor_size_percentage,
-            STANDARD_CURSOR_HEIGHT * cursor_size_percentage,
-        ];
+        let click_scale_factor = get_click_t(&cursor.clicks, (time_s as f64) * 1000.0)
+            * (1.0 - CLICK_SHRINK_SIZE)
+            + CLICK_SHRINK_SIZE;
 
-        let position = interpolated_cursor
-            .position
-            .to_frame_space(&constants.options, &uniforms.project, resolution_base)
-            .to_zoomed_frame_space(&constants.options, &uniforms.project, resolution_base, zoom);
-        let relative_position = [position.x as f32, position.y as f32];
+        let cursor_size_px =
+            cursor_base_size_px * click_scale_factor * zoom.display_amount() as f32;
 
-        fn smoothstep(low: f32, high: f32, v: f32) -> f32 {
-            let t = f32::clamp((v - low) / (high - low), 0.0, 1.0);
-            t * t * (3.0 - 2.0 * t)
-        }
+        let hotspot_px = cursor_texture.hotspot * cursor_size_px;
 
-        let click_scale = 1.0
-            - (0.2
-                * smoothstep(0.0, 0.25, last_click_time)
-                * (1.0 - smoothstep(0.25, 0.5, last_click_time)));
+        let position = {
+            let mut frame_position = interpolated_cursor.position.to_frame_space(
+                &constants.options,
+                &uniforms.project,
+                resolution_base,
+            );
 
-        let output_size = ProjectUniforms::get_output_size(
-            &constants.options,
-            &uniforms.project,
-            resolution_base,
-        );
-        let display_size =
-            ProjectUniforms::display_size(&constants.options, &uniforms.project, resolution_base);
+            frame_position.coord = frame_position.coord - hotspot_px.map(|v| v as f64);
+
+            frame_position
+                .to_zoomed_frame_space(&constants.options, &uniforms.project, resolution_base, zoom)
+                .coord
+        };
 
         let uniforms = CursorUniforms {
-            position: [relative_position[0], relative_position[1], 0.0, 0.0],
-            size: [normalized_size[0], normalized_size[1], 0.0, 0.0],
-            output_size: [
-                uniforms.output_size.0 as f32,
-                uniforms.output_size.1 as f32,
-                0.0,
-                0.0,
-            ],
+            position: [position.x as f32, position.y as f32],
+            size: [cursor_size_px.x, cursor_size_px.y],
+            output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
             screen_bounds: uniforms.display.target_bounds,
-            cursor_size: cursor_size_percentage
-                * click_scale
-                * zoom.display_amount() as f32
-                * (display_size.coord.x as f32 / output_size.0 as f32),
-            last_click_time,
             velocity,
             motion_blur_amount,
-            hotspot: [
-                cursor_texture.hotspot.x as f32,
-                cursor_texture.hotspot.y as f32,
-            ],
-            _alignment: [0.0; 5],
+            _alignment: [0.0; 3],
         };
 
         constants
@@ -282,22 +268,19 @@ impl CursorLayer {
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, Pod, Zeroable, Default)]
 pub struct CursorUniforms {
-    position: [f32; 4],
-    size: [f32; 4],
-    output_size: [f32; 4],
+    position: [f32; 2],
+    size: [f32; 2],
+    output_size: [f32; 2],
     screen_bounds: [f32; 4],
-    cursor_size: f32,
-    last_click_time: f32,
     velocity: [f32; 2],
     motion_blur_amount: f32,
-    hotspot: [f32; 2],
-    _alignment: [f32; 5],
+    _alignment: [f32; 3],
 }
 
-pub fn find_cursor_event(cursor: &CursorEvents, time: f32) -> &CursorMoveEvent {
+pub fn find_cursor_move(cursor: &CursorEvents, time: f32) -> &CursorMoveEvent {
     let time_ms = time * 1000.0;
 
-    if cursor.moves[0].process_time_ms > time_ms.into() {
+    if cursor.moves[0].time_ms > time_ms.into() {
         return &cursor.moves[0];
     }
 
@@ -307,7 +290,7 @@ pub fn find_cursor_event(cursor: &CursorEvents, time: f32) -> &CursorMoveEvent {
         .rev()
         .find(|event| {
             // println!("Checking event at time: {}ms", event.process_time_ms);
-            event.process_time_ms <= time_ms.into()
+            event.time_ms <= time_ms.into()
         })
         .unwrap_or(&cursor.moves[0]);
 
@@ -322,10 +305,7 @@ struct InterpolatedCursorPosition {
 fn interpolate_cursor(
     cursor: &CursorEvents,
     time_secs: f32,
-    tension: f32,
-    mass: f32,
-    friction: f32,
-    raw: bool,
+    smoothing: Option<SpringMassDamperSimulationConfig>,
 ) -> Option<InterpolatedCursorPosition> {
     let time_ms = (time_secs * 1000.0) as f64;
 
@@ -333,7 +313,7 @@ fn interpolate_cursor(
         return None;
     }
 
-    if cursor.moves[0].process_time_ms > time_ms.into() {
+    if cursor.moves[0].time_ms > time_ms.into() {
         let event = &cursor.moves[0];
 
         return Some(InterpolatedCursorPosition {
@@ -346,7 +326,7 @@ fn interpolate_cursor(
     }
 
     if let Some(event) = cursor.moves.last() {
-        if event.process_time_ms < time_ms.into() {
+        if event.time_ms < time_ms.into() {
             return Some(InterpolatedCursorPosition {
                 position: Coord::new(XY {
                     x: event.x,
@@ -357,9 +337,12 @@ fn interpolate_cursor(
         }
     }
 
-    if raw {
+    if let Some(smoothing_config) = smoothing {
+        let events = get_smoothed_cursor_events(&cursor.moves, smoothing_config);
+        interpolate_smoothed_position(&events, time_secs as f64, smoothing_config)
+    } else {
         let pos = cursor.moves.windows(2).enumerate().find_map(|(i, chunk)| {
-            if time_ms >= chunk[0].process_time_ms && time_ms < chunk[1].process_time_ms {
+            if time_ms >= chunk[0].time_ms && time_ms < chunk[1].time_ms {
                 let c = &chunk[0];
                 Some(XY::new(c.x as f32, c.y as f32))
             } else {
@@ -374,24 +357,19 @@ fn interpolate_cursor(
             }),
             velocity: XY::new(0.0, 0.0),
         })
-    } else {
-        let events = get_smoothed_cursor_events(&cursor.moves, tension, mass, friction);
-        interpolate_smoothed_position(&events, time_secs as f64, tension, mass, friction)
     }
 }
 
 fn interpolate_smoothed_position(
     smoothed_events: &[SmoothedCursorEvent],
     query_time: f64,
-    tension: f32,
-    mass: f32,
-    friction: f32,
+    smoothing_config: SpringMassDamperSimulationConfig,
 ) -> Option<InterpolatedCursorPosition> {
     if smoothed_events.is_empty() {
         return None;
     }
 
-    let mut sim = SpringMassDamperSimulation::new(tension, mass, friction);
+    let mut sim = SpringMassDamperSimulation::new(smoothing_config);
 
     let query_time_ms = (query_time * 1000.0) as f32;
 
@@ -430,20 +408,18 @@ struct SmoothedCursorEvent {
 
 fn get_smoothed_cursor_events(
     moves: &[CursorMoveEvent],
-    tension: f32,
-    mass: f32,
-    friction: f32,
+    smoothing_config: SpringMassDamperSimulationConfig,
 ) -> Vec<SmoothedCursorEvent> {
     let mut last_time = 0.0;
 
     let mut events = vec![];
 
-    let mut sim = SpringMassDamperSimulation::new(tension, mass, friction);
+    let mut sim = SpringMassDamperSimulation::new(smoothing_config);
 
     sim.set_position(XY::new(moves[0].x, moves[0].y).map(|v| v as f32));
     sim.set_velocity(XY::new(0.0, 0.0));
 
-    if moves[0].process_time_ms > 0.0 {
+    if moves[0].time_ms > 0.0 {
         events.push(SmoothedCursorEvent {
             time: 0.0,
             target_position: sim.position,
@@ -459,12 +435,12 @@ fn get_smoothed_cursor_events(
             .unwrap_or(sim.target_position);
         sim.set_target_position(target_position);
 
-        sim.run(m.process_time_ms as f32 - last_time);
+        sim.run(m.time_ms as f32 - last_time);
 
-        last_time = m.process_time_ms as f32;
+        last_time = m.time_ms as f32;
 
         events.push(SmoothedCursorEvent {
-            time: m.process_time_ms as f32,
+            time: m.time_ms as f32,
             target_position,
             position: sim.position,
             velocity: sim.velocity,
@@ -472,4 +448,53 @@ fn get_smoothed_cursor_events(
     }
 
     events
+}
+
+fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64) -> f32 {
+    fn smoothstep(low: f32, high: f32, v: f32) -> f32 {
+        let t = f32::clamp((v - low) / (high - low), 0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+
+    let mut prev_i = None;
+
+    for (i, clicks) in clicks.windows(2).enumerate() {
+        let left = &clicks[0];
+        let right = &clicks[1];
+
+        if left.time_ms <= time_ms && right.time_ms > time_ms {
+            prev_i = Some(i);
+            break;
+        }
+    }
+
+    let Some(prev_i) = prev_i else {
+        return 1.0;
+    };
+
+    let prev = &clicks[prev_i];
+
+    if prev.down {
+        return 0.0;
+    }
+
+    if !prev.down && time_ms - prev.time_ms <= CURSOR_CLICK_DURATION_MS {
+        return smoothstep(
+            0.0,
+            CURSOR_CLICK_DURATION_MS as f32,
+            (time_ms - prev.time_ms) as f32,
+        );
+    }
+
+    if let Some(next) = clicks.get(prev_i + 1) {
+        if !prev.down && next.down && next.time_ms - time_ms <= CURSOR_CLICK_DURATION_MS {
+            return smoothstep(
+                0.0,
+                CURSOR_CLICK_DURATION_MS as f32,
+                (time_ms - next.time_ms).abs() as f32,
+            );
+        }
+    }
+
+    1.0
 }

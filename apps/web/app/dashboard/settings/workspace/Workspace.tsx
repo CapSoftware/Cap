@@ -30,6 +30,10 @@ import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayou
 import { format } from "date-fns";
 import { Tooltip } from "react-tooltip";
 import { CustomDomain } from "./components/CustomDomain";
+import { updateWorkspaceDetails } from "@/actions/workspace/update-details";
+import { sendWorkspaceInvites } from "@/actions/workspace/send-invites";
+import { removeWorkspaceInvite } from "@/actions/workspace/remove-invite";
+import { manageBilling } from "@/actions/workspace/manage-billing";
 
 export const Workspace = () => {
   const { spaceData, activeSpace, user } = useSharedContext();
@@ -65,24 +69,13 @@ export const Workspace = () => {
     const allowedEmailDomain = formData.get("allowedEmailDomain") as string;
 
     try {
-      const response = await fetch("/api/settings/workspace/details", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          workspaceName,
-          allowedEmailDomain,
-          spaceId: activeSpace?.space.id,
-        }),
-      });
-
-      if (response.ok) {
-        toast.success("Settings updated successfully");
-        router.refresh();
-      } else {
-        toast.error("Failed to update settings");
-      }
+      await updateWorkspaceDetails(
+        workspaceName,
+        allowedEmailDomain,
+        activeSpace?.space.id as string
+      );
+      toast.success("Settings updated successfully");
+      router.refresh();
     } catch (error) {
       console.error("Error updating settings:", error);
       toast.error("An error occurred while updating settings");
@@ -109,25 +102,11 @@ export const Workspace = () => {
     }
 
     try {
-      const response = await fetch("/api/settings/workspace/invite/send", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          invitedEmails: inviteEmails,
-          spaceId: activeSpace?.space.id,
-        }),
-      });
-
-      if (response.ok) {
-        toast.success("Invites sent successfully");
-        setInviteEmails([]);
-        setIsInviteDialogOpen(false);
-        router.refresh();
-      } else {
-        toast.error("Failed to send invites");
-      }
+      await sendWorkspaceInvites(inviteEmails, activeSpace?.space.id as string);
+      toast.success("Invites sent successfully");
+      setInviteEmails([]);
+      setIsInviteDialogOpen(false);
+      router.refresh();
     } catch (error) {
       console.error("Error sending invites:", error);
       toast.error("An error occurred while sending invites");
@@ -141,26 +120,29 @@ export const Workspace = () => {
     }
 
     try {
-      const response = await fetch("/api/settings/workspace/invite/remove", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          inviteId,
-          spaceId: activeSpace?.space.id,
-        }),
-      });
-
-      if (response.ok) {
-        toast.success("Invite deleted successfully");
-        router.refresh();
-      } else {
-        toast.error("Failed to delete invite");
-      }
+      await removeWorkspaceInvite(inviteId, activeSpace?.space.id as string);
+      toast.success("Invite deleted successfully");
+      router.refresh();
     } catch (error) {
       console.error("Error deleting invite:", error);
       toast.error("An error occurred while deleting invite");
+    }
+  };
+
+  const handleManageBilling = async () => {
+    if (!isOwner) {
+      showOwnerToast();
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const url = await manageBilling();
+      router.push(url);
+    } catch (error) {
+      console.error("Error managing billing:", error);
+      toast.error("An error occurred while managing billing");
+      setLoading(false);
     }
   };
 
@@ -271,24 +253,7 @@ export const Workspace = () => {
             size="sm"
             variant="primary"
             disabled={!isOwner || loading}
-            onClick={() => {
-              if (!isOwner) {
-                showOwnerToast();
-                return;
-              }
-              setLoading(true);
-              fetch(`/api/settings/billing/manage`, {
-                method: "POST",
-              })
-                .then(async (res) => {
-                  const url = await res.json();
-                  router.push(url);
-                })
-                .catch((err) => {
-                  alert(err);
-                  setLoading(false);
-                });
-            }}
+            onClick={handleManageBilling}
             data-tooltip-id="purchase-seats-tooltip"
             data-tooltip-content='Once inside the Stripe dashboard, click "Manage Plan", then increase quantity of subscriptions to purchase more seats.'
           >
@@ -390,24 +355,7 @@ export const Workspace = () => {
             type="button"
             size="sm"
             variant="gray"
-            onClick={() => {
-              if (!isOwner) {
-                showOwnerToast();
-                return;
-              }
-              setLoading(true);
-              fetch(`/api/settings/billing/manage`, {
-                method: "POST",
-              })
-                .then(async (res) => {
-                  const url = await res.json();
-                  router.push(url);
-                })
-                .catch((err) => {
-                  alert(err);
-                  setLoading(false);
-                });
-            }}
+            onClick={handleManageBilling}
             disabled={!isOwner}
           >
             {loading ? "Loading..." : "Manage Billing"}

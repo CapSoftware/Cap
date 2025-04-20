@@ -1,9 +1,10 @@
-import { A, type RouteSectionProps } from "@solidjs/router";
-import { createResource, For, Show, Suspense, onMount } from "solid-js";
 import { Button } from "@cap/ui-solid";
+import { A, type RouteSectionProps } from "@solidjs/router";
 import { getVersion } from "@tauri-apps/api/app";
 import "@total-typescript/ts-reset/filter-boolean";
+import { createResource, For, Show, Suspense } from "solid-js";
 import toast from "solid-toast";
+import { SignInButton } from "~/components/SignInButton";
 
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
@@ -23,8 +24,6 @@ export default function Settings(props: RouteSectionProps) {
     if (auth.data) {
       trackEvent("user_signed_out", { platform: "desktop" });
       authStore.set(undefined);
-    } else {
-      commands.showWindow("SignIn");
     }
   };
 
@@ -55,7 +54,7 @@ export default function Settings(props: RouteSectionProps) {
 
   return (
     <div class="flex-1 flex flex-row divide-x divide-[--gray-200] text-[0.875rem] leading-[1.25rem] overflow-y-hidden">
-      <div class="h-full flex flex-col">
+      <div class="flex flex-col h-full bg-gray-100">
         <ul class="min-w-[12rem] h-full p-[0.625rem] space-y-1 text-[--text-primary]">
           <For
             each={
@@ -78,12 +77,12 @@ export default function Settings(props: RouteSectionProps) {
                   name: "Previous Recordings",
                   icon: IconLucideSquarePlay,
                 },
-                {
-                  type: "link",
-                  href: "screenshots",
-                  name: "Previous Screenshots",
-                  icon: IconLucideCamera,
-                },
+                // {
+                //   type: "link",
+                //   href: "screenshots",
+                //   name: "Previous Screenshots",
+                //   icon: IconLucideCamera,
+                // },
                 {
                   type: "link",
                   href: "integrations",
@@ -116,19 +115,19 @@ export default function Settings(props: RouteSectionProps) {
                 {item.type === "button" ? (
                   <button
                     onClick={item.onClick}
-                    class="w-full rounded-lg h-[2rem] px-[0.375rem] flex flex-row items-center gap-[0.375rem] transition-colors border hover:bg-gray-100 border-transparent"
+                    class="w-full rounded-lg h-[2rem] px-2 flex flex-row items-center gap-[0.375rem] transition-colors border hover:bg-gray-100 border-transparent"
                   >
-                    <item.icon class="size-[1.25rem]" />
+                    <item.icon class="size-4" />
                     <span>{item.name}</span>
                   </button>
                 ) : (
                   <A
                     href={item.href}
-                    activeClass="bg-blue-50 border-blue-200 text-blue-700"
+                    activeClass="bg-gray-200"
                     inactiveClass="hover:bg-gray-100 border-transparent"
-                    class="rounded-lg h-[2rem] px-[0.375rem] flex flex-row items-center gap-[0.375rem] transition-colors border"
+                    class="rounded-lg h-[2rem] px-2 flex flex-row items-center gap-[0.375rem] transition-colors border"
                   >
-                    <item.icon class="size-[1.25rem]" />
+                    <item.icon class="size-4" />
                     <span>{item.name}</span>
                   </A>
                 )}
@@ -136,16 +135,20 @@ export default function Settings(props: RouteSectionProps) {
             )}
           </For>
         </ul>
-        <div class="p-[0.625rem]">
+        <div class="p-[0.625rem] text-left flex flex-col">
           <Show when={version()}>
-            {(v) => <p class="text-xs text-gray-400 mb-1">v{v()}</p>}
+            {(v) => <p class="mb-1 text-xs text-gray-400">v{v()}</p>}
           </Show>
-          <Button onClick={handleAuth} variant="secondary" class="w-full">
-            {auth.data ? "Sign Out" : "Sign In"}
-          </Button>
+          {auth.data ? (
+            <Button onClick={handleAuth} variant="secondary" class="w-full">
+              Sign Out
+            </Button>
+          ) : (
+            <SignInButton>Sign In</SignInButton>
+          )}
         </div>
       </div>
-      <div class="flex-1 bg-gray-50 overflow-y-hidden animate-in">
+      <div class="overflow-y-hidden flex-1 bg-gray-50 animate-in">
         <Suspense>{props.children}</Suspense>
       </div>
     </div>

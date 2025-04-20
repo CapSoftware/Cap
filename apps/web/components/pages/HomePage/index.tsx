@@ -22,7 +22,7 @@ import { Parallax, ParallaxProvider } from "react-scroll-parallax";
 import { LogoSection } from "../_components/LogoSection";
 import LeftBlueHue from "./LeftBlueHue";
 import PowerfulFeaturesSVG from "./PowerfulFeaturesSVG";
-
+import { FeatureCard } from "../SelfHostingPage";
 export const HomePage = () => {
   const [videoToggled, setVideoToggled] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -180,7 +180,7 @@ export const HomePage = () => {
               repeatType: "reverse",
               ease: "linear",
             }}
-            className="absolute opacity-70 top-[340px] -left-[200px] z-[9] 
+            className="absolute opacity-70 top-[340px] -left-[200px] z-[9]
       w-full max-w-[1800px] h-[100px] bg-gradient-to-l from-transparent via-white/90 to-white"
             style={{
               borderRadius: "100%",
@@ -243,7 +243,7 @@ export const HomePage = () => {
               repeat: Infinity,
               repeatType: "reverse",
             }}
-            className="absolute 
+            className="absolute
             top-[180px] w-full max-w-[280px] z-[4] right-[60px] md:right-[600px] select-none"
             src="./illustrations/smallcloudthree.webp"
             alt="smallcloudfour"
@@ -266,7 +266,7 @@ export const HomePage = () => {
             alt="bottomcloudthree"
           />
           <img
-            className="absolute 
+            className="absolute
             top-[180px] w-full max-w-[400px] z-0 select-none right-[60px] opacity-30 pointer-events-none"
             src="./illustrations/smallcloudthree.webp"
             alt="smallcloudthree"
@@ -284,7 +284,7 @@ export const HomePage = () => {
               repeatType: "reverse",
               ease: "linear",
             }}
-            className="absolute 
+            className="absolute
         bottom-[240px] w-full max-w-[430px] z-[1] right-[40px] select-none  opacity-80 brightness-125 pointer-events-none"
             src="./illustrations/smallcloudtwo.webp"
             alt="smallcloudtwo"
@@ -293,7 +293,7 @@ export const HomePage = () => {
             style={{
               mixBlendMode: "screen",
             }}
-            className="absolute 
+            className="absolute
          w-full max-w-[500px] top-[210px] right-[300px] z-[2] select-none  brightness-125 pointer-events-none"
             src="./illustrations/chipcloud.webp"
             alt="chipcloudtwo"
@@ -315,13 +315,13 @@ export const HomePage = () => {
               repeatType: "reverse",
               ease: "linear",
             }}
-            className="absolute 
+            className="absolute
          w-full max-w-[500px] bottom-[15px] select-none left-[-200px] lg:left-[30px] z-[10] pointer-events-none"
             src="./illustrations/chipcloud.webp"
             alt="chipcloudfour"
           />
           <img
-            className="absolute 
+            className="absolute
          w-full max-w-[500px] top-[160px] select-none mix-blend-screen left-[-200px] lg:left-[30px] z-[10] pointer-events-none"
             src="./illustrations/chipcloud.webp"
             alt="chipcloud"
@@ -339,7 +339,7 @@ export const HomePage = () => {
         </div>
         {/** Right Blue Hue */}
         <div
-          className="w-[868px] h-[502px] bg-gradient-to-l rounded-full blur-[100px] 
+          className="w-[868px] h-[502px] bg-gradient-to-l rounded-full blur-[100px]
       absolute top-20 z-[0] right-0 from-[#A6D7FF] to-transparent"
         />
       </div>
@@ -383,6 +383,68 @@ export const HomePage = () => {
               className="w-full h-auto max-h-[290px] object-cover"
               src="/features/open-source.png"
               alt="Open source Illustration"
+            />
+          </div>
+        </div>
+      </div>
+      <div className="pb-32 wrapper md:pb-40" id="features">
+        <div className="space-y-3">
+          {/* Section 1: 35% / 65% split */}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
+            <div className="md:col-span-5">
+              <FeatureCard
+                title="Privacy-first"
+                description="Own your content with Cap's privacy-focused approach. Keep your sensitive information secure and maintain complete control over who can access your recordings - perfect for confidential client communications and internal team sharing."
+                imagePath="/illustrations/privacy.webp"
+                imageAlt="Complete Control"
+                imageHeight="h-[280px]"
+              />
+            </div>
+            <div className="md:col-span-7">
+              <FeatureCard
+                title="Multi-Platform Support"
+                description="Cap works seamlessly across macOS and Windows, giving you the flexibility to create content on any device. Capture, share, and collaborate regardless of which platform you or your team prefers, ensuring smooth workflows and consistent experience everywhere."
+                imagePath="/illustrations/multiplatmain.png"
+                bg="/illustrations/multiplatbg.webp"
+                imageAlt="Enterprise-Ready"
+                className="bg-[center_top_-90px] bg-no-repeat bg-cover lg:bg-[center_top_-60px]"
+                imageHeight="h-[280px]"
+              />
+            </div>
+          </div>
+
+          {/* Section 2: 65% / 35% split */}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
+            <div className="md:col-span-8">
+              <FeatureCard
+                title="Flexible Storage Options"
+                bg="/illustrations/multiplatbg.webp"
+                description="Choose how and where you store your recordings. Cap offers both local and cloud storage options to suit your needs. Save space on your device or keep your entire content library accessible from anywhere - ideal for freelancers and growing teams with varied content creation needs."
+                imagePath="/illustrations/cloud-feature.webp"
+                imageAlt="White Labeling"
+                imageHeight="h-[215px]"
+                className="lg:bg-[center_top_-150px] bg-[center_top_-120px] bg-no-repeat bg-cover"
+              />
+            </div>
+            <div className="md:col-span-4">
+              <FeatureCard
+                title="High-Quality Video Capture"
+                description="Deliver crystal-clear recordings that showcase your professionalism. Cap ensures exceptional quality for client presentations, tutorials, and team communications - making your content stand out whether you're a solo creator or a small business owner."
+                imagePath="/illustrations/video-capture.webp"
+                imageAlt="Data Sovereignty"
+                imageHeight="h-[224px]"
+              />
+            </div>
+          </div>
+
+          {/* Section 3: Full width */}
+          <div className="grid grid-cols-1">
+            <FeatureCard
+              title="Seamless Team Collaboration"
+              description="Share knowledge effortlessly with your team or clients. Cap's intuitive sharing features make it easy to organize content, provide access to specific people, and track engagement. Perfect for small businesses and growing teams who need simple yet powerful collaboration tools."
+              imagePath="/illustrations/collaboration.webp"
+              imageAlt="Dedicated Support"
+              imageHeight="h-[285px]"
             />
           </div>
         </div>

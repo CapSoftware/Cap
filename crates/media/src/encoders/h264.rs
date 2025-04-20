@@ -31,8 +31,6 @@ impl H264Encoder {
         config: VideoInfo,
         output: &mut format::context::Output,
     ) -> Result<Self, MediaError> {
-        dbg!(config);
-
         let (codec, options) = get_codec_and_options(&config)?;
 
         let (format, converter) = if !codec
@@ -62,7 +60,7 @@ impl H264Encoder {
                             config.pixel_format,
                             e
                         );
-                        MediaError::Any("Failed to create frame converter")
+                        MediaError::Any("Failed to create frame converter".into())
                     })?,
                 ),
             )

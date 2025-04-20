@@ -7,6 +7,7 @@ import { CapCard } from "./components/CapCard";
 import { EmptyCapState } from "./components/EmptyCapState";
 import { CapPagination } from "./components/CapPagination";
 import { apiClient } from "@/utils/web-api";
+import { VideoMetadata } from "@cap/database/types";
 
 type VideoData = {
   id: string;
@@ -17,6 +18,7 @@ type VideoData = {
   totalReactions: number;
   sharedSpaces: { id: string; name: string }[];
   ownerName: string;
+  metadata?: VideoMetadata;
 }[];
 
 export const Caps = ({

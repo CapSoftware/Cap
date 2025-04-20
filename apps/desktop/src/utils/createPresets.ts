@@ -1,5 +1,6 @@
 import type { PresetsStore, ProjectConfiguration } from "~/utils/tauri";
 import { presetsStore } from "~/store";
+import { produce } from "solid-js/store";
 
 export type CreatePreset = {
   name: string;
@@ -16,7 +17,7 @@ export function createPresets() {
     let p = query.data;
     if (!p) await presetsStore.set((p = { presets: [], default: null }));
 
-    const newValue = fn(p);
+    const newValue = produce(fn)(p);
 
     await presetsStore.set(newValue);
   }

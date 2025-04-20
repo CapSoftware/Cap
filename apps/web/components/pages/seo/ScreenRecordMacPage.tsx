@@ -1,13 +1,14 @@
 "use client";
 
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
+import Script from "next/script";
 
 export const screenRecordMacContent = {
-  title: "Screen Record on Mac: High-Quality, Easy-to-Use Recorder for macOS",
+  title: "Best Screen Recorder for Mac | High-Quality, Free & Easy (2025)",
   description:
-    "Cap is a powerful, user-friendly screen recorder for Mac, offering high-quality video capture with seamless functionality. Perfect for creating tutorials, presentations, and educational content on macOS.",
+    "Cap is the best free screen recorder for Mac, offering HD quality, unlimited recording, and easy export. Ideal for tutorials, presentations, and educational videos.",
 
-  featuresTitle: "Why Choose Cap for Screen Recording on Mac?",
+  featuresTitle: "Why Cap is the Best Screen Recorder for Mac",
   featuresDescription:
     "Cap provides all the features Mac users need for stunning, high-quality screen recordings",
 
@@ -15,12 +16,12 @@ export const screenRecordMacContent = {
     {
       title: "Optimized for macOS",
       description:
-        "Cap is fully optimized for Mac, delivering smooth performance and seamless integration with macOS. Looking for a <a href='/free-screen-recorder'>free screen recorder</a>? Cap works great on Mac!",
+        "Cap is fully optimized for Mac, delivering smooth performance and seamless integration with macOS. Looking for a <a href='/free-screen-recorder'>free screen recorder for Mac</a>? Cap is your best choice!",
     },
     {
       title: "High-Quality Video Capture",
       description:
-        "Record clear, high-definition video with synced audio, perfect for professional use.",
+        "Record clear, high-definition video with synced audio, perfect for professional use. Experience why users rate Cap as the best screen recorder for Mac.",
     },
     {
       title: "User-Friendly Interface",
@@ -35,24 +36,24 @@ export const screenRecordMacContent = {
     {
       title: "Easy Export and Sharing",
       description:
-        "Save and share your recordings effortlessly with Cap’s built-in export options for Mac.",
+        "Save and share your recordings effortlessly with Cap's built-in export options for Mac.",
     },
     {
       title: "Professional Tools",
       description:
-        "Access professional <a href='/screen-recording-software'>screen recording software</a> features optimized for Mac.",
+        "Access professional <a href='/screen-recording-software'>screen recording software</a> features optimized for Mac. A perfect <a href='/loom-alternative'>Loom alternative for Mac</a> users.",
     },
   ],
 
-  useCasesTitle: "Popular Uses for Cap’s Screen Recorder on Mac",
+  useCasesTitle: "Popular Uses for the Best Screen Recorder for Mac",
   useCasesDescription:
-    "Explore how Cap’s screen recorder enhances productivity on macOS",
+    "Explore how Cap's screen recorder enhances productivity on macOS",
 
   useCases: [
     {
       title: "Creating Tutorials",
       description:
-        "Easily create detailed tutorials or training videos on your Mac using our professional <a href='/screen-recorder'>screen recording software</a>.",
+        "Easily create detailed tutorials or training videos on your Mac using our <a href='/screen-recorder'>professional Mac recording software</a>.",
     },
     {
       title: "Professional Presentations",
@@ -112,6 +113,33 @@ export const screenRecordMacContent = {
   },
 };
 
+// Create FAQ structured data for SEO
+const createFaqStructuredData = () => {
+  const faqStructuredData = {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    mainEntity: screenRecordMacContent.faqs.map((faq) => ({
+      "@type": "Question",
+      name: faq.question,
+      acceptedAnswer: {
+        "@type": "Answer",
+        text: faq.answer.replace(/<\/?[^>]+(>|$)/g, ""),
+      },
+    })),
+  };
+
+  return JSON.stringify(faqStructuredData);
+};
+
 export const ScreenRecordMacPage = () => {
-  return <SeoPageTemplate content={screenRecordMacContent} />;
+  return (
+    <>
+      <Script
+        id="faq-structured-data"
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: createFaqStructuredData() }}
+      />
+      <SeoPageTemplate content={screenRecordMacContent} />
+    </>
+  );
 };

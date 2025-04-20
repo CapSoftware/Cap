@@ -18,19 +18,19 @@ tokio = { version = "1.39.3", features = [
 	"rt-multi-thread",
 	"time",
 ] }
-tauri = { version = "2.3.0", features = ["specta"] }
+tauri = { version = "2.4.0", features = ["specta"] }
 specta = { version = "=2.0.0-rc.20", features = [
 	"derive",
 	"serde_json",
 	"uuid",
 ] }
 
-scap = { git = "https://github.com/CapSoftware/scap", rev = "212d7a3958662244b9c7218a90c9c770f07c4222" }
-nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "e309b938ccd6", features = [
+scap = { git = "https://github.com/CapSoftware/scap", rev = "4164b9a3e7c7" }
+nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2", features = [
 	"input-native",
 	"serialize",
 ] }
-nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "e309b938ccd6" }
+nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2" }
 wgpu = "24.0.1"
 flume = "0.11.0"
 thiserror = "1.0"
@@ -39,9 +39,17 @@ sentry = { version = "0.34.0", features = [
 	"backtrace",
 	"debug-images",
 ] }
+tracing = "0.1.41"
 
 cidre = { git = "https://github.com/yury/cidre", rev = "ef04aaabe14ffbbce4a330973a74b6d797d073ff" }
 
 windows = "0.58.0"
 windows-sys = "0.59.0"
 windows-capture = "1.4.2"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+
+[patch.crates-io]
+screencapturekit = { git = "https://github.com/CapSoftware/screencapturekit-rs", rev = "7ff1e103742e56c8f6c2e940b5e52684ed0bed69" } # branch = "cap-main"
+wry = { git = "https://github.com/CapSoftware/wry", rev = "293f510" }                                                               # branch = "cap"

@@ -1,4 +1,4 @@
-// @refresh reload
+import { createElementBounds, NullableBounds } from "@solid-primitives/bounds";
 import { createContextProvider } from "@solid-primitives/context";
 import { trackStore } from "@solid-primitives/deep";
 import { createEventListener } from "@solid-primitives/event-listener";
@@ -13,24 +13,28 @@ import {
   on,
 } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
-import { createElementBounds, NullableBounds } from "@solid-primitives/bounds";
 
+import { createPresets } from "~/utils/createPresets";
+import { createImageDataWS, createLazySignal } from "~/utils/socket";
 import {
-  PresetsStore,
+  commands,
+  events,
+  InstantRecordingMeta,
+  MultipleSegments,
+  RecordingMeta,
+  SingleSegment,
+  StudioRecordingMeta,
   type ProjectConfiguration,
   type SerializedEditorInstance,
   type XY,
-  commands,
-  events,
 } from "~/utils/tauri";
-import { createImageDataWS, createLazySignal } from "~/utils/socket";
-import { createPresets } from "~/utils/createPresets";
 
 export type CurrentDialog =
   | { type: "createPreset" }
   | { type: "renamePreset"; presetIndex: number }
   | { type: "deletePreset"; presetIndex: number }
-  | { type: "crop"; position: XY<number>; size: XY<number> };
+  | { type: "crop"; position: XY<number>; size: XY<number> }
+  | { type: "export" };
 
 export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
 
@@ -41,10 +45,22 @@ export const OUTPUT_SIZE = {
   y: 1080,
 };
 
+export const BACKGROUND_THEMES = {
+  macOS: "macOS",
+  dark: "Dark",
+  blue: "Blue",
+  purple: "Purple",
+  orange: "Orange",
+};
+
 export const MAX_ZOOM_IN = 3;
 
 export const [EditorContextProvider, useEditorContext] = createContextProvider(
-  (props: { editorInstance: SerializedEditorInstance }) => {
+  (props: {
+    editorInstance: Omit<SerializedEditorInstance, "meta"> & {
+      meta: TransformedMeta;
+    };
+  }) => {
     const editorInstanceContext = useEditorInstanceContext();
     const [project, setProject] = createStore<ProjectConfiguration>(
       props.editorInstance.savedProjectConfig
@@ -66,6 +82,10 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       "background" | "camera" | "transcript" | "audio" | "cursor" | "hotkeys"
     >("background");
 
+    //Background tabs
+    const [backgroundTab, setBackgroundTab] =
+      createSignal<keyof typeof BACKGROUND_THEMES>("macOS");
+
     const [dialog, setDialog] = createSignal<DialogState>({
       open: false,
     });
@@ -73,6 +93,58 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
     const [previewTime, setPreviewTime] = createSignal<number>();
     const [playbackTime, setPlaybackTime] = createSignal<number>(0);
     const [playing, setPlaying] = createSignal(false);
+
+    //Export states
+
+    const [exportProgress, setExportProgress] = createSignal<{
+      totalFrames: number;
+      renderedFrames: number;
+    } | null>(null);
+
+    type ExportState =
+      | { type: "idle" }
+      | { type: "starting" }
+      | { type: "rendering" }
+      | { type: "saving"; done: boolean };
+
+    type CopyState =
+      | { type: "idle" }
+      | { type: "starting" }
+      | { type: "rendering" }
+      | { type: "copying" }
+      | { type: "copied" };
+
+    const [exportState, setExportState] = createStore<ExportState>({
+      type: "idle",
+    });
+
+    const [copyState, setCopyState] = createStore<CopyState>({
+      type: "idle",
+    });
+
+    const [uploadState, setUploadState] = createStore<
+      | { type: "idle" }
+      | { type: "starting" }
+      | { type: "rendering" }
+      | { type: "uploading"; progress: number }
+      | { type: "link-copied" }
+      | { type: "complete" }
+    >({ type: "idle" });
+
+    // This is used in ShareButton.tsx to notify the component that the metadata has changed, from ExportDialog.tsx
+    // When a video is uploaded, the metadata is updated
+
+    const [lastMetaUpdate, setLastMetaUpdate] = createSignal<{
+      videoId: string;
+      timestamp: number;
+    } | null>(null);
+
+    const metaUpdateStore = {
+      notifyUpdate: (videoId: string) => {
+        setLastMetaUpdate({ videoId, timestamp: Date.now() });
+      },
+      getLastUpdate: lastMetaUpdate,
+    };
 
     createEffect(
       on(playing, () => {
@@ -142,7 +214,9 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
             "position",
             Math.min(
               Math.max(p, 0),
-              zoomOutLimit() + 4 - state.timelineTransform.zoom
+              Math.max(zoomOutLimit(), totalDuration()) +
+                4 -
+                state.timelineTransform.zoom
             )
           );
         },
@@ -157,7 +231,20 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       project,
       setProject,
       selectedTab,
+      backgroundTab,
+      exportProgress,
+      setExportProgress,
+      copyState,
+      setCopyState,
+      uploadState,
+      setUploadState,
+      exportState,
+      setExportState,
+      setBackgroundTab,
       setSelectedTab,
+      metaUpdateStore,
+      lastMetaUpdate,
+      setLastMetaUpdate,
       history: createStoreHistory(project, setProject),
       playbackTime,
       setPlaybackTime,
@@ -179,17 +266,56 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 
 export type FrameData = { width: number; height: number; data: ImageData };
 
+function transformMeta(instance: SerializedEditorInstance) {
+  if ("fps" in instance.meta) {
+    throw new Error("Instant mode recordings cannot be edited");
+  }
+
+  let meta;
+
+  if ("segments" in instance.meta) {
+    meta = {
+      ...instance.meta,
+      type: "multiple",
+    } as unknown as MultipleSegments & { type: "multiple" };
+  } else {
+    meta = {
+      ...instance.meta,
+      type: "single",
+    } as unknown as SingleSegment & { type: "single" };
+  }
+
+  return {
+    ...meta,
+    prettyName: instance.meta.pretty_name,
+    hasCamera: (() => {
+      if (meta.type === "single") return !!meta.camera;
+      return !!meta.segments[0].camera;
+    })(),
+    hasSystemAudio: (() => {
+      if (meta.type === "single") return false;
+      return !!meta.segments[0].system_audio;
+    })(),
+    hasMicrophone: (() => {
+      if (meta.type === "single") return !!meta.audio;
+      return !!meta.segments[0].mic;
+    })(),
+  };
+}
+
+export type TransformedMeta = ReturnType<typeof transformMeta>;
+
 export const [EditorInstanceContextProvider, useEditorInstanceContext] =
-  createContextProvider((props: { videoId: string }) => {
+  createContextProvider(() => {
     const [latestFrame, setLatestFrame] = createLazySignal<{
       width: number;
       data: ImageData;
     }>();
 
     const [editorInstance] = createResource(async () => {
-      const instance = await commands.createEditorInstance(props.videoId);
+      const instance = await commands.createEditorInstance();
 
-      const [ws, isConnected] = createImageDataWS(
+      const [_ws, isConnected] = createImageDataWS(
         instance.framesSocketUrl,
         setLatestFrame
       );
@@ -204,15 +330,17 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
         }
       });
 
-      return instance;
+      return {
+        ...instance,
+        meta: transformMeta(instance),
+      };
     });
 
     return {
       editorInstance,
-      videoId: props.videoId,
       latestFrame,
       presets: createPresets(),
-      prettyName: () => editorInstance()?.prettyName ?? "Cap Recording",
+      prettyName: () => editorInstance()?.meta.prettyName ?? "Cap Recording",
     };
   }, null!);
 

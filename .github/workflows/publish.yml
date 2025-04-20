@@ -141,7 +141,7 @@ jobs:
           - target: aarch64-apple-darwin
             runner: macos-latest
           - target: x86_64-pc-windows-msvc
-            runner: windows-latest
+            runner: windows-latest-l
     runs-on: ${{ matrix.settings.runner }}
     steps:
       - name: Checkout repository
@@ -245,7 +245,7 @@ jobs:
                 body: JSON.stringify({
                   type: "release-done",
                   interactionId: "${{ inputs.interactionId }}",
-                  version: "${{ steps.read_version.outputs.value }}",
+                  version: "${{ needs.draft.outputs.version }}",
                   releaseUrl: "${{ needs.draft.outputs.gh_release_url }}",
                   cnReleaseId
                 }),

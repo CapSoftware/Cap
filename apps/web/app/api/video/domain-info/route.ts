@@ -74,7 +74,11 @@ export async function GET(request: NextRequest) {
       .where(eq(spaces.ownerId, videoData.ownerId))
       .limit(1);
 
-    if (ownerSpaces.length > 0 && ownerSpaces[0] && ownerSpaces[0].customDomain) {
+    if (
+      ownerSpaces.length > 0 &&
+      ownerSpaces[0] &&
+      ownerSpaces[0].customDomain
+    ) {
       return Response.json({
         customDomain: ownerSpaces[0].customDomain,
         domainVerified: ownerSpaces[0].domainVerified || false,
@@ -90,4 +94,4 @@ export async function GET(request: NextRequest) {
     console.error("Error fetching domain info:", error);
     return Response.json({ error: "Internal server error" }, { status: 500 });
   }
-} 
+}

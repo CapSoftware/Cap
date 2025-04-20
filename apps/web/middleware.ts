@@ -4,6 +4,7 @@ import { db } from "@cap/database";
 import { spaces } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { serverEnv } from "@cap/env";
+import { getToken } from "next-auth/jwt";
 
 const mainDomains = [
   "cap.so",
@@ -15,13 +16,14 @@ const mainDomains = [
 ].filter(Boolean) as string[];
 
 export async function middleware(request: NextRequest) {
-  const hostname = request.headers.get("host");
-  const path = request.nextUrl.pathname;
+  const url = new URL(request.url);
+  const hostname = url.hostname;
+  const path = url.pathname;
 
   if (!hostname) return NextResponse.next();
 
-  // Skip for main domains
   if (mainDomains.some((d) => hostname.includes(d))) {
+    // We just let the request go through for main domains, page-level logic will handle redirects
     return NextResponse.next();
   }
 

@@ -1,7 +1,8 @@
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
+use ffmpeg_sys_next::AV_TIME_BASE_Q;
 use flume::{Receiver, Sender};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::{
     data::{AudioInfo, FFAudio},
@@ -33,7 +34,7 @@ impl AudioMixer {
         AudioMixerSink { tx }
     }
 
-    pub fn add_source(&mut self, info: AudioInfo, rx: Receiver<FFAudio>) {
+    pub fn add_source(&mut self, info: AudioInfo, rx: Receiver<(FFAudio, f64)>) {
         self.sources.push(AudioMixerSource { rx, info })
     }
 
@@ -67,6 +68,8 @@ impl AudioMixer {
                     info.channel_layout().bits()
                 );
 
+                debug!("audio mixer input {i}: {args}");
+
                 filter_graph
                     .add(
                         &ffmpeg::filter::find("abuffer").expect("Failed to find abuffer filter"),
@@ -88,11 +91,14 @@ impl AudioMixer {
             )
             .unwrap();
 
+        let aformat_args = "sample_fmts=flt:sample_rates=48000:channel_layouts=stereo";
+        debug!("aformat args: {aformat_args}");
+
         let mut aformat = filter_graph
             .add(
                 &ffmpeg::filter::find("aformat").expect("Failed to find aformat filter"),
                 "aformat",
-                "sample_fmts=flt:sample_rates=48000:channel_layouts=stereo",
+                aformat_args,
             )
             .expect("Failed to add aformat filter");
 
@@ -130,13 +136,17 @@ impl AudioMixer {
                         Err(flume::TryRecvError::Disconnected) => return,
                         Err(flume::TryRecvError::Empty) => break,
                     };
+                    let frame = &value.0;
 
-                    abuffers[i].source().add(&value).unwrap();
+                    abuffers[i].source().add(&frame).unwrap();
                 }
             }
 
             while abuffersink.sink().frame(&mut filtered).is_ok() {
-                if self.output.send(dbg!(filtered)).is_err() {
+                let adjusted_pts =
+                    filtered.pts().unwrap() as f64 / 48000.0 * AV_TIME_BASE_Q.den as f64;
+                filtered.set_pts(Some(adjusted_pts as i64));
+                if self.output.send(filtered).is_err() {
                     warn!("Mixer unable to send output");
                     return;
                 }
@@ -149,32 +159,31 @@ impl AudioMixer {
 }
 
 pub struct AudioMixerSink {
-    pub tx: flume::Sender<FFAudio>,
+    pub tx: flume::Sender<(FFAudio, f64)>,
 }
 
 pub struct AudioMixerSource {
-    rx: flume::Receiver<FFAudio>,
+    rx: flume::Receiver<(FFAudio, f64)>,
     info: AudioInfo,
 }
 
-impl PipelineSinkTask<FFAudio> for AudioMixerSink {
-    fn run(
-        &mut self,
-        ready_signal: crate::pipeline::task::PipelineReadySignal,
-        input: &flume::Receiver<FFAudio>,
-    ) {
-        let _ = ready_signal.send(Ok(()));
+// impl PipelineSinkTask<(FFAudio, f64)> for AudioMixerSink {
+//     fn run(
+//         &mut self,
+//         ready_signal: crate::pipeline::task::PipelineReadySignal,
+//         input: &flume::Receiver<(FFAudio, f64)>,
+//     ) {
+//         let _ = ready_signal.send(Ok(()));
 
-        while let Ok(input) = input.recv() {
-            let _ = self.tx.send(input);
-        }
-    }
+//         while let Ok(input) = input.recv() {
+//             let _ = self.tx.send(input);
+//         }
+//     }
 
-    fn finish(&mut self) {}
-}
+//     fn finish(&mut self) {}
+// }
 
 impl PipelineSourceTask for AudioMixer {
-    type Output = FFAudio;
     type Clock = RealTimeClock<RawNanoseconds>;
 
     fn run(

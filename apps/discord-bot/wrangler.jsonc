@@ -22,13 +22,19 @@
 	 * databases, object storage, AI inference, real-time communication and more.
 	 * https://developers.cloudflare.com/workers/runtime-apis/bindings/
 	 */
-	"kv_namespaces": [{ "binding": "release_discord_interactions", "id": "846b080b86914e2ba666d35acee35c9a" }]
+	"kv_namespaces": [
+		{
+			"binding": "release_discord_interactions",
+			"id": "846b080b86914e2ba666d35acee35c9a",
+			"preview_id": "5f3b4b601daa4a758743ff2f52f09277"
+		}
+	]
 
 	/**
 	 * Environment Variables
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
 	 */
-	// "vars": { "MY_VARIABLE": "production_value" },
+	// "vars": { "GITHUB_TOKEN": "SECRET", "DISCORD_BOT_TOKEN": "SECRET" }
 	/**
 	 * Note: Use secrets to store sensitive data.
 	 * https://developers.cloudflare.com/workers/configuration/secrets/

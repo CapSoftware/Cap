@@ -43,8 +43,8 @@ impl Renderer {
         frame_tx: flume::Sender<WSFrame>,
         recording_meta: &RecordingMeta,
         meta: &StudioRecordingMeta,
-    ) -> RendererHandle {
-        let recordings = ProjectRecordings::new(&recording_meta.project_path, meta);
+    ) -> Result<RendererHandle, String> {
+        let recordings = Arc::new(ProjectRecordings::new(&recording_meta.project_path, meta)?);
         let mut max_duration = recordings.duration();
 
         // Check camera duration if it exists
@@ -70,7 +70,7 @@ impl Renderer {
 
         tokio::spawn(this.run());
 
-        RendererHandle { tx }
+        Ok(RendererHandle { tx })
     }
 
     async fn run(mut self) {

@@ -5,12 +5,15 @@ import { vValidator } from '@hono/valibot-validator';
 import * as v from 'valibot';
 import * as jose from 'jose';
 import { createMiddleware } from 'hono/factory';
+import { App } from 'octokit';
 
 const DISCORD_APP_ID = '1334742236096757861';
 const PUBLIC_KEY = 'fea8bb4c1432223609db5a37e074c5a5474b89bf4bea12515bc4e09d564e4f61';
 
 const GITHUB_ORG = 'CapSoftware';
 const GITHUB_REPO = 'Cap';
+const GITHUB_APP_ID = 1196731;
+const GITHUB_APP_INSTALLATION = 63538726;
 const WORKFLOW_FILE = 'publish.yml';
 
 const CHANNEL_MESSAGE_WITH_SOURCE = 4;
@@ -32,12 +35,29 @@ type InteractionBody = {
 	};
 };
 
+type MessageComponent =
+	| {
+			type: 1;
+			components: Array<Exclude<MessageComponent, { type: 1 }>>;
+	  }
+	| ({
+			type: 2;
+			label?: string;
+			disabled?: boolean;
+	  } & ({ style: 1 | 2 | 3 | 4; custom_id: string } | { style: 5; url: string } | { style: 6; sku_id: string }));
+
+type Message = {
+	content?: string;
+	components?: Array<MessageComponent>;
+};
+
 const app = new Hono<{ Bindings: Env }>();
 
-app.post('/', async (c) => {
+app.post('/interactions', async (c) => {
 	const body = await c.req.json();
 
-	if (!verifyRequest(c.req.raw, body)) return new Response('Invalid signature', { status: 401 });
+	const verification = await verifyRequest(c.req.raw, body);
+	if (!verification) return new Response('Invalid signature', { status: 401 });
 
 	// Ping
 	if (body.type === 1) return Response.json({ type: 1 });
@@ -131,7 +151,7 @@ app.post(
 				return new Response('Successfully updated message', { status: 200 });
 			}
 			case 'release-done': {
-				await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}`, {
+				await fetch(`https://discord.com/api/v10/channels/${interaction.channel_id}/messages`, {
 					method: 'POST',
 					body: JSON.stringify(
 						releaseWorkflowDoneMessageData({
@@ -140,7 +160,10 @@ app.post(
 							workflowRunId: c.get('githubToken').run_id,
 						})
 					),
-					headers: { 'Content-Type': 'application/json' },
+					headers: {
+						'Content-Type': 'application/json',
+						Authorization: `Bot ${c.env.DISCORD_BOT_TOKEN}`,
+					},
 				});
 
 				return new Response('Successfully sent message', { status: 200 });
@@ -157,31 +180,33 @@ export default app;
 async function handleCommand(interaction: InteractionBody, env: Env) {
 	const { data } = interaction;
 
+	const app = new App({
+		appId: GITHUB_APP_ID,
+		privateKey: env.GITHUB_APP_PRIVATE_KEY.trim(),
+	});
+
+	const octokit = await app.getInstallationOctokit(GITHUB_APP_INSTALLATION);
+
 	switch (data.name) {
 		case 'release': {
 			await env.release_discord_interactions.put(interaction.id, JSON.stringify(interaction));
 
-			const workflowResponse = await fetch(
-				`https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/actions/workflows/${WORKFLOW_FILE}/dispatches`,
-				{
-					method: 'POST',
-					body: JSON.stringify({ ref: 'main', inputs: { interactionId: interaction.id } }),
-					headers: {
-						Accept: 'application/vnd.github+json',
-						Authorization: `Bearer ${env.GITHUB_TOKEN}`,
-						'X-GitHub-Api-Version': '2022-11-28',
-						'User-Agent': 'CapBot',
-					},
-				}
-			);
+			try {
+				await octokit.rest.actions.createWorkflowDispatch({
+					owner: GITHUB_ORG,
+					repo: GITHUB_REPO,
+					workflow_id: WORKFLOW_FILE,
+					ref: 'main',
+					inputs: { interactionId: interaction.id },
+				});
 
-			if (workflowResponse.status !== 204)
-				return { type: 4, data: { content: `Failed to start release workflow: ${await workflowResponse.text()}` } };
-
-			return {
-				type: CHANNEL_MESSAGE_WITH_SOURCE,
-				data: releaseWorkflowStartedMessageData(),
-			};
+				return {
+					type: CHANNEL_MESSAGE_WITH_SOURCE,
+					data: releaseWorkflowStartedMessageData(),
+				};
+			} catch (e) {
+				return { type: 4, data: { content: `Failed to start release workflow: ${e}` } };
+			}
 		}
 		default: {
 			return { type: 4, data: { content: `Unknown command ${data.name}` } };
@@ -203,7 +228,7 @@ async function verifyRequest(request: Request, jsonBody: any) {
 	);
 }
 
-function releaseWorkflowStartedMessageData() {
+function releaseWorkflowStartedMessageData(): Message {
 	return {
 		content: 'Release workflow started, standby...',
 		components: [
@@ -218,11 +243,11 @@ function releaseWorkflowStartedMessageData() {
 					},
 				],
 			},
-		],
+		] satisfies Array<MessageComponent>,
 	};
 }
 
-function releaseWorkflowRunningMessageData(props: { version: string } & Parameters<typeof releaseDraftedMessageComponents>[0]) {
+function releaseWorkflowRunningMessageData(props: { version: string } & Parameters<typeof releaseDraftedMessageComponents>[0]): Message {
 	return {
 		content: `v${props.version} workflow running, go edit the release notes!`,
 		components: [
@@ -230,7 +255,7 @@ function releaseWorkflowRunningMessageData(props: { version: string } & Paramete
 				type: 1,
 				components: releaseDraftedMessageComponents(props),
 			},
-		],
+		] satisfies Array<MessageComponent>,
 	};
 }
 
@@ -239,15 +264,15 @@ function releaseWorkflowDoneMessageData(
 		userId: string;
 		version: string;
 	} & Parameters<typeof releaseDraftedMessageComponents>[0]
-) {
+): Message {
 	return {
-		content: [`<@${props.userId}> v${props.version} has finished building!`],
+		content: `<@${props.userId}> v${props.version} has finished building!`,
 		components: [
 			{
 				type: 1,
 				components: releaseDraftedMessageComponents(props),
 			},
-		],
+		] satisfies Array<MessageComponent>,
 	};
 }
 
@@ -271,5 +296,5 @@ function releaseDraftedMessageComponents(props: { releaseUrl: string; cnReleaseI
 			url: `https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/actions/runs/${props.workflowRunId}`,
 			style: 5,
 		},
-	];
+	] satisfies Array<MessageComponent>;
 }

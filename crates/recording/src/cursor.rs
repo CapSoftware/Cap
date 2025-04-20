@@ -3,7 +3,7 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     path::PathBuf,
     sync::{atomic::AtomicBool, Arc},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use cap_media::platform::Bounds;
@@ -48,6 +48,7 @@ pub fn spawn_cursor_recorder(
     cursors_dir: PathBuf,
     prev_cursors: Cursors,
     next_cursor_id: u32,
+    start_time: SystemTime,
 ) -> CursorActor {
     let stop_signal = Arc::new(AtomicBool::new(false));
     let (tx, rx) = oneshot::channel();
@@ -68,12 +69,12 @@ pub fn spawn_cursor_recorder(
                 clicks: vec![],
             };
 
-            let start_time = Instant::now();
-
             while !stop_signal.load(std::sync::atomic::Ordering::Relaxed) {
-                let elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
+                let Ok(elapsed) = start_time.elapsed() else {
+                    continue;
+                };
+                let elapsed = elapsed.as_secs_f64() * 1000.0;
                 let mouse_state = device_state.get_mouse();
-                let unix_time = chrono::Utc::now().timestamp_millis() as f64;
 
                 let cursor_data = get_cursor_image_data();
                 let cursor_id = if let Some(data) = cursor_data {
@@ -115,52 +116,10 @@ pub fn spawn_cursor_recorder(
                 } else {
                     "default".to_string()
                 };
-                // dbg!(&mouse_state, &screen_bounds);
 
                 if mouse_state.coords != last_mouse_state.coords {
                     // Get the actual mouse coordinates
                     let (mouse_x, mouse_y) = mouse_state.coords;
-
-                    #[cfg(windows)]
-                    let (mouse_x, mouse_y) = {
-                        // On Windows, ensure we're using the correct coordinate system
-                        // by getting the virtual screen metrics
-                        use windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics;
-                        use windows::Win32::UI::WindowsAndMessaging::{
-                            SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-                            SM_YVIRTUALSCREEN,
-                        };
-
-                        let virtual_screen_x = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
-                        let virtual_screen_y = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
-                        let virtual_screen_width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
-                        let virtual_screen_height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
-
-                        // If screen_bounds doesn't match the virtual screen, adjust the coordinates
-                        if (screen_bounds.x as i32 != virtual_screen_x
-                            || screen_bounds.y as i32 != virtual_screen_y
-                            || screen_bounds.width as i32 != virtual_screen_width
-                            || screen_bounds.height as i32 != virtual_screen_height)
-                            && screen_bounds.width > 0.0
-                            && screen_bounds.height > 0.0
-                        {
-                            // Convert to normalized coordinates in the virtual screen space first
-                            let norm_x = (mouse_x as f64 - virtual_screen_x as f64)
-                                / virtual_screen_width as f64;
-                            let norm_y = (mouse_y as f64 - virtual_screen_y as f64)
-                                / virtual_screen_height as f64;
-
-                            // Then convert to the target screen coordinates
-                            let adjusted_x =
-                                (norm_x * screen_bounds.width + screen_bounds.x) as i32;
-                            let adjusted_y =
-                                (norm_y * screen_bounds.height + screen_bounds.y) as i32;
-
-                            (adjusted_x, adjusted_y)
-                        } else {
-                            (mouse_x, mouse_y)
-                        }
-                    };
 
                     #[cfg(target_os = "macos")]
                     let (mouse_x, mouse_y) = {
@@ -174,7 +133,7 @@ pub fn spawn_cursor_recorder(
                         (mouse_x, mouse_y)
                     };
 
-                    #[cfg(not(any(windows, target_os = "macos")))]
+                    #[cfg(not(target_os = "macos"))]
                     let (mouse_x, mouse_y) = {
                         (
                             mouse_x - screen_bounds.x as i32,
@@ -214,8 +173,7 @@ pub fn spawn_cursor_recorder(
                     let mouse_event = CursorMoveEvent {
                         active_modifiers: vec![],
                         cursor_id: cursor_id.clone(),
-                        process_time_ms: elapsed,
-                        unix_time_ms: unix_time,
+                        time_ms: elapsed,
                         x,
                         y,
                     };
@@ -306,8 +264,7 @@ pub fn spawn_cursor_recorder(
                         active_modifiers: vec![],
                         cursor_num: num as u8,
                         cursor_id: cursor_id.clone(),
-                        process_time_ms: elapsed,
-                        unix_time_ms: unix_time,
+                        time_ms: elapsed,
                         x,
                         y,
                     };

@@ -7,6 +7,7 @@ import { Tooltip } from "react-tooltip";
 import { AnimatePresence, motion } from "framer-motion";
 import { AuthOverlay } from "../AuthOverlay";
 import { CapCardAnalytics } from "@/app/dashboard/caps/components/CapCardAnalytics";
+import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 
 type CommentType = typeof commentsSchema.$inferSelect & {
   authorName?: string | null;
@@ -339,18 +340,12 @@ export const Activity: React.FC<ActivityProps> = ({
   useEffect(() => {
     const fetchAnalytics = async () => {
       try {
-        const response = await fetch(`/api/video/analytics?videoId=${videoId}`);
-        if (!response.ok) {
-          throw new Error("Failed to fetch analytics");
-        }
-        const analyticsData = await response.json();
+        const result = await getVideoAnalytics(videoId);
 
         setAnalytics({
-          views:
-            analyticsData.count === 0 ? comments.length : analyticsData.count,
+          views: result.count === 0 ? comments.length : result.count,
           comments: comments.length,
-          reactions:
-            (analyticsData.metadata as { reactions?: number })?.reactions || 0,
+          reactions: 0,
         });
       } catch (error) {
         console.error("Error fetching analytics:", error);

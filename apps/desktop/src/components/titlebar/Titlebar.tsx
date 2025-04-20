@@ -1,9 +1,9 @@
 // Credits: tauri-controls
-import { type ComponentProps, Match, splitProps, Switch } from "solid-js";
 import { type } from "@tauri-apps/plugin-os";
-import CaptionControlsWindows11 from "./controls/CaptionControlsWindows11";
-import titlebarState from "~/utils/titlebar-state";
 import { cx } from "cva";
+import { type ComponentProps, Match, splitProps, Switch } from "solid-js";
+import titlebarState from "~/utils/titlebar-state";
+import CaptionControlsWindows11 from "./controls/CaptionControlsWindows11";
 
 export default function Titlebar() {
   function left() {
@@ -14,9 +14,13 @@ export default function Titlebar() {
   return (
     <header
       class={cx(
-        "flex flex-row items-center select-none space-x-1 shrink-0 border-gray-200",
-        titlebarState.transparent ? "bg-transparent" : "bg-gray-50",
-        titlebarState.border ? "border-b" : ""
+        "flex flex-row items-center select-none space-x-1 shrink-0 border-gray-50",
+        titlebarState.backgroundColor
+          ? titlebarState.backgroundColor
+          : titlebarState.transparent
+          ? "bg-transparent"
+          : "bg-gray-100",
+        titlebarState.border ? "border-b border-b-black-transparent-5" : ""
       )}
       style={{
         height: titlebarState.height,
@@ -38,7 +42,7 @@ export default function Titlebar() {
   );
 }
 
-function WindowControls(props: ComponentProps<"div">) {
+export function WindowControls(props: ComponentProps<"div">) {
   const [local, otherProps] = splitProps(props, ["class"]);
   const ostype = type();
 
@@ -51,7 +55,7 @@ function WindowControls(props: ComponentProps<"div">) {
         />
       </Match>
       <Match when={ostype === "macos"}>
-        <div data-tauri-drag-region class="flex h-full w-20" />
+        <div data-tauri-drag-region class="flex w-20 h-full" />
       </Match>
     </Switch>
   );

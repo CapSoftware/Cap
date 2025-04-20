@@ -40,6 +40,7 @@
     "core:window:allow-set-position",
     "core:window:allow-set-theme",
     "core:window:allow-set-progress-bar",
+    "core:window:allow-set-effects",
     "core:webview:default",
     "core:webview:allow-create-webview-window",
     "core:app:allow-version",
@@ -60,6 +61,7 @@
         { "url": "http://localhost:*" }
       ]
     },
-    "clipboard-manager:allow-write-text"
+    "clipboard-manager:allow-write-text",
+    "opener:allow-reveal-item-in-dir"
   ]
 }

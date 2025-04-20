@@ -1,9 +1,5 @@
-use crate::{
-    create_editor_instance_impl, get_video_metadata, recordings_path, windows::ShowCapWindow,
-    AuthStore, RenderProgress, VideoType,
-};
-use cap_editor::EditorInstance;
-use cap_project::{ProjectConfiguration, RecordingMeta, XY};
+use crate::{create_editor_instance_impl, get_video_metadata, RenderProgress};
+use cap_project::{RecordingMeta, XY};
 use std::path::PathBuf;
 use tauri::AppHandle;
 
@@ -11,34 +7,26 @@ use tauri::AppHandle;
 #[specta::specta]
 pub async fn export_video(
     app: AppHandle,
-    video_id: String,
+    project_path: PathBuf,
     progress: tauri::ipc::Channel<RenderProgress>,
-    force: bool,
     fps: u32,
     resolution_base: XY<u32>,
 ) -> Result<PathBuf, String> {
-    let editor_instance = create_editor_instance_impl(&app, &video_id).await?;
+    let editor_instance = create_editor_instance_impl(&app, project_path.clone()).await?;
 
-    let screen_metadata =
-        match get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Screen)).await {
-            Ok(meta) => meta,
-            Err(e) => {
-                sentry::capture_message(
-                    &format!("Failed to get video metadata: {}", e),
-                    sentry::Level::Error,
-                );
-                return Err(
-                "Failed to read video metadata. The recording may be from an incompatible version."
-                    .to_string(),
+    let screen_metadata = get_video_metadata(project_path.clone())
+        .await
+        .map_err(|e| {
+            sentry::capture_message(
+                &format!("Failed to get video metadata: {}", e),
+                sentry::Level::Error,
             );
-            }
-        };
+            "Failed to read video metadata. The recording may be from an incompatible version."
+                .to_string()
+        })?;
 
     // Get camera metadata if it exists
-    let camera_metadata =
-        get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Camera))
-            .await
-            .ok();
+    let camera_metadata = get_video_metadata(project_path.clone()).await.ok();
 
     // Use the longer duration between screen and camera
     let duration = screen_metadata.duration.max(
@@ -50,11 +38,6 @@ pub async fn export_video(
     let total_frames = editor_instance.get_total_frames(fps);
 
     let output_path = editor_instance.meta().output_path();
-
-    // If the file exists and we're not forcing a re-render, return it
-    if output_path.exists() && !force {
-        return Ok(output_path);
-    }
 
     progress
         .send(RenderProgress::EstimatedTotalFrames { total_frames })
@@ -71,7 +54,7 @@ pub async fn export_video(
         }
     }
 
-    let exporter = cap_export::Exporter::new(
+    cap_export::Exporter::new(
         modified_project,
         output_path.clone(),
         move |frame_index| {
@@ -82,30 +65,24 @@ pub async fn export_video(
                 .ok();
         },
         editor_instance.project_path.clone(),
-        editor_instance.meta(),
+        editor_instance.meta().clone(),
         editor_instance.render_constants.clone(),
         &editor_instance.segments,
         fps,
         resolution_base,
+        editor_instance.recordings.clone(),
     )
     .await
     .map_err(|e| {
         sentry::capture_message(&e.to_string(), sentry::Level::Error);
         e.to_string()
-    })?;
-
-    let result = exporter.export_with_custom_muxer().await;
-
-    match result {
-        Ok(_) => {
-            ShowCapWindow::RecordingsOverlay.show(&app).ok();
-            Ok(output_path)
-        }
-        Err(e) => {
-            sentry::capture_message(&e.to_string(), sentry::Level::Error);
-            Err(e.to_string())
-        }
-    }
+    })?
+    .export_with_custom_muxer()
+    .await
+    .map_err(|e| {
+        sentry::capture_message(&e.to_string(), sentry::Level::Error);
+        e.to_string()
+    })
 }
 
 #[derive(Debug, serde::Serialize, specta::Type)]
@@ -119,17 +96,12 @@ pub struct ExportEstimates {
 #[tauri::command]
 #[specta::specta]
 pub async fn get_export_estimates(
-    app: AppHandle,
-    video_id: String,
+    path: PathBuf,
     resolution: XY<u32>,
     fps: u32,
 ) -> Result<ExportEstimates, String> {
-    let screen_metadata =
-        get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Screen)).await?;
-    let camera_metadata =
-        get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Camera))
-            .await
-            .ok();
+    let screen_metadata = get_video_metadata(path.clone()).await?;
+    let camera_metadata = get_video_metadata(path.clone()).await.ok();
 
     let raw_duration = screen_metadata.duration.max(
         camera_metadata
@@ -137,8 +109,7 @@ pub async fn get_export_estimates(
             .unwrap_or(screen_metadata.duration),
     );
 
-    let project_path = EditorInstance::project_path(&recordings_path(&app), &video_id);
-    let meta = RecordingMeta::load_for_project(&project_path).unwrap();
+    let meta = RecordingMeta::load_for_project(&path).unwrap();
     let project_config = meta.project_config();
     let duration_seconds = if let Some(timeline) = &project_config.timeline {
         timeline

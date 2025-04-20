@@ -1,5 +1,7 @@
+use std::time::Instant;
+
 use futures_intrusive::channel::shared::oneshot_channel;
-use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+use wgpu::{hal::Device, COPY_BYTES_PER_ROW_ALIGNMENT};
 
 use crate::{get_either, ProjectUniforms, RenderVideoConstants, RenderVideoState, RenderingError};
 

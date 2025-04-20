@@ -166,18 +166,6 @@ async function main() {
     path.join(__root, ".cargo/config.toml"),
     cargoConfigContents
   );
-
-  if (!(await fileExists(path.join(__root, ".env")))) {
-    await fs.copyFile(
-      path.join(__root, ".env"),
-      path.join(__root, ".env.example")
-    );
-  }
-
-  await fs.copyFile(
-    path.join(__root, ".env"),
-    path.join(__root, "apps/desktop/.env")
-  );
 }
 
 main();
