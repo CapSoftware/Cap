@@ -401,7 +401,7 @@ impl RenderVideoConstants {
             (texture, texture_view)
         });
 
-        let blur_pipeline = BlurPipeline::new(&device);
+        let blur_pipeline = BlurPipeline::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb);
 
         Ok(Self {
             _instance: instance,
@@ -1024,7 +1024,7 @@ async fn produce_frame(
             );
         }
 
-        BlurLayer::render(&mut pipeline, [100.0, 100.0, 200.0, 200.0]);
+        BlurLayer::render(&mut pipeline, [100.0, 100.0, 200.0, 200.0], 3.0);
     }
 
     let padded_bytes_per_row = encoder.padded_bytes_per_row(&state);

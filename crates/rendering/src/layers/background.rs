@@ -178,6 +178,7 @@ impl BackgroundLayer {
                     &constants.image_background_pipeline.render_pipeline,
                     bind_group,
                     wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    0..4,
                 );
             }
             _ => {
@@ -191,6 +192,7 @@ impl BackgroundLayer {
                     &constants.gradient_or_color_pipeline.render_pipeline,
                     bind_group,
                     wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    0..4,
                 );
             }
         }
@@ -234,6 +236,7 @@ impl BackgroundLayer {
                 &constants.background_blur_pipeline.render_pipeline,
                 blur_bind_group,
                 wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                0..4,
             );
         }
 
