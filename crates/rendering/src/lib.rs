@@ -1024,7 +1024,7 @@ async fn produce_frame(
             );
         }
 
-        BlurLayer::render(&mut pipeline);
+        BlurLayer::render(&mut pipeline, [100.0, 100.0, 200.0, 200.0]);
     }
 
     let padded_bytes_per_row = encoder.padded_bytes_per_row(&state);

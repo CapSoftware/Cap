@@ -9,9 +9,56 @@ use crate::frame_pipeline::FramePipeline;
 pub struct BlurLayer;
 
 impl BlurLayer {
-    pub fn render(pipeline: &mut FramePipeline) {
+    pub fn render(pipeline: &mut FramePipeline, rect: [f32; 4]) {
         let constants = &pipeline.state.constants;
-        let uniforms = pipeline.state.uniforms;
+
+        // Create intermediate textures for blur passes
+        let texture_desc = wgpu::TextureDescriptor {
+            label: Some("Blur Intermediate Texture"),
+            size: pipeline.state.get_current_texture().size(),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: pipeline.state.get_current_texture().format(),
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        };
+
+        let intermediate_texture = constants.device.create_texture(&texture_desc);
+        let intermediate_view =
+            intermediate_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let horizontal_uniforms = BlurUniforms {
+            rect,
+            direction: [1.0, 0.0],
+            blur_radius: 4.0,
+            _pad: 0.0,
+        };
+
+        let vertical_uniforms = BlurUniforms {
+            rect,
+            direction: [0.0, 1.0],
+            blur_radius: 4.0,
+            _pad: 0.0,
+        };
+
+        let uniform_buffer =
+            constants
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Horizontal Blur Uniforms Buffer"),
+                    contents: bytemuck::cast_slice(&[horizontal_uniforms]),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                });
+
+        let vertical_uniform_buffer =
+            constants
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Vertical Blur Uniforms Buffer"),
+                    contents: bytemuck::cast_slice(&[vertical_uniforms]),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                });
 
         // Load shader
         let shader = constants
@@ -46,6 +93,16 @@ impl BlurLayer {
                                 multisampled: false,
                                 view_dimension: wgpu::TextureViewDimension::D2,
                                 sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 2,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
                             },
                             count: None,
                         },
@@ -100,7 +157,6 @@ impl BlurLayer {
 
         // First pass - Horizontal blur
         let input_view = pipeline.state.get_current_texture_view();
-        let temp_texture_view = pipeline.state.get_other_texture_view();
 
         let horizontal_bind_group =
             constants
@@ -117,10 +173,14 @@ impl BlurLayer {
                             binding: 1,
                             resource: wgpu::BindingResource::TextureView(&input_view),
                         },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: uniform_buffer.as_entire_binding(),
+                        },
                     ],
                 });
 
-        // First pass render
+        // First pass render - horizontal blur to intermediate texture
         {
             let mut render_pass =
                 pipeline
@@ -129,7 +189,7 @@ impl BlurLayer {
                     .begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Horizontal Blur Pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &temp_texture_view,
+                            view: &intermediate_view,
                             resolve_target: None,
                             ops: wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -161,12 +221,16 @@ impl BlurLayer {
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&temp_texture_view),
+                        resource: wgpu::BindingResource::TextureView(&intermediate_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: vertical_uniform_buffer.as_entire_binding(),
                     },
                 ],
             });
 
-        // Second pass render
+        // Second pass render - vertical blur to output
         {
             let mut render_pass =
                 pipeline
@@ -199,6 +263,7 @@ pub struct BlurPipeline {}
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct BlurUniforms {
+    rect: [f32; 4], // x, y, width, height
     direction: [f32; 2],
     blur_radius: f32,
     _pad: f32,
