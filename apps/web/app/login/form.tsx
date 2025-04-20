@@ -119,7 +119,7 @@ export function LoginForm() {
           <FontAwesomeIcon className="w-2" icon={faArrowLeft} />
           <p className="text-xs text-inherit">Back</p>
         </motion.div>
-        <Link href="/">
+        <Link className="flex mx-auto w-fit" href="/">
           <LogoBadge className="w-[72px] mx-auto" />
         </Link>
         <div className="flex flex-col justify-center items-center text-left">
