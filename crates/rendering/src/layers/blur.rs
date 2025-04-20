@@ -9,26 +9,9 @@ impl BlurLayer {
     pub fn render(pipeline: &mut FramePipeline, rect: [f32; 4], blur_radius: f32) {
         let constants = &pipeline.state.constants;
 
-        // TODO: Can we remove this
-        let intermediate_texture = constants.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Blur Intermediate Texture"),
-            size: pipeline.state.get_current_texture().size(),
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: pipeline.state.get_current_texture().format(),
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let intermediate_view =
-            intermediate_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        // First pass - Horizontal blur
-        let input_view = pipeline.state.get_current_texture_view();
-
         let horizontal_bind_group = constants.blur_pipeline.bind_group(
             &constants.device,
-            &input_view,
+            &pipeline.state.get_current_texture_view(),
             &BlurUniforms {
                 rect,
                 direction: [1.0, 0.0],
@@ -39,7 +22,7 @@ impl BlurLayer {
         );
         let vertical_bind_group = constants.blur_pipeline.bind_group(
             &constants.device,
-            &intermediate_view,
+            &pipeline.state.get_other_texture_view(),
             &BlurUniforms {
                 rect,
                 direction: [0.0, 1.0],
@@ -51,7 +34,7 @@ impl BlurLayer {
 
         // First pass render - horizontal blur to intermediate texture
         pipeline.encoder.do_render_pass(
-            &intermediate_view,
+            &pipeline.state.get_other_texture_view(),
             &constants.blur_pipeline.render_pipeline,
             horizontal_bind_group,
             wgpu::LoadOp::Clear(wgpu::Color::BLACK),
