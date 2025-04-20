@@ -87,12 +87,11 @@ impl TextLayer {
                 )?;
 
                 if let Some(bg_color) = text.background_color {
-                    let opacity = text.background_opacity.unwrap_or(1.0);
                     let color = [
                         bg_color[0] as f32,
                         bg_color[1] as f32,
                         bg_color[2] as f32,
-                        opacity,
+                        text.background_opacity.unwrap_or(1.0),
                     ];
 
                     let text_rendered_size = measure(&buffer);
