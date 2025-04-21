@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Cap - Development",
-  "identifier": "so.cap.desktop.dev",
-  "mainBinaryName": "Cap - Development",
+  "productName": "OPAVC",
+  "identifier": "so.opavc.desktop",
+  "mainBinaryName": "OPAVC",
   "build": {
     "beforeDevCommand": "pnpm localdev",
     "devUrl": "http://localhost:3001",
-    "beforeBuildCommand": "pnpm turbo build --filter @cap/desktop",
+    "beforeBuildCommand": "pnpm turbo build --filter @opavc/desktop",
     "frontendDist": "../.output/public"
   },
   "app": {
@@ -23,11 +23,11 @@
     "updater": { "active": false, "pubkey": "" },
     "deep-link": {
       "desktop": {
-        "schemes": ["cap-desktop"]
+        "schemes": ["opavc-desktop"]
       },
       "mobile": [
         {
-          "host": "cap.so",
+          "host": "opavc.so",
           "pathPrefix": ["/signin"]
         }
       ]
@@ -80,9 +80,9 @@
     },
     "fileAssociations": [
       {
-        "ext": ["cap"],
-        "name": "Cap Project",
-        "mimeType": "application/x-cap-project",
+        "ext": ["opavc"],
+        "name": "OPAVC Project",
+        "mimeType": "application/x-opavc-project",
         "role": "Editor"
       }
     ]

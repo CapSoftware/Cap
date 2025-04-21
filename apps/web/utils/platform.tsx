@@ -119,13 +119,13 @@ export const getDownloadButtonText = (
   isIntel: boolean = false
 ): string => {
   if (loading) {
-    return "Download Cap";
+    return "Download OPAVC";
   } else if (platform === "windows") {
-    return "Download for Windows (Beta)";
+    return "Download OPAVC for Windows";
   } else if (platform === "macos") {
-    return isIntel ? "Download for Apple Intel" : "Download for Apple Silicon";
+    return isIntel ? "Download OPAVC for Intel Mac" : "Download OPAVC for Apple Silicon";
   } else {
-    return "Download Cap";
+    return "Download OPAVC";
   }
 };
 
@@ -149,11 +149,11 @@ export const getPlatformIcon = (platform: string | null): React.ReactNode => {
 
 export const getVersionText = (platform: string | null): React.ReactNode => {
   if (platform === "macos") {
-    return <>macOS 13.1+ recommended</>;
+    return <>OPAVC for macOS 13.1+</>;
   } else if (platform === "windows") {
-    return <>Windows 10+ recommended</>;
+    return <>OPAVC for Windows 10+</>;
   } else {
-    return <>macOS 13.1+ recommended</>;
+    return <>OPAVC for macOS 13.1+</>;
   }
 };
 

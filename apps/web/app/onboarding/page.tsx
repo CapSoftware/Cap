@@ -25,10 +25,10 @@ export default async function OnboardingPage() {
         </a>
         <div className="text-center flex flex-col items-center justify-center space-y-3">
           <h1 className="text-3xl font-semibold fade-in-down animate-delay-1">
-            Let's get you started.
+            Welcome to OPAVC
           </h1>
           <p className="text-2xl text-gray-500 fade-in-down animate-delay-1">
-            What's your name?
+            Let's get you started with your organization's account.
           </p>
         </div>
         <div className="fade-in-down animate-delay-2 flex flex-col space-y-3">

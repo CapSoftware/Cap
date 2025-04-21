@@ -1,5 +1,5 @@
 [package]
-name = "cap-utils"
+name = "opavc-utils"
 version = "0.1.0"
 edition = "2021"
 

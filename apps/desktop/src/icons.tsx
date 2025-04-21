@@ -88,3 +88,13 @@ export const Flip = (props: { class: string }) => {
     </svg>
   );
 };
+
+export const IconOPAVCLogo = (props: { class: string }) => {
+  return (
+    <img
+      src="/design/OPAVC_Logo.png"
+      alt="OPAVC Logo"
+      class={props.class}
+    />
+  );
+};

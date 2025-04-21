@@ -1,4 +1,5 @@
 import { Button } from "@cap/ui-solid";
+import type { Component } from "solid-js";
 import {
   createEffect,
   createResource,
@@ -13,6 +14,8 @@ import {
 } from "solid-js";
 import { createTimer } from "@solid-primitives/timer";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { IconOPAVCLogo } from "~/icons";
+import { Volume2, VolumeX } from "lucide-solid";
 
 import { commands, OSPermission, type OSPermissionStatus } from "~/utils/tauri";
 import { makePersisted } from "@solid-primitives/storage";
@@ -98,11 +101,11 @@ export default function () {
 
         <Show when={currentStep() === "permissions"}>
           <div class="flex flex-col items-center">
-            <IconCapLogo class="size-14 mb-3" />
+            <IconOPAVCLogo class="size-14 mb-3" />
             <h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">
               Permissions Required
             </h1>
-            <p class="text-gray-400">Cap needs permissions to run properly.</p>
+            <p class="text-gray-400">OPAVC needs permissions to run properly.</p>
           </div>
 
           <ul class="flex flex-col gap-4 py-8">
@@ -158,11 +161,11 @@ export default function () {
 
         <Show when={currentStep() === "mode"}>
           <div class="flex flex-col items-center">
-            <IconCapLogo class="size-14 mb-3" />
+            <IconOPAVCLogo class="size-14 mb-3" />
             <h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">
               Select Recording Mode
             </h1>
-            <p class="text-gray-400">Choose how you want to record with Cap.</p>
+            <p class="text-gray-400">Choose how you want to record with OPAVC.</p>
           </div>
 
           <div class="w-full py-4">
@@ -170,7 +173,7 @@ export default function () {
           </div>
 
           <Button class="px-12" size="lg" onClick={handleContinue}>
-            Continue to Cap
+            Continue to OPAVC
           </Button>
         </Show>
       </div>
@@ -287,7 +290,7 @@ function Startup(props: { onClose: () => void }) {
   });
 
   const toggleMute = async () => {
-    setAudioState("isMuted", (m) => !m);
+    setAudioState("isMuted", (m: boolean) => !m);
 
     audio.muted = audioState.isMuted;
   };
@@ -314,9 +317,9 @@ function Startup(props: { onClose: () => void }) {
               )}
             >
               {audioState.isMuted ? (
-                <IconLucideVolumeX class="w-6 h-6" />
+                <VolumeX class="w-6 h-6" />
               ) : (
-                <IconLucideVolume2 class="w-6 h-6" />
+                <Volume2 class="w-6 h-6" />
               )}
             </button>
             {ostype() === "windows" && <CaptionControlsWindows11 />}
@@ -473,16 +476,16 @@ function Startup(props: { onClose: () => void }) {
                 onClick={handleLogoClick}
                 class="cursor-pointer inline-block"
               >
-                <IconCapLogo
+                <IconOPAVCLogo
                   class={`w-20 h-24 mx-auto drop-shadow-[0_0_100px_rgba(0,0,0,0.2)]
                   ${isLogoAnimating() ? "logo-bounce" : ""}`}
                 />
               </div>
               <h1 class="text-5xl md:text-5xl font-bold mb-4 drop-shadow-[0_0_20px_rgba(0,0,0,0.2)]">
-                Welcome to Cap
+                Welcome to OPAVC
               </h1>
               <p class="text-2xl opacity-80 max-w-md mx-auto drop-shadow-[0_0_20px_rgba(0,0,0,0.2)]">
-                Beautiful screen recordings, owned by you.
+                Professional screen recording platform by OPAVC
               </p>
             </div>
 

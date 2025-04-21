@@ -19,10 +19,10 @@ import { AnimatePresence, motion } from "framer-motion";
 import Link from "next/link";
 import React, { useEffect, useState } from "react";
 import { Parallax, ParallaxProvider } from "react-scroll-parallax";
-import { LogoSection } from "../_components/LogoSection";
 import LeftBlueHue from "./LeftBlueHue";
 import PowerfulFeaturesSVG from "./PowerfulFeaturesSVG";
 import { FeatureCard } from "../SelfHostingPage";
+
 export const HomePage = () => {
   const [videoToggled, setVideoToggled] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -47,87 +47,10 @@ export const HomePage = () => {
 
   return (
     <ParallaxProvider>
-      <div className="mt-[120px]">
-        <div className="relative z-10 px-5 w-full">
-          <div className="mx-auto text-center wrapper wrapper-sm">
-            <Link
-              href="https://x.com/richiemcilroy/status/1895526857807733018"
-              target="_blank"
-              className="flex gap-3 transition-opacity duration-300
-                 hover:opacity-90 mb-[52px] items-center relative z-[20] px-4 py-2
-               mx-auto bg-[#2e2e2e] rounded-full border w-fit border-zinc-200"
-            >
-              <p className="text-xs text-white sm:text-sm">
-                Launch Week Day 5:{" "}
-                <span className="text-xs font-bold text-blue-100 sm:text-sm">
-                  Self-host Cap
-                </span>
-              </p>
-              <FontAwesomeIcon
-                fontWeight="light"
-                className="w-2 text-white"
-                icon={faAngleRight}
-              />
-            </Link>
-            <h3 className="relative z-10 text-base text-black fade-in-down">
-              Record. Edit. Share.
-            </h3>
-            <h1 className="fade-in-down text-[2rem] font-bold leading-[2.5rem] md:text-[3.75rem] md:leading-[4rem] relative z-10 text-black mb-4">
-              Beautiful screen recordings,
-              <br />
-              owned by you.
-            </h1>
-            <p className="mx-auto mb-8 max-w-3xl text-md sm:text-xl text-zinc-500 fade-in-down animate-delay-1">
-              Cap is the open source alternative to Loom. Lightweight, powerful,
-              and cross-platform. Record and share securely in seconds with
-              custom S3 bucket support.
-            </p>
-          </div>
-          <div className="flex flex-col justify-center items-center mb-5 space-y-2 fade-in-up animate-delay-2 sm:flex-row sm:space-y-0 sm:space-x-2">
-            <Button
-              variant="white"
-              href={
-                platform === "windows"
-                  ? "/download"
-                  : getDownloadUrl(platform, isIntel)
-              }
-              size="lg"
-              className="flex justify-center items-center w-full font-medium text-md sm:w-auto"
-            >
-              {!loading && getPlatformIcon(platform)}
-              {getDownloadButtonText(platform, loading, isIntel)}
-            </Button>
-            <Button
-              variant="radialblue"
-              href="/pricing"
-              size="lg"
-              className="relative z-[20] w-full font-medium text-md sm:w-auto"
-            >
-              Buy Now
-            </Button>
-          </div>
-          <p className="text-sm text-center text-zinc-400 animate-delay-2 fade-in-up">
-            Free version available. No credit card required.
-          </p>
-
-          {/* Platform icons */}
-          <PlatformIcons />
-
-          {/* See other options button */}
-          <div className="flex justify-center mt-2">
-            <Link
-              href="/download"
-              className="text-sm text-center underline text-zinc-400 animate-delay-2 fade-in-up hover:text-zinc-500"
-            >
-              See other options
-            </Link>
-          </div>
-        </div>
-        <AnimatePresence>
-          {videoToggled && <VideoModal setVideoToggled={setVideoToggled} />}
-        </AnimatePresence>
+      <div className="mt-[60px]">
+        {/* Image Section First */}
         <Parallax
-          className="relative flex items-center justify-center w-full max-w-[540px] mx-auto mt-[100px] mb-[190px] sm:mt-[160px] sm:mb-[200px]"
+          className="relative flex items-center justify-center w-full max-w-[540px] mx-auto mb-[50px]"
           scale={[1, 1.6]}
         >
           <motion.div
@@ -163,9 +86,46 @@ export const HomePage = () => {
           <img
             src="/illustrations/app.webp"
             className="mx-auto w-full max-w-[540px] pointer-events-none h-auto rounded-xl"
-            alt="Landing Page Screenshot Banner"
+            alt="OPAVC Landing Page Screenshot"
           />
         </Parallax>
+
+        {/* Text Section Below */}
+        <div className="relative z-10 px-5 w-full">
+          <div className="mx-auto text-center wrapper wrapper-sm">
+            <h1 className="fade-in-down text-[1.1rem] font-semibold leading-[2rem] md:text-[2.5rem] md:leading-[3rem] relative z-10 text-black mb-4">
+              OPAVC is the open source alternative to Loom. Lightweight, powerful, and cross-platform.
+            </h1>
+            <div className="flex flex-col justify-center items-center mb-5 space-y-2 fade-in-up animate-delay-2 sm:flex-row sm:space-y-0 sm:space-x-2">
+              <Button
+                variant="white"
+                href={
+                  platform === "windows"
+                    ? "/download"
+                    : getDownloadUrl(platform, isIntel)
+                }
+                size="lg"
+                className="flex justify-center items-center w-full font-medium text-md sm:w-auto"
+              >
+                Download for Windows (Beta)
+              </Button>
+            </div>
+            <p className="text-sm text-center text-zinc-400 animate-delay-2 fade-in-up">
+              Free version available.
+            </p>
+
+            {/* See other options button */}
+            <div className="flex justify-center mt-4 mb-10">
+              <Link
+                href="/download"
+                className="text-sm text-center underline text-zinc-400 animate-delay-2 fade-in-up hover:text-zinc-500"
+              >
+                See other options
+              </Link>
+            </div>
+          </div>
+        </div>
+
         {/** Header BG */}
         <div className="w-full mx-auto overflow-hidden h-[830px] absolute top-0 left-0">
           <motion.div
@@ -320,22 +280,6 @@ export const HomePage = () => {
             src="./illustrations/chipcloud.webp"
             alt="chipcloudfour"
           />
-          <img
-            className="absolute
-         w-full max-w-[500px] top-[160px] select-none mix-blend-screen left-[-200px] lg:left-[30px] z-[10] pointer-events-none"
-            src="./illustrations/chipcloud.webp"
-            alt="chipcloud"
-          />
-          <img
-            className="absolute bottom-[-200px] -left-[500px] select-none z-[5] pointer-events-none"
-            src="./illustrations/bottomcloud.webp"
-            alt="bottomcloud"
-          />
-          <img
-            className="absolute bottom-[-90px] right-[-400px] select-none z-[5] pointer-events-none"
-            src="./illustrations/bottomcloud.webp"
-            alt="bottomcloudtwo"
-          />
         </div>
         {/** Right Blue Hue */}
         <div
@@ -343,20 +287,19 @@ export const HomePage = () => {
       absolute top-20 z-[0] right-0 from-[#A6D7FF] to-transparent"
         />
       </div>
-      <LogoSection />
       <div className="pb-32 wrapper md:pb-40">
         <div className="mb-4">
           <PowerfulFeaturesSVG />
         </div>
         <div className="text-center max-w-[800px] mx-auto mb-8">
-          <h2 className="mb-3">Crafted for simplicity</h2>
-          <p className="text-[1.125rem] leading-[1.75rem]">
+          <h2 className="mb-3 text-zinc-200 text-3xl font-bold">Crafted for simplicity</h2>
+          <p className="text-[1rem] leading-[1.2rem] text-gray-700">
             We believe great tools should make your life easier, not more
-            complicated. Cap is crafted to streamline your workflow, so you can
+            complicated. OPAVC is crafted to streamline your workflow, so you can
             record, edit, and share without jumping through hoops.
           </p>
         </div>
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
           <div className="overflow-hidden rounded-[20px]">
             <img
               className="w-full h-auto max-h-[290px] object-cover"
@@ -378,13 +321,13 @@ export const HomePage = () => {
               alt="Lightweight Illustration"
             />
           </div>
-          <div className="overflow-hidden rounded-[20px]">
+          {/* <div className="overflow-hidden rounded-[20px]">
             <img
               className="w-full h-auto max-h-[290px] object-cover"
               src="/features/open-source.png"
               alt="Open source Illustration"
             />
-          </div>
+          </div> */}
         </div>
       </div>
       <div className="pb-32 wrapper md:pb-40" id="features">
@@ -394,20 +337,21 @@ export const HomePage = () => {
             <div className="md:col-span-5">
               <FeatureCard
                 title="Privacy-first"
-                description="Own your content with Cap's privacy-focused approach. Keep your sensitive information secure and maintain complete control over who can access your recordings - perfect for confidential client communications and internal team sharing."
+                description="Own your content with OPAVC's privacy-focused approach. Keep your sensitive information secure and maintain complete control over who can access your recordings - perfect for confidential client communications and internal team sharing."
                 imagePath="/illustrations/privacy.webp"
                 imageAlt="Complete Control"
                 imageHeight="h-[280px]"
+                className="text-gray-800"
               />
             </div>
             <div className="md:col-span-7">
               <FeatureCard
                 title="Multi-Platform Support"
-                description="Cap works seamlessly across macOS and Windows, giving you the flexibility to create content on any device. Capture, share, and collaborate regardless of which platform you or your team prefers, ensuring smooth workflows and consistent experience everywhere."
+                description="OPAVC works seamlessly across macOS and Windows, giving you the flexibility to create content on any device. Capture, share, and collaborate regardless of which platform you or your team prefers, ensuring smooth workflows and consistent experience everywhere."
                 imagePath="/illustrations/multiplatmain.png"
                 bg="/illustrations/multiplatbg.webp"
                 imageAlt="Enterprise-Ready"
-                className="bg-[center_top_-90px] bg-no-repeat bg-cover lg:bg-[center_top_-60px]"
+                className="bg-[center_top_-90px] bg-no-repeat bg-cover lg:bg-[center_top_-60px] text-gray-800"
                 imageHeight="h-[280px]"
               />
             </div>
@@ -419,20 +363,21 @@ export const HomePage = () => {
               <FeatureCard
                 title="Flexible Storage Options"
                 bg="/illustrations/multiplatbg.webp"
-                description="Choose how and where you store your recordings. Cap offers both local and cloud storage options to suit your needs. Save space on your device or keep your entire content library accessible from anywhere - ideal for freelancers and growing teams with varied content creation needs."
+                description="Choose how and where you store your recordings. OPAVC offers both local and cloud storage options to suit your needs. Save space on your device or keep your entire content library accessible from anywhere - ideal for freelancers and growing teams with varied content creation needs."
                 imagePath="/illustrations/cloud-feature.webp"
                 imageAlt="White Labeling"
                 imageHeight="h-[215px]"
-                className="lg:bg-[center_top_-150px] bg-[center_top_-120px] bg-no-repeat bg-cover"
+                className="lg:bg-[center_top_-150px] bg-[center_top_-120px] bg-no-repeat bg-cover text-gray-800"
               />
             </div>
             <div className="md:col-span-4">
               <FeatureCard
                 title="High-Quality Video Capture"
-                description="Deliver crystal-clear recordings that showcase your professionalism. Cap ensures exceptional quality for client presentations, tutorials, and team communications - making your content stand out whether you're a solo creator or a small business owner."
+                description="Deliver crystal-clear recordings that showcase your professionalism. OPAVC ensures exceptional quality for client presentations, tutorials, and team communications - making your content stand out whether you're a solo creator or a small business owner."
                 imagePath="/illustrations/video-capture.webp"
                 imageAlt="Data Sovereignty"
                 imageHeight="h-[224px]"
+                className="text-gray-800"
               />
             </div>
           </div>
@@ -441,10 +386,11 @@ export const HomePage = () => {
           <div className="grid grid-cols-1">
             <FeatureCard
               title="Seamless Team Collaboration"
-              description="Share knowledge effortlessly with your team or clients. Cap's intuitive sharing features make it easy to organize content, provide access to specific people, and track engagement. Perfect for small businesses and growing teams who need simple yet powerful collaboration tools."
+              description="Share knowledge effortlessly with your team or clients. OPAVC's intuitive sharing features make it easy to organize content, provide access to specific people, and track engagement. Perfect for small businesses and growing teams who need simple yet powerful collaboration tools."
               imagePath="/illustrations/collaboration.webp"
               imageAlt="Dedicated Support"
               imageHeight="h-[285px]"
+              className="text-gray-800"
             />
           </div>
         </div>

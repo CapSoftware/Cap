@@ -2,14 +2,14 @@
   "type": "module",
   "scripts": {
     "build": "dotenv -e .env -- turbo run build",
-    "cap-setup": "dotenv -e .env -- node scripts/setup.js",
+    "opavc-setup": "dotenv -e .env -- node scripts/setup.js",
     "db:generate": "dotenv -e .env -- pnpm --dir packages/database db:generate",
     "db:push": "dotenv -e .env -- pnpm --dir packages/database db:push",
     "db:studio": "dotenv -e .env -- pnpm --dir packages/database db:studio",
     "dev": "(pnpm run docker:up > /dev/null &) && sleep 5 && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
-    "dev:desktop": "pnpm run --filter=@cap/desktop dev",
-    "dev:manual": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/storybook --no-cache --concurrency 1",
-    "dev:web": "pnpm dev --filter=!@cap/desktop",
+    "dev:desktop": "pnpm run --filter=@opavc/desktop dev",
+    "dev:manual": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@opavc/storybook --no-cache --concurrency 1",
+    "dev:web": "pnpm dev --filter=!@opavc/desktop",
     "dev:windows": "start /b cmd /c \"pnpm run docker:up > nul\" && timeout /t 5 /nobreak > nul && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
     "docker:clean": "turbo run docker:clean",
     "docker:stop": "turbo run docker:stop",
@@ -18,7 +18,7 @@
     "lint": "turbo run lint",
     "tauri:build": "dotenv -e .env -- pnpm --dir apps/desktop tauri build --verbose",
     "typecheck": "pnpm tsc -b",
-    "web": "pnpm run --filter=@cap/web",
+    "web": "pnpm run --filter=@opavc/web",
     "env-setup": "node scripts/env-cli.js"
   },
   "devDependencies": {
@@ -34,7 +34,7 @@
     "typescript": "^5.7.2"
   },
   "packageManager": "pnpm@10.5.2",
-  "name": "cap",
+  "name": "opavc",
   "engines": {
     "node": "20"
   },
@@ -44,6 +44,7 @@
     }
   },
   "dependencies": {
+    "lucide-solid": "^0.501.0",
     "sst": "3.10.13"
   }
 }

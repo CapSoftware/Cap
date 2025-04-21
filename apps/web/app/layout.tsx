@@ -12,16 +12,38 @@ import { PostHogProvider, Providers } from "./providers";
 import { serverEnv } from "@cap/env";
 
 export const metadata: Metadata = {
-  title: "Cap — Beautiful screen recordings, owned by you.",
+  title: {
+    default: "OPAVC — Ontario Provincial Autism Ventures Corporation",
+    template: "%s | OPAVC",
+  },
   description:
-    "Cap is the open source alternative to Loom. Lightweight, powerful, and cross-platform. Record and share in seconds.",
+    "OPAVC is dedicated to empowering individuals with autism through innovative solutions, community engagement, and sustainable ventures across Ontario.",
   openGraph: {
-    title: "Cap — Beautiful screen recordings, owned by you.",
+    title: "Ontario Provincial Autism Ventures Corporation",
     description:
-      "Cap is the open source alternative to Loom. Lightweight, powerful, and cross-platform. Record and share in seconds.",
+      "OPAVC is dedicated to empowering individuals with autism through innovative solutions, community engagement, and sustainable ventures across Ontario.",
+    url: "https://opavc.org",
+    siteName: "OPAVC",
+    locale: "en_CA",
     type: "website",
-    url: "https://cap.so",
-    images: ["https://cap.so/og.png"],
+  },
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      "max-video-preview": -1,
+      "max-image-preview": "large",
+      "max-snippet": -1,
+    },
+  },
+  twitter: {
+    title: "Ontario Provincial Autism Ventures Corporation",
+    card: "summary_large_image",
+  },
+  verification: {
+    google: "google-site-verification-code", // This should be replaced with actual verification code when available
   },
 };
 
@@ -30,14 +52,17 @@ export default async function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const user = await getCurrentUser();
+  const session = await getCurrentUser();
+  const isSharePage = false;
+
+  // Comment out Intercom hash generation
   let intercomHash = "";
-  if (serverEnv.INTERCOM_SECRET) {
-    intercomHash = crypto
-      .createHmac("sha256", serverEnv.INTERCOM_SECRET)
-      .update(user?.id ?? "")
-      .digest("hex");
-  }
+  // if (serverEnv.INTERCOM_SECRET) {
+  //   intercomHash = crypto
+  //     .createHmac("sha256", serverEnv.INTERCOM_SECRET)
+  //     .update(session?.id ?? "")
+  //     .digest("hex");
+  // }
 
   return (
     <html className={`${GeistSans.variable}`} lang="en">
@@ -45,23 +70,23 @@ export default async function RootLayout({
         <link
           rel="apple-touch-icon"
           sizes="180x180"
-          href="/apple-touch-icon.png"
+          href="/design/OPAVC-icon.png"
         />
         <link
           rel="icon"
           type="image/png"
           sizes="32x32"
-          href="/favicon-32x32.png"
+          href="/design/OPAVC-icon.png"
         />
         <link
           rel="icon"
           type="image/png"
           sizes="16x16"
-          href="/favicon-16x16.png"
+          href="/design/OPAVC-icon.png"
         />
         <link rel="manifest" href="/site.webmanifest" />
-        <link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5" />
-        <link rel="shortcut icon" href="/favicon.ico" />
+        <link rel="mask-icon" href="/design/OPAVC Logo.svg" color="#5bbad5" />
+        <link rel="shortcut icon" href="/design/OPAVC-icon.png" />
         <meta name="msapplication-TileColor" content="#da532c" />
         <meta name="theme-color" content="#ffffff" />
       </head>
@@ -69,18 +94,18 @@ export default async function RootLayout({
         <PostHogProvider>
           <AuthProvider>
             <Providers
-              userId={user?.id}
+              userId={session?.id}
               intercomHash={intercomHash}
-              name={`${user?.name ?? ""} ${user?.lastName ?? ""}`}
-              email={user?.email ?? ""}
+              name={`${session?.name ?? ""} ${session?.lastName ?? ""}`}
+              email={session?.email ?? ""}
             >
               <Toaster />
               <main className="overflow-hidden w-full">
-                <Navbar auth={user ? true : false} />
+                <Navbar auth={session ? true : false} />
                 {children}
                 <Footer />
               </main>
-              <BentoScript user={user} />
+              <BentoScript user={session} />
             </Providers>
           </AuthProvider>
         </PostHogProvider>

@@ -1,5 +1,5 @@
 [package]
-name = "cap-recording"
+name = "opavc-recording"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,10 +7,10 @@ edition = "2021"
 workspace = true
 
 [dependencies]
-cap-project = { path = "../project" }
-cap-media = { path = "../media" }
-cap-flags = { path = "../flags" }
-cap-utils = { path = "../utils" }
+opavc-project = { path = "../project" }
+opavc-media = { path = "../media" }
+opavc-flags = { path = "../flags" }
+opavc-utils = { path = "../utils" }
 
 specta.workspace = true
 tokio.workspace = true

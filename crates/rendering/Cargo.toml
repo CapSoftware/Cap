@@ -1,5 +1,5 @@
 [package]
-name = "cap-rendering"
+name = "opavc-rendering"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,9 +9,9 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 bytemuck = { version = "1.7", features = ["derive"] }
-cap-flags = { path = "../flags" }
-cap-project = { path = "../project" }
-cap-video-decode = { path = "../video-decode" }
+opavc-flags = { path = "../flags" }
+opavc-project = { path = "../project" }
+opavc-video-decode = { path = "../video-decode" }
 ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }
 tokio.workspace = true
 ffmpeg.workspace = true

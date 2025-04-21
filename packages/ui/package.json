@@ -1,8 +1,10 @@
 {
-  "name": "@cap/ui",
-  "version": "0.0.0",
+  "name": "@opavc/ui",
+  "version": "0.1.0",
+  "private": true,
   "main": "./src/index.tsx",
   "types": "./src/index.tsx",
+  "license": "MIT",
   "exports": {
     ".": "./src/index.tsx",
     "./tailwind": "./tailwind.config.js",
@@ -37,7 +39,7 @@
     "vite-tsconfig-paths": "^4.2.1"
   },
   "dependencies": {
-    "@cap/utils": "workspace:*",
+    "@opavc/utils": "workspace:*",
     "@kobalte/tailwindcss": "^0.9.0",
     "@radix-ui/react-dialog": "^1.0.5",
     "@radix-ui/react-dropdown-menu": "^2.0.6",
@@ -48,10 +50,15 @@
     "@radix-ui/react-switch": "^1.1.0",
     "@tailwindcss/typography": "^0.5.9",
     "class-variance-authority": "^0.7.0",
+    "clsx": "^2.1.0",
     "cmdk": "^0.2.0",
-    "lucide-react": "^0.294.0",
+    "lucide-react": "^0.330.0",
     "react-hook-form": "^7.49.2",
-    "react-loading-skeleton": "^3.3.1"
+    "react-loading-skeleton": "^3.3.1",
+    "tailwind-merge": "^2.2.1"
+  },
+  "peerDependencies": {
+    "next": "^14.0.0"
   },
   "engines": {
     "node": "20"

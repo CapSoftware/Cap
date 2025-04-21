@@ -76,6 +76,18 @@ module.exports = function (app, options) {
             400: "#8991A3",
             500: "#12161F",
           },
+          purple: {
+            50: "#F5F3FF",
+            100: "#EDE9FE",
+            200: "#DDD6FE",
+            300: "#C4B5FD",
+            400: "#A78BFA",
+            500: "#8B5CF6",
+            600: "#7C3AED",
+            700: "#6D28D9",
+            800: "#5B21B6",
+            900: "#4C1D95",
+          },
           "black-transparent": {
             5: "rgba(18,22,31,0.05)",
             10: "rgba(18,22,31,0.1)",
@@ -116,6 +128,7 @@ module.exports = function (app, options) {
           "gradient-radial": "radial-gradient(var(--tw-gradient-stops))",
           "gradient-conic":
             "conic-gradient(from 180deg at 50% 50%, var(--tw-gradient-stops))",
+          "gradient-primary": "linear-gradient(180deg, var(--primary) 0%, var(--primary-2) 100%)",
         },
         fontFamily: {
           primary: ['var(--font-geist-sans)', 'sans-serif'],

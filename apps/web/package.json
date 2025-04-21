@@ -1,5 +1,5 @@
 {
-  "name": "@cap/web",
+  "name": "@opavc/web",
   "version": "0.3.1",
   "private": true,
   "scripts": {
@@ -29,7 +29,6 @@
     "@headlessui/react": "^1.7.17",
     "@hono/zod-validator": "^0.4.3",
     "@hookform/resolvers": "^3.3.2",
-    "@intercom/messenger-js-sdk": "^0.0.14",
     "@mux/mux-node": "^8.5.1",
     "@mux/mux-player-react": "^3.3.0",
     "@octokit/rest": "^20.0.2",

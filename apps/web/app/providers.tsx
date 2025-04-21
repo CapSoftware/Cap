@@ -6,7 +6,7 @@ import posthog from "posthog-js";
 import { PostHogProvider as PHProvider } from "posthog-js/react";
 import { clientEnv } from "@cap/env";
 import PostHogPageView from "./PosthogPageView";
-import Intercom from "@intercom/messenger-js-sdk";
+// import Intercom from "@intercom/messenger-js-sdk";
 import { usePathname } from "next/navigation";
 
 export function PostHogProvider({ children }: { children: React.ReactNode }) {
@@ -58,23 +58,22 @@ export function AnalyticsProvider({
   const isSharePage = pathname?.startsWith("/s/");
 
   useEffect(() => {
-    if (!isSharePage) {
-      if (intercomHash === "") {
-        Intercom({
-          app_id: "efxq71cv",
-          utm_source: "web",
-        });
-      } else {
-        Intercom({
-          app_id: "efxq71cv",
-          user_id: userId ?? "",
-          user_hash: intercomHash ?? "",
-          name: name,
-          email: email,
-          utm_source: "web",
-        });
-      }
-    }
+    // Commenting out Intercom initialization
+    // if (intercomHash === "") {
+    //   Intercom({
+    //     api_base: "https://api-iam.intercom.io",
+    //     app_id: "YOUR_APP_ID",
+    //   });
+    // } else {
+    //   Intercom({
+    //     api_base: "https://api-iam.intercom.io",
+    //     app_id: "YOUR_APP_ID",
+    //     user_id: userId,
+    //     name: name,
+    //     email: email,
+    //     user_hash: intercomHash ?? "",
+    //   });
+    // }
   }, [intercomHash, userId, name, email, isSharePage]);
 
   useEffect(() => {
@@ -101,16 +100,37 @@ export function AnalyticsProvider({
 export function Providers({
   children,
   userId,
-  intercomHash,
   name,
   email,
+  isSharePage,
+  intercomHash,
 }: {
   children: React.ReactNode;
   userId?: string;
-  intercomHash?: string;
   name?: string;
   email?: string;
+  isSharePage?: boolean;
+  intercomHash?: string;
 }) {
+  useEffect(() => {
+    // Commenting out Intercom initialization
+    // if (intercomHash === "") {
+    //   Intercom({
+    //     api_base: "https://api-iam.intercom.io",
+    //     app_id: "YOUR_APP_ID",
+    //   });
+    // } else {
+    //   Intercom({
+    //     api_base: "https://api-iam.intercom.io",
+    //     app_id: "YOUR_APP_ID",
+    //     user_id: userId,
+    //     name: name,
+    //     email: email,
+    //     user_hash: intercomHash ?? "",
+    //   });
+    // }
+  }, [intercomHash, userId, name, email, isSharePage]);
+
   return (
     <AnalyticsProvider
       userId={userId}

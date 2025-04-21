@@ -30,14 +30,8 @@ export function ReadyToGetStarted() {
       </div>
       <div className="wrapper mx-auto h-full flex flex-col justify-center items-center relative z-10">
         <div className="text-center max-w-[800px] mx-auto mb-8">
-          <h2 className="text-xl sm:text-3xl text-white mb-3">
-            Beautiful screen recordings, owned by you.
-          </h2>
-          <p className="text-[1rem] sm:text-lg text-white">
-            Cap is the open source alternative to Loom. Lightweight, powerful,
-            and cross-platform. Record and share securely in seconds with custom
-            S3 bucket support.
-          </p>
+          <h2 className="text-4xl font-bold mb-4">Ready to Get Started?</h2>
+          <p className="text-gray-600 mb-8">Professional screen recording platform by OPAVC</p>
         </div>
         <div className="flex flex-col sm:flex-row items-center justify-center space-y-2 sm:space-y-0 sm:space-x-2">
           <Button

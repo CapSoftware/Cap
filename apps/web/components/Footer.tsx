@@ -1,7 +1,6 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { Logo, LogoBadge } from "@cap/ui";
 
 type FooterLink = {
   label: string;
@@ -17,40 +16,40 @@ const footerLinks = {
     { label: "Download", href: "/download" },
     {
       label: "Open Source",
-      href: "https://github.com/CapSoftware/Cap",
+      href: "https://github.com/OPAVC/OPAVC",
       isExternal: true,
     },
     { label: "Self-hosting", href: "/self-hosting" },
     {
       label: "Join the community",
-      href: "https://discord.gg/y8gdQ3WRN3",
+      href: "https://discord.gg/opavc",
       isExternal: true,
     },
   ] as FooterLink[],
   help: [
     { label: "FAQs", href: "/faq" },
-    { label: "Email Support", href: "mailto:hello@cap.so" },
+    { label: "Email Support", href: "mailto:hello@opavc.com" },
     {
       label: "Chat Support",
-      href: "https://discord.gg/y8gdQ3WRN3",
+      href: "https://discord.gg/opavc",
       isExternal: true,
     },
     {
       label: "System Status",
-      href: "https://cap.openstatus.dev/",
+      href: "https://opavc.openstatus.dev/",
       isExternal: true,
     },
   ] as FooterLink[],
   socials: [
-    { label: "X (@Cap)", href: "https://x.com/cap", isExternal: true },
+    { label: "X (@OPAVC)", href: "https://x.com/opavc", isExternal: true },
     {
       label: "Discord",
-      href: "https://discord.gg/y8gdQ3WRN3",
+      href: "https://discord.gg/opavc",
       isExternal: true,
     },
     {
       label: "LinkedIn",
-      href: "https://www.linkedin.com/company/caprecorder/",
+      href: "https://www.linkedin.com/company/opavc/",
       isExternal: true,
     },
   ] as FooterLink[],
@@ -93,7 +92,7 @@ export const Footer = () => {
     pathname.includes("/s/") ||
     pathname.includes("/onboarding") ||
     pathname.includes("/record") ||
-    (typeof window !== "undefined" && window.location.href.includes("cap.link"))
+    (typeof window !== "undefined" && window.location.href.includes("opavc.com"))
   )
     return null;
 
@@ -101,37 +100,43 @@ export const Footer = () => {
     <footer className="p-5">
       <div
         style={{ boxShadow: "0px 2px 8px rgba(18, 22, 31, 0.02)" }}
-        className="mx-auto max-w-[1400px] bg-gray-100 border-[1px] border-gray-200 p-8 lg:p-12 rounded-[20px] mb-10 relative overflow-hidden"
+        className="mx-auto max-w-[1400px] bg-gray-200 border-[1px] border-gray-300 p-8 lg:p-12 rounded-[20px] mb-10 relative overflow-hidden"
       >
         <div className="sm:grid space-y-8 sm:space-y-0 grid-cols-1 lg:grid-cols-12 gap-8 sm:items-start sm:justify-between z-10 relative">
           <div className="space-y-2 sm:space-y-4 col-span-12 lg:col-span-6">
-            <Logo className="w-[104px] h-auto" />
+            <div className="flex items-center">
+              <svg width="120" height="40" viewBox="0 0 120 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="20" cy="20" r="18" fill="#8B5CF6"/>
+                <text x="45" y="28" fill="black" className="text-2xl font-bold">OPAVC</text>
+              </svg>
+            </div>
             <div className="w-full">
               <p className="text-gray-500 max-w-md">
-                Cap is the open source alternative to Loom. Lightweight,
+                OPAVC is the open source alternative to Loom. Lightweight,
                 powerful, and cross-platform. Record and share in seconds.
               </p>
             </div>
             <p className="text-gray-400">
-              © Cap Software, Inc. {new Date().getFullYear()}.
+              © OPAVC Software, Inc. {new Date().getFullYear()}.
             </p>
             <div className="flex space-x-3">
-              <a className="text-gray-400 text-sm" href="/terms">
+              <a className="text-gray-400 hover:text-gray-900 hover:underline text-sm" href="/terms">
                 Terms of Service
               </a>
-              <a className="text-gray-400 text-sm" href="/privacy">
+              <a className="text-gray-400 hover:text-gray-900 hover:underline text-sm" href="/privacy">
                 Privacy Policy
               </a>
             </div>
           </div>
           <div className="space-y-4 col-span-12 sm:col-span-6 lg:col-span-2">
-            <h3 className="text-lg font-semibold">Product</h3>
+            <h3 className="text-xl font-semibold text-gray-900">Product</h3>
             <ul className="space-y-2">
               {footerLinks.product.map((link, index) => (
                 <li key={index}>
                   <a
                     href={link.href}
                     target={link.isExternal ? "_blank" : undefined}
+                    className="text-base text-gray-600 hover:text-gray-900 hover:underline"
                   >
                     {link.label}
                   </a>
@@ -140,13 +145,14 @@ export const Footer = () => {
             </ul>
           </div>
           <div className="space-y-4 col-span-12 sm:col-span-6 lg:col-span-2">
-            <h3 className="text-lg font-semibold">Help</h3>
+            <h3 className="text-xl font-semibold text-gray-900">Help</h3>
             <ul className="space-y-2">
               {footerLinks.help.map((link, index) => (
                 <li key={index}>
                   <a
                     href={link.href}
                     target={link.isExternal ? "_blank" : undefined}
+                    className="text-base text-gray-600 hover:text-gray-900 hover:underline"
                   >
                     {link.label}
                   </a>
@@ -155,13 +161,14 @@ export const Footer = () => {
             </ul>
           </div>
           <div className="space-y-4 col-span-12 sm:col-span-6 lg:col-span-2">
-            <h3 className="text-lg font-semibold">Socials</h3>
+            <h3 className="text-xl font-semibold text-gray-900">Socials</h3>
             <ul className="space-y-2">
               {footerLinks.socials.map((link, index) => (
                 <li key={index}>
                   <a
                     href={link.href}
                     target={link.isExternal ? "_blank" : undefined}
+                    className="text-base text-gray-600 hover:text-gray-900 hover:underline"
                   >
                     {link.label}
                   </a>
@@ -172,13 +179,14 @@ export const Footer = () => {
           <div className="space-y-4 col-span-12 sm:col-span-6 lg:col-span-12">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
               <div className="space-y-4">
-                <h3 className="text-lg font-semibold">Additional Links</h3>
+                <h3 className="text-xl font-semibold text-gray-900">Additional Links</h3>
                 <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {footerLinks.additional.map((link, index) => (
                     <li key={index}>
                       <a
                         href={link.href}
                         target={link.isExternal ? "_blank" : undefined}
+                        className="text-base text-gray-600 hover:text-gray-900 hover:underline"
                       >
                         {link.label}
                       </a>
@@ -187,13 +195,14 @@ export const Footer = () => {
                 </ul>
               </div>
               <div className="space-y-4">
-                <h3 className="text-lg font-semibold">Use Cases</h3>
+                <h3 className="text-xl font-semibold text-gray-900">Use Cases</h3>
                 <ul className="grid grid-cols-1 gap-2">
                   {footerLinks.useCases.map((link, index) => (
                     <li key={index}>
                       <a
                         href={link.href}
                         target={link.isExternal ? "_blank" : undefined}
+                        className="text-base text-gray-600 hover:text-gray-900 hover:underline"
                       >
                         {link.label}
                       </a>

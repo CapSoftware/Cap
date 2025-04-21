@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, LogoBadge } from "@cap/ui";
+import { Button } from "@cap/ui";
 import { useEffect, useState } from "react";
 import {
   detectPlatform,
@@ -39,192 +39,207 @@ export const DownloadPage = () => {
   };
 
   return (
-    <div className="pt-32 pb-16 wrapper wrapper-sm md:py-32">
-      <div className="space-y-4 text-center">
-        {/* Debug toggle button in top-right corner */}
-        <button
-          onClick={() => setShowDebug(!showDebug)}
-          className="absolute top-4 right-4 text-xs text-gray-400 hover:text-gray-300 bg-gray-800 px-2 py-1 rounded"
-        >
-          {showDebug ? "Hide Debug" : "Debug"}
-        </button>
-
-        {/* Debug panel */}
-        {showDebug && (
-          <div className="fixed top-10 right-4 bg-gray-800 p-3 rounded shadow-lg z-50 text-left">
-            <div className="text-xs text-gray-300 mb-2">Platform Simulator</div>
-            <div className="space-y-2">
-              <button
-                onClick={() => simulatePlatform("windows", false)}
-                className={`text-xs px-2 py-1 rounded w-full text-left ${
-                  platform === "windows"
-                    ? "bg-blue-600"
-                    : "bg-gray-700 hover:bg-gray-600"
-                }`}
-              >
-                Windows (Beta)
-              </button>
-              <button
-                onClick={() => simulatePlatform("macos", true)}
-                className={`text-xs px-2 py-1 rounded w-full text-left ${
-                  platform === "macos" && isIntel
-                    ? "bg-blue-600"
-                    : "bg-gray-700 hover:bg-gray-600"
-                }`}
-              >
-                macOS (Intel)
-              </button>
-              <button
-                onClick={() => simulatePlatform("macos", false)}
-                className={`text-xs px-2 py-1 rounded w-full text-left ${
-                  platform === "macos" && !isIntel
-                    ? "bg-blue-600"
-                    : "bg-gray-700 hover:bg-gray-600"
-                }`}
-              >
-                macOS (Apple Silicon)
-              </button>
-              <div className="text-xs text-gray-400 mt-2">
-                Current: {platform}{" "}
-                {platform === "macos" &&
-                  (isIntel ? "(Intel)" : "(Apple Silicon)")}
-              </div>
-            </div>
+    <div className="wrapper">
+      <div className="mt-[60px] mb-32">
+        <div className="flex flex-col items-center justify-center text-center mb-16">
+          <div className="mb-8">
+            <img
+              src="/design/OPAVC Logo.svg"
+              alt="OPAVC Logo"
+              className="h-16 w-auto"
+            />
           </div>
-        )}
-
-        <h1 className="text-2xl fade-in-down animate-delay-1 md:text-4xl">
-          Download Cap
-        </h1>
-        <p className="px-4 text-sm fade-in-down animate-delay-2 md:text-base md:px-0">
-          The quickest way to share your screen. Pin to your dock and record in
-          seconds.
-        </p>
-        <div className="flex flex-col justify-center items-center space-y-4 fade-in-up animate-delay-2">
-          <div className="flex flex-col items-center space-y-4">
-            <Button
-              variant="radialblue"
-              size="lg"
-              href={getDownloadUrl(platform, isIntel)}
-              className="font-medium flex items-center justify-center text-white py-6"
+          <h1 className="text-4xl font-bold mb-4">Download OPAVC</h1>
+          <p className="text-gray-600 max-w-xl">
+            OPAVC's screen recording software - designed for seamless communication and collaboration.
+          </p>
+        </div>
+        <div className="pt-32 pb-16 wrapper wrapper-sm md:py-32">
+          <div className="space-y-4 text-center">
+            {/* Debug toggle button in top-right corner */}
+            <button
+              onClick={() => setShowDebug(!showDebug)}
+              className="absolute top-4 right-4 text-xs text-gray-400 hover:text-gray-300 bg-gray-800 px-2 py-1 rounded"
             >
-              {!loading && getPlatformIcon(platform)}
-              {getDownloadButtonText(platform, loading, isIntel)}
-            </Button>
+              {showDebug ? "Hide Debug" : "Debug"}
+            </button>
 
-            <div className="text-sm text-gray-400">
-              {getVersionText(platform)}
-            </div>
-
-            {/* Windows SmartScreen video and instructions */}
-            {platform === "windows" && (
-              <div className="mt-4 max-w-md">
-                <video
-                  src="/windows-smartscreen.mp4"
-                  autoPlay
-                  loop
-                  muted
-                  playsInline
-                  className="w-full rounded-md shadow-md mx-auto"
-                  style={{ maxWidth: "300px" }}
-                />
-                <p className="text-sm text-gray-400 mt-2">
-                  Whilst Cap for Windows is in early beta, after downloading and
-                  running the app, follow the steps above to whitelist Cap on
-                  your PC.
-                </p>
+            {/* Debug panel */}
+            {showDebug && (
+              <div className="fixed top-10 right-4 bg-gray-800 p-3 rounded shadow-lg z-50 text-left">
+                <div className="text-xs text-gray-300 mb-2">Platform Simulator</div>
+                <div className="space-y-2">
+                  <button
+                    onClick={() => simulatePlatform("windows", false)}
+                    className={`text-xs px-2 py-1 rounded w-full text-left ${
+                      platform === "windows"
+                        ? "bg-blue-600"
+                        : "bg-gray-700 hover:bg-gray-600"
+                    }`}
+                  >
+                    Windows
+                  </button>
+                  <button
+                    onClick={() => simulatePlatform("macos", true)}
+                    className={`text-xs px-2 py-1 rounded w-full text-left ${
+                      platform === "macos" && isIntel
+                        ? "bg-blue-600"
+                        : "bg-gray-700 hover:bg-gray-600"
+                    }`}
+                  >
+                    macOS (Intel)
+                  </button>
+                  <button
+                    onClick={() => simulatePlatform("macos", false)}
+                    className={`text-xs px-2 py-1 rounded w-full text-left ${
+                      platform === "macos" && !isIntel
+                        ? "bg-blue-600"
+                        : "bg-gray-700 hover:bg-gray-600"
+                    }`}
+                  >
+                    macOS (Apple Silicon)
+                  </button>
+                  <div className="text-xs text-gray-400 mt-2">
+                    Current: {platform}{" "}
+                    {platform === "macos" &&
+                      (isIntel ? "(Intel)" : "(Apple Silicon)")}
+                  </div>
+                </div>
               </div>
             )}
-          </div>
-        </div>
 
-        <PlatformIcons />
-
-        <div className="mt-6 pb-4 fade-in-up animate-delay-2">
-          <h3 className="text-sm font-medium mb-2 text-gray-400">
-            Other download options:
-          </h3>
-          <div className="flex flex-col md:flex-row justify-center items-center gap-3">
-            {platform !== "windows" && (
-              <a
-                href="/download/windows"
-                className="text-sm text-gray-400 hover:underline transition-all"
-              >
-                Windows (Beta)
-              </a>
-            )}
-            {platform === "macos" && isIntel && (
-              <a
-                href="/download/apple-silicon"
-                className="text-sm text-gray-400 hover:underline transition-all"
-              >
-                Apple Silicon
-              </a>
-            )}
-            {platform === "macos" && !isIntel && (
-              <a
-                href="/download/apple-intel"
-                className="text-sm text-gray-400 hover:underline transition-all"
-              >
-                Apple Intel
-              </a>
-            )}
-            {platform !== "macos" && (
-              <>
-                <a
-                  href="/download/apple-silicon"
-                  className="text-sm text-gray-400 hover:underline transition-all"
+            <h1 className="text-2xl fade-in-down animate-delay-1 md:text-4xl">
+              Download OPAVC
+            </h1>
+            <p className="px-4 text-sm fade-in-down animate-delay-2 md:text-base md:px-0">
+              Professional screen recording software by Ontario Provincial Autism Ventures Corporation.
+            </p>
+            <div className="flex flex-col justify-center items-center space-y-4 fade-in-up animate-delay-2">
+              <div className="flex flex-col items-center space-y-4">
+                <Button
+                  variant="radialblue"
+                  size="lg"
+                  href={getDownloadUrl(platform, isIntel)}
+                  className="font-medium flex items-center justify-center text-white py-6"
                 >
-                  Apple Silicon
-                </a>
-                <a
-                  href="/download/apple-intel"
-                  className="text-sm text-gray-400 hover:underline transition-all"
-                >
-                  Apple Intel
-                </a>
-              </>
-            )}
-          </div>
-        </div>
+                  {!loading && getPlatformIcon(platform)}
+                  {getDownloadButtonText(platform, loading, isIntel)}
+                </Button>
 
-        {/* Discreet SEO Links */}
-        <div className="mt-32 pt-8 border-t border-gray-200 text-xs text-gray-500 opacity-70">
-          <div className="flex flex-wrap justify-center gap-x-4 gap-y-2 max-w-lg mx-auto">
-            <a
-              href="/screen-recorder"
-              className="hover:text-gray-400 hover:underline text-xs"
-            >
-              Screen Recorder
-            </a>
-            <span className="hidden md:inline">•</span>
-            <a
-              href="/free-screen-recorder"
-              className="hover:text-gray-400 hover:underline text-xs"
-            >
-              Free Screen Recorder
-            </a>
-            <span className="hidden md:inline">•</span>
-            <a
-              href="/screen-recorder-mac"
-              className="hover:text-gray-400 hover:underline text-xs"
-            >
-              Mac Screen Recorder
-            </a>
-            <span className="hidden md:inline">•</span>
-            <a
-              href="/screen-recorder-windows"
-              className="hover:text-gray-400 hover:underline text-xs"
-            >
-              Windows Screen Recorder
-            </a>
-            <span className="hidden md:inline">•</span>
-            <a
-              href="/screen-recording-software"
-              className="hover:text-gray-400 hover:underline text-xs"
-            >
-              Recording Software
-            </a>
+                <div className="text-sm text-gray-400">
+                  {getVersionText(platform)}
+                </div>
+
+                {/* Windows SmartScreen instructions */}
+                {platform === "windows" && (
+                  <div className="mt-4 max-w-md">
+                    <video
+                      src="/windows-smartscreen.mp4"
+                      autoPlay
+                      loop
+                      muted
+                      playsInline
+                      className="w-full rounded-md shadow-md mx-auto"
+                      style={{ maxWidth: "300px" }}
+                    />
+                    <p className="text-sm text-gray-400 mt-2">
+                      When running OPAVC for the first time, Windows SmartScreen may appear. 
+                      Click "More info" and then "Run anyway" to start using OPAVC.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <PlatformIcons />
+
+            <div className="mt-6 pb-4 fade-in-up animate-delay-2">
+              <h3 className="text-sm font-medium mb-2 text-gray-400">
+                Other download options:
+              </h3>
+              <div className="flex flex-col md:flex-row justify-center items-center gap-3">
+                {platform !== "windows" && (
+                  <a
+                    href="/download/windows"
+                    className="text-sm text-gray-400 hover:underline transition-all"
+                  >
+                    Windows
+                  </a>
+                )}
+                {platform === "macos" && isIntel && (
+                  <a
+                    href="/download/apple-silicon"
+                    className="text-sm text-gray-400 hover:underline transition-all"
+                  >
+                    Apple Silicon
+                  </a>
+                )}
+                {platform === "macos" && !isIntel && (
+                  <a
+                    href="/download/apple-intel"
+                    className="text-sm text-gray-400 hover:underline transition-all"
+                  >
+                    Apple Intel
+                  </a>
+                )}
+                {platform !== "macos" && (
+                  <>
+                    <a
+                      href="/download/apple-silicon"
+                      className="text-sm text-gray-400 hover:underline transition-all"
+                    >
+                      Apple Silicon
+                    </a>
+                    <a
+                      href="/download/apple-intel"
+                      className="text-sm text-gray-400 hover:underline transition-all"
+                    >
+                      Apple Intel
+                    </a>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Discreet SEO Links */}
+            <div className="mt-32 pt-8 border-t border-gray-200 text-xs text-gray-500 opacity-70">
+              <div className="flex flex-wrap justify-center gap-x-4 gap-y-2 max-w-lg mx-auto">
+                <a
+                  href="/screen-recorder"
+                  className="hover:text-gray-400 hover:underline text-xs"
+                >
+                  Screen Recorder
+                </a>
+                <span className="hidden md:inline">•</span>
+                <a
+                  href="/free-screen-recorder"
+                  className="hover:text-gray-400 hover:underline text-xs"
+                >
+                  Free Screen Recorder
+                </a>
+                <span className="hidden md:inline">•</span>
+                <a
+                  href="/screen-recorder-mac"
+                  className="hover:text-gray-400 hover:underline text-xs"
+                >
+                  Mac Screen Recorder
+                </a>
+                <span className="hidden md:inline">•</span>
+                <a
+                  href="/screen-recorder-windows"
+                  className="hover:text-gray-400 hover:underline text-xs"
+                >
+                  Windows Screen Recorder
+                </a>
+                <span className="hidden md:inline">•</span>
+                <a
+                  href="/screen-recording-software"
+                  className="hover:text-gray-400 hover:underline text-xs"
+                >
+                  Recording Software
+                </a>
+              </div>
+            </div>
           </div>
         </div>
       </div>

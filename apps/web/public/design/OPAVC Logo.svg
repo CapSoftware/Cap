@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="800" height="200" viewBox="0 0 800 200" version="1.1" xmlns="http://www.w3.org/2000/svg">
+    <g>
+        <!-- Circle logo -->
+        <circle cx="100" cy="100" r="90" fill="#7B1FA2"/>
+        <circle cx="100" cy="100" r="70" fill="white" stroke="#7B1FA2" stroke-width="2"/>
+        <!-- Text PAVC -->
+        <text x="220" y="140" font-family="Arial, sans-serif" font-size="120" font-weight="bold" fill="#7B1FA2">
+            PAVC
+        </text>
+    </g>
+</svg>

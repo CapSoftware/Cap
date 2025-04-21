@@ -20,15 +20,27 @@ export const AboutPage = () => {
   };
 
   return (
-    <>
+    <div className="py-32 wrapper">
+      <div className="mb-14 text-center page-intro">
+        <div className="flex justify-center mb-8">
+          <svg width="180" height="60" viewBox="0 0 180 60" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="30" cy="30" r="28" fill="#8B5CF6"/>
+            <text x="70" y="42" fill="currentColor" className="text-4xl font-bold">OPAVC</text>
+          </svg>
+        </div>
+        <h1 className="text-4xl font-bold mb-4">About OPAVC</h1>
+        <p className="text-xl text-gray-600 max-w-2xl mx-auto">
+          OPAVC is an open-source screen recording tool built for everyone. Our mission is to make screen recording accessible, private, and powerful.
+        </p>
+      </div>
       <div className="mt-[120px]">
         <div className="relative z-10 px-5 pt-24 pb-36 w-full">
           <div className="mx-auto text-center wrapper wrapper-sm">
             <h1 className="fade-in-down text-[2rem] font-bold leading-[2.5rem] md:text-[3.75rem] md:leading-[4rem] relative z-10 text-black mb-4">
-              About Cap
+              About OPAVC
             </h1>
             <p className="mx-auto mb-8 max-w-3xl text-md sm:text-xl text-zinc-500 fade-in-down animate-delay-1">
-              Screen recording made simple, secure, and powerful. Cap gives you
+              Screen recording made simple, secure, and powerful. OPAVC gives you
               full control over your recordings with a focus on privacy and ease
               of use.
             </p>
@@ -49,7 +61,7 @@ export const AboutPage = () => {
               size="lg"
               className="relative z-[20] w-full font-medium text-md sm:w-auto"
             >
-              Download Cap
+              Download OPAVC
             </Button>
           </div>
           <img
@@ -65,7 +77,7 @@ export const AboutPage = () => {
             <div className="p-8 bg-white rounded-2xl border border-gray-100/60 backdrop-blur-sm mb-12 shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] transition-all duration-300">
               <p className="text-lg">
                 Your recordings shouldn't be locked away in systems you don't
-                control. At Cap, we're building a screen recording tool that
+                control. At OPAVC, we're building a screen recording tool that
                 puts you first, respects your privacy, and gives you full
                 control over your content.
               </p>
@@ -74,7 +86,7 @@ export const AboutPage = () => {
             <div className="mb-12" id="video">
               <div className="text-center max-w-[800px] mx-auto mb-10">
                 <h2 className="text-3xl font-bold text-gray-800 mb-6 relative inline-block">
-                  See Cap In Action
+                  See OPAVC In Action
                   <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
                 </h2>
               </div>
@@ -82,7 +94,7 @@ export const AboutPage = () => {
                 <div className="rounded-xl overflow-hidden shadow-[0_0_20px_rgba(0,0,0,0.08)]">
                   <MuxPlayer
                     playbackId="A6oZoUWVZjOIVZB6XnBMLagYnXE6xhDhp8Hcyky018hk"
-                    metadataVideoTitle="Cap Demo"
+                    metadataVideoTitle="OPAVC Demo"
                     accentColor="#5C9FFF"
                     style={{ aspectRatio: "16/9", width: "100%" }}
                   />
@@ -93,10 +105,10 @@ export const AboutPage = () => {
             <div className="space-y-8">
               <div className="p-8 bg-white rounded-2xl border border-gray-100/60 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] hover:border-blue-100/40 transition-all duration-300 transform hover:-translate-y-[2px]">
                 <h2 className="text-2xl font-semibold mb-4 text-gray-800">
-                  Why Cap?
+                  Why OPAVC?
                 </h2>
                 <p className="text-gray-600 leading-relaxed">
-                  Cap started with a simple idea: great ideas should be easy to
+                  OPAVC started with a simple idea: great ideas should be easy to
                   share. Whether you're explaining a concept, showing how
                   something works, or working with others, the tools you use
                   should make your job easier, not harder.
@@ -128,10 +140,10 @@ export const AboutPage = () => {
                     Our Solution
                   </h2>
                   <p className="text-gray-600 leading-relaxed">
-                    So we built Cap—a simple, complete screen recording tool
+                    So we built OPAVC—a simple, complete screen recording tool
                     that anyone can use. Inspired by tools we love and built on
                     principles we believe in, our goal is to help you share
-                    ideas easily while keeping control of your content. Cap
+                    ideas easily while keeping control of your content. OPAVC
                     makes your recordings better with features like automatic
                     captions, easy zooming, simple editing, and flexible sharing
                     options.
@@ -144,7 +156,7 @@ export const AboutPage = () => {
                   Two Ways to Record
                 </h2>
                 <p className="text-gray-600 leading-relaxed mb-6">
-                  Cap gives you two simple ways to record:
+                  OPAVC gives you two simple ways to record:
                 </p>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="p-6 bg-blue-50/50 rounded-xl border border-blue-100/20">
@@ -173,7 +185,7 @@ export const AboutPage = () => {
                   Privacy First
                 </h2>
                 <p className="text-gray-600 leading-relaxed">
-                  Unlike other tools, Cap is built with your privacy as a top
+                  Unlike other tools, OPAVC is built with your privacy as a top
                   priority. We don't trap your data or force you to use only our
                   systems. You can connect your own storage, keeping complete
                   control of your recordings forever.
@@ -185,7 +197,7 @@ export const AboutPage = () => {
                   Open to Everyone
                 </h2>
                 <p className="text-gray-600 leading-relaxed">
-                  We believe in being open and transparent. Cap's code is
+                  We believe in being open and transparent. OPAVC's code is
                   available for anyone to see, use, and improve. This means your
                   data will always be accessible, and our tool will keep getting
                   better through community feedback and contributions.
@@ -197,9 +209,9 @@ export const AboutPage = () => {
                   Join Us
                 </h2>
                 <p className="text-gray-600 leading-relaxed">
-                  We're working to make Cap the best screen recording tool for
+                  We're working to make OPAVC the best screen recording tool for
                   everyone. Whether you're creating content alone, working with
-                  a startup, or part of a large team, Cap works for you.
+                  a startup, or part of a large team, OPAVC works for you.
                 </p>
                 <p className="text-gray-600 leading-relaxed mt-3">
                   Together, we're making it easier for everyone to share ideas
@@ -212,7 +224,7 @@ export const AboutPage = () => {
                     variant="primary"
                     size="lg"
                   >
-                    Download Cap
+                    Download OPAVC
                   </Button>
                 </div>
               </div>
@@ -232,7 +244,7 @@ export const AboutPage = () => {
             <div className="wrapper mx-auto h-full flex flex-col justify-center items-center relative z-10">
               <div className="text-center max-w-[800px] mx-auto mb-8">
                 <h2 className="text-3xl md:text-4xl font-bold text-white mb-4 drop-shadow-md">
-                  Ready to Try Cap?
+                  Ready to Try OPAVC?
                 </h2>
                 <p className="text-xl text-white/90 mb-6">
                   Download now and see the difference for yourself.
@@ -245,13 +257,13 @@ export const AboutPage = () => {
                   size="lg"
                   className="shadow-[0_4px_14px_rgba(0,0,0,0.05)] hover:shadow-[0_8px_30px_rgba(255,255,255,0.2)] transform hover:-translate-y-[2px] transition-all duration-300 font-medium px-8 py-3"
                 >
-                  Download Cap
+                  Download OPAVC
                 </Button>
               </div>
             </div>
           </div>
         </div>
       </div>
-    </>
+    </div>
   );
 };

@@ -1,7 +1,19 @@
-# Cap Web App
+# OPAVC Web App
 
-More details, as well as a contributor guide, will be posted soon.
+A modern web application for OPAVC.
 
-## Illustrations
+## Features
 
-A big thank you to Popsy (https://popsy.co) for some of the illustrations used in Cap.
+- Modern UI with OPAVC branding
+- Responsive design
+- Built with Next.js and TypeScript
+
+## Getting Started
+
+1. Clone the repository
+2. Install dependencies
+3. Run the development server
+
+## Acknowledgments
+
+A big thank you to Popsy (https://popsy.co) for some of the illustrations used in OPAVC.

@@ -1,16 +1,15 @@
-[
+{
+  "versions": [
     {
-      "title": "Trimming, Shortcuts and Bug Fixes",
-      "app": "Cap Desktop",
-      "publishedAt": "2024-09-18",
-      "version": "0.3.0-alpha.24",
-      "image:": ""
-    },
-    {
-      "title": "v0.3 Early Access Release",
-      "app": "Cap Desktop",
-      "publishedAt": "2024-09-13",
-      "version": "0.3.0",
-      "image:": ""
+      "app": "OPAVC Desktop",
+      "version": "0.1.0",
+      "date": "2024-03-20",
+      "changes": [
+        "Initial release of OPAVC Desktop",
+        "Screen recording functionality",
+        "Basic editing features",
+        "Export capabilities"
+      ]
     }
   ]
+}

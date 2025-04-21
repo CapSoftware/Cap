@@ -3,41 +3,43 @@
 @tailwind utilities;
 
 :root {
-  --primary: #005cb1;
-  --primary-2: #004c93;
-  --primary-3: #003b73;
-  --secondary: #2eb4ff;
-  --secondary-2: #1696e0;
-  --secondary-3: #117ebd;
-  --tertiary: #c5eaff;
-  --tertiary-2: #d3e5ff;
-  --tertiary-3: #e0edff;
-  --filler: #efefef;
-  --filler-2: #e4e4e4;
-  --filler-3: #e2e2e2;
-  --filler-txt: #b3b3b3;
-  --text-primary: #0d1b2a;
-  --text-secondary: #ffffff;
+  /* Primary colors - Purple theme */
+  --primary: #8B5CF6;
+  --primary-2: #7C3AED;
+  --primary-3: #6D28D9;
+  --secondary: #A78BFA;
+  --secondary-2: #8B5CF6;
+  --secondary-3: #7C3AED;
+  --tertiary: #C4B5FD;
+  --tertiary-2: #DDD6FE;
+  --tertiary-3: #EDE9FE;
+  --filler: #1E1B24;
+  --filler-2: #2D2438;
+  --filler-3: #352C44;
+  --filler-txt: #9CA3AF;
+  --text-primary: #FFFFFF;
+  --text-secondary: #E5E7EB;
   --header-height: 80px;
   --vh100-offset: calc(100vh - var(--header-height));
-  --foreground-rgb: #000000;
-  --background-start-rgb: 214, 219, 220;
-  --background-end-rgb: 255, 255, 255;
+  --foreground-rgb: #FFFFFF;
+  --background-start-rgb: 30, 27, 36;
+  --background-end-rgb: 45, 36, 56;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --foreground-rgb: #ffffff;
-    --background-start-rgb: 0, 0, 0;
-    --background-end-rgb: 0, 0, 0;
+    --foreground-rgb: #FFFFFF;
+    --background-start-rgb: 30, 27, 36;
+    --background-end-rgb: 45, 36, 56;
   }
 }
 
 body,
 html {
-  color: #000000;
+  color: var(--text-primary);
   font-family: var(--font-geist-sans) !important;
-  background-color: white;
+  background-color: var(--filler);
+  background-image: linear-gradient(to bottom right, rgb(var(--background-start-rgb)), rgb(var(--background-end-rgb)));
 }
 
 .wrapper {
@@ -93,11 +95,11 @@ a.bg-primary:hover {
 }
 
 .bg-gradient {
-  @apply bg-gradient-to-r transition-all duration-300 from-secondary-2 to-secondary-3;
+  @apply bg-gradient-to-r transition-all duration-300 from-primary-2 to-primary-3;
 }
 
 .bg-gradient:hover {
-  @apply bg-gradient-to-r from-secondary to-secondary-3;
+  @apply bg-gradient-to-r from-primary to-primary-2;
 }
 
 .bg-animated {
@@ -114,7 +116,7 @@ a.bg-primary:hover {
 @media (prefers-color-scheme: dark) {
   body,
   html {
-    color: #000000;
+    color: var(--text-primary);
   }
 }
 
@@ -203,7 +205,7 @@ label {
 }
 
 .custom-bg {
-  background: linear-gradient(180deg, #4785FF 0%, #85ADFF 100%);
+  background: linear-gradient(180deg, #8B5CF6 0%, #7C3AED 100%);
 }
 
 .muted-custom-bg {

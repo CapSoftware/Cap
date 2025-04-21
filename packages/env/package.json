@@ -1,13 +1,15 @@
 {
-  "name": "@cap/env",
+  "name": "@opavc/env",
+  "version": "0.1.0",
   "private": true,
-  "main": "./index.ts",
-  "types": "./index.ts",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
   "dependencies": {
     "@t3-oss/env-nextjs": "^0.12.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {
     "@types/node": "^22.12.0"
-  }
+  },
+  "license": "MIT"
 }

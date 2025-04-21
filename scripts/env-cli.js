@@ -51,7 +51,7 @@ async function main() {
   let usingDockerEnvironment = false;
 
   if (hasWeb) {
-    envs.VITE_SERVER_URL = "http://localhost:3000";
+    envs.VITE_SERVER_URL = "https://opavc.com";
     envs.NEXT_PUBLIC_WEB_URL = "http://localhost:3000";
     envs.NEXTAUTH_URL = envs.NEXT_PUBLIC_WEB_URL;
 
@@ -155,7 +155,7 @@ async function main() {
       envs.NEXT_PUBLIC_CAP_AWS_ENDPOINT = DOCKER_S3_ENVS.endpoint;
     }
   } else {
-    envs.VITE_SERVER_URL = "https://cap.so";
+    envs.VITE_SERVER_URL = "https://opavc.com";
   }
 
   if (hasDesktop) {

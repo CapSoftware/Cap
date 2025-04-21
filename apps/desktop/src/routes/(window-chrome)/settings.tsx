@@ -27,30 +27,30 @@ export default function Settings(props: RouteSectionProps) {
     }
   };
 
-  const initIntercom = async () => {
-    if (!intercomInitialized) {
-      const Intercom = (await import("@intercom/messenger-js-sdk")).default;
-      Intercom({
-        app_id: "efxq71cv",
-        hide_default_launcher: true,
-        user_id: auth.data?.user_id ?? "",
-        user_hash: auth.data?.intercom_hash ?? "",
-        utm_source: "desktop",
-      });
-      intercomInitialized = true;
-    }
-  };
+  // const initIntercom = async () => {
+  //   if (!intercomInitialized) {
+  //     const Intercom = (await import("@intercom/messenger-js-sdk")).default;
+  //     Intercom({
+  //       app_id: "efxq71cv",
+  //       hide_default_launcher: true,
+  //       user_id: auth.data?.user_id ?? "",
+  //       user_hash: auth.data?.intercom_hash ?? "",
+  //       utm_source: "desktop",
+  //     });
+  //     intercomInitialized = true;
+  //   }
+  // };
 
-  const handleLiveChat = async () => {
-    if (!auth.data) {
-      toast.error("Please sign in to access live chat support");
-      return;
-    }
+  // const handleLiveChat = async () => {
+  //   if (!auth.data) {
+  //     toast.error("Please sign in to access live chat support");
+  //     return;
+  //   }
 
-    await initIntercom();
-    // @ts-ignore - Intercom types
-    window.Intercom("show");
-  };
+  //   await initIntercom();
+  //   // @ts-ignore - Intercom types
+  //   window.Intercom("show");
+  // };
 
   return (
     <div class="flex-1 flex flex-row divide-x divide-[--gray-200] text-[0.875rem] leading-[1.25rem] overflow-y-hidden">

@@ -4,7 +4,6 @@
 
 import { CommercialGetStarted } from "@/components/CommercialGetStarted";
 import { Button } from "@cap/ui";
-import { LogoSection } from "./_components/LogoSection";
 
 interface FeatureCardProps {
   title: string;
@@ -37,10 +36,10 @@ export const FeatureCard: React.FC<FeatureCardProps> = ({
         alt={imageAlt || title}
         className={`object-contain mt-10 mb-6 w-full rounded-lg ${imageHeight}`}
       />
-      <h3 className="text-[1.25rem] leading-[1.5rem] font-semibold mb-1">
+      <h3 className="text-[1.25rem] leading-[1.5rem] font-semibold mb-1 text-gray-900">
         {title}
       </h3>
-      <p className="text-[1rem] leading-[1.5rem] text-[#151515/60] mb-0 max-w-lg">
+      <p className="text-[1rem] leading-[1.5rem] text-gray-700 mb-0 max-w-lg">
         {description}
       </p>
     </div>
@@ -102,7 +101,6 @@ export const SelfHostingPage = () => {
             className="absolute top-0 left-0 z-0 -mt-40 w-full h-auto pointer-events-none"
           />
         </div>
-        <LogoSection />
         <div className="pb-32 wrapper md:pb-40" id="features">
           <div className="space-y-3">
             {/* Section 1: 35% / 65% split */}

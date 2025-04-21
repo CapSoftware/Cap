@@ -2,9 +2,8 @@ import { AboutPage } from "@/components/pages/AboutPage";
 import { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "About Us — Cap",
-  description:
-    "Learn about Cap's mission to make screen sharing effortless, powerful, and private through our open-source, privacy-first platform.",
+  title: "About OPAVC — Ontario Provincial Autism Ventures Corporation",
+  description: "Learn about OPAVC's mission to support and empower individuals with autism through innovative solutions and community engagement in Ontario.",
 };
 
 export default function App() {

@@ -6,14 +6,22 @@ import { eq } from "drizzle-orm";
 import { serverEnv } from "@cap/env";
 import { getToken } from "next-auth/jwt";
 
+const ALLOWED_DOMAINS = [
+  "opavc.com",
+  "opavc.link",
+  "localhost",
+  "localhost:3000",
+  "127.0.0.1",
+  "127.0.0.1:3000",
+];
+
 const mainDomains = [
-  "cap.so",
-  "cap.link",
+  "opavc.com",
+  "opavc.link",
   "localhost",
   serverEnv.VERCEL_URL,
   serverEnv.VERCEL_BRANCH_URL,
-  serverEnv.VERCEL_PROJECT_PRODUCTION_URL,
-].filter(Boolean) as string[];
+];
 
 export async function middleware(request: NextRequest) {
   const url = new URL(request.url);
@@ -27,11 +35,41 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  if (url.hostname === "www.opavc.com") {
+    url.hostname = "opavc.com";
+    return NextResponse.redirect(url);
+  }
+
+  if (url.hostname === "www.opavc.link") {
+    url.hostname = "opavc.com";
+    return NextResponse.redirect(url);
+  }
+
+  if (url.hostname === "cap.so") {
+    url.hostname = "opavc.com";
+    return NextResponse.redirect(url);
+  }
+
+  if (url.hostname === "cap.link") {
+    url.hostname = "opavc.com";
+    return NextResponse.redirect(url);
+  }
+
+  if (url.hostname === "www.cap.so") {
+    url.hostname = "opavc.com";
+    return NextResponse.redirect(url);
+  }
+
+  if (url.hostname === "www.cap.link") {
+    url.hostname = "opavc.com";
+    return NextResponse.redirect(url);
+  }
+
   // We're on a custom domain at this point
   // Only allow /s/ routes for custom domains
   if (!path.startsWith("/s/")) {
     const url = new URL(request.url);
-    url.hostname = "cap.so";
+    url.hostname = "opavc.com";
     return NextResponse.redirect(url);
   }
 
@@ -80,7 +118,7 @@ export async function middleware(request: NextRequest) {
     if (!space || !space.domainVerified) {
       // If no verified custom domain found, redirect to main domain
       const url = new URL(request.url);
-      url.hostname = "cap.so";
+      url.hostname = "opavc.com";
       return NextResponse.redirect(url);
     }
 
