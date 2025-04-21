@@ -774,9 +774,10 @@ pub fn get_target_fps(target: &scap::Target) -> Result<u32, String> {
     #[cfg(target_os = "windows")]
     match target {
         scap::Target::Display(display) => platform::get_display_refresh_rate(display.raw_handle),
-        scap::Target::Window(window) => {
-            platform::get_display_refresh_rate(platform::display_for_window(window.raw_handle)?)
-        }
+        scap::Target::Window(window) => platform::get_display_refresh_rate(
+            platform::display_for_window(window.raw_handle)
+                .ok_or_else(|| "failed to get display for window".to_string())?,
+        ),
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     None
