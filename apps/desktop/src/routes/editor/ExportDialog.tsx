@@ -178,6 +178,7 @@ export function ExportDialog() {
   const save = createMutation(() => ({
     mutationFn: async () => {
       if (exportState.type !== "idle") return;
+      setExportState(reconcile({ action: "save", type: "starting" }));
 
       const outputPath = await saveDialog({
         filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
@@ -202,7 +203,9 @@ export function ExportDialog() {
             y: settings.resolution.height,
           },
         },
-        (progress) => setExportState({ type: "rendering", progress })
+        (progress) => {
+          setExportState({ type: "rendering", progress });
+        }
       );
 
       setExportState({ type: "copying" });
@@ -685,7 +688,7 @@ export function ExportDialog() {
                     variant="secondary"
                     class="flex gap-2 justify-center h-[44px] items-center"
                   >
-                    Back
+                    Close
                   </Button>
                 </Show>
               }
