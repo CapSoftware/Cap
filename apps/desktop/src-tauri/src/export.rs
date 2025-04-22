@@ -1,4 +1,5 @@
-use crate::{create_editor_instance_impl, get_video_metadata, RenderProgress};
+use crate::{create_editor_instance_impl, get_video_metadata, FramesRendered};
+use cap_export::ExportSettings;
 use cap_project::{RecordingMeta, XY};
 use std::path::PathBuf;
 use tauri::AppHandle;
@@ -8,9 +9,8 @@ use tauri::AppHandle;
 pub async fn export_video(
     app: AppHandle,
     project_path: PathBuf,
-    progress: tauri::ipc::Channel<RenderProgress>,
-    fps: u32,
-    resolution_base: XY<u32>,
+    progress: tauri::ipc::Channel<FramesRendered>,
+    settings: ExportSettings,
 ) -> Result<PathBuf, String> {
     let editor_instance = create_editor_instance_impl(&app, project_path.clone()).await?;
 
@@ -35,13 +35,14 @@ pub async fn export_video(
             .unwrap_or(screen_metadata.duration),
     );
 
-    let total_frames = editor_instance.get_total_frames(fps);
+    let total_frames = editor_instance.get_total_frames(settings.fps);
 
     let output_path = editor_instance.meta().output_path();
 
-    progress
-        .send(RenderProgress::EstimatedTotalFrames { total_frames })
-        .ok();
+    let _ = progress.send(FramesRendered {
+        rendered_count: 0,
+        total_frames,
+    });
 
     // Create a modified project configuration that accounts for different video lengths
     let mut modified_project = editor_instance.project_config.1.borrow().clone();
@@ -60,17 +61,17 @@ pub async fn export_video(
         move |frame_index| {
             // Ensure progress never exceeds total frames
             let current_frame = (frame_index + 1).min(total_frames);
-            progress
-                .send(RenderProgress::FrameRendered { current_frame })
-                .ok();
+            let _ = progress.send(FramesRendered {
+                rendered_count: current_frame,
+                total_frames,
+            });
         },
         editor_instance.project_path.clone(),
         editor_instance.meta().clone(),
         editor_instance.render_constants.clone(),
         &editor_instance.segments,
-        fps,
-        resolution_base,
         editor_instance.recordings.clone(),
+        settings,
     )
     .await
     .map_err(|e| {

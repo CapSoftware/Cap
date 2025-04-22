@@ -16,24 +16,19 @@ export function Player() {
     project,
     editorInstance,
     setDialog,
-    playbackTime,
-    setPlaybackTime,
-    previewTime,
-    setPreviewTime,
-    playing,
-    setPlaying,
-    split,
-    setSplit,
     totalDuration,
-    state,
+    editorState,
+    setEditorState,
     zoomOutLimit,
   } = useEditorContext();
 
   const splitButton = () => (
     <EditorButton<typeof KToggleButton>
       disabled={!window.FLAGS.split}
-      pressed={split()}
-      onChange={setSplit}
+      pressed={editorState.timeline.interactMode === "split"}
+      onChange={(v: boolean) =>
+        setEditorState("timeline", "interactMode", v ? "split" : "seek")
+      }
       as={KToggleButton}
       variant="danger"
       leftIcon={<IconCapScissors class="text-gray-500" />}
@@ -42,13 +37,13 @@ export function Player() {
 
   const isAtEnd = () => {
     const total = totalDuration();
-    return total > 0 && total - playbackTime() <= 0.1;
+    return total > 0 && total - editorState.playbackTime <= 0.1;
   };
 
   createEffect(() => {
-    if (isAtEnd() && playing()) {
+    if (isAtEnd() && editorState.playing) {
       commands.stopPlayback();
-      setPlaying(false);
+      setEditorState("playing", false);
     }
   });
 
@@ -56,35 +51,35 @@ export function Player() {
     try {
       if (isAtEnd()) {
         await commands.stopPlayback();
-        setPlaybackTime(0);
+        setEditorState("playbackTime", 0);
         await commands.seekTo(0);
         await commands.startPlayback(FPS, OUTPUT_SIZE);
-        setPlaying(true);
-      } else if (playing()) {
+        setEditorState("playing", true);
+      } else if (editorState.playing) {
         await commands.stopPlayback();
-        setPlaying(false);
+        setEditorState("playing", false);
       } else {
         // Ensure we seek to the current playback time before starting playback
-        await commands.seekTo(Math.floor(playbackTime() * FPS));
+        await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
         await commands.startPlayback(FPS, OUTPUT_SIZE);
-        setPlaying(true);
+        setEditorState("playing", true);
       }
-      if (playing()) setPreviewTime();
+      if (editorState.playing) setEditorState("previewTime", null);
     } catch (error) {
       console.error("Error handling play/pause:", error);
-      setPlaying(false);
+      setEditorState("playing", false);
     }
   };
 
   createEventListener(document, "keydown", async (e: KeyboardEvent) => {
     if (e.code === "Space" && e.target === document.body) {
       e.preventDefault();
-      const prevTime = previewTime();
+      const prevTime = editorState.previewTime;
 
-      if (!playing()) {
-        if (prevTime !== undefined) setPlaybackTime(prevTime);
+      if (!editorState.playing) {
+        if (prevTime !== null) setEditorState("playbackTime", prevTime);
 
-        await commands.seekTo(Math.floor(playbackTime() * FPS));
+        await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
       }
 
       await handlePlayPauseClick();
@@ -122,7 +117,10 @@ export function Player() {
         <div class="flex-1">
           <Time
             class="text-gray-500"
-            seconds={Math.max(previewTime() ?? playbackTime(), 0)}
+            seconds={Math.max(
+              editorState.previewTime ?? editorState.playbackTime,
+              0
+            )}
           />
           <span class="text-gray-400 text-[0.875rem] tabular-nums"> / </span>
           <Time seconds={totalDuration()} />
@@ -132,9 +130,9 @@ export function Player() {
             type="button"
             class="transition-opacity hover:opacity-70 will-change-[opacity]"
             onClick={async () => {
-              setPlaying(false);
               await commands.stopPlayback();
-              setPlaybackTime(0);
+              setEditorState("playing", false);
+              setEditorState("playbackTime", 0);
             }}
           >
             <IconCapPrev class="text-gray-500 size-3" />
@@ -144,7 +142,7 @@ export function Player() {
             onClick={handlePlayPauseClick}
             class="flex justify-center items-center bg-gray-200 rounded-full border border-gray-300 transition-colors hover:bg-gray-300 hover:text-black size-9"
           >
-            {!playing() || isAtEnd() ? (
+            {!editorState.playing || isAtEnd() ? (
               <IconCapPlay class="text-gray-500 size-3" />
             ) : (
               <IconCapPause class="text-gray-500 size-3" />
@@ -154,9 +152,9 @@ export function Player() {
             type="button"
             class="transition-opacity hover:opacity-70 will-change-[opacity]"
             onClick={async () => {
-              setPlaying(false);
               await commands.stopPlayback();
-              setPlaybackTime(totalDuration());
+              setEditorState("playing", false);
+              setEditorState("playbackTime", totalDuration());
             }}
           >
             <IconCapNext class="text-gray-500 size-3" />
@@ -173,9 +171,9 @@ export function Player() {
           <Tooltip content="Zoom out">
             <IconCapZoomOut
               onClick={() => {
-                state.timelineTransform.updateZoom(
-                  state.timelineTransform.zoom * 1.1,
-                  playbackTime()
+                editorState.timeline.transform.updateZoom(
+                  editorState.timeline.transform.zoom * 1.1,
+                  editorState.playbackTime
                 );
               }}
               class="text-gray-500 size-5 will-change-[opacity] transition-opacity hover:opacity-70"
@@ -184,9 +182,9 @@ export function Player() {
           <Tooltip content="Zoom in">
             <IconCapZoomIn
               onClick={() => {
-                state.timelineTransform.updateZoom(
-                  state.timelineTransform.zoom / 1.1,
-                  playbackTime()
+                editorState.timeline.transform.updateZoom(
+                  editorState.timeline.transform.zoom / 1.1,
+                  editorState.playbackTime
                 );
               }}
               class="text-gray-500 size-5 will-change-[opacity] transition-opacity hover:opacity-70"
@@ -199,18 +197,23 @@ export function Player() {
             step={0.001}
             value={[
               Math.min(
-                Math.max(1 - state.timelineTransform.zoom / zoomOutLimit(), 0),
+                Math.max(
+                  1 - editorState.timeline.transform.zoom / zoomOutLimit(),
+                  0
+                ),
                 1
               ),
             ]}
             onChange={([v]) => {
-              state.timelineTransform.updateZoom(
+              editorState.timeline.transform.updateZoom(
                 (1 - v) * zoomOutLimit(),
-                playbackTime()
+                editorState.playbackTime
               );
             }}
             formatTooltip={() =>
-              `${state.timelineTransform.zoom.toFixed(0)} seconds visible`
+              `${editorState.timeline.transform.zoom.toFixed(
+                0
+              )} seconds visible`
             }
           />
         </div>
