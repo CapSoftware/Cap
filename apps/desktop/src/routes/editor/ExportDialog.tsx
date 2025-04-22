@@ -36,14 +36,14 @@ import {
   PopperContent,
   topSlideAnimateClasses,
 } from "./ui";
-import { exportVideo } from "~/utils/export";
+import { exportVideo, COMPRESSION_QUALITY } from "~/utils/export";
 import type { CompressionQuality } from "~/utils/tauri";
 
 export const COMPRESSION_OPTIONS = [
-  { label: "Studio", value: "Studio" as CompressionQuality },
-  { label: "Social Media", value: "Social" as CompressionQuality },
-  { label: "Web", value: "Web" as CompressionQuality },
-  { label: "Web (Low)", value: "WebLow" as CompressionQuality },
+  { label: "Studio", value: COMPRESSION_QUALITY.Studio },
+  { label: "Social Media", value: COMPRESSION_QUALITY.Social },
+  { label: "Web", value: COMPRESSION_QUALITY.Web },
+  { label: "Web (Low)", value: COMPRESSION_QUALITY.WebLow },
 ] as const;
 
 export const FPS_OPTIONS = [
@@ -94,7 +94,7 @@ export function ExportDialog() {
       fps: 30,
       exportTo: "file" as ExportToOption,
       resolution: { label: "720p", value: "720p", width: 1280, height: 720 },
-      compression: "Web" as CompressionQuality,
+      compression: COMPRESSION_QUALITY.Web as CompressionQuality,
     }),
     { name: "export_settings" }
   );
@@ -563,7 +563,10 @@ export function ExportDialog() {
                     {(option) => (
                       <Button
                         onClick={() => {
-                          setSettings("compression", option.value);
+                          setSettings(
+                            "compression",
+                            option.value as CompressionQuality
+                          );
                         }}
                         variant="secondary"
                         class={cx(
