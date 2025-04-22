@@ -15,11 +15,11 @@ export const [TimelineContextProvider, useTimelineContext] =
       secsPerPixel: number;
       timelineBounds: Readonly<NullableBounds>;
     }) => {
-      const { state } = useEditorContext();
+      const { editorState: state } = useEditorContext();
 
       const markingResolution = () =>
         TIMELINE_MARKING_RESOLUTIONS.find(
-          (r) => state.timelineTransform.zoom / r <= MAX_TIMELINE_MARKINGS
+          (r) => state.timeline.transform.zoom / r <= MAX_TIMELINE_MARKINGS
         ) ?? 30;
 
       return {
@@ -34,7 +34,7 @@ export const [TimelineContextProvider, useTimelineContext] =
 
 export const [TrackContextProvider, useTrackContext] = createContextProvider(
   (props: { ref: Accessor<Element | undefined> }) => {
-    const { state } = useEditorContext();
+    const { editorState: state } = useEditorContext();
 
     const [trackState, setTrackState] = createStore({
       draggingSegment: false,
@@ -42,7 +42,7 @@ export const [TrackContextProvider, useTrackContext] = createContextProvider(
     const bounds = createElementBounds(() => props.ref());
 
     const secsPerPixel = () =>
-      state.timelineTransform.zoom / (bounds.width ?? 1);
+      state.timeline.transform.zoom / (bounds.width ?? 1);
 
     return {
       secsPerPixel,

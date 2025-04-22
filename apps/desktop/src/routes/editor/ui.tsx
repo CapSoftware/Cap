@@ -70,7 +70,7 @@ export function Slider(
     formatTooltip?: string | ((v: number) => string);
   }
 ) {
-  const { history } = useEditorContext();
+  const { projectHistory: history } = useEditorContext();
 
   // Pause history when slider is being dragged
   let resumeHistory: (() => void) | null = null;

@@ -57,7 +57,7 @@ function Inner() {
   return (
     <>
       <Toaster
-        position="top-right"
+        position="bottom-right"
         containerStyle={{
           "margin-top": titlebar.height,
         }}
@@ -66,7 +66,11 @@ function Inner() {
           style: {
             padding: "8px 16px",
             "border-radius": "15px",
+            "border-color": "var(--gray-200)",
+            "border-width": "1px",
             "font-size": "1rem",
+            "background-color": "var(--gray-50)",
+            color: "var(--text-secondary)",
           },
         }}
       />
