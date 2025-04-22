@@ -1,3 +1,4 @@
+use cidre::cv;
 use cocoa::{base::id, foundation::NSDictionary};
 use core_foundation::{
     array::CFArrayGetCount,
@@ -334,15 +335,31 @@ pub fn monitor_bounds(id: u32) -> Bounds {
 
 pub fn get_display_refresh_rate(
     display_id: core_graphics::display::CGDirectDisplayID,
-) -> Option<u32> {
+) -> Result<u32, String> {
     use core_graphics::display::CGDisplay;
 
-    Some(
-        CGDisplay::new(display_id)
-            .display_mode()?
-            .refresh_rate()
-            .round() as u32,
-    )
+    let display = CGDisplay::new(display_id);
+    let rate = display
+        .display_mode()
+        .ok_or_else(|| "no display_mode")?
+        .refresh_rate()
+        .round() as u32;
+
+    if rate == 0 {
+        // adapted from https://github.com/mpv-player/mpv/commit/eacf22e42a6bbce8a32e64f5563ac431122c1186
+        let link = cv::DisplayLink::with_cg_display(display.id)
+            .map_err(|e| format!("with_cg_display / {e}"))?;
+
+        let t = link.nominal_output_video_refresh_period();
+
+        if !t.flags.contains(cv::TimeFlags::IS_INDEFINITE) {
+            Ok((t.scale as f64 / t.value as f64).round() as u32)
+        } else {
+            Err("refresh rate is indefinite".to_string())
+        }
+    } else {
+        Ok(rate)
+    }
 }
 
 pub fn display_for_window(

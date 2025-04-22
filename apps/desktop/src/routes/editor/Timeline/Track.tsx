@@ -36,10 +36,10 @@ export function SegmentRoot(
   }
 ) {
   const { secsPerPixel } = useTrackContext();
-  const { state, project } = useEditorContext();
+  const { editorState: state, project } = useEditorContext();
 
   const isSelected = createMemo(() => {
-    const selection = state.timelineSelection;
+    const selection = state.timeline.selection;
     if (!selection || selection.type !== "zoom") return false;
 
     const segmentIndex = project.timeline?.zoomSegments?.findIndex(
@@ -50,7 +50,7 @@ export function SegmentRoot(
   });
 
   const translateX = createMemo(() => {
-    const base = state.timelineTransform.position;
+    const base = state.timeline.transform.position;
 
     const delta = props.segment.start;
 
