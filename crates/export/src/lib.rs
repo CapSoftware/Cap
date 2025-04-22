@@ -58,10 +58,16 @@ pub struct Exporter<TOnProgress> {
     recordings: Arc<ProjectRecordings>,
 }
 
-#[derive(Deserialize, Type, Clone, Copy, Debug)]
+#[derive(Deserialize, Type, Clone, Debug)]
 pub struct ExportSettings {
     pub fps: u32,
     pub resolution_base: XY<u32>,
+    #[serde(default = "default_compression")]
+    pub compression: cap_media::encoders::CompressionQuality,
+}
+
+fn default_compression() -> cap_media::encoders::CompressionQuality {
+    cap_media::encoders::CompressionQuality::Web
 }
 
 impl<TOnProgress> Exporter<TOnProgress>
@@ -168,7 +174,7 @@ where
             let mut encoder = cap_media::encoders::MP4File::init(
                 "output",
                 self.output_path.clone(),
-                H264Encoder::factory("output_video", video_info),
+                H264Encoder::factory("output_video", video_info, self.settings.compression),
                 |o| has_audio.then(|| OpusEncoder::init("output_audio", AudioRenderer::info(), o)),
             )
             .unwrap();

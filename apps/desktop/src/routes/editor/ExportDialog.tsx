@@ -37,12 +37,13 @@ import {
   topSlideAnimateClasses,
 } from "./ui";
 import { exportVideo } from "~/utils/export";
+import type { CompressionQuality } from "~/utils/tauri";
 
 export const COMPRESSION_OPTIONS = [
-  { label: "Studio", value: "studio" },
-  { label: "Social Media", value: "social" },
-  { label: "Web", value: "web" },
-  { label: "Web (Low)", value: "web_low" },
+  { label: "Studio", value: "Studio" as CompressionQuality },
+  { label: "Social Media", value: "Social" as CompressionQuality },
+  { label: "Web", value: "Web" as CompressionQuality },
+  { label: "Web (Low)", value: "WebLow" as CompressionQuality },
 ] as const;
 
 export const FPS_OPTIONS = [
@@ -93,7 +94,7 @@ export function ExportDialog() {
       fps: 30,
       exportTo: "file" as ExportToOption,
       resolution: { label: "720p", value: "720p", width: 1280, height: 720 },
-      compression: "social",
+      compression: "Web" as CompressionQuality,
     }),
     { name: "export_settings" }
   );
@@ -134,7 +135,11 @@ export function ExportDialog() {
       const { fps, resolution } = settings;
       const outputPath = await exportVideo(
         projectPath,
-        { fps, resolution_base: { x: resolution.width, y: resolution.height } },
+        {
+          fps: settings.fps,
+          resolution_base: { x: resolution.width, y: resolution.height },
+          compression: settings.compression,
+        },
         (progress) => setExportState({ type: "rendering", progress })
       );
 
@@ -200,6 +205,7 @@ export function ExportDialog() {
             x: settings.resolution.width,
             y: settings.resolution.height,
           },
+          compression: settings.compression,
         },
         (progress) => {
           setExportState({ type: "rendering", progress });
@@ -293,6 +299,7 @@ export function ExportDialog() {
               x: settings.resolution.width,
               y: settings.resolution.height,
             },
+            compression: settings.compression,
           },
           (progress) => setExportState({ type: "rendering", progress })
         );
@@ -550,14 +557,18 @@ export function ExportDialog() {
             {/* Compression */}
             <div class="p-4 bg-gray-100 rounded-xl">
               <div class="flex flex-col gap-3">
-                <h3 class="text-gray-400">Compression (Coming Soon)</h3>
+                <h3 class="text-gray-500">Compression</h3>
                 <div class="flex gap-2">
                   <For each={COMPRESSION_OPTIONS}>
                     {(option) => (
                       <Button
-                        onClick={() => setSettings("compression", option.value)}
+                        onClick={() => {
+                          setSettings("compression", option.value);
+                        }}
                         variant="secondary"
-                        disabled
+                        class={cx(
+                          settings.compression === option.value && selectedStyle
+                        )}
                       >
                         {option.label}
                       </Button>

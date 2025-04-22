@@ -10,7 +10,7 @@ import { commands, events } from "~/utils/tauri";
 import { useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
 import { Dialog, DialogContent } from "./ui";
-import { exportVideo } from "~/utils/export";
+import { exportVideo, COMPRESSION_QUALITY } from "~/utils/export";
 
 function ShareButton() {
   const { editorInstance, meta } = useEditorContext();
@@ -70,6 +70,7 @@ function ShareButton() {
               x: RESOLUTION_OPTIONS._1080p.width,
               y: RESOLUTION_OPTIONS._1080p.height,
             },
+            compression: COMPRESSION_QUALITY.Web,
           },
           (msg) => {
             setUploadState(

@@ -28,7 +28,7 @@ import IconLucideClock from "~icons/lucide/clock";
 import { commands, events, FramesRendered, UploadResult } from "~/utils/tauri";
 import { FPS, OUTPUT_SIZE } from "./editor/context";
 import { authStore } from "~/store";
-import { exportVideo } from "~/utils/export";
+import { exportVideo, COMPRESSION_QUALITY } from "~/utils/export";
 
 type MediaEntry = {
   path: string;
@@ -564,7 +564,11 @@ function createRecordingMutations(
           // First try to get existing rendered video
           const outputPath = await exportVideo(
             media.path,
-            { fps: FPS, resolution_base: OUTPUT_SIZE },
+            {
+              fps: FPS,
+              resolution_base: OUTPUT_SIZE,
+              compression: COMPRESSION_QUALITY.Web,
+            },
             createRenderProgressCallback("copy", setActionState)
           );
 
@@ -651,7 +655,11 @@ function createRecordingMutations(
       if (isRecording) {
         const outputPath = await exportVideo(
           media.path,
-          { fps: FPS, resolution_base: OUTPUT_SIZE },
+          {
+            fps: FPS,
+            resolution_base: OUTPUT_SIZE,
+            compression: COMPRESSION_QUALITY.Web,
+          },
           createRenderProgressCallback("save", setActionState)
         );
 
@@ -736,9 +744,13 @@ function createRecordingMutations(
             setActionState
           );
 
-          await exportVideo(
+          const outputPath = await exportVideo(
             media.path,
-            { fps: FPS, resolution_base: OUTPUT_SIZE },
+            {
+              fps: FPS,
+              resolution_base: OUTPUT_SIZE,
+              compression: COMPRESSION_QUALITY.Web,
+            },
             progress
           );
 

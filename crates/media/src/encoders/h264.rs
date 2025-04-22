@@ -8,6 +8,44 @@ use ffmpeg::{
     threading::Config,
     Dictionary,
 };
+use serde::{Deserialize, Serialize};
+use specta::Type;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub enum CompressionQuality {
+    Studio,
+    Social,
+    Web,
+    WebLow,
+}
+
+impl Default for CompressionQuality {
+    fn default() -> Self {
+        Self::Web
+    }
+}
+
+impl CompressionQuality {
+    fn bitrate(&self) -> usize {
+        match self {
+            CompressionQuality::Studio => 80_000_000,
+            CompressionQuality::Social => 24_000_000,
+            CompressionQuality::Web => 12_000_000,
+            CompressionQuality::WebLow => 3_000_000,
+        }
+    }
+
+    fn preset(&self) -> &'static str {
+        match self {
+            CompressionQuality::Studio => "slow",
+            _ => "ultrafast",
+        }
+    }
+
+    fn uses_crf(&self) -> bool {
+        matches!(self, CompressionQuality::Studio)
+    }
+}
 
 pub struct H264Encoder {
     tag: &'static str,
@@ -16,22 +54,25 @@ pub struct H264Encoder {
     converter: Option<ffmpeg::software::scaling::Context>,
     stream_index: usize,
     packet: ffmpeg::Packet,
+    compression: CompressionQuality,
 }
 
 impl H264Encoder {
     pub fn factory(
         tag: &'static str,
         config: VideoInfo,
+        compression: CompressionQuality,
     ) -> impl FnOnce(&mut format::context::Output) -> Result<Self, MediaError> {
-        move |o| Self::init(tag, config, o)
+        move |o| Self::init(tag, config, compression, o)
     }
 
     pub fn init(
         tag: &'static str,
         config: VideoInfo,
+        compression: CompressionQuality,
         output: &mut format::context::Output,
     ) -> Result<Self, MediaError> {
-        let (codec, options) = get_codec_and_options(&config)?;
+        let (codec, options) = get_codec_and_options(&config, compression)?;
 
         let (format, converter) = if !codec
             .video()
@@ -70,7 +111,6 @@ impl H264Encoder {
 
         let mut encoder_ctx = context::Context::new_with_codec(codec);
 
-        // TODO: Configure this per system
         encoder_ctx.set_threading(Config::count(4));
         let mut encoder = encoder_ctx.encoder().video()?;
 
@@ -79,8 +119,11 @@ impl H264Encoder {
         encoder.set_format(format);
         encoder.set_time_base(config.frame_rate.invert());
         encoder.set_frame_rate(Some(config.frame_rate));
-        encoder.set_bit_rate(12_000_000);
-        encoder.set_max_bit_rate(12_000_000);
+
+        let target_bitrate = compression.bitrate();
+
+        encoder.set_bit_rate(target_bitrate);
+        encoder.set_max_bit_rate(target_bitrate);
 
         let video_encoder = encoder.open_with(options)?;
 
@@ -97,6 +140,7 @@ impl H264Encoder {
             config,
             converter,
             packet: FFPacket::empty(),
+            compression,
         })
     }
 
@@ -153,7 +197,10 @@ impl H264Encoder {
     }
 }
 
-fn get_codec_and_options(config: &VideoInfo) -> Result<(Codec, Dictionary), MediaError> {
+fn get_codec_and_options(
+    config: &VideoInfo,
+    compression: CompressionQuality,
+) -> Result<(Codec, Dictionary), MediaError> {
     let encoder_name = {
         if cfg!(target_os = "macos") {
             "libx264"
@@ -167,20 +214,23 @@ fn get_codec_and_options(config: &VideoInfo) -> Result<(Codec, Dictionary), Medi
         let mut options = Dictionary::new();
 
         if encoder_name == "h264_videotoolbox" {
-            // options.set("constant_bit_rate", "true");
             options.set("realtime", "true");
         } else {
             let keyframe_interval_secs = 2;
             let keyframe_interval = keyframe_interval_secs * config.frame_rate.numerator();
             let keyframe_interval_str = keyframe_interval.to_string();
 
-            options.set("preset", "ultrafast");
+            let preset = compression.preset();
+
+            options.set("preset", preset);
             options.set("tune", "zerolatency");
             options.set("vsync", "1");
             options.set("g", &keyframe_interval_str);
             options.set("keyint_min", &keyframe_interval_str);
-            // // TODO: Is it worth limiting quality? Maybe make this configurable
-            // options.set("crf", "14");
+
+            if compression.uses_crf() {
+                options.set("crf", "16");
+            }
         }
 
         return Ok((codec, options));
