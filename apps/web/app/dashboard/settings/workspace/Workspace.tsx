@@ -264,7 +264,7 @@ export const Workspace = () => {
           <Button
             type="button"
             size="sm"
-            variant="gray"
+            variant="white"
             onClick={() => {
               if (!isOwner) {
                 showOwnerToast();

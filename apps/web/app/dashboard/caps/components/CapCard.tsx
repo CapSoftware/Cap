@@ -8,7 +8,7 @@ import { VideoThumbnail } from "@/components/VideoThumbnail";
 import { VideoMetadata } from "@cap/database/types";
 import { clientEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
-import { faLink, faTrash } from "@fortawesome/free-solid-svg-icons";
+import { faCopy, faLink, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import moment from "moment";
 import Link from "next/link";
@@ -50,6 +50,7 @@ export const CapCard: React.FC<CapCardProps> = ({
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
   const [sharedSpaces, setSharedSpaces] = useState(cap.sharedSpaces);
   const [isDateEditing, setIsDateEditing] = useState(false);
+  const [copyPressed, setCopyPressed] = useState(false);
   const [dateValue, setDateValue] = useState(
     moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss")
   );
@@ -156,6 +157,14 @@ export const CapCard: React.FC<CapCardProps> = ({
     }
   };
 
+  const handleCopy = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopyPressed(true);
+    setTimeout(() => {
+      setCopyPressed(false);
+    }, 2000);
+  };
+
   return (
     <>
       <SharingDialog
@@ -243,15 +252,15 @@ export const CapCard: React.FC<CapCardProps> = ({
             totalReactions={cap.totalReactions}
           />
         </div>
-        <div className="flex flex-wrap gap-3 items-center mt-auto w-full">
+        <div className="flex flex-wrap gap-5 justify-between items-center mt-auto w-full">
           <Button
             onClick={() => setIsSharingDialogOpen(true)}
             className="flex-1 h-10 rounded-xl"
-            variant="white"
+            variant="dark"
             size="sm"
           >
             <FontAwesomeIcon
-              className="mr-1 text-gray-400 size-4"
+              className="mr-1 text-gray-300 size-4"
               icon={faLink}
             />
             {isOwner
@@ -260,18 +269,60 @@ export const CapCard: React.FC<CapCardProps> = ({
                 : "Shared"
               : "Shared with you"}
           </Button>
-          <Button
-            onClick={() => onDelete?.(cap.id)}
-            className="flex-1 h-10 rounded-xl"
-            variant="white"
-            size="sm"
-          >
-            <FontAwesomeIcon
-              className="mr-1 text-gray-400 size-4"
-              icon={faTrash}
-            />
-            Delete
-          </Button>
+          <div className="flex flex-1 gap-3 justify-end">
+            <Tooltip content="Copy link">
+              <Button
+                onClick={() =>
+                  handleCopy(
+                    activeSpace?.space.customDomain
+                      ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
+                      : clientEnv.NEXT_PUBLIC_IS_CAP &&
+                        NODE_ENV === "production"
+                      ? `https://cap.link/${cap.id}`
+                      : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
+                  )
+                }
+                className="h-10 rounded-xl min-w-fit"
+                variant="white"
+                size="sm"
+              >
+                {!copyPressed ? (
+                  <FontAwesomeIcon
+                    className="mr-1 text-gray-400 size-4"
+                    icon={faCopy}
+                  />
+                ) : (
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="24"
+                    height="24"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    className="text-gray-400 size-5 svgpathanimation"
+                  >
+                    <path d="M20 6 9 17l-5-5" />
+                  </svg>
+                )}
+              </Button>
+            </Tooltip>
+            <Tooltip content="Delete Cap">
+              <Button
+                onClick={() => onDelete?.(cap.id)}
+                className="h-10 rounded-xl min-w-fit"
+                variant="white"
+                size="sm"
+              >
+                <FontAwesomeIcon
+                  className="mr-1 text-gray-400 size-4"
+                  icon={faTrash}
+                />
+              </Button>
+            </Tooltip>
+          </div>
         </div>
       </div>
     </>

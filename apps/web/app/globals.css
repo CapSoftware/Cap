@@ -141,6 +141,32 @@ a.bg-primary:hover {
   }
 }
 
+/* SVG path animation */
+
+@keyframes svgpathframes {
+  0% {
+    stroke-dasharray: 100;
+    stroke-dashoffset: 100;
+  }
+  50% {
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+.svgpathanimation {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  animation: svgpathframes 0.5s ease-in-out forwards;
+}
+
+.svgpathanimationrepeat {
+  animation: svgpathframes 0.5s ease-in-out forwards;
+  animation-iteration-count: infinite;
+}
+
+
 @keyframes slideLeft {
   from {
     opacity: 0;
@@ -501,7 +527,7 @@ footer a {
 @keyframes slideUp {
   from {
     opacity: 0;
-    transform: translateY(20px);
+    transform: translateY(5px);
   }
   to {
     opacity: 1;

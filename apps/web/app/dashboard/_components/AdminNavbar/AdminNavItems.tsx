@@ -88,14 +88,18 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
 
   return (
     <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-      <Tooltip
-        disable={collapsed === false}
-        position="right"
-        content={activeSpace?.space.name ?? "No space found"}
-      >
-        <div className="p-3 w-full rounded-xl border border-gray-200">
-          <Popover open={open} onOpenChange={setOpen}>
-            <PopoverTrigger asChild>
+      <Popover open={open} onOpenChange={setOpen}>
+        <Tooltip
+          disable={open || collapsed === false}
+          position="right"
+          content={activeSpace?.space.name ?? "No space found"}
+        >
+          <PopoverTrigger asChild>
+            <div
+              className={
+                "p-3 w-full rounded-xl border border-gray-200 cursor-pointer"
+              }
+            >
               <div
                 className="flex justify-between items-center cursor-pointer"
                 role="combobox"
@@ -116,45 +120,51 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                   )}
                 </div>
               </div>
-            </PopoverTrigger>
-            <PopoverContent className="z-[60] p-0 mt-3 w-[calc(100%-12px)] mx-auto bg-white">
-              <Command>
-                <CommandInput placeholder="Search spaces..." />
-                <CommandEmpty>No spaces found</CommandEmpty>
-                <CommandGroup>
-                  {spaceData?.map((space) => {
-                    const isSelected = activeSpace?.space.id === space.space.id;
-                    return (
-                      <CommandItem
-                        key={space.space.name + "-space"}
-                        onSelect={async () => {
-                          await updateActiveSpace(space.space.id);
-                          setOpen(false);
-                        }}
-                      >
-                        {space.space.name}
-                        <Check
-                          size={18}
-                          className={classNames(
-                            "ml-auto",
-                            isSelected ? "opacity-100" : "opacity-0"
-                          )}
-                        />
+              <PopoverContent
+                className={clsx(
+                  "p-0 w-[calc(100%-12px)] bg-white z-[60]",
+                  collapsed ? "ml-3" : "mx-auto"
+                )}
+              >
+                <Command>
+                  <CommandInput placeholder="Search spaces..." />
+                  <CommandEmpty>No spaces found</CommandEmpty>
+                  <CommandGroup>
+                    {spaceData?.map((space) => {
+                      const isSelected =
+                        activeSpace?.space.id === space.space.id;
+                      return (
+                        <CommandItem
+                          key={space.space.name + "-space"}
+                          onSelect={async () => {
+                            await updateActiveSpace(space.space.id);
+                            setOpen(false);
+                          }}
+                        >
+                          {space.space.name}
+                          <Check
+                            size={18}
+                            className={classNames(
+                              "ml-auto",
+                              isSelected ? "opacity-100" : "opacity-0"
+                            )}
+                          />
+                        </CommandItem>
+                      );
+                    })}
+                    <DialogTrigger className="w-full">
+                      <CommandItem className="bg-gray-100 rounded-lg border border-gray-200 aria-selected:bg-gray-200">
+                        <Plus className="mr-1 w-4 h-auto" />
+                        <span className="text-sm">Add new space</span>
                       </CommandItem>
-                    );
-                  })}
-                  <DialogTrigger className="w-full">
-                    <CommandItem className="bg-gray-100 rounded-lg border border-gray-200 aria-selected:bg-gray-200">
-                      <Plus className="mr-1 w-4 h-auto" />
-                      <span className="text-sm">Add new space</span>
-                    </CommandItem>
-                  </DialogTrigger>
-                </CommandGroup>
-              </Command>
-            </PopoverContent>
-          </Popover>
-        </div>
-      </Tooltip>
+                    </DialogTrigger>
+                  </CommandGroup>
+                </Command>
+              </PopoverContent>
+            </div>
+          </PopoverTrigger>
+        </Tooltip>
+      </Popover>
       <nav
         className="flex flex-col justify-between w-full h-full"
         aria-label="Sidebar"

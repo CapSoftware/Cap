@@ -1,5 +1,5 @@
 import { Button, Input } from "@cap/ui";
-import { faBuilding, faShareNodes } from "@fortawesome/free-solid-svg-icons";
+import { faShareNodes } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Dialog, Transition } from "@headlessui/react";
 import clsx from "clsx";
@@ -165,11 +165,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
                   ))
                 ) : (
                   <div className="flex gap-2 justify-center items-center pt-2 text-sm">
-                    <FontAwesomeIcon
-                      className="text-gray-400 size-3"
-                      icon={faBuilding}
-                    />
-                    <p className="text-gray-500">No spaces found</p>
+                    <p className="font-medium text-gray-500">No spaces found</p>
                   </div>
                 )}
               </div>
