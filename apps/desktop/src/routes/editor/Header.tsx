@@ -36,8 +36,14 @@ export interface ExportEstimates {
 }
 
 export function Header() {
-  const { editorInstance, projectHistory, setDialog, meta } =
-    useEditorContext();
+  const {
+    editorInstance,
+    projectHistory,
+    setDialog,
+    meta,
+    exportState,
+    setExportState,
+  } = useEditorContext();
 
   let unlistenTitlebar: UnlistenFn | undefined;
   onMount(async () => {
@@ -147,10 +153,9 @@ export function Header() {
           class={cx("flex gap-2 justify-center")}
           onClick={() => {
             trackEvent("export_button_clicked");
-            setDialog({
-              type: "export",
-              open: true,
-            });
+            if (exportState.type === "done") setExportState({ type: "idle" });
+
+            setDialog({ type: "export", open: true });
           }}
         >
           <UploadIcon class="text-gray-50 size-5" />
@@ -191,9 +196,7 @@ const UploadIcon = (props: ComponentProps<"svg">) => {
         stroke-linecap="round"
         stroke-linejoin="round"
         class={cx(
-          exportState.type !== "idle" &&
-            exportState.action === "upload" &&
-            "bounce"
+          exportState.type !== "idle" && exportState.type !== "done" && "bounce"
         )}
       />
     </svg>

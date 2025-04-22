@@ -21,6 +21,7 @@ import {
 } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import { makePersisted } from "@solid-primitives/storage";
+import toast from "solid-toast";
 
 import Tooltip from "~/components/Tooltip";
 import { authStore } from "~/store";
@@ -150,28 +151,25 @@ export function ExportDialog() {
     onSuccess() {
       setExportState({ type: "done" });
 
-      const timeout = setTimeout(() => {
-        setDialog((d) => ({ ...d, open: false }));
-      }, 1000);
+      if (dialog().open) {
+        const closeTimeout = setTimeout(() => {
+          setDialog((d) => ({ ...d, open: false }));
+        }, 2000);
 
-      createRoot((dispose) => {
-        createEffect(
-          on(
-            () => dialog().open,
-            (open) => {
-              if (open) {
-                if (exportState.type === "done")
-                  setExportState({ type: "idle" });
+        createRoot((dispose) => {
+          createEffect(
+            on(
+              () => dialog().open,
+              () => {
+                clearTimeout(closeTimeout);
 
-                clearTimeout(timeout);
                 dispose();
-              }
-            },
-
-            { defer: true }
-          )
-        );
-      });
+              },
+              { defer: true }
+            )
+          );
+        });
+      } else toast.success("Recording exported to clipboard");
     },
   }));
 
@@ -211,11 +209,6 @@ export function ExportDialog() {
       setExportState({ type: "copying" });
 
       await commands.copyFileToPath(videoPath, outputPath);
-
-      //needs to be here so if the user cancels file selection the dialog does not close
-      setTimeout(() => {
-        setDialog((d) => ({ ...d, open: false }));
-      }, 1000);
     },
     onError: (error) => {
       commands.globalMessageDialog(
@@ -226,26 +219,25 @@ export function ExportDialog() {
     onSuccess() {
       setExportState({ type: "done" });
 
-      const timeout = setTimeout(() => {
-        setExportState(reconcile({ type: "idle" }));
-      }, 1500);
+      if (dialog().open) {
+        const closeTimeout = setTimeout(() => {
+          setDialog((d) => ({ ...d, open: false }));
+        }, 2000);
 
-      createRoot((dispose) => {
-        createEffect(
-          on(
-            () => dialog().open,
-            (open) => {
-              console.log({ open });
-              if (exportState.type === "done") setExportState({ type: "idle" });
+        createRoot((dispose) => {
+          createEffect(
+            on(
+              () => dialog().open,
+              () => {
+                clearTimeout(closeTimeout);
 
-              clearTimeout(timeout);
-              dispose();
-            },
-
-            { defer: true }
-          )
-        );
-      });
+                dispose();
+              },
+              { defer: true }
+            )
+          );
+        });
+      } else toast.success("Recording exported to file");
     },
   }));
 
@@ -325,24 +317,12 @@ export function ExportDialog() {
       }
     },
     onSuccess: () => {
+      const d = dialog();
+      if ("type" in d && d.type === "export") setDialog({ ...d, open: true });
+
       refetchMeta();
 
       setExportState({ type: "done" });
-
-      createRoot((dispose) => {
-        createEffect(
-          on(
-            () => dialog().open,
-            () => {
-              if (exportState.type === "done") setExportState({ type: "idle" });
-
-              dispose();
-            },
-
-            { defer: true }
-          )
-        );
-      });
     },
     onError: (error) => {
       commands.globalMessageDialog(

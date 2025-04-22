@@ -204,6 +204,12 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCapture
 
 const MAX_FPS: u32 = 60;
 
+struct OptionsConfig {
+    scap_target: scap::Target,
+    bounds: Bounds,
+    crop_area: Option<Area>,
+}
+
 impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
     pub fn init(
         target: &ScreenCaptureTarget,
