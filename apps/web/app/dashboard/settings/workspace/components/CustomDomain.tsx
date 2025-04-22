@@ -6,7 +6,7 @@ import { checkWorkspaceDomain } from "@/actions/workspace/check-domain";
 import { removeWorkspaceDomain } from "@/actions/workspace/remove-domain";
 import { updateDomain } from "@/actions/workspace/update-domain";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { Button, Input, Label } from "@cap/ui";
+import { Button, Input } from "@cap/ui";
 import { Check, CheckCircle, Copy, RefreshCw, XCircle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -275,10 +275,7 @@ export function CustomDomain() {
   return (
     <div className="space-y-6">
       <div>
-        <Label htmlFor="customDomain" className="text-sm font-medium">
-          Add your custom domain here
-        </Label>
-        <div className="flex gap-2 items-center mt-2">
+        <div className="flex flex-col items-start mt-2">
           <Input
             type="text"
             id="customDomain"
@@ -289,8 +286,10 @@ export function CustomDomain() {
             className="flex-1"
           />
           <Button
+            className="mt-8"
+            type="submit"
+            size="sm"
             variant="dark"
-            type="button"
             onClick={handleSubmit}
             disabled={loading}
           >

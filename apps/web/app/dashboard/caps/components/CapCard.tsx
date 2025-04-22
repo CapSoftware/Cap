@@ -8,7 +8,7 @@ import { VideoThumbnail } from "@/components/VideoThumbnail";
 import { VideoMetadata } from "@cap/database/types";
 import { clientEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
-import { faCopy, faLink, faTrash } from "@fortawesome/free-solid-svg-icons";
+import { faLink, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import moment from "moment";
 import Link from "next/link";
@@ -289,7 +289,7 @@ export const CapCard: React.FC<CapCardProps> = ({
                 {!copyPressed ? (
                   <FontAwesomeIcon
                     className="mr-1 text-gray-400 size-4"
-                    icon={faCopy}
+                    icon={faLink}
                   />
                 ) : (
                   <svg

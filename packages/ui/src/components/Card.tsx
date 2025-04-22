@@ -22,7 +22,7 @@ const CardHeader = forwardRef<
 >(({ className, ...props }, ref) => (
   <div
     ref={ref}
-    className={classNames("flex flex-col space-y-1.5 p-6", className)}
+    className={classNames("flex flex-col space-y-1.5", className)}
     {...props}
   />
 ));
@@ -62,7 +62,7 @@ const CardContent = forwardRef<
   <div
     ref={ref}
     className={classNames(
-      "p-6 pt-0 bg-gray-50 border border-gray-200",
+      "p-5 bg-gray-50 rounded-2xl border border-gray-200",
       className
     )}
     {...props}
