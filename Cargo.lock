@@ -919,6 +919,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-cursor-capture"
+version = "0.1.0"
+dependencies = [
+ "cap-displays",
+ "core-graphics 0.24.0",
+ "device_query 3.0.1",
+]
+
+[[package]]
 name = "cap-desktop"
 version = "0.3.41"
 dependencies = [
@@ -940,7 +949,7 @@ dependencies = [
  "core-foundation 0.10.0",
  "core-graphics 0.24.0",
  "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
- "device_query",
+ "device_query 2.1.0",
  "dirs",
  "dotenvy_macro",
  "ffmpeg-next",
@@ -995,6 +1004,15 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "uuid",
+ "windows 0.58.0",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "cap-displays"
+version = "0.1.0"
+dependencies = [
+ "core-graphics 0.24.0",
  "windows 0.58.0",
  "windows-sys 0.59.0",
 ]
@@ -1116,6 +1134,8 @@ dependencies = [
 name = "cap-recording"
 version = "0.1.0"
 dependencies = [
+ "cap-cursor-capture",
+ "cap-displays",
  "cap-flags",
  "cap-media",
  "cap-project",
@@ -1123,7 +1143,7 @@ dependencies = [
  "chrono",
  "cidre",
  "cocoa 0.26.0",
- "device_query",
+ "device_query 2.1.0",
  "either",
  "ffmpeg-next",
  "flume 0.11.0",
@@ -2235,6 +2255,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bafa241a89a5edccff5057d0b85fbc083a781bd03d766c11a688331604980985"
 dependencies = [
  "lazy_static",
+ "macos-accessibility-client",
+ "pkg-config",
+ "readkey",
+ "readmouse",
+ "windows 0.48.0",
+ "x11",
+]
+
+[[package]]
+name = "device_query"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "429b683ad2cf0d2f0f37f510655854baf18d5f108c3790ab5dd1d09a26874436"
+dependencies = [
  "macos-accessibility-client",
  "pkg-config",
  "readkey",
@@ -6013,9 +6047,9 @@ dependencies = [
 
 [[package]]
 name = "readkey"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7677f98ca49bc9bb26e04c8abf80ba579e2cb98e8a384a0ff8128ad70670d249"
+checksum = "8a36870cefdfcff57edbc0fa62165f42dfd4e5a0d8965117c1ea84c5700e4450"
 
 [[package]]
 name = "readmouse"

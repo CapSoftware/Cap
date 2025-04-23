@@ -6,6 +6,8 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+use cap_cursor_capture::RawCursorPosition;
+use cap_displays::Display;
 use cap_media::platform::Bounds;
 use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
 use cap_utils::spawn_actor;
@@ -53,11 +55,17 @@ pub fn spawn_cursor_recorder(
     let stop_signal = Arc::new(AtomicBool::new(false));
     let (tx, rx) = oneshot::channel();
 
+    let display = Display::primary();
+    let crop_position = (0.0, 0.0);
+    let crop_size = (1.0, 1.0);
+
     spawn_actor({
         let stop_signal = stop_signal.clone();
         async move {
             let device_state = DeviceState::new();
             let mut last_mouse_state = device_state.get_mouse();
+
+            let mut last_position = RawCursorPosition::get();
 
             // Create cursors directory if it doesn't exist
             std::fs::create_dir_all(&cursors_dir).unwrap();
@@ -75,6 +83,8 @@ pub fn spawn_cursor_recorder(
                 };
                 let elapsed = elapsed.as_secs_f64() * 1000.0;
                 let mouse_state = device_state.get_mouse();
+
+                let position = RawCursorPosition::get();
 
                 let cursor_data = get_cursor_image_data();
                 let cursor_id = if let Some(data) = cursor_data {
@@ -117,66 +127,22 @@ pub fn spawn_cursor_recorder(
                     "default".to_string()
                 };
 
-                if mouse_state.coords != last_mouse_state.coords {
-                    // Get the actual mouse coordinates
-                    let (mouse_x, mouse_y) = mouse_state.coords;
+                if position != last_position {
+                    last_position = position;
 
-                    #[cfg(target_os = "macos")]
-                    let (mouse_x, mouse_y) = {
-                        let primary_bounds = cap_media::platform::primary_monitor_bounds();
-
-                        let mouse_x = mouse_x - screen_bounds.x as i32;
-                        let mouse_y = mouse_y
-                            + (screen_bounds.y + screen_bounds.height - primary_bounds.height)
-                                as i32;
-
-                        (mouse_x, mouse_y)
-                    };
-
-                    #[cfg(not(target_os = "macos"))]
-                    let (mouse_x, mouse_y) = {
-                        (
-                            mouse_x - screen_bounds.x as i32,
-                            mouse_y - screen_bounds.y as i32,
-                        )
-                    };
-
-                    // Calculate normalized coordinates (0.0 to 1.0) within the screen bounds
-                    // Check if screen_bounds dimensions are valid to avoid division by zero
-                    let x = if screen_bounds.width > 0.0 {
-                        mouse_x as f64 / screen_bounds.width
-                    } else {
-                        0.5 // Fallback if width is invalid
-                    };
-
-                    let y = if screen_bounds.height > 0.0 {
-                        mouse_y as f64 / screen_bounds.height
-                    } else {
-                        0.5 // Fallback if height is invalid
-                    };
-
-                    // Clamp values to ensure they're within valid range
-                    let x = if x.is_nan() || x.is_infinite() {
-                        debug!("X coordinate is invalid: {}", x);
-                        0.5
-                    } else {
-                        x.max(0.0).min(1.0)
-                    };
-
-                    let y = if y.is_nan() || y.is_infinite() {
-                        debug!("Y coordinate is invalid: {}", y);
-                        0.5
-                    } else {
-                        y.max(0.0).min(1.0)
-                    };
+                    let cropped_position = position
+                        .relative_to_display(display)
+                        .normalize()
+                        .with_crop(crop_position, crop_size);
 
                     let mouse_event = CursorMoveEvent {
                         active_modifiers: vec![],
                         cursor_id: cursor_id.clone(),
                         time_ms: elapsed,
-                        x,
-                        y,
+                        x: cropped_position.x() as f64,
+                        y: cropped_position.y() as f64,
                     };
+
                     response.moves.push(mouse_event);
                 }
 
@@ -189,84 +155,12 @@ pub fn spawn_cursor_recorder(
                         continue;
                     }
 
-                    // Get the actual mouse coordinates
-                    let (mouse_x, mouse_y) = mouse_state.coords;
-
-                    #[cfg(windows)]
-                    let (mouse_x, mouse_y) = {
-                        // On Windows, ensure we're using the correct coordinate system
-                        // by getting the virtual screen metrics
-                        use windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics;
-                        use windows::Win32::UI::WindowsAndMessaging::{
-                            SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-                            SM_YVIRTUALSCREEN,
-                        };
-
-                        let virtual_screen_x = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
-                        let virtual_screen_y = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
-                        let virtual_screen_width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
-                        let virtual_screen_height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
-
-                        // If screen_bounds doesn't match the virtual screen, adjust the coordinates
-                        if (screen_bounds.x as i32 != virtual_screen_x
-                            || screen_bounds.y as i32 != virtual_screen_y
-                            || screen_bounds.width as i32 != virtual_screen_width
-                            || screen_bounds.height as i32 != virtual_screen_height)
-                            && screen_bounds.width > 0.0
-                            && screen_bounds.height > 0.0
-                        {
-                            // Convert to normalized coordinates in the virtual screen space first
-                            let norm_x = (mouse_x as f64 - virtual_screen_x as f64)
-                                / virtual_screen_width as f64;
-                            let norm_y = (mouse_y as f64 - virtual_screen_y as f64)
-                                / virtual_screen_height as f64;
-
-                            // Then convert to the target screen coordinates
-                            let adjusted_x =
-                                (norm_x * screen_bounds.width + screen_bounds.x) as i32;
-                            let adjusted_y =
-                                (norm_y * screen_bounds.height + screen_bounds.y) as i32;
-
-                            (adjusted_x, adjusted_y)
-                        } else {
-                            (mouse_x, mouse_y)
-                        }
-                    };
-
-                    // Calculate normalized coordinates (0.0 to 1.0) within the screen bounds
-                    // Check if screen_bounds dimensions are valid to avoid division by zero
-                    let x = if screen_bounds.width > 0.0 {
-                        (mouse_x as f64 - screen_bounds.x) / screen_bounds.width
-                    } else {
-                        0.5 // Fallback if width is invalid
-                    };
-
-                    let y = if screen_bounds.height > 0.0 {
-                        (mouse_y as f64 - screen_bounds.y) / screen_bounds.height
-                    } else {
-                        0.5 // Fallback if height is invalid
-                    };
-
-                    // Clamp values to ensure they're within valid range
-                    let x = if x.is_nan() || x.is_infinite() {
-                        0.5
-                    } else {
-                        x.max(0.0).min(1.0)
-                    };
-                    let y = if y.is_nan() || y.is_infinite() {
-                        0.5
-                    } else {
-                        y.max(0.0).min(1.0)
-                    };
-
                     let mouse_event = CursorClickEvent {
                         down: pressed,
                         active_modifiers: vec![],
                         cursor_num: num as u8,
                         cursor_id: cursor_id.clone(),
                         time_ms: elapsed,
-                        x,
-                        y,
                     };
                     response.clicks.push(mouse_event);
                 }

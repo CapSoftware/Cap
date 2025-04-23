@@ -707,6 +707,34 @@ async fn create_segment_pipeline(
     let (mut pipeline, pipeline_done_rx) = pipeline_builder.build().await?;
 
     let cursor = custom_cursor_capture.then(|| {
+        let monitor = || {
+            #[cfg(target_os = "macos")]
+            return cap_displays::Display::list().into_iter().find(|m| {
+                match &options.capture_target {
+                    ScreenCaptureTarget::Screen { id }
+                    | ScreenCaptureTarget::Area { screen: id, .. } => {
+                        m.raw_handle().inner().id == *id
+                    }
+                    ScreenCaptureTarget::Window { id } => {
+                        m.raw_handle().inner().id
+                            == cap_media::platform::display_for_window(*id).unwrap().id
+                    }
+                }
+            });
+
+            #[cfg(windows)]
+            return cap_displays::Display::list().into_iter().find(|m| {
+                match &options.capture_target {
+                    ScreenCaptureTarget::Screen { id }
+                    | ScreenCaptureTarget::Area { screen: id, .. } => m.raw_handle().id() == *id,
+                    ScreenCaptureTarget::Window { id } => {
+                        m.raw_handle().id()
+                            == cap_media::platform::display_for_window(*id).unwrap().0
+                    }
+                }
+            });
+        };
+
         let cursor = spawn_cursor_recorder(
             screen.bounds.clone(),
             cursors_dir.clone(),
