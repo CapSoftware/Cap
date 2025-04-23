@@ -164,7 +164,8 @@ export const Workspace = () => {
           <p>
             Seats Remaining
             <span className="ml-2 font-bold text-gray-500">
-              {activeSpace?.inviteQuota ?? 1 - (activeSpace?.totalInvites ?? 1)}
+              {(activeSpace?.inviteQuota ?? 1) -
+                (activeSpace?.totalInvites ?? 0)}
             </span>
           </p>
         </Card>
@@ -245,7 +246,7 @@ export const Workspace = () => {
             <div className="space-y-1">
               <Label htmlFor="customDomain">Custom Domain</Label>
               <CardDescription className="w-full max-w-[400px]">
-                Set up a custom domain for your workspace’s shared caps and make
+                Set up a custom domain for your workspace's shared caps and make
                 it unique.
               </CardDescription>
             </div>
