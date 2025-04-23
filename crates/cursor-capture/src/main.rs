@@ -8,6 +8,6 @@ fn main() {
             .normalize()
             .with_crop((0.0, 0.0), (1.0, 1.0));
 
-        dbg!(position);
+        println!("{position:?}");
     }
 }
