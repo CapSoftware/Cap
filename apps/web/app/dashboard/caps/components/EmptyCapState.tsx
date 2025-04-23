@@ -22,7 +22,7 @@ export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
             Hey{userName ? ` ${userName}` : ""}! Record your first Cap
           </p>
           <p className="max-w-md text-gray-400 text-md">
-            Craft your narrative with - get projects done quicker
+            Craft your narrative with Cap - get projects done quicker.
           </p>
         </div>
         <div className="flex justify-center mt-4">
