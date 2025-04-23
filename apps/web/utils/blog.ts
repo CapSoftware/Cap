@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { recordScreenMacContent } from "../content/blog-content/record-screen-mac-system-audio";
 
 export type PostMetadata = {
   title: string;
@@ -25,6 +26,32 @@ export interface BlogPost {
   content: string;
   isManual?: boolean;
 }
+
+interface ManualBlogPost {
+  slug: string;
+  content: {
+    title: string;
+    description: string;
+    publishedAt: string;
+    author: string;
+    tags?: string[];
+    image?: string;
+    [key: string]: any;
+  };
+}
+
+export const manualBlogPosts: ManualBlogPost[] = [
+  {
+    slug: recordScreenMacContent.slug,
+    content: {
+      title: recordScreenMacContent.title,
+      description: recordScreenMacContent.description,
+      publishedAt: recordScreenMacContent.publishedAt,
+      author: recordScreenMacContent.author,
+      tags: recordScreenMacContent.tags,
+    }
+  }
+];
 
 function parseFrontmatter(fileContent: string) {
   let frontmatterRegex = /---\s*([\s\S]*?)\s*---/;
@@ -108,98 +135,22 @@ function getMDXData(dir: string): BlogPost[] {
 
 export function getManualBlogPosts(): BlogPost[] {
   try {
-    console.log("Current working directory:", process.cwd());
-    
-    const possiblePaths = [
-      "/var/task/apps/web/content/blog-content",
-      path.join(process.cwd(), "content/blog-content"),
-      path.join(process.cwd(), "apps/web/content/blog-content"),
-      path.join(process.cwd(), "/var/task/content/blog-content"),
-      path.join(process.cwd(), "/var/task/apps/web/content/blog-content"),
-      path.join(process.cwd(), "../content/blog-content"),
-      path.join(process.cwd(), "../../content/blog-content"),
-      path.join(process.cwd(), "public/content/blog-content"),
-      path.join(process.env.NEXT_PUBLIC_ROOT_DIR || "", "content/blog-content"),
-      "/var/task/content/blog-content",
-      path.join(process.cwd(), ".next/server/app/content/blog-content"),
-      path.join(process.cwd(), ".next/server/content/blog-content")
-    ];
-    
-    console.log("Checking paths:", possiblePaths);
-    
-    let blogContentDir = "";
-    for (const pathToCheck of possiblePaths) {
-      console.log("Checking path:", pathToCheck);
-      try {
-        if (fs.existsSync(pathToCheck)) {
-          blogContentDir = pathToCheck;
-          console.log("Found valid blog content directory:", blogContentDir);
-          break;
-        }
-      } catch (error) {
-        console.log("Error checking path:", pathToCheck, error);
-      }
-    }
-    
-    if (!blogContentDir) {
-      console.log("Blog content directory not found in any of the checked paths");
-      return [];
-    }
-
-    const fileNames = fs.readdirSync(blogContentDir);
-    
-    return fileNames
-      .filter(fileName => fileName.endsWith('.tsx'))
-      .map(fileName => {
-        const slug = fileName.replace(/\.tsx$/, "");
-        
-        try {
-          const filePath = path.join(blogContentDir, fileName);
-          const fileContent = fs.readFileSync(filePath, 'utf8');
-          
-          // Extract metadata using regex - ensure we have defaults for all required fields
-          const getRegexValue = (regex: RegExp, defaultValue: string): string => {
-            const match = fileContent.match(regex);
-            return match && match[1] ? match[1] : defaultValue;
-          };
-          
-          const title = getRegexValue(/title:\s*"([^"]+)"/, `Unknown (${slug})`);
-          const description = getRegexValue(/description:\s*"([^"]+)"/, `Blog post about ${slug}`);
-          const publishedAt = getRegexValue(/publishedAt:\s*"([^"]+)"/, new Date().toISOString());
-          const author = getRegexValue(/author:\s*"([^"]+)"/, 'Cap Team');
-          
-          // Tags handling
-          const tagsMatch = fileContent.match(/tags:\s*\[(.*?)\]/);
-          let tags = '';
-          if (tagsMatch && tagsMatch[1]) {
-            tags = tagsMatch[1]
-              .split(',')
-              .map(tag => tag.trim().replace(/"/g, ''))
-              .join(', ');
-          }
-          
-          // Create a metadata object similar to MDX files
-          const metadata: PostMetadata = {
-            title,
-            description,
-            publishedAt,
-            author,
-            summary: description,
-            tags
-          };
-          
-          return {
-            metadata,
-            slug,
-            content: '', // Content is handled by the component specific to this manual post
-            isManual: true
-          } as BlogPost;
-        } catch (error) {
-          console.error(`Error processing manual blog post ${fileName}:`, error);
-          return null;
-        }
-      })
-      .filter((post): post is BlogPost => post !== null); // Type guard to filter out nulls
+    return manualBlogPosts.map(({ slug, content }) => {
+      return {
+        slug,
+        metadata: {
+          title: content.title,
+          author: content.author,
+          publishedAt: content.publishedAt,
+          summary: content.description,
+          description: content.description,
+          tags: content.tags?.join(', ') || '',
+          image: content.image
+        },
+        content: '',
+        isManual: true
+      } as BlogPost;
+    });
   } catch (error) {
     console.error("Error getting manual blog posts:", error);
     return [];

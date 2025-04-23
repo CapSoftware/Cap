@@ -1,4 +1,5 @@
 export const recordScreenMacContent = {
+  slug: "record-screen-mac-system-audio",
   title: "Record Screen + System Audio on Mac (Free, 2025 Guide)",
   description:
     "A simple guide to capturing your Mac screen with internal audio without complex audio routing or expensive software.",
