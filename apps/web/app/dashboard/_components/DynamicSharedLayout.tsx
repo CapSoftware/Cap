@@ -44,10 +44,10 @@ export default function DynamicSharedLayout({
         </aside>
         {/* Header/topbar is now expected to be rendered by children if needed */}
         {/* Main content area */}
-        <main className="overflow-y-auto col-span-1 row-span-2 focus:outline-none">
+        <div className="overflow-y-auto col-span-1 row-span-2 focus:outline-none">
           <AdminMobileNav />
           {children}
-        </main>
+        </div>
       </div>
     </Context.Provider>
   );
