@@ -8,8 +8,14 @@ import { VideoThumbnail } from "@/components/VideoThumbnail";
 import { VideoMetadata } from "@cap/database/types";
 import { clientEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
-import { faLink, faTrash, faUserPlus } from "@fortawesome/free-solid-svg-icons";
+import {
+  faLink,
+  faTrash,
+  faUserPlus,
+  faChevronDown,
+} from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { ChevronDown } from "lucide-react";
 import moment from "moment";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -89,6 +95,38 @@ export const CapCard: React.FC<CapCardProps> = ({
       userSpaces.filter((space) => updatedSharedSpaces.includes(space.id))
     );
     router.refresh(); // Add this line to refresh the page
+  };
+
+  const isOwner = userId === cap.ownerId;
+
+  const renderSharedStatus = () => {
+    const baseClassName =
+      "text-sm text-gray-400 hover:text-gray-500 cursor-pointer flex items-center mb-1";
+    if (isOwner) {
+      if (cap.sharedSpaces.length === 0) {
+        return (
+          <span
+            className={`${baseClassName}`}
+            onClick={() => setIsSharingDialogOpen(true)}
+          >
+            <span>Not shared</span>{" "}
+            <FontAwesomeIcon className="size-3 ml-1" icon={faChevronDown} />
+          </span>
+        );
+      } else {
+        return (
+          <span
+            className={`${baseClassName}`}
+            onClick={() => setIsSharingDialogOpen(true)}
+          >
+            <span>Shared</span>{" "}
+            <FontAwesomeIcon className="size-3 ml-1" icon={faChevronDown} />
+          </span>
+        );
+      }
+    } else {
+      return <span className={`${baseClassName} `}>Shared with you</span>;
+    }
   };
 
   const handleDateClick = () => {
@@ -286,6 +324,7 @@ export const CapCard: React.FC<CapCardProps> = ({
                 {title}
               </p>
             )}
+            {renderSharedStatus()}
             <p className="mb-1">
               {isDateEditing ? (
                 <div className="flex items-center">

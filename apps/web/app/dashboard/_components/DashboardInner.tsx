@@ -8,7 +8,13 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@cap/ui";
-import { LogOut, MessageSquare, MoreVertical, Settings } from "lucide-react";
+import {
+  Home,
+  LogOut,
+  MessageSquare,
+  MoreVertical,
+  Settings,
+} from "lucide-react";
 import { useState } from "react";
 
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
@@ -78,6 +84,19 @@ const User = () => {
       <PopoverContent className="p-1 w-48 bg-gray-50">
         <Command>
           <CommandGroup>
+            <Link href="/home">
+              <CommandItem
+                className="px-2 py-2 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-100 group"
+                onSelect={() => {
+                  setMenuOpen(false);
+                }}
+              >
+                <Home className="mr-2 w-4 h-4 text-gray-400 group-hover:text-gray-500" />
+                <span className="text-sm text-gray-400 group-hover:text-gray-500">
+                  Homepage
+                </span>
+              </CommandItem>
+            </Link>
             <Link href="/dashboard/settings">
               <CommandItem
                 className="px-2 py-2 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-100 group"
