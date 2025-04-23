@@ -1,15 +1,7 @@
 "use client";
 
 import { users } from "@cap/database/schema";
-import {
-  Button,
-  Card,
-  CardDescription,
-  CardFooter,
-  CardTitle,
-  Input,
-  Label,
-} from "@cap/ui";
+import { Button, Card, CardDescription, CardTitle, Input } from "@cap/ui";
 import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
 
@@ -53,43 +45,41 @@ export const Settings = ({
 
   return (
     <form onSubmit={handleSubmit}>
-      <Card>
-        <CardTitle>Your name</CardTitle>
-        <CardDescription>
-          Changing your name below will update how your name appears when
-          sharing a Cap, and in your profile.
-        </CardDescription>
-      </Card>
-      <Card>
-        <div className="space-y-3">
-          <div>
-            <Label htmlFor="firstName">First name</Label>
-            <Input
-              type="text"
-              defaultValue={firstName as string}
-              id="firstName"
-              name="firstName"
-            />
+      <div className="flex flex-col flex-wrap gap-4 w-full md:flex-row">
+        <Card className="flex-1 space-y-1">
+          <CardTitle>Your name</CardTitle>
+          <CardDescription>
+            Changing your name below will update how your name appears when
+            sharing a Cap, and in your profile.
+          </CardDescription>
+          <div className="flex flex-col flex-wrap gap-5 pt-4 w-full md:flex-row">
+            <div className="flex-1 space-y-2">
+              <Input
+                type="text"
+                placeholder="First name"
+                defaultValue={firstName as string}
+                id="firstName"
+                name="firstName"
+              />
+            </div>
+            <div className="flex-1 space-y-2">
+              <Input
+                type="text"
+                placeholder="Last name"
+                defaultValue={lastName as string}
+                id="lastName"
+                name="lastName"
+              />
+            </div>
           </div>
-          <div>
-            <Label htmlFor="lastName">Last name</Label>
-            <Input
-              type="text"
-              defaultValue={lastName as string}
-              id="lastName"
-              name="lastName"
-            />
+        </Card>
+        <Card className="flex flex-col flex-1 gap-4 justify-between items-stretch">
+          <div className="space-y-1">
+            <CardTitle>Contact email address</CardTitle>
+            <CardDescription>
+              This is the email address you used to sign up to Cap with.
+            </CardDescription>
           </div>
-        </div>
-      </Card>
-      <Card>
-        <CardTitle>Contact email address</CardTitle>
-        <CardDescription>
-          This is the email address you used to sign up to Cap with.
-        </CardDescription>
-      </Card>
-      <Card>
-        <div>
           <Input
             type="email"
             value={email as string}
@@ -97,13 +87,11 @@ export const Settings = ({
             name="contactEmail"
             disabled
           />
-        </div>
-      </Card>
-      <CardFooter className="px-6 py-4 border-t">
-        <Button type="submit" size="sm" variant="gray">
-          Save
-        </Button>
-      </CardFooter>
+        </Card>
+      </div>
+      <Button className="mt-6" type="submit" size="sm" variant="dark">
+        Save
+      </Button>
     </form>
   );
 };

@@ -16,7 +16,7 @@ export const CapCardAnalytics: React.FC<CapCardAnalyticsProps> = ({
   totalReactions,
 }) => {
   return (
-    <div className="flex flex-wrap gap-3 items-center text-sm text-gray-60">
+    <div className="flex flex-wrap gap-4 items-center text-sm text-gray-60">
       <Tooltip content={`${displayCount} unique views`}>
         <div className="flex gap-1 items-center">
           <FontAwesomeIcon className="text-gray-400 size-4" icon={faEye} />

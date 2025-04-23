@@ -9,13 +9,11 @@ import { VideoMetadata } from "@cap/database/types";
 import { clientEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
 import {
+  faChevronDown,
   faLink,
   faTrash,
-  faUserPlus,
-  faChevronDown,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { ChevronDown } from "lucide-react";
 import moment from "moment";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -101,31 +99,31 @@ export const CapCard: React.FC<CapCardProps> = ({
 
   const renderSharedStatus = () => {
     const baseClassName =
-      "text-sm text-gray-400 hover:text-gray-500 cursor-pointer flex items-center mb-1";
+      "text-sm text-gray-400 transition-colors duration-300 hover:text-gray-500 cursor-pointer flex items-center mb-1";
     if (isOwner) {
       if (cap.sharedSpaces.length === 0) {
         return (
-          <span
-            className={`${baseClassName}`}
+          <p
+            className={baseClassName}
             onClick={() => setIsSharingDialogOpen(true)}
           >
-            <span>Not shared</span>{" "}
-            <FontAwesomeIcon className="size-3 ml-1" icon={faChevronDown} />
-          </span>
+            Not shared{" "}
+            <FontAwesomeIcon className="ml-2 size-2.5" icon={faChevronDown} />
+          </p>
         );
       } else {
         return (
-          <span
-            className={`${baseClassName}`}
+          <p
+            className={baseClassName}
             onClick={() => setIsSharingDialogOpen(true)}
           >
-            <span>Shared</span>{" "}
-            <FontAwesomeIcon className="size-3 ml-1" icon={faChevronDown} />
-          </span>
+            Shared{" "}
+            <FontAwesomeIcon className="ml-1 size-2.5" icon={faChevronDown} />
+          </p>
         );
       }
     } else {
-      return <span className={`${baseClassName} `}>Shared with you</span>;
+      return <p className={baseClassName}>Shared with you</p>;
     }
   };
 
@@ -216,21 +214,8 @@ export const CapCard: React.FC<CapCardProps> = ({
         userSpaces={userSpaces}
         onSharingUpdated={handleSharingUpdated}
       />
-      <div className="flex relative flex-col gap-4 p-4 w-full h-full bg-gray-50 rounded-2xl border-gray-200 transition-colors duration-300 group hover:border-blue-300 border-[1px]">
-        <div className="flex absolute duration-200 group-hover:opacity-100 opacity-0 top-6 right-6 z-[20] flex-col gap-2">
-          <Tooltip disable={isSharingDialogOpen} content="Share to spaces">
-            <Button
-              onClick={() => setIsSharingDialogOpen(true)}
-              className="!size-8 delay-0 hover:opacity-80 rounded-full min-w-fit !p-0"
-              variant="white"
-              size="sm"
-            >
-              <FontAwesomeIcon
-                className="text-gray-400 size-3.5"
-                icon={faUserPlus}
-              />
-            </Button>
-          </Tooltip>
+      <div className="flex relative flex-col gap-4 w-full h-full bg-gray-50 rounded-2xl border-gray-200 transition-colors duration-300 group hover:border-blue-300 border-[1px]">
+        <div className="flex absolute duration-200 group-hover:opacity-100 opacity-0 top-2 right-2 z-[20] flex-col gap-2">
           <Tooltip content="Copy link">
             <Button
               onClick={() =>
@@ -300,7 +285,7 @@ export const CapCard: React.FC<CapCardProps> = ({
             alt={`${cap.name} Thumbnail`}
           />
         </Link>
-        <div className="flex flex-col flex-grow gap-3 w-full cursor-pointer">
+        <div className="flex flex-col flex-grow gap-3 px-4 pb-4 w-full cursor-pointer">
           <div>
             {isEditing ? (
               <textarea
@@ -335,20 +320,20 @@ export const CapCard: React.FC<CapCardProps> = ({
                     onBlur={handleDateBlur}
                     onKeyDown={handleDateKeyDown}
                     autoFocus
-                    className="text-sm truncate leading-[1.25rem] text-gray-400 bg-transparent focus:outline-none"
+                    className="text-sm truncate mt-2 leading-[1.25rem] text-gray-400 bg-transparent focus:outline-none"
                     placeholder="YYYY-MM-DD HH:mm:ss"
                   />
                 </div>
               ) : (
                 <Tooltip content={`Cap created at ${effectiveDate}`}>
-                  <span
-                    className="text-sm truncate leading-[1.25rem] text-gray-400 cursor-pointer flex items-center"
+                  <p
+                    className="text-sm truncate mt-2 leading-[1.25rem] text-gray-400 cursor-pointer flex items-center"
                     onClick={handleDateClick}
                   >
                     {showFullDate
                       ? moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss")
                       : moment(effectiveDate).fromNow()}
-                  </span>
+                  </p>
                 </Tooltip>
               )}
             </p>

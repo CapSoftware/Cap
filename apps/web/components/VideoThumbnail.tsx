@@ -49,7 +49,7 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 
     return (
       <div
-        className={`overflow-hidden relative mx-auto w-full bg-black rounded-2xl max-h-[175px] aspect-video`}
+        className={`overflow-hidden relative mx-auto w-full bg-black rounded-t-xl max-h-[175px] aspect-video`}
       >
         <div className="flex absolute top-0 left-0 z-10 justify-center items-center w-full h-full">
           {failed ? (
