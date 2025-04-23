@@ -45,11 +45,11 @@ impl DisplayImpl {
         let mut minfo = MONITORINFOEXW::default();
 
         minfo.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
-        if !GetMonitorInfoW(self.0, &mut minfo as *mut MONITORINFOEXW as *mut _).as_bool() {
-            return None;
+        unsafe {
+            GetMonitorInfoW(self.0, &mut minfo as *mut MONITORINFOEXW as *mut _)
+                .as_bool()
+                .then(|| minfo.monitorInfo.rcMonitor)
         }
-
-        Some(minfo.monitorInfo.rcMonitor)
     }
 
     pub fn id(&self) -> u32 {
