@@ -1,4 +1,5 @@
 use bytemuck::{Pod, Zeroable};
+use rand::Rng;
 use wgpu::{include_wgsl, util::DeviceExt, TextureFormat};
 
 use crate::frame_pipeline::FramePipeline;
@@ -8,6 +9,14 @@ pub struct BlurLayer;
 impl BlurLayer {
     pub fn render(pipeline: &mut FramePipeline, rect: [f32; 4], blur_radius: f32) {
         let constants = &pipeline.state.constants;
+        let mut rng = rand::rng();
+
+        let noise_seed = [
+            rng.random_range(-1.0..1.0),
+            rng.random_range(-1.0..1.0),
+            rng.random_range(-1.0..1.0),
+            rng.random_range(-1.0..1.0),
+        ];
 
         let horizontal_bind_group = constants.blur_pipeline.bind_group(
             &constants.device,
@@ -16,6 +25,7 @@ impl BlurLayer {
                 rect,
                 direction: [1.0, 0.0],
                 blur_radius,
+                noise_seed,
                 _pad: 0.0,
             }
             .to_buffer(&constants.device),
@@ -27,6 +37,7 @@ impl BlurLayer {
                 rect,
                 direction: [0.0, 1.0],
                 blur_radius,
+                noise_seed,
                 _pad: 0.0,
             }
             .to_buffer(&constants.device),
@@ -64,7 +75,8 @@ pub struct BlurUniforms {
     rect: [f32; 4], // x, y, width, height
     direction: [f32; 2],
     blur_radius: f32,
-    _pad: f32,
+    _pad: f32, // 4 bytes padding for alignment
+    noise_seed: [f32; 4],
 }
 
 impl BlurUniforms {
