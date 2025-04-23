@@ -4,7 +4,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import * as React from "react";
 
 const buttonVariants = cva(
-  "flex items-center justify-center cursor-pointer ring-offset-transparent relative min-w-[100px] button-gradient-border  gap-1 rounded-xl",
+  "flex items-center justify-center cursor-pointer ring-offset-transparent relative min-w-[100px]  gap-1 rounded-xl",
   {
     defaultVariants: {
       variant: "primary",
@@ -13,18 +13,18 @@ const buttonVariants = cva(
     variants: {
       variant: {
         primary:
-          "bg-gradient-to-t from-blue-300 to-[#75A3FF] shadow-[0_0_0_1px] hover:brightness-110 shadow-blue-400 text-gray-50 hover:bg-blue-400 disabled:bg-blue-200",
-        red: "bg-gradient-to-t from-[#772828] to-[#9F3C3C] shadow-[0_0_0_1px] hover:brightness-110 shadow-red-900 text-gray-50 hover:bg-red-400 disabled:bg-red-200",
+          "bg-gradient-to-t button-gradient-border from-blue-300 to-[#75A3FF] shadow-[0_0_0_1px] hover:brightness-110 shadow-blue-400 text-gray-50 hover:bg-blue-400 disabled:bg-blue-200",
+        red: "bg-gradient-to-t button-gradient-border from-[#772828] to-[#9F3C3C] shadow-[0_0_0_1px] hover:brightness-110 shadow-red-900 text-gray-50 hover:bg-red-400 disabled:bg-red-200",
         secondary:
           "bg-blue-400 text-gray-50 hover:bg-blue-500 disabled:bg-blue-200 disabled:text-gray-400 border-blue-300",
         destructive:
-          "bg-red-300 text-gray-50 hover:bg-red-400 disabled:bg-red-200 border-red-300",
+          "bg-red-300 text-gray-50 button-gradient-border hover:bg-red-400 disabled:bg-red-200 border-red-300",
         white:
           "bg-gray-50 text-gray-500 hover:bg-gray-100 border disabled:bg-gray-100 border-gray-200",
         gray: "bg-gray-100 text-gray-500 hover:bg-gray-200 disabled:bg-gray-100 border-gray-200 border",
-        dark: "bg-gradient-to-t from-[#0f0f0f] to-[#404040] shadow-[0_0_0_1px] hover:brightness-110 shadow-[#383838] text-gray-50 hover:bg-[#383838] disabled:bg-[#383838] border-transparent",
+        dark: "bg-gradient-to-t button-gradient-border from-[#0f0f0f] to-[#404040] shadow-[0_0_0_1px] hover:brightness-110 shadow-[#383838] text-gray-50 hover:bg-[#383838] disabled:bg-[#383838] border-transparent",
         radialblue:
-          "text-gray-50 border shadow-[0_0_0_1px] shadow-blue-400 disabled:bg-gray-100 border-0 [background:radial-gradient(90%_100%_at_15%_12%,#9BC4FF_0%,#3588FF_100%)] border-transparent hover:opacity-80",
+          "text-gray-50 border button-gradient-border shadow-[0_0_0_1px] shadow-blue-400 disabled:bg-gray-100 border-0 [background:radial-gradient(90%_100%_at_15%_12%,#9BC4FF_0%,#3588FF_100%)] border-transparent hover:opacity-80",
       },
       size: {
         xs: "text-sm h-[32px] px-[0.5rem] ",

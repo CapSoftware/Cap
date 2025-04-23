@@ -360,6 +360,7 @@ const NormalLogin = ({
           <>
             <Button
               variant="red"
+              type="button"
               className="flex justify-center items-center space-x-2 w-full text-sm"
               onClick={handleGoogleSignIn}
               disabled={loading}

@@ -27,11 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from "@cap/ui";
-import {
-  faChair,
-  faCloudUpload,
-  faUserGroup,
-} from "@fortawesome/free-solid-svg-icons";
+import { faChair, faUserGroup } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { format } from "date-fns";
 import { useRouter } from "next/navigation";
@@ -257,15 +253,15 @@ export const Workspace = () => {
               <CustomDomain />
             </div>
           </div>
-          <div className="flex-1">
-            <div className="space-y-1">
+          {/* <div className="flex-1"> */}
+          {/* <div className="space-y-1">
               <Label htmlFor="icon">Icon</Label>
               <CardDescription className="w-full max-w-[400px]">
                 Upload a custom logo or icon for your workspace and make it
                 unique.
               </CardDescription>
-            </div>
-            <div
+            </div> */}
+          {/* <div
               onClick={() => fileInputRef.current?.click()}
               className="w-full hover:bg-gray-100 transition-all duration-300 gap-3 border-gray-300 mt-4 border px-4 flex items-center justify-center py-[14px] border-dashed rounded-2xl"
             >
@@ -276,8 +272,8 @@ export const Workspace = () => {
               <p className="text-xs text-gray-400 truncate">
                 Choose a file or drag & drop it here
               </p>
-            </div>
-            <Input
+            </div> */}
+          {/* <Input
               className="hidden"
               type="file"
               ref={fileInputRef}
@@ -288,7 +284,7 @@ export const Workspace = () => {
               }}
               name="icon"
             />
-          </div>
+          </div> */}
         </CardContent>
       </div>
 

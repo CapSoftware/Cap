@@ -8,7 +8,7 @@ import { VideoThumbnail } from "@/components/VideoThumbnail";
 import { VideoMetadata } from "@cap/database/types";
 import { clientEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
-import { faLink, faTrash } from "@fortawesome/free-solid-svg-icons";
+import { faLink, faTrash, faUserPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import moment from "moment";
 import Link from "next/link";
@@ -58,7 +58,8 @@ export const CapCard: React.FC<CapCardProps> = ({
   const router = useRouter();
   const { activeSpace } = useSharedContext();
 
-  const handleTitleBlur = async () => {
+  const handleTitleBlur = async (capName: string) => {
+    if (capName === title) return;
     if (!title) {
       setIsEditing(false);
       return;
@@ -78,19 +79,10 @@ export const CapCard: React.FC<CapCardProps> = ({
     }
   };
 
-  const handleTitleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      handleTitleBlur();
-    }
-  };
-
   const displayCount =
     analytics === 0
       ? Math.max(cap.totalComments, cap.totalReactions)
       : analytics;
-
-  const isOwner = userId === cap.ownerId;
 
   const handleSharingUpdated = (updatedSharedSpaces: string[]) => {
     setSharedSpaces(
@@ -165,6 +157,16 @@ export const CapCard: React.FC<CapCardProps> = ({
     }, 2000);
   };
 
+  const handleTitleKeyDown = (
+    e: React.KeyboardEvent<HTMLTextAreaElement>,
+    capName: string
+  ) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleTitleBlur(capName);
+    }
+  };
+
   return (
     <>
       <SharingDialog
@@ -176,7 +178,73 @@ export const CapCard: React.FC<CapCardProps> = ({
         userSpaces={userSpaces}
         onSharingUpdated={handleSharingUpdated}
       />
-      <div className="relative rounded-2xl flex flex-col gap-4 w-full h-full p-4 border-gray-200 bg-gray-50 border-[1px]">
+      <div className="flex relative flex-col gap-4 p-4 w-full h-full bg-gray-50 rounded-2xl border-gray-200 transition-colors duration-300 group hover:border-blue-300 border-[1px]">
+        <div className="flex absolute duration-200 group-hover:opacity-100 opacity-0 top-6 right-6 z-[20] flex-col gap-2">
+          <Tooltip disable={isSharingDialogOpen} content="Share to spaces">
+            <Button
+              onClick={() => setIsSharingDialogOpen(true)}
+              className="!size-8 delay-0 hover:opacity-80 rounded-full min-w-fit !p-0"
+              variant="white"
+              size="sm"
+            >
+              <FontAwesomeIcon
+                className="text-gray-400 size-3.5"
+                icon={faUserPlus}
+              />
+            </Button>
+          </Tooltip>
+          <Tooltip content="Copy link">
+            <Button
+              onClick={() =>
+                handleCopy(
+                  activeSpace?.space.customDomain
+                    ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
+                    : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+                    ? `https://cap.link/${cap.id}`
+                    : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
+                )
+              }
+              className="!size-8 delay-0 hover:opacity-80 rounded-full min-w-fit !p-0"
+              variant="white"
+              size="sm"
+            >
+              {!copyPressed ? (
+                <FontAwesomeIcon
+                  className="text-gray-400 size-4"
+                  icon={faLink}
+                />
+              ) : (
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="24"
+                  height="24"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  className="text-gray-400 size-5 svgpathanimation"
+                >
+                  <path d="M20 6 9 17l-5-5" />
+                </svg>
+              )}
+            </Button>
+          </Tooltip>
+          <Tooltip content="Delete Cap">
+            <Button
+              onClick={() => onDelete(cap.id)}
+              className="!size-8 delay-100 hover:opacity-80 rounded-full min-w-fit !p-0"
+              variant="white"
+              size="sm"
+            >
+              <FontAwesomeIcon
+                className="text-gray-400 size-2.5"
+                icon={faTrash}
+              />
+            </Button>
+          </Tooltip>
+        </div>
         <Link
           className="block group"
           href={
@@ -188,22 +256,23 @@ export const CapCard: React.FC<CapCardProps> = ({
           }
         >
           <VideoThumbnail
+            imageClass="group-hover:opacity-50 transition-opacity duration-200"
             userId={cap.ownerId}
             videoId={cap.id}
             alt={`${cap.name} Thumbnail`}
           />
         </Link>
-        <div className="flex flex-col flex-grow gap-3 w-full">
+        <div className="flex flex-col flex-grow gap-3 w-full cursor-pointer">
           <div>
             {isEditing ? (
               <textarea
                 rows={1}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                onBlur={handleTitleBlur}
-                onKeyDown={handleTitleKeyDown}
+                onBlur={() => handleTitleBlur(cap.name)}
+                onKeyDown={(e) => handleTitleKeyDown(e, cap.name)}
                 autoFocus
-                className="text-md truncate leading-[1.25rem] text-gray-500 font-medium box-border mb-1"
+                className="text-md resize-none truncate w-full border-0 outline-0 leading-[1.25rem] text-gray-500 font-medium mb-1"
               />
             ) : (
               <p
@@ -251,78 +320,6 @@ export const CapCard: React.FC<CapCardProps> = ({
             totalComments={cap.totalComments}
             totalReactions={cap.totalReactions}
           />
-        </div>
-        <div className="flex flex-wrap gap-5 justify-between items-center mt-auto w-full">
-          <Button
-            onClick={() => setIsSharingDialogOpen(true)}
-            className="flex-1 h-10 rounded-xl"
-            variant="dark"
-            size="sm"
-          >
-            <FontAwesomeIcon
-              className="mr-1 text-gray-300 size-4"
-              icon={faLink}
-            />
-            {isOwner
-              ? cap.sharedSpaces.length === 0
-                ? "Not shared"
-                : "Shared"
-              : "Shared with you"}
-          </Button>
-          <div className="flex flex-1 gap-3 justify-end">
-            <Tooltip content="Copy link">
-              <Button
-                onClick={() =>
-                  handleCopy(
-                    activeSpace?.space.customDomain
-                      ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
-                      : clientEnv.NEXT_PUBLIC_IS_CAP &&
-                        NODE_ENV === "production"
-                      ? `https://cap.link/${cap.id}`
-                      : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
-                  )
-                }
-                className="h-10 rounded-xl min-w-fit"
-                variant="white"
-                size="sm"
-              >
-                {!copyPressed ? (
-                  <FontAwesomeIcon
-                    className="mr-1 text-gray-400 size-4"
-                    icon={faLink}
-                  />
-                ) : (
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="24"
-                    height="24"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    className="text-gray-400 size-5 svgpathanimation"
-                  >
-                    <path d="M20 6 9 17l-5-5" />
-                  </svg>
-                )}
-              </Button>
-            </Tooltip>
-            <Tooltip content="Delete Cap">
-              <Button
-                onClick={() => onDelete?.(cap.id)}
-                className="h-10 rounded-xl min-w-fit"
-                variant="white"
-                size="sm"
-              >
-                <FontAwesomeIcon
-                  className="mr-1 text-gray-400 size-4"
-                  icon={faTrash}
-                />
-              </Button>
-            </Tooltip>
-          </div>
         </div>
       </div>
     </>

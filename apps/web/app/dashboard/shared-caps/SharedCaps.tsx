@@ -57,7 +57,7 @@ export const SharedCaps = ({
       }
     >
       <div className="flex flex-col w-full h-full">
-        <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
           {data.map((cap) => (
             <SharedCapCard
               key={cap.id}
