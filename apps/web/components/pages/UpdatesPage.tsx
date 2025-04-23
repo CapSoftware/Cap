@@ -62,7 +62,7 @@ export const UpdatesPage = () => {
                     </div>
                   )}
                   <div className="p-6 space-y-3">
-                    <h3 className="text-xl font-semibold">
+                    <h3 className="text-xl font-semibold text-gray-500">
                       {post.metadata.title}
                     </h3>
                     <div className="flex space-x-2 text-sm">
