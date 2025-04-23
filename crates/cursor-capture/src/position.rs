@@ -76,12 +76,13 @@ impl RelativeCursorPosition {
 
         #[cfg(windows)]
         let (x, y) = {
-            let display_bounds = self.display().raw_handle().bounds();
+            todo!();
+            // let display_bounds = self.display().raw_handle().bounds();
 
-            (
-                self.x as f32 / (display_bounds.right - display_bounds.left) as f32,
-                self.y as f32 / (display_bounds.bottom - display_bounds.top) as f32,
-            )
+            // (
+            //     self.x as f32 / (display_bounds.right - display_bounds.left) as f32,
+            //     self.y as f32 / (display_bounds.bottom - display_bounds.top) as f32,
+            // )
         };
 
         NormalizedCursorPosition {
