@@ -707,8 +707,6 @@ async fn create_segment_pipeline(
 
     let (mut pipeline, pipeline_done_rx) = pipeline_builder.build().await?;
 
-    dbg!(&screen.bounds);
-
     let cursor = custom_cursor_capture.then(move || {
         let cursor = spawn_cursor_recorder(
             screen.bounds.clone(),
