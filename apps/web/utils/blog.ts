@@ -108,18 +108,36 @@ function getMDXData(dir: string): BlogPost[] {
 
 export function getManualBlogPosts(): BlogPost[] {
   try {
+    console.log("Current working directory:", process.cwd());
+    
     const possiblePaths = [
+      "/var/task/apps/web/content/blog-content",
       path.join(process.cwd(), "content/blog-content"),
       path.join(process.cwd(), "apps/web/content/blog-content"),
+      path.join(process.cwd(), "/var/task/content/blog-content"),
+      path.join(process.cwd(), "/var/task/apps/web/content/blog-content"),
       path.join(process.cwd(), "../content/blog-content"),
-      path.join(process.cwd(), "../../content/blog-content")
+      path.join(process.cwd(), "../../content/blog-content"),
+      path.join(process.cwd(), "public/content/blog-content"),
+      path.join(process.env.NEXT_PUBLIC_ROOT_DIR || "", "content/blog-content"),
+      "/var/task/content/blog-content",
+      path.join(process.cwd(), ".next/server/app/content/blog-content"),
+      path.join(process.cwd(), ".next/server/content/blog-content")
     ];
+    
+    console.log("Checking paths:", possiblePaths);
     
     let blogContentDir = "";
     for (const pathToCheck of possiblePaths) {
-      if (fs.existsSync(pathToCheck)) {
-        blogContentDir = pathToCheck;
-        break;
+      console.log("Checking path:", pathToCheck);
+      try {
+        if (fs.existsSync(pathToCheck)) {
+          blogContentDir = pathToCheck;
+          console.log("Found valid blog content directory:", blogContentDir);
+          break;
+        }
+      } catch (error) {
+        console.log("Error checking path:", pathToCheck, error);
       }
     }
     
