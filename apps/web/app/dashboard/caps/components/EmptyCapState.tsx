@@ -1,31 +1,34 @@
 import { Button } from "@cap/ui";
+import { useRive } from "@rive-app/react-canvas";
 
 interface EmptyCapStateProps {
   userName?: string;
 }
 
 export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
+  const { rive, RiveComponent: EmptyCap } = useRive({
+    src: "/rive/capsempty.riv",
+    artboard: "empty",
+    autoplay: true,
+  });
   return (
-    <div className="w-full flex flex-col items-center justify-center">
-      <div className="w-full max-w-md mx-auto">
-        <img
-          className="w-full h-auto"
-          src="/illustrations/person-microphone.svg"
-          alt="Person using microphone"
-        />
-      </div>
-      <div className="text-center pb-[30px]">
-        <h1 className="text-2xl font-semibold mb-3">
-          <span className="block">Hey{userName ? `, ${userName}` : ""}!</span>
-          <span className="block">Record your first Cap.</span>
-        </h1>
-        <p className="text-xl max-w-md">
-          Craft your narrative with a Cap—get projects done quicker.
-        </p>
-        <div className="flex justify-center mt-8">
+    <div className="flex flex-col justify-center items-center w-full">
+      <div className="flex flex-col gap-3 items-center text-center">
+        <div className="mx-auto w-full mb-10 max-w-[450px] flex justify-center items-center">
+          <EmptyCap className="h-[150px] w-[400px]" />
+        </div>
+        <div className="flex flex-col items-center">
+          <p className="mb-1 text-xl font-semibold text-gray-500">
+            Hey{userName ? ` ${userName}` : ""}! Record your first Cap
+          </p>
+          <p className="max-w-md text-gray-400 text-md">
+            Craft your narrative with - get projects done quicker
+          </p>
+        </div>
+        <div className="flex justify-center mt-4">
           <Button
-            href="/download"
             size="lg"
+            href="/download"
             className="relative"
             variant="primary"
           >

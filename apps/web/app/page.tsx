@@ -1,12 +1,12 @@
 import { HomePage } from "@/components/pages/HomePage";
-import { authOptions } from "@cap/database/auth/auth-options";
-import { getServerSession } from "next-auth/next";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 export default async function Home() {
-  const session = await getServerSession(authOptions);
+  const cookieStore = cookies();
+  const sessionCookie = cookieStore.get("next-auth.session-token");
 
-  if (session?.user) {
+  if (sessionCookie) {
     redirect("/dashboard/caps");
   }
 

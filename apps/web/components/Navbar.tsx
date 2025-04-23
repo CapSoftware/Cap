@@ -165,16 +165,16 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
             <Button
               variant="white"
               href="https://github.com/CapSoftware/Cap"
-              size="md"
+              size="sm"
               className="w-full font-medium sm:w-auto"
-              icon={<FontAwesomeIcon icon={faGithub} />}
+              icon={<FontAwesomeIcon className="size-4" icon={faGithub} />}
             >
               Github
             </Button>
             <Button
               variant="dark"
               href={auth === false ? "/login" : "/dashboard"}
-              size="md"
+              size="sm"
               className="w-full font-medium sm:w-auto"
             >
               {auth === false ? "Login" : "Dashboard"}

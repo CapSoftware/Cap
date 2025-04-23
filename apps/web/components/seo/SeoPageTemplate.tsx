@@ -137,7 +137,7 @@ export const SeoPageTemplate = ({
               variant="radialblue"
               href="/download"
               size="lg"
-              className="relative z-[20] w-full font-medium text-md sm:w-auto shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all duration-300"
+              className="relative z-[20] w-full font-medium text-md sm:w-auto"
             >
               {content.cta.buttonText}
             </Button>
@@ -664,7 +664,7 @@ export const SeoPageTemplate = ({
                 variant="white"
                 href="/pricing"
                 size="lg"
-                className="w-full sm:w-auto shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all duration-300 font-medium px-8 py-3"
+                className="w-full sm:w-auto transition-all duration-300 font-medium px-8 py-3"
               >
                 {content.cta.buttonText}
               </Button>

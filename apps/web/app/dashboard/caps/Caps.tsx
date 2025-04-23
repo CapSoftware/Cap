@@ -1,13 +1,14 @@
 "use client";
-import { useRouter, useSearchParams } from "next/navigation";
-import toast from "react-hot-toast";
-import { useEffect, useState } from "react";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { CapCard } from "./components/CapCard";
-import { EmptyCapState } from "./components/EmptyCapState";
-import { CapPagination } from "./components/CapPagination";
 import { apiClient } from "@/utils/web-api";
 import { VideoMetadata } from "@cap/database/types";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
+import toast from "react-hot-toast";
+import DashboardInner from "../_components/DashboardInner";
+import { CapCard } from "./components/CapCard";
+import { CapPagination } from "./components/CapPagination";
+import { EmptyCapState } from "./components/EmptyCapState";
 
 type VideoData = {
   id: string;
@@ -30,11 +31,11 @@ export const Caps = ({
   count: number;
   userSpaces: { id: string; name: string }[];
 }) => {
-  const { refresh, replace } = useRouter();
+  const { refresh } = useRouter();
   const params = useSearchParams();
   const page = Number(params.get("page")) || 1;
   const [analytics, setAnalytics] = useState<Record<string, number>>({});
-  const { user, activeSpace } = useSharedContext();
+  const { user } = useSharedContext();
   const limit = 15;
   const totalPages = Math.ceil(count / limit);
 
@@ -80,35 +81,30 @@ export const Caps = ({
   };
 
   return (
-    <div className="flex flex-col min-h-[calc(100vh-30px)] h-full">
-      <div className="mb-3">
-        <h1 className="text-3xl font-medium">My Caps</h1>
-      </div>
-      <div className="flex-grow flex inner">
-        {data.length === 0 ? (
-          <EmptyCapState userName={user?.name || ""} />
-        ) : (
-          <div className="flex flex-col w-full h-full">
-            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
-              {data.map((cap) => (
-                <CapCard
-                  key={cap.id}
-                  cap={cap}
-                  analytics={analytics[cap.id] || 0}
-                  onDelete={deleteCap}
-                  userId={user?.id}
-                  userSpaces={userSpaces}
-                />
-              ))}
-            </div>
-            {(data.length > limit || data.length === limit || page !== 1) && (
-              <div className="mt-4">
-                <CapPagination currentPage={page} totalPages={totalPages} />
-              </div>
-            )}
+    <DashboardInner
+      title="My Caps"
+      emptyCondition={data.length === 0}
+      emptyComponent={<EmptyCapState userName={user?.name || ""} />}
+    >
+      <div className="flex flex-col w-full">
+        <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+          {data.map((cap) => (
+            <CapCard
+              key={cap.id}
+              cap={cap}
+              analytics={analytics[cap.id] || 0}
+              onDelete={deleteCap}
+              userId={user?.id}
+              userSpaces={userSpaces}
+            />
+          ))}
+        </div>
+        {(data.length > limit || data.length === limit || page !== 1) && (
+          <div className="mt-10">
+            <CapPagination currentPage={page} totalPages={totalPages} />
           </div>
         )}
       </div>
-    </div>
+    </DashboardInner>
   );
 };
