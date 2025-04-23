@@ -2,7 +2,7 @@
 
 import { getSpace } from "@/actions/workspace/get-space";
 import { NODE_ENV } from "@cap/env";
-import { Button, Input, Label, LogoBadge } from "@cap/ui";
+import { Button, Input, LogoBadge } from "@cap/ui";
 import { faArrowLeft } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { AnimatePresence, motion } from "framer-motion";
@@ -271,15 +271,13 @@ const LoginWithSSO = ({
   return (
     <>
       <form onSubmit={handleSpaceLookup} className="relative space-y-2">
-        <div>
-          <Label htmlFor="spaceId">Space ID</Label>
-          <Input
-            id="spaceId"
-            value={spaceId}
-            onChange={(e) => setSpaceId(e.target.value)}
-            className="w-full max-w-full"
-          />
-        </div>
+        <Input
+          id="spaceId"
+          placeholder="Enter your Space ID..."
+          value={spaceId}
+          onChange={(e) => setSpaceId(e.target.value)}
+          className="w-full max-w-full"
+        />
         {spaceName && (
           <p className="text-sm text-gray-500">Signing in to: {spaceName}</p>
         )}
