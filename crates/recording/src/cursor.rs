@@ -128,7 +128,6 @@ pub fn spawn_cursor_recorder(
                 #[cfg(target_os = "macos")]
                 let position = {
                     let position = RawCursorPosition::get();
-                    dbg!(position);
 
                     if position != last_position {
                         last_position = position;

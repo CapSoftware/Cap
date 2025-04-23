@@ -23,7 +23,7 @@ impl RawCursorPosition {
     }
 }
 
-// relative to display using bottom-left origin
+// relative to display using top-left origin
 #[derive(Clone, Copy)]
 pub struct RelativeCursorPosition {
     pub(crate) x: i32,
@@ -35,15 +35,12 @@ impl RelativeCursorPosition {
     pub fn from_raw(raw: RawCursorPosition, display: Display) -> Self {
         #[cfg(target_os = "macos")]
         {
-            let primary_display = cap_displays::DisplayImpl::primary();
-
             let raw_display = display.raw_handle().inner();
             let display_bounds = raw_display.bounds();
 
             return Self {
                 x: raw.x - display_bounds.origin.x as i32,
-                y: (primary_display.inner().pixels_high() - 1) as i32
-                    - (raw.y - display_bounds.origin.y as i32),
+                y: raw.y - display_bounds.origin.y as i32,
                 display,
             };
         }

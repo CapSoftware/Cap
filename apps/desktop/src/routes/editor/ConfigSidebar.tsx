@@ -1639,7 +1639,6 @@ function ZoomSegmentConfig(props: {
           variant="danger"
           onClick={() => {
             batch(() => {
-              setEditorState("timeline", "selection", null);
               setProject(
                 "timeline",
                 "zoomSegments",
@@ -1648,6 +1647,7 @@ function ZoomSegmentConfig(props: {
                   return s.splice(props.segmentIndex, 1);
                 })
               );
+              setEditorState("timeline", "selection", null);
             });
           }}
           leftIcon={<IconCapTrash />}
