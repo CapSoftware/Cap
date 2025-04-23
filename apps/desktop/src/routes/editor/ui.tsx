@@ -214,16 +214,13 @@ export const Dialog = {
       <div
         class={cx(
           "h-[4rem] px-[1rem] gap-3 flex flex-row items-center",
-          props.leftFooterContent ? "justify-between" : "justify-end",
+          props.leftFooterContent ? "justify-between" : "justify-center",
           props.class
         )}
         {...props}
       >
         {props.leftFooterContent}
-        <div class="flex flex-row gap-3 items-center">
-          {props.close ?? <Dialog.CloseButton />}
-          {props.children}
-        </div>
+        <div class="flex flex-row gap-3 items-center">{props.children}</div>
       </div>
     );
   },
