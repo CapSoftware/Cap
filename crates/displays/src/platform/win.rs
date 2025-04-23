@@ -41,7 +41,7 @@ impl DisplayImpl {
         list
     }
 
-    pub fn bounds(&self) -> RECT {
+    pub fn bounds(&self) -> Option<RECT> {
         let mut minfo = MONITORINFOEXW::default();
 
         minfo.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
