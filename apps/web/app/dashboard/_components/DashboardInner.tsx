@@ -97,7 +97,7 @@ const User = () => {
                 </span>
               </CommandItem>
             </Link>
-            <Link href="/dashboard/settings">
+            <Link href="/dashboard/settings/account">
               <CommandItem
                 className="px-2 py-2 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-100 group"
                 onSelect={() => {

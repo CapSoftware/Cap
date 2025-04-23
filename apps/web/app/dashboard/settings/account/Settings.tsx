@@ -45,7 +45,7 @@ export const Settings = ({
 
   return (
     <form onSubmit={handleSubmit}>
-      <div className="flex flex-col flex-wrap gap-4 w-full md:flex-row">
+      <div className="flex flex-col flex-wrap gap-6 w-full md:flex-row">
         <Card className="flex-1 space-y-1">
           <CardTitle>Your name</CardTitle>
           <CardDescription>
