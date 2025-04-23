@@ -58,7 +58,7 @@ export const AdminDesktopNav = () => {
         <div className="flex flex-col w-full max-w-[220px] mx-auto">
           <div className="flex overflow-hidden flex-col flex-grow h-full">
             <div className="flex flex-col flex-shrink-0 items-start px-3 pt-5 w-full h-full justify-top">
-              <div className="flex justify-center items-center mb-3.5 w-full truncate min-h-8">
+              <div className="flex justify-start items-center mb-3.5 w-full truncate min-h-8">
                 <Link href="/dashboard">
                   <Logo
                     className={clsx(
