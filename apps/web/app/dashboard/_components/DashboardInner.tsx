@@ -39,7 +39,7 @@ export default function DashboardInner({
       {/* Top Bar */}
       <div
         className={clsx(
-          "flex sticky z-10 justify-between items-center px-5 mt-10 w-full h-16 bg-gray-50 border-b border-gray-200 lg:border-b-0 lg:pl-0 lg:pr-5 lg:top-0 lg:relative top-[64px] lg:mt-0 lg:h-8"
+          "flex sticky z-50 justify-between items-center px-5 mt-10 w-full h-16 bg-gray-50 border-b border-gray-200 lg:border-b-0 lg:pl-0 lg:pr-5 lg:top-0 lg:relative top-[64px] lg:mt-0 lg:h-8"
         )}
       >
         <p className="relative text-xl text-gray-500 lg:text-2xl">{title}</p>

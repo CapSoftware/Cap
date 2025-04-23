@@ -20,7 +20,7 @@ export const AdminMobileNav = () => {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="flex fixed inset-0 z-50 lg:hidden bg-gray-200/50"
+            className="flex fixed inset-0 z-[1000000] lg:hidden bg-gray-200/50"
           >
             <motion.div
               ref={sidebarRef}
@@ -44,7 +44,7 @@ export const AdminMobileNav = () => {
           </motion.div>
         )}
       </AnimatePresence>
-      <div className="flex fixed z-10 justify-between w-full h-16 bg-gray-50 border-b lg:border-none lg:hidden">
+      <div className="flex fixed z-50 justify-between w-full h-16 bg-gray-50 border-b lg:border-none lg:hidden">
         <div className="flex flex-shrink-0 items-center px-4 h-full lg:hidden">
           <Link className="block" href="/dashboard">
             <LogoBadge className="block w-auto h-8" />
