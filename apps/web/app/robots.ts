@@ -25,6 +25,7 @@ export default function robots(): MetadataRoute.Robots {
           "/invite",
           "/onboarding",
           "/record",
+          "/home", // Explicitly disallow the /home route
         ],
       },
     ],
