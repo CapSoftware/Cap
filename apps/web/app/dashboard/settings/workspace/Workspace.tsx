@@ -148,7 +148,7 @@ export const Workspace = () => {
   };
 
   return (
-    <form onSubmit={handleSubmit}>
+    <form className="flex flex-col gap-6" onSubmit={handleSubmit}>
       {isOwner === false && (
         <Card>
           <CardTitle>*Only the owner can make changes</CardTitle>
@@ -183,7 +183,7 @@ export const Workspace = () => {
         </Card>
       </div>
 
-      <div className="flex flex-col flex-1 gap-6 justify-center items-stretch mt-6 xl:flex-row">
+      <div className="flex flex-col flex-1 gap-6 justify-center items-stretch xl:flex-row">
         <Card className="flex flex-col flex-1 justify-between w-full">
           <div className="flex flex-col gap-6 justify-center lg:flex-row">
             <div className="flex-1 w-full">
@@ -289,7 +289,7 @@ export const Workspace = () => {
         </Card>
       </div>
 
-      <Card className="mt-6">
+      <Card>
         <div className="flex flex-wrap gap-6 justify-between items-center w-full">
           <CardHeader>
             <CardTitle>Members</CardTitle>
@@ -393,7 +393,7 @@ export const Workspace = () => {
           </TableBody>
         </Table>
       </Card>
-      <Card className="flex flex-wrap gap-6 justify-between items-center mt-6 w-full">
+      <Card className="flex flex-wrap gap-6 justify-between items-center w-full">
         <CardHeader>
           <CardTitle>View and manage your billing details</CardTitle>
           <CardDescription>
