@@ -94,6 +94,7 @@ impl Playback {
                             frame_number,
                             fps,
                             resolution_base,
+                            None, // Some("Playback".into()),
                         );
 
                         self.renderer

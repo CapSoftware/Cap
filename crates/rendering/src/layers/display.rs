@@ -11,14 +11,14 @@ impl DisplayLayer {
         let frame_size = pipeline.state.constants.options.screen_size;
 
         constants.queue.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &constants.screen_frame.0,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             &segment_frames.screen_frame,
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(constants.options.screen_size.x * 4),
                 rows_per_image: None,

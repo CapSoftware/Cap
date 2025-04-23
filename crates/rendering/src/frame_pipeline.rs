@@ -3,7 +3,7 @@ use std::time::Instant;
 use futures_intrusive::channel::shared::oneshot_channel;
 use wgpu::{hal::Device, COPY_BYTES_PER_ROW_ALIGNMENT};
 
-use crate::{get_either, ProjectUniforms, RenderVideoConstants, RenderingError};
+use crate::{get_either, ProjectUniforms, RenderVideoConstants, RenderVideoState, RenderingError};
 
 pub struct FramePipeline<'a, 'b> {
     pub state: &'a mut FramePipelineState<'b>,
@@ -12,6 +12,7 @@ pub struct FramePipeline<'a, 'b> {
 
 pub struct FramePipelineState<'a> {
     pub constants: &'a RenderVideoConstants,
+    pub state: &'a mut RenderVideoState,
     pub uniforms: &'a ProjectUniforms,
     pub textures: &'a (wgpu::Texture, wgpu::Texture),
     pub texture_views: (wgpu::TextureView, wgpu::TextureView),
@@ -21,6 +22,7 @@ pub struct FramePipelineState<'a> {
 impl<'a> FramePipelineState<'a> {
     pub fn new(
         constants: &'a RenderVideoConstants,
+        state: &'a mut RenderVideoState,
         uniforms: &'a ProjectUniforms,
         textures: &'a (wgpu::Texture, wgpu::Texture),
     ) -> Self {
@@ -35,6 +37,7 @@ impl<'a> FramePipelineState<'a> {
 
         Self {
             constants,
+            state,
             uniforms,
             textures,
             texture_views,
@@ -158,15 +161,15 @@ impl FramePipelineEncoder {
         );
 
         encoder.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: state.get_current_texture(),
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::ImageCopyBuffer {
+            wgpu::TexelCopyBufferInfo {
                 buffer: &output_buffer,
-                layout: wgpu::ImageDataLayout {
+                layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_bytes_per_row),
                     rows_per_image: Some(state.uniforms.output_size.1),

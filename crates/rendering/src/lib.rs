@@ -9,13 +9,15 @@ use decoder::{spawn_decoder, AsyncVideoDecoderHandle};
 use frame_pipeline::{FramePipeline, FramePipelineEncoder, FramePipelineState};
 use futures::future::OptionFuture;
 use futures::FutureExt;
+use glyphon::{Cache, FontSystem, SwashCache, TextAtlas, TextRenderer, Viewport};
 use layers::{
     Background, BackgroundBlurPipeline, BackgroundLayer, CameraLayer, CursorLayer, DisplayLayer,
-    GradientOrColorPipeline, ImageBackgroundPipeline,
+    GradientOrColorPipeline, ImageBackgroundPipeline, TextBackgroundPipeline, TextLayer,
 };
 use specta::Type;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc;
+use wgpu::MultisampleState;
 
 use image::GenericImageView;
 use std::{path::PathBuf, time::Instant};
@@ -31,6 +33,7 @@ mod zoom;
 
 pub use coord::*;
 pub use decoder::DecodedFrame;
+pub use layers::Text;
 pub use project_recordings::{ProjectRecordings, SegmentRecordings, Video};
 
 use zoom::*;
@@ -165,6 +168,10 @@ pub enum RenderingError {
     ChannelSendFrameFailed(#[from] mpsc::error::SendError<(RenderedFrame, u32)>),
     #[error("Failed to load image: {0}")]
     ImageLoadError(String),
+    #[error("Failed to prepare text renderer: {0}")]
+    PrepareTextRendererError(#[from] glyphon::PrepareError),
+    #[error("Failed to render text: {0}")]
+    RenderTextError(#[from] glyphon::RenderError),
 }
 
 pub struct RenderSegment {
@@ -184,7 +191,7 @@ pub async fn render_video_to_channel(
     recordings: &ProjectRecordings,
 ) -> Result<(), RenderingError> {
     let constants = RenderVideoConstants::new(options, recording_meta, meta).await?;
-    // let recordings = ProjectRecordings::new(&recording_meta.project_path, meta);
+    let mut state = RenderVideoState::new(&constants);
 
     ffmpeg::init().unwrap();
 
@@ -202,7 +209,7 @@ pub async fn render_video_to_channel(
     let mut frame_number = 0;
     let background = project.background.source.clone();
 
-    let mut frame_renderer = FrameRenderer::new(&constants);
+    let mut frame_renderer = FrameRenderer::new(&constants, &mut state);
 
     loop {
         if frame_number >= total_frames {
@@ -228,8 +235,14 @@ pub async fn render_video_to_channel(
             .get_frames(segment_time as f32, !project.camera.hide)
             .await
         {
-            let uniforms =
-                ProjectUniforms::new(&constants, &project, frame_number, fps, resolution_base);
+            let uniforms = ProjectUniforms::new(
+                &constants,
+                &project,
+                frame_number,
+                fps,
+                resolution_base,
+                None,
+            );
 
             let frame = frame_renderer
                 .render(segment_frames, uniforms, &segment.cursor)
@@ -314,9 +327,11 @@ pub struct RenderVideoConstants {
     image_background_pipeline: ImageBackgroundPipeline,
     pub background_blur_pipeline: BackgroundBlurPipeline,
     background_textures: std::sync::Arc<tokio::sync::RwLock<HashMap<String, wgpu::Texture>>>,
+    text_background_pipeline: TextBackgroundPipeline,
     screen_frame: (wgpu::Texture, wgpu::TextureView),
     camera_frame: Option<(wgpu::Texture, wgpu::TextureView)>,
     cursor_layer: CursorLayer,
+    text_cache: Cache,
 }
 
 impl RenderVideoConstants {
@@ -326,7 +341,7 @@ impl RenderVideoConstants {
         meta: &StudioRecordingMeta,
     ) -> Result<Self, RenderingError> {
         println!("Initializing wgpu...");
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions::default())
             .await
@@ -347,6 +362,8 @@ impl RenderVideoConstants {
 
         let image_background_pipeline = ImageBackgroundPipeline::new(&device);
         let background_textures = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+
+        let text_background_pipeline = TextBackgroundPipeline::new(&device);
 
         let background_blur_pipeline = BackgroundBlurPipeline::new(&device);
 
@@ -400,6 +417,8 @@ impl RenderVideoConstants {
             (texture, texture_view)
         });
 
+        let text_cache = Cache::new(&device);
+
         Ok(Self {
             _instance: instance,
             _adapter: adapter,
@@ -412,9 +431,11 @@ impl RenderVideoConstants {
             cursor_textures,
             image_background_pipeline,
             background_textures,
+            text_background_pipeline,
             screen_frame,
             camera_frame,
             background_blur_pipeline,
+            text_cache,
         })
     }
 
@@ -461,14 +482,14 @@ impl RenderVideoConstants {
                     });
 
                     queue.write_texture(
-                        wgpu::ImageCopyTexture {
+                        wgpu::TexelCopyTextureInfo {
                             texture: &texture,
                             mip_level: 0,
                             origin: wgpu::Origin3d::ZERO,
                             aspect: wgpu::TextureAspect::All,
                         },
                         &rgba,
-                        wgpu::ImageDataLayout {
+                        wgpu::TexelCopyBufferLayout {
                             offset: 0,
                             bytes_per_row: Some(4 * dimensions.0),
                             rows_per_image: None,
@@ -509,6 +530,41 @@ impl RenderVideoConstants {
     }
 }
 
+pub struct RenderVideoState {
+    viewport: Viewport,
+    font_system: FontSystem,
+    swash_cache: SwashCache,
+    atlas: TextAtlas,
+    text_renderer: TextRenderer,
+}
+
+impl RenderVideoState {
+    pub fn new(constants: &RenderVideoConstants) -> Self {
+        let viewport = Viewport::new(&constants.device, &constants.text_cache);
+
+        let mut atlas = TextAtlas::new(
+            &constants.device,
+            &constants.queue,
+            &constants.text_cache,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+        );
+        let text_renderer = TextRenderer::new(
+            &mut atlas,
+            &constants.device,
+            MultisampleState::default(),
+            None,
+        );
+
+        Self {
+            viewport,
+            font_system: FontSystem::new(),
+            swash_cache: SwashCache::new(),
+            atlas,
+            text_renderer,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ProjectUniforms {
     pub output_size: (u32, u32),
@@ -518,6 +574,7 @@ pub struct ProjectUniforms {
     pub project: ProjectConfiguration,
     pub zoom: InterpolatedZoom,
     pub resolution_base: XY<u32>,
+    pub caption_text: Option<Text>,
 }
 
 #[derive(Debug, Clone)]
@@ -684,6 +741,7 @@ impl ProjectUniforms {
         frame_number: u32,
         fps: u32,
         resolution_base: XY<u32>,
+        caption_text: Option<Text>,
     ) -> Self {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project, resolution_base);
@@ -885,6 +943,7 @@ impl ProjectUniforms {
             camera,
             project: project.clone(),
             zoom,
+            caption_text,
         }
     }
 }
@@ -906,14 +965,16 @@ pub struct DecodedSegmentFrames {
 
 pub struct FrameRenderer<'a> {
     constants: &'a RenderVideoConstants,
+    state: &'a mut RenderVideoState,
     output_texture_desc: Option<wgpu::TextureDescriptor<'static>>,
     output_textures: Option<(wgpu::Texture, wgpu::Texture)>,
 }
 
 impl<'a> FrameRenderer<'a> {
-    pub fn new(constants: &'a RenderVideoConstants) -> Self {
+    pub fn new(constants: &'a RenderVideoConstants, state: &'a mut RenderVideoState) -> Self {
         Self {
             constants,
+            state,
             output_texture_desc: None,
             output_textures: None,
         }
@@ -958,7 +1019,8 @@ impl<'a> FrameRenderer<'a> {
         self.update_output_textures(uniforms.output_size.0, uniforms.output_size.1);
 
         produce_frame(
-            &self.constants,
+            self.constants,
+            &mut self.state,
             segment_frames,
             uniforms,
             self.output_textures.as_ref().unwrap(),
@@ -972,6 +1034,7 @@ impl<'a> FrameRenderer<'a> {
 // https://github.com/gfx-rs/wgpu/wiki/Encapsulating-Graphics-Work
 async fn produce_frame(
     constants: &RenderVideoConstants,
+    state: &mut RenderVideoState,
     segment_frames: DecodedSegmentFrames,
     uniforms: ProjectUniforms,
     textures: &(wgpu::Texture, wgpu::Texture),
@@ -979,7 +1042,7 @@ async fn produce_frame(
 ) -> Result<RenderedFrame, RenderingError> {
     let background = Background::from(uniforms.project.background.source.clone());
 
-    let mut state = FramePipelineState::new(constants, &uniforms, textures);
+    let mut state = FramePipelineState::new(constants, state, &uniforms, textures);
     let mut encoder = FramePipelineEncoder::new(&state);
 
     {
@@ -1019,6 +1082,8 @@ async fn produce_frame(
                 (texture, texture_view),
             );
         }
+
+        TextLayer::render(&mut pipeline)?;
     }
 
     let padded_bytes_per_row = encoder.padded_bytes_per_row(&state);
@@ -1052,17 +1117,16 @@ pub fn create_shader_render_pipeline(
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
-            entry_point: "vs_main",
+            entry_point: Some("vs_main"),
             buffers: &[],
             compilation_options: wgpu::PipelineCompilationOptions {
                 constants: &empty_constants,
                 zero_initialize_workgroup_memory: false,
-                vertex_pulling_transform: false,
             },
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: "fs_main",
+            entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba8UnormSrgb,
                 blend: Some(wgpu::BlendState::REPLACE),
@@ -1071,7 +1135,6 @@ pub fn create_shader_render_pipeline(
             compilation_options: wgpu::PipelineCompilationOptions {
                 constants: &empty_constants,
                 zero_initialize_workgroup_memory: false,
-                vertex_pulling_transform: false,
             },
         }),
         primitive: wgpu::PrimitiveState {
