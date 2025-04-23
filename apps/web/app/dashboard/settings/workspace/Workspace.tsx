@@ -374,7 +374,7 @@ export const Workspace = () => {
                   <TableCell>
                     <Button
                       type="button"
-                      size="sm"
+                      size="xs"
                       variant="destructive"
                       onClick={() => {
                         if (isOwner) {
