@@ -2,36 +2,45 @@
 
 import {
   Button,
-  LogoBadge,
   Card,
   CardDescription,
-  CardTitle,
-  CardHeader,
-  CardContent,
   CardFooter,
+  CardHeader,
+  CardTitle,
   Switch,
 } from "@cap/ui";
-import { Check, Construction } from "lucide-react";
-import { useState, useEffect } from "react";
 import { getProPlanId } from "@cap/utils";
-import toast from "react-hot-toast";
+import { Check } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
+import toast from "react-hot-toast";
 import { SimplePlans } from "../text/SimplePlans";
+
+const QuantityButton = ({
+  onClick,
+  children,
+}: {
+  onClick: () => void;
+  children: React.ReactNode;
+}) => {
+  return (
+    <button
+      onClick={onClick}
+      className="px-2 py-0 h-6 w-6 bg-gray-200 rounded-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400 flex items-center justify-center"
+    >
+      {children}
+    </button>
+  );
+};
 
 export const PricingPage = () => {
   const [proLoading, setProLoading] = useState(false);
   const [commercialLoading, setCommercialLoading] = useState(false);
-  const [selfHostedLoading, setSelfHostedLoading] = useState(false);
   const [isAnnual, setIsAnnual] = useState(true);
   const [isCommercialAnnual, setIsCommercialAnnual] = useState(false);
-  const [isSelfHostedAnnual, setIsSelfHostedAnnual] = useState(true);
   const [proQuantity, setProQuantity] = useState(1);
   const [licenseQuantity, setLicenseQuantity] = useState(1);
-  const [selfHostedQuantity, setSelfHostedQuantity] = useState(10);
   const [initialRender, setInitialRender] = useState(true);
-  const [deploymentType, setDeploymentType] = useState<"cloud" | "selfhosted">(
-    "cloud"
-  );
   const { push } = useRouter();
   const searchParams = useSearchParams();
 
@@ -58,14 +67,8 @@ export const PricingPage = () => {
       setInitialRender(false);
       const planFromUrl = searchParams.get("plan");
       const next = searchParams.get("next");
-      const typeFromUrl = searchParams.get("type");
       const pendingPriceId = localStorage.getItem("pendingPriceId");
       const pendingProQuantity = localStorage.getItem("pendingQuantity");
-
-      // Set deployment type based on URL parameter
-      if (typeFromUrl === "selfhosted") {
-        setDeploymentType("selfhosted");
-      }
 
       if (pendingPriceId && pendingProQuantity) {
         localStorage.removeItem("pendingPriceId");
@@ -157,61 +160,6 @@ export const PricingPage = () => {
     }
   };
 
-  const openSelfHostedCheckout = async () => {
-    setSelfHostedLoading(true);
-    try {
-      const requestData = {
-        type: isSelfHostedAnnual ? "yearly" : "monthly",
-        quantity: selfHostedQuantity,
-      };
-
-      console.log("Self-hosted checkout request data:", requestData);
-      console.log(
-        "Self-hosted checkout JSON payload:",
-        JSON.stringify(requestData)
-      );
-
-      const response = await fetch(`/api/selfhosted/checkout`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestData),
-      });
-
-      console.log("Self-hosted checkout response status:", response.status);
-
-      // Try to get the raw response text first
-      const responseText = await response.text();
-      console.log("Self-hosted checkout raw response:", responseText);
-
-      // Then parse it as JSON if possible
-      let data;
-      try {
-        data = JSON.parse(responseText);
-        console.log("Self-hosted checkout parsed response data:", data);
-      } catch (parseError) {
-        console.error("Error parsing response JSON:", parseError);
-        toast.error("Invalid response format from server");
-        setSelfHostedLoading(false);
-        return;
-      }
-
-      if (response.status === 200) {
-        console.log("Redirecting to:", data.url);
-        window.location.href = data.url;
-      } else {
-        console.error("Error response from server:", data.message);
-        window.alert(data.message);
-      }
-    } catch (error) {
-      console.error("Error during self-hosted checkout:", error);
-      toast.error("Failed to start checkout process");
-    } finally {
-      setSelfHostedLoading(false);
-    }
-  };
-
   const proList = [
     {
       text: "Connect your own domain to Cap",
@@ -270,45 +218,6 @@ export const PricingPage = () => {
     },
   ];
 
-  const selfHostedList = [
-    {
-      text: "Self-hosted on your own infrastructure",
-      available: true,
-    },
-    {
-      text: "Full control over your data",
-      available: true,
-    },
-    {
-      text: "White labeling with custom branding",
-      available: true,
-    },
-    {
-      text: "Customizable UI and domain",
-      available: true,
-    },
-    {
-      text: "Desktop app commercial license included",
-      available: true,
-    },
-    {
-      text: "Advanced teams features",
-      available: true,
-    },
-    {
-      text: "Custom branding options",
-      available: true,
-    },
-    {
-      text: "Priority support",
-      available: true,
-    },
-    {
-      text: "Dedicated onboarding",
-      available: true,
-    },
-  ];
-
   return (
     <div>
       <div className="py-12 mt-16 space-y-24 wrapper">
@@ -320,12 +229,12 @@ export const PricingPage = () => {
             <h1
               className={`text-4xl md:text-5xl ${
                 initialRender ? "fade-in-down" : ""
-              }mb-6 }`}
+              } mb-6`}
             >
               Early Adopter Pricing
             </h1>
             <p
-              className={`max-w-[800px] mx-auto ${
+              className={`max-w-[800px] mx-auto mb-8 ${
                 initialRender ? "fade-in-down animate-delay-1" : ""
               }`}
             >
@@ -333,418 +242,235 @@ export const PricingPage = () => {
               adopter pricing to our first users. This pricing will be locked in
               for the lifetime of your subscription.
             </p>
-
-            <div className="flex justify-center mt-5 mb-8">
-              <div className="inline-flex bg-gray-100 p-1 rounded-full border border-blue-300">
-                <div
-                  className={`rounded-full z-10 relative transition-all duration-300 min-w-[120px] py-2 px-6 mx-0.5 text-center cursor-pointer border ${
-                    deploymentType === "cloud"
-                      ? "bg-white text-blue-600 font-medium shadow-sm border-blue-300"
-                      : "bg-transparent text-gray-700 border-transparent"
-                  }`}
-                  onClick={() => setDeploymentType("cloud")}
-                >
-                  Cloud
-                </div>
-                <div
-                  className={`rounded-full z-10 relative transition-all duration-300 min-w-[120px] py-2 px-6 mx-0.5 text-center cursor-pointer border ${
-                    deploymentType === "selfhosted"
-                      ? "bg-white text-blue-600 font-medium shadow-sm border-blue-300"
-                      : "bg-transparent text-gray-700 border-transparent"
-                  }`}
-                  onClick={() => setDeploymentType("selfhosted")}
-                >
-                  Self-hosted
-                </div>
-              </div>
-            </div>
           </div>
 
-          {deploymentType === "cloud" ? (
-            <div className="grid grid-cols-1 gap-3 items-stretch md:grid-cols-2">
-              <Card
-                className={`bg-gray-100 rounded-xl min-h-[600px] flex-grow ${
-                  initialRender ? "fade-in-down animate-delay-2" : ""
-                }`}
-              >
-                <div className="space-y-4">
-                  <CardHeader>
-                    <CardTitle className="text-2xl">
-                      App + Commercial License
-                    </CardTitle>
-                    <CardDescription className="text-lg">
-                      For professional use of the desktop app, without cloud
-                      features.
-                    </CardDescription>
-                    <div>
-                      <div className="flex items-center space-x-3">
-                        <h3 className="text-4xl">
+          <div className="grid grid-cols-1 gap-3 items-stretch md:grid-cols-2">
+            <Card
+              className={`bg-gray-100 rounded-xl min-h-[600px] flex-grow ${
+                initialRender ? "fade-in-down animate-delay-2" : ""
+              }`}
+            >
+              <div className="space-y-4">
+                <CardHeader>
+                  <CardTitle className="text-2xl">
+                    App + Commercial License
+                  </CardTitle>
+                  <CardDescription className="text-lg">
+                    For professional use of the desktop app, without cloud
+                    features.
+                  </CardDescription>
+                  <div>
+                    <div className="flex items-center space-x-3">
+                      <h3 className="text-4xl">
+                        {isCommercialAnnual
+                          ? `$${29 * licenseQuantity}`
+                          : `$${58 * licenseQuantity}`}
+                      </h3>
+                      <div>
+                        <p className="text-sm font-medium">
                           {isCommercialAnnual
-                            ? `$${29 * licenseQuantity}`
-                            : `$${58 * licenseQuantity}`}
-                        </h3>
-                        <div>
-                          <p className="text-sm font-medium">
-                            {isCommercialAnnual
-                              ? licenseQuantity === 1
-                                ? "billed annually"
-                                : `for ${licenseQuantity} licenses, billed annually`
-                              : licenseQuantity === 1
-                              ? "one-time payment"
-                              : `for ${licenseQuantity} licenses, one-time payment`}
+                            ? licenseQuantity === 1
+                              ? "billed annually"
+                              : `for ${licenseQuantity} licenses, billed annually`
+                            : licenseQuantity === 1
+                            ? "one-time payment"
+                            : `for ${licenseQuantity} licenses, one-time payment`}
+                        </p>
+                        {isCommercialAnnual && (
+                          <p className="text-sm">
+                            or, ${58 * licenseQuantity} one-time payment
                           </p>
-                          {isCommercialAnnual && (
-                            <p className="text-sm">
-                              or, ${58 * licenseQuantity} one-time payment
-                            </p>
-                          )}
-                        </div>
+                        )}
                       </div>
-                      <div className="flex items-center justify-between pt-4 mt-2 border-t border-gray-200">
-                        <div className="flex items-center">
-                          <span className="mr-2 text-xs">
-                            Switch to{" "}
-                            {isCommercialAnnual ? "lifetime" : "yearly"}
-                          </span>
-                          <Switch
-                            checked={!isCommercialAnnual}
-                            onCheckedChange={() =>
-                              setIsCommercialAnnual(!isCommercialAnnual)
+                    </div>
+                    <div className="flex justify-between items-center pt-4 mt-2 border-t border-gray-200">
+                      <div className="flex items-center">
+                        <span className="mr-2 text-xs">
+                          Switch to {isCommercialAnnual ? "lifetime" : "yearly"}
+                        </span>
+                        <Switch
+                          checked={!isCommercialAnnual}
+                          onCheckedChange={() =>
+                            setIsCommercialAnnual(!isCommercialAnnual)
+                          }
+                        />
+                      </div>
+                      <div className="flex items-center">
+                        <span className="mr-2 text-xs">Licenses:</span>
+                        <div className="flex gap-2 items-center">
+                          <QuantityButton
+                            onClick={() =>
+                              licenseQuantity > 1 &&
+                              setLicenseQuantity(licenseQuantity - 1)
                             }
-                          />
-                        </div>
-                        <div className="flex items-center">
-                          <span className="mr-2 text-xs">Licenses:</span>
-                          <div className="flex gap-2 items-center">
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              onClick={() =>
-                                licenseQuantity > 1 &&
-                                setLicenseQuantity(licenseQuantity - 1)
-                              }
-                              className="px-2 py-0 h-6"
-                            >
-                              -
-                            </Button>
-                            <span className="w-4 text-center">
-                              {licenseQuantity}
-                            </span>
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              onClick={() =>
-                                setLicenseQuantity(licenseQuantity + 1)
-                              }
-                              className="px-2 py-0 h-6"
-                            >
-                              +
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <Button
-                      onClick={openCommercialCheckout}
-                      className="w-full"
-                      size="lg"
-                      disabled={commercialLoading}
-                    >
-                      {commercialLoading
-                        ? "Loading..."
-                        : licenseQuantity > 1
-                        ? "Purchase Licenses"
-                        : "Purchase License"}
-                    </Button>
-                  </CardContent>
-                  <CardFooter>
-                    <div className="space-y-8">
-                      <div>
-                        <ul className="p-0 space-y-3 list-none">
-                          {commercialList.map((item, index) => (
-                            <li
-                              key={index}
-                              className="flex justify-start items-center"
-                            >
-                              <div className="w-5 h-5 m-0 p-0 flex items-center border-[2px] border-green-500 justify-center rounded-full">
-                                <Check className="w-3 h-3 stroke-[4px] stroke-green-500" />
-                              </div>
-                              <span className="ml-1.5 font-bold text-gray-500">
-                                {item.text}
-                              </span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    </div>
-                  </CardFooter>
-                </div>
-              </Card>
-
-              <Card
-                className={`bg-gray-100 rounded-xl min-h-[600px] flex-grow border-blue-500 border-4 ${
-                  initialRender ? "fade-in-up animate-delay-2" : ""
-                }`}
-              >
-                <div className="space-y-3">
-                  <CardHeader>
-                    <CardTitle className="text-2xl  font-medium">
-                      App + Commercial License +{" "}
-                      <span className="text-blue-500 text-2xl font-bold">
-                        Cap Pro
-                      </span>
-                    </CardTitle>
-                    <CardDescription className="text-lg">
-                      For professional use + cloud features like shareable
-                      links, transcriptions, comments, & more. Perfect for teams
-                      or sharing with clients.
-                    </CardDescription>
-                    <div>
-                      <div className="flex items-center space-x-3">
-                        <h3 className="text-4xl">
-                          {isAnnual
-                            ? `$${6 * proQuantity}/mo`
-                            : `$${9 * proQuantity}/mo`}
-                        </h3>
-                        <div>
-                          <p className="text-sm font-medium">
-                            {isAnnual
-                              ? proQuantity === 1
-                                ? "per user, billed annually."
-                                : `for ${proQuantity} users, billed annually.`
-                              : proQuantity === 1
-                              ? "per user, billed monthly."
-                              : `for ${proQuantity} users, billed monthly.`}
-                          </p>
-                          {isAnnual && (
-                            <p className="text-sm">
-                              or, ${9 * proQuantity}/month,{" "}
-                              {proQuantity === 1
-                                ? "per user, "
-                                : `for ${proQuantity} users, `}
-                              billed monthly.
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex items-center justify-between pt-4 mt-2 border-t border-gray-200">
-                        <div className="flex items-center">
-                          <span className="mr-2 text-xs">
-                            Switch to {isAnnual ? "monthly" : "annually"}
+                          >
+                            -
+                          </QuantityButton>
+                          <span className="w-4 text-center">
+                            {licenseQuantity}
                           </span>
-                          <Switch
-                            checked={!isAnnual}
-                            onCheckedChange={() => setIsAnnual(!isAnnual)}
-                          />
-                        </div>
-                        <div className="flex items-center">
-                          <span className="mr-2 text-xs">Users:</span>
-                          <div className="flex gap-2 items-center">
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              onClick={() =>
-                                proQuantity > 1 &&
-                                setProQuantity(proQuantity - 1)
-                              }
-                              className="px-2 py-0 h-6"
-                            >
-                              -
-                            </Button>
-                            <span className="w-4 text-center">
-                              {proQuantity}
-                            </span>
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              onClick={() => setProQuantity(proQuantity + 1)}
-                              className="px-2 py-0 h-6"
-                            >
-                              +
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <Button
-                      variant="primary"
-                      onClick={() => planCheckout()}
-                      className="w-full"
-                      size="lg"
-                      disabled={proLoading}
-                    >
-                      {proLoading ? "Loading..." : "Upgrade to Cap Pro"}
-                    </Button>
-                  </CardContent>
-                  <CardFooter>
-                    <div className="space-y-8">
-                      <div>
-                        <ul className="p-0 space-y-3 list-none">
-                          {proList.map((item, index) => (
-                            <li
-                              key={index}
-                              className="flex justify-start items-center"
-                            >
-                              <div className="w-5 h-5 m-0 p-0 flex items-center border-[2px] border-green-500 justify-center rounded-full">
-                                <Check className="w-3 h-3 stroke-[4px] stroke-green-500" />
-                              </div>
-                              <span className="ml-1.5 text-gray-500 font-bold">
-                                {item.text}
-                              </span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    </div>
-                  </CardFooter>
-                </div>
-              </Card>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <Card
-                className={`bg-gray-100 rounded-xl min-h-[600px] flex-grow border-blue-500 border-4 ${
-                  initialRender ? "fade-in-up animate-delay-2" : ""
-                }`}
-              >
-                <div className="space-y-3">
-                  <CardHeader>
-                    <CardTitle className="text-2xl font-medium">
-                      <span className="text-black text-2xl font-medium">
-                        Self-hosted
-                      </span>{" "}
-                      <span className="text-blue-500 text-2xl font-bold">
-                        Cap Pro
-                      </span>
-                    </CardTitle>
-                    <CardDescription className="text-lg">
-                      Deploy Cap on your own infrastructure with full control
-                      over your data. Ideal for enterprises and organizations
-                      with specific security requirements or those wanting to
-                      white label the platform.
-                    </CardDescription>
-                    <div>
-                      <div className="flex items-center space-x-3">
-                        <h3 className="text-4xl">
-                          {isSelfHostedAnnual
-                            ? `$${6 * selfHostedQuantity}/mo`
-                            : `$${9 * selfHostedQuantity}/mo`}
-                        </h3>
-                        <div>
-                          <p className="text-sm font-medium">
-                            {`for ${selfHostedQuantity} users, billed ${
-                              isSelfHostedAnnual ? "annually" : "monthly"
-                            }.`}
-                          </p>
-                          {isSelfHostedAnnual && (
-                            <p className="text-sm">
-                              or, ${9 * selfHostedQuantity}/month, for{" "}
-                              {selfHostedQuantity} users, billed monthly.
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex items-center justify-between pt-4 mt-2 border-t border-gray-200">
-                        <div className="flex items-center">
-                          <span className="mr-2 text-xs">
-                            Switch to{" "}
-                            {isSelfHostedAnnual ? "monthly" : "annually"}
-                          </span>
-                          <Switch
-                            checked={!isSelfHostedAnnual}
-                            onCheckedChange={() =>
-                              setIsSelfHostedAnnual(!isSelfHostedAnnual)
+                          <QuantityButton
+                            onClick={() =>
+                              setLicenseQuantity(licenseQuantity + 1)
                             }
-                          />
+                          >
+                            +
+                          </QuantityButton>
                         </div>
-                        <div className="flex items-center">
-                          <span className="mr-2 text-xs">Users:</span>
-                          <div className="flex gap-2 items-center">
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              onClick={() =>
-                                selfHostedQuantity > 10 &&
-                                setSelfHostedQuantity(selfHostedQuantity - 1)
-                              }
-                              className="px-2 py-0 h-6"
-                            >
-                              -
-                            </Button>
-                            <span className="w-4 text-center">
-                              {selfHostedQuantity}
+                      </div>
+                    </div>
+                  </div>
+                </CardHeader>
+                <Card className="bg-transparent border-0">
+                  <Button
+                    onClick={openCommercialCheckout}
+                    className="w-full"
+                    size="lg"
+                    disabled={commercialLoading}
+                  >
+                    {commercialLoading
+                      ? "Loading..."
+                      : licenseQuantity > 1
+                      ? "Purchase Licenses"
+                      : "Purchase License"}
+                  </Button>
+                </Card>
+                <CardFooter>
+                  <div className="space-y-8">
+                    <div>
+                      <ul className="p-0 space-y-3 list-none">
+                        {commercialList.map((item, index) => (
+                          <li
+                            key={index}
+                            className="flex justify-start items-center"
+                          >
+                            <div className="w-5 h-5 m-0 p-0 flex items-center border-[2px] border-green-500 justify-center rounded-full">
+                              <Check className="w-3 h-3 stroke-[4px] stroke-green-500" />
+                            </div>
+                            <span className="ml-1.5 font-bold text-gray-500">
+                              {item.text}
                             </span>
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              onClick={() =>
-                                setSelfHostedQuantity(selfHostedQuantity + 1)
-                              }
-                              className="px-2 py-0 h-6"
-                            >
-                              +
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
+                          </li>
+                        ))}
+                      </ul>
                     </div>
-                  </CardHeader>
-                  <CardContent>
-                    <Button
-                      variant="primary"
-                      onClick={openSelfHostedCheckout}
-                      className="w-full"
-                      size="lg"
-                      disabled={selfHostedLoading}
-                    >
-                      {selfHostedLoading
-                        ? "Loading..."
-                        : "Get Self-hosted Cap Pro"}
-                    </Button>
-                  </CardContent>
-                  <CardFooter>
-                    <div className="space-y-8">
-                      <div>
-                        <ul className="p-0 space-y-3 list-none">
-                          {selfHostedList.map((item, index) => (
-                            <li
-                              key={index}
-                              className="flex justify-start items-center"
-                            >
-                              <div className="w-5 h-5 m-0 p-0 flex items-center border-[2px] border-green-500 justify-center rounded-full">
-                                <Check className="w-3 h-3 stroke-[4px] stroke-green-500" />
-                              </div>
-                              <span className="ml-1.5 text-gray-500 font-bold">
-                                {item.text}
-                              </span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    </div>
-                  </CardFooter>
-                </div>
-              </Card>
-              <div>
-                <div className="grid gap-6">
-                  {faqContent.map((section, index) => {
-                    return (
-                      <div key={index} className="pb-4">
-                        <h3 className="mb-2 text-xl font-medium">
-                          {section.title}
-                        </h3>
-                        <p className="text-gray-700">{section.answer}</p>
-                      </div>
-                    );
-                  })}
-                </div>
+                  </div>
+                </CardFooter>
               </div>
-            </div>
-          )}
+            </Card>
+
+            <Card
+              className={`bg-gray-100 rounded-xl min-h-[600px] flex-grow border-blue-500 border-4 ${
+                initialRender ? "fade-in-up animate-delay-2" : ""
+              }`}
+            >
+              <div className="space-y-3">
+                <CardHeader>
+                  <CardTitle className="text-2xl font-medium">
+                    App + Commercial License +{" "}
+                    <span className="text-2xl font-bold text-blue-500">
+                      Cap Pro
+                    </span>
+                  </CardTitle>
+                  <CardDescription className="text-lg">
+                    For professional use + cloud features like shareable links,
+                    transcriptions, comments, & more. Perfect for teams or
+                    sharing with clients.
+                  </CardDescription>
+                  <div>
+                    <div className="flex items-center space-x-3">
+                      <h3 className="text-4xl">
+                        {isAnnual
+                          ? `$${6 * proQuantity}/mo`
+                          : `$${9 * proQuantity}/mo`}
+                      </h3>
+                      <div>
+                        <p className="text-sm font-medium">
+                          {isAnnual
+                            ? proQuantity === 1
+                              ? "per user, billed annually."
+                              : `for ${proQuantity} users, billed annually.`
+                            : proQuantity === 1
+                            ? "per user, billed monthly."
+                            : `for ${proQuantity} users, billed monthly.`}
+                        </p>
+                        {isAnnual && (
+                          <p className="text-sm">
+                            or, ${9 * proQuantity}/month,{" "}
+                            {proQuantity === 1
+                              ? "per user, "
+                              : `for ${proQuantity} users, `}
+                            billed monthly.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex justify-between items-center pt-4 mt-2 border-t border-gray-200">
+                      <div className="flex items-center">
+                        <span className="mr-2 text-xs">
+                          Switch to {isAnnual ? "monthly" : "annually"}
+                        </span>
+                        <Switch
+                          checked={!isAnnual}
+                          onCheckedChange={() => setIsAnnual(!isAnnual)}
+                        />
+                      </div>
+                      <div className="flex items-center">
+                        <span className="mr-2 text-xs">Users:</span>
+                        <div className="flex gap-2 items-center">
+                          <QuantityButton
+                            onClick={() =>
+                              proQuantity > 1 && setProQuantity(proQuantity - 1)
+                            }
+                          >
+                            -
+                          </QuantityButton>
+                          <span className="w-4 text-center">{proQuantity}</span>
+                          <QuantityButton
+                            onClick={() => setProQuantity(proQuantity + 1)}
+                          >
+                            +
+                          </QuantityButton>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </CardHeader>
+                <Card className="bg-transparent border-0">
+                  <Button
+                    variant="primary"
+                    onClick={() => planCheckout()}
+                    className="w-full"
+                    size="lg"
+                    disabled={proLoading}
+                  >
+                    {proLoading ? "Loading..." : "Upgrade to Cap Pro"}
+                  </Button>
+                </Card>
+                <CardFooter>
+                  <div className="space-y-8">
+                    <div>
+                      <ul className="p-0 space-y-3 list-none">
+                        {proList.map((item, index) => (
+                          <li
+                            key={index}
+                            className="flex justify-start items-center"
+                          >
+                            <div className="w-5 h-5 m-0 p-0 flex items-center border-[2px] border-green-500 justify-center rounded-full">
+                              <Check className="w-3 h-3 stroke-[4px] stroke-green-500" />
+                            </div>
+                            <span className="ml-1.5 text-gray-500 font-bold">
+                              {item.text}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                </CardFooter>
+              </div>
+            </Card>
+          </div>
         </div>
         <div>
           <img

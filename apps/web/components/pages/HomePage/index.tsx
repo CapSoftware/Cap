@@ -4,7 +4,6 @@
 
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
 import {
-  detectPlatform,
   getDownloadButtonText,
   getDownloadUrl,
   getPlatformIcon,
@@ -16,34 +15,18 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import MuxPlayer from "@mux/mux-player-react";
 import { useClickAway } from "@uidotdev/usehooks";
 import { AnimatePresence, motion } from "framer-motion";
+import { useDetectPlatform } from "hooks/useDetectPlatform";
 import Link from "next/link";
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { Parallax, ParallaxProvider } from "react-scroll-parallax";
 import { LogoSection } from "../_components/LogoSection";
+import { FeatureCard } from "../SelfHostingPage";
 import LeftBlueHue from "./LeftBlueHue";
 import PowerfulFeaturesSVG from "./PowerfulFeaturesSVG";
-import { FeatureCard } from "../SelfHostingPage";
 export const HomePage = () => {
   const [videoToggled, setVideoToggled] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [platform, setPlatform] = useState<string | null>(null);
-  const [isIntel, setIsIntel] = useState(false);
-
-  useEffect(() => {
-    const detectUserPlatform = async () => {
-      try {
-        const { platform, isIntel } = await detectPlatform();
-        setPlatform(platform);
-        setIsIntel(isIntel);
-      } catch (error) {
-        console.error("Error detecting platform:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    detectUserPlatform();
-  }, []);
+  const { platform, isIntel } = useDetectPlatform();
+  const loading = platform === null;
 
   return (
     <ParallaxProvider>

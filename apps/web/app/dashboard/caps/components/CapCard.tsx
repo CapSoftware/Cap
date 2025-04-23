@@ -1,18 +1,24 @@
-import { useState } from "react";
-import { VideoThumbnail } from "@/components/VideoThumbnail";
-import { CapCardActions } from "@/app/dashboard/caps/components/CapCardActions";
-import { CapCardAnalytics } from "@/app/dashboard/caps/components/CapCardAnalytics";
-import { toast } from "react-hot-toast";
-import moment from "moment";
-import { Tooltip } from "react-tooltip";
-import { ChevronDown } from "lucide-react";
-import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
-import { useRouter } from "next/navigation";
-import { clientEnv, NODE_ENV } from "@cap/env";
-import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { VideoMetadata } from "@cap/database/types";
 import { editDate } from "@/actions/videos/edit-date";
 import { editTitle } from "@/actions/videos/edit-title";
+import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
+import { CapCardAnalytics } from "@/app/dashboard/caps/components/CapCardAnalytics";
+import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
+import { Tooltip } from "@/components/Tooltip";
+import { VideoThumbnail } from "@/components/VideoThumbnail";
+import { VideoMetadata } from "@cap/database/types";
+import { clientEnv, NODE_ENV } from "@cap/env";
+import { Button } from "@cap/ui";
+import {
+  faChevronDown,
+  faLink,
+  faTrash,
+} from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import moment from "moment";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { toast } from "react-hot-toast";
 
 interface CapCardProps {
   cap: {
@@ -48,6 +54,7 @@ export const CapCard: React.FC<CapCardProps> = ({
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
   const [sharedSpaces, setSharedSpaces] = useState(cap.sharedSpaces);
   const [isDateEditing, setIsDateEditing] = useState(false);
+  const [copyPressed, setCopyPressed] = useState(false);
   const [dateValue, setDateValue] = useState(
     moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss")
   );
@@ -55,7 +62,8 @@ export const CapCard: React.FC<CapCardProps> = ({
   const router = useRouter();
   const { activeSpace } = useSharedContext();
 
-  const handleTitleBlur = async () => {
+  const handleTitleBlur = async (capName: string) => {
+    if (capName === title) return;
     if (!title) {
       setIsEditing(false);
       return;
@@ -75,53 +83,48 @@ export const CapCard: React.FC<CapCardProps> = ({
     }
   };
 
-  const handleTitleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      handleTitleBlur();
-    }
-  };
-
   const displayCount =
     analytics === 0
       ? Math.max(cap.totalComments, cap.totalReactions)
       : analytics;
-
-  const isOwner = userId === cap.ownerId;
-
-  const renderSharedStatus = () => {
-    const baseClassName =
-      "text-gray-400 text-sm cursor-pointer flex items-center";
-    if (isOwner) {
-      if (cap.sharedSpaces.length === 0) {
-        return (
-          <span
-            className={baseClassName}
-            onClick={() => setIsSharingDialogOpen(true)}
-          >
-            Not shared <ChevronDown className="ml-1" size={16} />
-          </span>
-        );
-      } else {
-        return (
-          <span
-            className={baseClassName}
-            onClick={() => setIsSharingDialogOpen(true)}
-          >
-            Shared <ChevronDown className="ml-1" size={16} />
-          </span>
-        );
-      }
-    } else {
-      return <span className={baseClassName}>Shared with you</span>;
-    }
-  };
 
   const handleSharingUpdated = (updatedSharedSpaces: string[]) => {
     setSharedSpaces(
       userSpaces.filter((space) => updatedSharedSpaces.includes(space.id))
     );
     router.refresh(); // Add this line to refresh the page
+  };
+
+  const isOwner = userId === cap.ownerId;
+
+  const renderSharedStatus = () => {
+    const baseClassName =
+      "text-sm text-gray-400 transition-colors duration-300 hover:text-gray-500 cursor-pointer flex items-center mb-1";
+    if (isOwner) {
+      if (cap.sharedSpaces.length === 0) {
+        return (
+          <p
+            className={baseClassName}
+            onClick={() => setIsSharingDialogOpen(true)}
+          >
+            Not shared{" "}
+            <FontAwesomeIcon className="ml-2 size-2.5" icon={faChevronDown} />
+          </p>
+        );
+      } else {
+        return (
+          <p
+            className={baseClassName}
+            onClick={() => setIsSharingDialogOpen(true)}
+          >
+            Shared{" "}
+            <FontAwesomeIcon className="ml-1 size-2.5" icon={faChevronDown} />
+          </p>
+        );
+      }
+    } else {
+      return <p className={baseClassName}>Shared with you</p>;
+    }
   };
 
   const handleDateClick = () => {
@@ -182,96 +185,26 @@ export const CapCard: React.FC<CapCardProps> = ({
     }
   };
 
+  const handleCopy = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopyPressed(true);
+    setTimeout(() => {
+      setCopyPressed(false);
+    }, 2000);
+  };
+
+  const handleTitleKeyDown = (
+    e: React.KeyboardEvent<HTMLTextAreaElement>,
+    capName: string
+  ) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleTitleBlur(capName);
+    }
+  };
+
   return (
-    <div
-      className="rounded-xl border-[1px] border-gray-200 relative"
-      style={{ boxShadow: "0px 8px 16px rgba(18, 22, 31, 0.04)" }}
-    >
-      <CapCardActions capId={cap.id} onDelete={onDelete} />
-      <a
-        className="group block"
-        href={
-          activeSpace?.space.customDomain
-            ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
-            : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-            ? `https://cap.link/${cap.id}`
-            : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
-        }
-      >
-        <VideoThumbnail
-          userId={cap.ownerId}
-          videoId={cap.id}
-          alt={`${cap.name} Thumbnail`}
-        />
-      </a>
-      <div className="flex flex-col p-4">
-        <div className="mb-1">
-          <div>
-            <span className="text-[0.875rem] leading-[1.25rem] text-gray-400">
-              {isOwner ? cap.ownerName : cap.sharedSpaces[0]?.name}
-            </span>
-          </div>
-          <div>
-            <span>{renderSharedStatus()}</span>
-          </div>
-        </div>
-        {isEditing ? (
-          <textarea
-            rows={1}
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            onBlur={handleTitleBlur}
-            onKeyDown={handleTitleKeyDown}
-            autoFocus
-            className="text-[0.875rem] leading-[1.25rem] text-gray-500 font-medium box-border mb-1"
-          />
-        ) : (
-          <p
-            className="text-[0.875rem] leading-[1.25rem] text-gray-500 font-medium mb-1"
-            onClick={() => {
-              if (userId === cap.ownerId) {
-                setIsEditing(true);
-              }
-            }}
-          >
-            {title}
-          </p>
-        )}
-        <p className="mb-1">
-          {isDateEditing ? (
-            <div className="flex items-center">
-              <input
-                type="text"
-                value={dateValue}
-                onChange={handleDateChange}
-                onBlur={handleDateBlur}
-                onKeyDown={handleDateKeyDown}
-                autoFocus
-                className="text-[0.875rem] leading-[1.25rem] text-gray-400 bg-transparent focus:outline-none"
-                placeholder="YYYY-MM-DD HH:mm:ss"
-              />
-            </div>
-          ) : (
-            <span
-              className="text-[0.875rem] leading-[1.25rem] text-gray-400 cursor-pointer flex items-center"
-              onClick={handleDateClick}
-              data-tooltip-id={cap.id + "_createdAt"}
-              data-tooltip-content={`Cap created at ${effectiveDate}`}
-            >
-              {showFullDate
-                ? moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss")
-                : moment(effectiveDate).fromNow()}
-            </span>
-          )}
-          <Tooltip className="z-50" id={cap.id + "_createdAt"} />
-        </p>
-        <CapCardAnalytics
-          capId={cap.id}
-          displayCount={displayCount}
-          totalComments={cap.totalComments}
-          totalReactions={cap.totalReactions}
-        />
-      </div>
+    <>
       <SharingDialog
         isOpen={isSharingDialogOpen}
         onClose={() => setIsSharingDialogOpen(false)}
@@ -281,6 +214,138 @@ export const CapCard: React.FC<CapCardProps> = ({
         userSpaces={userSpaces}
         onSharingUpdated={handleSharingUpdated}
       />
-    </div>
+      <div className="flex relative flex-col gap-4 w-full h-full bg-gray-50 rounded-2xl border-gray-200 transition-colors duration-300 group hover:border-blue-300 border-[1px]">
+        <div className="flex absolute duration-200 group-hover:opacity-100 opacity-0 top-2 right-2 z-[20] flex-col gap-2">
+          <Tooltip content="Copy link">
+            <Button
+              onClick={() =>
+                handleCopy(
+                  activeSpace?.space.customDomain
+                    ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
+                    : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+                    ? `https://cap.link/${cap.id}`
+                    : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
+                )
+              }
+              className="!size-8 delay-0 hover:opacity-80 rounded-full min-w-fit !p-0"
+              variant="white"
+              size="sm"
+            >
+              {!copyPressed ? (
+                <FontAwesomeIcon
+                  className="text-gray-400 size-4"
+                  icon={faLink}
+                />
+              ) : (
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="24"
+                  height="24"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  className="text-gray-400 size-5 svgpathanimation"
+                >
+                  <path d="M20 6 9 17l-5-5" />
+                </svg>
+              )}
+            </Button>
+          </Tooltip>
+          <Tooltip content="Delete Cap">
+            <Button
+              onClick={() => onDelete(cap.id)}
+              className="!size-8 delay-100 hover:opacity-80 rounded-full min-w-fit !p-0"
+              variant="white"
+              size="sm"
+            >
+              <FontAwesomeIcon
+                className="text-gray-400 size-2.5"
+                icon={faTrash}
+              />
+            </Button>
+          </Tooltip>
+        </div>
+        <Link
+          className="block group"
+          href={
+            activeSpace?.space.customDomain
+              ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
+              : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+              ? `https://cap.link/${cap.id}`
+              : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
+          }
+        >
+          <VideoThumbnail
+            imageClass="group-hover:opacity-50 transition-opacity duration-200"
+            userId={cap.ownerId}
+            videoId={cap.id}
+            alt={`${cap.name} Thumbnail`}
+          />
+        </Link>
+        <div className="flex flex-col flex-grow gap-3 px-4 pb-4 w-full cursor-pointer">
+          <div>
+            {isEditing ? (
+              <textarea
+                rows={1}
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                onBlur={() => handleTitleBlur(cap.name)}
+                onKeyDown={(e) => handleTitleKeyDown(e, cap.name)}
+                autoFocus
+                className="text-md resize-none truncate w-full border-0 outline-0 leading-[1.25rem] text-gray-500 font-medium mb-1"
+              />
+            ) : (
+              <p
+                className="text-md truncate leading-[1.25rem] text-gray-500 font-medium mb-1"
+                onClick={() => {
+                  if (userId === cap.ownerId) {
+                    setIsEditing(true);
+                  }
+                }}
+              >
+                {title}
+              </p>
+            )}
+            {renderSharedStatus()}
+            <p className="mb-1">
+              {isDateEditing ? (
+                <div className="flex items-center">
+                  <input
+                    type="text"
+                    value={dateValue}
+                    onChange={handleDateChange}
+                    onBlur={handleDateBlur}
+                    onKeyDown={handleDateKeyDown}
+                    autoFocus
+                    className="text-sm truncate mt-2 leading-[1.25rem] text-gray-400 bg-transparent focus:outline-none"
+                    placeholder="YYYY-MM-DD HH:mm:ss"
+                  />
+                </div>
+              ) : (
+                <Tooltip content={`Cap created at ${effectiveDate}`}>
+                  <p
+                    className="text-sm truncate mt-2 leading-[1.25rem] text-gray-400 cursor-pointer flex items-center"
+                    onClick={handleDateClick}
+                  >
+                    {showFullDate
+                      ? moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss")
+                      : moment(effectiveDate).fromNow()}
+                  </p>
+                </Tooltip>
+              )}
+            </p>
+          </div>
+          <CapCardAnalytics
+            capId={cap.id}
+            displayCount={displayCount}
+            totalComments={cap.totalComments}
+            totalReactions={cap.totalReactions}
+          />
+        </div>
+      </div>
+    </>
   );
 };

@@ -63,14 +63,6 @@ export function CommercialGetStarted() {
           >
             Learn More
           </Button>
-          <Button
-            variant="secondary"
-            href="/pricing?type=selfhosted"
-            size="lg"
-            className="w-full sm:w-auto"
-          >
-            Pricing
-          </Button>
         </div>
       </div>
     </div>

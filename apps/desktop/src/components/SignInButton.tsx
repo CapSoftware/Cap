@@ -1,18 +1,17 @@
 import { Button } from "@cap/ui-solid";
-import * as shell from "@tauri-apps/plugin-shell";
-import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
-import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
-import { Window } from "@tauri-apps/api/window";
 import { createMutation } from "@tanstack/solid-query";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
+import * as shell from "@tauri-apps/plugin-shell";
 
-import callbackTemplate from "./callback.template";
-import { authStore } from "~/store";
-import { clientEnv } from "~/utils/env";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { commands } from "~/utils/tauri";
-import { identifyUser, trackEvent } from "~/utils/analytics";
 import { ComponentProps } from "solid-js";
+import { authStore } from "~/store";
+import { identifyUser, trackEvent } from "~/utils/analytics";
+import { clientEnv } from "~/utils/env";
+import { commands } from "~/utils/tauri";
+import callbackTemplate from "./callback.template";
 
 export function SignInButton(
   props: Omit<ComponentProps<typeof Button>, "onClick">

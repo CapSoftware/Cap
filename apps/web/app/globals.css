@@ -36,7 +36,6 @@
 body,
 html {
   color: #000000;
-  font-family: var(--font-geist-sans) !important;
   background-color: white;
 }
 
@@ -111,6 +110,111 @@ a.bg-primary:hover {
   animation: animatedyaxis 6s ease infinite forwards;
 }
 
+.TooltipContent[data-side="left"] {
+  animation: slideLeft 0.2s ease-out;
+}
+
+.TooltipContent[data-side="right"] {
+  animation: slideRight 0.2s ease-out;
+}
+
+.TooltipContent[data-side="top"] {
+  animation: slideUp 0.2s ease-out;
+}
+
+.TooltipContent[data-side="bottom"] {
+  animation: slideDown 0.2s ease-out;
+}
+
+.TooltipContent {
+	transform-origin: var(--radix-tooltip-content-transform-origin);
+}
+
+@keyframes slideRight {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    transform: translateX(0px);
+    opacity: 1;
+  }
+}
+
+/* SVG path animation */
+
+@keyframes svgpathframes {
+  0% {
+    stroke-dasharray: 100;
+    stroke-dashoffset: 100;
+  }
+  50% {
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+.svgpathanimation {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  animation: svgpathframes 0.5s ease-in-out forwards;
+}
+
+.svgpathanimationrepeat {
+  animation: svgpathframes 0.5s ease-in-out forwards;
+  animation-iteration-count: infinite;
+}
+
+
+@keyframes slideLeft {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  to {
+    transform: translateX(0px);
+    opacity: 1;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    transform: translateY(0px);
+    opacity: 1;
+  }
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    transform: translateY(0px);
+    opacity: 1;
+  }
+}
+
+
+.button-gradient-border::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: 12px;
+  background: linear-gradient(to bottom, #ffffff40 70%, #ffffff00 100%);
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
 @media (prefers-color-scheme: dark) {
   body,
   html {
@@ -123,7 +227,7 @@ h2,
 h3,
 h4,
 h5 {
-  @apply font-normal tracking-tighter text-[1.75rem] leading-[2.5rem] md:text-[2.5rem] md:leading-[3.25rem];
+  @apply font-normal tracking-[-0.03em] text-[1.75rem] leading-[2.5rem] md:text-[2.5rem] md:leading-[3.25rem];
 }
 
 a,
@@ -314,15 +418,7 @@ ul {
 }
 
 .dashboard-page {
-  @apply flex flex-col px-2 py-4;
-}
-
-.dashboard-page .inner {
-  @apply bg-white rounded-[20px] p-[12px] border-[1px] border-gray-200;
-}
-
-.dashboard-page .inner {
-  box-shadow: 0px 8px 16px rgba(18, 22, 31, 0.04);
+  @apply flex flex-col;
 }
 
 .dashboard-header {
@@ -347,7 +443,7 @@ slot:not(.dashboard-layout slot) {
 }
 
 .dashboard-layout {
-  @apply bg-gray-100
+  @apply bg-gray-50
 }
 
 #scrolling-section slot {
@@ -431,7 +527,7 @@ footer a {
 @keyframes slideUp {
   from {
     opacity: 0;
-    transform: translateY(20px);
+    transform: translateY(5px);
   }
   to {
     opacity: 1;

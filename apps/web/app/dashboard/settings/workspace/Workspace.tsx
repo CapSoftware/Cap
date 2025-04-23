@@ -1,13 +1,23 @@
 "use client";
 
+import { manageBilling } from "@/actions/workspace/manage-billing";
+import { removeWorkspaceInvite } from "@/actions/workspace/remove-invite";
+import { sendWorkspaceInvites } from "@/actions/workspace/send-invites";
+import { updateWorkspaceDetails } from "@/actions/workspace/update-details";
+import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
+import { Tooltip } from "@/components/Tooltip";
 import {
+  Button,
   Card,
-  CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
-  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
   Input,
   Label,
   Table,
@@ -16,27 +26,17 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
 } from "@cap/ui";
-import { useRouter } from "next/navigation";
-import { useState, useRef } from "react";
-import toast from "react-hot-toast";
-import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
+import { faChair, faUserGroup } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { format } from "date-fns";
-import { Tooltip } from "react-tooltip";
+import { useRouter } from "next/navigation";
+import { useRef, useState } from "react";
+import toast from "react-hot-toast";
 import { CustomDomain } from "./components/CustomDomain";
-import { updateWorkspaceDetails } from "@/actions/workspace/update-details";
-import { sendWorkspaceInvites } from "@/actions/workspace/send-invites";
-import { removeWorkspaceInvite } from "@/actions/workspace/remove-invite";
-import { manageBilling } from "@/actions/workspace/manage-billing";
 
 export const Workspace = () => {
-  const { spaceData, activeSpace, user } = useSharedContext();
+  const { activeSpace, user } = useSharedContext();
   const workspaceName = activeSpace?.space.name;
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -45,6 +45,7 @@ export const Workspace = () => {
   const [inviteEmails, setInviteEmails] = useState<string[]>([]);
   const [emailInput, setEmailInput] = useState("");
   const ownerToastShown = useRef(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const showOwnerToast = () => {
     if (!ownerToastShown.current) {
@@ -149,141 +150,191 @@ export const Workspace = () => {
   return (
     <form onSubmit={handleSubmit}>
       {isOwner === false && (
-        <CardContent>
+        <Card>
           <CardTitle>*Only the owner can make changes</CardTitle>
           <CardDescription>
             Only the owner can make changes to this workspace.
           </CardDescription>
-        </CardContent>
+        </Card>
       )}
-      <CardContent>
-        <CardTitle>Workspace Details</CardTitle>
-        <CardDescription>
-          Changing the name and image will update how your workspace appears to
-          others members.
-        </CardDescription>
-      </CardContent>
-      <CardContent>
-        <div className="space-y-3">
-          <div>
-            <Label htmlFor="workspaceName">Workspace name</Label>
-            <Input
-              type="text"
-              defaultValue={workspaceName as string}
-              id="workspaceName"
-              name="workspaceName"
-              disabled={!isOwner}
-              onChange={() => {
-                if (!isOwner) showOwnerToast();
-              }}
-            />
+
+      <div className="flex flex-col flex-1 gap-6 justify-center lg:flex-row">
+        <Card className="flex flex-col flex-1 gap-3 justify-center items-center">
+          <FontAwesomeIcon className="text-gray-400 size-5" icon={faChair} />
+          <p>
+            Seats Remaining
+            <span className="ml-2 font-bold text-gray-500">
+              {(activeSpace?.inviteQuota ?? 1) -
+                (activeSpace?.totalInvites ?? 0)}
+            </span>
+          </p>
+        </Card>
+        <Card className="flex flex-col flex-1 gap-3 justify-center items-center">
+          <FontAwesomeIcon
+            className="text-gray-400 size-5"
+            icon={faUserGroup}
+          />
+          <p>
+            Seats Capacity
+            <span className="ml-2 font-bold text-gray-500">
+              {activeSpace?.inviteQuota}
+            </span>
+          </p>
+        </Card>
+      </div>
+
+      <div className="flex flex-col flex-1 gap-6 justify-center items-stretch mt-6 xl:flex-row">
+        <Card className="flex flex-col flex-1 justify-between w-full">
+          <div className="flex flex-col gap-6 justify-center lg:flex-row">
+            <div className="flex-1 w-full">
+              <div className="space-y-1">
+                <Label htmlFor="workspaceName">Name</Label>
+                <p className="text-sm text-gray-400">
+                  Changing the name will update how your workspace appears to
+                  others members.
+                </p>
+              </div>
+              <Input
+                className="mt-4"
+                type="text"
+                defaultValue={workspaceName as string}
+                id="workspaceName"
+                name="workspaceName"
+                disabled={!isOwner}
+                onChange={() => {
+                  if (!isOwner) showOwnerToast();
+                }}
+              />
+            </div>
+            <div className="flex-1 w-full">
+              <div className="space-y-1">
+                <Label htmlFor="allowedEmailDomain">Access email domain</Label>
+                <p className="mt-1 text-sm text-gray-400">
+                  Only emails from this domain can access shared videos.{" "}
+                  <b>Leave blank to allow everyone.</b>
+                </p>
+              </div>
+              <Input
+                type="text"
+                placeholder="e.g. company.com"
+                defaultValue={activeSpace?.space.allowedEmailDomain || ""}
+                id="allowedEmailDomain"
+                name="allowedEmailDomain"
+                disabled={!isOwner}
+                className="mt-4"
+                onChange={() => {
+                  if (!isOwner) showOwnerToast();
+                }}
+              />
+            </div>
           </div>
-          <div>
-            <Label htmlFor="allowedEmailDomain">
-              Workspace Access Requirements
-            </Label>
-            <Input
-              type="text"
-              placeholder="e.g. company.com"
-              defaultValue={activeSpace?.space.allowedEmailDomain || ""}
-              id="allowedEmailDomain"
-              name="allowedEmailDomain"
-              disabled={!isOwner}
-              onChange={() => {
-                if (!isOwner) showOwnerToast();
-              }}
-            />
-            <p className="text-sm text-gray-400 mt-1">
-              Only users with email addresses from this domain will be able to
-              access videos shared in this workspace. Leave empty to allow all
-              users.
-            </p>
-          </div>
-        </div>
-      </CardContent>
-      <CardFooter className="border-b px-6 pt-0 pb-6">
-        <Button
-          type="submit"
-          size="sm"
-          variant="gray"
-          disabled={!isOwner}
-          onClick={() => {
-            if (!isOwner) showOwnerToast();
-          }}
-        >
-          Save
-        </Button>
-      </CardFooter>
-      <>
-        <CardContent className="pt-6">
-          <CardTitle>Custom Domain</CardTitle>
-          <CardDescription>
-            Configure a custom domain for your workspace's shared caps.
-          </CardDescription>
-          <div className="mt-4">
-            <CustomDomain />
-          </div>
-        </CardContent>
-        <CardFooter className="border-b px-6 pt-0 pb-2"></CardFooter>
-      </>
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle>Workspace Members</CardTitle>
-            <CardDescription>Manage your workspace members.</CardDescription>
-            <CardDescription>
-              Current seats capacity:{" "}
-              {`${activeSpace?.inviteQuota} paid ${
-                activeSpace && activeSpace?.inviteQuota > 1
-                  ? "subscriptions"
-                  : "subscription"
-              } across all of your workspaces`}
-            </CardDescription>
-            <CardDescription>
-              Seats remaining:{" "}
-              {activeSpace?.inviteQuota ?? 1 - (activeSpace?.totalInvites ?? 1)}
-            </CardDescription>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <div className="flex items-center space-x-2">
           <Button
-            type="button"
+            className="mt-8 w-fit"
+            type="submit"
             size="sm"
-            variant="primary"
-            disabled={!isOwner || loading}
-            onClick={handleManageBilling}
-            data-tooltip-id="purchase-seats-tooltip"
-            data-tooltip-content='Once inside the Stripe dashboard, click "Manage Plan", then increase quantity of subscriptions to purchase more seats.'
-          >
-            {loading ? "Loading..." : "Purchase more seats"}
-          </Button>
-          <Tooltip id="purchase-seats-tooltip" place="top" />
-          <Button
-            type="button"
-            size="sm"
-            variant="gray"
-            onClick={() => {
-              if (!isOwner) {
-                showOwnerToast();
-              } else if (
-                activeSpace &&
-                activeSpace.inviteQuota <= activeSpace.totalInvites
-              ) {
-                toast.error("Invite limit reached, please purchase more seats");
-              } else {
-                setIsInviteDialogOpen(true);
-              }
-            }}
+            variant="dark"
             disabled={!isOwner}
+            onClick={() => {
+              if (!isOwner) showOwnerToast();
+            }}
           >
-            Invite users
+            Save
           </Button>
+        </Card>
+        <Card className="flex flex-col flex-1 gap-6 w-full lg:flex-row">
+          <div className="flex-1">
+            <div className="space-y-1">
+              <Label htmlFor="customDomain">Custom Domain</Label>
+              <CardDescription className="w-full max-w-[400px]">
+                Set up a custom domain for your workspace's shared caps and make
+                it unique.
+              </CardDescription>
+            </div>
+            <div className="mt-4">
+              <CustomDomain />
+            </div>
+          </div>
+          {/* <div className="flex-1"> */}
+          {/* <div className="space-y-1">
+              <Label htmlFor="icon">Icon</Label>
+              <CardDescription className="w-full max-w-[400px]">
+                Upload a custom logo or icon for your workspace and make it
+                unique.
+              </CardDescription>
+            </div> */}
+          {/* <div
+              onClick={() => fileInputRef.current?.click()}
+              className="w-full hover:bg-gray-100 transition-all duration-300 gap-3 border-gray-300 mt-4 border px-4 flex items-center justify-center py-[14px] border-dashed rounded-2xl"
+            >
+              <FontAwesomeIcon
+                className="text-gray-400 size-5"
+                icon={faCloudUpload}
+              />
+              <p className="text-xs text-gray-400 truncate">
+                Choose a file or drag & drop it here
+              </p>
+            </div> */}
+          {/* <Input
+              className="hidden"
+              type="file"
+              ref={fileInputRef}
+              id="icon"
+              disabled={!isOwner}
+              onChange={() => {
+                if (!isOwner) showOwnerToast();
+              }}
+              name="icon"
+            />
+          </div> */}
+        </Card>
+      </div>
+
+      <Card className="mt-6">
+        <div className="flex flex-wrap gap-6 justify-between items-center w-full">
+          <CardHeader>
+            <CardTitle>Members</CardTitle>
+            <CardDescription>Manage your workspace members.</CardDescription>
+          </CardHeader>
+          <div className="flex flex-wrap gap-3">
+            <Tooltip
+              position="top"
+              content="Once inside the Stripe dashboard, click 'Manage Plan', then increase quantity of subscriptions to purchase more seats"
+            >
+              <Button
+                type="button"
+                size="sm"
+                variant="primary"
+                disabled={!isOwner || loading}
+                onClick={handleManageBilling}
+              >
+                {loading ? "Loading..." : "+ Purchase more seats"}
+              </Button>
+            </Tooltip>
+            <Button
+              type="button"
+              size="sm"
+              variant="white"
+              onClick={() => {
+                if (!isOwner) {
+                  showOwnerToast();
+                } else if (
+                  activeSpace &&
+                  activeSpace.inviteQuota <= activeSpace.totalInvites
+                ) {
+                  toast.error(
+                    "Invite limit reached, please purchase more seats"
+                  );
+                } else {
+                  setIsInviteDialogOpen(true);
+                }
+              }}
+              disabled={!isOwner}
+            >
+              + Invite users
+            </Button>
+          </div>
         </div>
-      </CardContent>
-      <CardContent>
-        <Table>
+        <Table className="mt-5">
           <TableHeader>
             <TableRow>
               <TableHead>{"Member"}</TableHead>
@@ -323,7 +374,7 @@ export const Workspace = () => {
                   <TableCell>
                     <Button
                       type="button"
-                      size="sm"
+                      size="xs"
                       variant="destructive"
                       onClick={() => {
                         if (isOwner) {
@@ -341,27 +392,25 @@ export const Workspace = () => {
               ))}
           </TableBody>
         </Table>
-      </CardContent>
-      <CardHeader>
-        <CardTitle>View and manage your billing details</CardTitle>
-        <CardDescription>
-          View and edit your billing details, as well as manage your
-          subscription.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <CardDescription className="mt-1">
-          <Button
-            type="button"
-            size="sm"
-            variant="gray"
-            onClick={handleManageBilling}
-            disabled={!isOwner}
-          >
-            {loading ? "Loading..." : "Manage Billing"}
-          </Button>
-        </CardDescription>
-      </CardContent>
+      </Card>
+      <Card className="flex flex-wrap gap-6 justify-between items-center mt-6 w-full">
+        <CardHeader>
+          <CardTitle>View and manage your billing details</CardTitle>
+          <CardDescription>
+            View and edit your billing details, as well as manage your
+            subscription.
+          </CardDescription>
+        </CardHeader>
+        <Button
+          type="button"
+          size="sm"
+          variant="gray"
+          onClick={handleManageBilling}
+          disabled={!isOwner}
+        >
+          {loading ? "Loading..." : "Manage Billing"}
+        </Button>
+      </Card>
 
       <Dialog open={isInviteDialogOpen} onOpenChange={setIsInviteDialogOpen}>
         <DialogContent>
@@ -392,7 +441,7 @@ export const Workspace = () => {
               {inviteEmails.map((email) => (
                 <div
                   key={email}
-                  className="flex items-center justify-between bg-gray-100 p-2 rounded"
+                  className="flex justify-between items-center p-2 bg-gray-100 rounded"
                 >
                   <span>{email}</span>
                   <Button
