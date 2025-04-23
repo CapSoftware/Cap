@@ -330,7 +330,7 @@ export const Workspace = () => {
               }}
               disabled={!isOwner}
             >
-              Invite users
+              + Invite users
             </Button>
           </div>
         </div>
