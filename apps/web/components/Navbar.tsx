@@ -103,7 +103,6 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
     pathname.includes("/invite") ||
     pathname.includes("/s/") ||
     pathname.includes("/onboarding") ||
-    pathname.includes("/record") ||
     (typeof window !== "undefined" && window.location.href.includes("cap.link"))
   )
     return null;

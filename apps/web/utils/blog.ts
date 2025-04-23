@@ -19,6 +19,13 @@ export type DocMetadata = {
   image?: string;
 };
 
+export interface BlogPost {
+  metadata: PostMetadata | DocMetadata;
+  slug: string;
+  content: string;
+  isManual?: boolean;
+}
+
 function parseFrontmatter(fileContent: string) {
   let frontmatterRegex = /---\s*([\s\S]*?)\s*---/;
   let match = frontmatterRegex.exec(fileContent);
@@ -77,7 +84,7 @@ function readMDXFile(filePath: string) {
   return parseFrontmatter(rawContent);
 }
 
-function getMDXData(dir: string) {
+function getMDXData(dir: string): BlogPost[] {
   console.log("Getting MDX data from:", dir);
   let mdxFiles = getMDXFiles(dir);
   return mdxFiles.map((relativePath) => {
@@ -94,12 +101,84 @@ function getMDXData(dir: string) {
       metadata,
       slug,
       content,
+      isManual: false
     };
   });
 }
 
-export function getBlogPosts() {
-  return getMDXData(path.join(process.cwd(), "content/blog"));
+export function getManualBlogPosts(): BlogPost[] {
+  try {
+    const blogContentDir = path.join(process.cwd(), "content/blog-content");
+    if (!fs.existsSync(blogContentDir)) {
+      console.log("Blog content directory does not exist:", blogContentDir);
+      return [];
+    }
+
+    const fileNames = fs.readdirSync(blogContentDir);
+    
+    return fileNames
+      .filter(fileName => fileName.endsWith('.tsx'))
+      .map(fileName => {
+        const slug = fileName.replace(/\.tsx$/, "");
+        
+        try {
+          const filePath = path.join(blogContentDir, fileName);
+          const fileContent = fs.readFileSync(filePath, 'utf8');
+          
+          // Extract metadata using regex - ensure we have defaults for all required fields
+          const getRegexValue = (regex: RegExp, defaultValue: string): string => {
+            const match = fileContent.match(regex);
+            return match && match[1] ? match[1] : defaultValue;
+          };
+          
+          const title = getRegexValue(/title:\s*"([^"]+)"/, `Unknown (${slug})`);
+          const description = getRegexValue(/description:\s*"([^"]+)"/, `Blog post about ${slug}`);
+          const publishedAt = getRegexValue(/publishedAt:\s*"([^"]+)"/, new Date().toISOString());
+          const author = getRegexValue(/author:\s*"([^"]+)"/, 'Cap Team');
+          
+          // Tags handling
+          const tagsMatch = fileContent.match(/tags:\s*\[(.*?)\]/);
+          let tags = '';
+          if (tagsMatch && tagsMatch[1]) {
+            tags = tagsMatch[1]
+              .split(',')
+              .map(tag => tag.trim().replace(/"/g, ''))
+              .join(', ');
+          }
+          
+          // Create a metadata object similar to MDX files
+          const metadata: PostMetadata = {
+            title,
+            description,
+            publishedAt,
+            author,
+            summary: description,
+            tags
+          };
+          
+          return {
+            metadata,
+            slug,
+            content: '', // Content is handled by the component specific to this manual post
+            isManual: true
+          } as BlogPost;
+        } catch (error) {
+          console.error(`Error processing manual blog post ${fileName}:`, error);
+          return null;
+        }
+      })
+      .filter((post): post is BlogPost => post !== null); // Type guard to filter out nulls
+  } catch (error) {
+    console.error("Error getting manual blog posts:", error);
+    return [];
+  }
+}
+
+export function getBlogPosts(): BlogPost[] {
+  const mdxPosts = getMDXData(path.join(process.cwd(), "content/blog"));
+  const manualPosts = getManualBlogPosts();
+  
+  return [...mdxPosts, ...manualPosts];
 }
 
 export function getDocs() {
