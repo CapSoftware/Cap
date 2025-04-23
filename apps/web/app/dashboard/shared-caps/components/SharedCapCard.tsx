@@ -41,7 +41,7 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
       : analytics;
 
   return (
-    <div className="relative rounded-2xl flex flex-col gap-4 w-full h-full p-4 border-gray-200 bg-gray-50 border-[1px]">
+    <div className="relative rounded-2xl flex flex-col gap-4 w-full h-full border-gray-200 bg-gray-50 border-[1px]">
       <a
         className="block group"
         href={
@@ -58,7 +58,7 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
           alt={`${cap.name} Thumbnail`}
         />
       </a>
-      <div className="flex flex-col flex-grow gap-3 w-full">
+      <div className="flex flex-col flex-grow gap-3 px-4 pb-4 w-full">
         <div className="flex flex-col gap-1">
           <p className="text-md truncate leading-[1.25rem] text-gray-500 font-medium">
             {cap.name}
