@@ -1,5 +1,6 @@
 import { Button } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
+import { makePersisted } from "@solid-primitives/storage";
 import {
   createMutation,
   createQuery,
@@ -20,12 +21,12 @@ import {
   ValidComponent,
 } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
-import { makePersisted } from "@solid-primitives/storage";
 import toast from "solid-toast";
 
 import Tooltip from "~/components/Tooltip";
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
+import { exportVideo } from "~/utils/export";
 import { commands, events } from "~/utils/tauri";
 import { RenderState, useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
@@ -37,7 +38,6 @@ import {
   PopperContent,
   topSlideAnimateClasses,
 } from "./ui";
-import { exportVideo } from "~/utils/export";
 
 export const COMPRESSION_OPTIONS = [
   { label: "Studio", value: "studio" },
@@ -610,13 +610,13 @@ export function ExportDialog() {
           return (
             <>
               <Dialog.Header>
-                <div class="flex w-full justify-between items-center">
+                <div class="flex justify-between items-center w-full">
                   <span class="text-gray-500 dark:text-gray-500">Export</span>
                   <div
                     onClick={() => setDialog((d) => ({ ...d, open: false }))}
-                    class="flex justify-center items-center p-1 rounded-full cursor-pointer hover:bg-gray-200 transition-colors"
+                    class="flex justify-center items-center p-1 rounded-full transition-colors cursor-pointer hover:bg-gray-200"
                   >
-                    <IconCapCircleX class="size-4 text-gray-500" />
+                    <IconCapCircleX class="text-gray-500 size-4" />
                   </div>
                 </div>
               </Dialog.Header>
@@ -690,17 +690,19 @@ export function ExportDialog() {
                               </>
                             }
                           >
-                            <div class="flex flex-col gap-6 items-center animate-in fade-in duration-500">
-                              <div class="flex flex-col gap-2 items-center">
-                                <div class="flex justify-center items-center mb-2 w-16 h-16 bg-blue-50 rounded-full">
-                                  <IconLucideCheck class="size-8 text-blue-500" />
+                            <div class="flex flex-col gap-6 items-center duration-500 animate-in fade-in">
+                              <div class="flex flex-col gap-3 items-center">
+                                <div class="flex justify-center items-center mb-2 bg-gray-500 rounded-full size-10">
+                                  <IconLucideCheck class="text-gray-50 size-5" />
                                 </div>
-                                <h1 class="text-xl font-medium text-gray-600">
-                                  Export Completed
-                                </h1>
-                                <p class="text-sm text-gray-400">
-                                  Your video has been successfully exported
-                                </p>
+                                <div class="flex flex-col gap-1 items-center">
+                                  <h1 class="text-xl font-medium text-gray-600">
+                                    Export Completed
+                                  </h1>
+                                  <p class="text-sm text-gray-400">
+                                    Your video has been successfully exported
+                                  </p>
+                                </div>
                               </div>
                             </div>
                           </Show>
@@ -798,9 +800,9 @@ export function ExportDialog() {
                         class="flex gap-2 justify-center items-center"
                       >
                         {!copyPressed() ? (
-                          <IconCapCopy class="size-4 text-gray-50 group-hover:text-gray-500 transition-colors duration-300" />
+                          <IconCapCopy class="text-gray-50 transition-colors duration-300 size-4 group-hover:text-gray-500" />
                         ) : (
-                          <IconLucideCheck class="size-4 svgpathanimation text-gray-50 group-hover:text-gray-500 transition-colors duration-300" />
+                          <IconLucideCheck class="text-gray-50 transition-colors duration-300 size-4 svgpathanimation group-hover:text-gray-500" />
                         )}
                         <p>Open Link</p>
                       </Button>
