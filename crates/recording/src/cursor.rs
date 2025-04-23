@@ -147,8 +147,8 @@ pub fn spawn_cursor_recorder(
                 let position = if mouse_state.coords != last_mouse_state.coords {
                     let (mouse_x, mouse_y) = {
                         (
-                            mouse_state.coords.x - screen_bounds.x as i32,
-                            mouse_state.coords.y - screen_bounds.y as i32,
+                            mouse_state.coords.0 - screen_bounds.x as i32,
+                            mouse_state.coords.1 - screen_bounds.y as i32,
                         )
                     };
 
