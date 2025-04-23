@@ -331,8 +331,6 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 
                 let monitor_bounds = logical_monitor_bounds(id).unwrap();
 
-                dbg!(monitor_bounds);
-
                 window_info.bounds.x -= monitor_bounds.position.x;
                 window_info.bounds.y -= monitor_bounds.position.y;
 
