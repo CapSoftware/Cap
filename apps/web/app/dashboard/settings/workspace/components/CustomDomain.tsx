@@ -291,7 +291,7 @@ export function CustomDomain() {
             {activeSpace?.space.customDomain &&
               (isVerified ? (
                 <>
-                  <div className="flex items-center gap-1.5 text-green-500 bg-green-100 px-2.5 py-1.5 rounded-xl text-sm">
+                  <div className="flex items-center gap-1.5 text-green-500 bg-green-200 px-2.5 py-1.5 rounded-xl text-sm">
                     <CheckCircle className="size-3" />
                     <span className="text-xs font-medium text-green-500">
                       Domain verified
