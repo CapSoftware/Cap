@@ -18,29 +18,23 @@ export function Timeline() {
     project,
     setProject,
     editorInstance,
-    playbackTime,
-    setPlaybackTime,
-    previewTime,
-    setPreviewTime,
-    history,
-    split,
-    setState,
-    playing,
+    projectHistory,
+    setEditorState,
     totalDuration,
-    state,
+    editorState,
   } = useEditorContext();
 
   const duration = () => editorInstance.recordingDuration;
+  const transform = () => editorState.timeline.transform;
 
   const [timelineRef, setTimelineRef] = createSignal<HTMLDivElement>();
   const timelineBounds = createElementBounds(timelineRef);
 
-  const secsPerPixel = () =>
-    state.timelineTransform.zoom / (timelineBounds.width ?? 1);
+  const secsPerPixel = () => transform().zoom / (timelineBounds.width ?? 1);
 
   onMount(() => {
     if (!project.timeline) {
-      const resume = history.pause();
+      const resume = projectHistory.pause();
       setProject("timeline", {
         segments: [
           {
@@ -79,10 +73,10 @@ export function Timeline() {
   async function handleUpdatePlayhead(e: MouseEvent) {
     const { left } = timelineBounds;
     if (zoomSegmentDragState.type !== "moving") {
-      setPlaybackTime(
+      setEditorState(
+        "playbackTime",
         Math.min(
-          secsPerPixel() * (e.clientX - left!) +
-            state.timelineTransform.position,
+          secsPerPixel() * (e.clientX - left!) + transform().position,
           totalDuration()
         )
       );
@@ -91,8 +85,8 @@ export function Timeline() {
 
   createEventListener(window, "keydown", (e) => {
     if (e.code === "Backspace" || e.code === "Delete") {
-      if (state.timelineSelection?.type !== "zoom") return;
-      const selection = state.timelineSelection;
+      if (editorState.timeline.selection?.type !== "zoom") return;
+      const selection = editorState.timeline.selection;
 
       batch(() => {
         setProject(
@@ -103,6 +97,8 @@ export function Timeline() {
       });
     }
   });
+
+  const split = () => editorState.timeline.interactMode === "split";
 
   return (
     <TimelineContextProvider
@@ -121,7 +117,7 @@ export function Timeline() {
             createEventListener(e.currentTarget, "mouseup", () => {
               handleUpdatePlayhead(e);
               if (zoomSegmentDragState.type === "idle") {
-                setState("timelineSelection", null);
+                setEditorState("timeline", "selection", null);
               }
             });
             createEventListener(window, "mouseup", () => {
@@ -131,27 +127,26 @@ export function Timeline() {
         }}
         onMouseMove={(e) => {
           const { left } = timelineBounds;
-          if (playing()) return;
-          setPreviewTime(
-            state.timelineTransform.position +
-              secsPerPixel() * (e.clientX - left!)
+          if (editorState.playing) return;
+          setEditorState(
+            "previewTime",
+            transform().position + secsPerPixel() * (e.clientX - left!)
           );
         }}
         onMouseLeave={() => {
-          setPreviewTime(undefined);
+          setEditorState("previewTime", null);
         }}
         onWheel={(e) => {
           // pinch zoom or ctrl + scroll
           if (e.ctrlKey) {
             batch(() => {
-              const zoomDelta =
-                (e.deltaY * Math.sqrt(state.timelineTransform.zoom)) / 30;
+              const zoomDelta = (e.deltaY * Math.sqrt(transform().zoom)) / 30;
 
-              const newZoom = state.timelineTransform.zoom + zoomDelta;
+              const newZoom = transform().zoom + zoomDelta;
 
-              state.timelineTransform.updateZoom(
+              transform().updateZoom(
                 newZoom,
-                previewTime() ?? playbackTime()
+                editorState.previewTime ?? editorState.playbackTime
               );
             });
           }
@@ -172,15 +167,14 @@ export function Timeline() {
               delta = e.deltaY;
             }
 
-            const newPosition =
-              state.timelineTransform.position + secsPerPixel() * delta;
+            const newPosition = transform().position + secsPerPixel() * delta;
 
-            state.timelineTransform.setPosition(newPosition);
+            transform().setPosition(newPosition);
           }
         }}
       >
         <TimelineMarkings />
-        <Show when={!playing() && previewTime()}>
+        <Show when={!editorState.playing && editorState.previewTime}>
           {(time) => (
             <div
               class={cx(
@@ -190,7 +184,7 @@ export function Timeline() {
               style={{
                 left: `${TIMELINE_PADDING}px`,
                 transform: `translateX(${
-                  (time() - state.timelineTransform.position) / secsPerPixel()
+                  (time() - transform().position) / secsPerPixel()
                 }px)`,
               }}
             >
@@ -209,7 +203,7 @@ export function Timeline() {
             style={{
               left: `${TIMELINE_PADDING}px`,
               transform: `translateX(${Math.min(
-                (playbackTime() - state.timelineTransform.position) /
+                (editorState.playbackTime - transform().position) /
                   secsPerPixel(),
                 timelineBounds.width ?? 0
               )}px)`,
@@ -231,16 +225,16 @@ export function Timeline() {
 }
 
 function TimelineMarkings() {
-  const { state } = useEditorContext();
+  const { editorState } = useEditorContext();
   const { secsPerPixel, markingResolution } = useTimelineContext();
+  const transform = () => editorState.timeline.transform;
 
   const timelineMarkings = () => {
-    const diff = state.timelineTransform.position % markingResolution();
+    const diff = transform().position % markingResolution();
 
     return Array.from(
-      { length: 2 + (state.timelineTransform.zoom + 5) / markingResolution() },
-      (_, i) =>
-        state.timelineTransform.position - diff + (i + 0) * markingResolution()
+      { length: 2 + (transform().zoom + 5) / markingResolution() },
+      (_, i) => transform().position - diff + (i + 0) * markingResolution()
     );
   };
 
@@ -253,8 +247,7 @@ function TimelineMarkings() {
               class="absolute bottom-1 left-0 text-center rounded-full w-1 h-1 bg-[--text-tertiary] text-[--text-tertiary]"
               style={{
                 transform: `translateX(${
-                  (second - state.timelineTransform.position) / secsPerPixel() -
-                  1
+                  (second - transform().position) / secsPerPixel() - 1
                 }px)`,
               }}
             >

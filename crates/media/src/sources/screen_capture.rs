@@ -48,7 +48,7 @@ pub struct CaptureArea {
     pub bounds: Bounds,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase", tag = "variant")]
 pub enum ScreenCaptureTarget {
     Window { id: u32 },
@@ -57,6 +57,13 @@ pub enum ScreenCaptureTarget {
 }
 
 impl ScreenCaptureTarget {
+    // only available on mac and windows
+    pub fn primary_display() -> Self {
+        ScreenCaptureTarget::Screen {
+            id: scap::get_main_display().id,
+        }
+    }
+
     pub fn get_target(&self) -> Option<scap::Target> {
         let targets = scap::get_all_targets();
 
@@ -197,6 +204,12 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCapture
 
 const MAX_FPS: u32 = 60;
 
+struct OptionsConfig {
+    scap_target: scap::Target,
+    bounds: Bounds,
+    crop_area: Option<Area>,
+}
+
 impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
     pub fn init(
         target: &ScreenCaptureTarget,
@@ -212,8 +225,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 
         let (scap_target, bounds, crop_area) = Self::get_options_config(&target)?;
 
-        let fps =
-            get_target_fps(&scap_target).ok_or_else(|| "Failed to get target fps".to_string())?;
+        let fps = get_target_fps(&scap_target).map_err(|e| format!("target_fps / {e}"))?;
         let fps = fps.min(max_fps);
 
         if !(fps > 0) {
@@ -707,7 +719,7 @@ pub fn list_screens() -> Vec<(CaptureScreen, Target)> {
                     .cloned()
                     .unwrap_or_else(|| format!("Screen {}", idx + 1)),
                 refresh_rate: {
-                    let Some(fps) = get_target_fps(&Target::Display(screen.clone())) else {
+                    let Ok(fps) = get_target_fps(&Target::Display(screen.clone())) else {
                         continue;
                     };
 
@@ -755,20 +767,23 @@ pub fn list_windows() -> Vec<(CaptureWindow, Target)> {
         .collect()
 }
 
-pub fn get_target_fps(target: &scap::Target) -> Option<u32> {
+pub fn get_target_fps(target: &scap::Target) -> Result<u32, String> {
     #[cfg(target_os = "macos")]
     match target {
         scap::Target::Display(display) => platform::get_display_refresh_rate(display.raw_handle.id),
-        scap::Target::Window(window) => {
-            platform::get_display_refresh_rate(platform::display_for_window(window.raw_handle)?.id)
-        }
+        scap::Target::Window(window) => platform::get_display_refresh_rate(
+            platform::display_for_window(window.raw_handle)
+                .ok_or_else(|| "failed to get display for window".to_string())?
+                .id,
+        ),
     }
     #[cfg(target_os = "windows")]
     match target {
         scap::Target::Display(display) => platform::get_display_refresh_rate(display.raw_handle),
-        scap::Target::Window(window) => {
-            platform::get_display_refresh_rate(platform::display_for_window(window.raw_handle)?)
-        }
+        scap::Target::Window(window) => platform::get_display_refresh_rate(
+            platform::display_for_window(window.raw_handle)
+                .ok_or_else(|| "failed to get display for window".to_string())?,
+        ),
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     None
