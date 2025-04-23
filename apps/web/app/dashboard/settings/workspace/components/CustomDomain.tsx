@@ -7,7 +7,9 @@ import { removeWorkspaceDomain } from "@/actions/workspace/remove-domain";
 import { updateDomain } from "@/actions/workspace/update-domain";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Button, Input } from "@cap/ui";
-import { Check, CheckCircle, Copy, RefreshCw, XCircle } from "lucide-react";
+import { faRefresh, faTrash } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Check, CheckCircle, Copy, XCircle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "react-hot-toast";
@@ -275,7 +277,7 @@ export function CustomDomain() {
   return (
     <div className="space-y-6">
       <div>
-        <div className="flex flex-col items-start mt-2">
+        <div className="flex flex-col justify-between items-start mt-2 h-full">
           <Input
             type="text"
             id="customDomain"
@@ -285,51 +287,13 @@ export function CustomDomain() {
             disabled={loading}
             className="flex-1"
           />
-          <Button
-            className="mt-8"
-            type="submit"
-            size="sm"
-            variant="dark"
-            onClick={handleSubmit}
-            disabled={loading}
-          >
-            {loading ? "Saving..." : "Save"}
-          </Button>
-          {activeSpace?.space.customDomain && (
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => checkVerification(true)}
-              disabled={verifying}
-              className="w-[105px]"
-            >
-              {verifying ? (
-                <RefreshCw className="mr-2 w-6 h-6 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-2 w-6 h-6" />
-              )}
-              Refresh
-            </Button>
-          )}
-          {activeSpace?.space.customDomain && (
-            <Button
-              type="button"
-              variant="destructive"
-              onClick={handleRemoveDomain}
-              disabled={loading}
-            >
-              Remove
-            </Button>
-          )}
-        </div>
-        {activeSpace?.space.customDomain && (
-          <div className="mt-4 space-y-4">
-            <div className="flex gap-2 items-center">
-              {isVerified ? (
+          <div className="flex gap-2 justify-between items-center mt-4">
+            {activeSpace?.space.customDomain &&
+              (isVerified ? (
                 <>
-                  <div className="flex items-center gap-1.5 text-green-500 bg-green-100 px-2.5 py-1.5 rounded-md text-sm">
-                    <CheckCircle className="w-4 h-4" />
-                    <span className="text-sm font-medium text-green-500">
+                  <div className="flex items-center gap-1.5 text-green-500 bg-green-100 px-2.5 py-1.5 rounded-xl text-sm">
+                    <CheckCircle className="size-3" />
+                    <span className="text-xs font-medium text-green-500">
                       Domain verified
                     </span>
                   </div>
@@ -343,8 +307,56 @@ export function CustomDomain() {
                     </span>
                   </div>
                 </>
+              ))}
+          </div>
+          <div className="flex gap-3 justify-between items-center mt-8 w-full">
+            <Button
+              type="submit"
+              size="sm"
+              variant="dark"
+              onClick={handleSubmit}
+              disabled={loading}
+            >
+              {loading ? "Saving..." : "Save"}
+            </Button>
+            <div className="flex gap-3 items-center">
+              {activeSpace?.space.customDomain && (
+                <Button
+                  type="button"
+                  variant="white"
+                  size="sm"
+                  onClick={() => checkVerification(true)}
+                  disabled={verifying}
+                  className="w-[105px]"
+                >
+                  {verifying ? (
+                    <FontAwesomeIcon
+                      className="animate-spin size-6"
+                      icon={faRefresh}
+                    />
+                  ) : (
+                    <FontAwesomeIcon className="mr-1 size-4" icon={faRefresh} />
+                  )}
+                  Refresh
+                </Button>
+              )}
+              {activeSpace?.space.customDomain && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="white"
+                  onClick={handleRemoveDomain}
+                  disabled={loading}
+                >
+                  <FontAwesomeIcon className="mr-1 size-4" icon={faTrash} />
+                  Remove
+                </Button>
               )}
             </div>
+          </div>
+        </div>
+        {activeSpace?.space.customDomain && (
+          <div className="mt-4 space-y-4">
             {!isVerified && domainConfig?.verification?.[0] && (
               <div className="overflow-hidden rounded-lg border border-gray-200">
                 <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
