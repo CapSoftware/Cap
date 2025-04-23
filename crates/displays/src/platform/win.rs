@@ -10,6 +10,7 @@ use windows::{
     core::{PCWSTR, PWSTR},
 };
 
+#[derive(Clone, Copy)]
 pub struct DisplayImpl(HMONITOR);
 
 impl DisplayImpl {

@@ -6,10 +6,6 @@ pub use platform::DisplayImpl;
 pub struct Display(DisplayImpl);
 
 impl Display {
-    pub fn primary() -> Self {
-        Self(DisplayImpl::primary())
-    }
-
     pub fn list() -> Vec<Self> {
         DisplayImpl::list().into_iter().map(Self).collect()
     }
