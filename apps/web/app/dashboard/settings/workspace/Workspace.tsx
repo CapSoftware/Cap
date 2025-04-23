@@ -8,7 +8,7 @@ import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayou
 import { Tooltip } from "@/components/Tooltip";
 import {
   Button,
-  CardContent,
+  Card,
   CardDescription,
   CardHeader,
   CardTitle,
@@ -150,16 +150,16 @@ export const Workspace = () => {
   return (
     <form onSubmit={handleSubmit}>
       {isOwner === false && (
-        <CardContent>
+        <Card>
           <CardTitle>*Only the owner can make changes</CardTitle>
           <CardDescription>
             Only the owner can make changes to this workspace.
           </CardDescription>
-        </CardContent>
+        </Card>
       )}
 
       <div className="flex flex-col flex-1 gap-6 justify-center lg:flex-row">
-        <CardContent className="flex flex-col flex-1 gap-3 justify-center items-center">
+        <Card className="flex flex-col flex-1 gap-3 justify-center items-center">
           <FontAwesomeIcon className="text-gray-400 size-5" icon={faChair} />
           <p>
             Seats Remaining
@@ -167,8 +167,8 @@ export const Workspace = () => {
               {activeSpace?.inviteQuota ?? 1 - (activeSpace?.totalInvites ?? 1)}
             </span>
           </p>
-        </CardContent>
-        <CardContent className="flex flex-col flex-1 gap-3 justify-center items-center">
+        </Card>
+        <Card className="flex flex-col flex-1 gap-3 justify-center items-center">
           <FontAwesomeIcon
             className="text-gray-400 size-5"
             icon={faUserGroup}
@@ -179,12 +179,12 @@ export const Workspace = () => {
               {activeSpace?.inviteQuota}
             </span>
           </p>
-        </CardContent>
+        </Card>
       </div>
 
-      <div className="flex flex-col flex-1 gap-6 justify-center items-center mt-6 xl:flex-row">
-        <CardContent className="flex-1 w-full">
-          <div className="flex flex-col gap-6 justify-center items-center lg:flex-row">
+      <div className="flex flex-col flex-1 gap-6 justify-center items-stretch mt-6 xl:flex-row">
+        <Card className="flex flex-col flex-1 justify-between w-full">
+          <div className="flex flex-col gap-6 justify-center lg:flex-row">
             <div className="flex-1 w-full">
               <div className="space-y-1">
                 <Label htmlFor="workspaceName">Name</Label>
@@ -228,7 +228,7 @@ export const Workspace = () => {
             </div>
           </div>
           <Button
-            className="mt-8"
+            className="mt-8 w-fit"
             type="submit"
             size="sm"
             variant="dark"
@@ -239,8 +239,8 @@ export const Workspace = () => {
           >
             Save
           </Button>
-        </CardContent>
-        <CardContent className="flex flex-col flex-1 gap-6 w-full lg:flex-row">
+        </Card>
+        <Card className="flex flex-col flex-1 gap-6 w-full lg:flex-row">
           <div className="flex-1">
             <div className="space-y-1">
               <Label htmlFor="customDomain">Custom Domain</Label>
@@ -285,10 +285,10 @@ export const Workspace = () => {
               name="icon"
             />
           </div> */}
-        </CardContent>
+        </Card>
       </div>
 
-      <CardContent className="mt-6">
+      <Card className="mt-6">
         <div className="flex flex-wrap gap-6 justify-between items-center w-full">
           <CardHeader>
             <CardTitle>Members</CardTitle>
@@ -391,8 +391,8 @@ export const Workspace = () => {
               ))}
           </TableBody>
         </Table>
-      </CardContent>
-      <CardContent className="flex flex-wrap gap-6 justify-between items-center mt-6 w-full">
+      </Card>
+      <Card className="flex flex-wrap gap-6 justify-between items-center mt-6 w-full">
         <CardHeader>
           <CardTitle>View and manage your billing details</CardTitle>
           <CardDescription>
@@ -409,7 +409,7 @@ export const Workspace = () => {
         >
           {loading ? "Loading..." : "Manage Billing"}
         </Button>
-      </CardContent>
+      </Card>
 
       <Dialog open={isInviteDialogOpen} onOpenChange={setIsInviteDialogOpen}>
         <DialogContent>

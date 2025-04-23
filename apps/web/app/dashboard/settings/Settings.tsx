@@ -2,18 +2,15 @@
 
 import { users } from "@cap/database/schema";
 import {
+  Button,
   Card,
-  CardContent,
   CardDescription,
   CardFooter,
-  CardHeader,
   CardTitle,
-  Button,
   Input,
   Label,
 } from "@cap/ui";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
 import toast from "react-hot-toast";
 
 export const Settings = ({
@@ -56,14 +53,14 @@ export const Settings = ({
 
   return (
     <form onSubmit={handleSubmit}>
-      <CardContent>
+      <Card>
         <CardTitle>Your name</CardTitle>
         <CardDescription>
           Changing your name below will update how your name appears when
           sharing a Cap, and in your profile.
         </CardDescription>
-      </CardContent>
-      <CardContent>
+      </Card>
+      <Card>
         <div className="space-y-3">
           <div>
             <Label htmlFor="firstName">First name</Label>
@@ -84,14 +81,14 @@ export const Settings = ({
             />
           </div>
         </div>
-      </CardContent>
-      <CardContent>
+      </Card>
+      <Card>
         <CardTitle>Contact email address</CardTitle>
         <CardDescription>
           This is the email address you used to sign up to Cap with.
         </CardDescription>
-      </CardContent>
-      <CardContent>
+      </Card>
+      <Card>
         <div>
           <Input
             type="email"
@@ -101,8 +98,8 @@ export const Settings = ({
             disabled
           />
         </div>
-      </CardContent>
-      <CardFooter className="border-t px-6 py-4">
+      </Card>
+      <CardFooter className="px-6 py-4 border-t">
         <Button type="submit" size="sm" variant="gray">
           Save
         </Button>

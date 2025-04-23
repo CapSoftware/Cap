@@ -2,20 +2,18 @@
 
 import {
   Button,
-  LogoBadge,
   Card,
   CardDescription,
-  CardTitle,
-  CardHeader,
-  CardContent,
   CardFooter,
+  CardHeader,
+  CardTitle,
   Switch,
 } from "@cap/ui";
-import { Check, Construction } from "lucide-react";
-import { useState, useEffect } from "react";
 import { getProPlanId } from "@cap/utils";
-import toast from "react-hot-toast";
+import { Check } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
+import toast from "react-hot-toast";
 import { SimplePlans } from "../text/SimplePlans";
 
 export const PricingPage = () => {
@@ -319,15 +317,13 @@ export const PricingPage = () => {
             </div>
             <h1
               className={`text-4xl md:text-5xl ${
-                initialRender ? "fade-in-down" : ""
-              }mb-6 }`}
+                initialRender ? "fade-in-down" : ""}mb-6 }`}
             >
               Early Adopter Pricing
             </h1>
             <p
               className={`max-w-[800px] mx-auto ${
-                initialRender ? "fade-in-down animate-delay-1" : ""
-              }`}
+                initialRender ? "fade-in-down animate-delay-1" : ""}`}
             >
               Cap is currently in public beta, and we're offering special early
               adopter pricing to our first users. This pricing will be locked in
@@ -335,7 +331,7 @@ export const PricingPage = () => {
             </p>
 
             <div className="flex justify-center mt-5 mb-8">
-              <div className="inline-flex bg-gray-100 p-1 rounded-full border border-blue-300">
+              <div className="inline-flex p-1 bg-gray-100 rounded-full border border-blue-300">
                 <div
                   className={`rounded-full z-10 relative transition-all duration-300 min-w-[120px] py-2 px-6 mx-0.5 text-center cursor-pointer border ${
                     deploymentType === "cloud"
@@ -364,8 +360,7 @@ export const PricingPage = () => {
             <div className="grid grid-cols-1 gap-3 items-stretch md:grid-cols-2">
               <Card
                 className={`bg-gray-100 rounded-xl min-h-[600px] flex-grow ${
-                  initialRender ? "fade-in-down animate-delay-2" : ""
-                }`}
+                  initialRender ? "fade-in-down animate-delay-2" : ""}`}
               >
                 <div className="space-y-4">
                   <CardHeader>
@@ -400,7 +395,7 @@ export const PricingPage = () => {
                           )}
                         </div>
                       </div>
-                      <div className="flex items-center justify-between pt-4 mt-2 border-t border-gray-200">
+                      <div className="flex justify-between items-center pt-4 mt-2 border-t border-gray-200">
                         <div className="flex items-center">
                           <span className="mr-2 text-xs">
                             Switch to{" "}
@@ -445,7 +440,7 @@ export const PricingPage = () => {
                       </div>
                     </div>
                   </CardHeader>
-                  <CardContent>
+                  <Card className="bg-transparent border-0">
                     <Button
                       onClick={openCommercialCheckout}
                       className="w-full"
@@ -458,7 +453,7 @@ export const PricingPage = () => {
                         ? "Purchase Licenses"
                         : "Purchase License"}
                     </Button>
-                  </CardContent>
+                  </Card>
                   <CardFooter>
                     <div className="space-y-8">
                       <div>
@@ -485,14 +480,13 @@ export const PricingPage = () => {
 
               <Card
                 className={`bg-gray-100 rounded-xl min-h-[600px] flex-grow border-blue-500 border-4 ${
-                  initialRender ? "fade-in-up animate-delay-2" : ""
-                }`}
+                  initialRender ? "fade-in-up animate-delay-2" : ""}`}
               >
                 <div className="space-y-3">
                   <CardHeader>
-                    <CardTitle className="text-2xl  font-medium">
+                    <CardTitle className="text-2xl font-medium">
                       App + Commercial License +{" "}
-                      <span className="text-blue-500 text-2xl font-bold">
+                      <span className="text-2xl font-bold text-blue-500">
                         Cap Pro
                       </span>
                     </CardTitle>
@@ -529,7 +523,7 @@ export const PricingPage = () => {
                           )}
                         </div>
                       </div>
-                      <div className="flex items-center justify-between pt-4 mt-2 border-t border-gray-200">
+                      <div className="flex justify-between items-center pt-4 mt-2 border-t border-gray-200">
                         <div className="flex items-center">
                           <span className="mr-2 text-xs">
                             Switch to {isAnnual ? "monthly" : "annually"}
@@ -569,7 +563,7 @@ export const PricingPage = () => {
                       </div>
                     </div>
                   </CardHeader>
-                  <CardContent>
+                  <Card className="bg-transparent border-0">
                     <Button
                       variant="primary"
                       onClick={() => planCheckout()}
@@ -579,7 +573,7 @@ export const PricingPage = () => {
                     >
                       {proLoading ? "Loading..." : "Upgrade to Cap Pro"}
                     </Button>
-                  </CardContent>
+                  </Card>
                   <CardFooter>
                     <div className="space-y-8">
                       <div>
@@ -605,19 +599,18 @@ export const PricingPage = () => {
               </Card>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
               <Card
                 className={`bg-gray-100 rounded-xl min-h-[600px] flex-grow border-blue-500 border-4 ${
-                  initialRender ? "fade-in-up animate-delay-2" : ""
-                }`}
+                  initialRender ? "fade-in-up animate-delay-2" : ""}`}
               >
                 <div className="space-y-3">
                   <CardHeader>
                     <CardTitle className="text-2xl font-medium">
-                      <span className="text-black text-2xl font-medium">
+                      <span className="text-2xl font-medium text-black">
                         Self-hosted
                       </span>{" "}
-                      <span className="text-blue-500 text-2xl font-bold">
+                      <span className="text-2xl font-bold text-blue-500">
                         Cap Pro
                       </span>
                     </CardTitle>
@@ -648,7 +641,7 @@ export const PricingPage = () => {
                           )}
                         </div>
                       </div>
-                      <div className="flex items-center justify-between pt-4 mt-2 border-t border-gray-200">
+                      <div className="flex justify-between items-center pt-4 mt-2 border-t border-gray-200">
                         <div className="flex items-center">
                           <span className="mr-2 text-xs">
                             Switch to{" "}
@@ -693,7 +686,7 @@ export const PricingPage = () => {
                       </div>
                     </div>
                   </CardHeader>
-                  <CardContent>
+                  <Card>
                     <Button
                       variant="primary"
                       onClick={openSelfHostedCheckout}
@@ -705,7 +698,7 @@ export const PricingPage = () => {
                         ? "Loading..."
                         : "Get Self-hosted Cap Pro"}
                     </Button>
-                  </CardContent>
+                  </Card>
                   <CardFooter>
                     <div className="space-y-8">
                       <div>

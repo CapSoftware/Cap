@@ -384,7 +384,7 @@ const NormalLogin = ({
         )}
 
         {oauthError && (
-          <div className="p-4 mb-4 bg-red-600 rounded-lg">
+          <div className="p-4 mb-4 bg-red-900 rounded-xl">
             <p className="text-sm text-gray-50">
               It looks like you've previously used this email to sign up via
               email login. Please enter your email below to receive a sign in
