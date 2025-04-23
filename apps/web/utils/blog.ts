@@ -108,9 +108,23 @@ function getMDXData(dir: string): BlogPost[] {
 
 export function getManualBlogPosts(): BlogPost[] {
   try {
-    const blogContentDir = path.join(process.cwd(), "content/blog-content");
-    if (!fs.existsSync(blogContentDir)) {
-      console.log("Blog content directory does not exist:", blogContentDir);
+    const possiblePaths = [
+      path.join(process.cwd(), "content/blog-content"),
+      path.join(process.cwd(), "apps/web/content/blog-content"),
+      path.join(process.cwd(), "../content/blog-content"),
+      path.join(process.cwd(), "../../content/blog-content")
+    ];
+    
+    let blogContentDir = "";
+    for (const pathToCheck of possiblePaths) {
+      if (fs.existsSync(pathToCheck)) {
+        blogContentDir = pathToCheck;
+        break;
+      }
+    }
+    
+    if (!blogContentDir) {
+      console.log("Blog content directory not found in any of the checked paths");
       return [];
     }
 
