@@ -6,6 +6,9 @@ export const metadata: Metadata = {
     index: false,
     follow: false,
   },
+  alternates: {
+    canonical: "https://cap.so/",
+  },
 };
 
 export default async function Home() {

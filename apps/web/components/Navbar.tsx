@@ -112,7 +112,7 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
       <div className="fixed border-b border-b-zinc-100 inset-0 z-20 p-4 w-full backdrop-blur-md bg-white/70 h-[60px]">
         <div className="flex justify-between items-center mx-auto max-w-3xl h-full transition-all">
           <div className="flex items-center">
-            <Link passHref href="/">
+            <Link passHref href="/home">
               <Logo className="w-[90px]" />
             </Link>
             <div className="hidden md:block">

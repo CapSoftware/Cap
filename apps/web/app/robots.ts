@@ -20,12 +20,12 @@ export default function robots(): MetadataRoute.Robots {
         // Be more specific about what we're disallowing under /s/
         disallow: [
           "/dashboard",
-          "/s/*", // This will match /s/ and anything under it
+          "/s/*",
           "/login",
           "/invite",
           "/onboarding",
           "/record",
-          "/home", // Explicitly disallow the /home route
+          "/home",
         ],
       },
     ],
