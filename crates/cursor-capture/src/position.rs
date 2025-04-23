@@ -33,13 +33,21 @@ pub struct RelativeCursorPosition {
 
 impl RelativeCursorPosition {
     pub fn from_raw(raw: RawCursorPosition, display: Display) -> Self {
-        let raw_display = display.raw_handle().inner();
-        let display_bounds = raw_display.bounds();
+        #[cfg(target_os = "macos")]
+        {
+            let raw_display = display.raw_handle().inner();
+            let display_bounds = raw_display.bounds();
 
-        Self {
-            x: raw.x - display_bounds.origin.x as i32,
-            y: raw.y - display_bounds.origin.y as i32,
-            display,
+            return Self {
+                x: raw.x - display_bounds.origin.x as i32,
+                y: raw.y - display_bounds.origin.y as i32,
+                display,
+            };
+        }
+
+        #[cfg(windows)]
+        {
+            todo!()
         }
     }
 
