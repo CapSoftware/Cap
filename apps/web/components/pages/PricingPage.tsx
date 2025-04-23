@@ -229,7 +229,7 @@ export const PricingPage = () => {
             <h1
               className={`text-4xl md:text-5xl ${
                 initialRender ? "fade-in-down" : ""
-              }mb-6 }`}
+              } mb-6`}
             >
               Early Adopter Pricing
             </h1>
