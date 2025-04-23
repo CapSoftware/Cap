@@ -122,7 +122,7 @@ export function LoginForm() {
         <Link className="flex mx-auto w-fit" href="/">
           <LogoBadge className="w-[72px] mx-auto" />
         </Link>
-        <div className="flex flex-col justify-center my-[28px] items-center text-left">
+        <div className="flex flex-col justify-center items-center my-7 text-left">
           <h1 className="text-2xl font-semibold">Sign in to Cap</h1>
           <p className="text-[16px] text-gray-400">
             Beautiful screen recordings, owned by you.
