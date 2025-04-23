@@ -46,7 +46,9 @@ impl CursorActor {
 
 #[tracing::instrument(name = "cursor", skip_all)]
 pub fn spawn_cursor_recorder(
-    screen_bounds: Bounds,
+    #[allow(unused)] screen_bounds: Bounds,
+    #[cfg(target_os = "macos")] display: Display,
+    #[cfg(target_os = "macos")] crop_ratio: ((f32, f32), (f32, f32)),
     cursors_dir: PathBuf,
     prev_cursors: Cursors,
     next_cursor_id: u32,
@@ -55,16 +57,13 @@ pub fn spawn_cursor_recorder(
     let stop_signal = Arc::new(AtomicBool::new(false));
     let (tx, rx) = oneshot::channel();
 
-    let display = Display::primary();
-    let crop_position = (0.0, 0.0);
-    let crop_size = (1.0, 1.0);
-
     spawn_actor({
         let stop_signal = stop_signal.clone();
         async move {
             let device_state = DeviceState::new();
             let mut last_mouse_state = device_state.get_mouse();
 
+            #[cfg(target_os = "macos")]
             let mut last_position = RawCursorPosition::get();
 
             // Create cursors directory if it doesn't exist
@@ -83,8 +82,6 @@ pub fn spawn_cursor_recorder(
                 };
                 let elapsed = elapsed.as_secs_f64() * 1000.0;
                 let mouse_state = device_state.get_mouse();
-
-                let position = RawCursorPosition::get();
 
                 let cursor_data = get_cursor_image_data();
                 let cursor_id = if let Some(data) = cursor_data {
@@ -127,20 +124,76 @@ pub fn spawn_cursor_recorder(
                     "default".to_string()
                 };
 
-                if position != last_position {
-                    last_position = position;
+                // TODO: use this on windows too
+                #[cfg(target_os = "macos")]
+                let position = {
+                    let position = RawCursorPosition::get();
+                    dbg!(position);
 
-                    let cropped_position = position
-                        .relative_to_display(display)
-                        .normalize()
-                        .with_crop(crop_position, crop_size);
+                    if position != last_position {
+                        last_position = position;
 
+                        let cropped_position = position
+                            .relative_to_display(display)
+                            .normalize()
+                            .with_crop(crop_ratio.0, crop_ratio.1);
+
+                        Some((cropped_position.x() as f64, cropped_position.y() as f64))
+                    } else {
+                        None
+                    }
+                };
+
+                #[cfg(windows)]
+                let position = if mouse_state.coords != last_mouse_state.coords {
+                    let (mouse_x, mouse_y) = {
+                        (
+                            mouse_state.coords.x - screen_bounds.x as i32,
+                            mouse_state.coords.y - screen_bounds.y as i32,
+                        )
+                    };
+
+                    // Calculate normalized coordinates (0.0 to 1.0) within the screen bounds
+                    // Check if screen_bounds dimensions are valid to avoid division by zero
+                    let x = if screen_bounds.width > 0.0 {
+                        mouse_x as f64 / screen_bounds.width
+                    } else {
+                        0.5 // Fallback if width is invalid
+                    };
+
+                    let y = if screen_bounds.height > 0.0 {
+                        mouse_y as f64 / screen_bounds.height
+                    } else {
+                        0.5 // Fallback if height is invalid
+                    };
+
+                    // Clamp values to ensure they're within valid range
+                    let x = if x.is_nan() || x.is_infinite() {
+                        debug!("X coordinate is invalid: {}", x);
+                        0.5
+                    } else {
+                        x
+                    };
+
+                    let y = if y.is_nan() || y.is_infinite() {
+                        debug!("Y coordinate is invalid: {}", y);
+                        0.5
+                    } else {
+                        y
+                    };
+
+                    Some((x, y))
+                } else {
+                    None
+                };
+
+                if let Some((x, y)) = position {
                     let mouse_event = CursorMoveEvent {
                         active_modifiers: vec![],
                         cursor_id: cursor_id.clone(),
                         time_ms: elapsed,
-                        x: cropped_position.x() as f64,
-                        y: cropped_position.y() as f64,
+                        x,
+                        y,
                     };
 
                     response.moves.push(mouse_event);

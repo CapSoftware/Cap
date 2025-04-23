@@ -23,6 +23,7 @@ impl RawCursorPosition {
     }
 }
 
+// relative to display using bottom-left origin
 #[derive(Clone, Copy)]
 pub struct RelativeCursorPosition {
     pub(crate) x: i32,

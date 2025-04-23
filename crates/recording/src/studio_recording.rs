@@ -520,6 +520,7 @@ async fn create_segment_pipeline(
         system_audio.0,
         start_time,
     )?;
+    let screen_crop_ratio = screen_source.crop_ratio();
 
     let camera_feed = match camera_feed.as_ref() {
         Some(camera_feed) => Some(camera_feed.lock().await),
@@ -706,11 +707,15 @@ async fn create_segment_pipeline(
 
     let (mut pipeline, pipeline_done_rx) = pipeline_builder.build().await?;
 
-    let cursor = custom_cursor_capture.then(|| {
-        let monitor = || {
+    dbg!(&screen.bounds);
+
+    let cursor = custom_cursor_capture.then(move || {
+        let cursor = spawn_cursor_recorder(
+            screen.bounds.clone(),
             #[cfg(target_os = "macos")]
-            return cap_displays::Display::list().into_iter().find(|m| {
-                match &options.capture_target {
+            cap_displays::Display::list()
+                .into_iter()
+                .find(|m| match &options.capture_target {
                     ScreenCaptureTarget::Screen { id }
                     | ScreenCaptureTarget::Area { screen: id, .. } => {
                         m.raw_handle().inner().id == *id
@@ -719,24 +724,10 @@ async fn create_segment_pipeline(
                         m.raw_handle().inner().id
                             == cap_media::platform::display_for_window(*id).unwrap().id
                     }
-                }
-            });
-
-            #[cfg(windows)]
-            return cap_displays::Display::list().into_iter().find(|m| {
-                match &options.capture_target {
-                    ScreenCaptureTarget::Screen { id }
-                    | ScreenCaptureTarget::Area { screen: id, .. } => m.raw_handle().id() == *id,
-                    ScreenCaptureTarget::Window { id } => {
-                        m.raw_handle().id()
-                            == cap_media::platform::display_for_window(*id).unwrap().0
-                    }
-                }
-            });
-        };
-
-        let cursor = spawn_cursor_recorder(
-            screen.bounds.clone(),
+                })
+                .unwrap(),
+            #[cfg(target_os = "macos")]
+            screen_crop_ratio,
             cursors_dir.clone(),
             prev_cursors,
             next_cursors_id,
