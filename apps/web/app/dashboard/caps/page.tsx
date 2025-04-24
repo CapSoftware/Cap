@@ -1,17 +1,17 @@
-import { Caps } from "./Caps";
 import { db } from "@cap/database";
+import { getCurrentUser } from "@cap/database/auth/session";
 import {
   comments,
-  videos,
   sharedVideos,
+  spaceMembers,
   spaces,
   users,
-  spaceMembers,
+  videos,
 } from "@cap/database/schema";
-import { desc, eq, sql, count, or } from "drizzle-orm";
-import { getCurrentUser } from "@cap/database/auth/session";
+import { count, desc, eq, sql } from "drizzle-orm";
 import { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { Caps } from "./Caps";
 
 export const metadata: Metadata = {
   title: "My Caps — Cap",
