@@ -134,6 +134,8 @@ pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
     show_camera: bool,
     force_show_cursor: bool,
     bounds: Bounds,
+    // logical display size
+    display_size: (f32, f32),
     video_tx: Sender<(TCaptureFormat::VideoFormat, f64)>,
     audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
     _phantom: std::marker::PhantomData<TCaptureFormat>,
@@ -194,6 +196,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCapture
             show_camera: self.show_camera,
             force_show_cursor: self.force_show_cursor,
             bounds: self.bounds,
+            display_size: self.display_size,
             video_tx: self.video_tx.clone(),
             audio_tx: self.audio_tx.clone(),
             _phantom: std::marker::PhantomData,
@@ -208,6 +211,12 @@ struct OptionsConfig {
     scap_target: scap::Target,
     bounds: Bounds,
     crop_area: Option<Area>,
+    display_size: (f32, f32),
+}
+
+struct CropRatio {
+    position: (f32, f32),
+    size: (f32, f32),
 }
 
 impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
@@ -223,7 +232,12 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
     ) -> Result<Self, String> {
         cap_fail::fail!("media::screen_capture::init");
 
-        let (scap_target, bounds, crop_area) = Self::get_options_config(&target)?;
+        let OptionsConfig {
+            scap_target,
+            bounds,
+            crop_area,
+            display_size,
+        } = Self::get_options_config(&target)?;
 
         let fps = get_target_fps(&scap_target).map_err(|e| format!("target_fps / {e}"))?;
         let fps = fps.min(max_fps);
@@ -242,6 +256,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, 0, 0, 0),
             options: Arc::new(Default::default()),
             bounds,
+            display_size,
             show_camera,
             force_show_cursor,
             video_tx,
@@ -254,12 +269,16 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 
         this.options = Arc::new(options);
 
-        this.video_info = VideoInfo::from_raw(
-            RawVideoFormat::Bgra,
-            bounds.width as u32,
-            bounds.height as u32,
-            fps,
-        );
+        #[cfg(target_os = "macos")]
+        let video_size = {
+            let [x, y] = scap::capturer::get_output_frame_size(&this.options);
+            (x, y)
+        };
+        #[cfg(windows)]
+        let video_size = (bounds.width as u32, bounds.height as u32);
+
+        this.video_info =
+            VideoInfo::from_raw(RawVideoFormat::Bgra, video_size.0, video_size.1, fps);
 
         Ok(this)
     }
@@ -268,9 +287,24 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         &self.bounds
     }
 
-    fn get_options_config(
-        target: &ScreenCaptureTarget,
-    ) -> Result<(scap::Target, Bounds, Option<Area>), String> {
+    pub fn crop_ratio(&self) -> ((f32, f32), (f32, f32)) {
+        if let Some(crop_area) = &self.options.crop_area {
+            (
+                (
+                    crop_area.origin.x as f32 / self.display_size.0,
+                    crop_area.origin.y as f32 / self.display_size.1,
+                ),
+                (
+                    crop_area.size.width as f32 / self.display_size.0,
+                    crop_area.size.height as f32 / self.display_size.1,
+                ),
+            )
+        } else {
+            ((0.0, 0.0), (1.0, 1.0))
+        }
+    }
+
+    fn get_options_config(target: &ScreenCaptureTarget) -> Result<OptionsConfig, String> {
         let targets = scap::get_all_targets();
 
         Ok(match target {
@@ -320,16 +354,20 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                     },
                 };
 
-                (
-                    Target::Display(display),
-                    Bounds {
+                OptionsConfig {
+                    scap_target: Target::Display(display),
+                    bounds: Bounds {
                         x: crop.origin.x,
                         y: crop.origin.y,
                         width: crop.size.width,
                         height: crop.size.height,
                     },
-                    Some(crop),
-                )
+                    crop_area: Some(crop),
+                    display_size: (
+                        monitor_bounds.size.width as f32,
+                        monitor_bounds.size.height as f32,
+                    ),
+                }
             }
             ScreenCaptureTarget::Screen { id } => {
                 let screens = list_screens();
@@ -339,18 +377,28 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                     .find(|(i, t)| i.id == *id)
                     .ok_or_else(|| "Target for screen capture not found".to_string())?;
 
-                (target, platform::monitor_bounds(screen_info.id), None)
+                let bounds = platform::monitor_bounds(screen_info.id);
+
+                OptionsConfig {
+                    scap_target: target,
+                    bounds,
+                    crop_area: None,
+                    display_size: (bounds.width as f32, bounds.height as f32),
+                }
             }
             ScreenCaptureTarget::Area { screen, bounds } => {
-                let screens = list_screens();
+                let screen_bounds = platform::monitor_bounds(*screen);
 
-                (
-                    screens
-                        .into_iter()
-                        .find_map(|(i, t)| (i.id == *screen).then_some(t))
-                        .ok_or_else(|| "Target for screen capture not found".to_string())?,
-                    *bounds,
-                    Some(Area {
+                let screens = list_screens();
+                let screen = screens
+                    .into_iter()
+                    .find_map(|(i, t)| (i.id == *screen).then_some(t))
+                    .ok_or_else(|| "Target for screen capture not found".to_string())?;
+
+                OptionsConfig {
+                    scap_target: screen,
+                    bounds: *bounds,
+                    crop_area: Some(Area {
                         size: Size {
                             width: bounds.width,
                             height: bounds.height,
@@ -360,7 +408,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                             y: bounds.y,
                         },
                     }),
-                )
+                    display_size: (screen_bounds.width as f32, screen_bounds.height as f32),
+                }
             }
         })
     }

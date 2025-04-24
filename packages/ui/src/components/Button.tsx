@@ -1,10 +1,10 @@
-import * as React from "react";
+import { classNames } from "@cap/utils";
 import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
-import { classNames } from "@cap/utils";
+import * as React from "react";
 
 const buttonVariants = cva(
-  "flex items-center justify-center gap-1 rounded-full border-[1px] font-normal",
+  "flex items-center justify-center cursor-pointer ring-offset-transparent relative min-w-[100px]  gap-1 rounded-xl",
   {
     defaultVariants: {
       variant: "primary",
@@ -13,23 +13,24 @@ const buttonVariants = cva(
     variants: {
       variant: {
         primary:
-          "bg-blue-300 text-gray-50 hover:bg-blue-400 disabled:bg-blue-200 border-blue-300",
+          "bg-gradient-to-t button-gradient-border from-blue-300 to-[#75A3FF] shadow-[0_0_0_1px] hover:brightness-110 shadow-blue-400 text-gray-50 hover:bg-blue-400 disabled:bg-blue-200",
+        red: "bg-gradient-to-t button-gradient-border from-[#772828] to-[#9F3C3C] shadow-[0_0_0_1px] hover:brightness-110 shadow-red-900 text-gray-50 hover:bg-red-400 disabled:bg-red-200",
         secondary:
           "bg-blue-400 text-gray-50 hover:bg-blue-500 disabled:bg-blue-200 disabled:text-gray-400 border-blue-300",
         destructive:
-          "bg-red-300 text-gray-50 hover:bg-red-400 disabled:bg-red-200 border-red-300",
+          "bg-gradient-to-t shadow-[0_0_0_1px] shadow-red-900 hover:brightness-110 from-red-600 to-red-400 text-gray-50 button-gradient-border hover:bg-red-400 disabled:bg-red-200 border-red-300",
         white:
-          "bg-white text-gray-500 hover:bg-gray-100 disabled:bg-gray-100 border-black/10",
-        gray: "bg-gray-200 text-gray-500 hover:bg-gray-200 disabled:bg-gray-100 border-transparent",
-        dark: "bg-[#2e2e2e] text-gray-50 hover:bg-[#383838] disabled:bg-[#383838] border-transparent",
+          "bg-gray-50 text-gray-500 hover:bg-gray-100 border disabled:bg-gray-100 border-gray-200",
+        gray: "bg-gray-100 text-gray-500 hover:bg-gray-200 disabled:bg-gray-100 border-gray-200 border",
+        dark: "bg-gradient-to-t button-gradient-border from-[#0f0f0f] to-[#404040] shadow-[0_0_0_1px] hover:brightness-110 shadow-[#383838] text-gray-50 hover:bg-[#383838] disabled:bg-[#383838] border-transparent",
         radialblue:
-          "text-gray-50 disabled:bg-gray-100 border-0 [background:radial-gradient(90%_100%_at_15%_12%,#9BC4FF_0%,#3588FF_100%)] border-transparent hover:opacity-80",
+          "text-gray-50 border button-gradient-border shadow-[0_0_0_1px] shadow-blue-400 disabled:bg-gray-100 border-0 [background:radial-gradient(90%_100%_at_15%_12%,#9BC4FF_0%,#3588FF_100%)] border-transparent hover:opacity-80",
       },
       size: {
-        xs: "font-[400] text-[0.75rem] px-[0.5rem] h-[1.25rem] ",
-        sm: "font-[400] text-[0.875rem] px-[0.75rem] h-[1.75rem]",
-        md: "font-[400] text-[0.875rem] px-[1rem] h-[2rem]",
-        lg: "font-[400] text-[1.125rem] px-[1.25em] h-[2.5rem]",
+        xs: "text-sm h-[32px] px-[0.5rem] ",
+        sm: "text-sm h-[40px] px-[0.75rem]",
+        md: "text-sm px-[1rem] h-[48px]",
+        lg: "text-md h-[48px] px-[1.25em]",
       },
     },
   }
@@ -66,12 +67,10 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         href={href || undefined}
         {...props}
       >
-        {icon && icon}
-        {props.children}
         {spinner && (
           <svg
             xmlns="http://www.w3.org/2000/svg"
-            className="ml-2 w-6 h-6"
+            className="mr-2 w-6 h-6"
             viewBox="0 0 24 24"
           >
             <style>
@@ -92,6 +91,8 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
             />
           </svg>
         )}
+        {icon && icon}
+        {props.children}
       </Comp>
     );
   }

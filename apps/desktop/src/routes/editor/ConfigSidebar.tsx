@@ -378,22 +378,24 @@ export function ConfigSidebar() {
                 </Subfield>
               </ComingSoonTooltip> */}
           </Field>
-          <Field
-            name="Microphone Volume"
-            icon={<IconCapMicrophone class="size-4" />}
-          >
-            <Slider
-              disabled={project.audio.mute}
-              value={[project.audio.micVolumeDb ?? 0]}
-              onChange={(v) => setProject("audio", "micVolumeDb", v[0])}
-              minValue={-30}
-              maxValue={10}
-              step={0.1}
-              formatTooltip={(v) =>
-                v <= -30 ? "Muted" : `${v > 0 ? "+" : ""}${v.toFixed(1)} dB`
-              }
-            />
-          </Field>
+          {meta.hasMicrophone && (
+            <Field
+              name="Microphone Volume"
+              icon={<IconCapMicrophone class="size-4" />}
+            >
+              <Slider
+                disabled={project.audio.mute}
+                value={[project.audio.micVolumeDb ?? 0]}
+                onChange={(v) => setProject("audio", "micVolumeDb", v[0])}
+                minValue={-30}
+                maxValue={10}
+                step={0.1}
+                formatTooltip={(v) =>
+                  v <= -30 ? "Muted" : `${v > 0 ? "+" : ""}${v.toFixed(1)} dB`
+                }
+              />
+            </Field>
+          )}
           {meta.hasSystemAudio && (
             <Field
               name="System Audio Volume"
@@ -1639,7 +1641,6 @@ function ZoomSegmentConfig(props: {
           variant="danger"
           onClick={() => {
             batch(() => {
-              setEditorState("timeline", "selection", null);
               setProject(
                 "timeline",
                 "zoomSegments",
@@ -1648,6 +1649,7 @@ function ZoomSegmentConfig(props: {
                   return s.splice(props.segmentIndex, 1);
                 })
               );
+              setEditorState("timeline", "selection", null);
             });
           }}
           leftIcon={<IconCapTrash />}

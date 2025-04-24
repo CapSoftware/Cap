@@ -7,7 +7,7 @@ use std::{
 
 use cap_media::{
     data::AudioInfo,
-    encoders::{H264Encoder, MP4File, OpusEncoder},
+    encoders::{AudioEncoder, H264Encoder, MP4File, OpusEncoder},
     feeds::AudioInputFeed,
     pipeline::{builder::PipelineBuilder, task::PipelineSinkTask, RealTimeClock},
     sources::{
@@ -283,7 +283,11 @@ impl MakeCapturePipeline for AVFrameCapture {
                 screen_config,
                 cap_media::encoders::CompressionQuality::Web,
             ),
-            |o| has_audio_sources.then(|| OpusEncoder::init("mic_audio", AudioMixer::info(), o)),
+            |o| {
+                has_audio_sources.then(|| {
+                    OpusEncoder::init("mic_audio", AudioMixer::info(), o).map(|v| v.boxed())
+                })
+            },
         )?));
 
         if has_audio_sources {

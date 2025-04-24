@@ -1,5 +1,6 @@
 import { Button } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
+import { makePersisted } from "@solid-primitives/storage";
 import {
   createMutation,
   createQuery,
@@ -20,16 +21,17 @@ import {
   ValidComponent,
 } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
-import { makePersisted } from "@solid-primitives/storage";
 import toast from "solid-toast";
 
 import Tooltip from "~/components/Tooltip";
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
+import { exportVideo } from "~/utils/export";
 import { commands, events } from "~/utils/tauri";
 import { RenderState, useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
 import {
+  Dialog,
   DialogContent,
   MenuItem,
   MenuItemList,
@@ -99,6 +101,8 @@ export function ExportDialog() {
     { name: "export_settings" }
   );
 
+  const [outputPath, setOutputPath] = createSignal<string | null>(null);
+
   const selectedStyle =
     "ring-1 ring-offset-2 ring-offset-gray-200 bg-gray-300 ring-gray-500";
 
@@ -157,17 +161,11 @@ export function ExportDialog() {
       setExportState({ type: "done" });
 
       if (dialog().open) {
-        const closeTimeout = setTimeout(() => {
-          setDialog((d) => ({ ...d, open: false }));
-        }, 2000);
-
         createRoot((dispose) => {
           createEffect(
             on(
               () => dialog().open,
               () => {
-                clearTimeout(closeTimeout);
-
                 dispose();
               },
               { defer: true }
@@ -181,21 +179,25 @@ export function ExportDialog() {
   const save = createMutation(() => ({
     mutationFn: async () => {
       if (exportState.type !== "idle") return;
-      setExportState(reconcile({ action: "save", type: "starting" }));
 
-      const outputPath = await saveDialog({
+      const savePath = await saveDialog({
         filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
         defaultPath: `~/Desktop/${meta.prettyName}.mp4`,
       });
-      if (!outputPath) return;
+      if (!savePath) {
+        setExportState(reconcile({ type: "idle" }));
+        return;
+      }
+
+      setExportState(reconcile({ action: "save", type: "starting" }));
+
+      setOutputPath(savePath);
 
       trackEvent("export_started", {
         resolution: settings.resolution,
         fps: settings.fps,
-        path: outputPath,
+        path: savePath,
       });
-
-      setExportState({ type: "starting" });
 
       const videoPath = await exportVideo(
         projectPath,
@@ -214,7 +216,9 @@ export function ExportDialog() {
 
       setExportState({ type: "copying" });
 
-      await commands.copyFileToPath(videoPath, outputPath);
+      await commands.copyFileToPath(videoPath, savePath);
+
+      setExportState({ type: "done" });
     },
     onError: (error) => {
       commands.globalMessageDialog(
@@ -223,20 +227,12 @@ export function ExportDialog() {
       setExportState({ type: "idle" });
     },
     onSuccess() {
-      setExportState({ type: "done" });
-
       if (dialog().open) {
-        const closeTimeout = setTimeout(() => {
-          setDialog((d) => ({ ...d, open: false }));
-        }, 2000);
-
         createRoot((dispose) => {
           createEffect(
             on(
               () => dialog().open,
               () => {
-                clearTimeout(closeTimeout);
-
                 dispose();
               },
               { defer: true }
@@ -616,11 +612,186 @@ export function ExportDialog() {
       <Show when={exportState.type !== "idle" && exportState} keyed>
         {(exportState) => {
           const [copyPressed, setCopyPressed] = createSignal(false);
+          const [clipboardCopyPressed, setClipboardCopyPressed] =
+            createSignal(false);
+          const [showCompletionScreen, setShowCompletionScreen] = createSignal(
+            exportState.type === "done" && exportState.action === "save"
+          );
+
+          createEffect(() => {
+            if (exportState.type === "done" && exportState.action === "save") {
+              setShowCompletionScreen(true);
+            }
+          });
 
           return (
-            <DialogContent
-              title={"Export"}
-              confirm={
+            <>
+              <Dialog.Header>
+                <div class="flex justify-between items-center w-full">
+                  <span class="text-gray-500 dark:text-gray-500">Export</span>
+                  <div
+                    onClick={() => setDialog((d) => ({ ...d, open: false }))}
+                    class="flex justify-center items-center p-1 rounded-full transition-colors cursor-pointer hover:bg-gray-200"
+                  >
+                    <IconCapCircleX class="text-gray-500 size-4" />
+                  </div>
+                </div>
+              </Dialog.Header>
+              <Dialog.Content class="text-gray-500 bg-gray-600 dark:text-gray-500">
+                <div class="relative z-10 px-5 py-4 mx-auto space-y-6 w-full text-center">
+                  <Switch>
+                    <Match
+                      when={exportState.action === "copy" && exportState}
+                      keyed
+                    >
+                      {(copyState) => (
+                        <div class="flex flex-col gap-4 justify-center items-center h-full">
+                          <h1 class="text-lg font-medium text-gray-500">
+                            {copyState.type === "starting"
+                              ? "Preparing..."
+                              : copyState.type === "rendering"
+                              ? "Rendering video..."
+                              : copyState.type === "copying"
+                              ? "Copying to clipboard..."
+                              : "Copied to clipboard"}
+                          </h1>
+                          <Show
+                            when={
+                              (copyState.type === "rendering" ||
+                                copyState.type === "starting") &&
+                              copyState
+                            }
+                            keyed
+                          >
+                            {(copyState) => (
+                              <RenderProgress state={copyState} />
+                            )}
+                          </Show>
+                        </div>
+                      )}
+                    </Match>
+                    <Match
+                      when={exportState.action === "save" && exportState}
+                      keyed
+                    >
+                      {(saveState) => (
+                        <div class="flex flex-col gap-4 justify-center items-center h-full">
+                          <Show
+                            when={
+                              showCompletionScreen() &&
+                              saveState.type === "done"
+                            }
+                            fallback={
+                              <>
+                                <h1 class="text-lg font-medium text-gray-500">
+                                  {saveState.type === "starting"
+                                    ? "Preparing..."
+                                    : saveState.type === "rendering"
+                                    ? "Rendering video..."
+                                    : saveState.type === "copying"
+                                    ? "Exporting to file..."
+                                    : "Export completed"}
+                                </h1>
+                                <Show
+                                  when={
+                                    (saveState.type === "rendering" ||
+                                      saveState.type === "starting") &&
+                                    saveState
+                                  }
+                                  keyed
+                                >
+                                  {(copyState) => (
+                                    <RenderProgress state={copyState} />
+                                  )}
+                                </Show>
+                              </>
+                            }
+                          >
+                            <div class="flex flex-col gap-6 items-center duration-500 animate-in fade-in">
+                              <div class="flex flex-col gap-3 items-center">
+                                <div class="flex justify-center items-center mb-2 bg-gray-500 rounded-full size-10">
+                                  <IconLucideCheck class="text-gray-50 size-5" />
+                                </div>
+                                <div class="flex flex-col gap-1 items-center">
+                                  <h1 class="text-xl font-medium text-gray-600">
+                                    Export Completed
+                                  </h1>
+                                  <p class="text-sm text-gray-400">
+                                    Your video has been successfully exported
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          </Show>
+                        </div>
+                      )}
+                    </Match>
+                    <Match
+                      when={exportState.action === "upload" && exportState}
+                      keyed
+                    >
+                      {(uploadState) => (
+                        <Switch>
+                          <Match
+                            when={uploadState.type !== "done" && uploadState}
+                            keyed
+                          >
+                            {(uploadState) => (
+                              <div class="flex flex-col gap-4 justify-center items-center">
+                                <h1 class="text-lg font-medium text-center text-gray-500">
+                                  Uploading Cap...
+                                </h1>
+                                <Switch>
+                                  <Match
+                                    when={
+                                      uploadState.type === "uploading" &&
+                                      uploadState
+                                    }
+                                    keyed
+                                  >
+                                    {(uploadState) => (
+                                      <ProgressView
+                                        amount={uploadState.progress}
+                                        label={`Uploading - ${Math.floor(
+                                          uploadState.progress
+                                        )}%`}
+                                      />
+                                    )}
+                                  </Match>
+                                  <Match
+                                    when={
+                                      uploadState.type !== "uploading" &&
+                                      uploadState
+                                    }
+                                    keyed
+                                  >
+                                    {(renderState) => (
+                                      <RenderProgress state={renderState} />
+                                    )}
+                                  </Match>
+                                </Switch>
+                              </div>
+                            )}
+                          </Match>
+                          <Match when={uploadState.type === "done"}>
+                            <div class="flex flex-col gap-5 justify-center items-center">
+                              <div class="flex flex-col gap-1 items-center">
+                                <h1 class="mx-auto text-lg font-medium text-center text-gray-500">
+                                  Upload Complete
+                                </h1>
+                                <p class="text-sm text-gray-400">
+                                  Your Cap has been uploaded successfully
+                                </p>
+                              </div>
+                            </div>
+                          </Match>
+                        </Switch>
+                      )}
+                    </Match>
+                  </Switch>
+                </div>
+              </Dialog.Content>
+              <Dialog.Footer>
                 <Show
                   when={
                     exportState.action === "upload" &&
@@ -635,20 +806,6 @@ export function ExportDialog() {
                       class="block"
                     >
                       <Button
-                        variant="lightdark"
-                        class="flex gap-2 justify-center items-center"
-                      >
-                        <p>Open Link</p>
-                        <div class="size-6" />{" "}
-                        {/* Placeholder for the copy button */}
-                      </Button>
-                    </a>
-                    {/* Absolutely positioned copy button that sits on top */}
-                    <Tooltip
-                      childClass="absolute right-4 top-1/2 transform -translate-y-1/2"
-                      content="Copy link"
-                    >
-                      <div
                         onClick={() => {
                           setCopyPressed(true);
                           setTimeout(() => {
@@ -656,161 +813,65 @@ export function ExportDialog() {
                           }, 2000);
                           navigator.clipboard.writeText(meta.sharing?.link!);
                         }}
-                        class="flex justify-center items-center rounded-lg transition-colors duration-300 cursor-pointer bg-gray-450 group hover:bg-gray-400 size-6"
+                        variant="lightdark"
+                        class="flex gap-2 justify-center items-center"
                       >
                         {!copyPressed() ? (
-                          <IconCapCopy class="size-2.5 text-gray-50 group-hover:text-gray-500 transition-colors duration-300" />
+                          <IconCapCopy class="text-gray-50 transition-colors duration-300 size-4 group-hover:text-gray-500" />
                         ) : (
-                          <IconLucideCheck class="size-2.5 svgpathanimation text-gray-50 group-hover:text-gray-500 transition-colors duration-300" />
+                          <IconLucideCheck class="text-gray-50 transition-colors duration-300 size-4 svgpathanimation group-hover:text-gray-500" />
                         )}
-                      </div>
-                    </Tooltip>
+                        <p>Open Link</p>
+                      </Button>
+                    </a>
                   </div>
                 </Show>
-              }
-              close={
+
                 <Show
                   when={
-                    exportState.action === "upload" &&
-                    exportState.type === "done"
+                    exportState.action === "save" && exportState.type === "done"
                   }
                 >
-                  <Button
-                    onClick={() => {
-                      setDialog((d) => ({ ...d, open: false }));
-                    }}
-                    variant="secondary"
-                    class="flex gap-2 justify-center h-[44px] items-center"
-                  >
-                    Close
-                  </Button>
+                  <div class="flex gap-4 w-full">
+                    <Button
+                      variant="secondary"
+                      class="flex gap-2 items-center"
+                      onClick={() => {
+                        const path = outputPath();
+                        if (path) {
+                          commands.openFilePath(path);
+                        }
+                      }}
+                    >
+                      <IconCapFile class="size-4" />
+                      Open File
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      class="flex gap-2 items-center"
+                      onClick={async () => {
+                        const path = outputPath();
+                        if (path) {
+                          setClipboardCopyPressed(true);
+                          setTimeout(() => {
+                            setClipboardCopyPressed(false);
+                          }, 2000);
+                          await commands.copyVideoToClipboard(path);
+                          toast.success("Video copied to clipboard");
+                        }
+                      }}
+                    >
+                      {!clipboardCopyPressed() ? (
+                        <IconCapCopy class="size-4" />
+                      ) : (
+                        <IconLucideCheck class="size-4 svgpathanimation" />
+                      )}
+                      Copy to Clipboard
+                    </Button>
+                  </div>
                 </Show>
-              }
-              class="text-gray-500 bg-gray-600 dark:text-gray-500"
-            >
-              <div class="relative z-10 px-5 py-4 mx-auto space-y-6 w-full text-center">
-                <Switch>
-                  <Match
-                    when={exportState.action === "copy" && exportState}
-                    keyed
-                  >
-                    {(copyState) => (
-                      <div class="flex flex-col gap-4 justify-center items-center h-full">
-                        <h1 class="text-lg font-medium text-gray-500">
-                          {copyState.type === "starting"
-                            ? "Preparing..."
-                            : copyState.type === "rendering"
-                            ? "Rendering video..."
-                            : copyState.type === "copying"
-                            ? "Copying to clipboard..."
-                            : "Copied to clipboard"}
-                        </h1>
-                        <Show
-                          when={
-                            (copyState.type === "rendering" ||
-                              copyState.type === "starting") &&
-                            copyState
-                          }
-                          keyed
-                        >
-                          {(copyState) => <RenderProgress state={copyState} />}
-                        </Show>
-                      </div>
-                    )}
-                  </Match>
-                  <Match
-                    when={exportState.action === "save" && exportState}
-                    keyed
-                  >
-                    {(saveState) => (
-                      <div class="flex flex-col gap-4 justify-center items-center h-full">
-                        <h1 class="text-lg font-medium text-gray-500">
-                          {saveState.type === "starting"
-                            ? "Preparing..."
-                            : saveState.type === "rendering"
-                            ? "Rendering video..."
-                            : saveState.type === "copying"
-                            ? "Exporting to file..."
-                            : "Exported successfully"}
-                        </h1>
-                        <Show
-                          when={
-                            (saveState.type === "rendering" ||
-                              saveState.type === "starting") &&
-                            saveState
-                          }
-                          keyed
-                        >
-                          {(copyState) => <RenderProgress state={copyState} />}
-                        </Show>
-                      </div>
-                    )}
-                  </Match>
-                  <Match
-                    when={exportState.action === "upload" && exportState}
-                    keyed
-                  >
-                    {(uploadState) => (
-                      <Switch>
-                        <Match
-                          when={uploadState.type !== "done" && uploadState}
-                          keyed
-                        >
-                          {(uploadState) => (
-                            <div class="flex flex-col gap-4 justify-center items-center">
-                              <h1 class="text-lg font-medium text-center text-gray-500">
-                                Uploading Cap...
-                              </h1>
-                              <Switch>
-                                <Match
-                                  when={
-                                    uploadState.type === "uploading" &&
-                                    uploadState
-                                  }
-                                  keyed
-                                >
-                                  {(uploadState) => (
-                                    <ProgressView
-                                      amount={uploadState.progress}
-                                      label={`Uploading - ${Math.floor(
-                                        uploadState.progress
-                                      )}%`}
-                                    />
-                                  )}
-                                </Match>
-                                <Match
-                                  when={
-                                    uploadState.type !== "uploading" &&
-                                    uploadState
-                                  }
-                                  keyed
-                                >
-                                  {(renderState) => (
-                                    <RenderProgress state={renderState} />
-                                  )}
-                                </Match>
-                              </Switch>
-                            </div>
-                          )}
-                        </Match>
-                        <Match when={uploadState.type === "done"}>
-                          <div class="flex flex-col gap-5 justify-center items-center">
-                            <div class="flex flex-col gap-1 items-center">
-                              <h1 class="mx-auto text-lg font-medium text-center text-gray-500">
-                                Upload Complete
-                              </h1>
-                              <p class="text-sm text-gray-400">
-                                Your Cap has been uploaded successfully
-                              </p>
-                            </div>
-                          </div>
-                        </Match>
-                      </Switch>
-                    )}
-                  </Match>
-                </Switch>
-              </div>
-            </DialogContent>
+              </Dialog.Footer>
+            </>
           );
         }}
       </Show>

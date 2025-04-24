@@ -103,7 +103,6 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
     pathname.includes("/invite") ||
     pathname.includes("/s/") ||
     pathname.includes("/onboarding") ||
-    pathname.includes("/record") ||
     (typeof window !== "undefined" && window.location.href.includes("cap.link"))
   )
     return null;
@@ -113,7 +112,7 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
       <div className="fixed border-b border-b-zinc-100 inset-0 z-20 p-4 w-full backdrop-blur-md bg-white/70 h-[60px]">
         <div className="flex justify-between items-center mx-auto max-w-3xl h-full transition-all">
           <div className="flex items-center">
-            <Link passHref href="/">
+            <Link passHref href="/home">
               <Logo className="w-[90px]" />
             </Link>
             <div className="hidden md:block">
@@ -166,16 +165,16 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
             <Button
               variant="white"
               href="https://github.com/CapSoftware/Cap"
-              size="md"
+              size="sm"
               className="w-full font-medium sm:w-auto"
-              icon={<FontAwesomeIcon icon={faGithub} />}
+              icon={<FontAwesomeIcon className="size-4" icon={faGithub} />}
             >
               Github
             </Button>
             <Button
               variant="dark"
               href={auth === false ? "/login" : "/dashboard"}
-              size="md"
+              size="sm"
               className="w-full font-medium sm:w-auto"
             >
               {auth === false ? "Login" : "Dashboard"}

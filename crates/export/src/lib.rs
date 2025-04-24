@@ -1,7 +1,7 @@
 use cap_editor::{get_audio_segments, Segment};
 use cap_media::{
     data::{AudioInfo, RawVideoFormat, VideoInfo},
-    encoders::{H264Encoder, MP4Input, OpusEncoder},
+    encoders::{AACEncoder, AudioEncoder, H264Encoder, MP4Input, OpusEncoder},
     feeds::{AudioRenderer, AudioSegment, AudioSegmentTrack},
     MediaError,
 };
@@ -175,7 +175,12 @@ where
                 "output",
                 self.output_path.clone(),
                 H264Encoder::factory("output_video", video_info, self.settings.compression),
-                |o| has_audio.then(|| OpusEncoder::init("output_audio", AudioRenderer::info(), o)),
+                |o| {
+                    has_audio.then(|| {
+                        AACEncoder::init("output_audio", AudioRenderer::info(), o)
+                            .map(|v| v.boxed())
+                    })
+                },
             )
             .unwrap();
 

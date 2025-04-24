@@ -28,8 +28,6 @@ pub struct CursorClickEvent {
     pub cursor_id: String,
     pub time_ms: f64,
     pub down: bool,
-    pub x: f64,
-    pub y: f64,
 }
 
 impl PartialOrd for CursorClickEvent {

@@ -174,19 +174,6 @@
   border-radius: 500px;
 }
 
-/* SVG path animation */
-
-@keyframes svgpathframes {
-  0% {
-    stroke-dasharray: 100;
-    stroke-dashoffset: 100;
-  }
-  50% {
-  }
-  100% {
-    stroke-dashoffset: 0;
-  }
-}
 
 @keyframes bounce {
   0%,
@@ -203,6 +190,20 @@
 .bounce {
   animation: bounce 1s ease-in-out forwards;
   animation-iteration-count: infinite;
+}
+
+/* SVG path animation */
+
+@keyframes svgpathframes {
+  0% {
+    stroke-dasharray: 100;
+    stroke-dashoffset: 100;
+  }
+  50% {
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
 }
 
 .svgpathanimation {

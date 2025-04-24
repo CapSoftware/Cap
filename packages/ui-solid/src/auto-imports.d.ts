@@ -65,6 +65,7 @@ declare global {
   const IconCapTrash: typeof import('~icons/cap/trash.jsx')['default']
   const IconCapUndo: typeof import('~icons/cap/undo.jsx')['default']
   const IconCapUpload: typeof import('~icons/cap/upload.jsx')['default']
+  const IconCapX: typeof import('~icons/cap/x.jsx')['default']
   const IconCapZoomIn: typeof import('~icons/cap/zoom-in.jsx')['default']
   const IconCapZoomOut: typeof import('~icons/cap/zoom-out.jsx')['default']
   const IconHugeiconsEaseCurveControlPoints: typeof import('~icons/hugeicons/ease-curve-control-points.jsx')['default']
@@ -97,6 +98,7 @@ declare global {
   const IconLucideVideo: typeof import("~icons/lucide/video.jsx")["default"]
   const IconLucideVolume2: typeof import('~icons/lucide/volume2.jsx')['default']
   const IconLucideVolumeX: typeof import('~icons/lucide/volume-x.jsx')['default']
+  const IconLucideX: typeof import('~icons/lucide/x.jsx')['default']
   const IconMdiMonitor: typeof import("~icons/mdi/monitor.jsx")["default"]
   const IconPhMonitorBold: typeof import('~icons/ph/monitor-bold.jsx')['default']
 }
