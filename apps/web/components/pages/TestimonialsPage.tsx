@@ -5,7 +5,7 @@ import Image from "next/image";
 const testimonials = [
   {
     name: "Steven Tey",
-    xhandle: "Dub.co",
+    handle: "Dub.co",
     image: "/testimonials/steven_tey.png",
     content:
       "Cap is one of my favorite pieces of software I've used in the recent years – best part is you get to own your data since they're fully open-source + via their S3 integration. Incredibly excited for this launch!",
@@ -13,14 +13,14 @@ const testimonials = [
   },
   {
     name: "Guillermo Rauch",
-    xhandle: "Vercel",
+    handle: "Vercel",
     image: "/testimonials/guillermo_rauch.png",
     content: "Congrats on shipping!",
     url: "https://www.producthunt.com/products/cap-3?comment=4174563#cap-4",
   },
   {
     name: "Olivia",
-    xhandle: "@olivialawson.co",
+    handle: "@olivialawson.co",
     image: "/testimonials/olivialawson.png",
     content:
       "I've been testing Cap.so for no other reason than some old habits die hard for this former software analyst. Whew that UI is so polished and crispy. Between the open source code, self hosted vids, editing features and price point -- gone give Loom some competition 🤞🏽",
@@ -28,14 +28,14 @@ const testimonials = [
   },
   {
     name: "Livvux",
-    xhandle: "@livvux",
+    handle: "@livvux",
     image: "/testimonials/livvux.png",
     content: "One of my favorite Open Source projects",
     url: "https://x.com/Livvux/status/1910227928056558042",
   },
   {
     name: "Roger Mattos",
-    xhandle: "@_rogermattos",
+    handle: "@_rogermattos",
     image: "/testimonials/_rogermattos.png",
     content:
       "Tip for people that need to make screen recordings: Cap is the open source alternative to Loom. Lightweight, powerful, and stunning. Record and share in seconds.",
@@ -43,7 +43,7 @@ const testimonials = [
   },
   {
     name: "Greg_Ld",
-    xhandle: "@Greg__LD",
+    handle: "@Greg__LD",
     image: "/testimonials/Greg__LD.png",
     content:
       "No brainer instant purchase this morning: was looking for a solid screen recorder, for my new MacBook Pro,  gave @cap a try, got myself a license within 10 mins — flawless UX sometimes speaks louder than lengthy marketer's words !",
@@ -51,21 +51,21 @@ const testimonials = [
   },
   {
     name: "JoséPablo*",
-    xhandle: "@jdomito_",
+    handle: "@jdomito_",
     image: "/testimonials/jdomito_.png",
     content: "@Cap is actually way better than loom",
     url: "https://x.com/jdomito_/status/1900395567550742956",
   },
   {
     name: "CJ",
-    xhandle: "@cjkihl",
+    handle: "@cjkihl",
     image: "/testimonials/cjkihl.png",
     content: "Such a great Open source project. I will never install OBS again",
     url: "https://x.com/cjkihl/status/1850367930464379226",
   },
   {
     name: "Rohith Gilla",
-    xhandle: "@gillarohith",
+    handle: "@gillarohith",
     image: "/testimonials/gillarohith.png",
     content:
       "Used @cap. Holy smokes this product delivers and it delivers hard The whole experience from recording to the editor part is pretty sweet",
@@ -73,7 +73,7 @@ const testimonials = [
   },
   {
     name: "Bilal Budhani",
-    xhandle: "@BilalBudhani",
+    handle: "@BilalBudhani",
     image: "/testimonials/BilalBudhani.png",
     content:
       "Tried @Cap v 0.3.beta and found an issue while exporting video.\n\nWrote to @richiemcilroy about the problem and ~40 mins later the issue is fixed.\n\nI'm sold. Checkout Cap.so",
@@ -81,7 +81,7 @@ const testimonials = [
   },
   {
     name: "Hrushi",
-    xhandle: "@BorhadeHrushi",
+    handle: "@BorhadeHrushi",
     image: "/testimonials/BorhadeHrushi.png",
     content:
       "hey @richiemcilroy , cap is hands down one of the best oss i've used, so much so i've uninstalled loom and screen studio  :)  can you please bring up the video cut and  playback speed adjust feature soon , can't wait to try it on, you guys are doing great cheers!",
@@ -89,14 +89,14 @@ const testimonials = [
   },
   {
     name: "Minimal Nerd",
-    xhandle: "@minimalnerd",
+    handle: "@minimalnerd",
     image: "/testimonials/minimalnerd.png",
     content: "This is the Best Open-Source Loom alternative for Mac",
     url: "https://x.com/minimalnerd/status/1909263024180904368",
   },
   {
     name: "Prayag",
-    xhandle: "@prayagtushar",
+    handle: "@prayagtushar",
     image: "/testimonials/prayagtushar.png",
     content:
       "I think I just found my go to screen recording app which is free @Cap",
@@ -104,7 +104,7 @@ const testimonials = [
   },
   {
     name: "Omar McAdam",
-    xhandle: "UnInbox",
+    handle: "UnInbox",
     image: "/testimonials/omar_mcadam.png",
     content:
       "Been following since the first announcement tweet Proud to say i've been a user since pre-beta, and can see the epic trajectory of this product",
@@ -112,7 +112,7 @@ const testimonials = [
   },
   {
     name: "Emeka Onu",
-    xhandle: "Postly",
+    handle: "Postly",
     image: "/testimonials/emekaonu.png",
     content:
       "Congratulations on the launch! I tried Cap some time ago, and it's such a great product.",
@@ -120,63 +120,63 @@ const testimonials = [
   },
   {
     name: "Tony Tong",
-    xhandle: "muku.ai",
+    handle: "muku.ai",
     image: "/testimonials/tony_tong.png",
     content: "Wow this is a beautiful product! Congratulations on the launch!",
     url: "https://www.producthunt.com/products/cap-3?comment=4179706#cap-4",
   },
   {
     name: "Geet Khosla",
-    xhandle: "proem.ai",
+    handle: "proem.ai",
     image: "/testimonials/geet_khosla.png",
     content: "I tried Cap sometime ago, great product - well executed.",
     url: "https://www.producthunt.com/products/cap-3?comment=4172443#cap-4",
   },
   {
     name: "diana",
-    xhandle: "@pixelswithin",
+    handle: "@pixelswithin",
     image: "/testimonials/pixelswithin.png",
     content: "Self-hosted Loom. The future is awesome 👉🏽",
     url: "https://x.com/pixelswithin/status/1883344509121257704",
   },
   {
     name: "Dozie",
-    xhandle: "@dozibe",
+    handle: "@dozibe",
     image: "/testimonials/dozibe.png",
     content: "Came at the right time. Cap.so was well needed.",
     url: "https://x.com/dozibe/status/1842653324635455914",
   },
   {
     name: "Azzam",
-    xhandle: "@azrrow_s",
+    handle: "@azrrow_s",
     image: "/testimonials/azrrow_s.png",
     content: "you can try http://cap.so, it's just better!",
     url: "https://x.com/azrrow_s/status/1863202543725121586",
   },
   {
     name: "Jaisal Rathee",
-    xhandle: "@RatheeJaisal",
+    handle: "@RatheeJaisal",
     image: "/testimonials/RatheeJaisal.png",
     content: "Best dash I've ever seen 🤌",
     url: "https://x.com/RatheeJaisal/status/1913458774175604784",
   },
   {
     name: "Elie Steinbock",
-    xhandle: "@elie2222",
+    handle: "@elie2222",
     image: "/testimonials/elie2222.png",
     content: "Open source 💪",
     url: "https://x.com/elie2222/status/1909281075014119559",
   },
   {
     name: "Rohan",
-    xhandle: "@rohannrk",
+    handle: "@rohannrk",
     image: "/testimonials/rohannrk.png",
     content: "Love the product using it regulary for sharing work updates.",
     url: "https://x.com/rohannrk/status/1909263024180904368",
   },
   {
     name: "abdul🪐",
-    xhandle: "@NerdyProgramme2",
+    handle: "@NerdyProgramme2",
     image: "/testimonials/NerdyProgramme2.png",
     content:
       "thanks for creating this @richiemcilroy. Cap is so good especially the zoom effects still playing around and figuring things out tho... you guys need to try it out @cap - an opensource alternative to loom",
@@ -184,14 +184,14 @@ const testimonials = [
   },
   {
     name: "Christopher Sybico",
-    xhandle: "Holoholo App",
+    handle: "Holoholo App",
     image: "/testimonials/christophersybico.png",
     content: "Sold on owning your own data 👍",
     url: "https://www.producthunt.com/products/cap-3?comment=4175688#cap-4",
   },
   {
     name: "Cam Pak",
-    xhandle: "",
+    handle: "",
     image: "/testimonials/campak.png",
     content: "Thank you for Cap!",
     url: "https://www.producthunt.com/products/cap-3?comment=4174238#cap-4",
@@ -202,11 +202,11 @@ export const TestimonialsPage = () => {
   return (
     <div className="py-20 wrapper wrapper-sm">
       <h1 className="text-4xl mt-10 text-center md:text-5xl tracking-[-.05em] font-medium text-[--text-primary]">
-        What are users say after hitting record
+        What our users say about Cap after hitting record
       </h1>
 
       <p className="mx-auto mt-4 max-w-2xl text-center text-gray-400">
-        Don't just take our word for it. Here's what people are saying about
+        Don't just take our word for it. Here's what our users are saying about
         their experience with Cap.
       </p>
 
@@ -224,7 +224,7 @@ export const TestimonialsPage = () => {
 interface TestimonialCardProps {
   testimonial: {
     name: string;
-    xhandle: string;
+    handle: string;
     image: string;
     content: string;
     url: string;
@@ -232,16 +232,6 @@ interface TestimonialCardProps {
 }
 
 const TestimonialCard = ({ testimonial }: TestimonialCardProps) => {
-  const handleTwitterClick = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    window.open(
-      `https://x.com/${testimonial.xhandle}`,
-      "_blank",
-      "noopener,noreferrer"
-    );
-  };
-
   return (
     <a
       href={testimonial.url}
@@ -265,7 +255,7 @@ const TestimonialCard = ({ testimonial }: TestimonialCardProps) => {
             {testimonial.name}
           </h3>
           <p className="text-sm font-medium text-gray-400 transition-colors duration-200">
-            {testimonial.xhandle}
+            {testimonial.handle}
           </p>
         </div>
       </div>
