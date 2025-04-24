@@ -1,7 +1,7 @@
 use std::{
     path::PathBuf,
     sync::Arc,
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use cap_flags::FLAGS;
@@ -38,6 +38,7 @@ enum StudioRecordingActorState {
         pipeline_done_rx: oneshot::Receiver<()>,
         index: u32,
         segment_start_time: f64,
+        segment_start_instant: Instant,
     },
     Paused {
         next_index: u32,
@@ -211,6 +212,7 @@ pub async fn spawn_studio_recording_actor(
                 pipeline_done_rx,
                 index,
                 segment_start_time,
+                segment_start_instant: Instant::now(),
             };
 
             'outer: loop {
@@ -220,6 +222,7 @@ pub async fn spawn_studio_recording_actor(
                         mut pipeline_done_rx,
                         index,
                         segment_start_time,
+                        segment_start_instant,
                     } => {
                         info!("recording actor recording");
                         loop {
@@ -301,6 +304,14 @@ pub async fn spawn_studio_recording_actor(
                                     }
                                 }
                                 StudioRecordingActorControlMessage::Stop(tx) => {
+                                    tokio::time::sleep_until(
+                                        segment_start_instant
+                                            .checked_add(Duration::from_secs(1))
+                                            .unwrap()
+                                            .into(),
+                                    )
+                                    .await;
+
                                     let res =
                                         shutdown(pipeline, &mut actor, segment_start_time).await;
                                     let res = match res {
@@ -360,6 +371,7 @@ pub async fn spawn_studio_recording_actor(
                                                 pipeline_done_rx,
                                                 index: next_index,
                                                 segment_start_time: current_time_f64(),
+                                                segment_start_instant: Instant::now(),
                                             },
                                             Ok(()),
                                         ),
