@@ -75,6 +75,7 @@
     "react-hook-form": "^7.49.2",
     "react-hot-toast": "^2.4.1",
     "react-player": "^2.14.1",
+    "react-responsive-masonry": "^2.7.1",
     "react-rnd": "^10.4.1",
     "react-scroll-parallax": "^3.4.5",
     "react-tooltip": "^5.26.3",
