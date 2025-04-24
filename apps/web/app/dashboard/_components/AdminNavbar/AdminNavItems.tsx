@@ -177,11 +177,25 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
             <div key={item.name} className="flex relative justify-center">
               {pathname.includes(item.href) ? (
                 <motion.div
+                  initial={{
+                    width: collapsed ? 40 : "100%",
+                    height: collapsed ? 40 : "100%",
+                  }}
+                  animate={{
+                    width: collapsed ? 40 : "100%",
+                    height: collapsed ? 40 : "100%",
+                  }}
+                  transition={{
+                    type: "spring",
+                    bounce: 0.2,
+                    duration: 0.4,
+                    width: { type: "tween", duration: 0.05 },
+                  }}
                   layoutId="underline"
                   id="underline"
-                  className="bg-transparent size-10 mx-auto inset-0
-                 rounded-xl text-gray-400 absolute border-[1px] border-gray-200 
-                 shadow-sm shadow-gray-200"
+                  className={clsx(
+                    "absolute inset-0 mx-auto text-gray-400 bg-transparent rounded-xl border-gray-200 shadow-sm border-[1px] shadow-gray-200"
+                  )}
                 />
               ) : null}
               <Tooltip
@@ -216,7 +230,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
             subscribed={isSubscribed}
           />
           <p className="mt-4 text-xs text-center text-gray-400 truncate">
-            © Cap Software, Inc. {new Date().getFullYear()}.
+            Cap Software, Inc. {new Date().getFullYear()}.
           </p>
         </div>
       </nav>
