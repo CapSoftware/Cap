@@ -77,6 +77,9 @@ impl EditorInstances {
             return;
         };
 
-        instances.0.write().await.remove(window.label());
+        let mut instances = instances.0.write().await;
+        if let Some(instance) = instances.remove(window.label()) {
+            instance.dispose().await;
+        }
     }
 }
