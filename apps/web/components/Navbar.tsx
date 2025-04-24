@@ -52,6 +52,10 @@ const Links = [
     href: "/download",
   },
   {
+    label: "Testimonials",
+    href: "/testimonials",
+  },
+  {
     label: "Help",
     dropdown: [
       {
@@ -110,7 +114,7 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
   return (
     <>
       <div className="fixed border-b border-b-zinc-100 inset-0 z-20 p-4 w-full backdrop-blur-md bg-white/70 h-[60px]">
-        <div className="flex justify-between items-center mx-auto max-w-3xl h-full transition-all">
+        <div className="flex justify-between items-center mx-auto max-w-4xl h-full transition-all">
           <div className="flex items-center">
             <Link passHref href="/home">
               <Logo className="w-[90px]" />
@@ -161,7 +165,7 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
               </NavigationMenu>
             </div>
           </div>
-          <div className="hidden items-center space-x-2 sm:flex">
+          <div className="hidden items-center space-x-2 md:flex">
             <Button
               variant="white"
               href="https://github.com/CapSoftware/Cap"
@@ -294,17 +298,25 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
                     <span className="ml-2">Join the community</span>
                   </Link>
                 </li>
-                <li>
-                  <Button
-                    variant="radialblue"
-                    className="font-medium h-[50px] !text-white"
-                    href={auth === false ? "/download" : "/dashboard"}
-                    size="lg"
-                  >
-                    {auth === false ? "Download App" : "Dashboard"}
-                  </Button>
-                </li>
               </ul>
+              <div className="flex flex-col gap-4 items-center mt-10">
+                <Button
+                  variant="dark"
+                  href="/login"
+                  size="sm"
+                  className="font-medium h-[50px] !text-white"
+                >
+                  Login
+                </Button>
+                <Button
+                  variant="radialblue"
+                  className="font-medium h-[50px] !text-white"
+                  href={auth === false ? "/download" : "/dashboard"}
+                  size="lg"
+                >
+                  {auth === false ? "Download App" : "Dashboard"}
+                </Button>
+              </div>
             </nav>
           </div>
         </div>
