@@ -179,9 +179,10 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                 <motion.div
                   layoutId="underline"
                   id="underline"
-                  className="bg-transparent size-10 mx-auto inset-0
-                 rounded-xl text-gray-400 absolute border-[1px] border-gray-200 
-                 shadow-sm shadow-gray-200"
+                  className={clsx(
+                    "absolute inset-0 mx-auto text-gray-400 bg-transparent rounded-xl border-gray-200 shadow-sm border-[1px] shadow-gray-200",
+                    collapsed ? "size-10" : "w-full"
+                  )}
                 />
               ) : null}
               <Tooltip
