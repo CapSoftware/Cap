@@ -181,7 +181,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
               >
                 <Link
                   passHref
-                  prefetch={false}
+                  prefetch={true}
                   href={item.href}
                   className={classNames(
                     pathname.includes(item.href)
