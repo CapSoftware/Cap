@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{ops::Range, time::Instant};
 
 use futures_intrusive::channel::shared::oneshot_channel;
 use wgpu::{hal::Device, COPY_BYTES_PER_ROW_ALIGNMENT};
@@ -93,6 +93,7 @@ impl FramePipelineEncoder {
         render_pipeline: &wgpu::RenderPipeline,
         bind_group: wgpu::BindGroup,
         load_op: wgpu::LoadOp<wgpu::Color>,
+        vertices: Range<u32>,
     ) {
         let mut render_pass = self.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Render Pass"),
@@ -111,7 +112,7 @@ impl FramePipelineEncoder {
 
         render_pass.set_pipeline(render_pipeline);
         render_pass.set_bind_group(0, &bind_group, &[]);
-        render_pass.draw(0..4, 0..1);
+        render_pass.draw(vertices, 0..1);
     }
 
     pub fn padded_bytes_per_row(&self, state: &FramePipelineState<'_>) -> u32 {

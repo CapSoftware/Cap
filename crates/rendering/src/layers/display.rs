@@ -42,6 +42,7 @@ impl DisplayLayer {
                 pipeline.state.get_other_texture_view(),
             ),
             wgpu::LoadOp::Load,
+            0..4,
         );
     }
 }

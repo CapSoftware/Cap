@@ -27,6 +27,7 @@ wgpu.workspace = true
 bezier_easing = "0.1.1"
 reactive_graph = "0.1.5"
 tracing.workspace = true
+rand = "0.9.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre.workspace = true

@@ -263,6 +263,7 @@ impl CursorLayer {
             &self.render_pipeline,
             cursor_bind_group,
             wgpu::LoadOp::Load,
+            0..4,
         );
     }
 }
