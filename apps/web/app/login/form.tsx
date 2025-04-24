@@ -3,7 +3,10 @@
 import { getSpace } from "@/actions/workspace/get-space";
 import { NODE_ENV } from "@cap/env";
 import { Button, Input, LogoBadge } from "@cap/ui";
-import { faArrowLeft } from "@fortawesome/free-solid-svg-icons";
+import {
+  faArrowLeft,
+  faExclamationCircle,
+} from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { AnimatePresence, motion } from "framer-motion";
 import { LucideArrowUpRight, LucideMail } from "lucide-react";
@@ -22,7 +25,6 @@ export function LoginForm() {
   const [emailSent, setEmailSent] = useState(false);
   const [oauthError, setOauthError] = useState(false);
   const [showOrgInput, setShowOrgInput] = useState(false);
-  const [organizationId, setOrganizationId] = useState("");
   const [spaceId, setSpaceId] = useState("");
   const [spaceName, setSpaceName] = useState<string | null>(null);
 
@@ -30,18 +32,24 @@ export function LoginForm() {
     const error = searchParams?.get("error");
     const errorDesc = searchParams?.get("error_description");
 
-    if (error === "OAuthAccountNotLinked") {
-      setOauthError(true);
-      toast.error(
-        "This email is already associated with a different sign-in method"
-      );
-    } else if (error === "profile_not_allowed_outside_organization") {
-      toast.error(
-        "Your email domain is not authorized for SSO access. Please use your work email or contact your administrator."
-      );
-    } else if (error && errorDesc) {
-      toast.error(errorDesc);
-    }
+    const handleErrors = () => {
+      if (error === "OAuthAccountNotLinked" && !errorDesc) {
+        setOauthError(true);
+        return toast.error(
+          "This email is already associated with a different sign-in method"
+        );
+      } else if (
+        error === "profile_not_allowed_outside_organization" &&
+        !errorDesc
+      ) {
+        return toast.error(
+          "Your email domain is not authorized for SSO access. Please use your work email or contact your administrator."
+        );
+      } else if (error && errorDesc) {
+        return toast.error(errorDesc);
+      }
+    };
+    handleErrors();
   }, [searchParams]);
 
   useEffect(() => {
@@ -104,7 +112,7 @@ export function LoginForm() {
 
   return (
     <div className="flex justify-center items-center w-full h-screen">
-      <div className="overflow-hidden relative w-[calc(100%-2%)] p-[28px] max-w-[472px] bg-gray-100 border border-gray-200 rounded-2xl">
+      <div className="overflow-hidden relative w-[calc(100%-5%)] p-[28px] max-w-[472px] bg-gray-100 border border-gray-200 rounded-2xl">
         <motion.div
           key="back-button"
           initial={{ opacity: 0, display: "none" }}
@@ -382,8 +390,12 @@ const NormalLogin = ({
         )}
 
         {oauthError && (
-          <div className="p-4 mb-4 bg-red-900 rounded-xl">
-            <p className="text-sm text-gray-50">
+          <div className="flex gap-3 items-center p-3 bg-red-400 rounded-xl border border-red-600">
+            <FontAwesomeIcon
+              className="text-gray-50 size-8"
+              icon={faExclamationCircle}
+            />
+            <p className="text-xs leading-5 text-gray-50">
               It looks like you've previously used this email to sign up via
               email login. Please enter your email below to receive a sign in
               link.
