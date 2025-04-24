@@ -37,6 +37,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
+import { motion } from "framer-motion";
 import { updateActiveSpace } from "./server";
 
 export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
@@ -173,7 +174,16 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
           className={clsx("mt-8 space-y-2.5", collapsed ? "items-center" : "")}
         >
           {manageNavigation.map((item) => (
-            <div key={item.name} className="flex justify-center">
+            <div key={item.name} className="flex relative justify-center">
+              {pathname.includes(item.href) ? (
+                <motion.div
+                  layoutId="underline"
+                  id="underline"
+                  className="bg-transparent size-10 mx-auto inset-0
+                 rounded-xl text-gray-400 absolute border-[1px] border-gray-200 
+                 shadow-sm shadow-gray-200"
+                />
+              ) : null}
               <Tooltip
                 content={item.name}
                 disable={collapsed === false}
@@ -183,12 +193,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                   passHref
                   prefetch={false}
                   href={item.href}
-                  className={classNames(
-                    pathname.includes(item.href)
-                      ? "bg-white text-gray-400 border-[1px] border-gray-200 shadow-sm shadow-gray-200"
-                      : "hover:opacity-75",
-                    navItemClass
-                  )}
+                  className={classNames("hover:opacity-75", navItemClass)}
                 >
                   <FontAwesomeIcon
                     icon={item.icon as IconDefinition}

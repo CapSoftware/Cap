@@ -22,18 +22,21 @@ import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 import clsx from "clsx";
 import { signOut } from "next-auth/react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 
 export default function DashboardInner({
   children,
-  title,
-  emptyCondition,
-  emptyComponent,
 }: {
   children: React.ReactNode;
-  title?: string;
-  emptyCondition?: boolean;
-  emptyComponent?: React.ReactNode;
 }) {
+  const pathname = usePathname();
+  const titles: Record<string, string> = {
+    "/dashboard/caps": "Caps",
+    "/dashboard/shared-caps": "Shared Caps",
+    "/dashboard/settings/workspace": "Workspace Settings",
+    "/dashboard/settings/account": "Account Settings",
+  };
+  const title = titles[pathname] || "";
   return (
     <div className="flex flex-col pt-5 min-h-screen lg:gap-5">
       {/* Top Bar */}
@@ -51,11 +54,7 @@ export default function DashboardInner({
           "flex overflow-auto flex-col flex-1 p-5 pb-5 bg-gray-100 border border-gray-200 lg:rounded-tl-2xl lg:p-8"
         )}
       >
-        {emptyCondition ? (
-          emptyComponent
-        ) : (
-          <div className="flex flex-col gap-4">{children}</div>
-        )}
+        <div className="flex flex-col gap-4">{children}</div>
       </div>
     </div>
   );
