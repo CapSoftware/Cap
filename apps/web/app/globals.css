@@ -39,6 +39,11 @@ html {
   background-color: white;
 }
 
+::selection {
+  background: black;
+  color: #ffffff;
+}
+
 .wrapper {
   @apply mx-auto w-[92%] max-w-screen-xl;
 }
