@@ -12,10 +12,10 @@ impl SecurityBlurLayer {
         let mut rng = rand::rng();
 
         let noise_seed = [
-            rng.random_range(-1.0..1.0),
-            rng.random_range(-1.0..1.0),
-            rng.random_range(-1.0..1.0),
-            rng.random_range(-1.0..1.0),
+            rng.random_range(-2.0..2.0),
+            rng.random_range(-2.0..2.0),
+            rng.random_range(-2.0..2.0),
+            rng.random_range(-2.0..2.0),
         ];
 
         let bind_group = constants.blur_pipeline.bind_group(

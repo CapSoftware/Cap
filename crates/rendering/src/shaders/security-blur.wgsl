@@ -32,7 +32,8 @@ fn gaussian(x: f32, sigma: f32) -> f32 {
 fn get_noise_offset(pos: vec2<f32>, seed: vec4<f32>, sigma: f32) -> vec2<f32> {
     let noise_x = hash(pos + seed.xy) * 2.0 - 1.0;
     let noise_y = hash(pos + seed.zw) * 2.0 - 1.0;
-    let noise_scale = min(sigma * 0.01, 0.02);
+    // Increased noise scale for softer effect
+    let noise_scale = min(sigma * 0.02, 0.04);
     return vec2<f32>(noise_x, noise_y) * noise_scale;
 }
 
@@ -57,35 +58,38 @@ fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
         return textureSample(img_texture, img_sampler, uv);
     }
 
-    // Calculate sigma based on blur radius
-    let sigma = max(uniforms.blur_radius / 3.0, 0.01);
+    // Increased sigma calculation for stronger blur
+    let sigma = max(uniforms.blur_radius / 2.0, 0.1) * 1.5;
 
-    let sample_count = 15;
+    // Increased sample count for better quality
+    let sample_count = 25;
     var total_weight = gaussian(0.0, sigma);
 
-    // Center sample with noise
+    // Center sample with increased noise
     let noise_offset = get_noise_offset(pos.xy, uniforms.noise_seed, sigma);
     var color = textureSample(img_texture, img_sampler, uv + noise_offset * texel_size) * total_weight;
 
-    // Sample in both horizontal and vertical directions
+    // Enhanced sampling pattern with more samples and wider distribution
     for (var i = 1; i < sample_count; i++) {
-        let weight = gaussian(f32(i), sigma);
         let offset = f32(i);
+        let weight = gaussian(offset, sigma);
 
-        // Sample in all four diagonal directions to cover both horizontal and vertical
-        color += sample_with_blur(uv, vec2<f32>( offset,  offset), pos.xy, uniforms.noise_seed, sigma, texel_size) * weight;
-        color += sample_with_blur(uv, vec2<f32>(-offset,  offset), pos.xy, uniforms.noise_seed, sigma, texel_size) * weight;
-        color += sample_with_blur(uv, vec2<f32>( offset, -offset), pos.xy, uniforms.noise_seed, sigma, texel_size) * weight;
-        color += sample_with_blur(uv, vec2<f32>(-offset, -offset), pos.xy, uniforms.noise_seed, sigma, texel_size) * weight;
+        // Rotated sampling pattern for more uniform blur
+        let angle_step = 0.785398; // pi/4
+        for (var j = 0; j < 8; j++) {
+            let angle = f32(j) * angle_step;
+            let sample_offset = vec2<f32>(
+                cos(angle) * offset,
+                sin(angle) * offset
+            );
 
-        // Sample in cardinal directions
-        color += sample_with_blur(uv, vec2<f32>(offset, 0.0), pos.xy, uniforms.noise_seed, sigma, texel_size) * weight;
-        color += sample_with_blur(uv, vec2<f32>(-offset, 0.0), pos.xy, uniforms.noise_seed, sigma, texel_size) * weight;
-        color += sample_with_blur(uv, vec2<f32>(0.0, offset), pos.xy, uniforms.noise_seed, sigma, texel_size) * weight;
-        color += sample_with_blur(uv, vec2<f32>(0.0, -offset), pos.xy, uniforms.noise_seed, sigma, texel_size) * weight;
+            color += sample_with_blur(uv, sample_offset, pos.xy, uniforms.noise_seed, sigma, texel_size) * weight;
+        }
 
-        total_weight += 8.0 * weight; // Account for all 8 samples
+        total_weight += 8.0 * weight;
     }
 
-    return color / total_weight;
+    // Apply additional softening
+    let final_color = color / total_weight;
+    return mix(final_color, smoothstep(vec4<f32>(0.0), vec4<f32>(1.0), final_color), 0.1);
 }
