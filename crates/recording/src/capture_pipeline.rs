@@ -216,11 +216,7 @@ impl MakeCapturePipeline for AVFrameCapture {
         let mut screen_encoder = MP4File::init(
             "screen",
             output_path.into(),
-            H264Encoder::factory(
-                "screen",
-                screen_config,
-                cap_media::encoders::CompressionQuality::Web,
-            ),
+            |o| H264Encoder::builder("screen", screen_config).build(o),
             |_| None,
         )?;
 
@@ -278,11 +274,7 @@ impl MakeCapturePipeline for AVFrameCapture {
         let mp4 = Arc::new(std::sync::Mutex::new(MP4File::init(
             "screen",
             output_path.into(),
-            H264Encoder::factory(
-                "screen",
-                screen_config,
-                cap_media::encoders::CompressionQuality::Web,
-            ),
+            |o| H264Encoder::builder("screen", screen_config).build(o),
             |o| {
                 has_audio_sources.then(|| {
                     OpusEncoder::init("mic_audio", AudioMixer::info(), o).map(|v| v.boxed())

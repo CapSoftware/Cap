@@ -26,8 +26,12 @@ import toast from "solid-toast";
 import Tooltip from "~/components/Tooltip";
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
-import { exportVideo } from "~/utils/export";
-import { commands, events } from "~/utils/tauri";
+import {
+  commands,
+  events,
+  ExportCompression,
+  FramesRendered,
+} from "~/utils/tauri";
 import { RenderState, useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
 import {
@@ -38,15 +42,17 @@ import {
   PopperContent,
   topSlideAnimateClasses,
 } from "./ui";
-import { exportVideo, COMPRESSION_QUALITY } from "~/utils/export";
-import type { CompressionQuality } from "~/utils/tauri";
+import { exportVideo } from "~/utils/export";
 
-export const COMPRESSION_OPTIONS = [
-  { label: "Studio", value: COMPRESSION_QUALITY.Studio },
-  { label: "Social Media", value: COMPRESSION_QUALITY.Social },
-  { label: "Web", value: COMPRESSION_QUALITY.Web },
-  { label: "Web (Low)", value: COMPRESSION_QUALITY.WebLow },
-] as const;
+export const COMPRESSION_OPTIONS: Array<{
+  label: string;
+  value: ExportCompression;
+}> = [
+  { label: "Minimal", value: "Minimal" },
+  { label: "Social Media", value: "Social" },
+  { label: "Web", value: "Web" },
+  { label: "Potato", value: "Potato" },
+];
 
 export const FPS_OPTIONS = [
   { label: "15 FPS", value: 15 },
@@ -96,10 +102,25 @@ export function ExportDialog() {
       fps: 30,
       exportTo: "file" as ExportToOption,
       resolution: { label: "720p", value: "720p", width: 1280, height: 720 },
-      compression: COMPRESSION_QUALITY.Web as CompressionQuality,
+      compression: "Minimal" as ExportCompression,
     }),
     { name: "export_settings" }
   );
+
+  // just a wrapper of exportVideo that provides the current settings
+  const exportWithSettings = (onProgress: (progress: FramesRendered) => void) =>
+    exportVideo(
+      projectPath,
+      {
+        fps: settings.fps,
+        resolution_base: {
+          x: settings.resolution.width,
+          y: settings.resolution.height,
+        },
+        compression: settings.compression,
+      },
+      onProgress
+    );
 
   const [outputPath, setOutputPath] = createSignal<string | null>(null);
 
@@ -136,15 +157,8 @@ export function ExportDialog() {
       if (exportState.type !== "idle") return;
       setExportState(reconcile({ action: "copy", type: "starting" }));
 
-      const { fps, resolution } = settings;
-      const outputPath = await exportVideo(
-        projectPath,
-        {
-          fps: settings.fps,
-          resolution_base: { x: resolution.width, y: resolution.height },
-          compression: settings.compression,
-        },
-        (progress) => setExportState({ type: "rendering", progress })
+      const outputPath = await exportWithSettings((progress) =>
+        setExportState({ type: "rendering", progress })
       );
 
       setExportState({ type: "copying" });
@@ -199,20 +213,9 @@ export function ExportDialog() {
         path: savePath,
       });
 
-      const videoPath = await exportVideo(
-        projectPath,
-        {
-          fps: settings.fps,
-          resolution_base: {
-            x: settings.resolution.width,
-            y: settings.resolution.height,
-          },
-          compression: settings.compression,
-        },
-        (progress) => {
-          setExportState({ type: "rendering", progress });
-        }
-      );
+      const videoPath = await exportWithSettings((progress) => {
+        setExportState({ type: "rendering", progress });
+      });
 
       setExportState({ type: "copying" });
 
@@ -287,17 +290,8 @@ export function ExportDialog() {
       });
 
       try {
-        await exportVideo(
-          projectPath,
-          {
-            fps: settings.fps,
-            resolution_base: {
-              x: settings.resolution.width,
-              y: settings.resolution.height,
-            },
-            compression: settings.compression,
-          },
-          (progress) => setExportState({ type: "rendering", progress })
+        await exportWithSettings((progress) =>
+          setExportState({ type: "rendering", progress })
         );
 
         setExportState({ type: "uploading", progress: 0 });
@@ -561,7 +555,7 @@ export function ExportDialog() {
                         onClick={() => {
                           setSettings(
                             "compression",
-                            option.value as CompressionQuality
+                            option.value as ExportCompression
                           );
                         }}
                         variant="secondary"

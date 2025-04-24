@@ -8,42 +8,120 @@ use ffmpeg::{
     threading::Config,
     Dictionary,
 };
-use serde::{Deserialize, Serialize};
-use specta::Type;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
-pub enum CompressionQuality {
-    Studio,
-    Social,
-    Web,
-    WebLow,
+pub struct H264EncoderBuilder {
+    name: &'static str,
+    bpp: f32,
+    input_config: VideoInfo,
+    preset: H264Preset,
 }
 
-impl Default for CompressionQuality {
-    fn default() -> Self {
-        Self::Web
-    }
+#[derive(Clone, Copy)]
+pub enum H264Preset {
+    Slow,
+    Medium,
+    Ultrafast,
 }
 
-impl CompressionQuality {
-    fn bitrate(&self) -> usize {
-        match self {
-            CompressionQuality::Studio => 80_000_000,
-            CompressionQuality::Social => 24_000_000,
-            CompressionQuality::Web => 12_000_000,
-            CompressionQuality::WebLow => 3_000_000,
+impl H264EncoderBuilder {
+    pub const QUALITY_BPP: f32 = 0.3;
+
+    pub fn new(name: &'static str, input_config: VideoInfo) -> Self {
+        Self {
+            name,
+            input_config,
+            bpp: Self::QUALITY_BPP,
+            preset: H264Preset::Ultrafast,
         }
     }
 
-    fn preset(&self) -> &'static str {
-        match self {
-            CompressionQuality::Studio => "slow",
-            _ => "ultrafast",
-        }
+    pub fn with_preset(mut self, preset: H264Preset) -> Self {
+        self.preset = preset;
+        self
     }
 
-    fn uses_crf(&self) -> bool {
-        matches!(self, CompressionQuality::Studio)
+    pub fn with_bpp(mut self, bpp: f32) -> Self {
+        self.bpp = bpp;
+        self
+    }
+
+    pub fn build(self, output: &mut format::context::Output) -> Result<H264Encoder, MediaError> {
+        let input_config = &self.input_config;
+        let (codec, encoder_options) = get_codec_and_options(&input_config, self.preset)?;
+
+        let (format, converter) = if !codec
+            .video()
+            .unwrap()
+            .formats()
+            .unwrap()
+            .any(|f| f == input_config.pixel_format)
+        {
+            let format = ffmpeg::format::Pixel::YUV420P;
+            tracing::debug!(
+                "Converting from {:?} to {:?} for H264 encoding",
+                input_config.pixel_format,
+                format
+            );
+            (
+                format,
+                Some(
+                    ffmpeg::software::converter(
+                        (input_config.width, input_config.height),
+                        input_config.pixel_format,
+                        format,
+                    )
+                    .map_err(|e| {
+                        tracing::error!(
+                            "Failed to create converter from {:?} to YUV420P: {:?}",
+                            input_config.pixel_format,
+                            e
+                        );
+                        MediaError::Any("Failed to create frame converter".into())
+                    })?,
+                ),
+            )
+        } else {
+            (input_config.pixel_format, None)
+        };
+
+        let mut encoder_ctx = context::Context::new_with_codec(codec);
+
+        encoder_ctx.set_threading(Config::count(4));
+        let mut encoder = encoder_ctx.encoder().video()?;
+
+        encoder.set_width(input_config.width);
+        encoder.set_height(input_config.height);
+        encoder.set_format(format);
+        encoder.set_time_base(input_config.frame_rate.invert());
+        encoder.set_frame_rate(Some(input_config.frame_rate));
+
+        // let target_bitrate = compression.bitrate();
+        let bitrate = get_bitrate(
+            input_config.width,
+            input_config.height,
+            input_config.frame_rate.0 as f32 / input_config.frame_rate.1 as f32,
+            self.bpp,
+        );
+
+        encoder.set_bit_rate(bitrate);
+        encoder.set_max_bit_rate(bitrate);
+
+        let video_encoder = encoder.open_with(encoder_options)?;
+
+        let mut output_stream = output.add_stream(codec)?;
+        let stream_index = output_stream.index();
+        output_stream.set_time_base(input_config.frame_rate.invert());
+        output_stream.set_rate(input_config.frame_rate);
+        output_stream.set_parameters(&video_encoder);
+
+        Ok(H264Encoder {
+            tag: self.name,
+            encoder: video_encoder,
+            stream_index,
+            config: self.input_config,
+            converter,
+            packet: FFPacket::empty(),
+        })
     }
 }
 
@@ -54,99 +132,11 @@ pub struct H264Encoder {
     converter: Option<ffmpeg::software::scaling::Context>,
     stream_index: usize,
     packet: ffmpeg::Packet,
-    compression: CompressionQuality,
 }
 
 impl H264Encoder {
-    pub fn factory(
-        tag: &'static str,
-        config: VideoInfo,
-        compression: CompressionQuality,
-    ) -> impl FnOnce(&mut format::context::Output) -> Result<Self, MediaError> {
-        move |o| Self::init(tag, config, compression, o)
-    }
-
-    pub fn init(
-        tag: &'static str,
-        config: VideoInfo,
-        compression: CompressionQuality,
-        output: &mut format::context::Output,
-    ) -> Result<Self, MediaError> {
-        let (codec, options) = get_codec_and_options(&config, compression)?;
-
-        let (format, converter) = if !codec
-            .video()
-            .unwrap()
-            .formats()
-            .unwrap()
-            .any(|f| f == config.pixel_format)
-        {
-            let format = ffmpeg::format::Pixel::YUV420P;
-            tracing::debug!(
-                "Converting from {:?} to {:?} for H264 encoding",
-                config.pixel_format,
-                format
-            );
-            (
-                format,
-                Some(
-                    ffmpeg::software::converter(
-                        (config.width, config.height),
-                        config.pixel_format,
-                        format,
-                    )
-                    .map_err(|e| {
-                        tracing::error!(
-                            "Failed to create converter from {:?} to YUV420P: {:?}",
-                            config.pixel_format,
-                            e
-                        );
-                        MediaError::Any("Failed to create frame converter".into())
-                    })?,
-                ),
-            )
-        } else {
-            (config.pixel_format, None)
-        };
-
-        let mut encoder_ctx = context::Context::new_with_codec(codec);
-
-        encoder_ctx.set_threading(Config::count(4));
-        let mut encoder = encoder_ctx.encoder().video()?;
-
-        encoder.set_width(config.width);
-        encoder.set_height(config.height);
-        encoder.set_format(format);
-        encoder.set_time_base(config.frame_rate.invert());
-        encoder.set_frame_rate(Some(config.frame_rate));
-
-        // let target_bitrate = compression.bitrate();
-        let bitrate = get_bitrate(
-            config.width,
-            config.height,
-            config.frame_rate.0 as f32 / config.frame_rate.1 as f32,
-        );
-
-        encoder.set_bit_rate(bitrate);
-        encoder.set_max_bit_rate(bitrate);
-
-        let video_encoder = encoder.open_with(options)?;
-
-        let mut output_stream = output.add_stream(codec)?;
-        let stream_index = output_stream.index();
-        output_stream.set_time_base(config.frame_rate.invert());
-        output_stream.set_rate(config.frame_rate);
-        output_stream.set_parameters(&video_encoder);
-
-        Ok(Self {
-            tag,
-            encoder: video_encoder,
-            stream_index,
-            config,
-            converter,
-            packet: FFPacket::empty(),
-            compression,
-        })
+    pub fn builder(name: &'static str, input_config: VideoInfo) -> H264EncoderBuilder {
+        H264EncoderBuilder::new(name, input_config)
     }
 
     pub fn queue_frame(&mut self, frame: FFVideo, output: &mut format::context::Output) {
@@ -204,7 +194,7 @@ impl H264Encoder {
 
 fn get_codec_and_options(
     config: &VideoInfo,
-    compression: CompressionQuality,
+    preset: H264Preset,
 ) -> Result<(Codec, Dictionary), MediaError> {
     let encoder_name = {
         if cfg!(target_os = "macos") {
@@ -226,17 +216,20 @@ fn get_codec_and_options(
             let keyframe_interval = keyframe_interval_secs * config.frame_rate.numerator();
             let keyframe_interval_str = keyframe_interval.to_string();
 
-            let preset = compression.preset();
-
-            options.set("preset", preset);
-            options.set("tune", "zerolatency");
+            options.set(
+                "preset",
+                match preset {
+                    H264Preset::Slow => "slow",
+                    H264Preset::Medium => "medium",
+                    H264Preset::Ultrafast => "ultrafast",
+                },
+            );
+            if let H264Preset::Ultrafast = preset {
+                options.set("tune", "zerolatency");
+            }
             options.set("vsync", "1");
             options.set("g", &keyframe_interval_str);
             options.set("keyint_min", &keyframe_interval_str);
-
-            if compression.uses_crf() {
-                options.set("crf", "16");
-            }
         }
 
         return Ok((codec, options));
@@ -245,23 +238,10 @@ fn get_codec_and_options(
     Err(MediaError::MissingCodec("H264 video"))
 }
 
-fn get_bitrate(width: u32, height: u32, frame_rate: f32) -> usize {
+fn get_bitrate(width: u32, height: u32, frame_rate: f32, bpp: f32) -> usize {
     // higher frame rates don't really need double the bitrate lets be real
-    let frame_rate_multiplier = (frame_rate - 30.0).max(0.0) * 0.4 + 30.0;
+    let frame_rate_multiplier = (frame_rate - 30.0).max(0.0) * 0.6 + 30.0;
     let pixels_per_second = (width * height) as f32 * frame_rate_multiplier;
 
-    let base_bpp = 0.15;
-
-    // Apply resolution efficiency scaling (larger resolutions can use relatively lower bitrates)
-    let resolution_factor = if width * height > 1920 * 1080 {
-        0.7
-    } else if width * height > 1280 * 720 {
-        0.8
-    } else if width * height > 640 * 480 {
-        0.9
-    } else {
-        1.0
-    };
-
-    (pixels_per_second * base_bpp * resolution_factor) as usize
+    (pixels_per_second * bpp) as usize
 }

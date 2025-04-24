@@ -28,7 +28,7 @@ import IconLucideClock from "~icons/lucide/clock";
 import { commands, events, FramesRendered, UploadResult } from "~/utils/tauri";
 import { FPS, OUTPUT_SIZE } from "./editor/context";
 import { authStore } from "~/store";
-import { exportVideo, COMPRESSION_QUALITY } from "~/utils/export";
+import { exportVideo } from "~/utils/export";
 
 type MediaEntry = {
   path: string;
@@ -552,6 +552,16 @@ function createRecordingMutations(
     queryFn: () => commands.getRecordingMeta(media.path, type),
   }));
 
+  // just a wrapper of exportVideo to provide base settings
+  const exportWithDefaultSettings = (
+    onProgress: (progress: FramesRendered) => void
+  ) =>
+    exportVideo(
+      media.path,
+      { fps: FPS, resolution_base: OUTPUT_SIZE, compression: "Web" },
+      onProgress
+    );
+
   const copy = createMutation(() => ({
     mutationFn: async () => {
       setActionState({
@@ -562,13 +572,7 @@ function createRecordingMutations(
       try {
         if (isRecording) {
           // First try to get existing rendered video
-          const outputPath = await exportVideo(
-            media.path,
-            {
-              fps: FPS,
-              resolution_base: OUTPUT_SIZE,
-              compression: COMPRESSION_QUALITY.Web,
-            },
+          const outputPath = await exportWithDefaultSettings(
             createRenderProgressCallback("copy", setActionState)
           );
 
@@ -653,13 +657,7 @@ function createRecordingMutations(
       });
 
       if (isRecording) {
-        const outputPath = await exportVideo(
-          media.path,
-          {
-            fps: FPS,
-            resolution_base: OUTPUT_SIZE,
-            compression: COMPRESSION_QUALITY.Web,
-          },
+        const outputPath = await exportWithDefaultSettings(
           createRenderProgressCallback("save", setActionState)
         );
 
@@ -744,15 +742,7 @@ function createRecordingMutations(
             setActionState
           );
 
-          const outputPath = await exportVideo(
-            media.path,
-            {
-              fps: FPS,
-              resolution_base: OUTPUT_SIZE,
-              compression: COMPRESSION_QUALITY.Web,
-            },
-            progress
-          );
+          await exportWithDefaultSettings(progress);
 
           // Show quick progress animation for existing video
           setActionState(

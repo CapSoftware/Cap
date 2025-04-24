@@ -1,13 +1,10 @@
 import { Channel } from "@tauri-apps/api/core";
-import { commands, ExportSettings, FramesRendered } from "./tauri";
-import type { CompressionQuality } from "./tauri";
-
-export const COMPRESSION_QUALITY = {
-  Studio: "Studio",
-  Social: "Social",
-  Web: "Web",
-  WebLow: "WebLow"
-} as const satisfies Record<string, CompressionQuality>;
+import {
+  commands,
+  ExportCompression,
+  ExportSettings,
+  FramesRendered,
+} from "./tauri";
 
 export async function exportVideo(
   projectPath: string,

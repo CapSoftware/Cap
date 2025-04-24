@@ -17,8 +17,6 @@ pub mod pipeline;
 pub mod platform;
 pub mod sources;
 
-pub use encoders::CompressionQuality;
-
 pub fn init() -> Result<(), MediaError> {
     ffmpeg::init()?;
 
