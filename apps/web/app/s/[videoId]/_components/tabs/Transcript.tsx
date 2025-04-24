@@ -149,7 +149,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
       fetchTranscript();
     } else {
       const startTime = Date.now();
-      const maxDuration = 2 * 60 * 1000; // 2 minutes
+      const maxDuration = 2 * 60 * 1000;
 
       const intervalId = setInterval(() => {
         if (Date.now() - startTime > maxDuration) {

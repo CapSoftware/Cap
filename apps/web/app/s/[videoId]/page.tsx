@@ -15,6 +15,8 @@ import { notFound } from "next/navigation";
 import { ImageViewer } from "./_components/ImageViewer";
 import { clientEnv } from "@cap/env";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
+import { transcribeVideo } from "@/actions/videos/transcribe";
+import { getScreenshot } from "@/actions/screenshots/get-screenshot";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -59,38 +61,41 @@ export async function generateMetadata(
   const video = query[0];
 
   if (!video) {
-    console.log(
-      "[generateMetadata] Video object is null for videoId:",
-      videoId
-    );
     return notFound();
   }
 
   if (video.public === false) {
-    console.log(
-      "[generateMetadata] Video is private, returning private metadata"
-    );
     return {
       title: "Cap: This video is private",
       description: "This video is private and cannot be shared.",
       openGraph: {
         images: [
-          `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/og?videoId=${videoId}`,
+          {
+            url: new URL(
+              `/api/video/og?videoId=${videoId}`,
+              clientEnv.NEXT_PUBLIC_WEB_URL
+            ).toString(),
+            width: 1200,
+            height: 630,
+          },
         ],
       },
     };
   }
 
-  console.log(
-    "[generateMetadata] Returning public metadata for video:",
-    video.name
-  );
   return {
     title: video.name + " | Cap Recording",
     description: "Watch this video on Cap",
     openGraph: {
       images: [
-        `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/og?videoId=${videoId}`,
+        {
+          url: new URL(
+            `/api/video/og?videoId=${videoId}`,
+            clientEnv.NEXT_PUBLIC_WEB_URL
+          ).toString(),
+          width: 1200,
+          height: 630,
+        },
       ],
     },
   };
@@ -174,36 +179,9 @@ export default async function ShareVideoPage(props: Props) {
     }
   }
 
-  const videoSource = video.source as (typeof videos.$inferSelect)["source"];
-
-  if (
-    video.jobId === null &&
-    video.skipProcessing === false &&
-    videoSource.type === "MediaConvert"
-  ) {
-    console.log("[ShareVideoPage] Creating MUX job for video:", videoId);
-    const res = await fetch(
-      `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/upload/mux/create?videoId=${videoId}&userId=${video.ownerId}`,
-      {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-      }
-    );
-
-    await res.json();
-  }
-
   if (video.transcriptionStatus !== "COMPLETE") {
     console.log("[ShareVideoPage] Starting transcription for video:", videoId);
-    fetch(
-      `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/transcribe?videoId=${videoId}&userId=${video.ownerId}`,
-      {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-      }
-    );
+    await transcribeVideo(videoId, video.ownerId);
   }
 
   if (video.public === false && userId !== video.ownerId) {
@@ -232,25 +210,22 @@ export default async function ShareVideoPage(props: Props) {
   let screenshotUrl;
   if (video.isScreenshot === true) {
     console.log("[ShareVideoPage] Fetching screenshot for video:", videoId);
-    const res = await fetch(
-      `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/screenshot?userId=${video.ownerId}&screenshotId=${videoId}`,
-      {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-      }
-    );
-    const data = await res.json();
-    screenshotUrl = data.url;
+    try {
+      const data = await getScreenshot(video.ownerId, videoId);
+      screenshotUrl = data.url;
 
-    return (
-      <ImageViewer
-        imageSrc={screenshotUrl}
-        data={video}
-        user={user}
-        comments={commentsQuery}
-      />
-    );
+      return (
+        <ImageViewer
+          imageSrc={screenshotUrl}
+          data={video}
+          user={user}
+          comments={commentsQuery}
+        />
+      );
+    } catch (error) {
+      console.error("[ShareVideoPage] Error fetching screenshot:", error);
+      return <p>Failed to load screenshot</p>;
+    }
   }
 
   console.log("[ShareVideoPage] Fetching analytics for video:", videoId);
@@ -331,7 +306,7 @@ export default async function ShareVideoPage(props: Props) {
       data={videoWithSpaceInfo}
       user={user}
       comments={commentsQuery}
-      individualFiles={[]} // individualFiles}
+      individualFiles={[]}
       initialAnalytics={initialAnalytics}
       customDomain={customDomain}
       domainVerified={domainVerified}

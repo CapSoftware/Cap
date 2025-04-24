@@ -22,13 +22,8 @@
     "env-setup": "node scripts/env-cli.js"
   },
   "devDependencies": {
-    "@clack/core": "^0.4.1",
     "@clack/prompts": "^0.10.0",
-    "@turbo/gen": "^1.9.7",
-    "@types/aws-lambda": "8.10.148",
     "dotenv-cli": "latest",
-    "eslint": "^7.32.0",
-    "extract-zip": "^2.0.1",
     "prettier": "^2.5.1",
     "turbo": "^2.3.4",
     "typescript": "^5.7.2"
@@ -42,8 +37,5 @@
     "patchedDependencies": {
       "@kobalte/core@0.13.7": "patches/@kobalte__core@0.13.7.patch"
     }
-  },
-  "dependencies": {
-    "sst": "3.10.13"
   }
 }
