@@ -134,6 +134,7 @@ pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
     show_camera: bool,
     force_show_cursor: bool,
     bounds: Bounds,
+    // logical display size
     display_size: (f32, f32),
     video_tx: Sender<(TCaptureFormat::VideoFormat, f64)>,
     audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
@@ -268,12 +269,16 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 
         this.options = Arc::new(options);
 
-        this.video_info = VideoInfo::from_raw(
-            RawVideoFormat::Bgra,
-            bounds.width as u32,
-            bounds.height as u32,
-            fps,
-        );
+        #[cfg(target_os = "macos")]
+        let video_size = {
+            let [x, y] = scap::capturer::get_output_frame_size(&this.options);
+            (x, y)
+        };
+        #[cfg(windows)]
+        let video_size = (bounds.width as u32, bounds.height as u32);
+
+        this.video_info =
+            VideoInfo::from_raw(RawVideoFormat::Bgra, video_size.0, video_size.1, fps);
 
         Ok(this)
     }

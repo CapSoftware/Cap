@@ -79,8 +79,15 @@ impl H264Encoder {
         encoder.set_format(format);
         encoder.set_time_base(config.frame_rate.invert());
         encoder.set_frame_rate(Some(config.frame_rate));
-        encoder.set_bit_rate(12_000_000);
-        encoder.set_max_bit_rate(12_000_000);
+
+        let bitrate = get_bitrate(
+            config.width,
+            config.height,
+            config.frame_rate.0 as f32 / config.frame_rate.1 as f32,
+        );
+
+        encoder.set_bit_rate(bitrate);
+        encoder.set_max_bit_rate(bitrate);
 
         let video_encoder = encoder.open_with(options)?;
 
@@ -163,6 +170,7 @@ fn get_codec_and_options(config: &VideoInfo) -> Result<(Codec, Dictionary), Medi
             "libx264"
         }
     };
+
     if let Some(codec) = encoder::find_by_name(encoder_name) {
         let mut options = Dictionary::new();
 
@@ -187,4 +195,25 @@ fn get_codec_and_options(config: &VideoInfo) -> Result<(Codec, Dictionary), Medi
     }
 
     Err(MediaError::MissingCodec("H264 video"))
+}
+
+fn get_bitrate(width: u32, height: u32, frame_rate: f32) -> usize {
+    // higher frame rates don't really need double the bitrate lets be real
+    let frame_rate_multiplier = (frame_rate - 30.0).max(0.0) * 0.4 + 30.0;
+    let pixels_per_second = (width * height) as f32 * frame_rate_multiplier;
+
+    let base_bpp = 0.15;
+
+    // Apply resolution efficiency scaling (larger resolutions can use relatively lower bitrates)
+    let resolution_factor = if width * height > 1920 * 1080 {
+        0.7
+    } else if width * height > 1280 * 720 {
+        0.8
+    } else if width * height > 640 * 480 {
+        0.9
+    } else {
+        1.0
+    };
+
+    (pixels_per_second * base_bpp * resolution_factor) as usize
 }
