@@ -1024,9 +1024,7 @@ async fn produce_frame(
             );
         }
 
-        SecurityBlurLayer::render(&mut pipeline, [100.0, 100.0, 400.0, 400.0], 100.0);
-
-        SecurityBlurLayer::render(&mut pipeline, [100.0, 100.0, 400.0, 400.0], 100.0);
+        SecurityBlurLayer::render(&mut pipeline, [100.0, 100.0, 400.0, 400.0], 1.0);
     }
 
     let padded_bytes_per_row = encoder.padded_bytes_per_row(&state);
