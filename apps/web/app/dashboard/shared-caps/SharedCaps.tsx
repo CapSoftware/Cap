@@ -4,7 +4,6 @@ import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayou
 import { VideoMetadata } from "@cap/database/types";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
-import DashboardInner from "../_components/DashboardInner";
 import { CapPagination } from "../caps/components/CapPagination";
 import { EmptySharedCapState } from "./components/EmptySharedCapState";
 import { SharedCapCard } from "./components/SharedCapCard";
@@ -48,31 +47,27 @@ export const SharedCaps = ({
     fetchAnalytics();
   }, [data]);
 
+  if (data.length === 0) {
+    return <EmptySharedCapState spaceName={activeSpace?.space.name || ""} />;
+  }
+
   return (
-    <DashboardInner
-      title="Shared Caps"
-      emptyCondition={data.length === 0}
-      emptyComponent={
-        <EmptySharedCapState spaceName={activeSpace?.space.name || ""} />
-      }
-    >
-      <div className="flex flex-col w-full h-full">
-        <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-          {data.map((cap) => (
-            <SharedCapCard
-              key={cap.id}
-              cap={cap}
-              analytics={analytics[cap.id] || 0}
-              spaceName={activeSpace?.space.name || ""}
-            />
-          ))}
-        </div>
-        {(data.length > limit || data.length === limit || page !== 1) && (
-          <div className="mt-4">
-            <CapPagination currentPage={page} totalPages={totalPages} />
-          </div>
-        )}
+    <div className="flex flex-col w-full h-full">
+      <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+        {data.map((cap) => (
+          <SharedCapCard
+            key={cap.id}
+            cap={cap}
+            analytics={analytics[cap.id] || 0}
+            spaceName={activeSpace?.space.name || ""}
+          />
+        ))}
       </div>
-    </DashboardInner>
+      {(data.length > limit || data.length === limit || page !== 1) && (
+        <div className="mt-4">
+          <CapPagination currentPage={page} totalPages={totalPages} />
+        </div>
+      )}
+    </div>
   );
 };

@@ -5,7 +5,6 @@ import { VideoMetadata } from "@cap/database/types";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
-import DashboardInner from "../_components/DashboardInner";
 import { CapCard } from "./components/CapCard";
 import { CapPagination } from "./components/CapPagination";
 import { EmptyCapState } from "./components/EmptyCapState";
@@ -80,31 +79,29 @@ export const Caps = ({
     }
   };
 
+  if (data.length === 0) {
+    return <EmptyCapState />;
+  }
+
   return (
-    <DashboardInner
-      title="My Caps"
-      emptyCondition={data.length === 0}
-      emptyComponent={<EmptyCapState userName={user?.name || ""} />}
-    >
-      <div className="flex flex-col w-full">
-        <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-          {data.map((cap) => (
-            <CapCard
-              key={cap.id}
-              cap={cap}
-              analytics={analytics[cap.id] || 0}
-              onDelete={deleteCap}
-              userId={user?.id}
-              userSpaces={userSpaces}
-            />
-          ))}
-        </div>
-        {(data.length > limit || data.length === limit || page !== 1) && (
-          <div className="mt-10">
-            <CapPagination currentPage={page} totalPages={totalPages} />
-          </div>
-        )}
+    <div className="flex flex-col w-full">
+      <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+        {data.map((cap) => (
+          <CapCard
+            key={cap.id}
+            cap={cap}
+            analytics={analytics[cap.id] || 0}
+            onDelete={deleteCap}
+            userId={user?.id}
+            userSpaces={userSpaces}
+          />
+        ))}
       </div>
-    </DashboardInner>
+      {(data.length > limit || data.length === limit || page !== 1) && (
+        <div className="mt-10">
+          <CapPagination currentPage={page} totalPages={totalPages} />
+        </div>
+      )}
+    </div>
   );
 };
