@@ -8,17 +8,18 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@cap/ui";
-import {
-  Home,
-  LogOut,
-  MessageSquare,
-  MoreVertical,
-  Settings,
-} from "lucide-react";
+import { MoreVertical } from "lucide-react";
 import { useState } from "react";
 
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
+import {
+  faGear,
+  faHome,
+  faMessage,
+  faSignOut,
+} from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { signOut } from "next-auth/react";
 import Link from "next/link";
@@ -85,45 +86,57 @@ const User = () => {
           <CommandGroup>
             <Link href="/home">
               <CommandItem
-                className="px-2 py-2 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-100 group"
+                className="px-2 py-1.5 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-100 group"
                 onSelect={() => {
                   setMenuOpen(false);
                 }}
               >
-                <Home className="mr-2 w-4 h-4 text-gray-400 group-hover:text-gray-500" />
-                <span className="text-sm text-gray-400 group-hover:text-gray-500">
+                <FontAwesomeIcon
+                  icon={faHome}
+                  className="mr-2 text-gray-400 transition-colors duration-300 size-3.5 group-hover:text-gray-500"
+                />
+                <span className="text-[13px] transition-colors duration-300 text-gray-400 group-hover:text-gray-500">
                   Homepage
                 </span>
               </CommandItem>
             </Link>
             <Link href="/dashboard/settings/account">
               <CommandItem
-                className="px-2 py-2 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-100 group"
+                className="px-2 py-1.5 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-100 group"
                 onSelect={() => {
                   setMenuOpen(false);
                 }}
               >
-                <Settings className="mr-2 w-4 h-4 text-gray-400 group-hover:text-gray-500" />
-                <span className="text-sm text-gray-400 group-hover:text-gray-500">
+                <FontAwesomeIcon
+                  icon={faGear}
+                  className="mr-2 text-gray-400 transition-colors duration-300 size-3.5 group-hover:text-gray-500"
+                />
+                <span className="text-[13px] transition-colors duration-300 text-gray-400 group-hover:text-gray-500">
                   Settings
                 </span>
               </CommandItem>
             </Link>
             <CommandItem
-              className="px-2 py-2 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-100 group"
+              className="px-2 py-1.5 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-100 group"
               onSelect={() => window.open("https://cap.link/discord", "_blank")}
             >
-              <MessageSquare className="mr-2 w-4 h-4 text-gray-400 group-hover:text-gray-500" />
-              <span className="text-sm text-gray-400 group-hover:text-gray-500">
+              <FontAwesomeIcon
+                icon={faMessage}
+                className="mr-2 text-gray-400 transition-colors duration-300 size-3 group-hover:text-gray-500"
+              />
+              <span className="text-[13px] transition-colors duration-300 text-gray-400 group-hover:text-gray-500">
                 Chat Support
               </span>
             </CommandItem>
             <CommandItem
-              className="px-2 py-2 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-100 group"
+              className="px-2 py-1.5 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-100 group"
               onSelect={() => signOut()}
             >
-              <LogOut className="mr-2 w-4 h-4 text-gray-400 group-hover:text-gray-500" />
-              <span className="text-sm text-gray-400 group-hover:text-gray-500">
+              <FontAwesomeIcon
+                icon={faSignOut}
+                className="mr-2 text-gray-400 transition-colors duration-300 size-3.5 group-hover:text-gray-500"
+              />
+              <span className="text-[13px] transition-colors duration-300 text-gray-400 group-hover:text-gray-500">
                 Sign Out
               </span>
             </CommandItem>
