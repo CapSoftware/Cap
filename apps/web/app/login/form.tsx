@@ -25,7 +25,6 @@ export function LoginForm() {
   const [emailSent, setEmailSent] = useState(false);
   const [oauthError, setOauthError] = useState(false);
   const [showOrgInput, setShowOrgInput] = useState(false);
-  const [organizationId, setOrganizationId] = useState("");
   const [spaceId, setSpaceId] = useState("");
   const [spaceName, setSpaceName] = useState<string | null>(null);
 
@@ -33,18 +32,24 @@ export function LoginForm() {
     const error = searchParams?.get("error");
     const errorDesc = searchParams?.get("error_description");
 
-    if (error === "OAuthAccountNotLinked") {
-      setOauthError(true);
-      toast.error(
-        "This email is already associated with a different sign-in method"
-      );
-    } else if (error === "profile_not_allowed_outside_organization") {
-      toast.error(
-        "Your email domain is not authorized for SSO access. Please use your work email or contact your administrator."
-      );
-    } else if (error && errorDesc) {
-      toast.error(errorDesc);
-    }
+    const handleErrors = () => {
+      if (error === "OAuthAccountNotLinked" && !errorDesc) {
+        setOauthError(true);
+        return toast.error(
+          "This email is already associated with a different sign-in method"
+        );
+      } else if (
+        error === "profile_not_allowed_outside_organization" &&
+        !errorDesc
+      ) {
+        return toast.error(
+          "Your email domain is not authorized for SSO access. Please use your work email or contact your administrator."
+        );
+      } else if (error && errorDesc) {
+        return toast.error(errorDesc);
+      }
+    };
+    handleErrors();
   }, [searchParams]);
 
   useEffect(() => {
