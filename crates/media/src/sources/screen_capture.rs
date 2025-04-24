@@ -94,36 +94,6 @@ impl ScreenCaptureTarget {
     }
 }
 
-// impl PartialEq<Target> for ScreenCaptureTarget {
-//     fn eq(&self, other: &Target) -> bool {
-//         match (self, other) {
-//             (Self::Window(capture_window), Target::Window(window)) => {
-//                 window.id == capture_window.id
-//             }
-//             (ScreenCaptureTarget::Area(capture_area), Target::Display(display)) => {
-//                 display.id == capture_area.screen.id
-//             }
-//             (ScreenCaptureTarget::Screen(capture_screen), Target::Display(display)) => {
-//                 display.id == capture_screen.id
-//             }
-//             (&ScreenCaptureTarget::Window(_), &scap::Target::Display(_))
-//             | (&ScreenCaptureTarget::Screen(_), &scap::Target::Window(_))
-//             | (&ScreenCaptureTarget::Area(_), &scap::Target::Window(_)) => todo!(),
-//         }
-//     }
-// }
-
-// impl ScreenCaptureTarget {
-//     pub fn recording_fps(&self) -> u32 {
-//         match self {
-//             ScreenCaptureTarget::Window(window) => window.
-//             ScreenCaptureTarget::Screen(screen) => screen.refresh_rate,
-//             ScreenCaptureTarget::Area(area) => area.screen.refresh_rate,
-//         }
-//         .min(MAX_FPS)
-//     }
-// }
-
 pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
     target: ScreenCaptureTarget,
     output_resolution: Option<ScapResolution>,
@@ -205,8 +175,6 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCapture
     }
 }
 
-const MAX_FPS: u32 = 60;
-
 struct OptionsConfig {
     scap_target: scap::Target,
     bounds: Bounds,
@@ -214,9 +182,9 @@ struct OptionsConfig {
     display_size: (f32, f32),
 }
 
-struct CropRatio {
-    position: (f32, f32),
-    size: (f32, f32),
+pub struct CropRatio {
+    pub position: (f32, f32),
+    pub size: (f32, f32),
 }
 
 impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
@@ -287,20 +255,23 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         &self.bounds
     }
 
-    pub fn crop_ratio(&self) -> ((f32, f32), (f32, f32)) {
+    pub fn crop_ratio(&self) -> CropRatio {
         if let Some(crop_area) = &self.options.crop_area {
-            (
-                (
+            CropRatio {
+                position: (
                     crop_area.origin.x as f32 / self.display_size.0,
                     crop_area.origin.y as f32 / self.display_size.1,
                 ),
-                (
+                size: (
                     crop_area.size.width as f32 / self.display_size.0,
                     crop_area.size.height as f32 / self.display_size.1,
                 ),
-            )
+            }
         } else {
-            ((0.0, 0.0), (1.0, 1.0))
+            CropRatio {
+                position: (0.0, 0.0),
+                size: (1.0, 1.0),
+            }
         }
     }
 
@@ -705,6 +676,13 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                             }
                         }
                         SCStreamOutputType::Audio => {
+                            let res = || {
+                                Ok::<_, ()>(cap_fail::fail_err!("screen_capture audio skip", ()))
+                            };
+                            if let Err(_) = res() {
+                                return ControlFlow::Continue(());
+                            }
+
                             let Some(audio_tx) = &audio_tx else {
                                 return ControlFlow::Continue(());
                             };
