@@ -10,8 +10,8 @@ use frame_pipeline::{FramePipeline, FramePipelineEncoder, FramePipelineState};
 use futures::future::OptionFuture;
 use futures::FutureExt;
 use layers::{
-    Background, BackgroundBlurPipeline, BackgroundLayer, BlurLayer, BlurPipeline, CameraLayer,
-    CursorLayer, DisplayLayer, GradientOrColorPipeline, ImageBackgroundPipeline,
+    Background, BackgroundBlurPipeline, BackgroundLayer, CameraLayer, CursorLayer, DisplayLayer,
+    GradientOrColorPipeline, ImageBackgroundPipeline, SecurityBlurLayer, SecurityBlurPipeline,
 };
 use specta::Type;
 use std::{collections::HashMap, sync::Arc};
@@ -313,7 +313,7 @@ pub struct RenderVideoConstants {
     gradient_or_color_pipeline: GradientOrColorPipeline,
     image_background_pipeline: ImageBackgroundPipeline,
     pub background_blur_pipeline: BackgroundBlurPipeline,
-    blur_pipeline: BlurPipeline,
+    blur_pipeline: SecurityBlurPipeline,
     background_textures: std::sync::Arc<tokio::sync::RwLock<HashMap<String, wgpu::Texture>>>,
     screen_frame: (wgpu::Texture, wgpu::TextureView),
     camera_frame: Option<(wgpu::Texture, wgpu::TextureView)>,
@@ -401,7 +401,7 @@ impl RenderVideoConstants {
             (texture, texture_view)
         });
 
-        let blur_pipeline = BlurPipeline::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let blur_pipeline = SecurityBlurPipeline::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb);
 
         Ok(Self {
             _instance: instance,
@@ -1024,7 +1024,7 @@ async fn produce_frame(
             );
         }
 
-        BlurLayer::render(&mut pipeline, [100.0, 100.0, 200.0, 200.0], 50.0);
+        SecurityBlurLayer::render(&mut pipeline, [100.0, 100.0, 400.0, 400.0], 50.0);
     }
 
     let padded_bytes_per_row = encoder.padded_bytes_per_row(&state);

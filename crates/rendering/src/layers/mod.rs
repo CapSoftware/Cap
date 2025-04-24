@@ -1,11 +1,11 @@
 mod background;
-mod blur;
 mod camera;
 mod cursor;
 mod display;
+mod security_blur;
 
 pub use background::*;
-pub use blur::*;
 pub use camera::*;
 pub use cursor::*;
 pub use display::*;
+pub use security_blur::*;
