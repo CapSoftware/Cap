@@ -18,22 +18,44 @@ impl SecurityBlurLayer {
             rng.random_range(-2.0..2.0),
         ];
 
-        let bind_group = constants.blur_pipeline.bind_group(
+        let uniforms = SecurityBlurUniforms {
+            rect,
+            blur_radius,
+            noise_seed,
+            _pad: [0.0; 7],
+        }
+        .to_buffer(&constants.device);
+
+        // First pass - downsample to intermediate texture
+        let downsample_bind_group = constants.blur_pipeline.bind_group(
             &constants.device,
             &pipeline.state.get_current_texture_view(),
-            &SecurityBlurUniforms {
-                rect,
-                blur_radius,
-                noise_seed,
-                _pad: [0.0; 7],
-            }
-            .to_buffer(&constants.device),
+            &uniforms,
+            true, // is_downsample
         );
-        // First pass render - horizontal blur to intermediate texture
+
         pipeline.encoder.do_render_pass(
             &pipeline.state.get_other_texture_view(),
-            &constants.blur_pipeline.render_pipeline,
-            bind_group,
+            &constants.blur_pipeline.downsample_pipeline,
+            downsample_bind_group,
+            wgpu::LoadOp::Load,
+            0..6,
+        );
+
+        // pipeline.state.switch_output();
+
+        // Second pass - upsample with blur
+        let upsample_bind_group = constants.blur_pipeline.bind_group(
+            &constants.device,
+            &pipeline.state.get_other_texture_view(),
+            &uniforms,
+            false, // is_downsample
+        );
+
+        pipeline.encoder.do_render_pass(
+            &pipeline.state.get_current_texture_view(),
+            &constants.blur_pipeline.upsample_pipeline,
+            upsample_bind_group,
             wgpu::LoadOp::Load,
             0..6,
         );
@@ -44,7 +66,8 @@ impl SecurityBlurLayer {
 
 pub struct SecurityBlurPipeline {
     pub bind_group_layout: wgpu::BindGroupLayout,
-    pub render_pipeline: wgpu::RenderPipeline,
+    pub downsample_pipeline: wgpu::RenderPipeline,
+    pub upsample_pipeline: wgpu::RenderPipeline,
     pub sampler: wgpu::Sampler,
 }
 
@@ -59,13 +82,11 @@ pub struct SecurityBlurUniforms {
 
 impl SecurityBlurUniforms {
     fn to_buffer(self, device: &wgpu::Device) -> wgpu::Buffer {
-        device.create_buffer_init(
-            &(wgpu::util::BufferInitDescriptor {
-                label: Some("BlurUniforms Buffer"),
-                contents: bytemuck::cast_slice(&[self]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            }),
-        )
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("BlurUniforms Buffer"),
+            contents: bytemuck::cast_slice(&[self]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        })
     }
 }
 
@@ -105,15 +126,15 @@ impl SecurityBlurPipeline {
 
         let shader = device.create_shader_module(include_wgsl!("../shaders/security-blur.wgsl"));
 
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Blur Pipeline"),
-            layout: Some(
-                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("Blur Pipeline Layout"),
-                    bind_group_layouts: &[&bind_group_layout],
-                    push_constant_ranges: &[],
-                }),
-            ),
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Blur Pipeline Layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let downsample_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Downsample Pipeline"),
+            layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "vs_main",
@@ -122,7 +143,41 @@ impl SecurityBlurPipeline {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: "fs_downsample",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        let upsample_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Upsample Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_upsample",
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -156,7 +211,8 @@ impl SecurityBlurPipeline {
 
         Self {
             bind_group_layout,
-            render_pipeline,
+            downsample_pipeline,
+            upsample_pipeline,
             sampler,
         }
     }
@@ -166,9 +222,14 @@ impl SecurityBlurPipeline {
         device: &wgpu::Device,
         view: &wgpu::TextureView,
         uniforms: &wgpu::Buffer,
+        is_downsample: bool,
     ) -> wgpu::BindGroup {
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Blur Bind Group"),
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(if is_downsample {
+                "Downsample Bind Group"
+            } else {
+                "Upsample Bind Group"
+            }),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -184,8 +245,51 @@ impl SecurityBlurPipeline {
                     resource: uniforms.as_entire_binding(),
                 },
             ],
-        });
-
-        bind_group
+        })
     }
+}
+
+struct Kernel {
+    sum: f32,
+    values: Vec<f32>,
+}
+
+impl Kernel {
+    fn new(values: Vec<f32>) -> Self {
+        let sum = values.iter().sum();
+        Self { sum, values }
+    }
+
+    fn packed_data(&self) -> Vec<f32> {
+        let mut data = vec![0.0; self.values.len() + 1];
+        data[0] = self.sum;
+        data[1..].copy_from_slice(&self.values);
+        data
+    }
+
+    fn size(&self) -> usize {
+        self.values.len()
+    }
+}
+
+
+fn kernel_size_for_sigma(sigma: f32) -> u32 {
+    2 * (sigma * 3.0).ceil() as u32 + 1
+}
+
+fn kernel(sigma: f32) -> Kernel {
+    let kernel_size = kernel_size_for_sigma(sigma);
+    let mut values = vec![0.0; kernel_size as usize];
+    let kernel_radius = (kernel_size as usize - 1) / 2;
+    for index in 0..=kernel_radius {
+        let normpdf = normalized_probablility_density_function(index as f32, sigma);
+        values[kernel_radius + index] = normpdf;
+        values[kernel_radius - index] = normpdf;
+    }
+
+    Kernel::new(values)
+}
+
+fn normalized_probablility_density_function(x: f32, sigma: f32) -> f32 {
+    0.39894 * (-0.5 * x * x / (sigma * sigma)).exp() / sigma
 }
