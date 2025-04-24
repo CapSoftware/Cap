@@ -9,13 +9,13 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use super::{H264Encoder, OpusEncoder};
+use super::{audio::AudioEncoder, H264Encoder};
 
 pub struct MP4File {
     tag: &'static str,
     output: format::context::Output,
     video: H264Encoder,
-    audio: Option<OpusEncoder>,
+    audio: Option<Box<dyn AudioEncoder + Send>>,
     is_finished: bool,
 }
 
@@ -24,7 +24,9 @@ impl MP4File {
         tag: &'static str,
         mut output: PathBuf,
         video: impl FnOnce(&mut format::context::Output) -> Result<H264Encoder, MediaError>,
-        audio: impl FnOnce(&mut format::context::Output) -> Option<Result<OpusEncoder, MediaError>>,
+        audio: impl FnOnce(
+            &mut format::context::Output,
+        ) -> Option<Result<Box<dyn AudioEncoder + Send>, MediaError>>,
     ) -> Result<Self, MediaError> {
         output.set_extension("mp4");
         let mut output = format::output(&output)?;

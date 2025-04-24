@@ -173,13 +173,17 @@ export function ExportDialog() {
   const save = createMutation(() => ({
     mutationFn: async () => {
       if (exportState.type !== "idle") return;
-      setExportState(reconcile({ action: "save", type: "starting" }));
 
       const savePath = await saveDialog({
         filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
         defaultPath: `~/Desktop/${meta.prettyName}.mp4`,
       });
-      if (!savePath) return;
+      if (!savePath) {
+        setExportState(reconcile({ type: "idle" }));
+        return;
+      }
+
+      setExportState(reconcile({ action: "save", type: "starting" }));
 
       setOutputPath(savePath);
 
@@ -188,8 +192,6 @@ export function ExportDialog() {
         fps: settings.fps,
         path: savePath,
       });
-
-      setExportState({ type: "starting" });
 
       const videoPath = await exportVideo(
         projectPath,

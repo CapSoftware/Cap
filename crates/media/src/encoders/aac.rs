@@ -13,52 +13,21 @@ use crate::{
     MediaError,
 };
 
-use super::AudioEncoder;
+use super::audio::AudioEncoder;
 
-pub struct OggFile {
-    encoder: OpusEncoder,
-    output: format::context::Output,
-}
-
-impl OggFile {
-    pub fn init(
-        mut output: PathBuf,
-        encoder: impl FnOnce(&mut format::context::Output) -> Result<OpusEncoder, MediaError>,
-    ) -> Result<Self, MediaError> {
-        output.set_extension("ogg");
-        let mut output = format::output(&output)?;
-
-        let encoder = encoder(&mut output)?;
-
-        // make sure this happens after adding all encoders!
-        output.write_header()?;
-
-        Ok(Self { encoder, output })
-    }
-
-    pub fn queue_frame(&mut self, frame: FFAudio) {
-        self.encoder.queue_frame(frame, &mut self.output);
-    }
-
-    pub fn finish(&mut self) {
-        self.encoder.finish(&mut self.output);
-        self.output.write_trailer().unwrap();
-    }
-}
-
-pub struct OpusEncoder {
+pub struct AACEncoder {
     tag: &'static str,
     encoder: encoder::Audio,
     packet: ffmpeg::Packet,
     resampler: Option<ffmpeg::software::resampling::Context>,
     resampled_frame: FFAudio,
-    buffer: VecDeque<u8>,
+    buffer: Vec<VecDeque<u8>>,
     stream_index: usize,
 }
 
-impl OpusEncoder {
-    const OUTPUT_BITRATE: usize = 128 * 1000; // 128k
-    const SAMPLE_FORMAT: Sample = Sample::F32(Type::Packed);
+impl AACEncoder {
+    const OUTPUT_BITRATE: usize = 320 * 1000; // 128k
+    const SAMPLE_FORMAT: Sample = Sample::F32(Type::Planar);
 
     pub fn factory(
         tag: &'static str,
@@ -72,8 +41,8 @@ impl OpusEncoder {
         input_config: AudioInfo,
         output: &mut format::context::Output,
     ) -> Result<Self, MediaError> {
-        let codec = encoder::find_by_name("libopus")
-            .ok_or(MediaError::TaskLaunch("Could not find Opus codec".into()))?;
+        let codec = encoder::find_by_name("aac")
+            .ok_or(MediaError::TaskLaunch("Could not find AAC codec".into()))?;
         let mut encoder_ctx = context::Context::new_with_codec(codec);
         encoder_ctx.set_threading(Config::count(4));
         let mut encoder = encoder_ctx.encoder().audio()?;
@@ -148,7 +117,7 @@ impl OpusEncoder {
 
         Ok(Self {
             tag,
-            buffer: VecDeque::new(),
+            buffer: vec![VecDeque::new(); 2],
             encoder,
             stream_index,
             packet: ffmpeg::Packet::empty(),
@@ -158,58 +127,43 @@ impl OpusEncoder {
     }
 
     pub fn queue_frame(&mut self, frame: FFAudio, output: &mut format::context::Output) {
-        if let Some(resampler) = &mut self.resampler {
+        let frame = if let Some(resampler) = &mut self.resampler {
             resampler.run(&frame, &mut self.resampled_frame).unwrap();
-
-            self.buffer
-                .extend(&self.resampled_frame.data(0)[0..frame_size_bytes(&self.resampled_frame)]);
-
-            loop {
-                let frame_size_bytes = self.encoder.frame_size() as usize
-                    * self.encoder.channels() as usize
-                    * self.encoder.format().bytes();
-                if self.buffer.len() < frame_size_bytes {
-                    break;
-                }
-
-                let bytes = self.buffer.drain(0..frame_size_bytes).collect::<Vec<_>>();
-                let mut frame = FFAudio::new(
-                    self.encoder.format(),
-                    self.encoder.frame_size() as usize,
-                    self.encoder.channel_layout(),
-                );
-
-                frame.data_mut(0)[0..frame_size_bytes].copy_from_slice(&bytes);
-
-                self.encoder.send_frame(&frame).unwrap();
-
-                self.process_packets(output);
-            }
+            &self.resampled_frame
         } else {
-            self.buffer
-                .extend(&frame.data(0)[0..frame_size_bytes(&frame)]);
+            &frame
+        };
 
-            loop {
-                let frame_size_bytes = self.encoder.frame_size() as usize
-                    * self.encoder.channels() as usize
-                    * self.encoder.format().bytes();
-                if self.buffer.len() < frame_size_bytes {
-                    break;
-                }
+        for i in 0..frame.planes() {
+            self.buffer[i]
+                .extend(&frame.data(i)[0..frame_size_bytes(&frame) / frame.channels() as usize]);
+        }
 
-                let bytes = self.buffer.drain(0..frame_size_bytes).collect::<Vec<_>>();
-                let mut frame = FFAudio::new(
-                    self.encoder.format(),
-                    self.encoder.frame_size() as usize,
-                    self.encoder.channel_layout(),
-                );
+        let channel_size_bytes = self.encoder.frame_size() as usize * self.encoder.format().bytes();
 
-                frame.data_mut(0)[0..frame_size_bytes].copy_from_slice(&bytes);
-
-                self.encoder.send_frame(&frame).unwrap();
-
-                self.process_packets(output);
+        loop {
+            if self.buffer[0].len() < channel_size_bytes {
+                break;
             }
+
+            let mut frame = FFAudio::new(
+                self.encoder.format(),
+                self.encoder.frame_size() as usize,
+                self.encoder.channel_layout(),
+            );
+
+            for i in 0..frame.planes() {
+                let bytes = self.buffer[i]
+                    .drain(0..channel_size_bytes)
+                    .collect::<Vec<_>>();
+
+                frame.data_mut(i)[0..channel_size_bytes]
+                    .copy_from_slice(&bytes[0..channel_size_bytes]);
+            }
+
+            self.encoder.send_frame(&frame).unwrap();
+
+            self.process_packets(output);
         }
     }
 
@@ -236,22 +190,27 @@ impl OpusEncoder {
                     break;
                 }
 
-                self.buffer.extend(
-                    &self.resampled_frame.data(0)[0..self.resampled_frame.samples()
-                        * self.resampled_frame.channels() as usize
-                        * self.resampled_frame.format().bytes()],
-                );
+                for i in 0..self.resampled_frame.planes() {
+                    self.buffer[i].extend(
+                        &self.resampled_frame.data(0)[0..self.resampled_frame.samples()
+                            * self.resampled_frame.format().bytes()],
+                    );
+                }
 
                 while self.buffer.len() >= frame_size_bytes {
-                    let bytes = self.buffer.drain(0..frame_size_bytes).collect::<Vec<_>>();
-
                     let mut frame = FFAudio::new(
                         self.encoder.format(),
                         self.encoder.frame_size() as usize,
                         self.encoder.channel_layout(),
                     );
 
-                    frame.data_mut(0)[0..frame_size_bytes].copy_from_slice(&bytes);
+                    for i in 0..frame.planes() {
+                        let bytes = self.buffer[i]
+                            .drain(0..frame_size_bytes)
+                            .collect::<Vec<_>>();
+
+                        frame.data_mut(0)[0..frame_size_bytes].copy_from_slice(&bytes);
+                    }
 
                     self.encoder.send_frame(&frame).unwrap();
 
@@ -259,13 +218,10 @@ impl OpusEncoder {
                 }
             }
 
-            while self.buffer.len() > 0 {
-                let frame_size_bytes = frame_size_bytes.min(self.buffer.len());
-                let frame_size = frame_size_bytes
-                    / self.encoder.channels() as usize
-                    / self.encoder.format().bytes();
-
-                let bytes = self.buffer.drain(0..frame_size_bytes).collect::<Vec<_>>();
+            while self.buffer[0].len() > 0 {
+                let channel_size_bytes =
+                    (frame_size_bytes / self.encoder.channels() as usize).min(self.buffer[0].len());
+                let frame_size = channel_size_bytes / self.encoder.format().bytes();
 
                 let mut frame = FFAudio::new(
                     self.encoder.format(),
@@ -273,7 +229,14 @@ impl OpusEncoder {
                     self.encoder.channel_layout(),
                 );
 
-                frame.data_mut(0)[0..frame_size_bytes].copy_from_slice(&bytes);
+                for i in 0..frame.planes() {
+                    let bytes = self.buffer[i]
+                        .drain(0..channel_size_bytes)
+                        .collect::<Vec<_>>();
+
+                    frame.data_mut(i)[0..channel_size_bytes]
+                        .copy_from_slice(&bytes[0..channel_size_bytes]);
+                }
 
                 self.encoder.send_frame(&frame).unwrap();
 
@@ -287,33 +250,13 @@ impl OpusEncoder {
     }
 }
 
-impl AudioEncoder for OpusEncoder {
+impl AudioEncoder for AACEncoder {
     fn queue_frame(&mut self, frame: FFAudio, output: &mut format::context::Output) {
         self.queue_frame(frame, output);
     }
 
     fn finish(&mut self, output: &mut format::context::Output) {
         self.finish(output);
-    }
-}
-
-impl PipelineSinkTask<FFAudio> for OggFile {
-    fn run(
-        &mut self,
-        ready_signal: crate::pipeline::task::PipelineReadySignal,
-        input: &flume::Receiver<FFAudio>,
-    ) {
-        ready_signal.send(Ok(())).unwrap();
-
-        while let Ok(frame) = input.recv() {
-            fail!("media::encoder::opus::run");
-
-            self.queue_frame(frame);
-        }
-    }
-
-    fn finish(&mut self) {
-        self.finish();
     }
 }
 
