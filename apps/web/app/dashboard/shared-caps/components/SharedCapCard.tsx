@@ -1,11 +1,13 @@
-import { useState } from "react";
-import { VideoThumbnail } from "@/components/VideoThumbnail";
-import { CapCardAnalytics } from "@/app/dashboard/caps/components/CapCardAnalytics";
-import moment from "moment";
-import { Tooltip } from "react-tooltip";
-import { serverEnv, clientEnv, NODE_ENV } from "@cap/env";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { usePublicEnv } from "@/utils/public-env";
+import { CapCardAnalytics } from "@/app/dashboard/caps/components/CapCardAnalytics";
+import { Tooltip } from "@/components/Tooltip";
+import { VideoThumbnail } from "@/components/VideoThumbnail";
+import { VideoMetadata } from "@cap/database/types";
+import { clientEnv, NODE_ENV } from "@cap/env";
+import { faBuilding, faUser } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import moment from "moment";
+
 interface SharedCapCardProps {
   cap: {
     id: string;
@@ -15,6 +17,7 @@ interface SharedCapCardProps {
     totalComments: number;
     totalReactions: number;
     ownerName: string | null;
+    metadata?: VideoMetadata;
   };
   analytics: number;
   spaceName: string;
@@ -25,8 +28,11 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
   analytics,
   spaceName,
 }) => {
-  const [isEditing, setIsEditing] = useState(false);
-  const [title, setTitle] = useState(cap.name);
+  // Get the effective date (custom or original)
+  const effectiveDate = cap.metadata?.customCreatedAt
+    ? new Date(cap.metadata.customCreatedAt)
+    : cap.createdAt;
+
   const { activeSpace } = useSharedContext();
   const publicEnv = usePublicEnv();
 
@@ -36,12 +42,9 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
       : analytics;
 
   return (
-    <div
-      className="rounded-xl border-[1px] border-gray-200 relative"
-      style={{ boxShadow: "0px 8px 16px rgba(18, 22, 31, 0.04)" }}
-    >
+    <div className="relative rounded-2xl flex flex-col gap-4 w-full h-full border-gray-200 bg-gray-50 border-[1px]">
       <a
-        className="group block"
+        className="block group"
         href={
           activeSpace?.space.customDomain && activeSpace.space.domainVerified
             ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
@@ -56,34 +59,37 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
           alt={`${cap.name} Thumbnail`}
         />
       </a>
-      <div className="flex flex-col p-4">
-        <div className="mb-2">
+      <div className="flex flex-col flex-grow gap-3 px-4 pb-4 w-full">
+        <div className="flex flex-col gap-1">
+          <p className="text-md truncate leading-[1.25rem] text-gray-500 font-medium">
+            {cap.name}
+          </p>
+          <Tooltip content={`Cap created at ${effectiveDate}`}>
+            <span className="text-sm truncate leading-[1.25rem] text-gray-400 cursor-pointer flex items-center">
+              {moment(effectiveDate).fromNow()}
+            </span>
+          </Tooltip>
+        </div>
+        <div className="mb-2 space-y-1">
           {cap.ownerName && (
-            <div>
-              <span className="text-[0.875rem] leading-[1.25rem] text-gray-400">
-                {cap.ownerName}
-              </span>
+            <div className="flex gap-2 items-center">
+              <FontAwesomeIcon icon={faUser} className="text-gray-400 size-3" />
+              <span className="text-sm text-gray-400">{cap.ownerName}</span>
             </div>
           )}
-          <div>
-            <span className="text-[0.875rem] leading-[1.25rem] text-gray-400">
-              Shared with {spaceName}
-            </span>
+          <div className="flex gap-2 items-center">
+            <FontAwesomeIcon
+              icon={faBuilding}
+              className="text-gray-400 size-2.5"
+            />
+            <p className="text-sm text-gray-400">
+              Shared with{" "}
+              <span className="text-sm font-medium text-gray-500">
+                {spaceName}
+              </span>
+            </p>
           </div>
         </div>
-        <p className="text-[0.875rem] leading-[1.25rem] text-gray-500 font-medium">
-          {title}
-        </p>
-        <p>
-          <span
-            className="text-[0.875rem] leading-[1.25rem] text-gray-400"
-            data-tooltip-id={cap.id + "_createdAt"}
-            data-tooltip-content={`Cap created at ${cap.createdAt}`}
-          >
-            {moment(cap.createdAt).fromNow()}
-          </span>
-          <Tooltip id={cap.id + "_createdAt"} />
-        </p>
         <CapCardAnalytics
           capId={cap.id}
           displayCount={displayCount}

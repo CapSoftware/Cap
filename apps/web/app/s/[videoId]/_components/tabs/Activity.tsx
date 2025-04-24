@@ -1,12 +1,14 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
-import { comments as commentsSchema } from "@cap/database/schema";
-import { userSelectProps } from "@cap/database/auth/session";
-import { Tooltip } from "react-tooltip";
-import { AnimatePresence, motion } from "framer-motion";
-import { AuthOverlay } from "../AuthOverlay";
+import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { CapCardAnalytics } from "@/app/dashboard/caps/components/CapCardAnalytics";
+import { userSelectProps } from "@cap/database/auth/session";
+import { comments as commentsSchema } from "@cap/database/schema";
+import clsx from "clsx";
+import { AnimatePresence, motion } from "framer-motion";
+import { useEffect, useRef, useState } from "react";
+import { Tooltip } from "react-tooltip";
+import { AuthOverlay } from "../AuthOverlay";
 
 type CommentType = typeof commentsSchema.$inferSelect & {
   authorName?: string | null;
@@ -28,16 +30,21 @@ interface ActivityProps {
 export const Avatar: React.FC<{
   name: string | null | undefined;
   className?: string;
-}> = ({ name, className = "" }) => {
+  letterClass?: string;
+}> = ({ name, className = "", letterClass = "text-xs" }) => {
   const initial = name?.[0]?.toUpperCase() || "A";
-  const bgColor = name ? "bg-blue-400" : "bg-gray-200";
+  const bgColor = name ? "bg-gray-500" : "bg-gray-200";
   const textColor = name ? "text-white" : "text-gray-500";
 
   return (
     <div
-      className={`w-[20px] h-[20px] rounded-full flex items-center justify-center ${bgColor} ${className}`}
+      className={clsx(
+        "flex justify-center items-center rounded-full size-4",
+        bgColor,
+        className
+      )}
     >
-      <span className={`text-xs font-medium ${textColor}`}>{initial}</span>
+      <span className={clsx(letterClass, textColor)}>{initial}</span>
     </div>
   );
 };
@@ -88,7 +95,7 @@ const CommentInput: React.FC<CommentInputProps> = ({
   return (
     <div className="flex items-start space-x-3">
       <div className="flex-1">
-        <div className="bg-gray-100 rounded-lg p-4">
+        <div className="p-4 bg-gray-100 rounded-lg">
           <textarea
             ref={inputRef}
             value={content}
@@ -97,7 +104,7 @@ const CommentInput: React.FC<CommentInputProps> = ({
             placeholder={placeholder || "Leave a comment"}
             className="w-full text-[15px] leading-[22px] text-gray-500 bg-transparent focus:outline-none"
           />
-          <div className="flex space-x-2 mt-2">
+          <div className="flex mt-2 space-x-2">
             <button
               onClick={() => handleSubmit()}
               className="px-2 py-1.5 bg-blue-500 text-white text-xs font-medium rounded-full hover:bg-blue-600 focus:outline-none"
@@ -226,14 +233,14 @@ const Comment: React.FC<{
             {comment.timestamp && (
               <button
                 onClick={() => onSeek?.(comment.timestamp!)}
-                className="text-sm text-blue-500 hover:text-blue-700 cursor-pointer"
+                className="text-sm text-blue-500 cursor-pointer hover:text-blue-700"
               >
                 {new Date(comment.timestamp * 1000).toISOString().substr(11, 8)}
               </button>
             )}
           </div>
-          <p className="text-gray-700 mt-1">{comment.content}</p>
-          <div className="flex items-center space-x-4 mt-2">
+          <p className="mt-1 text-gray-700">{comment.content}</p>
+          <div className="flex items-center mt-2 space-x-4">
             {user && !isReplying && canReply && (
               <button
                 onClick={() => onReply(comment.id)}
@@ -268,7 +275,7 @@ const Comment: React.FC<{
       )}
 
       {nestedReplies.length > 0 && (
-        <div className="space-y-3 mt-3">
+        <div className="mt-3 space-y-3">
           {nestedReplies.map((reply) => (
             <Comment
               key={reply.id}
@@ -294,12 +301,12 @@ const EmptyState = () => (
   <motion.div
     initial={{ opacity: 0 }}
     animate={{ opacity: 1 }}
-    className="flex flex-col items-center justify-center h-full p-8 text-center"
+    className="flex flex-col justify-center items-center p-8 h-full text-center"
   >
-    <div className="text-gray-300 space-y-2">
+    <div className="space-y-2 text-gray-300">
       <svg
         xmlns="http://www.w3.org/2000/svg"
-        className="h-8 w-8 mx-auto"
+        className="mx-auto w-8 h-8"
         fill="none"
         viewBox="0 0 24 24"
         stroke="currentColor"
@@ -312,7 +319,7 @@ const EmptyState = () => (
         />
       </svg>
       <h3 className="text-sm font-medium text-gray-500">No comments yet</h3>
-      <p className="text-gray-400 text-sm">
+      <p className="text-sm text-gray-400">
         Be the first to share your thoughts!
       </p>
     </div>
@@ -339,18 +346,12 @@ export const Activity: React.FC<ActivityProps> = ({
   useEffect(() => {
     const fetchAnalytics = async () => {
       try {
-        const response = await fetch(`/api/video/analytics?videoId=${videoId}`);
-        if (!response.ok) {
-          throw new Error("Failed to fetch analytics");
-        }
-        const analyticsData = await response.json();
+        const result = await getVideoAnalytics(videoId);
 
         setAnalytics({
-          views:
-            analyticsData.count === 0 ? comments.length : analyticsData.count,
+          views: result.count === 0 ? comments.length : result.count,
           comments: comments.length,
-          reactions:
-            (analyticsData.metadata as { reactions?: number })?.reactions || 0,
+          reactions: 0,
         });
       } catch (error) {
         console.error("Error fetching analytics:", error);
@@ -549,12 +550,12 @@ export const Activity: React.FC<ActivityProps> = ({
 
       <div
         ref={commentsContainerRef}
-        className="flex-1 overflow-y-auto min-h-0"
+        className="overflow-y-auto flex-1 min-h-0"
       >
         {rootComments.length === 0 && optimisticComments.length === 0 ? (
           <EmptyState />
         ) : (
-          <div className="space-y-6 p-4">
+          <div className="p-4 space-y-6">
             <AnimatePresence mode="sync">
               {rootComments
                 .sort(
@@ -591,7 +592,7 @@ export const Activity: React.FC<ActivityProps> = ({
         )}
       </div>
 
-      <div className="flex-none border-t border-gray-200 bg-white p-4">
+      <div className="flex-none p-4 bg-white border-t border-gray-200">
         {user ? (
           <CommentInput
             onSubmit={handleNewComment}
@@ -602,7 +603,7 @@ export const Activity: React.FC<ActivityProps> = ({
         ) : (
           <div
             onClick={() => setShowAuthOverlay(true)}
-            className="bg-gray-100 rounded-lg p-4 cursor-pointer hover:bg-gray-200 transition-colors"
+            className="p-4 bg-gray-100 rounded-lg transition-colors cursor-pointer hover:bg-gray-200"
           >
             <span className="text-[15px] leading-[22px] text-gray-500">
               Sign in to leave a comment

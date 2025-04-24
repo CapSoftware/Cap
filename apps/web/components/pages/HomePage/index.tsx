@@ -4,7 +4,6 @@
 
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
 import {
-  detectPlatform,
   getDownloadButtonText,
   getDownloadUrl,
   getPlatformIcon,
@@ -16,34 +15,19 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import MuxPlayer from "@mux/mux-player-react";
 import { useClickAway } from "@uidotdev/usehooks";
 import { AnimatePresence, motion } from "framer-motion";
+import { useDetectPlatform } from "hooks/useDetectPlatform";
 import Link from "next/link";
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { Parallax, ParallaxProvider } from "react-scroll-parallax";
 import { LogoSection } from "../_components/LogoSection";
+import { FeatureCard } from "../SelfHostingPage";
 import LeftBlueHue from "./LeftBlueHue";
 import PowerfulFeaturesSVG from "./PowerfulFeaturesSVG";
-
+import { Testimonials } from "@/components/ui/Testimonials";
 export const HomePage = () => {
   const [videoToggled, setVideoToggled] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [platform, setPlatform] = useState<string | null>(null);
-  const [isIntel, setIsIntel] = useState(false);
-
-  useEffect(() => {
-    const detectUserPlatform = async () => {
-      try {
-        const { platform, isIntel } = await detectPlatform();
-        setPlatform(platform);
-        setIsIntel(isIntel);
-      } catch (error) {
-        console.error("Error detecting platform:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    detectUserPlatform();
-  }, []);
+  const { platform, isIntel } = useDetectPlatform();
+  const loading = platform === null;
 
   return (
     <ParallaxProvider>
@@ -387,7 +371,76 @@ export const HomePage = () => {
           </div>
         </div>
       </div>
-      <div className="px-5 mb-32 md:mb-40">
+      <div className="pb-32 wrapper" id="features">
+        <div className="space-y-3">
+          {/* Section 1: 35% / 65% split */}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
+            <div className="md:col-span-5">
+              <FeatureCard
+                title="Privacy-first"
+                description="Own your content with Cap's privacy-focused approach. Keep your sensitive information secure and maintain complete control over who can access your recordings - perfect for confidential client communications and internal team sharing."
+                imagePath="/illustrations/privacy.webp"
+                imageAlt="Complete Control"
+                imageHeight="h-[280px]"
+              />
+            </div>
+            <div className="md:col-span-7">
+              <FeatureCard
+                title="Multi-Platform Support"
+                description="Cap works seamlessly across macOS and Windows, giving you the flexibility to create content on any device. Capture, share, and collaborate regardless of which platform you or your team prefers, ensuring smooth workflows and consistent experience everywhere."
+                imagePath="/illustrations/multiplatmain.png"
+                bg="/illustrations/multiplatbg.webp"
+                imageAlt="Enterprise-Ready"
+                className="bg-[center_top_-90px] bg-no-repeat bg-cover lg:bg-[center_top_-60px]"
+                imageHeight="h-[280px]"
+              />
+            </div>
+          </div>
+
+          {/* Section 2: 65% / 35% split */}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
+            <div className="md:col-span-8">
+              <FeatureCard
+                title="Flexible Storage Options"
+                bg="/illustrations/multiplatbg.webp"
+                description="Choose how and where you store your recordings. Cap offers both local and cloud storage options to suit your needs. Save space on your device or keep your entire content library accessible from anywhere - ideal for freelancers and growing teams with varied content creation needs."
+                imagePath="/illustrations/cloud-feature.webp"
+                imageAlt="White Labeling"
+                imageHeight="h-[215px]"
+                className="lg:bg-[center_top_-150px] bg-[center_top_-120px] bg-no-repeat bg-cover"
+              />
+            </div>
+            <div className="md:col-span-4">
+              <FeatureCard
+                title="High-Quality Video Capture"
+                description="Deliver crystal-clear recordings that showcase your professionalism. Cap ensures exceptional quality for client presentations, tutorials, and team communications - making your content stand out whether you're a solo creator or a small business owner."
+                imagePath="/illustrations/video-capture.webp"
+                imageAlt="Data Sovereignty"
+                imageHeight="h-[224px]"
+              />
+            </div>
+          </div>
+
+          {/* Section 3: Full width */}
+          <div className="grid grid-cols-1">
+            <FeatureCard
+              title="Seamless Team Collaboration"
+              description="Share knowledge effortlessly with your team or clients. Cap's intuitive sharing features make it easy to organize content, provide access to specific people, and track engagement. Perfect for small businesses and growing teams who need simple yet powerful collaboration tools."
+              imagePath="/illustrations/collaboration.webp"
+              imageAlt="Dedicated Support"
+              imageHeight="h-[285px]"
+            />
+          </div>
+        </div>
+      </div>
+      <div className="wrapper mb-32">
+        <Testimonials
+          amount={10}
+          title="What our users say about Cap after hitting record"
+          subtitle="Don't just take our word for it. Here's what our users are saying about their experience with Cap."
+        />
+      </div>
+      <div className="px-5 mb-32">
         <ReadyToGetStarted />
       </div>
     </ParallaxProvider>

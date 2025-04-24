@@ -50,14 +50,14 @@ async removeFakeWindow(name: string) : Promise<null> {
 async focusCapturesPanel() : Promise<void> {
     await TAURI_INVOKE("focus_captures_panel");
 },
-async getCurrentRecording() : Promise<JsonValue<CurrentRecordingTarget | null>> {
+async getCurrentRecording() : Promise<JsonValue<CurrentRecording | null>> {
     return await TAURI_INVOKE("get_current_recording");
 },
-async exportVideo(videoId: string, progress: TAURI_CHANNEL<RenderProgress>, force: boolean, fps: number, resolutionBase: XY<number>) : Promise<string> {
-    return await TAURI_INVOKE("export_video", { videoId, progress, force, fps, resolutionBase });
+async exportVideo(projectPath: string, progress: TAURI_CHANNEL<FramesRendered>, settings: ExportSettings) : Promise<string> {
+    return await TAURI_INVOKE("export_video", { projectPath, progress, settings });
 },
-async getExportEstimates(videoId: string, resolution: XY<number>, fps: number) : Promise<ExportEstimates> {
-    return await TAURI_INVOKE("get_export_estimates", { videoId, resolution, fps });
+async getExportEstimates(path: string, resolution: XY<number>, fps: number) : Promise<ExportEstimates> {
+    return await TAURI_INVOKE("get_export_estimates", { path, resolution, fps });
 },
 async copyFileToPath(src: string, dst: string) : Promise<null> {
     return await TAURI_INVOKE("copy_file_to_path", { src, dst });
@@ -71,11 +71,11 @@ async copyScreenshotToClipboard(path: string) : Promise<null> {
 async openFilePath(path: string) : Promise<null> {
     return await TAURI_INVOKE("open_file_path", { path });
 },
-async getVideoMetadata(videoId: string, videoType: VideoType | null) : Promise<VideoRecordingMetadata> {
-    return await TAURI_INVOKE("get_video_metadata", { videoId, videoType });
+async getVideoMetadata(path: string) : Promise<VideoRecordingMetadata> {
+    return await TAURI_INVOKE("get_video_metadata", { path });
 },
-async createEditorInstance(videoId: string) : Promise<SerializedEditorInstance> {
-    return await TAURI_INVOKE("create_editor_instance", { videoId });
+async createEditorInstance() : Promise<SerializedEditorInstance> {
+    return await TAURI_INVOKE("create_editor_instance");
 },
 async startPlayback(fps: number, resolutionBase: XY<number>) : Promise<null> {
     return await TAURI_INVOKE("start_playback", { fps, resolutionBase });
@@ -89,9 +89,6 @@ async setPlayheadPosition(frameNumber: number) : Promise<null> {
 async setProjectConfig(config: ProjectConfiguration) : Promise<null> {
     return await TAURI_INVOKE("set_project_config", { config });
 },
-async openEditor(id: string) : Promise<void> {
-    await TAURI_INVOKE("open_editor", { id });
-},
 async openPermissionSettings(permission: OSPermission) : Promise<void> {
     await TAURI_INVOKE("open_permission_settings", { permission });
 },
@@ -101,22 +98,22 @@ async doPermissionsCheck(initialCheck: boolean) : Promise<OSPermissionsCheck> {
 async requestPermission(permission: OSPermission) : Promise<void> {
     await TAURI_INVOKE("request_permission", { permission });
 },
-async uploadExportedVideo(videoId: string, mode: UploadMode) : Promise<UploadResult> {
-    return await TAURI_INVOKE("upload_exported_video", { videoId, mode });
+async uploadExportedVideo(path: string, mode: UploadMode) : Promise<UploadResult> {
+    return await TAURI_INVOKE("upload_exported_video", { path, mode });
 },
 async uploadScreenshot(screenshotPath: string) : Promise<UploadResult> {
     return await TAURI_INVOKE("upload_screenshot", { screenshotPath });
 },
-async getRecordingMeta(id: string, fileType: string) : Promise<RecordingMetaWithType> {
-    return await TAURI_INVOKE("get_recording_meta", { id, fileType });
+async getRecordingMeta(path: string, fileType: string) : Promise<RecordingMetaWithType> {
+    return await TAURI_INVOKE("get_recording_meta", { path, fileType });
 },
 async saveFileDialog(fileName: string, fileType: string) : Promise<string | null> {
     return await TAURI_INVOKE("save_file_dialog", { fileName, fileType });
 },
-async listRecordings() : Promise<([string, string, RecordingMetaWithType])[]> {
+async listRecordings() : Promise<([string, RecordingMetaWithType])[]> {
     return await TAURI_INVOKE("list_recordings");
 },
-async listScreenshots() : Promise<([string, string, RecordingMeta])[]> {
+async listScreenshots() : Promise<([string, RecordingMeta])[]> {
     return await TAURI_INVOKE("list_screenshots");
 },
 async checkUpgradedAndUpdate() : Promise<boolean> {
@@ -149,17 +146,14 @@ async setTheme(theme: AppTheme) : Promise<void> {
 async globalMessageDialog(message: string) : Promise<void> {
     await TAURI_INVOKE("global_message_dialog", { message });
 },
-async showWindow(window: ShowCapWindow) : Promise<void> {
-    await TAURI_INVOKE("show_window", { window });
+async showWindow(window: ShowCapWindow) : Promise<null> {
+    return await TAURI_INVOKE("show_window", { window });
 },
 async writeClipboardString(text: string) : Promise<null> {
     return await TAURI_INVOKE("write_clipboard_string", { text });
 },
 async performHapticFeedback(pattern: HapticPattern | null, time: HapticPerformanceTime | null) : Promise<null> {
     return await TAURI_INVOKE("perform_haptic_feedback", { pattern, time });
-},
-async getWallpaperPath(filename: string) : Promise<string> {
-    return await TAURI_INVOKE("get_wallpaper_path", { filename });
 },
 async listFails() : Promise<{ [key in string]: boolean }> {
     return await TAURI_INVOKE("list_fails");
@@ -170,11 +164,11 @@ async setFail(name: string, value: boolean) : Promise<void> {
 async updateAuthPlan() : Promise<void> {
     await TAURI_INVOKE("update_auth_plan");
 },
-async reuploadInstantVideo(videoId: string) : Promise<null> {
-    return await TAURI_INVOKE("reupload_instant_video", { videoId });
-},
 async setWindowTransparent(value: boolean) : Promise<void> {
     await TAURI_INVOKE("set_window_transparent", { value });
+},
+async getEditorMeta() : Promise<RecordingMeta> {
+    return await TAURI_INVOKE("get_editor_meta");
 }
 }
 
@@ -189,7 +183,6 @@ editorStateChanged: EditorStateChanged,
 newNotification: NewNotification,
 newScreenshotAdded: NewScreenshotAdded,
 newStudioRecordingAdded: NewStudioRecordingAdded,
-recordingMetaChanged: RecordingMetaChanged,
 recordingOptionsChanged: RecordingOptionsChanged,
 recordingStarted: RecordingStarted,
 recordingStopped: RecordingStopped,
@@ -208,7 +201,6 @@ editorStateChanged: "editor-state-changed",
 newNotification: "new-notification",
 newScreenshotAdded: "new-screenshot-added",
 newStudioRecordingAdded: "new-studio-recording-added",
-recordingMetaChanged: "recording-meta-changed",
 recordingOptionsChanged: "recording-options-changed",
 recordingStarted: "recording-started",
 recordingStopped: "recording-stopped",
@@ -229,8 +221,8 @@ uploadProgress: "upload-progress"
 
 export type AppTheme = "system" | "light" | "dark"
 export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
-export type Audio = { duration: number; sample_rate: number; channels: number }
-export type AudioConfiguration = { mute: boolean; improve: boolean }
+export type Audio = { duration: number; sample_rate: number; channels: number; start_time: number }
+export type AudioConfiguration = { mute: boolean; improve: boolean; micVolumeDb?: number; micStereoMode?: StereoMode; systemVolumeDb?: number }
 export type AudioInputLevelChange = number
 export type AudioMeta = { path: string; 
 /**
@@ -250,6 +242,7 @@ export type CaptureScreen = { id: number; name: string; refresh_rate: number }
 export type CaptureWindow = { id: number; owner_name: string; name: string; bounds: Bounds; refresh_rate: number }
 export type CommercialLicense = { licenseKey: string; expiryDate: number | null; refresh: number; activatedOn: number }
 export type Crop = { position: XY<number>; size: XY<number> }
+export type CurrentRecording = { target: CurrentRecordingTarget; type: RecordingType }
 export type CurrentRecordingChanged = null
 export type CurrentRecordingTarget = { window: { id: number; bounds: Bounds } } | { screen: { id: number } } | { area: { screen: number; bounds: Bounds } }
 export type CursorAnimationStyle = "regular" | "slow" | "fast"
@@ -258,9 +251,12 @@ export type CursorMeta = { imagePath: string; hotspot: XY<number> }
 export type CursorType = "pointer" | "circle"
 export type Cursors = { [key in string]: string } | { [key in string]: CursorMeta }
 export type EditorStateChanged = { playhead_position: number }
+export type ExportCompression = "Minimal" | "Social" | "Web" | "Potato"
 export type ExportEstimates = { duration_seconds: number; estimated_time_seconds: number; estimated_size_mb: number }
-export type Flags = { recordMouseState: boolean; systemAudioRecording: boolean; split: boolean }
-export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; hapticsEnabled?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; 
+export type ExportSettings = { fps: number; resolution_base: XY<number>; compression: ExportCompression }
+export type Flags = { systemAudioRecording: boolean; split: boolean }
+export type FramesRendered = { renderedCount: number; totalFrames: number; type: "FramesRendered" }
+export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; hapticsEnabled?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; customCursorCapture?: boolean; systemAudioCapture?: boolean; 
 /**
  * @deprecated
  */
@@ -268,13 +264,13 @@ openEditorAfterRecording?: boolean }
 export type HapticPattern = "Alignment" | "LevelChange" | "Generic"
 export type HapticPerformanceTime = "Default" | "Now" | "DrawCompleted"
 export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
-export type HotkeyAction = "startRecording" | "stopRecording" | "restartRecording" | "takeScreenshot"
+export type HotkeyAction = "startRecording" | "stopRecording" | "restartRecording"
 export type HotkeysConfiguration = { show: boolean }
 export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } }
 export type InstantRecordingMeta = { fps: number; sample_rate: number | null }
 export type JsonValue<T> = [T]
 export type MainWindowRecordingStartBehaviour = "close" | "minimise"
-export type MultipleSegment = { display: VideoMeta; camera?: VideoMeta | null; audio?: AudioMeta | null; system_audio?: AudioMeta | null; cursor?: string | null }
+export type MultipleSegment = { display: VideoMeta; camera?: VideoMeta | null; mic?: AudioMeta | null; system_audio?: AudioMeta | null; cursor?: string | null }
 export type MultipleSegments = { segments: MultipleSegment[]; cursors: Cursors }
 export type NewNotification = { title: string; body: string; is_error: boolean }
 export type NewScreenshotAdded = { path: string }
@@ -283,22 +279,21 @@ export type OSPermission = "screenRecording" | "camera" | "microphone" | "access
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; camera: OSPermissionStatus; accessibility: OSPermissionStatus }
 export type Plan = { upgraded: boolean; manual: boolean; last_checked: number }
+export type Platform = "MacOS" | "Windows"
 export type PostStudioRecordingBehaviour = "openEditor" | "showOverlay"
 export type Preset = { name: string; config: ProjectConfiguration }
 export type PresetsStore = { presets: Preset[]; default: number | null }
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: Camera; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline?: TimelineConfiguration | null }
 export type ProjectRecordings = { segments: SegmentRecordings[] }
-export type RecordingMeta = (StudioRecordingMeta | InstantRecordingMeta) & { pretty_name: string; sharing?: SharingMeta | null }
-export type RecordingMetaChanged = { id: string }
-export type RecordingMetaWithType = ((StudioRecordingMeta | InstantRecordingMeta) & { pretty_name: string; sharing?: SharingMeta | null }) & { type: RecordingType }
+export type RecordingMeta = (StudioRecordingMeta | InstantRecordingMeta) & { platform: Platform | null; pretty_name: string; sharing?: SharingMeta | null }
+export type RecordingMetaWithType = ((StudioRecordingMeta | InstantRecordingMeta) & { platform: Platform | null; pretty_name: string; sharing?: SharingMeta | null }) & { type: RecordingType }
 export type RecordingMode = "studio" | "instant"
-export type RecordingOptions = { captureTarget: ScreenCaptureTarget; audioInputName: string | null; cameraLabel: string | null; captureSystemAudio?: boolean; mode: RecordingMode }
+export type RecordingOptions = { captureTarget: ScreenCaptureTarget; micName: string | null; cameraLabel: string | null; captureSystemAudio?: boolean; mode: RecordingMode }
 export type RecordingOptionsChanged = null
 export type RecordingStarted = null
 export type RecordingStopped = { path: string }
 export type RecordingType = "studio" | "instant"
 export type RenderFrameEvent = { frame_number: number; fps: number; resolution_base: XY<number> }
-export type RenderProgress = { type: "Starting"; total_frames: number } | { type: "EstimatedTotalFrames"; total_frames: number } | { type: "FrameRendered"; current_frame: number }
 export type RequestNewScreenshot = null
 export type RequestOpenSettings = { page: string }
 export type RequestRestartRecording = null
@@ -306,26 +301,26 @@ export type RequestStartRecording = null
 export type RequestStopRecording = null
 export type S3UploadMeta = { id: string; user_id: string; aws_region?: string; aws_bucket?: string; aws_endpoint?: string }
 export type ScreenCaptureTarget = { variant: "window"; id: number } | { variant: "screen"; id: number } | { variant: "area"; screen: number; bounds: Bounds }
-export type SegmentRecordings = { display: Video; camera: Video | null; audio: Audio | null; system_audio: Audio | null }
-export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordings; path: string; prettyName: string }
+export type SegmentRecordings = { display: Video; camera: Video | null; mic: Audio | null; system_audio: Audio | null }
+export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordings; path: string }
 export type ShadowConfiguration = { size: number; opacity: number; blur: number }
 export type SharingMeta = { id: string; link: string }
-export type ShowCapWindow = "Setup" | "Main" | { Settings: { page: string | null } } | { Editor: { project_id: string } } | "RecordingsOverlay" | "WindowCaptureOccluder" | { CaptureArea: { screen_id: number } } | { Camera: { ws_port: number } } | { InProgressRecording: { position: [number, number] | null } } | "Upgrade" | "SignIn" | "ModeSelect"
+export type ShowCapWindow = "Setup" | "Main" | { Settings: { page: string | null } } | { Editor: { project_path: string } } | "RecordingsOverlay" | { WindowCaptureOccluder: { screen_id: number } } | { CaptureArea: { screen_id: number } } | { Camera: { ws_port: number } } | { InProgressRecording: { position: [number, number] | null } } | "Upgrade" | "ModeSelect"
 export type SingleSegment = { display: VideoMeta; camera?: VideoMeta | null; audio?: AudioMeta | null; cursor?: string | null }
+export type StereoMode = "stereo" | "monoL" | "monoR"
 export type StudioRecordingMeta = { segment: SingleSegment } | { inner: MultipleSegments }
 export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments: ZoomSegment[] }
 export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number }
 export type UploadMode = { Initial: { pre_created_video: VideoUploadInfo | null } } | "Reupload"
 export type UploadProgress = { progress: number; message: string }
 export type UploadResult = { Success: string } | "NotAuthenticated" | "PlanCheckFailed" | "UpgradeRequired"
-export type Video = { duration: number; width: number; height: number; fps: number }
+export type Video = { duration: number; width: number; height: number; fps: number; start_time: number }
 export type VideoMeta = { path: string; fps?: number; 
 /**
  * unix time of the first frame
  */
 start_time?: number | null }
 export type VideoRecordingMetadata = { duration: number; size: number }
-export type VideoType = "screen" | "output" | "camera"
 export type VideoUploadInfo = { id: string; link: string; config: S3UploadMeta }
 export type XY<T> = { x: T; y: T }
 export type ZoomMode = "auto" | { manual: { x: number; y: number } }

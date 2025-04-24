@@ -5,7 +5,7 @@ import { vValidator } from '@hono/valibot-validator';
 import * as v from 'valibot';
 import * as jose from 'jose';
 import { createMiddleware } from 'hono/factory';
-import { App, Octokit, RequestError } from 'octokit';
+import { App } from 'octokit';
 
 const DISCORD_APP_ID = '1334742236096757861';
 const PUBLIC_KEY = 'fea8bb4c1432223609db5a37e074c5a5474b89bf4bea12515bc4e09d564e4f61';
@@ -35,6 +35,22 @@ type InteractionBody = {
 	};
 };
 
+type MessageComponent =
+	| {
+			type: 1;
+			components: Array<Exclude<MessageComponent, { type: 1 }>>;
+	  }
+	| ({
+			type: 2;
+			label?: string;
+			disabled?: boolean;
+	  } & ({ style: 1 | 2 | 3 | 4; custom_id: string } | { style: 5; url: string } | { style: 6; sku_id: string }));
+
+type Message = {
+	content?: string;
+	components?: Array<MessageComponent>;
+};
+
 const app = new Hono<{ Bindings: Env }>();
 
 app.post('/interactions', async (c) => {
@@ -49,7 +65,6 @@ app.post('/interactions', async (c) => {
 	// Slash command
 	if (body.type === 2) {
 		const response = await handleCommand(body, c.env);
-		console.log({ response });
 		return Response.json(response);
 	}
 });
@@ -213,7 +228,7 @@ async function verifyRequest(request: Request, jsonBody: any) {
 	);
 }
 
-function releaseWorkflowStartedMessageData() {
+function releaseWorkflowStartedMessageData(): Message {
 	return {
 		content: 'Release workflow started, standby...',
 		components: [
@@ -228,11 +243,11 @@ function releaseWorkflowStartedMessageData() {
 					},
 				],
 			},
-		],
+		] satisfies Array<MessageComponent>,
 	};
 }
 
-function releaseWorkflowRunningMessageData(props: { version: string } & Parameters<typeof releaseDraftedMessageComponents>[0]) {
+function releaseWorkflowRunningMessageData(props: { version: string } & Parameters<typeof releaseDraftedMessageComponents>[0]): Message {
 	return {
 		content: `v${props.version} workflow running, go edit the release notes!`,
 		components: [
@@ -240,7 +255,7 @@ function releaseWorkflowRunningMessageData(props: { version: string } & Paramete
 				type: 1,
 				components: releaseDraftedMessageComponents(props),
 			},
-		],
+		] satisfies Array<MessageComponent>,
 	};
 }
 
@@ -249,15 +264,15 @@ function releaseWorkflowDoneMessageData(
 		userId: string;
 		version: string;
 	} & Parameters<typeof releaseDraftedMessageComponents>[0]
-) {
+): Message {
 	return {
-		content: [`<@${props.userId}> v${props.version} has finished building!`],
+		content: `<@${props.userId}> v${props.version} has finished building!`,
 		components: [
 			{
 				type: 1,
 				components: releaseDraftedMessageComponents(props),
 			},
-		],
+		] satisfies Array<MessageComponent>,
 	};
 }
 
@@ -281,5 +296,5 @@ function releaseDraftedMessageComponents(props: { releaseUrl: string; cnReleaseI
 			url: `https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/actions/runs/${props.workflowRunId}`,
 			style: 5,
 		},
-	];
+	] satisfies Array<MessageComponent>;
 }

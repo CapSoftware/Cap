@@ -1,16 +1,15 @@
 import DynamicSharedLayout from "@/app/dashboard/_components/DynamicSharedLayout";
-import { cache } from "react";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { redirect } from "next/navigation";
 import { DashboardTemplate } from "@/components/templates/DashboardTemplate";
 import { db } from "@cap/database";
+import { getCurrentUser } from "@cap/database/auth/session";
 import {
+  spaceInvites,
   spaceMembers,
   spaces,
-  spaceInvites,
   users,
 } from "@cap/database/schema";
-import { eq, inArray, or, and, count, sql } from "drizzle-orm";
+import { count, eq, inArray, or, sql } from "drizzle-orm";
+import { redirect } from "next/navigation";
 
 export type Space = {
   space: typeof spaces.$inferSelect;

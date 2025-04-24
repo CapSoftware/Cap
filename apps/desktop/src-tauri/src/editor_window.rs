@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Deref, sync::Arc};
+use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc};
 
 use cap_editor::EditorInstance;
 use tauri::{ipc::CommandArg, Manager, Runtime, Window};
@@ -47,7 +47,7 @@ impl<'de, R: Runtime> CommandArg<'de, R> for WindowEditorInstance {
 impl EditorInstances {
     pub async fn get_or_create(
         window: &Window,
-        video_id: &str,
+        path: PathBuf,
     ) -> Result<Arc<EditorInstance>, String> {
         let instances = match window.try_state::<EditorInstances>() {
             Some(s) => (*s).clone(),
@@ -64,7 +64,7 @@ impl EditorInstances {
 
         match instances.entry(window.label().to_string()) {
             Entry::Vacant(entry) => {
-                let instance = create_editor_instance_impl(window.app_handle(), video_id).await?;
+                let instance = create_editor_instance_impl(window.app_handle(), path).await?;
                 entry.insert(instance.clone());
                 Ok(instance)
             }
@@ -77,6 +77,9 @@ impl EditorInstances {
             return;
         };
 
-        instances.0.write().await.remove(window.label());
+        let mut instances = instances.0.write().await;
+        if let Some(instance) = instances.remove(window.label()) {
+            instance.dispose().await;
+        }
     }
 }

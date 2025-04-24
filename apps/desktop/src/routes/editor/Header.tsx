@@ -23,11 +23,11 @@ export type ResolutionOption = {
   height: number;
 };
 
-export const RESOLUTION_OPTIONS: ResolutionOption[] = [
-  { label: "720p", value: "720p", width: 1280, height: 720 },
-  { label: "1080p", value: "1080p", width: 1920, height: 1080 },
-  { label: "4K", value: "4k", width: 3840, height: 2160 },
-];
+export const RESOLUTION_OPTIONS = {
+  _720p: { label: "720p", value: "720p", width: 1280, height: 720 },
+  _1080p: { label: "1080p", value: "1080p", width: 1920, height: 1080 },
+  _4k: { label: "4K", value: "4k", width: 3840, height: 2160 },
+};
 
 export interface ExportEstimates {
   duration_seconds: number;
@@ -36,8 +36,14 @@ export interface ExportEstimates {
 }
 
 export function Header() {
-  const { editorInstance, history, setDialog, exportProgress } =
-    useEditorContext();
+  const {
+    editorInstance,
+    projectHistory,
+    setDialog,
+    meta,
+    exportState,
+    setExportState,
+  } = useEditorContext();
 
   let unlistenTitlebar: UnlistenFn | undefined;
   onMount(async () => {
@@ -76,7 +82,7 @@ export function Header() {
         />
 
         <p class="text-sm text-gray-500">
-          {editorInstance.prettyName}
+          {meta.prettyName}
           <span class="text-sm text-gray-400">.cap</span>
         </p>
         {/* <ErrorBoundary fallback={<></>}>
@@ -129,14 +135,14 @@ export function Header() {
         )}
       >
         <EditorButton
-          onClick={() => history.undo()}
-          disabled={!history.canUndo()}
+          onClick={() => projectHistory.undo()}
+          disabled={!projectHistory.canUndo()}
           tooltipText="Undo"
           leftIcon={<IconCapUndo class="w-5" />}
         />
         <EditorButton
-          onClick={() => history.redo()}
-          disabled={!history.canRedo()}
+          onClick={() => projectHistory.redo()}
+          disabled={!projectHistory.canRedo()}
           tooltipText="Redo"
           leftIcon={<IconCapRedo class="w-5" />}
         />
@@ -147,10 +153,9 @@ export function Header() {
           class={cx("flex gap-2 justify-center")}
           onClick={() => {
             trackEvent("export_button_clicked");
-            setDialog({
-              type: "export",
-              open: true,
-            });
+            if (exportState.type === "done") setExportState({ type: "idle" });
+
+            setDialog({ type: "export", open: true });
           }}
         >
           <UploadIcon class="text-gray-50 size-5" />
@@ -163,7 +168,7 @@ export function Header() {
 }
 
 const UploadIcon = (props: ComponentProps<"svg">) => {
-  const { exportProgress } = useEditorContext();
+  const { exportState } = useEditorContext();
   return (
     <svg
       width={20}
@@ -190,7 +195,9 @@ const UploadIcon = (props: ComponentProps<"svg">) => {
         stroke-width={1.66667}
         stroke-linecap="round"
         stroke-linejoin="round"
-        class={cx(exportProgress() !== null ? "bounce" : "")}
+        class={cx(
+          exportState.type !== "idle" && exportState.type !== "done" && "bounce"
+        )}
       />
     </svg>
   );

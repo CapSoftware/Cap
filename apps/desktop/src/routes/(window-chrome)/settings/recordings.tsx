@@ -17,15 +17,14 @@ import {
   Show,
 } from "solid-js";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-
 import { ask } from "@tauri-apps/plugin-dialog";
 import * as shell from "@tauri-apps/plugin-shell";
+
 import { trackEvent } from "~/utils/analytics";
 import { commands, events, RecordingMetaWithType } from "~/utils/tauri";
 
 type Recording = {
   meta: RecordingMetaWithType;
-  id: string;
   path: string;
   prettyName: string;
   thumbnailPath: string;
@@ -55,12 +54,11 @@ const recordingsQuery = queryOptions({
 
     const recordings = await Promise.all(
       result.map(async (file) => {
-        const [id, path, meta] = file;
+        const [path, meta] = file;
         const thumbnailPath = `${path}/screenshots/display.jpg`;
 
         return {
           meta,
-          id,
           path,
           prettyName: meta.pretty_name,
           thumbnailPath,
@@ -90,27 +88,25 @@ export default function Recordings() {
   });
 
   const handleRecordingClick = (recording: Recording) => {
-    trackEvent("recording_view_clicked", { recording_id: recording.id });
+    trackEvent("recording_view_clicked");
     events.newStudioRecordingAdded.emit({ path: recording.path });
   };
 
   const handleOpenFolder = (path: string) => {
-    trackEvent("recording_folder_clicked", { path });
+    trackEvent("recording_folder_clicked");
     commands.openFilePath(path);
   };
 
   const handleCopyVideoToClipboard = (path: string) => {
-    trackEvent("recording_copy_clicked", { path });
+    trackEvent("recording_copy_clicked");
     commands.copyVideoToClipboard(path);
   };
 
-  const handleOpenEditor = (id: string) => {
-    const normalizedPath = id.replace(/\\/g, "/");
-    const fileName = normalizedPath.split("/").pop() || "";
-    trackEvent("recording_editor_clicked", {
-      recording_id: fileName.replace(".cap", ""),
+  const handleOpenEditor = (path: string) => {
+    trackEvent("recording_editor_clicked");
+    commands.showWindow({
+      Editor: { project_path: path },
     });
-    commands.openEditor(fileName.replace(".cap", ""));
   };
 
   return (
@@ -197,7 +193,6 @@ function RecordingItem(props: {
         </Show>
         <div class="flex flex-col gap-2">
           <span>{props.recording.prettyName}</span>
-          {/** Tag */}
           <div
             class={cx(
               "px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-500 rounded-full w-fit",
@@ -215,12 +210,6 @@ function RecordingItem(props: {
       </div>
       <div class="flex items-center gap-2">
         <Show when={type() === "studio"}>
-          <TooltipIconButton
-            tooltipText="Edit"
-            onClick={() => props.onOpenEditor()}
-          >
-            <IconLucideEdit class="size-4" />
-          </TooltipIconButton>
           <Show when={props.recording.meta.sharing}>
             {(sharing) => (
               <TooltipIconButton
@@ -231,12 +220,21 @@ function RecordingItem(props: {
               </TooltipIconButton>
             )}
           </Show>
+          <TooltipIconButton
+            tooltipText="Edit"
+            onClick={() => props.onOpenEditor()}
+          >
+            <IconLucideEdit class="size-4" />
+          </TooltipIconButton>
         </Show>
         <Show when={type() === "instant"}>
           {(_) => {
             const reupload = createMutation(() => ({
               mutationFn: () => {
-                return commands.reuploadInstantVideo(props.recording.id);
+                return commands.uploadExportedVideo(
+                  props.recording.path,
+                  "Reupload"
+                );
               },
             }));
 

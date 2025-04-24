@@ -122,6 +122,25 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
               generalSettingsStore.set({ theme: newTheme });
             }}
           />
+          <ToggleSetting
+            pro
+            label="Disable automatic link opening"
+            description="When enabled, Cap will not automatically open links in your browser (e.g. after creating a shareable link)."
+            value={!!settings.disableAutoOpenLinks}
+            onChange={(value) => handleChange("disableAutoOpenLinks", value)}
+          />
+          <ToggleSetting
+            label="Enable custom cursor capture in Studio Mode (Experimental)"
+            description="Whether Studio Mode recordings should capture cursor state separately, for customisation (size, smoothing) in the editor. Currently experimental as cursor events may not be captured accurately."
+            value={!!settings.customCursorCapture}
+            onChange={(value) => handleChange("customCursorCapture", value)}
+          />
+          <ToggleSetting
+            label="System audio capture (Experimental)"
+            description="Provides the option for you to capture audio coming from your system, such as music or video playback."
+            value={!!settings.systemAudioCapture}
+            onChange={(value) => handleChange("systemAudioCapture", value)}
+          />
           {ostype === "macos" && (
             <>
               <ToggleSetting
@@ -138,13 +157,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
               />
             </>
           )}
-          <ToggleSetting
-            pro
-            label="Disable automatic link opening"
-            description="When enabled, Cap will not automatically open links in your browser (e.g. after creating a shareable link)."
-            value={!!settings.disableAutoOpenLinks}
-            onChange={(value) => handleChange("disableAutoOpenLinks", value)}
-          />
           <ToggleSetting
             label="Enable system notifications"
             description="Show system notifications for events like copying to clipboard, saving files, and more. You may need to manually allow Cap access via your system's notification settings."

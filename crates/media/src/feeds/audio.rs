@@ -1,5 +1,5 @@
-use cap_audio::AudioData;
-use cap_project::{ProjectConfiguration, TimelineConfiguration};
+use cap_audio::{AudioData, StereoMode};
+use cap_project::{AudioConfiguration, ProjectConfiguration, TimelineConfiguration};
 use ffmpeg::{
     codec::decoder,
     format::{
@@ -118,7 +118,7 @@ fn decode_audio_to_f32(
 }
 
 pub struct AudioRenderer {
-    data: Vec<AudioTrack>,
+    data: Vec<AudioSegment>,
     cursor: AudioRendererCursor,
     // sum of `frame.samples()` that have elapsed
     // this * channel count = cursor
@@ -132,7 +132,43 @@ pub struct AudioRendererCursor {
     samples: usize,
 }
 
-pub type AudioTrack = Vec<Arc<AudioData>>;
+#[derive(Clone)]
+pub struct AudioSegment {
+    pub tracks: Vec<AudioSegmentTrack>,
+}
+
+#[derive(Clone)]
+pub struct AudioSegmentTrack {
+    data: Arc<AudioData>,
+    get_gain: fn(&AudioConfiguration) -> f32,
+    get_stereo_mode: fn(&AudioConfiguration) -> StereoMode,
+}
+
+impl AudioSegmentTrack {
+    pub fn new(
+        data: Arc<AudioData>,
+        get_gain: fn(&AudioConfiguration) -> f32,
+        get_stereo_mode: fn(&AudioConfiguration) -> StereoMode,
+    ) -> Self {
+        Self {
+            data,
+            get_gain,
+            get_stereo_mode,
+        }
+    }
+
+    pub fn data(&self) -> &Arc<AudioData> {
+        &self.data
+    }
+
+    pub fn gain(&self, config: &AudioConfiguration) -> f32 {
+        (self.get_gain)(config)
+    }
+
+    pub fn stereo_mode(&self, config: &AudioConfiguration) -> StereoMode {
+        (self.get_stereo_mode)(config)
+    }
+}
 
 impl AudioRenderer {
     pub const SAMPLE_FORMAT: avformat::Sample = AudioData::SAMPLE_FORMAT;
@@ -143,7 +179,7 @@ impl AudioRenderer {
         AudioInfo::new(Self::SAMPLE_FORMAT, Self::SAMPLE_RATE, Self::CHANNELS).unwrap()
     }
 
-    pub fn new(data: Vec<AudioTrack>) -> Self {
+    pub fn new(data: Vec<AudioSegment>) -> Self {
         Self {
             data,
             cursor: AudioRendererCursor {
@@ -233,19 +269,20 @@ impl AudioRenderer {
         }
         let channels: usize = 2;
 
-        let track_datas = self.data[self.cursor.segment_index as usize]
-            .iter()
-            .map(|t| t.as_ref())
-            .collect::<Vec<_>>();
+        let tracks = &self.data[self.cursor.segment_index as usize].tracks;
 
-        if track_datas.is_empty() {
+        if tracks.is_empty() {
             return None;
         }
 
-        let max_samples = track_datas.iter().map(|t| t.sample_count()).min().unwrap();
+        let max_samples = tracks
+            .iter()
+            .map(|t| t.data().sample_count())
+            .min()
+            .unwrap();
 
         if self.cursor.samples >= max_samples {
-            self.elapsed_samples += max_samples;
+            self.elapsed_samples += samples;
             return None;
         }
 
@@ -255,8 +292,23 @@ impl AudioRenderer {
 
         let mut ret = vec![0.0; samples * 2];
 
+        let track_datas = tracks
+            .iter()
+            .map(|t| {
+                (
+                    t.data().as_ref(),
+                    if project.audio.mute {
+                        f32::NEG_INFINITY
+                    } else {
+                        t.gain(&project.audio)
+                    },
+                    t.stereo_mode(&project.audio),
+                )
+            })
+            .collect::<Vec<_>>();
+
         let actual_sample_count =
-            cap_audio::render_audio(track_datas.as_slice(), start.samples, samples, 0, &mut ret);
+            cap_audio::render_audio(&track_datas, start.samples, samples, 0, &mut ret);
 
         self.elapsed_samples += actual_sample_count;
         self.cursor.samples += actual_sample_count;
@@ -279,7 +331,7 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
     pub const PLAYBACK_SAMPLES_COUNT: u32 = 256;
     const PROCESSING_SAMPLES_COUNT: u32 = 1024;
 
-    pub fn new(data: Vec<AudioTrack>, output_info: AudioInfo) -> Self {
+    pub fn new(data: Vec<AudioSegment>, output_info: AudioInfo) -> Self {
         // println!("Input info: {:?}", data[0][0].info);
         println!("Output info: {:?}", output_info);
 
@@ -304,8 +356,6 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
         self.resampler.reset();
         self.resampled_buffer.clear();
         self.frame_buffer.set_playhead(playhead, project);
-
-        println!("Successful seek to sample {:?}", self.frame_buffer.cursor);
     }
 
     pub fn buffer_reaching_limit(&self) -> bool {

@@ -3,15 +3,33 @@ import { BentoScript } from "@/components/BentoScript";
 import { Footer } from "@/components/Footer";
 import { Navbar } from "@/components/Navbar";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { serverEnv } from "@cap/env";
+import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import crypto from "crypto";
-import { GeistSans } from "geist/font/sans";
 import type { Metadata } from "next";
+import localFont from "next/font/local";
 import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "./AuthProvider";
 import { PostHogProvider, Providers } from "./providers";
-import { clientEnv, serverEnv } from "@cap/env";
-import { PublicEnvContext } from "@/utils/public-env";
-import { S3_BUCKET_URL } from "@cap/utils";
+
+const SfProDisplay = localFont({
+  src: [
+    {
+      path: "./fonts/SFPRODISPLAYREGULAR.woff2",
+      weight: "300",
+    },
+    {
+      path: "./fonts/SFPRODISPLAYBOLD.woff2",
+      weight: "700",
+    },
+    {
+      path: "./fonts/SFPRODISPLAYMEDIUM.woff2",
+      weight: "500",
+    },
+  ],
+  display: "swap",
+  variable: "--font-sf-pro-display",
+});
 
 export const metadata: Metadata = {
   title: "Cap — Beautiful screen recordings, owned by you.",
@@ -42,7 +60,7 @@ export default async function RootLayout({
   }
 
   return (
-    <html className={`${GeistSans.variable}`} lang="en">
+    <html lang="en">
       <head>
         <link
           rel="apple-touch-icon"
@@ -68,15 +86,9 @@ export default async function RootLayout({
         <meta name="theme-color" content="#ffffff" />
       </head>
       <body>
-        <PostHogProvider>
-          <AuthProvider>
-            <PublicEnvContext
-              value={{
-                webUrl: serverEnv.WEB_URL,
-                awsBucket: serverEnv.CAP_AWS_BUCKET,
-                s3BucketUrl: S3_BUCKET_URL,
-              }}
-            >
+        <TooltipPrimitive.Provider>
+          <PostHogProvider>
+            <AuthProvider>
               <Providers
                 userId={user?.id}
                 intercomHash={intercomHash}
@@ -84,16 +96,16 @@ export default async function RootLayout({
                 email={user?.email ?? ""}
               >
                 <Toaster />
-                <main className="overflow-hidden w-full">
+                <main className="overflow-x-hidden w-full">
                   <Navbar auth={user ? true : false} />
                   {children}
                   <Footer />
                 </main>
                 <BentoScript user={user} />
               </Providers>
-            </PublicEnvContext>
-          </AuthProvider>
-        </PostHogProvider>
+            </AuthProvider>
+          </PostHogProvider>
+        </TooltipPrimitive.Provider>
       </body>
     </html>
   );

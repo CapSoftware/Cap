@@ -3,8 +3,10 @@ name = "cap-editor"
 version = "0.1.0"
 edition = "2021"
 
-[dependencies]
+[lints]
+workspace = true
 
+[dependencies]
 cap-media = { path = "../media" }
 cap-project = { path = "../project" }
 cap-rendering = { path = "../rendering" }

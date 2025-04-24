@@ -1,29 +1,39 @@
 use std::{
+    cell::RefCell,
     collections::BTreeMap,
     path::PathBuf,
+    rc::Rc,
     sync::{mpsc, Arc},
 };
 
 use cidre::{
     arc::R,
-    av::{self, AssetReaderTrackOutput},
     cv::{self, pixel_buffer::LockFlags},
 };
-use ffmpeg::{codec, format, frame, Rational};
+use ffmpeg::{format, frame, Rational};
 use tokio::{runtime::Handle as TokioHandle, sync::oneshot};
 
-use super::{pts_to_frame, DecodedFrame, VideoDecoderMessage, FRAME_CACHE_SIZE};
+use super::{pts_to_frame, VideoDecoderMessage, FRAME_CACHE_SIZE};
+
+#[derive(Clone)]
+struct ProcessedFrame {
+    number: u32,
+    data: Arc<Vec<u8>>,
+}
 
 #[derive(Clone)]
 enum CachedFrame {
-    Raw(R<cv::ImageBuf>),
-    Processed(Arc<Vec<u8>>),
+    Raw {
+        image_buf: R<cv::ImageBuf>,
+        number: u32,
+    },
+    Processed(ProcessedFrame),
 }
 
 impl CachedFrame {
-    fn process(&mut self) -> Arc<Vec<u8>> {
+    fn process(&mut self) -> ProcessedFrame {
         match self {
-            CachedFrame::Raw(image_buf) => {
+            CachedFrame::Raw { image_buf, number } => {
                 let format = cap_video_decode::avassetreader::pixel_format_to_pixel(
                     image_buf.pixel_format(),
                 );
@@ -161,7 +171,10 @@ impl CachedFrame {
                     bytes
                 };
 
-                let data = Arc::new(data);
+                let data = ProcessedFrame {
+                    number: *number,
+                    data: Arc::new(data),
+                };
 
                 *self = Self::Processed(data.clone());
 
@@ -174,7 +187,6 @@ impl CachedFrame {
 
 pub struct AVAssetReaderDecoder {
     inner: cap_video_decode::AVAssetReaderDecoder,
-    last_decoded_frame: Option<(u32, CachedFrame)>,
     is_done: bool,
 }
 
@@ -182,18 +194,12 @@ impl AVAssetReaderDecoder {
     fn new(path: PathBuf, tokio_handle: TokioHandle) -> Result<Self, String> {
         Ok(Self {
             inner: cap_video_decode::AVAssetReaderDecoder::new(path, tokio_handle)?,
-            last_decoded_frame: None,
             is_done: false,
         })
     }
 
     fn reset(&mut self, requested_time: f32) {
-        self.inner.reset(requested_time);
-        self.last_decoded_frame = None;
-    }
-
-    fn last_decoded_frame(&mut self) -> Option<&mut (u32, CachedFrame)> {
-        self.last_decoded_frame.as_mut()
+        let _ = self.inner.reset(requested_time);
     }
 
     pub fn spawn(
@@ -227,14 +233,10 @@ impl AVAssetReaderDecoder {
             }
         };
 
-        // let black_frame = LazyCell::new(|| Arc::new(vec![0; (width * height * 4) as usize]));
-
         let mut cache = BTreeMap::<u32, CachedFrame>::new();
 
         let mut last_active_frame = None::<u32>;
-
-        // let mut last_decoded_frame = None::<(u32, CachedFrame)>;
-        let mut last_sent_frame = None::<(u32, DecodedFrame)>;
+        let last_sent_frame = Rc::new(RefCell::new(None::<ProcessedFrame>));
 
         let mut frames = this.inner.frames();
 
@@ -242,17 +244,19 @@ impl AVAssetReaderDecoder {
             match r {
                 VideoDecoderMessage::GetFrame(requested_time, sender) => {
                     let requested_frame = (requested_time * fps as f32).floor() as u32;
-                    // info!("requested frame {}", requested_frame);
 
                     let mut sender = if let Some(cached) = cache.get_mut(&requested_frame) {
                         let data = cached.process();
 
-                        // info!("sending cached frame {}", requested_frame);
-                        sender.send(data.clone()).ok();
-                        last_sent_frame = Some((requested_frame, data));
+                        sender.send(data.data.clone()).ok();
+                        *last_sent_frame.borrow_mut() = Some(data);
                         continue;
                     } else {
-                        Some(sender)
+                        let last_sent_frame = last_sent_frame.clone();
+                        Some(move |data: ProcessedFrame| {
+                            *last_sent_frame.borrow_mut() = Some(data.clone());
+                            let _ = sender.send(data.data);
+                        })
                     };
 
                     let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
@@ -260,11 +264,12 @@ impl AVAssetReaderDecoder {
 
                     if requested_frame == 0
                         || last_sent_frame
+                            .borrow()
                             .as_ref()
                             .map(|last| {
-                                requested_frame < last.0 ||
-                        // seek forward for big jumps. this threshold is arbitrary but should be derived from i-frames in future
-                        requested_frame - last.0 > FRAME_CACHE_SIZE as u32
+                                requested_frame < last.number
+                                // seek forward for big jumps. this threshold is arbitrary but should be derived from i-frames in future
+                                || requested_frame - last.number > FRAME_CACHE_SIZE as u32
                             })
                             .unwrap_or(true)
                     {
@@ -291,9 +296,11 @@ impl AVAssetReaderDecoder {
                             continue;
                         };
 
-                        let mut cache_frame = CachedFrame::Raw(frame.retained());
+                        let mut cache_frame = CachedFrame::Raw {
+                            image_buf: frame.retained(),
+                            number: current_frame,
+                        };
 
-                        this.last_decoded_frame = Some((current_frame, cache_frame.clone()));
                         this.is_done = false;
 
                         // Handles frame skips.
@@ -302,9 +309,7 @@ impl AVAssetReaderDecoder {
                             cache.iter_mut().rev().find(|v| *v.0 < requested_frame)
                         {
                             if let Some(sender) = sender.take() {
-                                let data = most_recent_prev_frame.1.process();
-                                sender.send(data.clone()).ok();
-                                last_sent_frame = Some((current_frame, data));
+                                (sender)(most_recent_prev_frame.1.process());
                             }
                         }
 
@@ -315,10 +320,9 @@ impl AVAssetReaderDecoder {
                             if current_frame == requested_frame {
                                 if let Some(sender) = sender.take() {
                                     let data = cache_frame.process();
-                                    last_sent_frame = Some((current_frame, data.clone()));
                                     // info!("sending frame {requested_frame}");
 
-                                    sender.send(data).ok();
+                                    (sender)(data);
 
                                     break;
                                 }
@@ -351,22 +355,24 @@ impl AVAssetReaderDecoder {
                         }
 
                         if current_frame > requested_frame && sender.is_some() {
-                            if let Some((sender, last_sent_frame)) = last_sent_frame
-                                .as_ref()
-                                .and_then(|l| Some((sender.take()?, l)))
+                            // not inlining this is important so that last_sent_frame is dropped before the sender is invoked
+                            let last_sent_frame = last_sent_frame.borrow().clone();
+
+                            if let Some((sender, last_sent_frame)) =
+                                last_sent_frame.and_then(|l| Some((sender.take()?, l)))
                             {
                                 // info!(
                                 //     "sending previous frame {} for {requested_frame}",
                                 //     last_sent_frame.0
                                 // );
 
-                                sender.send(last_sent_frame.1.clone()).ok();
+                                (sender)(last_sent_frame);
                             } else if let Some(sender) = sender.take() {
                                 // info!(
                                 //     "sending forward frame {current_frame} for {requested_frame}",
                                 // );
 
-                                sender.send(cache_frame.process()).ok();
+                                (sender)(cache_frame.process());
                             }
                         }
 
@@ -379,15 +385,15 @@ impl AVAssetReaderDecoder {
 
                     this.is_done = true;
 
-                    if let Some((sender, last_sent_frame)) =
-                        sender.take().zip(last_sent_frame.as_ref())
-                    {
+                    // not inlining this is important so that last_sent_frame is dropped before the sender is invoked
+                    let last_sent_frame = last_sent_frame.borrow().clone();
+                    if let Some((sender, last_sent_frame)) = sender.take().zip(last_sent_frame) {
                         // info!(
                         //     "sending hail mary frame {} for {requested_frame}",
                         //     last_sent_frame.0
                         // );
 
-                        sender.send(last_sent_frame.1.clone()).ok();
+                        (sender)(last_sent_frame);
                     }
                 }
             }

@@ -1,9 +1,9 @@
 "use client";
 
-import * as React from "react";
 import { DialogProps } from "@radix-ui/react-dialog";
 import { Command as CommandPrimitive } from "cmdk";
 import { Search } from "lucide-react";
+import * as React from "react";
 
 import { classNames } from "@cap/utils";
 import { Dialog, DialogContent } from "./Dialog";
@@ -15,7 +15,7 @@ const Command = React.forwardRef<
   <CommandPrimitive
     ref={ref}
     className={classNames(
-      "flex h-full w-full flex-col overflow-hidden rounded-md bg-popover text-popover-foreground",
+      "flex overflow-hidden flex-col w-full h-full rounded-md bg-popover text-popover-foreground",
       className
     )}
     {...props}
@@ -41,12 +41,12 @@ const CommandInput = React.forwardRef<
   React.ElementRef<typeof CommandPrimitive.Input>,
   React.ComponentPropsWithoutRef<typeof CommandPrimitive.Input>
 >(({ className, ...props }, ref) => (
-  <div className="flex items-center border-b px-3" cmdk-input-wrapper="">
-    <Search className="mr-2 h-4 w-4 shrink-0 opacity-50" />
+  <div className="flex items-center px-3 border-b" cmdk-input-wrapper="">
+    <Search className="mr-2 w-4 h-4 opacity-50 shrink-0" />
     <CommandPrimitive.Input
       ref={ref}
       className={classNames(
-        "flex h-11 w-full rounded-md bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
+        "flex py-3 w-full h-11 text-sm bg-transparent rounded-md outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
         className
       )}
       {...props}
@@ -63,7 +63,7 @@ const CommandList = React.forwardRef<
   <CommandPrimitive.List
     ref={ref}
     className={classNames(
-      "max-h-[300px] overflow-y-auto overflow-x-hidden",
+      "overflow-y-auto overflow-x-hidden max-h-[300px]",
       className
     )}
     {...props}
@@ -120,7 +120,7 @@ const CommandItem = React.forwardRef<
   <CommandPrimitive.Item
     ref={ref}
     className={classNames(
-      "relative flex cursor-pointer text-gray-400 select-none items-center rounded-sm px-2 py-2.5 text-[0.875rem] outline-none aria-selected:bg-accent aria-selected:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      "relative flex cursor-pointer text-gray-400 select-none items-center rounded-sm px-2 py-2 text-[0.875rem] outline-none aria-selected:bg-accent aria-selected:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       className
     )}
     {...props}
@@ -148,11 +148,11 @@ CommandShortcut.displayName = "CommandShortcut";
 export {
   Command,
   CommandDialog,
-  CommandInput,
-  CommandList,
   CommandEmpty,
   CommandGroup,
+  CommandInput,
   CommandItem,
-  CommandShortcut,
+  CommandList,
   CommandSeparator,
+  CommandShortcut,
 };

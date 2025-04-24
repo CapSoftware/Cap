@@ -22,6 +22,8 @@ mod windows;
 
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid, Plan};
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
 use camera::create_camera_preview_ws;
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
@@ -59,6 +61,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use std::collections::BTreeMap;
+use std::ffi::OsString;
+use std::time::Duration;
 use std::{
     fs::File,
     future::Future,
@@ -73,9 +77,11 @@ use tauri::Window;
 use tauri::{AppHandle, Manager, State, WindowEvent};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::{NotificationExt, PermissionState};
+use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::sync::{Mutex, RwLock};
+use tracing::debug;
 use tracing::info;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -83,6 +89,7 @@ use tracing_subscriber::Layer;
 use upload::{get_s3_config, upload_image, upload_video, S3UploadMeta};
 use web_api::ManagerExt as WebManagerExt;
 use windows::set_window_transparent;
+use windows::EditorWindowIds;
 use windows::{CapWindowId, ShowCapWindow};
 
 #[derive(specta::Type, Serialize)]
@@ -95,9 +102,9 @@ pub struct App {
     #[serde(skip)]
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
     #[serde(skip)]
-    audio_input_feed: Option<AudioInputFeed>,
+    mic_feed: Option<AudioInputFeed>,
     #[serde(skip)]
-    audio_input_tx: AudioInputSamplesSender,
+    mic_samples_tx: AudioInputSamplesSender,
     #[serde(skip)]
     handle: AppHandle,
     #[serde(skip)]
@@ -137,29 +144,22 @@ pub struct VideoUploadInfo {
 
 impl App {
     pub fn set_current_recording(&mut self, actor: InProgressRecording) {
-        let current_recording = self.current_recording.insert(actor);
+        self.current_recording.insert(actor);
 
         CurrentRecordingChanged.emit(&self.handle).ok();
-
-        if matches!(
-            current_recording.capture_target(),
-            ScreenCaptureTarget::Window { .. } | ScreenCaptureTarget::Area { .. }
-        ) {
-            let _ = ShowCapWindow::WindowCaptureOccluder.show(&self.handle);
-        } else {
-            self.close_occluder_window();
-        }
     }
 
     pub fn clear_current_recording(&mut self) -> Option<InProgressRecording> {
-        self.close_occluder_window();
+        self.close_occluder_windows();
 
         self.current_recording.take()
     }
 
-    fn close_occluder_window(&self) {
-        if let Some(window) = CapWindowId::WindowCaptureOccluder.get(&self.handle) {
-            window.close().ok();
+    fn close_occluder_windows(&self) {
+        for window in self.handle.webview_windows() {
+            if window.0.starts_with("window-capture-occluder-") {
+                let _ = window.1.close();
+            }
         }
     }
 
@@ -168,22 +168,20 @@ impl App {
         new_options: RecordingOptions,
     ) -> Result<(), String> {
         let options = new_options.clone();
-        let capture_target_title = options
-            .capture_target
-            .get_title()
-            .ok_or_else(|| "Failed to get capture target name".to_string())?;
+        let capture_target_title = options.capture_target.get_title();
 
         sentry::configure_scope(move |scope| {
-            dbg!(options.capture_target.get_title());
             let mut ctx = std::collections::BTreeMap::new();
-            ctx.insert("capture_target".into(), capture_target_title.into());
+            if let Some(capture_target_title) = capture_target_title {
+                ctx.insert("capture_target".into(), capture_target_title.into());
+            }
             ctx.insert(
                 "camera".into(),
                 options.camera_label.unwrap_or("None".into()).into(),
             );
             ctx.insert(
                 "microphone".into(),
-                options.audio_input_name.unwrap_or("None".into()).into(),
+                options.mic_name.unwrap_or("None".into()).into(),
             );
             scope.set_context("recording_options", sentry::protocol::Context::Other(ctx));
 
@@ -204,6 +202,7 @@ impl App {
                     ws_port: self.camera_ws_port,
                 }
                 .show(&self.handle)
+                .await
                 .ok();
             }
             _ => {}
@@ -225,7 +224,7 @@ impl App {
                 })
                 .map_err(|e| e.to_string()),
             (None, _) => {
-                self.camera_feed = None;
+                self.remove_camera_feed();
                 Ok(())
             }
         }
@@ -234,13 +233,13 @@ impl App {
         });
 
         // try update microphone
-        let microphone = match (new_options.audio_input_name(), &mut self.audio_input_feed) {
+        let microphone = match (new_options.mic_name(), &mut self.mic_feed) {
             (Some(new_input_name), v @ None) => {
                 AudioInputFeed::init(new_input_name)
                     .await
                     .map_err(|e| e.to_string())
-                    .map(|feed| async {
-                        feed.add_sender(self.audio_input_tx.clone()).await.unwrap();
+                    .map(async |feed| {
+                        feed.add_sender(self.mic_samples_tx.clone()).await.unwrap();
                         *v = Some(feed);
                     })
                     .transpose_async()
@@ -250,13 +249,14 @@ impl App {
                 .switch_input(new_input_name)
                 .await
                 .map_err(|e| e.to_string()),
-            (None, v) => {
-                v.take();
+            (None, _) => {
+                debug!("removing mic in set_start_recording_options");
+                self.remove_mic_feed();
                 Ok(())
             }
         }
         .inspect(|_| {
-            self.recording_options.audio_input_name = new_options.audio_input_name.clone();
+            self.recording_options.mic_name = new_options.mic_name.clone();
         });
 
         if camera.is_ok() || microphone.is_ok() {
@@ -266,6 +266,49 @@ impl App {
         }
 
         camera.and(microphone)
+    }
+
+    pub fn remove_camera_feed(&mut self) {
+        self.camera_feed.take();
+    }
+
+    pub async fn create_camera_feed(&mut self) -> Result<bool, String> {
+        if let (Some(label), true) = (
+            self.recording_options.camera_label(),
+            self.camera_feed.is_none(),
+        ) {
+            CameraFeed::init(label)
+                .await
+                .map(|feed| {
+                    feed.attach(self.camera_tx.clone());
+                    self.camera_feed = Some(Arc::new(Mutex::new(feed)));
+                })
+                .map_err(|e| e.to_string())?;
+
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    pub fn remove_mic_feed(&mut self) {
+        self.mic_feed.take();
+    }
+
+    pub async fn create_mic_feed(&mut self) -> Result<(), String> {
+        if let (Some(name), true) = (self.recording_options.mic_name(), self.mic_feed.is_none()) {
+            AudioInputFeed::init(name)
+                .await
+                .map_err(|e| e.to_string())
+                .map(|feed| async {
+                    feed.add_sender(self.mic_samples_tx.clone()).await.unwrap();
+                    self.mic_feed = Some(feed);
+                })
+                .transpose_async()
+                .await?
+        }
+
+        Ok(())
     }
 }
 
@@ -423,19 +466,19 @@ async fn get_recording_options(
     let mut state = state.write().await;
 
     // If there's a saved audio input but no feed, initialize it
-    if let Some(audio_input_name) = state.recording_options.audio_input_name() {
-        if state.audio_input_feed.is_none() {
-            state.audio_input_feed = if let Ok(feed) = AudioInputFeed::init(audio_input_name)
-                .await
-                .map_err(|error| eprintln!("{error}"))
-            {
-                feed.add_sender(state.audio_input_tx.clone()).await.unwrap();
-                Some(feed)
-            } else {
-                None
-            };
-        }
-    }
+    // if let Some(audio_input_name) = state.recording_options.mic_name() {
+    //     if state.mic_feed.is_none() {
+    //         state.mic_feed = if let Ok(feed) = AudioInputFeed::init(audio_input_name)
+    //             .await
+    //             .map_err(|error| eprintln!("{error}"))
+    //         {
+    //             feed.add_sender(state.audio_input_tx.clone()).await.unwrap();
+    //             Some(feed)
+    //         } else {
+    //             None
+    //         };
+    //     }
+    // }
 
     Ok(state.recording_options.clone())
 }
@@ -490,16 +533,23 @@ enum CurrentRecordingTarget {
     Area { screen: u32, bounds: Bounds },
 }
 
+#[derive(Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+struct CurrentRecording {
+    target: CurrentRecordingTarget,
+    r#type: RecordingType,
+}
+
 #[tauri::command]
 #[specta::specta]
 async fn get_current_recording(
     state: MutableState<'_, App>,
-) -> Result<JsonValue<Option<CurrentRecordingTarget>>, ()> {
+) -> Result<JsonValue<Option<CurrentRecording>>, ()> {
     let state = state.read().await;
     Ok(JsonValue::new(&state.current_recording.as_ref().map(|r| {
         let bounds = r.bounds();
 
-        match r.capture_target() {
+        let target = match r.capture_target() {
             ScreenCaptureTarget::Screen { id } => CurrentRecordingTarget::Screen { id: *id },
             ScreenCaptureTarget::Window { id } => CurrentRecordingTarget::Window {
                 id: *id,
@@ -508,6 +558,14 @@ async fn get_current_recording(
             ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {
                 screen: *screen,
                 bounds: bounds.clone(),
+            },
+        };
+
+        CurrentRecording {
+            target,
+            r#type: match r {
+                InProgressRecording::Instant { .. } => RecordingType::Instant,
+                InProgressRecording::Studio { .. } => RecordingType::Studio,
             },
         }
     })))
@@ -915,22 +973,31 @@ struct SerializedEditorInstance {
     frames_socket_url: String,
     recording_duration: f64,
     saved_project_config: ProjectConfiguration,
-    recordings: ProjectRecordings,
+    recordings: Arc<ProjectRecordings>,
     path: PathBuf,
-    pretty_name: String,
 }
 
 #[tauri::command]
 #[specta::specta]
-async fn create_editor_instance(
-    window: Window,
-    video_id: String,
-) -> Result<SerializedEditorInstance, String> {
-    let editor_instance = EditorInstances::get_or_create(&window, &video_id).await?;
+async fn create_editor_instance(window: Window) -> Result<SerializedEditorInstance, String> {
+    let CapWindowId::Editor { id } = CapWindowId::from_str(window.label()).unwrap() else {
+        return Err("Invalid window".to_string());
+    };
+
+    let path = {
+        let window_ids = EditorWindowIds::get(window.app_handle());
+        let window_ids = window_ids.ids.lock().unwrap();
+
+        let Some((path, _)) = window_ids.iter().find(|(_, _id)| *_id == id) else {
+            return Err("Editor instance not found".to_string());
+        };
+        path.clone()
+    };
+
+    let editor_instance = EditorInstances::get_or_create(&window, path).await?;
 
     // Load the RecordingMeta to get the pretty name
-    let meta = RecordingMeta::load_for_project(&editor_instance.project_path)
-        .map_err(|e| format!("Failed to load recording meta: {}", e))?;
+    let meta = editor_instance.meta();
 
     println!("Pretty name: {}", meta.pretty_name);
 
@@ -943,8 +1010,13 @@ async fn create_editor_instance(
         },
         recordings: editor_instance.recordings.clone(),
         path: editor_instance.project_path.clone(),
-        pretty_name: meta.pretty_name,
     })
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn get_editor_meta(editor: WindowEditorInstance) -> Result<RecordingMeta, String> {
+    Ok(editor.meta().clone())
 }
 
 #[tauri::command]
@@ -966,25 +1038,8 @@ async fn copy_video_to_clipboard(
 
 #[tauri::command]
 #[specta::specta]
-async fn get_video_metadata(
-    app: AppHandle,
-    video_id: String,
-    video_type: Option<VideoType>,
-) -> Result<VideoRecordingMetadata, String> {
-    let video_id = if video_id.ends_with(".cap") {
-        video_id.trim_end_matches(".cap").to_string()
-    } else {
-        video_id
-    };
-
-    let project_path = app
-        .path()
-        .app_data_dir()
-        .unwrap()
-        .join("recordings")
-        .join(format!("{}.cap", video_id));
-
-    let recording_meta = RecordingMeta::load_for_project(&project_path)?;
+async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, String> {
+    let recording_meta = RecordingMeta::load_for_project(&path)?;
 
     fn get_duration_for_path(path: PathBuf) -> Result<f64, String> {
         let reader = BufReader::new(
@@ -1011,13 +1066,13 @@ async fn get_video_metadata(
 
     let display_paths = match &recording_meta.inner {
         RecordingMetaInner::Instant(_) => {
-            vec![project_path.join("content/output.mp4")]
+            vec![path.join("content/output.mp4")]
         }
         RecordingMetaInner::Studio(meta) => match meta {
             StudioRecordingMeta::SingleSegment { segment } => {
                 vec![recording_meta.path(&segment.display.path)]
             }
-            StudioRecordingMeta::MultipleSegments { inner } => inner
+            StudioRecordingMeta::MultipleSegments { inner, .. } => inner
                 .segments
                 .iter()
                 .map(|s| recording_meta.path(&s.display.path))
@@ -1057,14 +1112,6 @@ async fn get_video_metadata(
     })
 }
 
-#[tauri::command(async)]
-#[specta::specta]
-fn open_editor(app: AppHandle, id: String) {
-    println!("Opening editor for recording: {}", id);
-
-    ShowCapWindow::Editor { project_id: id }.show(&app).unwrap();
-}
-
 #[tauri::command]
 #[specta::specta]
 fn close_recordings_overlay_window(app: AppHandle) {
@@ -1097,11 +1144,10 @@ fn focus_captures_panel(app: AppHandle) {
 }
 
 #[derive(Serialize, Deserialize, specta::Type, Clone)]
-#[serde(tag = "type")]
-pub enum RenderProgress {
-    Starting { total_frames: u32 },
-    EstimatedTotalFrames { total_frames: u32 },
-    FrameRendered { current_frame: u32 },
+#[serde(tag = "type", rename_all = "camelCase")]
+pub struct FramesRendered {
+    rendered_count: u32,
+    total_frames: u32,
 }
 
 #[tauri::command]
@@ -1163,7 +1209,7 @@ pub enum UploadMode {
 #[specta::specta]
 async fn upload_exported_video(
     app: AppHandle,
-    video_id: String,
+    path: PathBuf,
     mode: UploadMode,
 ) -> Result<UploadResult, String> {
     let Ok(Some(auth)) = AuthStore::get(&app) else {
@@ -1172,26 +1218,18 @@ async fn upload_exported_video(
     };
 
     // Get video metadata to check duration
-    let screen_metadata =
-        match get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Screen)).await {
-            Ok(meta) => meta,
-            Err(e) => {
-                sentry::capture_message(
-                    &format!("Failed to get video metadata: {}", e),
-                    sentry::Level::Error,
-                );
-                return Err(
-                "Failed to read video metadata. The recording may be from an incompatible version."
-                    .to_string(),
-            );
-            }
-        };
+    let screen_metadata = get_video_metadata(path.clone()).await.map_err(|e| {
+        sentry::capture_message(
+            &format!("Failed to get video metadata: {}", e),
+            sentry::Level::Error,
+        );
+
+        "Failed to read video metadata. The recording may be from an incompatible version."
+            .to_string()
+    })?;
 
     // Get camera metadata if it exists
-    let camera_metadata =
-        get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Camera))
-            .await
-            .ok();
+    let camera_metadata = get_video_metadata(path.clone()).await.ok();
 
     // Use the longer duration between screen and camera
     let duration = screen_metadata.duration.max(
@@ -1206,13 +1244,7 @@ async fn upload_exported_video(
         return Ok(UploadResult::UpgradeRequired);
     }
 
-    let mut meta = RecordingMeta::load_for_project(
-        &app.path()
-            .app_data_dir()
-            .unwrap()
-            .join("recordings")
-            .join(format!("{}.cap", video_id)),
-    )?;
+    let mut meta = RecordingMeta::load_for_project(&path)?;
 
     let output_path = meta.output_path();
     if !output_path.exists() {
@@ -1249,9 +1281,11 @@ async fn upload_exported_video(
     }
     .await?;
 
+    let upload_id = s3_config.id().to_string();
+
     match upload_video(
         &app,
-        video_id.clone(),
+        upload_id.clone(),
         output_path,
         Some(s3_config),
         Some(meta.project_path.join("screenshots/display.jpg")),
@@ -1272,7 +1306,6 @@ async fn upload_exported_video(
                 id: uploaded_video.id.clone(),
             });
             meta.save_for_project().ok();
-            RecordingMetaChanged { id: video_id }.emit(&app).ok();
 
             let _ = app
                 .state::<ArcLock<ClipboardContext>>()
@@ -1304,7 +1337,7 @@ async fn upload_screenshot(
     };
 
     if !auth.is_upgraded() {
-        ShowCapWindow::Upgrade.show(&app).ok();
+        ShowCapWindow::Upgrade.show(&app).await.ok();
         return Ok(UploadResult::UpgradeRequired);
     }
 
@@ -1328,17 +1361,6 @@ async fn upload_screenshot(
             id: uploaded.id.clone(),
         });
         meta.save_for_project();
-
-        RecordingMetaChanged {
-            id: screenshot_path
-                .file_stem()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .to_string(),
-        }
-        .emit(&app)
-        .ok();
 
         uploaded.link
     };
@@ -1451,6 +1473,8 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
 
         use cap_project::*;
         RecordingMeta {
+            platform: Some(Platform::default()),
+
             project_path: recording_dir.clone(),
             sharing: None,
             pretty_name: screenshot_name,
@@ -1564,11 +1588,6 @@ async fn save_file_dialog(
     }
 }
 
-#[derive(Serialize, specta::Type, tauri_specta::Event, Debug, Clone)]
-struct RecordingMetaChanged {
-    id: String,
-}
-
 #[derive(Serialize, specta::Type)]
 pub struct RecordingMetaWithType {
     #[serde(flatten)]
@@ -1599,25 +1618,17 @@ pub enum RecordingType {
 #[specta::specta]
 fn get_recording_meta(
     app: AppHandle,
-    id: String,
+    path: PathBuf,
     file_type: String,
 ) -> Result<RecordingMetaWithType, String> {
-    let meta_path = match file_type.as_str() {
-        "recording" => recording_path(&app, &id),
-        "screenshot" => screenshot_path(&app, &id),
-        _ => return Err("Invalid file type".to_string()),
-    };
-
-    RecordingMeta::load_for_project(&meta_path)
+    RecordingMeta::load_for_project(&path)
         .map(RecordingMetaWithType::new)
         .map_err(|e| format!("Failed to load recording meta: {}", e))
 }
 
 #[tauri::command]
 #[specta::specta]
-fn list_recordings(
-    app: AppHandle,
-) -> Result<Vec<(String, PathBuf, RecordingMetaWithType)>, String> {
+fn list_recordings(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMetaWithType)>, String> {
     let recordings_dir = recordings_path(&app);
 
     // First check if directory exists
@@ -1640,33 +1651,22 @@ fn list_recordings(
                 return None;
             }
 
-            let extension = match path.extension().and_then(|s| s.to_str()) {
-                Some("cap") => "cap",
-                _ => return None,
-            };
-
-            let id = match path.file_stem().and_then(|s| s.to_str()) {
-                Some(stem) => stem.to_string(),
-                None => return None,
-            };
-
             // Try to get recording meta, skip if it fails
-            match get_recording_meta(app.clone(), id.clone(), "recording".to_string()) {
-                Ok(meta) => Some((id, path.clone(), meta)),
-                Err(e) => None,
-            }
+            get_recording_meta(app.clone(), path.clone(), "recording".to_string())
+                .ok()
+                .map(|meta| (path, meta))
         })
         .collect::<Vec<_>>();
 
     // Sort the result by creation date of the actual file, newest first
     result.sort_by(|a, b| {
         let b_time =
-            b.1.metadata()
+            b.0.metadata()
                 .and_then(|m| m.created())
                 .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
 
         let a_time =
-            a.1.metadata()
+            a.0.metadata()
                 .and_then(|m| m.created())
                 .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
 
@@ -1678,7 +1678,7 @@ fn list_recordings(
 
 #[tauri::command]
 #[specta::specta]
-fn list_screenshots(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMeta)>, String> {
+fn list_screenshots(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMeta)>, String> {
     let screenshots_dir = screenshots_path(&app);
 
     let mut result = std::fs::read_dir(&screenshots_dir)
@@ -1687,9 +1687,8 @@ fn list_screenshots(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMet
             let entry = entry.ok()?;
             let path = entry.path();
             if path.is_dir() && path.extension().and_then(|s| s.to_str()) == Some("cap") {
-                let id = path.file_stem()?.to_str()?.to_string();
                 let meta =
-                    match get_recording_meta(app.clone(), id.clone(), "screenshot".to_string()) {
+                    match get_recording_meta(app.clone(), path.clone(), "screenshot".to_string()) {
                         Ok(meta) => meta.inner,
                         Err(_) => return None, // Skip this entry if metadata can't be loaded
                     };
@@ -1701,7 +1700,7 @@ fn list_screenshots(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMet
                     .find(|e| e.path().extension().and_then(|s| s.to_str()) == Some("png"))
                     .map(|e| e.path())?;
 
-                Some((id, png_path, meta))
+                Some((png_path, meta))
             } else {
                 None
             }
@@ -1710,11 +1709,11 @@ fn list_screenshots(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMet
 
     // Sort the result by creation date of the actual file, newest first
     result.sort_by(|a, b| {
-        b.1.metadata()
+        b.0.metadata()
             .and_then(|m| m.created())
             .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
             .cmp(
-                &a.1.metadata()
+                &a.0.metadata()
                     .and_then(|m| m.created())
                     .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
             )
@@ -1870,10 +1869,11 @@ async fn seek_to(editor_instance: WindowEditorInstance, frame_number: u32) -> Re
 }
 
 // keep this async otherwise opening windows may hang on windows
-#[tauri::command(async)]
+#[tauri::command]
 #[specta::specta]
-fn show_window(app: AppHandle, window: ShowCapWindow) {
-    window.show(&app).ok();
+async fn show_window(app: AppHandle, window: ShowCapWindow) -> Result<(), String> {
+    window.show(&app).await.unwrap();
+    Ok(())
 }
 
 #[tauri::command(async)]
@@ -1886,56 +1886,6 @@ fn list_fails() -> Result<BTreeMap<String, bool>, ()> {
 #[specta::specta]
 fn set_fail(name: String, value: bool) {
     cap_fail::set_fail(&name, value)
-}
-
-#[tauri::command(async)]
-#[specta::specta]
-async fn reupload_instant_video(app: AppHandle, video_id: String) -> Result<(), String> {
-    let recording_dir = app
-        .path()
-        .app_data_dir()
-        .unwrap()
-        .join("recordings")
-        .join(format!("{video_id}.cap"));
-
-    let meta = RecordingMeta::load_for_project(&recording_dir)?;
-
-    let Some(share_id) = meta.sharing.map(|s| s.id) else {
-        return Err("Video share data not found".to_string());
-    };
-
-    let config = match AuthStore::get(&app).ok().flatten() {
-        Some(_) => match get_s3_config(&app, false, Some(share_id)).await {
-            Ok(s3_config) => {
-                let link = web_api::make_url(format!("/s/{}", s3_config.id()));
-                info!("Created shareable link: {}", link);
-
-                VideoUploadInfo {
-                    id: s3_config.id().to_string(),
-                    link: link.clone(),
-                    config: s3_config,
-                }
-            }
-            Err(e) => return Err(format!("Failed to get upload config: {e}")),
-        },
-        // Allow the recording to proceed without error for any signed-in user
-        _ => {
-            // User is not signed in
-            ShowCapWindow::SignIn.show(&app).ok();
-            return Err("Please sign in to use instant recording".to_string());
-        }
-    };
-
-    upload::InstantMultipartUpload::run(
-        app,
-        video_id,
-        recording_dir.join("content/output.mp4"),
-        config,
-        None,
-    )
-    .await?;
-
-    Ok(())
 }
 
 async fn check_notification_permissions(app: AppHandle) {
@@ -1999,28 +1949,6 @@ fn configure_logging(folder: &PathBuf) -> tracing_appender::non_blocking::Worker
 
 #[tauri::command]
 #[specta::specta]
-async fn get_wallpaper_path(app: AppHandle, filename: String) -> Result<String, String> {
-    let resource_path = app
-        .path()
-        .resource_dir()
-        .map_err(|_| "Failed to get resource dir".to_string())?
-        .join("assets")
-        .join("backgrounds")
-        .join(if filename.ends_with(".jpg") {
-            filename
-        } else {
-            format!("{}.jpg", filename)
-        });
-
-    if resource_path.exists() {
-        Ok(resource_path.to_string_lossy().to_string())
-    } else {
-        Err(format!("Resource not found: {:?}", resource_path))
-    }
-}
-
-#[tauri::command]
-#[specta::specta]
 async fn update_auth_plan(app: AppHandle) {
     AuthStore::update_auth_plan(&app).await.ok();
 }
@@ -2067,7 +1995,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             stop_playback,
             set_playhead_position,
             set_project_config,
-            open_editor,
             permissions::open_permission_settings,
             permissions::do_permissions_check,
             permissions::request_permission,
@@ -2090,12 +2017,11 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             show_window,
             write_clipboard_string,
             platform::perform_haptic_feedback,
-            get_wallpaper_path,
             list_fails,
             set_fail,
             update_auth_plan,
-            reupload_instant_video,
-            set_window_transparent
+            set_window_transparent,
+            get_editor_meta
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2104,7 +2030,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             RenderFrameEvent,
             EditorStateChanged,
             CurrentRecordingChanged,
-            RecordingMetaChanged,
             RecordingStarted,
             RecordingStopped,
             RequestStartRecording,
@@ -2141,8 +2066,17 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 
     #[allow(unused_mut)]
     let mut builder =
-        tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            let _ = ShowCapWindow::Main.show(app);
+        tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            let Some(cap_file) = args
+                .iter()
+                .find(|arg| arg.ends_with(".cap"))
+                .map(PathBuf::from)
+            else {
+                let _ = ShowCapWindow::Main.show(app);
+                return;
+            };
+
+            let _ = open_project_from_path(&cap_file, app.clone());
         }));
 
     #[cfg(target_os = "macos")]
@@ -2175,7 +2109,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 })
                 .with_denylist(&[
                     CapWindowId::Setup.label().as_str(),
-                    CapWindowId::WindowCaptureOccluder.label().as_str(),
+                    "window-capture-occluder",
+                    // CapWindowId::WindowCaptureOccluder.label().as_str(),
                     CapWindowId::CaptureArea.label().as_str(),
                     CapWindowId::Camera.label().as_str(),
                     CapWindowId::RecordingsOverlay.label().as_str(),
@@ -2184,6 +2119,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 ])
                 .map_label(|label| match label {
                     label if label.starts_with("editor-") => "editor",
+                    label if label.starts_with("window-capture-occluder-") => {
+                        "window-capture-occluder"
+                    }
                     _ => label,
                 })
                 .build(),
@@ -2195,6 +2133,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             hotkeys::init(&app);
             general_settings::init(&app);
             fake_window::init(&app);
+            app.manage(EditorWindowIds::default());
 
             if let Ok(Some(auth)) = AuthStore::load(&app) {
                 sentry::configure_scope(|scope| {
@@ -2212,12 +2151,12 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     camera_tx,
                     camera_ws_port,
                     camera_feed: None,
-                    audio_input_tx,
-                    audio_input_feed: None,
+                    mic_samples_tx: audio_input_tx,
+                    mic_feed: None,
                     recording_options: RecordingOptions {
-                        capture_target: ScreenCaptureTarget::Screen { id: 0 },
+                        capture_target: ScreenCaptureTarget::primary_display(),
                         camera_label: None,
-                        audio_input_name: None,
+                        mic_name: None,
                         mode: RecordingMode::Studio,
                         capture_system_audio: false,
                     },
@@ -2236,18 +2175,25 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             let permissions = permissions::do_permissions_check(false);
             println!("Permissions check result: {:?}", permissions);
 
-            if !permissions.screen_recording.permitted()
-                || !permissions.accessibility.permitted()
-                || dbg!(GeneralSettingsStore::get(&app).ok().flatten())
-                    .map(|s| !s.has_completed_startup)
-                    .unwrap_or(false)
-            {
-                ShowCapWindow::Setup.show(&app).ok();
-            } else {
-                println!("Permissions granted, showing main window");
+            tokio::spawn({
+                let app = app.clone();
+                async move {
+                    if !permissions.screen_recording.permitted()
+                        || !permissions.accessibility.permitted()
+                        || GeneralSettingsStore::get(&app)
+                            .ok()
+                            .flatten()
+                            .map(|s| !s.has_completed_startup)
+                            .unwrap_or(false)
+                    {
+                        let _ = ShowCapWindow::Setup.show(&app).await;
+                    } else {
+                        println!("Permissions granted, showing main window");
 
-                ShowCapWindow::Main.show(&app).ok();
-            }
+                        let _ = ShowCapWindow::Main.show(&app).await;
+                    }
+                }
+            });
 
             audio_meter::spawn_event_emitter(app.clone(), audio_input_rx);
 
@@ -2282,15 +2228,14 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 
                 // Stop and discard the current recording
                 {
-                    let mut app_state = state.write().await;
-                    if let Some(recording) = app_state.clear_current_recording() {
-                        CurrentRecordingChanged /*(JsonValue::new(&None))*/
-                            .emit(&app)
-                            .ok();
+                    if let Some(recording) = state.write().await.clear_current_recording() {
+                        CurrentRecordingChanged.emit(&app).ok();
 
-                        recording.stop().await.ok();
+                        let _ = recording.cancel().await;
                     }
                 }
+
+                tokio::time::sleep(Duration::from_millis(1000)).await;
 
                 if let Err(e) = recording::start_recording(app.clone(), state, None).await {
                     eprintln!("Failed to start new recording: {}", e);
@@ -2306,11 +2251,11 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             });
 
             RequestOpenSettings::listen_any_spawn(&app, |payload, app| async move {
-                ShowCapWindow::Settings {
+                let _ = ShowCapWindow::Settings {
                     page: Some(payload.page),
                 }
                 .show(&app)
-                .ok();
+                .await;
             });
 
             Ok(())
@@ -2323,10 +2268,32 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 WindowEvent::Destroyed => {
                     if let Ok(window_id) = CapWindowId::from_str(label) {
                         match window_id {
-                            CapWindowId::Editor { .. } => {
+                            CapWindowId::Main => {
+                                let app = app.clone();
+                                tokio::spawn(async move {
+                                    let state = app.state::<Arc<RwLock<App>>>();
+                                    let app_state = &mut *state.write().await;
+
+                                    if app_state.current_recording.is_none() {
+                                        app_state.remove_mic_feed();
+
+                                        if let Some(camera) = CapWindowId::Camera.get(&app) {
+                                            let _ = camera.close();
+                                            app_state.remove_camera_feed();
+                                        }
+                                    }
+                                });
+                            }
+                            CapWindowId::Editor { id } => {
+                                let window_ids = EditorWindowIds::get(window.app_handle());
+                                window_ids.ids.lock().unwrap().retain(|(_, _id)| *_id != id);
+
                                 tokio::spawn(EditorInstances::remove(window.clone()));
                             }
                             CapWindowId::Settings | CapWindowId::Upgrade => {
+                                if let Some(window) = CapWindowId::Main.get(&app) {
+                                    let _ = window.show();
+                                }
                                 // Don't quit the app when settings or upgrade window is closed
                                 return;
                             }
@@ -2352,6 +2319,13 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         if window_id.activates_dock() {
                             app.set_activation_policy(tauri::ActivationPolicy::Regular)
                                 .ok();
+                        }
+                    }
+                }
+                WindowEvent::DragDrop(event) => {
+                    if let tauri::DragDropEvent::Drop { paths, .. } = event {
+                        for path in paths {
+                            let _ = open_project_from_path(path, app.clone());
                         }
                     }
                 }
@@ -2385,7 +2359,13 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         window.set_focus().ok();
                     }
                 } else {
-                    ShowCapWindow::Main.show(handle).ok();
+                    let handle = handle.clone();
+                    let _ = tokio::spawn(async move { ShowCapWindow::Main.show(&handle).await });
+                }
+            }
+            tauri::RunEvent::ExitRequested { code, api, .. } => {
+                if code.is_none() {
+                    api.prevent_exit();
                 }
             }
             _ => {}
@@ -2394,30 +2374,16 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 
 async fn create_editor_instance_impl(
     app: &AppHandle,
-    video_id: &str,
+    path: PathBuf,
 ) -> Result<Arc<EditorInstance>, String> {
     let app = app.clone();
 
-    let instance = EditorInstance::new(
-        recordings_path(&app),
-        video_id,
-        {
-            let app = app.clone();
-            move |state| {
-                EditorStateChanged::new(state).emit(&app).ok();
-            }
-        },
-        {
-            let app = app.clone();
-            move || {
-                AuthStore::get(&app)
-                    .ok()
-                    .flatten()
-                    .map(|s| s.is_upgraded())
-                    .unwrap_or(false)
-            }
-        },
-    )
+    let instance = EditorInstance::new(path, {
+        let app = app.clone();
+        move |state| {
+            EditorStateChanged::new(state).emit(&app).ok();
+        }
+    })
     .await?;
 
     RenderFrameEvent::listen_any(&app, {
@@ -2521,4 +2487,30 @@ impl<F: Future<Output = T>, T, E> TransposeAsync for Result<F, E> {
             }
         }
     }
+}
+
+fn open_project_from_path(path: &PathBuf, app: AppHandle) -> Result<(), String> {
+    let meta = RecordingMeta::load_for_project(path)?;
+
+    match &meta.inner {
+        RecordingMetaInner::Studio(_) => {
+            let project_path = path.clone();
+
+            tokio::spawn(async move { ShowCapWindow::Editor { project_path }.show(&app).await });
+        }
+        RecordingMetaInner::Instant(_) => {
+            let mp4_path = path.join("content/output.mp4");
+
+            if mp4_path.exists() && mp4_path.is_file() {
+                let _ = app
+                    .opener()
+                    .open_path(mp4_path.to_str().unwrap_or_default(), None::<String>);
+                if let Some(main_window) = CapWindowId::Main.get(&app) {
+                    main_window.close().ok();
+                }
+            }
+        }
+    }
+
+    Ok(())
 }

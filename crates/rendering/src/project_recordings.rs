@@ -1,7 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::{
+    cell::RefCell,
+    path::{Path, PathBuf},
+};
 
-use crate::RecordingMeta;
-use cap_project::StudioRecordingMeta;
+use cap_project::{AudioMeta, StudioRecordingMeta, VideoMeta};
 use serde::Serialize;
 use specta::Type;
 
@@ -11,11 +13,12 @@ pub struct Video {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
+    pub start_time: f64,
 }
 
 impl Video {
-    pub fn new(path: impl AsRef<Path>) -> Result<Self, String> {
-        fn inner(path: &Path) -> Result<Video, String> {
+    pub fn new(path: impl AsRef<Path>, start_time: f64) -> Result<Self, String> {
+        fn inner(path: &Path, start_time: f64) -> Result<Video, String> {
             let input =
                 ffmpeg::format::input(path).map_err(|e| format!("Failed to open video: {}", e))?;
             let stream = input
@@ -37,10 +40,11 @@ impl Video {
                 height: video_decoder.height(),
                 duration: input.duration() as f64 / 1_000_000.0,
                 fps: fps.round() as u32,
+                start_time,
             })
         }
 
-        inner(path.as_ref())
+        inner(path.as_ref(), start_time)
     }
 
     pub fn fps(&self) -> u32 {
@@ -53,11 +57,12 @@ pub struct Audio {
     pub duration: f64,
     pub sample_rate: u32,
     pub channels: u16,
+    pub start_time: f64,
 }
 
 impl Audio {
-    pub fn new(path: impl AsRef<Path>) -> Result<Self, String> {
-        fn inner(path: &Path) -> Result<Audio, String> {
+    pub fn new(path: impl AsRef<Path>, start_time: f64) -> Result<Self, String> {
+        fn inner(path: &Path, start_time: f64) -> Result<Audio, String> {
             let input =
                 ffmpeg::format::input(path).map_err(|e| format!("Failed to open audio: {}", e))?;
             let stream = input
@@ -75,10 +80,11 @@ impl Audio {
                 duration: input.duration() as f64 / 1_000_000.0,
                 sample_rate: audio_decoder.rate(),
                 channels: audio_decoder.channels(),
+                start_time,
             })
         }
 
-        inner(path.as_ref())
+        inner(path.as_ref(), start_time)
     }
 }
 
@@ -88,64 +94,87 @@ pub struct ProjectRecordings {
 }
 
 impl ProjectRecordings {
-    pub fn new(recording_path: &PathBuf, meta: &StudioRecordingMeta) -> Self {
+    pub fn new(recording_path: &PathBuf, meta: &StudioRecordingMeta) -> Result<Self, String> {
         let segments = match &meta {
-            StudioRecordingMeta::SingleSegment { segment } => {
-                let display = Video::new(segment.display.path.to_path(recording_path))
+            StudioRecordingMeta::SingleSegment { segment: s } => {
+                let display = Video::new(s.display.path.to_path(recording_path), 0.0)
                     .expect("Failed to read display video");
-                let camera = segment.camera.as_ref().map(|camera| {
-                    Video::new(&camera.path.to_path(recording_path))
+                let camera = s.camera.as_ref().map(|camera| {
+                    Video::new(camera.path.to_path(recording_path), 0.0)
                         .expect("Failed to read camera video")
                 });
-                let audio = segment
+                let mic = s
                     .audio
                     .as_ref()
-                    .map(|audio| Audio::new(audio.path.to_path(recording_path)))
+                    .map(|audio| Audio::new(audio.path.to_path(recording_path), 0.0))
                     .transpose()
                     .expect("Failed to read audio");
 
                 vec![SegmentRecordings {
                     display,
                     camera,
-                    audio,
+                    mic,
                     system_audio: None,
                 }]
             }
-            StudioRecordingMeta::MultipleSegments { inner } => inner
+            StudioRecordingMeta::MultipleSegments { inner, .. } => inner
                 .segments
                 .iter()
                 .map(|s| {
-                    let display = Video::new(s.display.path.to_path(recording_path))
-                        .expect("Failed to read display video");
-                    let camera = s.camera.as_ref().map(|camera| {
-                        Video::new(&camera.path.to_path(recording_path))
-                            .expect("Failed to read camera video")
-                    });
-                    let audio = s
-                        .audio
-                        .as_ref()
-                        .map(|audio| Audio::new(audio.path.to_path(recording_path)))
-                        .transpose()
-                        .expect("Failed to read audio");
+                    let has_start_times = RefCell::new(None);
 
-                    let system_audio = s
-                        .system_audio
-                        .as_ref()
-                        .map(|audio| Audio::new(audio.path.to_path(recording_path)))
-                        .transpose()
-                        .expect("Failed to read audio");
+                    let ensure_start_time = |time: Option<f64>| {
+                        let Some(has_start_times) = has_start_times.borrow_mut().clone() else {
+                            *has_start_times.borrow_mut() = Some(time.is_some());
+                            return Ok(time.unwrap_or_default());
+                        };
 
-                    SegmentRecordings {
-                        display,
-                        camera,
-                        audio,
-                        system_audio,
-                    }
+                        Ok(if has_start_times {
+                            if let Some(time) = time {
+                                time
+                            } else {
+                                return Err("Missing start time".to_string());
+                            }
+                        } else {
+                            if time.is_some() {
+                                return Err("Start time mismatch".to_string());
+                            } else {
+                                0.0
+                            }
+                        })
+                    };
+
+                    let load_video = |meta: &VideoMeta| {
+                        ensure_start_time(meta.start_time).and_then(|start_time| {
+                            Video::new(meta.path.to_path(recording_path), start_time)
+                        })
+                    };
+
+                    let load_audio = |meta: &AudioMeta| {
+                        ensure_start_time(meta.start_time).and_then(|start_time| {
+                            Audio::new(meta.path.to_path(recording_path), start_time)
+                        })
+                    };
+
+                    Ok::<_, String>(SegmentRecordings {
+                        display: load_video(&s.display).map_err(|e| format!("video / {e}"))?,
+                        camera: Option::map(s.camera.as_ref(), load_video)
+                            .transpose()
+                            .map_err(|e| format!("camera / {e}"))?,
+                        mic: Option::map(s.mic.as_ref(), load_audio)
+                            .transpose()
+                            .map_err(|e| format!("mic / {e}"))?,
+                        system_audio: Option::map(s.system_audio.as_ref(), load_audio)
+                            .transpose()
+                            .map_err(|e| format!("system audio / {e}"))?,
+                    })
                 })
-                .collect(),
+                .enumerate()
+                .map(|(i, v)| v.map_err(|e| format!("segment {i} / {e}")))
+                .collect::<Result<_, String>>()?,
         };
 
-        Self { segments }
+        Ok(Self { segments })
     }
 
     pub fn duration(&self) -> f64 {
@@ -153,7 +182,7 @@ impl ProjectRecordings {
     }
 
     pub fn get_source_duration(&self, path: &PathBuf) -> Result<f64, String> {
-        Video::new(path).map(|v| v.duration)
+        Video::new(path, 0.0).map(|v| v.duration)
     }
 }
 
@@ -161,7 +190,7 @@ impl ProjectRecordings {
 pub struct SegmentRecordings {
     pub display: Video,
     pub camera: Option<Video>,
-    pub audio: Option<Audio>,
+    pub mic: Option<Audio>,
     pub system_audio: Option<Audio>,
 }
 
@@ -170,7 +199,7 @@ impl SegmentRecordings {
         let mut duration_ns = [
             Some(self.display.duration),
             self.camera.as_ref().map(|s| s.duration),
-            self.audio.as_ref().map(|s| s.duration),
+            self.mic.as_ref().map(|s| s.duration),
         ]
         .into_iter()
         .flatten()

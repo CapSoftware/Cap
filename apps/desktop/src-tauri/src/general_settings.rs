@@ -53,6 +53,10 @@ pub struct GeneralSettingsStore {
     pub post_studio_recording_behaviour: PostStudioRecordingBehaviour,
     #[serde(default)]
     pub main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour,
+    #[serde(default)]
+    pub custom_cursor_capture: bool,
+    #[serde(default)]
+    pub system_audio_capture: bool,
     #[serde(default, alias = "open_editor_after_recording")]
     #[deprecated]
     _open_editor_after_recording: bool,
@@ -84,6 +88,8 @@ impl Default for GeneralSettingsStore {
             window_transparency: false,
             post_studio_recording_behaviour: PostStudioRecordingBehaviour::OpenEditor,
             main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour::Close,
+            custom_cursor_capture: false,
+            system_audio_capture: false,
             _open_editor_after_recording: false,
         }
     }

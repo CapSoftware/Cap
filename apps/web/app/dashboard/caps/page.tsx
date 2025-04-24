@@ -1,18 +1,17 @@
-import { Caps } from "./Caps";
 import { db } from "@cap/database";
+import { getCurrentUser } from "@cap/database/auth/session";
 import {
   comments,
-  videos,
   sharedVideos,
+  spaceMembers,
   spaces,
   users,
-  spaceMembers,
+  videos,
 } from "@cap/database/schema";
-import { desc, eq, sql, count, or } from "drizzle-orm";
-import { getCurrentUser } from "@cap/database/auth/session";
+import { count, desc, eq, sql } from "drizzle-orm";
 import { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { clientEnv, serverEnv } from "@cap/env";
+import { Caps } from "./Caps";
 
 export const metadata: Metadata = {
   title: "My Caps — Cap",
@@ -53,6 +52,7 @@ export default async function CapsPage({
       ownerId: videos.ownerId,
       name: videos.name,
       createdAt: videos.createdAt,
+      metadata: videos.metadata,
       totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
       totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
       sharedSpaces: sql<{ id: string; name: string }[]>`
@@ -67,6 +67,12 @@ export default async function CapsPage({
         )
       `,
       ownerName: users.name,
+      effectiveDate: sql<string>`
+        COALESCE(
+          JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')), 
+          ${videos.createdAt}
+        )
+      `,
     })
     .from(videos)
     .leftJoin(comments, eq(videos.id, comments.videoId))
@@ -79,9 +85,15 @@ export default async function CapsPage({
       videos.ownerId,
       videos.name,
       videos.createdAt,
+      videos.metadata,
       users.name
     )
-    .orderBy(desc(videos.createdAt))
+    .orderBy(
+      desc(sql`COALESCE(
+      JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')), 
+      ${videos.createdAt}
+    )`)
+    )
     .limit(limit)
     .offset(offset);
 
@@ -94,11 +106,21 @@ export default async function CapsPage({
     .leftJoin(spaceMembers, eq(spaces.id, spaceMembers.spaceId))
     .where(eq(spaceMembers.userId, userId));
 
-  const processedVideoData = videoData.map((video) => ({
-    ...video,
-    sharedSpaces: video.sharedSpaces.filter((space) => space.id !== null),
-    ownerName: video.ownerName ?? "",
-  }));
+  const processedVideoData = videoData.map((video) => {
+    const { effectiveDate, ...videoWithoutEffectiveDate } = video;
+
+    return {
+      ...videoWithoutEffectiveDate,
+      sharedSpaces: video.sharedSpaces.filter((space) => space.id !== null),
+      ownerName: video.ownerName ?? "",
+      metadata: video.metadata as
+        | {
+            customCreatedAt?: string;
+            [key: string]: any;
+          }
+        | undefined,
+    };
+  });
 
   return (
     <Caps

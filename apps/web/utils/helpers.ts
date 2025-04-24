@@ -8,6 +8,7 @@ export function classNames(...inputs: ClassValue[]) {
 	return twMerge(clsx(inputs));
 }
 
+// Base allowed origins
 export const allowedOrigins = [
 	serverEnv.WEB_URL,
 	"https://cap.link",
@@ -15,13 +16,13 @@ export const allowedOrigins = [
 ];
 
 export function getHeaders(origin: string) {
-	return {
-		"Access-Control-Allow-Origin": allowedOrigins.includes(origin)
-			? origin
-			: "null",
-		"Access-Control-Allow-Credentials": "true",
-		"Access-Control-Allow-Methods": "GET, OPTIONS",
-	};
+  // Allow "*" for custom domains or allowedOrigins for main domains
+  return {
+    "Access-Control-Allow-Origin": origin || "*",
+    "Access-Control-Allow-Credentials": "true",
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  };
 }
 
 const rateLimitMap = new Map();

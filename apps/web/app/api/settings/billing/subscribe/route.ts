@@ -4,7 +4,8 @@ import { NextRequest } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@cap/database";
 import { users } from "@cap/database/schema";
-import { clientEnv, serverEnv } from "@cap/env";
+import { clientEnv } from "@cap/env";
+import posthog from "posthog-js";
 
 export async function POST(request: NextRequest) {
 	console.log("Starting subscription process");
@@ -34,15 +35,24 @@ export async function POST(request: NextRequest) {
 		return Response.json({ error: true, subscription: true }, { status: 400 });
 	}
 
-	try {
-		if (!user.stripeCustomerId) {
-			console.log("Creating new Stripe customer for user:", user.id);
-			const customer = await stripe.customers.create({
-				email: user.email,
-				metadata: {
-					userId: user.id,
-				},
-			});
+  try {
+    // Track subscription initiated event
+    if (typeof window !== "undefined") {
+      posthog.capture("subscription_initiated", {
+        price_id: priceId,
+        quantity: quantity,
+        platform: "web",
+      });
+    }
+
+    if (!user.stripeCustomerId) {
+      console.log("Creating new Stripe customer for user:", user.id);
+      const customer = await stripe.customers.create({
+        email: user.email,
+        metadata: {
+          userId: user.id,
+        },
+      });
 
 			console.log("Created Stripe customer:", customer.id);
 

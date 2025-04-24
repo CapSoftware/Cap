@@ -1,6 +1,5 @@
-import { Workspace } from "./Workspace";
 import { Metadata } from "next";
-import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
+import { Workspace } from "./Workspace";
 
 export const metadata: Metadata = {
   title: "Workspace Settings — Cap",
@@ -8,6 +7,6 @@ export const metadata: Metadata = {
 
 export const revalidate = 0;
 
-export default async function BillingPage() {
+export default function BillingPage() {
   return <Workspace />;
 }

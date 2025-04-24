@@ -25,10 +25,10 @@ import { makePersisted } from "@solid-primitives/storage";
 import { createStore, produce, SetStoreFunction } from "solid-js/store";
 import IconLucideClock from "~icons/lucide/clock";
 
-import { commands, events, RenderProgress, UploadResult } from "~/utils/tauri";
-import { createPresets } from "~/utils/createPresets";
+import { commands, events, FramesRendered, UploadResult } from "~/utils/tauri";
 import { FPS, OUTPUT_SIZE } from "./editor/context";
 import { authStore } from "~/store";
+import { exportVideo } from "~/utils/export";
 
 type MediaEntry = {
   path: string;
@@ -107,8 +107,6 @@ export default function () {
             <For each={allMedia()}>
               {(media) => {
                 const [ref, setRef] = createSignal<HTMLElement | null>(null);
-                const normalizedPath = media.path.replace(/\\/g, "/");
-                const mediaId = normalizedPath.split("/").pop()?.split(".")[0]!;
 
                 const type = media.type ?? "recording";
                 const isRecording = type !== "screenshot";
@@ -122,7 +120,7 @@ export default function () {
                   if (!isRecording) return null;
 
                   const result = await commands
-                    .getVideoMetadata(media.path, null)
+                    .getVideoMetadata(media.path)
                     .catch((e) => {
                       console.error(`Failed to get metadata: ${e}`);
                     });
@@ -147,17 +145,9 @@ export default function () {
 
                 createFakeWindowBounds(ref, () => media.path);
 
-                const fileId =
-                  type === "recording"
-                    ? mediaId
-                    : normalizedPath
-                        .split("screenshots/")[1]
-                        .split("/")[0]
-                        .replace(".cap", "");
-
                 const recordingMeta = createQuery(() => ({
-                  queryKey: ["recordingMeta", fileId],
-                  queryFn: () => commands.getRecordingMeta(fileId, type),
+                  queryKey: ["recordingMeta", media.path],
+                  queryFn: () => commands.getRecordingMeta(media.path, type),
                 }));
 
                 return (
@@ -332,7 +322,9 @@ export default function () {
                                     }
                                   })
                                 );
-                                commands.openEditor(mediaId);
+                                commands.showWindow({
+                                  Editor: { project_path: media.path },
+                                });
                               }}
                             >
                               <IconCapEditor class="size-[1rem]" />
@@ -552,25 +544,23 @@ function createRecordingMutations(
   media: MediaEntry,
   onEvent: (e: "upgradeRequired") => void
 ) {
-  const presets = createPresets();
-
-  const normalizedPath = media.path.replace(/\\/g, "/");
-  const mediaId = normalizedPath.split("/").pop()?.split(".")[0]!;
   const type = media.type ?? "recording";
   const isRecording = type !== "screenshot";
 
-  const fileId =
-    type === "recording"
-      ? mediaId
-      : normalizedPath
-          .split("screenshots/")[1]
-          .split("/")[0]
-          .replace(".cap", "");
-
   const recordingMeta = createQuery(() => ({
-    queryKey: ["recordingMeta", fileId],
-    queryFn: () => commands.getRecordingMeta(fileId, type),
+    queryKey: ["recordingMeta", media.path],
+    queryFn: () => commands.getRecordingMeta(media.path, type),
   }));
+
+  // just a wrapper of exportVideo to provide base settings
+  const exportWithDefaultSettings = (
+    onProgress: (progress: FramesRendered) => void
+  ) =>
+    exportVideo(
+      media.path,
+      { fps: FPS, resolution_base: OUTPUT_SIZE, compression: "Web" },
+      onProgress
+    );
 
   const copy = createMutation(() => ({
     mutationFn: async () => {
@@ -581,15 +571,9 @@ function createRecordingMutations(
 
       try {
         if (isRecording) {
-          const progress = createRenderProgressChannel("copy", setActionState);
-
           // First try to get existing rendered video
-          const outputPath = await commands.exportVideo(
-            mediaId,
-            progress,
-            false,
-            FPS,
-            OUTPUT_SIZE
+          const outputPath = await exportWithDefaultSettings(
+            createRenderProgressCallback("copy", setActionState)
           );
 
           // Show quick progress animation for existing video
@@ -673,15 +657,8 @@ function createRecordingMutations(
       });
 
       if (isRecording) {
-        const progress = createRenderProgressChannel("save", setActionState);
-
-        // Always force re-render when saving
-        const outputPath = await commands.exportVideo(
-          mediaId,
-          progress,
-          true, // Force re-render
-          FPS,
-          OUTPUT_SIZE
+        const outputPath = await exportWithDefaultSettings(
+          createRenderProgressCallback("save", setActionState)
         );
 
         await commands.copyFileToPath(outputPath, savePath);
@@ -716,11 +693,10 @@ function createRecordingMutations(
       // Check authentication first
       const existingAuth = await authStore.get();
       if (!existingAuth) {
-        await commands.showWindow("SignIn");
         throw new Error("You need to sign in to share recordings");
       }
 
-      const metadata = await commands.getVideoMetadata(media.path, null);
+      const metadata = await commands.getVideoMetadata(media.path);
       const plan = await commands.checkUpgradedAndUpdate();
       const canShare = {
         allowed: plan || metadata.duration < 300,
@@ -761,20 +737,12 @@ function createRecordingMutations(
             state: { type: "rendering", state: { type: "starting" } },
           });
 
-          const progress = createRenderProgressChannel(
+          const progress = createRenderProgressCallback(
             "upload",
             setActionState
           );
 
-          // First try to get existing rendered video
-          await commands.exportVideo(
-            mediaId,
-            progress,
-            false,
-            FPS,
-            OUTPUT_SIZE
-          );
-          console.log("Using existing rendered video");
+          await exportWithDefaultSettings(progress);
 
           // Show quick progress animation for existing video
           setActionState(
@@ -793,7 +761,7 @@ function createRecordingMutations(
             state: { type: "uploading", progress: 0 },
           });
 
-          res = await commands.uploadExportedVideo(mediaId, {
+          res = await commands.uploadExportedVideo(media.path, {
             Initial: { pre_created_video: null },
           });
         } else {
@@ -866,13 +834,11 @@ type ActionState =
         | { type: "link-copied" };
     };
 
-function createRenderProgressChannel(
+function createRenderProgressCallback(
   actionType: Exclude<ActionState["type"], "idle">,
   setActionState: SetStoreFunction<ActionState>
 ) {
-  const progress = new Channel<RenderProgress>();
-
-  progress.onmessage = (msg) => {
+  return (msg: FramesRendered) => {
     setActionState(
       produce((progressState) => {
         if (
@@ -881,27 +847,15 @@ function createRenderProgressChannel(
         )
           return;
 
-        const renderState = progressState.state.state;
-
-        if (
-          msg.type === "EstimatedTotalFrames" &&
-          renderState.type === "starting"
-        )
+        if (progressState.state.state.type === "rendering")
           progressState.state.state = {
             type: "rendering",
-            renderedFrames: 0,
-            totalFrames: msg.total_frames,
+            renderedFrames: msg.renderedCount,
+            totalFrames: msg.totalFrames,
           };
-        else if (
-          msg.type === "FrameRendered" &&
-          renderState.type === "rendering"
-        )
-          renderState.renderedFrames = msg.current_frame;
       })
     );
   };
-
-  return progress;
 }
 
 function actionProgressPercentage(state: ActionState): number {

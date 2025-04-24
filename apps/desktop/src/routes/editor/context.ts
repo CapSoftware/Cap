@@ -4,6 +4,7 @@ import { trackStore } from "@solid-primitives/deep";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { createUndoHistory } from "@solid-primitives/history";
 import { debounce } from "@solid-primitives/scheduled";
+import { createQuery, skipToken } from "@tanstack/solid-query";
 import {
   Accessor,
   batch,
@@ -19,10 +20,15 @@ import { createImageDataWS, createLazySignal } from "~/utils/socket";
 import {
   commands,
   events,
+  FramesRendered,
+  MultipleSegments,
+  RecordingMeta,
+  SingleSegment,
   type ProjectConfiguration,
   type SerializedEditorInstance,
   type XY,
 } from "~/utils/tauri";
+import { createProgressBar } from "./utils";
 
 export type CurrentDialog =
   | { type: "createPreset" }
@@ -40,18 +46,18 @@ export const OUTPUT_SIZE = {
   y: 1080,
 };
 
-export const BACKGROUND_THEMES = {
-  macOS: "macOS",
-  dark: "Dark",
-  blue: "Blue",
-  purple: "Purple",
-  orange: "Orange",
-};
-
 export const MAX_ZOOM_IN = 3;
 
+export type RenderState =
+  | { type: "starting" }
+  | { type: "rendering"; progress: FramesRendered };
+
 export const [EditorContextProvider, useEditorContext] = createContextProvider(
-  (props: { editorInstance: SerializedEditorInstance }) => {
+  (props: {
+    meta: TransformedMeta;
+    editorInstance: SerializedEditorInstance;
+    refetchMeta(): Promise<void>;
+  }) => {
     const editorInstanceContext = useEditorInstanceContext();
     const [project, setProject] = createStore<ProjectConfiguration>(
       props.editorInstance.savedProjectConfig
@@ -69,81 +75,65 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       )
     );
 
-    const [selectedTab, setSelectedTab] = createSignal<
-      "background" | "camera" | "transcript" | "audio" | "cursor" | "hotkeys"
-    >("background");
-
-    //Background tabs
-    const [backgroundTab, setBackgroundTab] =
-      createSignal<keyof typeof BACKGROUND_THEMES>("macOS");
-
     const [dialog, setDialog] = createSignal<DialogState>({
       open: false,
     });
 
-    const [previewTime, setPreviewTime] = createSignal<number>();
-    const [playbackTime, setPlaybackTime] = createSignal<number>(0);
-    const [playing, setPlaying] = createSignal(false);
+    const [exportState, setExportState] = createStore<
+      | { type: "idle" }
+      | (
+          | ({ action: "copy" } & (
+              | RenderState
+              | { type: "copying" }
+              | { type: "done" }
+            ))
+          | ({ action: "save" } & (
+              | RenderState
+              | { type: "copying" }
+              | { type: "done" }
+            ))
+          | ({ action: "upload" } & (
+              | RenderState
+              | { type: "uploading"; progress: number }
+              | { type: "done" }
+            ))
+        )
+    >({ type: "idle" });
 
-
-    //Export states
-
-    const [exportProgress, setExportProgress] = createSignal<{
-      totalFrames: number;
-      renderedFrames: number;
-    } | null>(null);
-
-      type ExportState =
-  | { type: "idle" }
-  | { type: "starting" }
-  | { type: "rendering"}
-  | { type: "saving"; done: boolean };
-
-type CopyState =
-  | { type: "idle" }
-  | { type: "starting" }
-  | { type: "rendering"}
-  | { type: "copying" }
-  | { type: "copied" };
-
-  const [exportState, setExportState] = createStore<ExportState>({
-    type: "idle",
-  });
-
-  const [copyState, setCopyState] = createStore<CopyState>({
-    type: "idle",
-  });
-
-  const [uploadState, setUploadState] = createStore<
-    | { type: "idle" }
-    | { type: "starting" }
-    | { type: "rendering" }
-    | { type: "uploading"; progress: number }
-    | { type: "link-copied" }
-  >({ type: "idle" });
-
-
-//This is used in ShareButton.tsx to notify the component that the metadata has changed, from ExportDialog.tsx
-//When a video is uploaded, the metadata is updated
-
-
-  const [lastMetaUpdate, setLastMetaUpdate] = createSignal<{ videoId: string; timestamp: number } | null>(null);
-
-  const metaUpdateStore = {
-    notifyUpdate: (videoId: string) => {
-      setLastMetaUpdate({ videoId, timestamp: Date.now() });
-    },
-    getLastUpdate: lastMetaUpdate
-  };
-
-    createEffect(
-      on(playing, () => {
-        if (!playing())
-          commands.setPlayheadPosition(Math.floor(playbackTime() * FPS));
-      })
+    createProgressBar(() =>
+      exportState?.type === "rendering"
+        ? (exportState.progress.renderedCount /
+            exportState.progress.totalFrames) *
+          100
+        : undefined
     );
 
-    const [split, setSplit] = createSignal(false);
+    // This is used in ShareButton.tsx to notify the component that the metadata has changed, from ExportDialog.tsx
+    // When a video is uploaded, the metadata is updated
+
+    const [lastMetaUpdate, setLastMetaUpdate] = createSignal<{
+      videoId: string;
+      timestamp: number;
+    } | null>(null);
+
+    const metaUpdateStore = {
+      notifyUpdate: (videoId: string) => {
+        setLastMetaUpdate({ videoId, timestamp: Date.now() });
+      },
+      getLastUpdate: lastMetaUpdate,
+    };
+
+    createEffect(
+      on(
+        () => editorState.playing,
+        (active) => {
+          if (!active)
+            commands.setPlayheadPosition(
+              Math.floor(editorState.playbackTime * FPS)
+            );
+        }
+      )
+    );
 
     const totalDuration = () =>
       project.timeline?.segments.reduce(
@@ -174,78 +164,73 @@ type CopyState =
       };
     }
 
-    const [state, setState] = createStore({
-      timelineSelection: null as null | { type: "zoom"; index: number },
-      timelineTransform: {
-        // visible seconds
-        zoom: zoomOutLimit(),
-        updateZoom(z: number, origin: number) {
-          const { zoom, position } = updateZoom(
-            {
-              zoom: state.timelineTransform.zoom,
-              position: state.timelineTransform.position,
-            },
-            z,
-            origin
-          );
+    const [editorState, setEditorState] = createStore({
+      previewTime: null as number | null,
+      playbackTime: 0,
+      playing: false,
+      timeline: {
+        interactMode: "seek" as "seek" | "split",
+        selection: null as null | { type: "zoom"; index: number },
+        transform: {
+          // visible seconds
+          zoom: zoomOutLimit(),
+          updateZoom(z: number, origin: number) {
+            const { zoom, position } = updateZoom(
+              {
+                zoom: editorState.timeline.transform.zoom,
+                position: editorState.timeline.transform.position,
+              },
+              z,
+              origin
+            );
 
-          const transform = state.timelineTransform;
-          batch(() => {
-            setState("timelineTransform", "zoom", zoom);
-            if (transform.zoom !== zoom) return;
-            transform.setPosition(position);
-          });
-        },
-        // number of seconds of leftmost point
-        position: 0,
-        setPosition(p: number) {
-          setState(
-            "timelineTransform",
-            "position",
-            Math.min(
-              Math.max(p, 0),
-              zoomOutLimit() + 4 - state.timelineTransform.zoom
-            )
-          );
+            const transform = editorState.timeline.transform;
+            batch(() => {
+              setEditorState("timeline", "transform", "zoom", zoom);
+              if (transform.zoom !== zoom) return;
+              transform.setPosition(position);
+            });
+          },
+          // number of seconds of leftmost point
+          position: 0,
+          setPosition(p: number) {
+            setEditorState(
+              "timeline",
+              "transform",
+              "position",
+              Math.min(
+                Math.max(p, 0),
+                Math.max(zoomOutLimit(), totalDuration()) +
+                  4 -
+                  editorState.timeline.transform.zoom
+              )
+            );
+          },
         },
       },
     });
 
     return {
       ...editorInstanceContext,
+      get meta() {
+        return props.meta;
+      },
+      refetchMeta: () => props.refetchMeta(),
       editorInstance: props.editorInstance,
       dialog,
       setDialog,
       project,
       setProject,
-      selectedTab,
-      backgroundTab,
-      exportProgress,
-      setExportProgress,
-      copyState,
-      setCopyState,
-      uploadState,
-      setUploadState,
-      exportState,
-      setExportState,
-      setBackgroundTab,
-      setSelectedTab,
       metaUpdateStore,
       lastMetaUpdate,
       setLastMetaUpdate,
-      history: createStoreHistory(project, setProject),
-      playbackTime,
-      setPlaybackTime,
-      playing,
-      setPlaying,
-      previewTime,
-      setPreviewTime,
-      split,
-      setSplit,
-      state,
-      setState,
+      projectHistory: createStoreHistory(project, setProject),
+      editorState,
+      setEditorState,
       totalDuration,
       zoomOutLimit,
+      exportState,
+      setExportState,
     };
   },
   // biome-ignore lint/style/noNonNullAssertion: it's ok
@@ -254,17 +239,57 @@ type CopyState =
 
 export type FrameData = { width: number; height: number; data: ImageData };
 
+function transformMeta({ pretty_name, ...rawMeta }: RecordingMeta) {
+  if ("fps" in rawMeta) {
+    throw new Error("Instant mode recordings cannot be edited");
+  }
+
+  let meta;
+
+  if ("segments" in rawMeta) {
+    meta = {
+      ...rawMeta,
+      type: "multiple",
+    } as unknown as MultipleSegments & { type: "multiple" };
+  } else {
+    meta = {
+      ...rawMeta,
+      type: "single",
+    } as unknown as SingleSegment & { type: "single" };
+  }
+
+  return {
+    ...rawMeta,
+    ...meta,
+    prettyName: pretty_name,
+    hasCamera: (() => {
+      if (meta.type === "single") return !!meta.camera;
+      return !!meta.segments[0].camera;
+    })(),
+    hasSystemAudio: (() => {
+      if (meta.type === "single") return false;
+      return !!meta.segments[0].system_audio;
+    })(),
+    hasMicrophone: (() => {
+      if (meta.type === "single") return !!meta.audio;
+      return !!meta.segments[0].mic;
+    })(),
+  };
+}
+
+export type TransformedMeta = ReturnType<typeof transformMeta>;
+
 export const [EditorInstanceContextProvider, useEditorInstanceContext] =
-  createContextProvider((props: { videoId: string }) => {
+  createContextProvider(() => {
     const [latestFrame, setLatestFrame] = createLazySignal<{
       width: number;
       data: ImageData;
     }>();
 
     const [editorInstance] = createResource(async () => {
-      const instance = await commands.createEditorInstance(props.videoId);
+      const instance = await commands.createEditorInstance();
 
-      const [ws, isConnected] = createImageDataWS(
+      const [_ws, isConnected] = createImageDataWS(
         instance.framesSocketUrl,
         setLatestFrame
       );
@@ -282,12 +307,18 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
       return instance;
     });
 
+    const metaQuery = createQuery(() => ({
+      queryKey: ["editor", "meta"],
+      queryFn: editorInstance()
+        ? () => commands.getEditorMeta().then(transformMeta)
+        : skipToken,
+    }));
+
     return {
       editorInstance,
-      videoId: props.videoId,
       latestFrame,
       presets: createPresets(),
-      prettyName: () => editorInstance()?.prettyName ?? "Cap Recording",
+      metaQuery,
     };
   }, null!);
 
@@ -367,7 +398,7 @@ export const [TimelineContextProvider, useTimelineContext] =
 
 export const [TrackContextProvider, useTrackContext] = createContextProvider(
   (props: { ref: Accessor<Element | undefined> }) => {
-    const { state } = useEditorContext();
+    const { editorState } = useEditorContext();
 
     const [trackState, setTrackState] = createStore({
       draggingSegment: false,
@@ -375,7 +406,7 @@ export const [TrackContextProvider, useTrackContext] = createContextProvider(
     const bounds = createElementBounds(() => props.ref());
 
     const secsPerPixel = () =>
-      state.timelineTransform.zoom / (bounds.width ?? 1);
+      editorState.timeline.transform.zoom / (bounds.width ?? 1);
 
     return {
       secsPerPixel,
@@ -391,4 +422,3 @@ export const [SegmentContextProvider, useSegmentContext] =
   createContextProvider((props: { width: Accessor<number> }) => {
     return props;
   }, null!);
-

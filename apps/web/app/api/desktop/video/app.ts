@@ -47,11 +47,10 @@ app.get(
 		const s3Config = await getS3Config(bucket);
 		const bucketName = await getS3Bucket(bucket);
 
-		const id = nanoId();
-		const date = new Date();
-		const formattedDate = `${date.getDate()} ${date.toLocaleString("default", {
-			month: "long",
-		})} ${date.getFullYear()}`;
+    const date = new Date();
+    const formattedDate = `${date.getDate()} ${date.toLocaleString("default", {
+      month: "long",
+    })} ${date.getFullYear()}`;
 
 		if (videoId !== undefined) {
 			const [video] = await db
@@ -59,41 +58,44 @@ app.get(
 				.from(videos)
 				.where(eq(videos.id, videoId));
 
-			if (!video) return c.json({ error: "video_not_found" }, { status: 404 });
+      if (video) {
+        return c.json({
+          id: video.id,
+          user_id: user.id,
+          aws_region: video.awsRegion,
+          aws_bucket: video.awsBucket,
+        });
+      }
+    }
 
-			return c.json({
-				id: video.id,
-				user_id: user.id,
-				aws_region: video.awsRegion,
-				aws_bucket: video.awsBucket,
-			});
-		}
+    const idToUse = videoId !== undefined ? videoId : nanoId();
 
-		const videoData = {
-			id: id,
-			name: `Cap ${isScreenshot ? "Screenshot" : "Recording"
-				} - ${formattedDate}`,
-			ownerId: user.id,
-			awsRegion: s3Config.region,
-			awsBucket: bucketName,
-			source:
-				recordingMode === "hls"
-					? { type: "local" as const }
-					: recordingMode === "desktopMP4"
-						? { type: "desktopMP4" as const }
-						: undefined,
-			isScreenshot,
-			bucket: bucket?.id,
-		};
+    const videoData = {
+      id: idToUse,
+      name: `Cap ${
+        isScreenshot ? "Screenshot" : "Recording"
+      } - ${formattedDate}`,
+      ownerId: user.id,
+      awsRegion: s3Config.region,
+      awsBucket: bucketName,
+      source:
+        recordingMode === "hls"
+          ? { type: "local" as const }
+          : recordingMode === "desktopMP4"
+          ? { type: "desktopMP4" as const }
+          : undefined,
+      isScreenshot,
+      bucket: bucket?.id,
+    };
 
 		await db.insert(videos).values(videoData);
 
-		if (clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
-			await dub.links.create({
-				url: `${serverEnv.WEB_URL}/s/${id}`,
-				domain: "cap.link",
-				key: id,
-			});
+    if (clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
+      await dub.links.create({
+        url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${idToUse}`,
+        domain: "cap.link",
+        key: idToUse,
+      });
 
 		// Check if this is the user's first video and send the first shareable link email
 		try {
@@ -112,9 +114,9 @@ app.get(
 					"[SendFirstShareableLinkEmail] Sending first shareable link email with 5-minute delay"
 				);
 
-				const videoUrl = clientEnv.NEXT_PUBLIC_IS_CAP
-					? `https://cap.link/${id}`
-					: `${serverEnv.WEB_URL}/s/${id}`;
+        const videoUrl = clientEnv.NEXT_PUBLIC_IS_CAP
+          ? `https://cap.link/${idToUse}`
+          : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${idToUse}`;
 
 				// Send email with 5-minute delay using Resend's scheduling feature
 				await sendEmail({
@@ -137,11 +139,11 @@ app.get(
 			console.error("Error checking for first video or sending email:", error);
 		}
 
-		return c.json({
-			id,
-			user_id: user.id,
-			aws_region: s3Config.region,
-			aws_bucket: bucketName,
-		});
-	}
+    return c.json({
+      id: idToUse,
+      user_id: user.id,
+      aws_region: s3Config.region,
+      aws_bucket: bucketName,
+    });
+  }
 );

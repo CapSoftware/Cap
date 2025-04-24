@@ -11,9 +11,9 @@ import { eq } from "drizzle-orm";
 export async function GET(req: NextRequest) {
   const videoId = req.nextUrl.searchParams.get("videoId") as string;
 
-  const response = await getData(videoId);
+  const videoData = await getData(videoId);
 
-  if (!response) {
+  if (!videoData) {
     return new ImageResponse(
       (
         <div
@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const { video, bucket } = response;
+  const { video, bucket } = videoData;
 
   if (!video || !bucket || video.public === false) {
     return new ImageResponse(

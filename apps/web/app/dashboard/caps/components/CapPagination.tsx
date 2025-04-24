@@ -1,3 +1,4 @@
+import { clientEnv } from "@cap/env";
 import {
   Pagination,
   PaginationContent,
@@ -7,7 +8,6 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@cap/ui";
-import { clientEnv } from "@cap/env";
 
 interface CapPaginationProps {
   currentPage: number;
@@ -30,7 +30,8 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
         )}
         <PaginationItem>
           <PaginationLink
-            href={`/dashboard/caps?page=1`}
+            className="min-w-[54px]"
+            href={`${clientEnv.NEXT_PUBLIC_WEB_URL}/dashboard/caps?page=1`}
             isActive={currentPage === 1}
           >
             1

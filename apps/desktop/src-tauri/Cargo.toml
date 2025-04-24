@@ -1,9 +1,12 @@
 [package]
 name = "cap-desktop"
-version = "0.3.32"
+version = "0.3.42"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2021"
+
+[lints]
+workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

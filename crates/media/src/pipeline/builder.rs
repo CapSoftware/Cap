@@ -138,7 +138,7 @@ impl<T: PipelineClock> PipelineBuilder<T> {
             tokio::time::timeout(Duration::from_secs(5), task.ready_signal.recv_async())
                 .await
                 .map_err(|_| MediaError::TaskLaunch(format!("task timed out: '{name}'")))?
-                .map_err(|e| MediaError::TaskLaunch(format!("{name} stop / {e}")))??;
+                .map_err(|e| MediaError::TaskLaunch(format!("{name} build / {e}")))??;
 
             task_handles.insert(name, task.join_handle);
             stop_rx.push(task.done_rx);

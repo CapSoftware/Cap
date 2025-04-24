@@ -7,7 +7,7 @@
   --gray-200: #e4e6ed; /* Light borders/dividers */
   --gray-300: #c7ccda; /* Subtle highlights */
   --gray-400: #868e9f; /* Secondary text - slightly softened */
-  --gray-450: #eaecef; /* Adjusted to maintain balance */
+  --gray-450: #4a4a4a; /* Adjusted to maintain balance */
   --gray-500: #161b26; /* Primary text - deep, rich contrast */
 
   --gray-50-transparent-50: rgba(255, 255, 255, 0.5);
@@ -174,6 +174,24 @@
   border-radius: 500px;
 }
 
+
+@keyframes bounce {
+  0%,
+  100% {
+    transform: translateY(-15%);
+    animation-timing-function: cubic-bezier(0.8, 0, 1, 1);
+  }
+  50% {
+    transform: none;
+    animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
+  }
+}
+
+.bounce {
+  animation: bounce 1s ease-in-out forwards;
+  animation-iteration-count: infinite;
+}
+
 /* SVG path animation */
 
 @keyframes svgpathframes {
@@ -187,22 +205,6 @@
     stroke-dashoffset: 0;
   }
 }
-
-@keyframes bounce {
-  0%, 100% {
-    transform: translateY(-15%);
-    animation-timing-function: cubic-bezier(0.8, 0, 1, 1);
-  }
-  50% {
-    transform: none;
-    animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
-  }
-}
-
-.bounce {
-  animation: bounce 1s ease-in-out forwards;
-  animation-iteration-count: infinite;
-} 
 
 .svgpathanimation {
   stroke-dasharray: 100;
