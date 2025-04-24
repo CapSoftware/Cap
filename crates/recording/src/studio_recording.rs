@@ -655,7 +655,7 @@ async fn create_segment_pipeline(
         let mut camera_encoder = MP4File::init(
             "camera",
             output_path.clone(),
-            H264Encoder::factory("camera", camera_config),
+            |o| H264Encoder::builder("camera", camera_config).build(o),
             |_| None,
         )?;
 

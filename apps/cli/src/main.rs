@@ -7,7 +7,7 @@ use std::{
 };
 
 use cap_editor::create_segments;
-use cap_export::ExportSettings;
+use cap_export::{ExportCompression, ExportSettings};
 use cap_media::sources::get_target_fps;
 use cap_project::{RecordingMeta, XY};
 use cap_rendering::{ProjectRecordings, RenderVideoConstants};
@@ -207,6 +207,7 @@ impl Export {
             ExportSettings {
                 fps: 60,
                 resolution_base: XY::new(1920, 1080),
+                compression: ExportCompression::Web,
             },
         )
         .await

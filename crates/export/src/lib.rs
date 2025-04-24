@@ -58,10 +58,30 @@ pub struct Exporter<TOnProgress> {
     recordings: Arc<ProjectRecordings>,
 }
 
-#[derive(Deserialize, Type, Clone, Copy, Debug)]
+#[derive(Deserialize, Type, Clone, Debug)]
 pub struct ExportSettings {
     pub fps: u32,
     pub resolution_base: XY<u32>,
+    pub compression: ExportCompression,
+}
+
+#[derive(Deserialize, Clone, Copy, Debug, Type)]
+pub enum ExportCompression {
+    Minimal,
+    Social,
+    Web,
+    Potato,
+}
+
+impl ExportCompression {
+    pub fn bits_per_pixel(&self) -> f32 {
+        match self {
+            Self::Minimal => 0.3,
+            Self::Social => 0.15,
+            Self::Web => 0.08,
+            Self::Potato => 0.04,
+        }
+    }
 }
 
 impl<TOnProgress> Exporter<TOnProgress>
@@ -168,7 +188,11 @@ where
             let mut encoder = cap_media::encoders::MP4File::init(
                 "output",
                 self.output_path.clone(),
-                H264Encoder::factory("output_video", video_info),
+                |o| {
+                    H264Encoder::builder("output_video", video_info)
+                        .with_bpp(self.settings.compression.bits_per_pixel())
+                        .build(o)
+                },
                 |o| {
                     has_audio.then(|| {
                         AACEncoder::init("output_audio", AudioRenderer::info(), o)
