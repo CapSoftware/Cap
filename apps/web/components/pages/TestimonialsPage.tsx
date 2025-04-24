@@ -260,7 +260,7 @@ const TestimonialCard = ({ testimonial }: TestimonialCardProps) => {
   return (
     <div className="p-6 bg-gray-100 rounded-xl border border-gray-200 h-full flex flex-col w-full">
       <div className="flex items-center mb-4">
-        <div className="overflow-hidden relative mr-4 w-12 h-12 rounded-full border-2 border-gray-100">
+        <div className="overflow-hidden relative mr-2 w-12 h-12 rounded-full border-2 border-gray-100">
           <Image
             src={testimonial.image}
             alt={testimonial.name}
