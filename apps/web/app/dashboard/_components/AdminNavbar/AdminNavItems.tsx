@@ -205,7 +205,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
               >
                 <Link
                   passHref
-                  prefetch={true}
+                  prefetch={false}
                   href={item.href}
                   className={classNames("hover:opacity-75", navItemClass)}
                 >
