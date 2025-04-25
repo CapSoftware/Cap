@@ -1,4 +1,4 @@
-'use server';
+"use server";
 
 import { getCurrentUser } from "@cap/database/auth/session";
 import { spaces, spaceInvites } from "@cap/database/schema";
@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 import { nanoId } from "@cap/database/helpers";
 import { sendEmail } from "@cap/database/emails/config";
 import { WorkspaceInvite } from "@cap/database/emails/workspace-invite";
-import { clientEnv } from "@cap/env";
+import { clientEnv, serverEnv } from "@cap/env";
 import { revalidatePath } from "next/cache";
 
 export async function sendWorkspaceInvites(
@@ -35,30 +35,30 @@ export async function sendWorkspaceInvites(
     emailRegex.test(email.trim())
   );
 
-	for (const email of validEmails) {
-		const inviteId = nanoId();
-		await db.insert(spaceInvites).values({
-			id: inviteId,
-			spaceId: spaceId,
-			invitedEmail: email.trim(),
-			invitedByUserId: user.id,
-			role: "member",
-		});
+  for (const email of validEmails) {
+    const inviteId = nanoId();
+    await db.insert(spaceInvites).values({
+      id: inviteId,
+      spaceId: spaceId,
+      invitedEmail: email.trim(),
+      invitedByUserId: user.id,
+      role: "member",
+    });
 
-		// Send invitation email
-		const inviteUrl = `${serverEnv.WEB_URL}/invite/${inviteId}`;
-		await sendEmail({
-			email: email.trim(),
-			subject: `Invitation to join ${space[0].name} on Cap`,
-			react: WorkspaceInvite({
-				email: email.trim(),
-				url: inviteUrl,
-				workspaceName: space[0].name,
-			}),
-		});
-	}
+    // Send invitation email
+    const inviteUrl = `${serverEnv.WEB_URL}/invite/${inviteId}`;
+    await sendEmail({
+      email: email.trim(),
+      subject: `Invitation to join ${space[0].name} on Cap`,
+      react: WorkspaceInvite({
+        email: email.trim(),
+        url: inviteUrl,
+        workspaceName: space[0].name,
+      }),
+    });
+  }
 
-  revalidatePath('/dashboard/settings/workspace');
-  
+  revalidatePath("/dashboard/settings/workspace");
+
   return { success: true };
-} 
+}

@@ -1,11 +1,11 @@
-'use server';
+"use server";
 
 import { stripe } from "@cap/utils";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { eq } from "drizzle-orm";
 import { db } from "@cap/database";
 import { users } from "@cap/database/schema";
-import { clientEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 
 export async function manageBilling() {
   const user = await getCurrentUser();
@@ -35,8 +35,8 @@ export async function manageBilling() {
 
   const { url } = await stripe.billingPortal.sessions.create({
     customer: customerId as string,
-    return_url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/dashboard/settings/workspace`,
+    return_url: `${serverEnv.WEB_URL}/dashboard/settings/workspace`,
   });
-  
+
   return url;
-} 
+}

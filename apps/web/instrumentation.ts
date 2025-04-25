@@ -1,6 +1,8 @@
 // This file is used to run database migrations in the docker builds or other self hosting environments.
 // It is not suitable (a.k.a DEADLY) for serverless environments where the server will be restarted on each request.
 
+import { serverEnv } from "@cap/env";
+
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     console.log("Waiting 5 seconds to run database migrations");
@@ -9,7 +11,7 @@ export async function register() {
     const triggerMigrations = async (retryCount = 0, maxRetries = 3) => {
       try {
         const response = await fetch(
-          "http://localhost:3000/api/selfhosted/migrations",
+          `${serverEnv.WEB_URL}/api/selfhosted/migrations`,
           {
             method: "POST",
             headers: {

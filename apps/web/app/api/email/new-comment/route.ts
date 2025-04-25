@@ -204,6 +204,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Generate the video URL
+    const videoUrl = clientEnv.NEXT_PUBLIC_IS_CAP
+      ? `https://cap.link/${video.id}`
+      : `${serverEnv.WEB_URL}/s/${video.id}`;
+    console.log(`Generated video URL: ${videoUrl}`);
+
+    // Send the email
+    console.log(
+      `Sending email to ${owner.email} about comment on video "${video.name}"`
+    );
+
     try {
       const emailResult = await sendEmail({
         email: owner.email,

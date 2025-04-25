@@ -12,6 +12,7 @@ services:
     environment:
       DATABASE_URL: 'mysql://root:@ps-mysql:3306/planetscale?ssl={"rejectUnauthorized":false}'
       DATABASE_MIGRATION_URL: 'mysql://root:@ps-mysql:3306/planetscale?ssl={"rejectUnauthorized":false}'
+      WEB_URL: http://localhost:3000
       NEXTAUTH_URL: http://localhost:3000
       DOCKER_BUILD: true
       # CHANGE THESE TO YOUR OWN VALUES
@@ -27,7 +28,7 @@ services:
       - 3000:3000
 
   ps-mysql:
-    container_name: mysql-primary-db
+    container_name: cap-primary-db
     image: mysql:8.0
     restart: unless-stopped
     environment:
@@ -47,7 +48,7 @@ services:
 
   # Local S3 Strorage
   minio:
-    container_name: minio-storage
+    container_name: cap-minio-storage
     image: "bitnami/minio:latest"
     restart: unless-stopped
     ports:
@@ -65,7 +66,7 @@ services:
 
   # DISABLE THIS IF YOU ARE NOT USING MINIO VIA THIS DOCKER COMPOSE FILE
   createbuckets:
-    container_name: minio-bucket-creation
+    container_name: cap-minio-bucket-creation
     image: minio/mc
     depends_on:
       - minio

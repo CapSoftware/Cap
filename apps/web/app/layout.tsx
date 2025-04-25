@@ -10,7 +10,7 @@ import type { Metadata } from "next";
 import localFont from "next/font/local";
 import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "./AuthProvider";
-import { PostHogProvider, Providers, PublicEnvProvider } from "./providers";
+import { PostHogProvider, Providers } from "./providers";
 import { PublicEnvContext } from "@/utils/public-env";
 import { S3_BUCKET_URL } from "@cap/utils";
 
