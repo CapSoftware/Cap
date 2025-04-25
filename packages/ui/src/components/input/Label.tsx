@@ -6,7 +6,7 @@ import * as React from "react";
 
 import { classNames } from "@cap/utils";
 
-const labelVariants = cva("text-md text-gray-500 font-medium");
+const labelVariants = cva("text-md text-gray-1 font-medium");
 
 const Label = React.forwardRef<
   React.ElementRef<typeof LabelPrimitive.Root>,

@@ -7,29 +7,9 @@ import { serverEnv } from "@cap/env";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import crypto from "crypto";
 import type { Metadata } from "next";
-import localFont from "next/font/local";
 import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "./AuthProvider";
 import { PostHogProvider, Providers } from "./providers";
-
-const SfProDisplay = localFont({
-  src: [
-    {
-      path: "./fonts/SFPRODISPLAYREGULAR.woff2",
-      weight: "300",
-    },
-    {
-      path: "./fonts/SFPRODISPLAYBOLD.woff2",
-      weight: "700",
-    },
-    {
-      path: "./fonts/SFPRODISPLAYMEDIUM.woff2",
-      weight: "500",
-    },
-  ],
-  display: "swap",
-  variable: "--font-sf-pro-display",
-});
 
 export const metadata: Metadata = {
   title: "Cap — Beautiful screen recordings, owned by you.",
@@ -85,7 +65,7 @@ export default async function RootLayout({
         <meta name="msapplication-TileColor" content="#da532c" />
         <meta name="theme-color" content="#ffffff" />
       </head>
-      <body>
+      <body className="dark">
         <TooltipPrimitive.Provider>
           <PostHogProvider>
             <AuthProvider>

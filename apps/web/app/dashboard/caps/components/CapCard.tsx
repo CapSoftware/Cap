@@ -99,7 +99,7 @@ export const CapCard: React.FC<CapCardProps> = ({
 
   const renderSharedStatus = () => {
     const baseClassName =
-      "text-sm text-gray-400 transition-colors duration-300 hover:text-gray-500 cursor-pointer flex items-center mb-1";
+      "text-sm text-gray-10 transition-colors duration-200 hover:text-gray-12 cursor-pointer flex items-center mb-1";
     if (isOwner) {
       if (cap.sharedSpaces.length === 0) {
         return (
@@ -214,7 +214,7 @@ export const CapCard: React.FC<CapCardProps> = ({
         userSpaces={userSpaces}
         onSharingUpdated={handleSharingUpdated}
       />
-      <div className="flex relative flex-col gap-4 w-full h-full bg-gray-50 rounded-2xl border-gray-200 transition-colors duration-300 group hover:border-blue-300 border-[1px]">
+      <div className="flex relative flex-col gap-4 w-full h-full bg-gray-2 rounded-xl border-gray-3 transition-colors duration-300 group hover:border-blue-8 border-[1px]">
         <div className="flex absolute duration-200 group-hover:opacity-100 opacity-0 top-2 right-2 z-[20] flex-col gap-2">
           <Tooltip content="Copy link">
             <Button
@@ -232,10 +232,7 @@ export const CapCard: React.FC<CapCardProps> = ({
               size="sm"
             >
               {!copyPressed ? (
-                <FontAwesomeIcon
-                  className="text-gray-400 size-4"
-                  icon={faLink}
-                />
+                <FontAwesomeIcon className="text-gray-1 size-4" icon={faLink} />
               ) : (
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -247,7 +244,7 @@ export const CapCard: React.FC<CapCardProps> = ({
                   stroke-width="2"
                   stroke-linecap="round"
                   stroke-linejoin="round"
-                  className="text-gray-400 size-5 svgpathanimation"
+                  className="text-gray-1 size-5 svgpathanimation"
                 >
                   <path d="M20 6 9 17l-5-5" />
                 </svg>
@@ -262,7 +259,7 @@ export const CapCard: React.FC<CapCardProps> = ({
               size="sm"
             >
               <FontAwesomeIcon
-                className="text-gray-400 size-2.5"
+                className="text-gray-1 size-2.5"
                 icon={faTrash}
               />
             </Button>
@@ -295,11 +292,11 @@ export const CapCard: React.FC<CapCardProps> = ({
                 onBlur={() => handleTitleBlur(cap.name)}
                 onKeyDown={(e) => handleTitleKeyDown(e, cap.name)}
                 autoFocus
-                className="text-md resize-none truncate w-full border-0 outline-0 leading-[1.25rem] text-gray-500 font-medium mb-1"
+                className="text-md resize-none bg-transparent truncate w-full border-0 outline-0 leading-[1.25rem] text-gray-12 font-medium mb-1"
               />
             ) : (
               <p
-                className="text-md truncate leading-[1.25rem] text-gray-500 font-medium mb-1"
+                className="text-md truncate leading-[1.25rem] text-gray-12 font-medium mb-1"
                 onClick={() => {
                   if (userId === cap.ownerId) {
                     setIsEditing(true);
@@ -320,14 +317,14 @@ export const CapCard: React.FC<CapCardProps> = ({
                     onBlur={handleDateBlur}
                     onKeyDown={handleDateKeyDown}
                     autoFocus
-                    className="text-sm truncate mt-2 leading-[1.25rem] text-gray-400 bg-transparent focus:outline-none"
+                    className="text-sm truncate mt-2 leading-[1.25rem] text-gray-10 bg-transparent focus:outline-none"
                     placeholder="YYYY-MM-DD HH:mm:ss"
                   />
                 </div>
               ) : (
                 <Tooltip content={`Cap created at ${effectiveDate}`}>
                   <p
-                    className="text-sm truncate mt-2 leading-[1.25rem] text-gray-400 cursor-pointer flex items-center"
+                    className="text-sm truncate mt-2 leading-[1.25rem] text-gray-10 cursor-pointer flex items-center"
                     onClick={handleDateClick}
                   >
                     {showFullDate

@@ -112,7 +112,7 @@ export function LoginForm() {
 
   return (
     <div className="flex justify-center items-center w-full h-screen">
-      <div className="overflow-hidden relative w-[calc(100%-5%)] p-[28px] max-w-[472px] bg-gray-100 border border-gray-200 rounded-2xl">
+      <div className="overflow-hidden relative w-[calc(100%-5%)] p-[28px] max-w-[472px] bg-gray-1 border border-gray-200 rounded-2xl">
         <motion.div
           key="back-button"
           initial={{ opacity: 0, display: "none" }}
@@ -122,7 +122,7 @@ export function LoginForm() {
             transition: { duration: 0.2 },
           }}
           onClick={() => setShowOrgInput(false)}
-          className="flex absolute top-5 left-5 z-20 hover:bg-gray-100 gap-2 items-center py-1.5 px-3 text-gray-500 bg-gray-50 rounded-full border border-gray-200 transition-colors duration-300 cursor-pointer "
+          className="flex absolute top-5 left-5 z-20 hover:bg-gray-1 gap-2 items-center py-1.5 px-3 text-gray-1 bg-gray-50 rounded-full border border-gray-200 transition-colors duration-300 cursor-pointer "
         >
           <FontAwesomeIcon className="w-2" icon={faArrowLeft} />
           <p className="text-xs text-inherit">Back</p>
@@ -132,7 +132,7 @@ export function LoginForm() {
         </Link>
         <div className="flex flex-col justify-center items-center my-7 text-left">
           <h1 className="text-2xl font-semibold">Sign in to Cap</h1>
-          <p className="text-[16px] text-gray-400">
+          <p className="text-[16px] text-gray-8">
             Beautiful screen recordings, owned by you.
           </p>
         </div>
@@ -143,7 +143,7 @@ export function LoginForm() {
                 <Button disabled={true} variant="primary" />
                 <Button disabled={true} variant="secondary" />
                 <Button disabled={true} variant="destructive" />
-                <div className="mx-auto w-3/4 h-5 bg-gray-100 rounded-lg" />
+                <div className="mx-auto w-3/4 h-5 bg-gray-1 rounded-lg" />
               </>
             }
           >
@@ -222,13 +222,13 @@ export function LoginForm() {
                   </motion.form>
                 )}
               </AnimatePresence>
-              <p className="pt-3 text-xs text-center text-gray-400">
+              <p className="pt-3 text-xs text-center text-gray-8">
                 By typing your email and clicking continue, you acknowledge that
                 you have both read and agree to Cap's{" "}
                 <Link
                   href="/terms"
                   target="_blank"
-                  className="text-xs font-semibold text-gray-500 hover:text-blue-300"
+                  className="text-xs font-semibold text-gray-1 hover:text-blue-300"
                 >
                   Terms of Service
                 </Link>{" "}
@@ -236,7 +236,7 @@ export function LoginForm() {
                 <Link
                   href="/privacy"
                   target="_blank"
-                  className="text-xs font-semibold text-gray-500 hover:text-blue-300"
+                  className="text-xs font-semibold text-gray-1 hover:text-blue-300"
                 >
                   Privacy Policy
                 </Link>
@@ -245,7 +245,7 @@ export function LoginForm() {
             </div>
             {emailSent && (
               <button
-                className="pt-3 mx-auto text-sm text-gray-500 underline hover:text-gray-400"
+                className="pt-3 mx-auto text-sm text-gray-1 underline hover:text-gray-8"
                 onClick={() => {
                   setEmailSent(false);
                   setEmail("");
@@ -287,7 +287,7 @@ const LoginWithSSO = ({
           className="w-full max-w-full"
         />
         {spaceName && (
-          <p className="text-sm text-gray-500">Signing in to: {spaceName}</p>
+          <p className="text-sm text-gray-1">Signing in to: {spaceName}</p>
         )}
         <div>
           <Button type="submit" variant="dark" className="w-full max-w-full">
@@ -358,7 +358,7 @@ const NormalLogin = ({
       </div>
       <div className="flex gap-4 items-center my-4">
         <span className="flex-1 h-px bg-gray-200" />
-        <p className="text-sm text-center text-gray-400">OR</p>
+        <p className="text-sm text-center text-gray-8">OR</p>
         <span className="flex-1 h-px bg-gray-200" />
       </div>
       <div className="flex flex-col gap-3 justify-center items-center">

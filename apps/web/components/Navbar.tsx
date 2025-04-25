@@ -109,7 +109,7 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
 
   return (
     <>
-      <div className="fixed border-b border-b-zinc-100 inset-0 z-20 p-4 w-full backdrop-blur-md bg-white/70 h-[60px]">
+      <div className="fixed border-b border-b-zinc-100 inset-0 z-20 p-4 w-full backdrop-blur-md bg-gray-1/70 h-[60px]">
         <div className="flex justify-between items-center mx-auto max-w-3xl h-full transition-all">
           <div className="flex items-center">
             <Link passHref href="/home">
@@ -188,7 +188,7 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
         </div>
       </div>
       {showMobileMenu && (
-        <div className="fixed top-0 left-0 w-full h-full px-4 bg-white z-[100000] overflow-auto">
+        <div className="fixed top-0 left-0 w-full h-full px-4 bg-gray-1 z-[100000] overflow-auto">
           <div
             className="bg-gradient-to-b from-white to-[rgba(255,255,255,0.3)] 
           pt-3 pb-12 sticky top-0 flex items-center justify-between"

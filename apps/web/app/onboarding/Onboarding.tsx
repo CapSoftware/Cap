@@ -50,7 +50,7 @@ export const Onboarding = ({
 
   return (
     <form
-      className="relative w-[calc(100%-2%)] p-[28px] max-w-[472px] bg-gray-100 border border-gray-200 rounded-2xl"
+      className="relative w-[calc(100%-2%)] p-[28px] max-w-[472px] bg-gray-1 border border-gray-200 rounded-2xl"
       onSubmit={handleSubmit}
     >
       <div className="space-y-3">

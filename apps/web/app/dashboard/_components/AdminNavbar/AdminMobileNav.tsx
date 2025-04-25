@@ -36,7 +36,7 @@ export const AdminMobileNav = () => {
                 className="flex justify-end items-center mb-6 w-full rounded-full"
                 onClick={() => setSidebarOpen(false)}
               >
-                <X className="text-gray-500 size-7" aria-hidden="true" />
+                <X className="text-gray-1 size-7" aria-hidden="true" />
               </div>
 
               <AdminNavItems />
@@ -54,7 +54,7 @@ export const AdminMobileNav = () => {
           className="flex flex-col gap-2 justify-center items-center px-5 text-white border-l lg:hidden"
           onClick={() => setSidebarOpen(true)}
         >
-          <Menu className="text-gray-500 size-7" aria-hidden="true" />
+          <Menu className="text-gray-1 size-7" aria-hidden="true" />
         </button>
       </div>
     </>

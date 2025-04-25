@@ -18,10 +18,10 @@ export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
           <EmptyCap className="h-[150px] w-[400px]" />
         </div>
         <div className="flex flex-col items-center">
-          <p className="mb-1 text-xl font-semibold text-gray-500">
+          <p className="mb-1 text-xl font-semibold text-gray-1">
             Hey{userName ? ` ${userName}` : ""}! Record your first Cap
           </p>
-          <p className="max-w-md text-gray-400 text-md">
+          <p className="max-w-md text-gray-8 text-md">
             Craft your narrative with Cap - get projects done quicker.
           </p>
         </div>

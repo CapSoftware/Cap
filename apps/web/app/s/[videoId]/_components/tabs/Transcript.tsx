@@ -1,10 +1,10 @@
 "use client";
 
 import { videos } from "@cap/database/schema";
-import { useState, useEffect } from "react";
-import { MessageSquare } from "lucide-react";
-import { S3_BUCKET_URL } from "@cap/utils";
 import { clientEnv } from "@cap/env";
+import { S3_BUCKET_URL } from "@cap/utils";
+import { MessageSquare } from "lucide-react";
+import { useEffect, useState } from "react";
 
 interface TranscriptProps {
   data: typeof videos.$inferSelect;
@@ -225,9 +225,9 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
   if (isTranscriptionProcessing) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-500">
+      <div className="flex items-center justify-center h-full text-gray-1">
         <div className="text-center">
-          <MessageSquare className="w-8 h-8 mx-auto mb-2 text-gray-400 animate-pulse" />
+          <MessageSquare className="w-8 h-8 mx-auto mb-2 text-gray-8 animate-pulse" />
           <p>Transcription in progress...</p>
         </div>
       </div>
@@ -236,10 +236,10 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
   if (!transcriptData.length) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-500">
+      <div className="flex items-center justify-center h-full text-gray-1">
         <div className="text-center">
           <MessageSquare className="w-8 h-8 mx-auto mb-2 text-gray-300" />
-          <p className="text-sm text-gray-500 font-medium">
+          <p className="text-sm text-gray-1 font-medium">
             No transcript available
           </p>
         </div>
@@ -255,13 +255,11 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
             <div
               key={entry.id}
               className={`group rounded-lg p-2 transition-colors cursor-pointer ${
-                selectedEntry === entry.id ? "bg-blue-50" : "hover:bg-gray-100"
+                selectedEntry === entry.id ? "bg-blue-50" : "hover:bg-gray-1"
               }`}
               onClick={() => handleTranscriptClick(entry)}
             >
-              <div className="text-sm text-gray-500 mb-1">
-                {entry.timestamp}
-              </div>
+              <div className="text-sm text-gray-1 mb-1">{entry.timestamp}</div>
               <div className="text-sm text-gray-900">{entry.text}</div>
             </div>
           ))}

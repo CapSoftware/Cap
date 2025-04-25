@@ -13,7 +13,10 @@ export const UsageButton = ({
   collapsed: boolean;
 }) => {
   return (
-    <Tooltip position="right" content={subscribed ? "Cap Pro" : "Upgrade to Pro"}>
+    <Tooltip
+      position="right"
+      content={subscribed ? "Cap Pro" : "Upgrade to Pro"}
+    >
       <Link
         className="flex justify-center mx-auto w-full"
         href={subscribed ? "/dashboard/settings/workspace" : "/pricing"}

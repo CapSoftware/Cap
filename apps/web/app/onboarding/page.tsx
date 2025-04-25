@@ -24,7 +24,7 @@ export default async function OnboardingPage() {
         </a>
         <div className="flex flex-col justify-center items-center space-y-1 text-center">
           <h1 className="text-3xl font-semibold">Let's get you started</h1>
-          <p className="text-2xl text-gray-500">What's your name?</p>
+          <p className="text-2xl text-gray-12">What's your name?</p>
         </div>
         <div className="flex flex-col space-y-3">
           <Onboarding user={user ?? null} />

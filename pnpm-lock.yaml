@@ -489,6 +489,9 @@ importers:
       '@octokit/rest':
         specifier: ^20.0.2
         version: 20.1.1
+      '@radix-ui/colors':
+        specifier: ^3.0.0
+        version: 3.0.0
       '@radix-ui/react-tooltip':
         specifier: ^1.2.0
         version: 1.2.0(@types/react-dom@18.3.0)(@types/react@18.3.9)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -4378,6 +4381,9 @@ packages:
   '@pulumiverse/vercel@1.14.3':
     resolution: {integrity: sha512-Wdq/vNPNWh/cjzv+VHCjT30gBBhrrmX5J8E8VlNJ8bQ5mkMfEZDPpHaY+6NTFIb6arF+KUGdIsUFsndT50pmeA==}
 
+  '@radix-ui/colors@3.0.0':
+    resolution: {integrity: sha512-FUOsGBkHrYJwCSEtWRCIfQbZG7q1e6DgxCIOe1SUQzDe/7rXXeA47s8yCn6fuTNQAj1Zq4oTFi9Yjp3wzElcxg==}
+
   '@radix-ui/primitive@1.0.0':
     resolution: {integrity: sha512-3e7rn8FDMin4CgeL7Z/49smCA3rFYY3Ha2rUQ7HRWFadS5iCRw08ZgVT1LaNTCNqgvrUiyczLflrVrF0SRQtNA==}
 
@@ -5895,10 +5901,10 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@9.0.0-alpha.19':
-    resolution: {integrity: sha512-m6mR8SX4A40I+uPjbBjsV5Kitaqialau7J3PmkoV+1Cp2NC5DqGTPCV6SkyLznVIzxG/7uEbIB1d071upwAu0w==}
+  '@storybook/builder-vite@9.0.0-beta.1':
+    resolution: {integrity: sha512-OALGrbqmpvLib/0yQl3Q1ggmTqOtMENURwwyhNe3Vb3HGQ8O+srDPPQ/xk0fSy7FO1YOoybZQHBpExOdfCpEKg==}
     peerDependencies:
-      storybook: ^9.0.0-alpha.19
+      storybook: ^9.0.0-beta.1
       vite: ^5.0.0 || ^6.0.0
 
   '@storybook/core@8.3.3':
@@ -5909,10 +5915,10 @@ packages:
     peerDependencies:
       storybook: ^8.3.3
 
-  '@storybook/csf-plugin@9.0.0-alpha.19':
-    resolution: {integrity: sha512-Kw9IiBbzjhfvGJpjry2YhOZXM5xPUirok4Nggl3nsEKmA6179b8BmNL+thU5zjzmU4RH2W5IJDqCO1qKTAvQQw==}
+  '@storybook/csf-plugin@9.0.0-beta.1':
+    resolution: {integrity: sha512-Od2EyWGiozSDy0IGBdYYo7U+x46rYTYO0Mm0wimAxtotSjIC03b91BVGFXeYxDN/Cd2ObpfKQlDnque8HrrBXw==}
     peerDependencies:
-      storybook: ^9.0.0-alpha.19
+      storybook: ^9.0.0-beta.1
 
   '@storybook/csf@0.1.11':
     resolution: {integrity: sha512-dHYFQH3mA+EtnCkHXzicbLgsvzYjcDJ1JWsogbItZogkPHgSJM/Wr71uMkcvw8v9mmCyP4NpXJuu6bPoVsOnzg==}
@@ -17604,6 +17610,8 @@ snapshots:
       - ts-node
       - typescript
 
+  '@radix-ui/colors@3.0.0': {}
+
   '@radix-ui/primitive@1.0.0':
     dependencies:
       '@babel/runtime': 7.25.6
@@ -19240,9 +19248,9 @@ snapshots:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
 
-  '@storybook/builder-vite@9.0.0-alpha.19(storybook@8.3.3)(vite@6.1.2(@types/node@22.12.0)(jiti@2.4.2)(terser@5.34.0)(yaml@2.7.0))':
+  '@storybook/builder-vite@9.0.0-beta.1(storybook@8.3.3)(vite@6.1.2(@types/node@22.12.0)(jiti@2.4.2)(terser@5.34.0)(yaml@2.7.0))':
     dependencies:
-      '@storybook/csf-plugin': 9.0.0-alpha.19(storybook@8.3.3)
+      '@storybook/csf-plugin': 9.0.0-beta.1(storybook@8.3.3)
       browser-assert: 1.2.1
       storybook: 8.3.3
       ts-dedent: 2.2.0
@@ -19273,7 +19281,7 @@ snapshots:
       storybook: 8.3.3
       unplugin: 1.16.1
 
-  '@storybook/csf-plugin@9.0.0-alpha.19(storybook@8.3.3)':
+  '@storybook/csf-plugin@9.0.0-beta.1(storybook@8.3.3)':
     dependencies:
       storybook: 8.3.3
       unplugin: 1.16.1
@@ -28079,7 +28087,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.2(storybook@8.3.3)(vite@6.1.2(@types/node@22.12.0)(jiti@2.4.2)(terser@5.34.0)(yaml@2.7.0)):
     dependencies:
-      '@storybook/builder-vite': 9.0.0-alpha.19(storybook@8.3.3)(vite@6.1.2(@types/node@22.12.0)(jiti@2.4.2)(terser@5.34.0)(yaml@2.7.0))
+      '@storybook/builder-vite': 9.0.0-beta.1(storybook@8.3.3)(vite@6.1.2(@types/node@22.12.0)(jiti@2.4.2)(terser@5.34.0)(yaml@2.7.0))
     transitivePeerDependencies:
       - storybook
       - vite

@@ -77,7 +77,7 @@ export default async function PostPage({ params }: PostProps) {
         <div className="wrapper">
           <header>
             <h1 className="mb-2">{post.metadata.title}</h1>
-            <p className="space-x-1 text-xs text-gray-500">
+            <p className="space-x-1 text-xs text-gray-12">
               <span>
                 {format(parseISO(post.metadata.publishedAt), "MMMM dd, yyyy")}
               </span>

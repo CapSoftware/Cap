@@ -246,7 +246,7 @@ export const PricingPage = () => {
 
           <div className="grid grid-cols-1 gap-3 items-stretch md:grid-cols-2">
             <Card
-              className={`bg-gray-100 rounded-xl min-h-[600px] flex-grow ${
+              className={`bg-gray-1 rounded-xl min-h-[600px] flex-grow ${
                 initialRender ? "fade-in-down animate-delay-2" : ""
               }`}
             >
@@ -347,7 +347,7 @@ export const PricingPage = () => {
                             <div className="w-5 h-5 m-0 p-0 flex items-center border-[2px] border-green-500 justify-center rounded-full">
                               <Check className="w-3 h-3 stroke-[4px] stroke-green-500" />
                             </div>
-                            <span className="ml-1.5 font-bold text-gray-500">
+                            <span className="ml-1.5 font-bold text-gray-1">
                               {item.text}
                             </span>
                           </li>
@@ -360,7 +360,7 @@ export const PricingPage = () => {
             </Card>
 
             <Card
-              className={`bg-gray-100 rounded-xl min-h-[600px] flex-grow border-blue-500 border-4 ${
+              className={`bg-gray-1 rounded-xl min-h-[600px] flex-grow border-blue-500 border-4 ${
                 initialRender ? "fade-in-up animate-delay-2" : ""
               }`}
             >
@@ -459,7 +459,7 @@ export const PricingPage = () => {
                             <div className="w-5 h-5 m-0 p-0 flex items-center border-[2px] border-green-500 justify-center rounded-full">
                               <Check className="w-3 h-3 stroke-[4px] stroke-green-500" />
                             </div>
-                            <span className="ml-1.5 text-gray-500 font-bold">
+                            <span className="ml-1.5 text-gray-1 font-bold">
                               {item.text}
                             </span>
                           </li>

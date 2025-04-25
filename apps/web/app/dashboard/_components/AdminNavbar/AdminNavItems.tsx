@@ -1,5 +1,6 @@
 "use client";
 import {
+  Button,
   Command,
   CommandEmpty,
   CommandGroup,
@@ -98,7 +99,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
           <PopoverTrigger asChild>
             <div
               className={
-                "p-3 w-full rounded-xl border border-gray-200 cursor-pointer"
+                "px-3 py-2.5 w-full rounded-xl border cursor-pointer bg-gray-3 border-gray-4"
               }
             >
               <div
@@ -109,21 +110,22 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                 <div className="flex justify-between items-center w-full text-left">
                   <div className="flex items-center">
                     <Avatar
-                      className="flex-shrink-0 size-5"
+                      letterClass="text-gray-1 text-xs"
+                      className="relative flex-shrink-0 size-5"
                       name={activeSpace?.space.name ?? "No space found"}
                     />
-                    <p className="ml-2.5 text-sm font-medium truncate">
+                    <p className="ml-2.5 text-sm text-gray-12 font-medium truncate">
                       {activeSpace?.space.name ?? "No space found"}
                     </p>
                   </div>
                   {!collapsed && (
-                    <ChevronDown className="w-[20px] h-auto text-gray-400" />
+                    <ChevronDown className="w-5 h-auto text-gray-8" />
                   )}
                 </div>
               </div>
               <PopoverContent
                 className={clsx(
-                  "p-0 w-[calc(100%-12px)] bg-white z-[60]",
+                  "p-0 w-[calc(100%-12px)] z-[60]",
                   collapsed ? "ml-3" : "mx-auto"
                 )}
               >
@@ -153,11 +155,15 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                         </CommandItem>
                       );
                     })}
-                    <DialogTrigger className="w-full">
-                      <CommandItem className="bg-gray-100 rounded-lg border border-gray-200 aria-selected:bg-gray-200">
-                        <Plus className="mr-1 w-4 h-auto" />
-                        <span className="text-sm">Add new space</span>
-                      </CommandItem>
+                    <DialogTrigger className="mt-3 w-full">
+                      <Button
+                        variant="white"
+                        size="sm"
+                        className="flex gap-1 items-center w-full"
+                      >
+                        <Plus className="w-4 h-auto" />
+                        Add new space
+                      </Button>
                     </DialogTrigger>
                   </CommandGroup>
                 </Command>
@@ -194,7 +200,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                   layoutId="underline"
                   id="underline"
                   className={clsx(
-                    "absolute inset-0 mx-auto text-gray-400 bg-transparent rounded-xl border-gray-200 shadow-sm border-[1px] shadow-gray-200"
+                    "absolute inset-0 mx-auto rounded-xl shadow-sm border-gray-5 text-gray-8 border-[1px] shadow-gray-2"
                   )}
                 />
               ) : null}
@@ -207,16 +213,20 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                   passHref
                   prefetch={true}
                   href={item.href}
-                  className={classNames("hover:opacity-75", navItemClass)}
+                  className={classNames(
+                    "relative transition-opacity duration-200 hover:opacity-75 z-3",
+                    navItemClass
+                  )}
                 >
                   <FontAwesomeIcon
                     icon={item.icon as IconDefinition}
                     className={classNames(
-                      "flex-shrink-0 w-5 h-5 stroke-[1.5px] text-gray-400"
+                      "flex-shrink-0 w-5 h-5 transition-colors duration-200 stroke-[1.5px]",
+                      collapsed ? "text-gray-12" : "text-gray-10"
                     )}
                     aria-hidden="true"
                   />
-                  <span className="text-base ml-2.5 text-gray-400 truncate">
+                  <span className="text-base ml-2.5 text-gray-12 truncate">
                     {item.name}
                   </span>
                 </Link>
@@ -229,7 +239,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
             collapsed={collapsed ?? false}
             subscribed={isSubscribed}
           />
-          <p className="mt-4 text-xs text-center text-gray-400 truncate">
+          <p className="mt-4 text-xs text-center truncate text-gray-10">
             Cap Software, Inc. {new Date().getFullYear()}.
           </p>
         </div>

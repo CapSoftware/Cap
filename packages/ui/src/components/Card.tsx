@@ -9,7 +9,7 @@ const Card = forwardRef<
     ref={ref}
     className={classNames(
       !noStyle &&
-        "border p-5 bg-gray-50 rounded-2xl border-gray-200 text-card-foreground",
+        "border p-5 bg-gray-1 rounded-2xl border-gray-4 text-card-foreground",
       className
     )}
     {...props}

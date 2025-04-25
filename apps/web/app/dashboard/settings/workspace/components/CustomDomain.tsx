@@ -371,17 +371,13 @@ export function CustomDomain() {
                 <div className="px-4 py-3">
                   <dl className="grid gap-4">
                     <div className="grid grid-cols-[100px,1fr] items-center">
-                      <dt className="text-sm font-medium text-gray-500">
-                        Type
-                      </dt>
+                      <dt className="text-sm font-medium text-gray-1">Type</dt>
                       <dd className="text-sm text-gray-900">
                         {domainConfig?.verification?.[0]?.type}
                       </dd>
                     </div>
                     <div className="grid grid-cols-[100px,1fr] items-center">
-                      <dt className="text-sm font-medium text-gray-500">
-                        Name
-                      </dt>
+                      <dt className="text-sm font-medium text-gray-1">Name</dt>
                       <dd className="flex gap-2 items-center text-sm text-gray-900">
                         <div className="flex items-center gap-1.5 bg-gray-50 px-2 py-1 rounded flex-1 min-w-0">
                           <code className="truncate">
@@ -395,13 +391,13 @@ export function CustomDomain() {
                                   domainConfig?.verification?.[0]?.domain;
                                 if (domain) handleCopy(domain, "name");
                               }}
-                              className="p-1 rounded-md transition-colors hover:bg-gray-100 shrink-0"
+                              className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
                               title="Copy to clipboard"
                             >
                               {copiedField === "name" ? (
                                 <Check className="w-4 h-4 text-green-500" />
                               ) : (
-                                <Copy className="w-4 h-4 text-gray-500" />
+                                <Copy className="w-4 h-4 text-gray-1" />
                               )}
                             </button>
                           )}
@@ -409,9 +405,7 @@ export function CustomDomain() {
                       </dd>
                     </div>
                     <div className="grid grid-cols-[100px,1fr] items-center">
-                      <dt className="text-sm font-medium text-gray-500">
-                        Value
-                      </dt>
+                      <dt className="text-sm font-medium text-gray-1">Value</dt>
                       <dd className="flex gap-2 items-center text-sm text-gray-900">
                         <div className="flex items-center gap-1.5 bg-gray-50 p-2 rounded flex-1 min-w-0">
                           <code className="font-mono text-xs break-all">
@@ -425,13 +419,13 @@ export function CustomDomain() {
                                   domainConfig?.verification?.[0]?.value;
                                 if (value) handleCopy(value, "value");
                               }}
-                              className="p-1 rounded-md transition-colors hover:bg-gray-100 shrink-0"
+                              className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
                               title="Copy to clipboard"
                             >
                               {copiedField === "value" ? (
                                 <Check className="w-4 h-4 text-green-500" />
                               ) : (
-                                <Copy className="w-4 h-4 text-gray-500" />
+                                <Copy className="w-4 h-4 text-gray-1" />
                               )}
                             </button>
                           )}
@@ -461,7 +455,7 @@ export function CustomDomain() {
                       {domainConfig.currentAValues &&
                         domainConfig.currentAValues.length > 0 && (
                           <div className="grid grid-cols-[100px,1fr] items-center">
-                            <dt className="text-sm font-medium text-gray-500">
+                            <dt className="text-sm font-medium text-gray-1">
                               Current
                             </dt>
                             <dd className="text-sm text-gray-600">
@@ -496,7 +490,7 @@ export function CustomDomain() {
                           </div>
                         )}
                       <div className="grid grid-cols-[100px,1fr] items-center">
-                        <dt className="text-sm font-medium text-gray-500">
+                        <dt className="text-sm font-medium text-gray-1">
                           Required
                         </dt>
                         <dd className="flex gap-2 items-center">
@@ -514,13 +508,13 @@ export function CustomDomain() {
                                     "value"
                                   )
                                 }
-                                className="p-1 rounded-md transition-colors hover:bg-gray-100 shrink-0"
+                                className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
                                 title="Copy to clipboard"
                               >
                                 {copiedField === "value" ? (
                                   <Check className="w-4 h-4 text-green-500" />
                                 ) : (
-                                  <Copy className="w-4 h-4 text-gray-500" />
+                                  <Copy className="w-4 h-4 text-gray-1" />
                                 )}
                               </button>
                             )}

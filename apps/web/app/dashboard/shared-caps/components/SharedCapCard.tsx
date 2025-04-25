@@ -60,11 +60,11 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
       </a>
       <div className="flex flex-col flex-grow gap-3 px-4 pb-4 w-full">
         <div className="flex flex-col gap-1">
-          <p className="text-md truncate leading-[1.25rem] text-gray-500 font-medium">
+          <p className="text-md truncate leading-[1.25rem] text-gray-1 font-medium">
             {cap.name}
           </p>
           <Tooltip content={`Cap created at ${effectiveDate}`}>
-            <span className="text-sm truncate leading-[1.25rem] text-gray-400 cursor-pointer flex items-center">
+            <span className="text-sm truncate leading-[1.25rem] text-gray-10 cursor-pointer flex items-center">
               {moment(effectiveDate).fromNow()}
             </span>
           </Tooltip>
@@ -72,18 +72,18 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
         <div className="mb-2 space-y-1">
           {cap.ownerName && (
             <div className="flex gap-2 items-center">
-              <FontAwesomeIcon icon={faUser} className="text-gray-400 size-3" />
-              <span className="text-sm text-gray-400">{cap.ownerName}</span>
+              <FontAwesomeIcon icon={faUser} className="text-gray-10 size-3" />
+              <span className="text-sm text-gray-10">{cap.ownerName}</span>
             </div>
           )}
           <div className="flex gap-2 items-center">
             <FontAwesomeIcon
               icon={faBuilding}
-              className="text-gray-400 size-2.5"
+              className="text-gray-10 size-2.5"
             />
-            <p className="text-sm text-gray-400">
+            <p className="text-sm text-gray-10">
               Shared with{" "}
-              <span className="text-sm font-medium text-gray-500">
+              <span className="text-sm font-medium text-gray-1">
                 {spaceName}
               </span>
             </p>

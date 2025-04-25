@@ -1,8 +1,8 @@
-import { Dialog, DialogContent, LogoBadge, Button } from "@cap/ui";
 import { NODE_ENV } from "@cap/env";
+import { Button, Dialog, DialogContent, LogoBadge } from "@cap/ui";
 import { motion } from "framer-motion";
 import { signIn } from "next-auth/react";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { toast } from "react-hot-toast";
 
 interface AuthOverlayProps {
@@ -49,7 +49,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.2 }}
-              className="text-2xl text-gray-500"
+              className="text-2xl text-gray-1"
             >
               Join the conversation.
             </motion.p>
@@ -91,7 +91,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
                     <div className="w-full border-t border-blue-100" />
                   </div>
                   <div className="relative flex justify-center">
-                    <span className="bg-white px-2 text-gray-500 rounded-xl text-xs">
+                    <span className="bg-gray-1 px-2 text-gray-1 rounded-xl text-xs">
                       Or
                     </span>
                   </div>
@@ -167,7 +167,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
                     : "Email sent to your inbox"
                   : "Continue with Email"}
               </Button>
-              <p className="text-xs text-gray-500 pt-2">
+              <p className="text-xs text-gray-1 pt-2">
                 By typing your email and clicking continue, you acknowledge that
                 you have both read and agree to Cap's{" "}
                 <a
@@ -193,7 +193,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
           {emailSent && (
             <div>
               <button
-                className="mt-5 text-sm text-gray-500 underline hover:text-black"
+                className="mt-5 text-sm text-gray-1 underline hover:text-black"
                 onClick={() => {
                   setEmailSent(false);
                   setEmail("");

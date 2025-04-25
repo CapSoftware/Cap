@@ -1,7 +1,7 @@
-import Link from "next/link";
-import Image from "next/image";
+import { BlogPost, getBlogPosts, PostMetadata } from "@/utils/blog";
 import { format, parseISO } from "date-fns";
-import { getBlogPosts, PostMetadata, BlogPost } from "@/utils/blog";
+import Image from "next/image";
+import Link from "next/link";
 
 const FEATURED_SLUGS = ["handling-a-stripe-payment-attack", "cap-v03-launch"];
 
@@ -62,7 +62,7 @@ export const UpdatesPage = () => {
                     </div>
                   )}
                   <div className="p-6 space-y-3">
-                    <h3 className="text-xl font-semibold text-gray-500">
+                    <h3 className="text-xl font-semibold text-gray-1">
                       {post.metadata.title}
                     </h3>
                     <div className="flex space-x-2 text-sm">
@@ -90,7 +90,7 @@ export const UpdatesPage = () => {
                         post.metadata.tags.split(", ").map((tag, index) => (
                           <p
                             key={index}
-                            className="rounded-md bg-gray-200 font-medium px-2 py-0.5 text-sm text-gray-500"
+                            className="rounded-md bg-gray-200 font-medium px-2 py-0.5 text-sm text-gray-1"
                           >
                             {tag}
                           </p>
@@ -125,7 +125,7 @@ export const UpdatesPage = () => {
                   </div>
                 )}
                 <div className="p-10 space-y-4">
-                  <h2 className="text-xl text-gray-500 md:text-4xl">
+                  <h2 className="text-xl text-gray-1 md:text-4xl">
                     {post.metadata.title}
                   </h2>
                   <div className="flex space-x-2">
@@ -151,7 +151,7 @@ export const UpdatesPage = () => {
                       post.metadata.tags.split(", ").map((tag, index) => (
                         <p
                           key={index}
-                          className="rounded-md bg-gray-200 font-medium px-2 py-0.5 text-sm text-gray-500"
+                          className="rounded-md bg-gray-200 font-medium px-2 py-0.5 text-sm text-gray-1"
                         >
                           {tag}
                         </p>

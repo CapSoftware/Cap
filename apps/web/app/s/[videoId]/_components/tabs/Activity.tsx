@@ -33,8 +33,8 @@ export const Avatar: React.FC<{
   letterClass?: string;
 }> = ({ name, className = "", letterClass = "text-xs" }) => {
   const initial = name?.[0]?.toUpperCase() || "A";
-  const bgColor = name ? "bg-gray-500" : "bg-gray-200";
-  const textColor = name ? "text-white" : "text-gray-500";
+  const bgColor = name ? "bg-gray-12" : "bg-gray-6";
+  const textColor = name ? "text-white" : "text-gray-1";
 
   return (
     <div
@@ -95,14 +95,14 @@ const CommentInput: React.FC<CommentInputProps> = ({
   return (
     <div className="flex items-start space-x-3">
       <div className="flex-1">
-        <div className="p-4 bg-gray-100 rounded-lg">
+        <div className="p-4 bg-gray-1 rounded-lg">
           <textarea
             ref={inputRef}
             value={content}
             onChange={(e) => setContent(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={placeholder || "Leave a comment"}
-            className="w-full text-[15px] leading-[22px] text-gray-500 bg-transparent focus:outline-none"
+            className="w-full text-[15px] leading-[22px] text-gray-1 bg-transparent focus:outline-none"
           />
           <div className="flex mt-2 space-x-2">
             <button
@@ -114,7 +114,7 @@ const CommentInput: React.FC<CommentInputProps> = ({
             {showCancelButton && onCancel && (
               <button
                 onClick={onCancel}
-                className="px-2 py-1.5 bg-gray-100 text-gray-700 text-xs font-medium rounded-full hover:bg-gray-200 focus:outline-none"
+                className="px-2 py-1.5 bg-gray-1 text-gray-700 text-xs font-medium rounded-full hover:bg-gray-200 focus:outline-none"
               >
                 Cancel
               </button>
@@ -223,7 +223,7 @@ const Comment: React.FC<{
               {comment.authorName || "Anonymous"}
             </span>
             <span
-              className="text-sm text-gray-500"
+              className="text-sm text-gray-1"
               data-tooltip-id={`comment-${comment.id}-timestamp`}
               data-tooltip-content={formatTimestamp(commentDate)}
             >
@@ -244,7 +244,7 @@ const Comment: React.FC<{
             {user && !isReplying && canReply && (
               <button
                 onClick={() => onReply(comment.id)}
-                className="text-sm text-gray-500 hover:text-gray-700"
+                className="text-sm text-gray-1 hover:text-gray-700"
               >
                 Reply
               </button>
@@ -318,8 +318,8 @@ const EmptyState = () => (
           d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
         />
       </svg>
-      <h3 className="text-sm font-medium text-gray-500">No comments yet</h3>
-      <p className="text-sm text-gray-400">
+      <h3 className="text-sm font-medium text-gray-1">No comments yet</h3>
+      <p className="text-sm text-gray-8">
         Be the first to share your thoughts!
       </p>
     </div>
@@ -592,7 +592,7 @@ export const Activity: React.FC<ActivityProps> = ({
         )}
       </div>
 
-      <div className="flex-none p-4 bg-white border-t border-gray-200">
+      <div className="flex-none p-4 bg-gray-1 border-t border-gray-200">
         {user ? (
           <CommentInput
             onSubmit={handleNewComment}
@@ -603,9 +603,9 @@ export const Activity: React.FC<ActivityProps> = ({
         ) : (
           <div
             onClick={() => setShowAuthOverlay(true)}
-            className="p-4 bg-gray-100 rounded-lg transition-colors cursor-pointer hover:bg-gray-200"
+            className="p-4 bg-gray-1 rounded-lg transition-colors cursor-pointer hover:bg-gray-200"
           >
-            <span className="text-[15px] leading-[22px] text-gray-500">
+            <span className="text-[15px] leading-[22px] text-gray-1">
               Sign in to leave a comment
             </span>
           </div>

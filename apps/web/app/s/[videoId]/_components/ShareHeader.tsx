@@ -1,15 +1,15 @@
-import { Button, LogoBadge } from "@cap/ui";
-import { videos } from "@cap/database/schema";
-import moment from "moment";
+import { editTitle } from "@/actions/videos/edit-title";
 import { userSelectProps } from "@cap/database/auth/session";
+import { videos } from "@cap/database/schema";
+import { clientEnv, NODE_ENV } from "@cap/env";
+import { Button } from "@cap/ui";
+import { saveAs } from "file-saver";
+import JSZip from "jszip";
+import { Copy, Loader2 } from "lucide-react";
+import moment from "moment";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "react-hot-toast";
-import { Copy, Loader2 } from "lucide-react";
-import JSZip from "jszip";
-import { saveAs } from "file-saver";
-import { clientEnv, NODE_ENV } from "@cap/env";
-import { editTitle } from "@/actions/videos/edit-title";
 
 export const ShareHeader = ({
   data,
@@ -125,7 +125,7 @@ export const ShareHeader = ({
                   </h1>
                 )}
               </div>
-              <p className="text-gray-400 text-sm">
+              <p className="text-gray-8 text-sm">
                 {moment(data.createdAt).fromNow()}
               </p>
             </div>

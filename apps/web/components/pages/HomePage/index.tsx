@@ -463,7 +463,7 @@ const VideoModal = ({ setVideoToggled }: Props) => {
           damping: 20,
         }}
         ref={ref}
-        className="w-[calc(100%-20px)] max-w-[1000px] bg-white rounded-[16px] md:h-[700px] h-[300px]"
+        className="w-[calc(100%-20px)] max-w-[1000px] bg-gray-1 rounded-[16px] md:h-[700px] h-[300px]"
       >
         <MuxPlayer
           playbackId="A6oZoUWVZjOIVZB6XnBMLagYnXE6xhDhp8Hcyky018hk"

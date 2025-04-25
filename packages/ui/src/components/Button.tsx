@@ -13,18 +13,20 @@ const buttonVariants = cva(
     variants: {
       variant: {
         primary:
-          "bg-gradient-to-t button-gradient-border from-blue-300 to-[#75A3FF] shadow-[0_0_0_1px] hover:brightness-110 shadow-blue-400 text-gray-50 hover:bg-blue-400 disabled:bg-blue-200",
+          "bg-gradient-to-t button-gradient-border from-blue-8 to-[#75A3FF] shadow-[0_0_0_1px] hover:brightness-110 shadow-blue-4 text-gray-50 hover:bg-blue-9 disabled:bg-blue-200",
         red: "bg-gradient-to-t button-gradient-border from-[#772828] to-[#9F3C3C] shadow-[0_0_0_1px] hover:brightness-110 shadow-red-900 text-gray-50 hover:bg-red-400 disabled:bg-red-200",
         secondary:
-          "bg-blue-400 text-gray-50 hover:bg-blue-500 disabled:bg-blue-200 disabled:text-gray-400 border-blue-300",
+          "bg-blue-400 text-gray-50 hover:bg-blue-500 disabled:bg-blue-200 disabled:text-gray-8 border-blue-300",
         destructive:
           "bg-gradient-to-t shadow-[0_0_0_1px] shadow-red-900 hover:brightness-110 from-red-600 to-red-400 text-gray-50 button-gradient-border hover:bg-red-400 disabled:bg-red-200 border-red-300",
         white:
-          "bg-gray-50 text-gray-500 hover:bg-gray-100 border disabled:bg-gray-100 border-gray-200",
-        gray: "bg-gray-100 text-gray-500 hover:bg-gray-200 disabled:bg-gray-100 border-gray-200 border",
+          "bg-gray-12 text-gray-1 hover:bg-gray-11 border disabled:bg-gray-1 border-gray-12",
+        gray: "bg-gray-4 text-gray-12 hover:bg-gray-6 hover:border-gray-7 disabled:bg-gray-1 border-gray-5 border",
+        normaldark:
+          "bg-gray-12 text-gray-1 hover:bg-gray-11 border disabled:bg-gray-1 border-gray-12",
         dark: "bg-gradient-to-t button-gradient-border from-[#0f0f0f] to-[#404040] shadow-[0_0_0_1px] hover:brightness-110 shadow-[#383838] text-gray-50 hover:bg-[#383838] disabled:bg-[#383838] border-transparent",
         radialblue:
-          "text-gray-50 border button-gradient-border shadow-[0_0_0_1px] shadow-blue-400 disabled:bg-gray-100 border-0 [background:radial-gradient(90%_100%_at_15%_12%,#9BC4FF_0%,#3588FF_100%)] border-transparent hover:opacity-80",
+          "text-gray-50 border button-gradient-border shadow-[0_0_0_1px] shadow-blue-400 disabled:bg-gray-1 border-0 [background:radial-gradient(90%_100%_at_15%_12%,#9BC4FF_0%,#3588FF_100%)] border-transparent hover:opacity-80",
       },
       size: {
         xs: "text-sm h-[32px] px-[0.5rem] ",

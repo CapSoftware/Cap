@@ -26,7 +26,7 @@ export function LoginLink({
       <Head />
       <Preview>Your Cap Login Link</Preview>
       <Tailwind>
-        <Body className="mx-auto my-auto bg-white font-sans">
+        <Body className="mx-auto my-auto bg-gray-1 font-sans">
           <Container className="mx-auto my-10 max-w-[500px] rounded border border-solid border-gray-200 px-10 py-5">
             <Section className="mt-8">
               <Img
