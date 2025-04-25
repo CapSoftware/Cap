@@ -10,6 +10,7 @@ import JSZip from "jszip";
 import { saveAs } from "file-saver";
 import { clientEnv, NODE_ENV } from "@cap/env";
 import { editTitle } from "@/actions/videos/edit-title";
+import { usePublicEnv } from "@/utils/public-env";
 
 export const ShareHeader = ({
   data,
@@ -77,12 +78,14 @@ export const ShareHeader = ({
     }
   };
 
+  const { webUrl } = usePublicEnv();
+
   const getVideoLink = () => {
     return customDomain && domainVerified
       ? `https://${customDomain}/s/${data.id}`
       : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
       ? `https://cap.link/${data.id}`
-      : `${location.origin}/s/${data.id}`;
+      : `${webUrl}/s/${data.id}`;
   };
 
   const getDisplayLink = () => {
@@ -90,7 +93,7 @@ export const ShareHeader = ({
       ? `${customDomain}/s/${data.id}`
       : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
       ? `cap.link/${data.id}`
-      : `${location.origin}/s/${data.id}`;
+      : `${webUrl}/s/${data.id}`;
   };
 
   return (

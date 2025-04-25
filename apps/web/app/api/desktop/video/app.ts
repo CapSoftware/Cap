@@ -16,47 +16,47 @@ import { withAuth } from "../../utils";
 export const app = new Hono().use(withAuth);
 
 app.get(
-	"/create",
-	zValidator(
-		"query",
-		z.object({
-			duration: z.number().optional(),
-			recordingMode: z
-				.union([z.literal("hls"), z.literal("desktopMP4")])
-				.optional(),
-			isScreenshot: z.coerce.boolean().default(false),
-			videoId: z.string().optional(),
-		})
-	),
-	async (c) => {
-		const { duration, recordingMode, isScreenshot, videoId } =
-			c.req.valid("query");
-		const user = c.get("user");
+  "/create",
+  zValidator(
+    "query",
+    z.object({
+      duration: z.number().optional(),
+      recordingMode: z
+        .union([z.literal("hls"), z.literal("desktopMP4")])
+        .optional(),
+      isScreenshot: z.coerce.boolean().default(false),
+      videoId: z.string().optional(),
+    })
+  ),
+  async (c) => {
+    const { duration, recordingMode, isScreenshot, videoId } =
+      c.req.valid("query");
+    const user = c.get("user");
 
-		// Check if user is on free plan and video is over 5 minutes
-		const isUpgraded = user.stripeSubscriptionStatus === "active";
+    // Check if user is on free plan and video is over 5 minutes
+    const isUpgraded = user.stripeSubscriptionStatus === "active";
 
-		if (!isUpgraded && duration && duration > 300)
-			return c.json({ error: "upgrade_required" }, { status: 403 });
+    if (!isUpgraded && duration && duration > 300)
+      return c.json({ error: "upgrade_required" }, { status: 403 });
 
-		const [bucket] = await db
-			.select()
-			.from(s3Buckets)
-			.where(eq(s3Buckets.ownerId, user.id));
+    const [bucket] = await db
+      .select()
+      .from(s3Buckets)
+      .where(eq(s3Buckets.ownerId, user.id));
 
-		const s3Config = await getS3Config(bucket);
-		const bucketName = await getS3Bucket(bucket);
+    const s3Config = await getS3Config(bucket);
+    const bucketName = await getS3Bucket(bucket);
 
     const date = new Date();
     const formattedDate = `${date.getDate()} ${date.toLocaleString("default", {
       month: "long",
     })} ${date.getFullYear()}`;
 
-		if (videoId !== undefined) {
-			const [video] = await db
-				.select()
-				.from(videos)
-				.where(eq(videos.id, videoId));
+    if (videoId !== undefined) {
+      const [video] = await db
+        .select()
+        .from(videos)
+        .where(eq(videos.id, videoId));
 
       if (video) {
         return c.json({
@@ -88,56 +88,56 @@ app.get(
       bucket: bucket?.id,
     };
 
-		await db.insert(videos).values(videoData);
+    await db.insert(videos).values(videoData);
 
     if (clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
       await dub.links.create({
-        url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${idToUse}`,
+        url: `${serverEnv.WEB_URL}/s/${idToUse}`,
         domain: "cap.link",
         key: idToUse,
       });
 
-		// Check if this is the user's first video and send the first shareable link email
-		try {
-			const videoCount = await db
-				.select({ count: count() })
-				.from(videos)
-				.where(eq(videos.ownerId, user.id));
+    // Check if this is the user's first video and send the first shareable link email
+    try {
+      const videoCount = await db
+        .select({ count: count() })
+        .from(videos)
+        .where(eq(videos.ownerId, user.id));
 
-			if (
-				videoCount &&
-				videoCount[0] &&
-				videoCount[0].count === 1 &&
-				user.email
-			) {
-				console.log(
-					"[SendFirstShareableLinkEmail] Sending first shareable link email with 5-minute delay"
-				);
+      if (
+        videoCount &&
+        videoCount[0] &&
+        videoCount[0].count === 1 &&
+        user.email
+      ) {
+        console.log(
+          "[SendFirstShareableLinkEmail] Sending first shareable link email with 5-minute delay"
+        );
 
         const videoUrl = clientEnv.NEXT_PUBLIC_IS_CAP
           ? `https://cap.link/${idToUse}`
-          : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${idToUse}`;
+          : `${serverEnv.WEB_URL}/s/${idToUse}`;
 
-				// Send email with 5-minute delay using Resend's scheduling feature
-				await sendEmail({
-					email: user.email,
-					subject: "You created your first Cap! 🥳",
-					react: FirstShareableLink({
-						email: user.email,
-						url: videoUrl,
-						videoName: videoData.name,
-					}),
-					marketing: true,
-					scheduledAt: "in 5 min",
-				});
+        // Send email with 5-minute delay using Resend's scheduling feature
+        await sendEmail({
+          email: user.email,
+          subject: "You created your first Cap! 🥳",
+          react: FirstShareableLink({
+            email: user.email,
+            url: videoUrl,
+            videoName: videoData.name,
+          }),
+          marketing: true,
+          scheduledAt: "in 5 min",
+        });
 
-				console.log(
-					"[SendFirstShareableLinkEmail] First shareable link email scheduled to be sent in 5 minutes"
-				);
-			}
-		} catch (error) {
-			console.error("Error checking for first video or sending email:", error);
-		}
+        console.log(
+          "[SendFirstShareableLinkEmail] First shareable link email scheduled to be sent in 5 minutes"
+        );
+      }
+    } catch (error) {
+      console.error("Error checking for first video or sending email:", error);
+    }
 
     return c.json({
       id: idToUse,

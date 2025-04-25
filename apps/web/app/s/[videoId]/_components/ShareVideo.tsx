@@ -1,4 +1,4 @@
-import { apiClient } from "@/utils/web-api";
+import { useApiClient } from "@/utils/web-api";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
@@ -892,6 +892,8 @@ export const ShareVideo = forwardRef<
   };
 
   const publicEnv = usePublicEnv();
+
+  const apiClient = useApiClient();
 
   useEffect(() => {
     const fetchSubtitles = async () => {

@@ -13,7 +13,7 @@ import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
 import type { Metadata, ResolvingMetadata } from "next";
 import { notFound } from "next/navigation";
 import { ImageViewer } from "./_components/ImageViewer";
-import { clientEnv } from "@cap/env";
+import { clientEnv, serverEnv } from "@cap/env";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 
 export const dynamic = "auto";

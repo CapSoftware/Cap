@@ -5,6 +5,7 @@ import { CapCardAnalytics } from "@/app/dashboard/caps/components/CapCardAnalyti
 import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
 import { Tooltip } from "@/components/Tooltip";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
+import { usePublicEnv } from "@/utils/public-env";
 import { VideoMetadata } from "@cap/database/types";
 import { clientEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
@@ -44,7 +45,7 @@ export const CapCard = ({
   onDelete,
   userId,
   userSpaces,
-}) => {
+}: CapCardProps) => {
   const effectiveDate = cap.metadata?.customCreatedAt
     ? new Date(cap.metadata.customCreatedAt)
     : cap.createdAt;
@@ -203,6 +204,8 @@ export const CapCard = ({
     }
   };
 
+  const { webUrl } = usePublicEnv();
+
   return (
     <>
       <SharingDialog
@@ -224,7 +227,7 @@ export const CapCard = ({
                     ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
                     : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
                     ? `https://cap.link/${cap.id}`
-                    : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
+                    : `${webUrl}/s/${cap.id}`
                 )
               }
               className="!size-8 delay-0 hover:opacity-80 rounded-full min-w-fit !p-0"
@@ -275,7 +278,7 @@ export const CapCard = ({
               ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
               : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
               ? `https://cap.link/${cap.id}`
-              : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
+              : `${webUrl}/s/${cap.id}`
           }
         >
           <VideoThumbnail

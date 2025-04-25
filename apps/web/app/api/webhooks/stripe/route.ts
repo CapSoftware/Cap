@@ -4,7 +4,7 @@ import { users } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
-import { serverEnv } from "@cap/env";
+import { clientEnv, serverEnv } from "@cap/env";
 import { PostHog } from "posthog-node";
 
 const relevantEvents = new Set([
@@ -198,8 +198,8 @@ export const POST = async (req: Request) => {
         try {
           // Initialize server-side PostHog
           const serverPostHog = new PostHog(
-            process.env.NEXT_PUBLIC_POSTHOG_KEY || "",
-            { host: process.env.NEXT_PUBLIC_POSTHOG_HOST || "" }
+            clientEnv.NEXT_PUBLIC_POSTHOG_KEY || "",
+            { host: clientEnv.NEXT_PUBLIC_POSTHOG_HOST || "" }
           );
 
           // Track subscription completed event

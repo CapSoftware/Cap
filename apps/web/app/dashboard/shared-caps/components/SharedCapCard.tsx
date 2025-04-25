@@ -2,6 +2,7 @@ import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayou
 import { CapCardAnalytics } from "@/app/dashboard/caps/components/CapCardAnalytics";
 import { Tooltip } from "@/components/Tooltip";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
+import { usePublicEnv } from "@/utils/public-env";
 import { VideoMetadata } from "@cap/database/types";
 import { clientEnv, NODE_ENV } from "@cap/env";
 import { faBuilding, faUser } from "@fortawesome/free-solid-svg-icons";

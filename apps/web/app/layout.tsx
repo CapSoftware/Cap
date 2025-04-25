@@ -10,7 +10,9 @@ import type { Metadata } from "next";
 import localFont from "next/font/local";
 import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "./AuthProvider";
-import { PostHogProvider, Providers } from "./providers";
+import { PostHogProvider, Providers, PublicEnvProvider } from "./providers";
+import { PublicEnvContext } from "@/utils/public-env";
+import { S3_BUCKET_URL } from "@cap/utils";
 
 const SfProDisplay = localFont({
   src: [
@@ -89,20 +91,28 @@ export default async function RootLayout({
         <TooltipPrimitive.Provider>
           <PostHogProvider>
             <AuthProvider>
-              <Providers
-                userId={user?.id}
-                intercomHash={intercomHash}
-                name={`${user?.name ?? ""} ${user?.lastName ?? ""}`}
-                email={user?.email ?? ""}
+              <PublicEnvContext
+                value={{
+                  webUrl: serverEnv.WEB_URL,
+                  awsBucket: serverEnv.CAP_AWS_BUCKET,
+                  s3BucketUrl: S3_BUCKET_URL,
+                }}
               >
-                <Toaster />
-                <main className="overflow-x-hidden w-full">
-                  <Navbar auth={user ? true : false} />
-                  {children}
-                  <Footer />
-                </main>
-                <BentoScript user={user} />
-              </Providers>
+                <Providers
+                  userId={user?.id}
+                  intercomHash={intercomHash}
+                  name={`${user?.name ?? ""} ${user?.lastName ?? ""}`}
+                  email={user?.email ?? ""}
+                >
+                  <Toaster />
+                  <main className="overflow-x-hidden w-full">
+                    <Navbar auth={user ? true : false} />
+                    {children}
+                    <Footer />
+                  </main>
+                  <BentoScript user={user} />
+                </Providers>
+              </PublicEnvContext>
             </AuthProvider>
           </PostHogProvider>
         </TooltipPrimitive.Provider>

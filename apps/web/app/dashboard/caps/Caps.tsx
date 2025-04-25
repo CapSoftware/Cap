@@ -1,6 +1,6 @@
 "use client";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { apiClient } from "@/utils/web-api";
+import { useApiClient } from "@/utils/web-api";
 import { VideoMetadata } from "@cap/database/types";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -37,6 +37,8 @@ export const Caps = ({
   const { user } = useSharedContext();
   const limit = 15;
   const totalPages = Math.ceil(count / limit);
+
+  const apiClient = useApiClient();
 
   useEffect(() => {
     const fetchAnalytics = async () => {

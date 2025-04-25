@@ -11,32 +11,32 @@ import { clientEnv, serverEnv } from "@cap/env";
 const lastEmailSentCache = new Map<string, Date>();
 
 export async function POST(request: NextRequest) {
-	console.log("Processing new comment email notification");
-	const { commentId } = await request.json();
+  console.log("Processing new comment email notification");
+  const { commentId } = await request.json();
 
-	if (!commentId) {
-		console.error("Missing required field: commentId");
-		return Response.json(
-			{ error: "Missing required fields: commentId" },
-			{ status: 400 }
-		);
-	}
+  if (!commentId) {
+    console.error("Missing required field: commentId");
+    return Response.json(
+      { error: "Missing required fields: commentId" },
+      { status: 400 }
+    );
+  }
 
-	try {
-		console.log(`Fetching comment details for commentId: ${commentId}`);
-		// Get the comment details
-		const commentDetails = await db
-			.select({
-				id: comments.id,
-				content: comments.content,
-				type: comments.type,
-				videoId: comments.videoId,
-				authorId: comments.authorId,
-				createdAt: comments.createdAt,
-			})
-			.from(comments)
-			.where(eq(comments.id, commentId))
-			.limit(1);
+  try {
+    console.log(`Fetching comment details for commentId: ${commentId}`);
+    // Get the comment details
+    const commentDetails = await db
+      .select({
+        id: comments.id,
+        content: comments.content,
+        type: comments.type,
+        videoId: comments.videoId,
+        authorId: comments.authorId,
+        createdAt: comments.createdAt,
+      })
+      .from(comments)
+      .where(eq(comments.id, commentId))
+      .limit(1);
 
     if (!commentDetails || commentDetails.length === 0) {
       console.error(`Comment not found for commentId: ${commentId}`);
@@ -66,17 +66,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
-		console.log(`Fetching video details for videoId: ${comment.videoId}`);
-		// Get the video details
-		const videoDetails = await db
-			.select({
-				id: videos.id,
-				name: videos.name,
-				ownerId: videos.ownerId,
-			})
-			.from(videos)
-			.where(eq(videos.id, comment.videoId))
-			.limit(1);
+    console.log(`Fetching video details for videoId: ${comment.videoId}`);
+    // Get the video details
+    const videoDetails = await db
+      .select({
+        id: videos.id,
+        name: videos.name,
+        ownerId: videos.ownerId,
+      })
+      .from(videos)
+      .where(eq(videos.id, comment.videoId))
+      .limit(1);
 
     if (!videoDetails || videoDetails.length === 0) {
       console.error(`Video not found for videoId: ${comment.videoId}`);
@@ -95,16 +95,16 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: "Invalid video data" }, { status: 500 });
     }
 
-		console.log(`Fetching owner details for userId: ${video.ownerId}`);
-		// Get the video owner's email
-		const ownerDetails = await db
-			.select({
-				id: users.id,
-				email: users.email,
-			})
-			.from(users)
-			.where(eq(users.id, video.ownerId))
-			.limit(1);
+    console.log(`Fetching owner details for userId: ${video.ownerId}`);
+    // Get the video owner's email
+    const ownerDetails = await db
+      .select({
+        id: users.id,
+        email: users.email,
+      })
+      .from(users)
+      .where(eq(users.id, video.ownerId))
+      .limit(1);
 
     if (
       !ownerDetails ||
@@ -116,26 +116,26 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: "Video owner not found" }, { status: 404 });
     }
 
-		const owner = ownerDetails[0];
-		console.log(`Found owner: ${owner.id}, email: ${owner.email}`);
+    const owner = ownerDetails[0];
+    console.log(`Found owner: ${owner.id}, email: ${owner.email}`);
 
     if (!owner || !owner.email || !owner.id) {
       console.error("Invalid owner data");
       return Response.json({ error: "Invalid owner data" }, { status: 500 });
     }
 
-		// Get the commenter's name
-		let commenterName = "Anonymous";
-		if (comment.authorId) {
-			console.log(`Fetching commenter details for userId: ${comment.authorId}`);
-			const commenterDetails = await db
-				.select({
-					id: users.id,
-					name: users.name,
-				})
-				.from(users)
-				.where(eq(users.id, comment.authorId))
-				.limit(1);
+    // Get the commenter's name
+    let commenterName = "Anonymous";
+    if (comment.authorId) {
+      console.log(`Fetching commenter details for userId: ${comment.authorId}`);
+      const commenterDetails = await db
+        .select({
+          id: users.id,
+          name: users.name,
+        })
+        .from(users)
+        .where(eq(users.id, comment.authorId))
+        .limit(1);
 
       if (
         commenterDetails &&
@@ -203,30 +203,6 @@ export async function POST(request: NextRequest) {
         { status: 200 }
       );
     }
-
-		// Also check the database for recent comments that might have triggered emails
-		// This handles cases where the server restarts and the cache is cleared
-		const fifteenMinutesAgo = new Date(now.getTime() - 15 * 60 * 1000);
-		console.log(`Checking for recent comments since ${fifteenMinutesAgo.toISOString()}`);
-		const recentComments = await db
-			.select({
-				id: comments.id,
-			})
-			.from(comments)
-			.where(
-				and(
-					eq(comments.videoId, comment.videoId),
-					eq(comments.type, "text"),
-					gt(comments.createdAt, fifteenMinutesAgo),
-					ne(comments.id, commentId) // Exclude the current comment
-				)
-			)
-			.limit(1);
-
-    // Send the email
-    console.log(
-      `Sending email to ${owner.email} about comment on video "${video.name}"`
-    );
 
     try {
       const emailResult = await sendEmail({

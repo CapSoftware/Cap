@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect } from "react";
+import { createContext, PropsWithChildren, useEffect } from "react";
 import { identifyUser, initAnonymousUser, trackEvent } from "./utils/analytics";
 import posthog from "posthog-js";
 import { PostHogProvider as PHProvider } from "posthog-js/react";
-import { clientEnv } from "@cap/env";
+import { clientEnv, serverEnv } from "@cap/env";
 import PostHogPageView from "./PosthogPageView";
 import Intercom from "@intercom/messenger-js-sdk";
 import { usePathname } from "next/navigation";

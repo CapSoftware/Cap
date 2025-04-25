@@ -18,11 +18,11 @@ WORKDIR /app
 COPY package.json yarn.lock* package-lock.json* pnpm-lock.yaml* .npmrc* ./
 COPY /patches ./patches
 RUN \
-  if [ -f yarn.lock ]; then yarn --frozen-lockfile; \
-  elif [ -f package-lock.json ]; then npm ci; \
-  elif [ -f pnpm-lock.yaml ]; then corepack enable pnpm && pnpm i; \
-  else echo "Lockfile not found." && exit 1; \
-  fi
+	if [ -f yarn.lock ]; then yarn --frozen-lockfile; \
+	elif [ -f package-lock.json ]; then npm ci; \
+	elif [ -f pnpm-lock.yaml ]; then corepack enable pnpm && pnpm i; \
+	else echo "Lockfile not found." && exit 1; \
+	fi
 
 
 # 2. Rebuild the source code only when needed
@@ -34,28 +34,6 @@ COPY . .
 
 # build-time only variables
 ARG DOCKER_BUILD=true
-
-# Build and runtime variables
-ENV DOCKER_BUILD=true
-ENV DATABASE_ENCRYPTION_KEY=8439f729756f4d591032e9d4a1dd366423581a82af0c191187582a39aab935f6
-ENV NEXTAUTH_SECRET=8439f729756f4d591032e9d4a1dd366423581a82af0c191187582a39aab935f6
-ENV NODE_ENV=production
-ENV PORT=3000
-ENV NEXT_PUBLIC_WEB_URL=http://localhost:3000
-ENV NEXTAUTH_URL=${NEXT_PUBLIC_WEB_URL}
-ENV DATABASE_URL=mysql://root:@localhost:3306/planetscale
-ENV DATABASE_MIGRATION_URL=mysql://root:@localhost:3306/planetscale
-ENV CAP_AWS_ACCESS_KEY=capS3root
-ENV CAP_AWS_SECRET_KEY=capS3root
-ENV NEXT_PUBLIC_CAP_AWS_BUCKET=capso
-ENV NEXT_PUBLIC_CAP_AWS_REGION=us-east-1
-ENV NEXT_PUBLIC_CAP_AWS_ENDPOINT=http://localhost:3902
-
-ENV GOOGLE_CLIENT_ID=""
-ENV GOOGLE_CLIENT_SECRET=""
-ENV RESEND_API_KEY=""
-ENV DEEPGRAM_API_KEY=""
-
 
 RUN corepack enable pnpm && pnpm run build:web
 
