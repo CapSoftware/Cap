@@ -1,6 +1,33 @@
 import { MediaFormatConverter } from "@/components/tools/MediaFormatConverter";
 import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 import { ToolPageContent } from "@/components/tools/types";
+import { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "MOV to MP4 Converter | Free Online Video Converter | Cap",
+  description:
+    "Convert Apple QuickTime MOV videos to MP4 format directly in your browser. Free online converter with no uploads needed for maximum privacy.",
+  openGraph: {
+    title: "MOV to MP4 Converter | Free Online Video Converter",
+    description:
+      "Convert Apple QuickTime MOV videos to the widely compatible MP4 format right in your browser. No uploads, no installation required.",
+    images: [
+      {
+        url: "/og.png",
+        width: 1200,
+        height: 630,
+        alt: "Cap MOV to MP4 Converter Tool",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "MOV to MP4 Converter | Free Online Video Converter",
+    description:
+      "Convert Apple QuickTime MOV videos to MP4 format directly in your browser. No uploads required for maximum privacy.",
+    images: ["/og.png"],
+  },
+};
 
 export default function MOVToMP4Page() {
   const pageContent: ToolPageContent = {

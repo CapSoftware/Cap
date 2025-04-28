@@ -1,6 +1,33 @@
 import { MediaFormatConverter } from "@/components/tools/MediaFormatConverter";
 import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 import { ToolPageContent } from "@/components/tools/types";
+import { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "MP4 to MP3 Converter | Extract Audio from Video | Cap",
+  description:
+    "Extract audio from MP4 videos and save as MP3 files directly in your browser. No uploads required, completely private and secure.",
+  openGraph: {
+    title: "MP4 to MP3 Converter | Extract Audio from Video",
+    description:
+      "Extract audio from MP4 videos and save as MP3 files. Process videos locally in your browser with no uploads for maximum privacy.",
+    images: [
+      {
+        url: "/og.png",
+        width: 1200,
+        height: 630,
+        alt: "Cap MP4 to MP3 Converter Tool",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "MP4 to MP3 Converter | Extract Audio from Video",
+    description:
+      "Extract audio from MP4 videos and save as high-quality MP3 files. No uploads required, completely private and secure.",
+    images: ["/og.png"],
+  },
+};
 
 export default function MP4ToMP3Page() {
   const pageContent: ToolPageContent = {

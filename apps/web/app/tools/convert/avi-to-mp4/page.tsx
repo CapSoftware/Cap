@@ -1,6 +1,33 @@
 import { MediaFormatConverter } from "@/components/tools/MediaFormatConverter";
 import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 import { ToolPageContent } from "@/components/tools/types";
+import { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "AVI to MP4 Converter | Free Online Video Converter | Cap",
+  description:
+    "Convert AVI videos to MP4 format directly in your browser. Free online converter with no uploads needed for maximum privacy and security.",
+  openGraph: {
+    title: "AVI to MP4 Converter | Free Online Video Converter",
+    description:
+      "Convert outdated AVI videos to modern MP4 format. Process files locally in your browser with no uploads for maximum privacy.",
+    images: [
+      {
+        url: "/og.png",
+        width: 1200,
+        height: 630,
+        alt: "Cap AVI to MP4 Converter Tool",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "AVI to MP4 Converter | Free Online Video Converter",
+    description:
+      "Convert AVI videos to MP4 format for better compatibility. No uploads required, completely private and secure.",
+    images: ["/og.png"],
+  },
+};
 
 export default function AVIToMP4Page() {
   const pageContent: ToolPageContent = {

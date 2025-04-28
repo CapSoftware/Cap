@@ -21,17 +21,35 @@ export async function generateMetadata({
 
   if (!CONVERSION_CONFIGS[conversionPath]) {
     return {
-      title: "Conversion Not Supported",
-      description: "This conversion type is not supported.",
+      title: "Conversion Not Supported | Cap",
+      description:
+        "This conversion type is not supported by our free online tools.",
     };
   }
 
   const { sourceFormat, targetFormat } = parseFormats(conversionPath);
   const config = CONVERSION_CONFIGS[conversionPath];
+  const sourceUpper = sourceFormat.toUpperCase();
+  const targetUpper = targetFormat.toUpperCase();
 
   return {
-    title: `${sourceFormat.toUpperCase()} to ${targetFormat.toUpperCase()} Converter | Free Online Tool`,
-    description: config.description(sourceFormat, targetFormat),
+    title: `${sourceUpper} to ${targetUpper} Converter | Free Online Tool | Cap`,
+    description: `${config.description(
+      sourceFormat,
+      targetFormat
+    )} Free online converter with no uploads needed for maximum privacy.`,
+    openGraph: {
+      title: `${sourceUpper} to ${targetUpper} Converter | Free Online Tool`,
+      description: `Convert ${sourceUpper} files to ${targetUpper} format directly in your browser. No uploads required, processing happens locally for maximum privacy.`,
+      images: [
+        {
+          url: "/og.png",
+          width: 1200,
+          height: 630,
+          alt: `Cap ${sourceUpper} to ${targetUpper} Converter Tool`,
+        },
+      ],
+    },
   };
 }
 

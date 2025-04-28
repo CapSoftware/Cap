@@ -1,6 +1,33 @@
 import { MediaFormatConverter } from "@/components/tools/MediaFormatConverter";
 import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 import { ToolPageContent } from "@/components/tools/types";
+import { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "MP4 to GIF Converter | Free Online Animated GIF Maker | Cap",
+  description:
+    "Convert MP4 videos to animated GIF images directly in your browser. Create high-quality GIFs with our free online converter, no uploads needed.",
+  openGraph: {
+    title: "MP4 to GIF Converter | Free Online Animated GIF Maker",
+    description:
+      "Convert MP4 videos to animated GIF images directly in your browser. No uploads required, processing happens locally for maximum privacy.",
+    images: [
+      {
+        url: "/og.png",
+        width: 1200,
+        height: 630,
+        alt: "Cap MP4 to GIF Converter Tool",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "MP4 to GIF Converter | Free Online Animated GIF Maker",
+    description:
+      "Convert MP4 videos to animated GIF images directly in your browser. No uploads required, maximum privacy.",
+    images: ["/og.png"],
+  },
+};
 
 export default function MP4ToGIFPage() {
   const pageContent: ToolPageContent = {

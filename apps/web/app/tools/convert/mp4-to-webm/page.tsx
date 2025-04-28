@@ -1,6 +1,33 @@
 import { MediaFormatConverter } from "@/components/tools/MediaFormatConverter";
 import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 import { ToolPageContent } from "@/components/tools/types";
+import { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "MP4 to WebM Converter | Free Online Video Converter | Cap",
+  description:
+    "Convert MP4 videos to WebM format for better web compatibility directly in your browser. Free online tool with no uploads required.",
+  openGraph: {
+    title: "MP4 to WebM Converter | Free Online Video Converter",
+    description:
+      "Convert MP4 videos to WebM format for better web compatibility. Process videos locally in your browser with no uploads required.",
+    images: [
+      {
+        url: "/og.png",
+        width: 1200,
+        height: 630,
+        alt: "Cap MP4 to WebM Converter Tool",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "MP4 to WebM Converter | Free Online Video Converter",
+    description:
+      "Convert MP4 videos to WebM format for better web compatibility. Process locally with no uploads for maximum privacy.",
+    images: ["/og.png"],
+  },
+};
 
 export default function MP4ToWebMPage() {
   const pageContent: ToolPageContent = {
