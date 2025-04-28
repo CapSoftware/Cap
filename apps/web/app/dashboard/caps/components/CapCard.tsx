@@ -99,7 +99,7 @@ export const CapCard: React.FC<CapCardProps> = ({
     setSharedSpaces(
       userSpaces.filter((space) => updatedSharedSpaces.includes(space.id))
     );
-    router.refresh(); // Add this line to refresh the page
+    router.refresh();
   };
 
   const isOwner = userId === cap.ownerId;
@@ -210,6 +210,16 @@ export const CapCard: React.FC<CapCardProps> = ({
     }
   };
 
+  const handleCardClick = (e: React.MouseEvent) => {
+    if (anyCapSelected) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (onSelectToggle) {
+        onSelectToggle();
+      }
+    }
+  };
+
   const handleSelectClick = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -217,6 +227,12 @@ export const CapCard: React.FC<CapCardProps> = ({
       onSelectToggle();
     }
   };
+
+  const capUrl = activeSpace?.space.customDomain
+    ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
+    : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+    ? `https://cap.link/${cap.id}`
+    : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`;
 
   return (
     <>
@@ -240,20 +256,12 @@ export const CapCard: React.FC<CapCardProps> = ({
       >
         <div
           className={`flex absolute duration-200 ${
-            anyCapSelected ? "opacity-100" : "group-hover:opacity-100 opacity-0"
+            anyCapSelected ? "opacity-0" : "group-hover:opacity-100 opacity-0"
           } top-2 right-2 z-[20] flex-col gap-2`}
         >
           <Tooltip content="Copy link">
             <Button
-              onClick={() =>
-                handleCopy(
-                  activeSpace?.space.customDomain
-                    ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
-                    : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-                    ? `https://cap.link/${cap.id}`
-                    : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
-                )
-              }
+              onClick={() => handleCopy(capUrl)}
               className="!size-8 delay-0 hover:opacity-80 rounded-full min-w-fit !p-0"
               variant="white"
               size="sm"
@@ -296,7 +304,6 @@ export const CapCard: React.FC<CapCardProps> = ({
           </Tooltip>
         </div>
 
-        {/* Selection checkbox */}
         <div
           className={`absolute top-2 left-2 z-[20] duration-200 ${
             isSelected || anyCapSelected
@@ -318,25 +325,24 @@ export const CapCard: React.FC<CapCardProps> = ({
           </div>
         </div>
 
-        <Link
-          className="block group"
-          href={
-            activeSpace?.space.customDomain
-              ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
-              : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-              ? `https://cap.link/${cap.id}`
-              : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
-          }
-        >
-          <VideoThumbnail
-            imageClass={`${
-              anyCapSelected ? "opacity-50" : "group-hover:opacity-50"
-            } transition-opacity duration-200`}
-            userId={cap.ownerId}
-            videoId={cap.id}
-            alt={`${cap.name} Thumbnail`}
-          />
-        </Link>
+        <div className="relative cursor-pointer" onClick={handleCardClick}>
+          <Link
+            className={`block group ${
+              anyCapSelected ? "pointer-events-none" : ""
+            }`}
+            href={capUrl}
+          >
+            <VideoThumbnail
+              imageClass={`${
+                anyCapSelected ? "opacity-50" : "group-hover:opacity-50"
+              } transition-opacity duration-200`}
+              userId={cap.ownerId}
+              videoId={cap.id}
+              alt={`${cap.name} Thumbnail`}
+            />
+          </Link>
+        </div>
+
         <div className="flex flex-col flex-grow gap-3 px-4 pb-4 w-full cursor-pointer">
           <div>
             {isEditing ? (
