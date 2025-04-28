@@ -8,6 +8,14 @@ module.exports = function (app, options) {
       "../../packages/*/src/**/*.{ts,tsx,html,stories.tsx}",
     ],
     theme: {
+      screens: {
+        'xs': '480px',
+        'sm': '640px',
+        'md': '768px',
+        'lg': '1024px',
+        'xl': '1280px',
+        '2xl': '1536px',
+      },
       fontWeight: {
         thin: "300",
         hairline: "300",
