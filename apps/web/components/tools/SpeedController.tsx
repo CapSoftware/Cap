@@ -162,7 +162,7 @@ export const SpeedController = () => {
       const video = document.createElement("video");
       videoRef.current = video;
       video.src = videoUrl;
-      video.muted = true;
+      video.muted = false;
 
       video.oncanplay = async () => {
         try {
@@ -241,7 +241,7 @@ export const SpeedController = () => {
 
           const stream = canvas.captureStream(60);
 
-          video.muted = true;
+          video.muted = false;
           if (includeAudio) {
             try {
               const audioContext = new AudioContext();

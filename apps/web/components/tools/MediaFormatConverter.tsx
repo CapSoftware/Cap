@@ -355,7 +355,7 @@ export const MediaFormatConverter = ({
     return new Promise((resolve, reject) => {
       const audio = new Audio();
       audio.src = fileUrl;
-      audio.muted = true;
+      audio.muted = false;
 
       const audioContext = new AudioContext();
       const mediaSource = audioContext.createMediaElementSource(audio);
@@ -426,7 +426,7 @@ export const MediaFormatConverter = ({
       const video = document.createElement("video");
       videoRef.current = video;
       video.src = fileUrl;
-      video.muted = true;
+      video.muted = false;
 
       video.oncanplay = async () => {
         try {
