@@ -117,19 +117,19 @@ export const Footer = () => {
           <div className="col-span-12 space-y-2 sm:space-y-4 lg:col-span-5">
             <Logo className="w-[104px] h-auto" />
             <div className="w-full">
-              <p className="max-w-sm text-gray-500">
+              <p className="max-w-sm text-gray-9">
                 Cap is the open source alternative to Loom. Lightweight,
                 powerful, and cross-platform. Record and share in seconds.
               </p>
             </div>
-            <p className="text-gray-8">
+            <p className="text-gray-10">
               © Cap Software, Inc. {new Date().getFullYear()}.
             </p>
             <div className="flex space-x-3">
-              <a className="text-sm text-gray-8" href="/terms">
+              <a className="text-sm text-gray-10" href="/terms">
                 Terms of Service
               </a>
-              <a className="text-sm text-gray-8" href="/privacy">
+              <a className="text-sm text-gray-10" href="/privacy">
                 Privacy Policy
               </a>
             </div>
