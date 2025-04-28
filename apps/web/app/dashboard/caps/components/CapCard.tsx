@@ -252,8 +252,15 @@ export const CapCard: React.FC<CapCardProps> = ({
             : anyCapSelected
             ? "border-blue-300 border-[1px]"
             : "hover:border-blue-300 border-[1px]"
-        }`}
+        } ${anyCapSelected ? "cursor-pointer" : ""}`}
+        onClick={anyCapSelected ? handleCardClick : undefined}
       >
+        {anyCapSelected && (
+          <div
+            className="absolute inset-0 z-10"
+            onClick={handleCardClick}
+          ></div>
+        )}
         <div
           className={`flex absolute duration-200 ${
             anyCapSelected ? "opacity-0" : "group-hover:opacity-100 opacity-0"
@@ -261,7 +268,10 @@ export const CapCard: React.FC<CapCardProps> = ({
         >
           <Tooltip content="Copy link">
             <Button
-              onClick={() => handleCopy(capUrl)}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleCopy(capUrl);
+              }}
               className="!size-8 delay-0 hover:opacity-80 rounded-full min-w-fit !p-0"
               variant="white"
               size="sm"
@@ -291,7 +301,10 @@ export const CapCard: React.FC<CapCardProps> = ({
           </Tooltip>
           <Tooltip content="Delete Cap">
             <Button
-              onClick={() => onDelete(cap.id)}
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(cap.id);
+              }}
               className="!size-8 delay-100 hover:opacity-80 rounded-full min-w-fit !p-0"
               variant="white"
               size="sm"
@@ -310,7 +323,10 @@ export const CapCard: React.FC<CapCardProps> = ({
               ? "opacity-100"
               : "group-hover:opacity-100 opacity-0"
           }`}
-          onClick={handleSelectClick}
+          onClick={(e) => {
+            e.stopPropagation();
+            handleSelectClick(e);
+          }}
         >
           <div
             className={`flex items-center justify-center w-6 h-6 rounded-md border cursor-pointer hover:bg-gray-200/60 transition-colors ${
@@ -325,7 +341,7 @@ export const CapCard: React.FC<CapCardProps> = ({
           </div>
         </div>
 
-        <div className="relative cursor-pointer" onClick={handleCardClick}>
+        <div className="relative">
           <Link
             className={`block group ${
               anyCapSelected ? "pointer-events-none" : ""
@@ -343,7 +359,7 @@ export const CapCard: React.FC<CapCardProps> = ({
           </Link>
         </div>
 
-        <div className="flex flex-col flex-grow gap-3 px-4 pb-4 w-full cursor-pointer">
+        <div className="flex flex-col flex-grow gap-3 px-4 pb-4 w-full">
           <div>
             {isEditing ? (
               <textarea
