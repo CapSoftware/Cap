@@ -2,8 +2,6 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@cap/ui";
-import { FFmpeg } from "@ffmpeg/ffmpeg";
-import { fetchFile } from "@ffmpeg/util";
 import { trackEvent } from "@/app/utils/analytics";
 
 const SPEED_OPTIONS = [
@@ -24,45 +22,21 @@ export const SpeedController = () => {
   const [progress, setProgress] = useState(0);
   const [outputUrl, setOutputUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [ffmpegLoaded, setFfmpegLoaded] = useState(false);
+  const [mediaEngineLoaded, setMediaEngineLoaded] = useState(true);
   const [isDragging, setIsDragging] = useState(false);
   const [selectedSpeed, setSelectedSpeed] = useState<number>(1.5);
   const [videoInfo, setVideoInfo] = useState<{
     duration: number;
     dimensions: string;
   } | null>(null);
+  const [isSafari, setIsSafari] = useState(false);
+  const [selectedMimeType, setSelectedMimeType] = useState<string>("");
 
-  const ffmpegRef = useRef<FFmpeg | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
-
-  useEffect(() => {
-    const loadFFmpeg = async () => {
-      try {
-        const ffmpegInstance = new FFmpeg();
-        ffmpegRef.current = ffmpegInstance;
-
-        ffmpegInstance.on("progress", ({ progress }: { progress: number }) => {
-          setProgress(Math.round(progress * 100));
-        });
-
-        await ffmpegInstance.load();
-        setFfmpegLoaded(true);
-        trackEvent("speed_controller_loaded");
-      } catch (err) {
-        setError("Failed to load FFmpeg. Please try again later.");
-        console.error("FFmpeg loading error:", err);
-      }
-    };
-
-    loadFFmpeg();
-
-    return () => {
-      if (outputUrl) {
-        URL.revokeObjectURL(outputUrl);
-      }
-    };
-  }, []);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -138,7 +112,7 @@ export const SpeedController = () => {
   };
 
   const processVideo = async () => {
-    if (!file || !ffmpegLoaded || !ffmpegRef.current) return;
+    if (!file || !mediaEngineLoaded) return;
 
     setIsProcessing(true);
     setError(null);
@@ -152,99 +126,12 @@ export const SpeedController = () => {
     });
 
     try {
-      const ffmpeg = ffmpegRef.current;
-      const inputFileName = `input_${Date.now()}.mp4`;
-      const outputFileName = `output_${Date.now()}.mp4`;
-
       console.log(`Starting video speed adjustment: ${selectedSpeed}x`);
       console.log(`Input file: ${file.name}, size: ${file.size} bytes`);
 
-      await ffmpeg.writeFile(inputFileName, await fetchFile(file));
-      console.log("File written to FFmpeg virtual filesystem");
-
-      let atempoFilter = "";
-      let speedFactor = selectedSpeed;
-
-      if (selectedSpeed < 0.5) {
-        atempoFilter = `atempo=0.5,atempo=${selectedSpeed / 0.5}`;
-      } else if (selectedSpeed > 2) {
-        const iterations = Math.ceil(Math.log2(selectedSpeed));
-        const values = [];
-        let remaining = selectedSpeed;
-
-        for (let i = 0; i < iterations; i++) {
-          if (remaining > 2) {
-            values.push(2);
-            remaining /= 2;
-          } else {
-            values.push(remaining);
-            break;
-          }
-        }
-
-        atempoFilter = values.map((v) => `atempo=${v}`).join(",");
-      } else {
-        atempoFilter = `atempo=${speedFactor}`;
-      }
-
-      const command = [
-        "-i",
-        inputFileName,
-        "-filter_complex",
-        `[0:v]setpts=${1 / selectedSpeed}*PTS[v];[0:a]${atempoFilter}[a]`,
-        "-map",
-        "[v]",
-        "-map",
-        "[a]",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "medium",
-        "-crf",
-        "23",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
-        outputFileName,
-      ];
-
-      console.log("FFmpeg command:", command);
-
-      await ffmpeg.exec(command);
-      console.log("FFmpeg command executed");
-
-      const data = await ffmpeg.readFile(outputFileName);
-      console.log(`Output data received, type: ${typeof data}`);
-
-      if (!data) {
-        throw new Error(
-          "Processing resulted in an empty file. Please try again."
-        );
-      }
-
-      const blob = new Blob([data], { type: "video/mp4" });
-      console.log(`Output blob created, size: ${blob.size} bytes`);
-
-      if (blob.size < 1024 && file.size > 10 * 1024) {
-        throw new Error(
-          "Processing produced an unusually small file. It may be corrupted."
-        );
-      }
-
-      const url = URL.createObjectURL(blob);
-
-      setOutputUrl(url);
-
-      trackEvent(`speed_controller_${action}_completed`, {
-        fileSize: file.size,
-        fileName: file.name,
-        outputSize: blob.size,
-        speedFactor: selectedSpeed,
-      });
-
-      await ffmpeg.deleteFile(inputFileName);
-      await ffmpeg.deleteFile(outputFileName);
+      const fileUrl = URL.createObjectURL(file);
+      await adjustVideoSpeed(fileUrl);
+      URL.revokeObjectURL(fileUrl);
     } catch (err: any) {
       console.error("Detailed processing error:", err);
 
@@ -270,13 +157,271 @@ export const SpeedController = () => {
     }
   };
 
+  const adjustVideoSpeed = async (videoUrl: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const video = document.createElement("video");
+      videoRef.current = video;
+      video.src = videoUrl;
+      video.muted = true;
+
+      video.oncanplay = async () => {
+        try {
+          const canvas = document.createElement("canvas");
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          const ctx = canvas.getContext("2d", { alpha: false });
+
+          if (!ctx) {
+            throw new Error("Failed to create canvas context");
+          }
+
+          let inputFormat = "video/webm";
+          if (file?.type) {
+            inputFormat = file.type;
+          } else if (file?.name) {
+            const extension = file.name.split(".").pop()?.toLowerCase();
+            if (extension === "mp4") inputFormat = "video/mp4";
+            else if (extension === "webm") inputFormat = "video/webm";
+            else if (extension === "mov") inputFormat = "video/quicktime";
+          }
+
+          let mimeTypes: string[] = [];
+
+          if (inputFormat.includes("mp4")) {
+            mimeTypes = [
+              "video/mp4",
+              "video/webm;codecs=vp9,opus",
+              "video/webm;codecs=vp8,opus",
+              "video/webm;codecs=vp9",
+              "video/webm;codecs=vp8",
+              "video/webm",
+            ];
+          } else {
+            mimeTypes = [
+              "video/webm;codecs=vp9,opus",
+              "video/webm;codecs=vp8,opus",
+              "video/webm;codecs=vp9",
+              "video/webm;codecs=vp8",
+              "video/webm",
+              "video/mp4",
+            ];
+          }
+
+          let selectedMimeType = "";
+          for (const type of mimeTypes) {
+            if (MediaRecorder.isTypeSupported(type)) {
+              selectedMimeType = type;
+              break;
+            }
+          }
+
+          if (!selectedMimeType) {
+            throw new Error(
+              "None of the media formats are supported by this browser"
+            );
+          }
+
+          setSelectedMimeType(selectedMimeType);
+          console.log(
+            `Input format: ${inputFormat}, Selected output format: ${selectedMimeType}`
+          );
+
+          let includeAudio = true;
+          const supportsAudio = MediaRecorder.isTypeSupported(
+            selectedMimeType +
+              (selectedMimeType.includes("codecs=") ? ",opus" : ";codecs=opus")
+          );
+
+          if (!supportsAudio) {
+            console.warn(
+              "Selected MIME type does not support audio: " + selectedMimeType
+            );
+            includeAudio = false;
+          }
+
+          const stream = canvas.captureStream(60);
+
+          video.muted = true;
+          if (includeAudio) {
+            try {
+              const audioContext = new AudioContext();
+              const source = audioContext.createMediaElementSource(video);
+              const destination = audioContext.createMediaStreamDestination();
+              source.connect(destination);
+
+              destination.stream.getAudioTracks().forEach((track) => {
+                stream.addTrack(track);
+              });
+            } catch (audioErr) {
+              console.warn("Could not add audio track", audioErr);
+            }
+          }
+
+          const recorder = new MediaRecorder(stream, {
+            mimeType: selectedMimeType,
+            videoBitsPerSecond: 5000000,
+          });
+          mediaRecorderRef.current = recorder;
+          recordedChunksRef.current = [];
+
+          recorder.ondataavailable = (e) => {
+            if (e.data.size > 0) {
+              recordedChunksRef.current.push(e.data);
+            }
+          };
+
+          recorder.onstop = () => {
+            const chunks = recordedChunksRef.current;
+            const blob = new Blob(chunks, {
+              type: selectedMimeType.split(";")[0],
+            });
+            const url = URL.createObjectURL(blob);
+
+            setOutputUrl(url);
+
+            trackEvent(
+              `speed_controller_${
+                selectedSpeed < 1 ? "slowing_down" : "speeding_up"
+              }_completed`,
+              {
+                fileSize: file!.size,
+                fileName: file!.name,
+                outputSize: blob.size,
+                speedFactor: selectedSpeed,
+              }
+            );
+
+            videoRef.current = null;
+            mediaRecorderRef.current = null;
+            resolve();
+          };
+
+          recorder.start(1000);
+
+          video.playbackRate = selectedSpeed;
+
+          const finishProcessing = () => {
+            if (recorder.state === "recording") {
+              recorder.stop();
+            }
+            setProgress(100);
+            cancelAnimationFrame(animationFrameId);
+          };
+
+          const totalDuration = video.duration / selectedSpeed;
+          let lastProgress = 0;
+          let stuckCounter = 0;
+          let isFrameStuck = false;
+          let lastFrameTime = 0;
+          let animationFrameId: number;
+
+          const renderFrame = () => {
+            if (video.readyState >= 2) {
+              const currentTime = video.currentTime;
+              const currentProgress = (currentTime / video.duration) * 100;
+
+              if (currentTime !== lastFrameTime) {
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                lastFrameTime = currentTime;
+                isFrameStuck = false;
+              } else {
+                isFrameStuck = true;
+              }
+
+              if (Math.abs(currentProgress - lastProgress) < 0.1) {
+                stuckCounter++;
+                if (stuckCounter > 180 && currentProgress > 95) {
+                  console.log(
+                    "Progress appears to be stuck, forcing completion"
+                  );
+                  finishProcessing();
+                  return;
+                }
+              } else {
+                stuckCounter = 0;
+                lastProgress = currentProgress;
+              }
+
+              setProgress(Math.min(Math.round(currentProgress), 99));
+            }
+
+            if (video.ended || (isFrameStuck && stuckCounter > 300)) {
+              finishProcessing();
+            } else {
+              animationFrameId = requestAnimationFrame(renderFrame);
+            }
+          };
+
+          video
+            .play()
+            .then(() => {
+              animationFrameId = requestAnimationFrame(renderFrame);
+            })
+            .catch((err) => {
+              console.error("Error playing video:", err);
+              reject(err);
+            });
+
+          const safetyTimeout = setTimeout(() => {
+            if (recorder.state === "recording") {
+              console.log("Safety timeout reached, forcing completion");
+              finishProcessing();
+            }
+          }, totalDuration * 1000 + 5000);
+
+          video.onended = () => {
+            clearTimeout(safetyTimeout);
+            setTimeout(() => {
+              finishProcessing();
+            }, 500);
+          };
+        } catch (err) {
+          reject(err);
+        }
+      };
+
+      video.onerror = () => {
+        reject(new Error("Error loading video"));
+      };
+    });
+  };
+
   const handleDownload = () => {
     if (!outputUrl || !file) return;
 
     const dotIndex = file.name.lastIndexOf(".");
     const baseName =
       dotIndex !== -1 ? file.name.substring(0, dotIndex) : file.name;
-    const downloadFileName = `${baseName}_${selectedSpeed}x.mp4`;
+
+    const chunks = recordedChunksRef.current;
+    let extension = "webm";
+
+    if (chunks.length > 0) {
+      const firstChunk = chunks[0];
+      if (firstChunk) {
+        const type = firstChunk.type;
+        if (type.includes("mp4")) {
+          extension = "mp4";
+        } else if (type.includes("webm")) {
+          extension = "webm";
+        } else if (type.includes("quicktime") || type.includes("mov")) {
+          extension = "mov";
+        }
+      }
+    } else {
+      if (selectedMimeType.includes("mp4")) {
+        extension = "mp4";
+      } else if (selectedMimeType.includes("webm")) {
+        extension = "webm";
+      } else if (
+        selectedMimeType.includes("quicktime") ||
+        selectedMimeType.includes("mov")
+      ) {
+        extension = "mov";
+      }
+    }
+
+    const downloadFileName = `${baseName}_${selectedSpeed}x.${extension}`;
 
     trackEvent(`speed_controller_download_clicked`, {
       fileName: downloadFileName,
@@ -293,11 +438,25 @@ export const SpeedController = () => {
     if (outputUrl) {
       URL.revokeObjectURL(outputUrl);
     }
+
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state !== "inactive"
+    ) {
+      mediaRecorderRef.current.stop();
+    }
+
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.src = "";
+    }
+
     setFile(null);
     setOutputUrl(null);
     setProgress(0);
     setError(null);
     setVideoInfo(null);
+    recordedChunksRef.current = [];
 
     trackEvent(`speed_controller_reset`);
 
@@ -317,6 +476,13 @@ export const SpeedController = () => {
     const estimatedDuration = videoInfo.duration / selectedSpeed;
     return formatDuration(estimatedDuration);
   };
+
+  useEffect(() => {
+    const isSafariBrowser = /^((?!chrome|android).)*safari/i.test(
+      navigator.userAgent
+    );
+    setIsSafari(isSafariBrowser);
+  }, []);
 
   return (
     <div className="w-full">
@@ -470,7 +636,7 @@ export const SpeedController = () => {
           <Button
             variant="primary"
             onClick={processVideo}
-            disabled={!ffmpegLoaded || isProcessing}
+            disabled={!mediaEngineLoaded || isProcessing}
             className="w-full"
           >
             {selectedSpeed < 1 ? "Slow Down" : "Speed Up"} Video (
@@ -490,22 +656,24 @@ export const SpeedController = () => {
         )}
       </div>
 
-      {!ffmpegLoaded && !error && (
-        <div className="mt-6 text-center text-gray-500">
-          <p>Loading processing engine...</p>
-          <div className="mt-2 w-8 h-8 border-4 border-blue-200 border-t-blue-500 rounded-full animate-spin mx-auto"></div>
-        </div>
-      )}
-
       <div className="mt-8 pt-6 border-t border-gray-200 text-sm text-gray-500 text-center">
         <p>
           This tool works entirely in your browser. Your videos are never
           uploaded to any server.
         </p>
         <p className="mt-1">
-          Video processing is performed using FFmpeg, which runs locally on your
-          device.
+          Powered by modern browser APIs like MediaRecorder and Canvas for
+          efficient video processing.
         </p>
+        {isSafari && (
+          <div className="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-md text-yellow-700">
+            <p>
+              <strong>Safari Compatibility Notice:</strong> Safari has limited
+              support for some video processing features. For best results,
+              consider using Chrome or Firefox.
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

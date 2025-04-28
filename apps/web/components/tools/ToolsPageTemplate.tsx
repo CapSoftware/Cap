@@ -4,6 +4,7 @@ import { Button } from "@cap/ui";
 import { ToolPageContent } from "@/components/tools/types";
 import { useEffect, ReactNode } from "react";
 import { motion } from "framer-motion";
+import Link from "next/link";
 
 const renderHTML = (content: string) => {
   const styledContent = content.replace(
@@ -119,7 +120,21 @@ export const ToolsPageTemplate = ({
     <>
       {/* Compact Hero Section */}
       <div className="relative mt-[60px] overflow-hidden bg-gradient-to-b from-blue-50/50 to-white">
-        <div className="relative z-10 px-5 pt-12 pb-6 md:pt-16 md:pb-8 w-full">
+        {/* Breadcrumbs */}
+        <div className="wrapper relative z-20 pt-4 px-5 text-center">
+          <div className="flex items-center justify-center text-sm">
+            <Link
+              className="text-gray-500 hover:underline text-sm font-semibold"
+              href="/tools"
+            >
+              Tools
+            </Link>
+            <span className="mx-2 text-gray-400 text-sm">/</span>
+            <span className="text-gray-500 text-sm">{content.title}</span>
+          </div>
+        </div>
+
+        <div className="relative z-10 px-5 pt-8 pb-6 md:pt-12 md:pb-8 w-full">
           <div className="mx-auto text-center wrapper wrapper-sm max-w-3xl">
             <h1 className="fade-in-down text-[2rem] leading-[2.5rem] md:text-[2.75rem] md:leading-[3.25rem] relative z-10 text-black mb-4">
               {content.title}

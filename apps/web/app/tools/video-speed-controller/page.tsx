@@ -2,60 +2,60 @@ import { SpeedController } from "@/components/tools/SpeedController";
 import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 
 const content = {
-  title: "Video Speed Controller",
-  description: "Speed up or slow down your videos directly in your browser",
-  featuresTitle: "Why Use Our Video Speed Controller",
+  title: "Video Speed Controller (0.25×-3×)",
+  description:
+    "Instantly speed up or slow down any MP4, WebM or MOV in your browser. No uploads, no quality loss.",
+  featuresTitle: "Why Use Our Online Video Speed Controller?",
   featuresDescription:
-    "Our free video speed controller tool runs entirely in your browser, respecting your privacy while delivering professional results.",
+    "Powered by WebCodecs + WebAssembly, Cap processes every frame locally for near-instant results—while keeping your files 100% private.",
   features: [
+    {
+      title: "WebCodecs-Level Speed",
+      description:
+        "Modern browser APIs crunch frames directly on your GPU/CPU, so even large clips render in seconds.",
+    },
     {
       title: "100% Private",
       description:
-        "All processing happens locally in your browser. Your videos never leave your device.",
+        "Nothing ever touches a server. All encoding and decoding stays on-device.",
     },
     {
-      title: "Multiple Speed Options",
+      title: "Fine-Grained Control (0.25×-3×)",
       description:
-        "Choose from various speed settings from super slow (0.25x) to ultra fast (3x) to achieve the perfect timing.",
-    },
-    {
-      title: "Preserves Audio Quality",
-      description:
-        "Unlike basic tools, we adjust audio pitch to sound natural at different speeds.",
+        "Dial in super-slow 0.25× for tutorials or crank up to 3× for snappy demos—audio pitch is auto-corrected.",
     },
   ],
   faqs: [
     {
-      question: "What video formats are supported?",
+      question: "What video formats can I adjust?",
       answer:
-        "Our tool supports most common video formats including MP4, WebM, MOV, AVI, and MKV.",
+        "MP4, WebM, MOV, AVI and MKV are all supported—basically anything modern browsers can decode. Chrome is recommended for best results.",
     },
     {
-      question: "Is there a file size limit?",
-      answer:
-        "Yes, the maximum file size is 500MB. This limit ensures optimal performance in the browser.",
+      question: "Is there a file-size limit?",
+      answer: "Up to 500 MB for smooth in-browser performance.",
     },
     {
-      question: "Will the video quality be reduced?",
+      question: "Will my video quality drop?",
       answer:
-        "No, our tool maintains the original resolution of your video while adjusting its speed.",
+        "No. We preserve your original resolution and bitrate; only playback speed changes.",
     },
     {
-      question: "Why is video processing slow?",
+      question: "Why is processing still slow on my laptop?",
       answer:
-        "Processing happens completely in your browser, so speed depends on your device's performance. Larger videos will take longer to process.",
+        "WebCodecs relies on your device’s hardware. Older CPUs/GPUs or throttled mobiles will take longer.",
     },
     {
-      question: "Can I use this on my phone?",
+      question: "Can I use this on iOS / Android?",
       answer:
-        "Yes, this tool works on modern mobile browsers, but processing may be faster on desktop devices.",
+        "Yes—modern Safari, Chrome and Firefox are supported, but Chrome is recommended.",
     },
   ],
   cta: {
-    title: "Looking for more powerful video tools?",
+    title: "Need heavier-duty video tools?",
     description:
-      "Download Cap - the open source screen recorder with built-in editing capabilities",
-    buttonText: "Get Cap for Free",
+      "Grab Cap — the open-source screen recorder & editor that lives on your machine.",
+    buttonText: "Download Cap Free",
   },
 };
 
@@ -66,7 +66,15 @@ export default function SpeedControllerPage() {
 }
 
 export const metadata = {
-  title: "Video Speed Controller - Speed Up or Slow Down Videos Online",
+  title:
+    "Video Speed Controller Online – Speed Up or Slow Down Videos (0.25×-3×)",
   description:
-    "Free browser-based tool to adjust video playback speed. Speed up or slow down videos without losing quality, all processed locally for privacy.",
+    "Free WebCodecs-powered tool to change video speed online. Adjust playback from 0.25× to 3× without quality loss—processed locally for privacy.",
+  keywords: [
+    "video speed controller",
+    "speed up video online",
+    "slow down video online",
+    "change video playback speed",
+    "adjust video speed in browser",
+  ],
 };

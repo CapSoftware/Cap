@@ -479,6 +479,12 @@ importers:
       '@react-email/render':
         specifier: 0.0.11
         version: 0.0.11
+      '@remotion/media-parser':
+        specifier: ^4.0.291
+        version: 4.0.291
+      '@remotion/webcodecs':
+        specifier: ^4.0.291
+        version: 4.0.291
       '@rive-app/react-canvas':
         specifier: ^4.18.7
         version: 4.18.7(react@18.3.1)
@@ -5119,6 +5125,15 @@ packages:
     resolution: {integrity: sha512-baiMx18+IMuD1yyvOGaHM9QrVUPGGG0jC+z+IPHnRJWUAUvaKuWKyE8gjDj2rzv3sz9zOGoRSPgeBVHRhZnBlA==}
     engines: {node: '>=14.0.0'}
 
+  '@remotion/licensing@4.0.291':
+    resolution: {integrity: sha512-+0yfhhgXHPfRUG7Oqo99wN6EqjKRCtDZc9dGDB9mQjMiyJYkyFUjZRtp+CYTIhA8fBy9FsUQAZEheb3/AkHmdw==}
+
+  '@remotion/media-parser@4.0.291':
+    resolution: {integrity: sha512-NV+qetN27mmBGNu6k8YG03/y0mLPkIoZ1xmuZDbejobyRcdY2mklVOde8+iD8QcssL8KjZhjC8hRsCOt7o9Mqg==}
+
+  '@remotion/webcodecs@4.0.291':
+    resolution: {integrity: sha512-v9kd/Wves5ZRH1zUoBipD/FnZtJvL75r/c7mdFSCO3fEC+gzEw4BLcz+HzY4Gyoj3VuOFpFTxyH3fpmwM/PZ0g==}
+
   '@rive-app/canvas@2.26.7':
     resolution: {integrity: sha512-0/L3jsLdpVXfZHqkK6famgLQf7wFT1TuWrB4A8I8K+/uLPulpTK76/jJ78odCdZ7WyO5OpRkK2OwuW5MvH4qJg==}
 
@@ -5875,10 +5890,10 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@9.0.0-beta.4':
-    resolution: {integrity: sha512-D718PrP4rbppHUE7HsosbHxTQNGRal4BazV6RCrDWnu4+UG64qur3KztjxeGZdU+Sv7UEF5BJiYEokQHH0aBNw==}
+  '@storybook/builder-vite@9.0.0-beta.5':
+    resolution: {integrity: sha512-FBrVGft5u26aB47AU5k4CgHqwAFp075KFAyRSj3eeqb8kJjHDuGeFKL02fr7dprqAYsko0BkksTWbYm/+c0ysg==}
     peerDependencies:
-      storybook: ^9.0.0-beta.4
+      storybook: ^9.0.0-beta.5
       vite: ^5.0.0 || ^6.0.0
 
   '@storybook/core@8.3.3':
@@ -5889,10 +5904,10 @@ packages:
     peerDependencies:
       storybook: ^8.3.3
 
-  '@storybook/csf-plugin@9.0.0-beta.4':
-    resolution: {integrity: sha512-eHyYQBWW5kwn8HtaDooIeT0nuhQysafyHL5QfPlyErAzDn1oVR+0EDWPlEgXy0pzqVzY3Axh3SqZ37ccA7kIeA==}
+  '@storybook/csf-plugin@9.0.0-beta.5':
+    resolution: {integrity: sha512-JoParjJNyRlzzJyoacPJSpeoZMT1JRNZfzsiLK8OH3ko1cnQrx0I38q2/w7rUOiqxEyp40DEwAmjv0srRHOJBA==}
     peerDependencies:
-      storybook: ^9.0.0-beta.4
+      storybook: ^9.0.0-beta.5
 
   '@storybook/csf@0.1.11':
     resolution: {integrity: sha512-dHYFQH3mA+EtnCkHXzicbLgsvzYjcDJ1JWsogbItZogkPHgSJM/Wr71uMkcvw8v9mmCyP4NpXJuu6bPoVsOnzg==}
@@ -18039,6 +18054,15 @@ snapshots:
 
   '@remix-run/router@1.19.2': {}
 
+  '@remotion/licensing@4.0.291': {}
+
+  '@remotion/media-parser@4.0.291': {}
+
+  '@remotion/webcodecs@4.0.291':
+    dependencies:
+      '@remotion/licensing': 4.0.291
+      '@remotion/media-parser': 4.0.291
+
   '@rive-app/canvas@2.26.7': {}
 
   '@rive-app/canvas@2.26.8': {}
@@ -18930,9 +18954,9 @@ snapshots:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
 
-  '@storybook/builder-vite@9.0.0-beta.4(storybook@8.3.3)(vite@6.1.2(@types/node@22.12.0)(jiti@2.4.2)(terser@5.34.0)(yaml@2.7.0))':
+  '@storybook/builder-vite@9.0.0-beta.5(storybook@8.3.3)(vite@6.1.2(@types/node@22.12.0)(jiti@2.4.2)(terser@5.34.0)(yaml@2.7.0))':
     dependencies:
-      '@storybook/csf-plugin': 9.0.0-beta.4(storybook@8.3.3)
+      '@storybook/csf-plugin': 9.0.0-beta.5(storybook@8.3.3)
       browser-assert: 1.2.1
       storybook: 8.3.3
       ts-dedent: 2.2.0
@@ -18963,7 +18987,7 @@ snapshots:
       storybook: 8.3.3
       unplugin: 1.16.1
 
-  '@storybook/csf-plugin@9.0.0-beta.4(storybook@8.3.3)':
+  '@storybook/csf-plugin@9.0.0-beta.5(storybook@8.3.3)':
     dependencies:
       storybook: 8.3.3
       unplugin: 1.16.1
@@ -27382,7 +27406,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.2(storybook@8.3.3)(vite@6.1.2(@types/node@22.12.0)(jiti@2.4.2)(terser@5.34.0)(yaml@2.7.0)):
     dependencies:
-      '@storybook/builder-vite': 9.0.0-beta.4(storybook@8.3.3)(vite@6.1.2(@types/node@22.12.0)(jiti@2.4.2)(terser@5.34.0)(yaml@2.7.0))
+      '@storybook/builder-vite': 9.0.0-beta.5(storybook@8.3.3)(vite@6.1.2(@types/node@22.12.0)(jiti@2.4.2)(terser@5.34.0)(yaml@2.7.0))
     transitivePeerDependencies:
       - storybook
       - vite
