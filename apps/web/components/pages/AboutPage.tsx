@@ -43,7 +43,7 @@ export const AboutPage = () => {
               See it in Action
             </Button>
             <Button
-              variant="radialblue"
+              variant="primary"
               href="/download"
               size="lg"
               className="relative z-[20] w-full font-medium text-md sm:w-auto"
@@ -59,10 +59,10 @@ export const AboutPage = () => {
         </div>
 
         {/* Main Content */}
-        <div className="wrapper py-24 bg-gradient-to-b from-white to-gray-50">
+        <div className="wrapper pb-24 bg-gradient-to-b from-white to-gray-50">
           <div className="max-w-4xl mx-auto">
-            <div className="p-8 bg-gray-1 rounded-2xl border border-gray-100/60 backdrop-blur-sm mb-12 shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] transition-all duration-300">
-              <p className="text-lg">
+            <div className="mb-48">
+              <p className="text-3xl text-center font-light">
                 Your recordings shouldn't be locked away in systems you don't
                 control. At Cap, we're building a screen recording tool that
                 puts you first, respects your privacy, and gives you full
@@ -90,7 +90,7 @@ export const AboutPage = () => {
             </div>
 
             <div className="space-y-8">
-              <div className="p-8 bg-gray-1 rounded-2xl border border-gray-100/60 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] hover:border-blue-100/40 transition-all duration-300 transform hover:-translate-y-[2px]">
+              <div className="p-8 bg-gray-1 rounded-2xl border border-gray-4 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] transition-all duration-300 transform hover:-translate-y-[2px]">
                 <h2 className="text-2xl font-semibold mb-4 text-gray-800">
                   Why Cap?
                 </h2>
@@ -103,7 +103,7 @@ export const AboutPage = () => {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <div className="p-8 bg-gray-1 rounded-2xl border border-gray-100/60 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] hover:border-blue-100/40 transition-all duration-300 transform hover:-translate-y-[2px]">
+                <div className="p-8 bg-gray-1 rounded-2xl border border-gray-4 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] transition-all duration-300 transform hover:-translate-y-[2px]">
                   <div className="bg-blue-50 w-12 h-12 flex items-center justify-center rounded-full mb-4">
                     <span className="text-blue-500 text-xl font-bold">1</span>
                   </div>
@@ -119,7 +119,7 @@ export const AboutPage = () => {
                   </p>
                 </div>
 
-                <div className="p-8 bg-gray-1 rounded-2xl border border-gray-100/60 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] hover:border-blue-100/40 transition-all duration-300 transform hover:-translate-y-[2px]">
+                <div className="p-8 bg-gray-1 rounded-2xl border border-gray-4 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] transition-all duration-300 transform hover:-translate-y-[2px]">
                   <div className="bg-blue-50 w-12 h-12 flex items-center justify-center rounded-full mb-4">
                     <span className="text-blue-500 text-xl font-bold">2</span>
                   </div>
@@ -138,7 +138,7 @@ export const AboutPage = () => {
                 </div>
               </div>
 
-              <div className="p-8 bg-gray-1 rounded-2xl border border-gray-100/60 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] hover:border-blue-100/40 transition-all duration-300 transform hover:-translate-y-[2px]">
+              <div className="p-8 bg-gray-1 rounded-2xl border border-gray-4 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] transition-all duration-300 transform hover:-translate-y-[2px]">
                 <h2 className="text-2xl font-semibold mb-4 text-gray-800">
                   Two Ways to Record
                 </h2>
@@ -167,7 +167,7 @@ export const AboutPage = () => {
                 </div>
               </div>
 
-              <div className="p-8 bg-gray-1 rounded-2xl border border-gray-100/60 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] hover:border-blue-100/40 transition-all duration-300 transform hover:-translate-y-[2px]">
+              <div className="p-8 bg-gray-1 rounded-2xl border border-gray-4 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] transition-all duration-300 transform hover:-translate-y-[2px]">
                 <h2 className="text-2xl font-semibold mb-4 text-gray-800">
                   Privacy First
                 </h2>
@@ -179,7 +179,7 @@ export const AboutPage = () => {
                 </p>
               </div>
 
-              <div className="p-8 bg-gray-1 rounded-2xl border border-gray-100/60 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] hover:border-blue-100/40 transition-all duration-300 transform hover:-translate-y-[2px]">
+              <div className="p-8 bg-gray-1 rounded-2xl border border-gray-4  backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)]transition-all duration-300 transform hover:-translate-y-[2px]">
                 <h2 className="text-2xl font-semibold mb-4 text-gray-800">
                   Open to Everyone
                 </h2>
@@ -191,7 +191,7 @@ export const AboutPage = () => {
                 </p>
               </div>
 
-              <div className="p-8 bg-gray-1 rounded-2xl border border-gray-100/60 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] hover:border-blue-100/40 transition-all duration-300 transform hover:-translate-y-[2px]">
+              <div className="p-8 bg-gray-1 rounded-2xl border border-gray-4 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] transition-all duration-300 transform hover:-translate-y-[2px]">
                 <h2 className="text-2xl font-semibold mb-4 text-gray-800">
                   Join Us
                 </h2>
@@ -206,7 +206,7 @@ export const AboutPage = () => {
                 </p>
                 <div className="mt-6">
                   <Button
-                    className="inline-flex shadow-[0_4px_14px_rgba(0,0,0,0.1)] hover:shadow-[0_6px_20px_rgba(0,118,255,0.23)] transform hover:-translate-y-[2px] transition-all duration-300"
+                    className="inline-flex transform hover:-translate-y-[2px] transition-all duration-300"
                     href="/download"
                     variant="primary"
                     size="lg"
