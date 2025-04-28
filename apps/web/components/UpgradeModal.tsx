@@ -1,27 +1,26 @@
 "use client";
 
-import { useState } from "react";
 import { Button, Dialog, DialogContent, DialogTitle, Switch } from "@cap/ui";
-import {
-  Share2,
-  Database,
-  Shield,
-  Users,
-  Infinity,
-  Lock,
-  BarChart3,
-  Headphones,
-  X,
-  Minus,
-  Plus,
-  Globe,
-  Sparkles,
-} from "lucide-react";
 import { getProPlanId } from "@cap/utils";
-import { useRouter } from "next/navigation";
-import toast from "react-hot-toast";
 import { useRive } from "@rive-app/react-canvas";
 import { AnimatePresence, motion } from "framer-motion";
+import {
+  BarChart3,
+  Database,
+  Globe,
+  Headphones,
+  Infinity,
+  Lock,
+  Minus,
+  Plus,
+  Share2,
+  Shield,
+  Sparkles,
+  Users,
+} from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import toast from "react-hot-toast";
 
 interface UpgradeModalProps {
   open: boolean;
@@ -166,7 +165,7 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[650px] max-h-[90vh] overflow-y-auto p-6">
+      <DialogContent className="sm:max-w-[650px] bg-gray-2 border border-gray-4 max-h-[90vh] overflow-y-auto p-6">
         <AnimatePresence mode="wait">
           {open && (
             <motion.div
@@ -183,22 +182,24 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
               <div className="flex flex-col items-center py-6">
                 <div className="flex flex-col items-center">
                   <Pro
-                    className="w-[100px] h-[80px]"
+                    className="w-[250px] h-[120px]"
                     onMouseEnter={handleProHover}
                   />
-                  <h1 className="text-3xl font-bold mb-3">
+                  <h1 className="text-3xl font-bold text-gray-12">
                     Upgrade to Cap Pro
                   </h1>
                 </div>
 
-                <p className="text-lg text-gray-600 mb-1">
+                <p className="mt-1 text-lg text-gray-11">
                   You can cancel anytime. Early adopter pricing locked in.
                 </p>
 
                 <div className="flex flex-col items-center mt-3 mb-4 w-full">
                   <div className="flex items-end mb-1">
-                    <h3 className="text-3xl font-bold">${totalPrice}/mo</h3>
-                    <span className="text-gray-500 ml-2 mb-1">
+                    <h3 className="text-3xl font-medium text-gray-12">
+                      ${totalPrice}/mo
+                    </h3>
+                    <span className="mb-1 ml-2 text-gray-11">
                       {proQuantity === 1 ? (
                         `per user, ${billingText}`
                       ) : (
@@ -210,9 +211,9 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
                     </span>
                   </div>
 
-                  <div className="flex justify-between items-center w-full max-w-md mt-4">
+                  <div className="flex justify-between items-center mt-8 w-full max-w-md">
                     <div className="flex items-center">
-                      <span className="mr-3 text-gray-500">Annual billing</span>
+                      <span className="mr-3 text-gray-12">Annual billing</span>
                       <Switch
                         checked={isAnnual}
                         onCheckedChange={() => setIsAnnual(!isAnnual)}
@@ -220,25 +221,25 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
                     </div>
 
                     <div className="flex items-center">
-                      <span className="mr-3 text-gray-500">Users:</span>
+                      <span className="mr-3 text-gray-12">Users:</span>
                       <div className="flex items-center">
                         <button
                           onClick={() =>
                             proQuantity > 1 && setProQuantity(proQuantity - 1)
                           }
-                          className="h-8 w-8 rounded-l-md bg-gray-100 flex items-center justify-center hover:bg-gray-200"
+                          className="flex justify-center items-center w-8 h-8 rounded-l-md bg-gray-4 hover:bg-gray-5"
                           disabled={proQuantity <= 1}
                         >
-                          <Minus className="h-4 w-4" />
+                          <Minus className="w-4 h-4 text-gray-12" />
                         </button>
-                        <div className="h-8 w-10 flex items-center justify-center bg-gray-100">
+                        <div className="flex justify-center items-center w-10 h-8 text-gray-12 bg-gray-3">
                           {proQuantity}
                         </div>
                         <button
                           onClick={() => setProQuantity(proQuantity + 1)}
-                          className="h-8 w-8 rounded-r-md bg-gray-100 flex items-center justify-center hover:bg-gray-200"
+                          className="flex justify-center items-center w-8 h-8 rounded-r-md bg-gray-4 hover:bg-gray-5"
                         >
-                          <Plus className="h-4 w-4" />
+                          <Plus className="w-4 h-4 text-gray-12" />
                         </button>
                       </div>
                     </div>
@@ -248,26 +249,26 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
                 <Button
                   variant="primary"
                   onClick={planCheckout}
-                  className="w-full max-w-md text-lg h-14 rounded-xl"
+                  className="w-full max-w-md h-14 text-lg rounded-xl"
                   disabled={proLoading}
                 >
                   {proLoading ? "Loading..." : "Upgrade to Cap Pro"}
                 </Button>
               </div>
 
-              <div className="pt-8 mt-4 border-t border-gray-200">
-                <h2 className="text-2xl font-bold text-center mb-10">
+              <div className="pt-8 mt-4 border-t border-gray-5">
+                <h2 className="mb-10 text-2xl font-bold text-center text-gray-12">
                   Here's what's included
                 </h2>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-12">
+                <div className="grid grid-cols-1 gap-x-10 gap-y-12 md:grid-cols-2">
                   {proFeatures.map((feature, index) => (
                     <div key={index} className="flex flex-col items-center">
                       <div className="mb-3">{feature.icon}</div>
-                      <h3 className="text-lg font-bold mb-1">
+                      <h3 className="mb-1 text-lg font-medium text-gray-12">
                         {feature.title}
                       </h3>
-                      <p className="text-gray-600 text-center">
+                      <p className="text-center text-gray-11">
                         {feature.description}
                       </p>
                     </div>

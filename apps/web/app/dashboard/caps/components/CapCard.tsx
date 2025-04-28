@@ -245,9 +245,9 @@ export const CapCard: React.FC<CapCardProps> = ({
         className={clsx(
           "flex relative flex-col gap-4 w-full h-full rounded-xl cursor-default bg-gray-2 border-gray-3 group border-[1px]",
           isSelected
-            ? "border-blue-10 border-[1px]"
+            ? "!border-blue-10 border-[1px]"
             : anyCapSelected
-            ? "border-gray-6 border-[1px]"
+            ? "border-blue-10 border-[1px] hover:border-blue-10"
             : "hover:border-blue-10"
         )}
       >

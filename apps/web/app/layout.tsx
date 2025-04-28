@@ -40,11 +40,14 @@ export default async function RootLayout({
       .digest("hex");
   }
 
+  const path = headers().get("x-current-path");
+  const isPathDashboard =
+    path?.startsWith("/dashboard") ||
+    path?.startsWith("/login") ||
+    path?.startsWith("/onboarding");
+
   const cookieStore = await cookies();
   const theme = cookieStore.get("theme")?.value === "dark" ? "dark" : "light";
-
-  const path = headers().get("x-current-path");
-  const isPathDashboard = path?.startsWith("/dashboard");
 
   return (
     <html lang="en">

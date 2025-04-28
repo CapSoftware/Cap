@@ -205,7 +205,6 @@ export function LoginForm() {
                         .then((res) => {
                           setLoading(false);
                           if (res?.ok && !res?.error) {
-                            setEmail("");
                             setEmailSent(true);
                             trackEvent("auth_email_sent", {
                               email_domain: email.split("@")[1],
@@ -258,7 +257,7 @@ export function LoginForm() {
             </div>
             {emailSent && (
               <button
-                className="pt-3 mx-auto text-sm underline text-gray-1 hover:text-gray-8"
+                className="pt-3 mx-auto text-sm underline text-gray-10 hover:text-gray-8"
                 onClick={() => {
                   setEmailSent(false);
                   setEmail("");
@@ -276,7 +275,6 @@ export function LoginForm() {
 }
 
 const LoginWithSSO = ({
-  setShowOrgInput,
   handleSpaceLookup,
   spaceId,
   setSpaceId,

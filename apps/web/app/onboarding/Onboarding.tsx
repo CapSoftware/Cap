@@ -1,16 +1,11 @@
 "use client";
 
-import { users } from "@cap/database/schema";
 import { Button, Input } from "@cap/ui";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import toast from "react-hot-toast";
 
-export const Onboarding = ({
-  user,
-}: {
-  user: typeof users.$inferSelect | null;
-}) => {
+export const Onboarding = () => {
   const router = useRouter();
   const [firstNameInput, setFirstNameInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -50,7 +45,7 @@ export const Onboarding = ({
 
   return (
     <form
-      className="relative w-[calc(100%-2%)] p-[28px] max-w-[472px] bg-gray-1 border border-gray-200 rounded-2xl"
+      className="relative w-[calc(100%-2%)] p-[28px] max-w-[472px] bg-gray-2 border border-gray-4 rounded-2xl"
       onSubmit={handleSubmit}
     >
       <div className="space-y-3">
