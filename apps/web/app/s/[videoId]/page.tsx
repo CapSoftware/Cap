@@ -237,11 +237,9 @@ export default async function ShareVideoPage(props: Props) {
     reactions: commentsQuery.filter((c) => c.type === "emoji").length,
   };
 
-  // Fetch custom domain information
   let customDomain: string | null = null;
   let domainVerified = false;
 
-  // Check if the video is shared with a space
   if (video.sharedSpace?.spaceId) {
     const spaceData = await db
       .select({
@@ -254,14 +252,12 @@ export default async function ShareVideoPage(props: Props) {
 
     if (spaceData.length > 0 && spaceData[0] && spaceData[0].customDomain) {
       customDomain = spaceData[0].customDomain;
-      // Handle domainVerified which could be a Date or boolean
       if (spaceData[0].domainVerified !== null) {
-        domainVerified = true; // If it exists (not null), consider it verified
+        domainVerified = true;
       }
     }
   }
 
-  // If no custom domain from shared space, check the owner's space
   if (!customDomain && video.ownerId) {
     const ownerSpaces = await db
       .select({
@@ -278,14 +274,12 @@ export default async function ShareVideoPage(props: Props) {
       ownerSpaces[0].customDomain
     ) {
       customDomain = ownerSpaces[0].customDomain;
-      // Handle domainVerified which could be a Date or boolean
       if (ownerSpaces[0].domainVerified !== null) {
-        domainVerified = true; // If it exists (not null), consider it verified
+        domainVerified = true;
       }
     }
   }
 
-  // Get space members if the video is shared with a space
   const membersList = video.sharedSpace?.spaceId
     ? await db
         .select({
@@ -306,7 +300,6 @@ export default async function ShareVideoPage(props: Props) {
       data={videoWithSpaceInfo}
       user={user}
       comments={commentsQuery}
-      individualFiles={[]}
       initialAnalytics={initialAnalytics}
       customDomain={customDomain}
       domainVerified={domainVerified}
