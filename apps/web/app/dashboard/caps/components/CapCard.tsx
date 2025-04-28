@@ -9,10 +9,10 @@ import { VideoMetadata } from "@cap/database/types";
 import { clientEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
 import {
+  faCheck,
   faChevronDown,
   faLink,
   faTrash,
-  faCheck,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
@@ -236,17 +236,31 @@ export const CapCard: React.FC<CapCardProps> = ({
         userSpaces={userSpaces}
         onSharingUpdated={handleSharingUpdated}
       />
-      <div className={`flex relative cursor-default flex-col gap-4 w-full h-full bg-gray-2 rounded-xl border-gray-3 group border-[1px] ${
-        isSelected
-          ? "border-blue-8 border-[1px]"
-          : anyCapSelected
-          ? "border-blue-5 border-[1px]"
-          : "hover:border-blue-8"
-      }`}>
+      <div
+        onClick={() => {
+          if (anyCapSelected && onSelectToggle) {
+            onSelectToggle();
+          }
+        }}
+        className={clsx(
+          "flex relative flex-col gap-4 w-full h-full rounded-xl cursor-default bg-gray-2 border-gray-3 group border-[1px]",
+          isSelected
+            ? "border-blue-10 border-[1px]"
+            : anyCapSelected
+            ? "border-gray-6 border-[1px]"
+            : "hover:border-blue-10"
+        )}
+      >
         {!sharedCapCard && (
-          <div className={`flex absolute duration-200 ${
-            anyCapSelected ? "opacity-100" : "group-hover:opacity-100 opacity-0"
-          } top-2 right-2 z-[20] flex-col gap-2`}>
+          <div
+            className={clsx(
+              "flex absolute duration-200",
+              anyCapSelected
+                ? "opacity-0"
+                : "opacity-0 group-hover:opacity-100",
+              "top-2 right-2 flex-col gap-2 z-[20]"
+            )}
+          >
             <Tooltip content="Copy link">
               <Button
                 onClick={() =>
@@ -313,11 +327,12 @@ export const CapCard: React.FC<CapCardProps> = ({
             onClick={handleSelectClick}
           >
             <div
-              className={`flex items-center justify-center w-6 h-6 rounded-md border cursor-pointer hover:bg-gray-3/60 transition-colors ${
+              className={clsx(
+                "flex justify-center items-center w-6 h-6 rounded-md border transition-colors cursor-pointer hover:bg-gray-3/60",
                 isSelected
-                  ? "bg-blue-8 border-blue-8"
-                  : "border-gray-8 bg-gray-1/80"
-              }`}
+                  ? "bg-blue-10 border-blue-10"
+                  : "border-white-95 bg-gray-1/80"
+              )}
             >
               {isSelected && (
                 <FontAwesomeIcon icon={faCheck} className="text-white size-3" />
@@ -326,7 +341,10 @@ export const CapCard: React.FC<CapCardProps> = ({
           </div>
         )}
         <Link
-          className="block group"
+          className={clsx(
+            "block group",
+            anyCapSelected && "cursor-pointer pointer-events-none"
+          )}
           href={
             activeSpace?.space.customDomain
               ? `https://${activeSpace.space.customDomain}/s/${cap.id}`

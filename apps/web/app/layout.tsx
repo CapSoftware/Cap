@@ -7,7 +7,7 @@ import { serverEnv } from "@cap/env";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import crypto from "crypto";
 import type { Metadata } from "next";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "./AuthProvider";
 import { PostHogProvider, Providers } from "./providers";
@@ -43,6 +43,9 @@ export default async function RootLayout({
   const cookieStore = await cookies();
   const theme = cookieStore.get("theme")?.value === "dark" ? "dark" : "light";
 
+  const path = headers().get("x-current-path");
+  const isPathDashboard = path?.startsWith("/dashboard");
+
   return (
     <html lang="en">
       <head>
@@ -69,7 +72,7 @@ export default async function RootLayout({
         <meta name="msapplication-TileColor" content="#da532c" />
         <meta name="theme-color" content="#ffffff" />
       </head>
-      <body className={theme}>
+      <body className={isPathDashboard ? theme : "light"}>
         <TooltipPrimitive.Provider>
           <PostHogProvider>
             <AuthProvider>

@@ -19,7 +19,6 @@ import { Menu, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { seoPages } from "../lib/seo-pages";
 
 const Links = [
   {
@@ -96,8 +95,6 @@ const Links = [
 
 export const Navbar = ({ auth }: { auth: boolean }) => {
   const pathname = usePathname();
-  const isHomePage = pathname === "/";
-  const isSeoPage = pathname.slice(1) in seoPages;
   const [showMobileMenu, setShowMobileMenu] = useState(false);
 
   if (
