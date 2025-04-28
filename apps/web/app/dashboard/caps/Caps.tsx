@@ -196,6 +196,7 @@ export const Caps = ({
               disabled={isDeleting}
               className="text-sm w-[50px]"
               spinner={isDeleting}
+              size="sm"
             >
               <FontAwesomeIcon icon={faTrash} />
             </Button>
@@ -203,6 +204,7 @@ export const Caps = ({
               variant="white"
               onClick={() => setSelectedCaps([])}
               className="text-sm"
+              size="sm"
             >
               Cancel
             </Button>
