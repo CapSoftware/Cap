@@ -247,7 +247,7 @@ p,
 span,
 input,
 label, button {
-  @apply tracking-tight text-gray-400 font-normal text-[1rem] leading-[1.5rem];
+  @apply tracking-tight text-gray-10 font-normal text-[1rem] leading-[1.5rem];
 }
 
 a,

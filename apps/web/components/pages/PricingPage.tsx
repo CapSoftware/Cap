@@ -224,19 +224,23 @@ export const PricingPage = () => {
       <div className="py-12 mt-16 space-y-24 wrapper">
         <div>
           <div className="text-center">
-            <div className={`mb-4 ${initialRender ? "fade-in-down" : ""}`}>
+            <div
+              className={clsx("mb-4", {
+                "fade-in-down animate-delay-1": initialRender,
+              })}
+            >
               <SimplePlans />
             </div>
             <h1
               className={clsx("text-4xl md:text-5xl", {
-                "fade-in-down animate-delay-1": initialRender,
+                "fade-in-down animate-delay-1 text-gray-12": initialRender,
               })}
             >
               Early Adopter Pricing
             </h1>
             <p
-              className={clsx("mx-auto mb-8 max-w-[800px]", {
-                "fade-in-down animate-delay-1": initialRender,
+              className={clsx("mx-auto mt-3 mb-8 max-w-[800px]", {
+                "mt-4 fade-in-down animate-delay-1 text-gray-10": initialRender,
               })}
             >
               Cap is currently in public beta, and we're offering special early
@@ -247,9 +251,9 @@ export const PricingPage = () => {
 
           <div className="grid grid-cols-1 gap-3 items-stretch md:grid-cols-2">
             <Card
-              className={`bg-gray-1 rounded-xl min-h-[600px] flex-grow ${
-                initialRender ? "fade-in-down animate-delay-2" : ""
-              }`}
+              className={clsx("flex-grow rounded-xl bg-gray-1 min-h-[600px]", {
+                "fade-in-down animate-delay-2": initialRender,
+              })}
             >
               <div className="space-y-4">
                 <CardHeader>
