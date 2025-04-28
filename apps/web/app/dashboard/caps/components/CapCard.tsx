@@ -12,6 +12,7 @@ import {
   faChevronDown,
   faLink,
   faTrash,
+  faCheck,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import moment from "moment";
@@ -20,7 +21,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "react-hot-toast";
 
-interface CapCardProps {
+export interface CapCardProps {
   cap: {
     id: string;
     ownerId: string;
@@ -36,6 +37,9 @@ interface CapCardProps {
   onDelete: (videoId: string) => Promise<void>;
   userId: string;
   userSpaces: { id: string; name: string }[];
+  isSelected?: boolean;
+  onSelectToggle?: () => void;
+  anyCapSelected?: boolean;
 }
 
 export const CapCard: React.FC<CapCardProps> = ({
@@ -44,6 +48,9 @@ export const CapCard: React.FC<CapCardProps> = ({
   onDelete,
   userId,
   userSpaces,
+  isSelected = false,
+  onSelectToggle,
+  anyCapSelected = false,
 }) => {
   const effectiveDate = cap.metadata?.customCreatedAt
     ? new Date(cap.metadata.customCreatedAt)
@@ -203,6 +210,14 @@ export const CapCard: React.FC<CapCardProps> = ({
     }
   };
 
+  const handleSelectClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (onSelectToggle) {
+      onSelectToggle();
+    }
+  };
+
   return (
     <>
       <SharingDialog
@@ -214,8 +229,20 @@ export const CapCard: React.FC<CapCardProps> = ({
         userSpaces={userSpaces}
         onSharingUpdated={handleSharingUpdated}
       />
-      <div className="flex relative flex-col gap-4 w-full h-full bg-gray-50 rounded-2xl border-gray-200 transition-colors duration-300 group hover:border-blue-300 border-[1px]">
-        <div className="flex absolute duration-200 group-hover:opacity-100 opacity-0 top-2 right-2 z-[20] flex-col gap-2">
+      <div
+        className={`flex relative flex-col gap-4 w-full h-full bg-gray-50 rounded-2xl border-gray-200 transition-colors duration-300 group ${
+          isSelected
+            ? "border-blue-500 border-[1px]"
+            : anyCapSelected
+            ? "border-blue-300 border-[1px]"
+            : "hover:border-blue-300 border-[1px]"
+        }`}
+      >
+        <div
+          className={`flex absolute duration-200 ${
+            anyCapSelected ? "opacity-100" : "group-hover:opacity-100 opacity-0"
+          } top-2 right-2 z-[20] flex-col gap-2`}
+        >
           <Tooltip content="Copy link">
             <Button
               onClick={() =>
@@ -244,9 +271,9 @@ export const CapCard: React.FC<CapCardProps> = ({
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
                   className="text-gray-400 size-5 svgpathanimation"
                 >
                   <path d="M20 6 9 17l-5-5" />
@@ -268,6 +295,29 @@ export const CapCard: React.FC<CapCardProps> = ({
             </Button>
           </Tooltip>
         </div>
+
+        {/* Selection checkbox */}
+        <div
+          className={`absolute top-2 left-2 z-[20] duration-200 ${
+            isSelected || anyCapSelected
+              ? "opacity-100"
+              : "group-hover:opacity-100 opacity-0"
+          }`}
+          onClick={handleSelectClick}
+        >
+          <div
+            className={`flex items-center justify-center w-6 h-6 rounded-md border cursor-pointer hover:bg-gray-200/60 transition-colors ${
+              isSelected
+                ? "bg-blue-500 border-blue-500"
+                : "border-gray-400 bg-white/80"
+            }`}
+          >
+            {isSelected && (
+              <FontAwesomeIcon icon={faCheck} className="text-white size-3" />
+            )}
+          </div>
+        </div>
+
         <Link
           className="block group"
           href={
@@ -279,7 +329,9 @@ export const CapCard: React.FC<CapCardProps> = ({
           }
         >
           <VideoThumbnail
-            imageClass="group-hover:opacity-50 transition-opacity duration-200"
+            imageClass={`${
+              anyCapSelected ? "opacity-50" : "group-hover:opacity-50"
+            } transition-opacity duration-200`}
             userId={cap.ownerId}
             videoId={cap.id}
             alt={`${cap.name} Thumbnail`}
