@@ -52,16 +52,6 @@ const Links = [
     href: "/download",
   },
   {
-    label: "Tools",
-    dropdown: [
-      {
-        label: "WebM to MP4 Converter",
-        sub: "Convert WebM videos to MP4 format in your browser",
-        href: "/tools/webm-to-mp4",
-      },
-    ],
-  },
-  {
     label: "Testimonials",
     href: "/testimonials",
   },
@@ -237,17 +227,6 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
                     passHref
                   >
                     Download
-                  </Link>
-                </li>
-                <li>
-                  <Link
-                    onClick={() => {
-                      setShowMobileMenu(false);
-                    }}
-                    href="/tools/webm-to-mp4"
-                    passHref
-                  >
-                    WebM to MP4 Converter
                   </Link>
                 </li>
                 <li>
