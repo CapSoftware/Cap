@@ -5,7 +5,7 @@ import { db } from "@cap/database";
 import { eq, and, gt, ne } from "drizzle-orm";
 import { sendEmail } from "@cap/database/emails/config";
 import { NewComment } from "@cap/database/emails/new-comment";
-import { clientEnv, serverEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 
 // Cache to store the last email sent time for each user
 const lastEmailSentCache = new Map<string, Date>();
@@ -205,9 +205,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Generate the video URL
-    const videoUrl = clientEnv.NEXT_PUBLIC_IS_CAP
+    const videoUrl = buildEnv.NEXT_PUBLIC_IS_CAP
       ? `https://cap.link/${video.id}`
-      : `${serverEnv.WEB_URL}/s/${video.id}`;
+      : `${serverEnv().WEB_URL}/s/${video.id}`;
     console.log(`Generated video URL: ${videoUrl}`);
 
     // Send the email

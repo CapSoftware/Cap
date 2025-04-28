@@ -70,7 +70,7 @@ export async function DELETE(request: NextRequest) {
     const deleteObjectsCommand = new DeleteObjectsCommand({
       Bucket,
       Delete: {
-        Objects: listedObjects.Contents.map((content) => ({
+        Objects: listedObjects.Contents.map((content: any) => ({
           Key: content.Key,
         })),
       },

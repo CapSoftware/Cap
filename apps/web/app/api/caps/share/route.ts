@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
 
   try {
     // Check if the user owns the cap
-    const [cap] = await db.select().from(videos).where(eq(videos.id, capId));
+    const [cap] = await db().select().from(videos).where(eq(videos.id, capId));
     if (!cap || cap.ownerId !== user.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
     }
@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
         (share) => share.spaceId === spaceId
       );
       if (!existingShare) {
-        await db.insert(sharedVideos).values({
+        await db().insert(sharedVideos).values({
           id: nanoId(),
           videoId: capId,
           spaceId: spaceId,

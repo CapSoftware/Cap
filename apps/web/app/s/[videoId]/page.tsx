@@ -13,8 +13,10 @@ import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
 import type { Metadata, ResolvingMetadata } from "next";
 import { notFound } from "next/navigation";
 import { ImageViewer } from "./_components/ImageViewer";
-import { clientEnv, serverEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
+import { transcribeVideo } from "@/actions/videos/transcribe";
+import { getScreenshot } from "@/actions/screenshots/get-screenshot";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -49,7 +51,7 @@ export async function generateMetadata(
     "[generateMetadata] Fetching video metadata for videoId:",
     videoId
   );
-  const query = await db.select().from(videos).where(eq(videos.id, videoId));
+  const query = await db().select().from(videos).where(eq(videos.id, videoId));
 
   if (query.length === 0) {
     console.log("[generateMetadata] No video found for videoId:", videoId);
@@ -59,35 +61,42 @@ export async function generateMetadata(
   const video = query[0];
 
   if (!video) {
-    console.log(
-      "[generateMetadata] Video object is null for videoId:",
-      videoId
-    );
     return notFound();
   }
 
   if (video.public === false) {
-    console.log(
-      "[generateMetadata] Video is private, returning private metadata"
-    );
     return {
       title: "Cap: This video is private",
       description: "This video is private and cannot be shared.",
       openGraph: {
-        images: [`${serverEnv.WEB_URL}/api/video/og?videoId=${videoId}`],
+        images: [
+          {
+            url: new URL(
+              `/api/video/og?videoId=${videoId}`,
+              buildEnv.NEXT_PUBLIC_WEB_URL
+            ).toString(),
+            width: 1200,
+            height: 630,
+          },
+        ],
       },
     };
   }
 
-  console.log(
-    "[generateMetadata] Returning public metadata for video:",
-    video.name
-  );
   return {
     title: video.name + " | Cap Recording",
     description: "Watch this video on Cap",
     openGraph: {
-      images: [`${serverEnv.WEB_URL}/api/video/og?videoId=${videoId}`],
+      images: [
+        {
+          url: new URL(
+            `/api/video/og?videoId=${videoId}`,
+            buildEnv.NEXT_PUBLIC_WEB_URL
+          ).toString(),
+          width: 1200,
+          height: 630,
+        },
+      ],
     },
   };
 }
@@ -170,36 +179,9 @@ export default async function ShareVideoPage(props: Props) {
     }
   }
 
-  const videoSource = video.source as (typeof videos.$inferSelect)["source"];
-
-  if (
-    video.jobId === null &&
-    video.skipProcessing === false &&
-    videoSource.type === "MediaConvert"
-  ) {
-    console.log("[ShareVideoPage] Creating MUX job for video:", videoId);
-    const res = await fetch(
-      `${serverEnv.WEB_URL}/api/upload/mux/create?videoId=${videoId}&userId=${video.ownerId}`,
-      {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-      }
-    );
-
-    await res.json();
-  }
-
   if (video.transcriptionStatus !== "COMPLETE") {
     console.log("[ShareVideoPage] Starting transcription for video:", videoId);
-    fetch(
-      `${serverEnv.WEB_URL}/api/video/transcribe?videoId=${videoId}&userId=${video.ownerId}`,
-      {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-      }
-    );
+    await transcribeVideo(videoId, video.ownerId);
   }
 
   if (video.public === false && userId !== video.ownerId) {
@@ -228,25 +210,22 @@ export default async function ShareVideoPage(props: Props) {
   let screenshotUrl;
   if (video.isScreenshot === true) {
     console.log("[ShareVideoPage] Fetching screenshot for video:", videoId);
-    const res = await fetch(
-      `${serverEnv.WEB_URL}/api/screenshot?userId=${video.ownerId}&screenshotId=${videoId}`,
-      {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-      }
-    );
-    const data = await res.json();
-    screenshotUrl = data.url;
+    try {
+      const data = await getScreenshot(video.ownerId, videoId);
+      screenshotUrl = data.url;
 
-    return (
-      <ImageViewer
-        imageSrc={screenshotUrl}
-        data={video}
-        user={user}
-        comments={commentsQuery}
-      />
-    );
+      return (
+        <ImageViewer
+          imageSrc={screenshotUrl}
+          data={video}
+          user={user}
+          comments={commentsQuery}
+        />
+      );
+    } catch (error) {
+      console.error("[ShareVideoPage] Error fetching screenshot:", error);
+      return <p>Failed to load screenshot</p>;
+    }
   }
 
   console.log("[ShareVideoPage] Fetching analytics for video:", videoId);
@@ -258,11 +237,9 @@ export default async function ShareVideoPage(props: Props) {
     reactions: commentsQuery.filter((c) => c.type === "emoji").length,
   };
 
-  // Fetch custom domain information
   let customDomain: string | null = null;
   let domainVerified = false;
 
-  // Check if the video is shared with a space
   if (video.sharedSpace?.spaceId) {
     const spaceData = await db
       .select({
@@ -275,14 +252,12 @@ export default async function ShareVideoPage(props: Props) {
 
     if (spaceData.length > 0 && spaceData[0] && spaceData[0].customDomain) {
       customDomain = spaceData[0].customDomain;
-      // Handle domainVerified which could be a Date or boolean
       if (spaceData[0].domainVerified !== null) {
-        domainVerified = true; // If it exists (not null), consider it verified
+        domainVerified = true;
       }
     }
   }
 
-  // If no custom domain from shared space, check the owner's space
   if (!customDomain && video.ownerId) {
     const ownerSpaces = await db
       .select({
@@ -299,14 +274,12 @@ export default async function ShareVideoPage(props: Props) {
       ownerSpaces[0].customDomain
     ) {
       customDomain = ownerSpaces[0].customDomain;
-      // Handle domainVerified which could be a Date or boolean
       if (ownerSpaces[0].domainVerified !== null) {
-        domainVerified = true; // If it exists (not null), consider it verified
+        domainVerified = true;
       }
     }
   }
 
-  // Get space members if the video is shared with a space
   const membersList = video.sharedSpace?.spaceId
     ? await db
         .select({
@@ -327,7 +300,6 @@ export default async function ShareVideoPage(props: Props) {
       data={videoWithSpaceInfo}
       user={user}
       comments={commentsQuery}
-      individualFiles={[]} // individualFiles}
       initialAnalytics={initialAnalytics}
       customDomain={customDomain}
       domainVerified={domainVerified}

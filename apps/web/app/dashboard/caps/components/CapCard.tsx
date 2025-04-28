@@ -7,12 +7,13 @@ import { Tooltip } from "@/components/Tooltip";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
 import { usePublicEnv } from "@/utils/public-env";
 import { VideoMetadata } from "@cap/database/types";
-import { clientEnv, NODE_ENV } from "@cap/env";
+import { buildEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
 import {
   faChevronDown,
   faLink,
   faTrash,
+  faCheck,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import moment from "moment";
@@ -21,7 +22,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "react-hot-toast";
 
-interface CapCardProps {
+export interface CapCardProps {
   cap: {
     id: string;
     ownerId: string;
@@ -37,6 +38,9 @@ interface CapCardProps {
   onDelete: (videoId: string) => Promise<void>;
   userId: string;
   userSpaces: { id: string; name: string }[];
+  isSelected?: boolean;
+  onSelectToggle?: () => void;
+  anyCapSelected?: boolean;
 }
 
 export const CapCard = ({
@@ -45,6 +49,9 @@ export const CapCard = ({
   onDelete,
   userId,
   userSpaces,
+  isSelected = false,
+  onSelectToggle,
+  anyCapSelected = false,
 }: CapCardProps) => {
   const effectiveDate = cap.metadata?.customCreatedAt
     ? new Date(cap.metadata.customCreatedAt)
@@ -204,6 +211,14 @@ export const CapCard = ({
     }
   };
 
+  const handleSelectClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (onSelectToggle) {
+      onSelectToggle();
+    }
+  };
+
   const { webUrl } = usePublicEnv();
 
   return (
@@ -217,15 +232,27 @@ export const CapCard = ({
         userSpaces={userSpaces}
         onSharingUpdated={handleSharingUpdated}
       />
-      <div className="flex relative flex-col gap-4 w-full h-full bg-gray-50 rounded-2xl border-gray-200 transition-colors duration-300 group hover:border-blue-300 border-[1px]">
-        <div className="flex absolute duration-200 group-hover:opacity-100 opacity-0 top-2 right-2 z-[20] flex-col gap-2">
+      <div
+        className={`flex relative flex-col gap-4 w-full h-full bg-gray-50 rounded-2xl border-gray-200 transition-colors duration-300 group ${
+          isSelected
+            ? "border-blue-500 border-[1px]"
+            : anyCapSelected
+            ? "border-blue-300 border-[1px]"
+            : "hover:border-blue-300 border-[1px]"
+        }`}
+      >
+        <div
+          className={`flex absolute duration-200 ${
+            anyCapSelected ? "opacity-100" : "group-hover:opacity-100 opacity-0"
+          } top-2 right-2 z-[20] flex-col gap-2`}
+        >
           <Tooltip content="Copy link">
             <Button
               onClick={() =>
                 handleCopy(
                   activeSpace?.space.customDomain
                     ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
-                    : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+                    : buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
                     ? `https://cap.link/${cap.id}`
                     : `${webUrl}/s/${cap.id}`
                 )
@@ -247,9 +274,9 @@ export const CapCard = ({
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
                   className="text-gray-400 size-5 svgpathanimation"
                 >
                   <path d="M20 6 9 17l-5-5" />
@@ -271,18 +298,43 @@ export const CapCard = ({
             </Button>
           </Tooltip>
         </div>
+
+        {/* Selection checkbox */}
+        <div
+          className={`absolute top-2 left-2 z-[20] duration-200 ${
+            isSelected || anyCapSelected
+              ? "opacity-100"
+              : "group-hover:opacity-100 opacity-0"
+          }`}
+          onClick={handleSelectClick}
+        >
+          <div
+            className={`flex items-center justify-center w-6 h-6 rounded-md border cursor-pointer hover:bg-gray-200/60 transition-colors ${
+              isSelected
+                ? "bg-blue-500 border-blue-500"
+                : "border-gray-400 bg-white/80"
+            }`}
+          >
+            {isSelected && (
+              <FontAwesomeIcon icon={faCheck} className="text-white size-3" />
+            )}
+          </div>
+        </div>
+
         <Link
           className="block group"
           href={
             activeSpace?.space.customDomain
               ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
-              : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+              : buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
               ? `https://cap.link/${cap.id}`
               : `${webUrl}/s/${cap.id}`
           }
         >
           <VideoThumbnail
-            imageClass="group-hover:opacity-50 transition-opacity duration-200"
+            imageClass={`${
+              anyCapSelected ? "opacity-50" : "group-hover:opacity-50"
+            } transition-opacity duration-200`}
             userId={cap.ownerId}
             videoId={cap.id}
             alt={`${cap.name} Thumbnail`}

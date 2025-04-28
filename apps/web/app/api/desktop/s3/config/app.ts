@@ -55,7 +55,7 @@ app.post(
           .where(eq(s3Buckets.id, existingBucket.id));
       } else {
         // Insert new config
-        await db.insert(s3Buckets).values(encryptedConfig);
+        await db().insert(s3Buckets).values(encryptedConfig);
       }
 
       return c.json({ success: true });
@@ -77,7 +77,7 @@ app.delete("/delete", async (c) => {
 
   try {
     // Delete the S3 configuration for the user
-    await db.delete(s3Buckets).where(eq(s3Buckets.ownerId, user.id));
+    await db().delete(s3Buckets).where(eq(s3Buckets.ownerId, user.id));
 
     return c.json({ success: true });
   } catch (error) {

@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const video = await db.select().from(videos).where(eq(videos.id, videoId));
+  const video = await db().select().from(videos).where(eq(videos.id, videoId));
 
   if (video.length === 0 || !video[0]) {
     return Response.json(

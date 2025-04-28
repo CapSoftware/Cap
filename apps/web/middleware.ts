@@ -3,17 +3,17 @@ import type { NextRequest } from "next/server";
 import { db } from "@cap/database";
 import { spaces } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
-import { serverEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 import { notFound } from "next/navigation";
 
-const mainDomains = [
-  "cap.so",
-  "cap.link",
-  "localhost",
-  serverEnv.WEB_URL,
-  serverEnv.VERCEL_URL,
-  serverEnv.VERCEL_BRANCH_URL,
-  serverEnv.VERCEL_PROJECT_PRODUCTION_URL,
+const mainOrigins = [
+  "https://cap.so",
+  "https://cap.link",
+  "http://localhost",
+  serverEnv().WEB_URL,
+  serverEnv().VERCEL_URL,
+  serverEnv().VERCEL_BRANCH_URL,
+  serverEnv().VERCEL_PROJECT_PRODUCTION_URL,
 ].filter(Boolean) as string[];
 
 export async function middleware(request: NextRequest) {
@@ -21,57 +21,30 @@ export async function middleware(request: NextRequest) {
   const hostname = url.hostname;
   const path = url.pathname;
 
-  const webUrl = new URL(serverEnv.WEB_URL).hostname;
+  const webUrl = new URL(serverEnv().WEB_URL).hostname;
 
-  if (mainDomains.some((d) => hostname.includes(d))) {
+  if (
+    buildEnv.NEXT_PUBLIC_IS_CAP !== "true" ||
+    mainOrigins.some((d) => url.origin === d)
+  ) {
     // We just let the request go through for main domains, page-level logic will handle redirects
     return NextResponse.next();
   }
 
-  // We're on a custom domain at this point
-  // Only allow /s/ routes for custom domains
-  if (!path.startsWith("/s/")) {
-    const url = new URL(request.url);
-    url.hostname = webUrl;
-    return NextResponse.redirect(url);
-  }
-
-  // Check if we have a cached verification
-  const verifiedDomain = request.cookies.get("verified_domain");
-  if (verifiedDomain?.value === hostname) {
-    // Domain is verified from cache, handle CORS for API routes
-    // if (path.startsWith("/api/")) {
-    //   if (request.method === "OPTIONS") {
-    //     const response = new NextResponse(null, { status: 204 });
-    //     response.headers.set("Access-Control-Allow-Origin", "*");
-    //     response.headers.set(
-    //       "Access-Control-Allow-Methods",
-    //       "GET, POST, PUT, DELETE, OPTIONS"
-    //     );
-    //     response.headers.set(
-    //       "Access-Control-Allow-Headers",
-    //       "Content-Type, Authorization"
-    //     );
-    //     response.headers.set("Access-Control-Max-Age", "86400");
-    //     return response;
-    //   }
-
-    //   const response = NextResponse.next();
-    //   response.headers.set("Access-Control-Allow-Origin", "*");
-    //   response.headers.set(
-    //     "Access-Control-Allow-Methods",
-    //     "GET, POST, PUT, DELETE, OPTIONS"
-    //   );
-    //   response.headers.set(
-    //     "Access-Control-Allow-Headers",
-    //     "Content-Type, Authorization"
-    //   );
-    //   return response;
-    // }
-    return NextResponse.next();
-  }
-
   try {
+    // We're on a custom domain at this point
+    // Only allow /s/ routes for custom domains
+    if (!path.startsWith("/s/")) {
+      const url = new URL(request.url);
+      url.hostname = webUrl;
+      console.log({ url });
+      return NextResponse.redirect(url);
+    }
+
+    // Check if we have a cached verification
+    const verifiedDomain = request.cookies.get("verified_domain");
+    if (verifiedDomain?.value === hostname) return NextResponse.next();
+
     // Query the space with this custom domain
     const [space] = await db
       .select()
@@ -84,50 +57,6 @@ export async function middleware(request: NextRequest) {
       url.hostname = webUrl;
       return NextResponse.redirect(url);
     }
-
-    // Domain is verified at this point, handle CORS for API routes
-    // if (path.startsWith("/api/")) {
-    //   if (request.method === "OPTIONS") {
-    //     const response = new NextResponse(null, { status: 204 });
-    //     response.headers.set("Access-Control-Allow-Origin", "*");
-    //     response.headers.set(
-    //       "Access-Control-Allow-Methods",
-    //       "GET, POST, PUT, DELETE, OPTIONS"
-    //     );
-    //     response.headers.set(
-    //       "Access-Control-Allow-Headers",
-    //       "Content-Type, Authorization"
-    //     );
-    //     response.headers.set("Access-Control-Max-Age", "86400");
-    //     // Set verification cookie
-    //     response.cookies.set("verified_domain", hostname, {
-    //       httpOnly: true,
-    //       secure: process.env.NODE_ENV === "production",
-    //       sameSite: "strict",
-    //       maxAge: 3600, // Cache for 1 hour
-    //     });
-    //     return response;
-    //   }
-
-    //   const response = NextResponse.next();
-    //   response.headers.set("Access-Control-Allow-Origin", "*");
-    //   response.headers.set(
-    //     "Access-Control-Allow-Methods",
-    //     "GET, POST, PUT, DELETE, OPTIONS"
-    //   );
-    //   response.headers.set(
-    //     "Access-Control-Allow-Headers",
-    //     "Content-Type, Authorization"
-    //   );
-    //   // Set verification cookie
-    //   response.cookies.set("verified_domain", hostname, {
-    //     httpOnly: true,
-    //     secure: process.env.NODE_ENV === "production",
-    //     sameSite: "strict",
-    //     maxAge: 3600, // Cache for 1 hour
-    //   });
-    //   return response;
-    // }
 
     // Set verification cookie for non-API routes too
     const response = NextResponse.next();

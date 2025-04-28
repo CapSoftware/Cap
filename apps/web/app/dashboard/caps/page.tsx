@@ -69,7 +69,7 @@ export default async function CapsPage({
       ownerName: users.name,
       effectiveDate: sql<string>`
         COALESCE(
-          JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')), 
+          JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
           ${videos.createdAt}
         )
       `,
@@ -90,7 +90,7 @@ export default async function CapsPage({
     )
     .orderBy(
       desc(sql`COALESCE(
-      JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')), 
+      JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
       ${videos.createdAt}
     )`)
     )

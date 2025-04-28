@@ -26,6 +26,7 @@ import { fromVtt, Subtitle } from "subtitles-parser-vtt";
 import { MP4VideoPlayer } from "./MP4VideoPlayer";
 import { VideoPlayer } from "./VideoPlayer";
 import { usePublicEnv } from "@/utils/public-env";
+import { UpgradeModal } from "@/components/UpgradeModal";
 
 declare global {
   interface Window {
@@ -73,6 +74,7 @@ export const ShareVideo = forwardRef<
   const [subtitlesVisible, setSubtitlesVisible] = useState(true);
   const [isTranscriptionProcessing, setIsTranscriptionProcessing] =
     useState(false);
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 
   // Scrubbing preview states
   const [showPreview, setShowPreview] = useState(false);
@@ -1420,27 +1422,31 @@ export const ShareVideo = forwardRef<
           subscriptionStatus: user.stripeSubscriptionStatus,
         }) && (
           <div className="absolute top-4 left-4 z-30">
-            <a
-              href="/pricing"
-              target="_blank"
+            <div
               className="block cursor-pointer"
-              onClick={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                setUpgradeModalOpen(true);
+              }}
             >
               <div className="relative">
                 <div className="opacity-50 transition-opacity hover:opacity-100 peer">
-                  <Logo className="w-auto h-4 sm:h-6" white={true} />
+                  <Logo className="w-auto h-4 sm:h-8" white={true} />
                 </div>
 
-                {/* Text only appears when hovering the exact logo element */}
-                <div className="absolute left-0 top-6 transition-transform duration-300 ease-in-out origin-top scale-y-0 peer-hover:scale-y-100">
+                <div className="absolute left-0 top-8 transition-transform duration-300 ease-in-out origin-top scale-y-0 peer-hover:scale-y-100">
                   <p className="text-white text-xs font-medium whitespace-nowrap bg-black bg-opacity-50 px-2 py-0.5 rounded">
-                    Upgrade to Cap Pro and remove the watermark
+                    Remove watermark
                   </p>
                 </div>
               </div>
-            </a>
+            </div>
           </div>
         )}
+      <UpgradeModal
+        open={upgradeModalOpen}
+        onOpenChange={setUpgradeModalOpen}
+      />
     </div>
   );
 });

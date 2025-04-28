@@ -37,13 +37,15 @@ export async function POST(request: NextRequest) {
   if (!space) {
     const spaceId = nanoId();
 
-    await db.insert(spaces).values({
-      id: spaceId,
-      ownerId: user.id,
-      name: `${fullName}'s Space`,
-    });
+    await db()
+      .insert(spaces)
+      .values({
+        id: spaceId,
+        ownerId: user.id,
+        name: `${fullName}'s Space`,
+      });
 
-    await db.insert(spaceMembers).values({
+    await db().insert(spaceMembers).values({
       id: nanoId(),
       userId: user.id,
       role: "owner",

@@ -4,7 +4,7 @@ import { NextRequest } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@cap/database";
 import { users } from "@cap/database/schema";
-import { clientEnv, serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 import posthog from "posthog-js";
 
 export async function POST(request: NextRequest) {
@@ -72,8 +72,8 @@ export async function POST(request: NextRequest) {
       customer: customerId as string,
       line_items: [{ price: priceId, quantity: quantity }],
       mode: "subscription",
-      success_url: `${serverEnv.WEB_URL}/dashboard/caps?upgrade=true`,
-      cancel_url: `${serverEnv.WEB_URL}/pricing`,
+      success_url: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true`,
+      cancel_url: `${serverEnv().WEB_URL}/pricing`,
       allow_promotion_codes: true,
     });
 

@@ -5,7 +5,7 @@ import { comments } from "@cap/database/schema";
 import { db } from "@cap/database";
 import { rateLimitMiddleware } from "@/utils/helpers";
 import { headers } from "next/headers";
-import { clientEnv, serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 
 async function handlePost(request: NextRequest) {
   const user = await getCurrentUser();
@@ -44,7 +44,7 @@ async function handlePost(request: NextRequest) {
       updatedAt: new Date(),
     };
 
-    await db.insert(comments).values(newComment);
+    await db().insert(comments).values(newComment);
 
     // Trigger email notification for new comment
     if (type === "text" && userId !== "anonymous") {
@@ -52,7 +52,7 @@ async function handlePost(request: NextRequest) {
         // Don't await this to avoid blocking the response
         const absoluteUrl = new URL(
           "/api/email/new-comment",
-          serverEnv.WEB_URL
+          serverEnv().WEB_URL
         ).toString();
         fetch(absoluteUrl, {
           method: "POST",

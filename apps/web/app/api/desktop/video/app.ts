@@ -5,7 +5,7 @@ import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
 import { s3Buckets, videos } from "@cap/database/schema";
-import { clientEnv, NODE_ENV, serverEnv } from "@cap/env";
+import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { zValidator } from "@hono/zod-validator";
 import { count, eq } from "drizzle-orm";
 import { Hono } from "hono";
@@ -88,11 +88,11 @@ app.get(
       bucket: bucket?.id,
     };
 
-    await db.insert(videos).values(videoData);
+    await db().insert(videos).values(videoData);
 
-    if (clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
-      await dub.links.create({
-        url: `${serverEnv.WEB_URL}/s/${idToUse}`,
+    if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
+      await dub().links.create({
+        url: `${serverEnv().WEB_URL}/s/${idToUse}`,
         domain: "cap.link",
         key: idToUse,
       });
@@ -114,9 +114,9 @@ app.get(
           "[SendFirstShareableLinkEmail] Sending first shareable link email with 5-minute delay"
         );
 
-        const videoUrl = clientEnv.NEXT_PUBLIC_IS_CAP
+        const videoUrl = buildEnv.NEXT_PUBLIC_IS_CAP
           ? `https://cap.link/${idToUse}`
-          : `${serverEnv.WEB_URL}/s/${idToUse}`;
+          : `${serverEnv().WEB_URL}/s/${idToUse}`;
 
         // Send email with 5-minute delay using Resend's scheduling feature
         await sendEmail({

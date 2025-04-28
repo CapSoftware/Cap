@@ -1,4 +1,4 @@
-import { serverEnv, clientEnv, NODE_ENV } from "@cap/env";
+import { serverEnv, NODE_ENV } from "@cap/env";
 import { LinkIcon, Trash } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { Tooltip } from "react-tooltip";

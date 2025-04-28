@@ -1,4 +1,3 @@
-import type { NextRequest } from "next/server";
 import {
   S3Client,
   GetObjectCommand,
@@ -6,54 +5,33 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createClient } from "@deepgram/sdk";
-import { getHeaders } from "@/utils/helpers";
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { createS3Client } from "@/utils/s3";
 import { serverEnv } from "@cap/env";
 
-export const maxDuration = 120;
+type TranscribeResult = {
+  success: boolean;
+  message: string;
+};
 
-export async function OPTIONS(request: NextRequest) {
-  const origin = request.headers.get("origin") as string;
-
-  return new Response(null, {
-    status: 200,
-    headers: getHeaders(origin),
-  });
-}
-
-export async function GET(request: NextRequest) {
-  const searchParams = request.nextUrl.searchParams;
-  const userId = searchParams.get("userId") || "";
-  const videoId = searchParams.get("videoId") || "";
-  const origin = request.headers.get("origin") as string;
-
-  if (!serverEnv.DEEPGRAM_API_KEY) {
-    return new Response(
-      JSON.stringify({
-        error: true,
-        message: "Missing necessary environment variables",
-      }),
-      {
-        status: 500,
-        headers: getHeaders(origin),
-      }
-    );
+export async function transcribeVideo(
+  videoId: string,
+  userId: string
+): Promise<TranscribeResult> {
+  if (!serverEnv().DEEPGRAM_API_KEY) {
+    return {
+      success: false,
+      message: "Missing necessary environment variables",
+    };
   }
 
   if (!userId || !videoId) {
-    return new Response(
-      JSON.stringify({
-        error: true,
-        message: "userId or videoId not supplied",
-      }),
-      {
-        status: 401,
-        headers: getHeaders(origin),
-      }
-    );
+    return {
+      success: false,
+      message: "userId or videoId not supplied",
+    };
   }
 
   const query = await db
@@ -66,64 +44,38 @@ export async function GET(request: NextRequest) {
     .where(eq(videos.id, videoId));
 
   if (query.length === 0) {
-    return new Response(
-      JSON.stringify({ error: true, message: "Video does not exist" }),
-      {
-        status: 401,
-        headers: getHeaders(origin),
-      }
-    );
+    return { success: false, message: "Video does not exist" };
   }
 
   const result = query[0];
   if (!result || !result.video) {
-    return new Response(
-      JSON.stringify({ error: true, message: "Video information is missing" }),
-      {
-        status: 500,
-        headers: getHeaders(origin),
-      }
-    );
+    return { success: false, message: "Video information is missing" };
   }
 
   const { video, bucket } = result;
 
   if (!video) {
-    return new Response(
-      JSON.stringify({ error: true, message: "Video information is missing" }),
-      {
-        status: 500,
-        headers: getHeaders(origin),
-      }
-    );
+    return { success: false, message: "Video information is missing" };
   }
 
   const awsRegion = video.awsRegion;
   const awsBucket = video.awsBucket;
 
   if (!awsRegion || !awsBucket) {
-    return new Response(
-      JSON.stringify({
-        error: true,
-        message: "AWS region or bucket information is missing",
-      }),
-      {
-        status: 500,
-        headers: getHeaders(origin),
-      }
-    );
+    return {
+      success: false,
+      message: "AWS region or bucket information is missing",
+    };
   }
 
   if (
     video.transcriptionStatus === "COMPLETE" ||
     video.transcriptionStatus === "PROCESSING"
   ) {
-    return new Response(
-      JSON.stringify({
-        message: "Transcription already completed or in progress",
-      }),
-      { status: 200, headers: getHeaders(origin) }
-    );
+    return {
+      success: true,
+      message: "Transcription already completed or in progress",
+    };
   }
 
   await db
@@ -164,28 +116,17 @@ export async function GET(request: NextRequest) {
       .set({ transcriptionStatus: "COMPLETE" })
       .where(eq(videos.id, videoId));
 
-    return new Response(
-      JSON.stringify({
-        message: "VTT file generated and uploaded successfully",
-      }),
-      {
-        status: 200,
-        headers: getHeaders(origin),
-      }
-    );
+    return {
+      success: true,
+      message: "VTT file generated and uploaded successfully",
+    };
   } catch (error) {
     await db
       .update(videos)
       .set({ transcriptionStatus: "ERROR" })
       .where(eq(videos.id, videoId));
 
-    return new Response(
-      JSON.stringify({ error: true, message: "Error processing video file" }),
-      {
-        status: 500,
-        headers: getHeaders(origin),
-      }
-    );
+    return { success: false, message: "Error processing video file" };
   }
 }
 
@@ -237,7 +178,7 @@ function formatTimestamp(seconds: number): string {
 }
 
 async function transcribeAudio(videoUrl: string): Promise<string> {
-  const deepgram = createClient(serverEnv.DEEPGRAM_API_KEY as string);
+  const deepgram = createClient(serverEnv().DEEPGRAM_API_KEY as string);
 
   const { result, error } = await deepgram.listen.prerecorded.transcribeUrl(
     {

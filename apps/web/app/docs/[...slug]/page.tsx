@@ -1,6 +1,6 @@
 import type { DocMetadata } from "@/utils/blog";
 import { getDocs } from "@/utils/blog";
-import { clientEnv, serverEnv } from "@cap/env";
+import { buildEnv } from "@cap/env";
 import type { Metadata } from "next";
 import { MDXRemote } from "next-mdx-remote/rsc";
 import Image from "next/image";
@@ -49,7 +49,7 @@ export async function generateMetadata(
   if (!doc) return;
 
   const { title, summary, image } = doc.metadata;
-  const ogImage = image ? `${serverEnv.WEB_URL}${image}` : undefined;
+  const ogImage = image ? `${buildEnv.NEXT_PUBLIC_WEB_URL}${image}` : undefined;
   const description = summary || title;
 
   return {
@@ -59,7 +59,7 @@ export async function generateMetadata(
       title,
       description,
       type: "article",
-      url: `${serverEnv.WEB_URL}/docs/${fullSlug}`,
+      url: `${buildEnv.NEXT_PUBLIC_WEB_URL}/docs/${fullSlug}`,
       ...(ogImage && {
         images: [{ url: ogImage }],
       }),

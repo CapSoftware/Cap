@@ -1,4 +1,3 @@
-export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const fetchCache = "force-no-store";
 
@@ -13,6 +12,7 @@ import { Check, CheckCircle, Copy, XCircle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "react-hot-toast";
+import { UpgradeModal } from "@/components/UpgradeModal";
 
 type DomainVerification = {
   type: string;
@@ -53,9 +53,10 @@ export function CustomDomain() {
   );
   const [domainConfig, setDomainConfig] = useState<DomainConfig | null>(null);
   const [copiedField, setCopiedField] = useState<"name" | "value" | null>(null);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const initialCheckDone = useRef(false);
   const pollInterval = useRef<NodeJS.Timeout>();
-  const POLL_INTERVAL = 5000; // 5 seconds
+  const POLL_INTERVAL = 5000;
 
   const cleanDomain = (input: string) => {
     if (!input) return "";
@@ -71,7 +72,6 @@ export function CustomDomain() {
     const withoutHash = withoutQuery.split("#")[0] || "";
     const cleanedDomain = withoutHash.trim();
 
-    // Check for valid domain with optional subdomains
     const hasTLD =
       /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/.test(
         cleanedDomain
@@ -103,7 +103,7 @@ export function CustomDomain() {
       if (showToasts) {
         if (data.verified) {
           toast.success("Domain is verified!");
-          // Stop polling once verified
+
           if (pollInterval.current) {
             clearInterval(pollInterval.current);
             pollInterval.current = undefined;
@@ -124,23 +124,18 @@ export function CustomDomain() {
   };
 
   useEffect(() => {
-    // Start polling if we have a custom domain and it's not verified
     if (activeSpace?.space.customDomain && !isVerified) {
-      // Clear any existing interval
       if (pollInterval.current) {
         clearInterval(pollInterval.current);
       }
 
-      // Check immediately
       checkVerification(false);
 
-      // Start polling
       pollInterval.current = setInterval(() => {
         checkVerification(false);
       }, POLL_INTERVAL);
     }
 
-    // Cleanup interval if domain becomes verified or component unmounts
     return () => {
       if (pollInterval.current) {
         clearInterval(pollInterval.current);
@@ -149,7 +144,6 @@ export function CustomDomain() {
     };
   }, [activeSpace?.space.customDomain, isVerified]);
 
-  // Initial check when component mounts
   useEffect(() => {
     if (!initialCheckDone.current && activeSpace?.space.customDomain) {
       initialCheckDone.current = true;
@@ -161,28 +155,7 @@ export function CustomDomain() {
     e.preventDefault();
 
     if (!isSubscribed) {
-      toast.error(
-        (t) => (
-          <span>
-            Please upgrade to{" "}
-            <a
-              href="/pricing"
-              className="font-medium text-blue-500 hover:text-blue-600"
-              onClick={(e) => {
-                e.preventDefault();
-                toast.dismiss(t.id);
-                router.push("/pricing");
-              }}
-            >
-              Cap Pro
-            </a>{" "}
-            to use custom domains
-          </span>
-        ),
-        {
-          duration: 5000,
-        }
-      );
+      setShowUpgradeModal(true);
       return;
     }
 
@@ -193,7 +166,7 @@ export function CustomDomain() {
     }
 
     setLoading(true);
-    setDomain(cleanedDomain); // Update the input to show the cleaned domain
+    setDomain(cleanedDomain);
 
     try {
       const data = await updateDomain(
@@ -204,16 +177,13 @@ export function CustomDomain() {
       toast.success("Domain settings updated");
       router.refresh();
 
-      // Set initial domain config from the response
       setDomainConfig(data.status);
       setIsVerified(data.verified);
 
-      // Trigger a refresh after 1 second to get DNS config
       setTimeout(() => {
         checkVerification(false);
       }, 1000);
 
-      // Start polling
       pollInterval.current = setInterval(() => {
         checkVerification(false);
       }, POLL_INTERVAL);
@@ -226,28 +196,7 @@ export function CustomDomain() {
 
   const handleRemoveDomain = async () => {
     if (!isSubscribed) {
-      toast.error(
-        (t) => (
-          <span>
-            Please upgrade to{" "}
-            <a
-              href="/pricing"
-              className="font-medium text-blue-500 hover:text-blue-600"
-              onClick={(e) => {
-                e.preventDefault();
-                toast.dismiss(t.id);
-                router.push("/pricing");
-              }}
-            >
-              Cap Pro
-            </a>{" "}
-            to use custom domains
-          </span>
-        ),
-        {
-          duration: 5000,
-        }
-      );
+      setShowUpgradeModal(true);
       return;
     }
 
@@ -257,7 +206,6 @@ export function CustomDomain() {
     try {
       await removeWorkspaceDomain(activeSpace?.space.id as string);
 
-      // Clear polling when domain is removed
       if (pollInterval.current) {
         clearInterval(pollInterval.current);
         pollInterval.current = undefined;
@@ -534,6 +482,12 @@ export function CustomDomain() {
           </div>
         )}
       </div>
+      {showUpgradeModal && (
+        <UpgradeModal
+          open={showUpgradeModal}
+          onOpenChange={setShowUpgradeModal}
+        />
+      )}
     </div>
   );
 }

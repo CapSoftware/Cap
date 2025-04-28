@@ -2,6 +2,7 @@
 
 import { testimonials, Testimonial } from "../../data/testimonials";
 import Image from "next/image";
+import { motion } from "framer-motion";
 
 interface TestimonialsProps {
   amount?: number;
@@ -20,24 +21,46 @@ export const Testimonials = ({
     ? testimonials.slice(0, amount)
     : testimonials;
 
+  const getRandomDelay = () => 0.15 + Math.random() * 0.3;
+
   return (
     <div>
       {showHeader && (
         <>
-          <h2 className="text-3xl text-center md:text-4xl tracking-[-.05em] font-medium text-[--text-primary]">
+          <motion.h2
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4 }}
+            className="text-3xl text-center md:text-4xl tracking-[-.05em] font-medium text-[--text-primary]"
+          >
             {title}
-          </h2>
-          <p className="mx-auto mt-4 max-w-2xl text-center text-gray-400">
+          </motion.h2>
+          <motion.p
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4, delay: 0.1 }}
+            className="mx-auto mt-4 max-w-2xl text-center text-gray-400"
+          >
             {subtitle}
-          </p>
+          </motion.p>
         </>
       )}
 
       <div className="mt-8 columns-1 md:columns-2 lg:columns-3 gap-3 space-y-3">
         {displayedTestimonials.map((testimonial, i) => (
-          <div key={i} className="break-inside-avoid mb-3">
+          <motion.div
+            key={i}
+            className="break-inside-avoid mb-3"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{
+              duration: 0.3,
+              delay: getRandomDelay(),
+              ease: "easeOut",
+            }}
+          >
             <TestimonialCard testimonial={testimonial} />
-          </div>
+          </motion.div>
         ))}
       </div>
     </div>
@@ -50,11 +73,13 @@ interface TestimonialCardProps {
 
 const TestimonialCard = ({ testimonial }: TestimonialCardProps) => {
   return (
-    <a
+    <motion.a
       href={testimonial.url}
       target="_blank"
       rel="noopener noreferrer"
       className="p-6 bg-gray-100 rounded-xl border border-gray-200 w-full h-auto hover:scale-[1.015] hover:border-blue-500 hover:shadow-lg transition-all duration-300 cursor-pointer block"
+      whileHover={{ scale: 1.03 }}
+      whileTap={{ scale: 0.98 }}
     >
       <div className="flex items-center mb-4">
         <div className="overflow-hidden relative mr-2 w-12 h-12 rounded-full border-2 border-gray-100">
@@ -78,6 +103,6 @@ const TestimonialCard = ({ testimonial }: TestimonialCardProps) => {
       </div>
 
       <p className="text-gray-500">{testimonial.content}</p>
-    </a>
+    </motion.a>
   );
 };

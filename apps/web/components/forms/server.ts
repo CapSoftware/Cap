@@ -12,13 +12,13 @@ export async function createSpace(args: { name: string }) {
   if (!user) throw new Error("Unauthorized");
 
   const spaceId = nanoId();
-  await db.insert(spaces).values({
+  await db().insert(spaces).values({
     id: spaceId,
     ownerId: user.id,
     name: args.name,
   });
 
-  await db.insert(spaceMembers).values({
+  await db().insert(spaceMembers).values({
     id: nanoId(),
     userId: user.id,
     role: "owner",

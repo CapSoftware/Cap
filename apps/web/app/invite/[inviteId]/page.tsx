@@ -1,4 +1,3 @@
-"use server";
 import { db } from "@cap/database";
 import { eq } from "drizzle-orm";
 import { spaceInvites, spaces, users } from "@cap/database/schema";

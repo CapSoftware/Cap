@@ -3,7 +3,7 @@ import { BentoScript } from "@/components/BentoScript";
 import { Footer } from "@/components/Footer";
 import { Navbar } from "@/components/Navbar";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { serverEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import crypto from "crypto";
 import type { Metadata } from "next";
@@ -54,9 +54,9 @@ export default async function RootLayout({
 }) {
   const user = await getCurrentUser();
   let intercomHash = "";
-  if (serverEnv.INTERCOM_SECRET) {
+  if (serverEnv().INTERCOM_SECRET) {
     intercomHash = crypto
-      .createHmac("sha256", serverEnv.INTERCOM_SECRET)
+      .createHmac("sha256", serverEnv().INTERCOM_SECRET)
       .update(user?.id ?? "")
       .digest("hex");
   }
@@ -93,8 +93,8 @@ export default async function RootLayout({
             <AuthProvider>
               <PublicEnvContext
                 value={{
-                  webUrl: serverEnv.WEB_URL,
-                  awsBucket: serverEnv.CAP_AWS_BUCKET,
+                  webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
+                  awsBucket: buildEnv.NEXT_PUBLIC_CAP_AWS_BUCKET,
                   s3BucketUrl: S3_BUCKET_URL,
                 }}
               >

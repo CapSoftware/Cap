@@ -6,28 +6,31 @@ const SALT_LENGTH = 16;
 const KEY_LENGTH = 32;
 const ITERATIONS = 100000;
 
-const ENCRYPTION_KEY = serverEnv.DATABASE_ENCRYPTION_KEY as string;
+const ENCRYPTION_KEY = () => {
+  const key = serverEnv().DATABASE_ENCRYPTION_KEY;
+  // Verify the encryption key is valid hex and correct length
+  try {
+    const keyBuffer = Buffer.from(key, "hex");
+    if (keyBuffer.length !== KEY_LENGTH) {
+      throw new Error(
+        `Encryption key must be ${KEY_LENGTH} bytes (${
+          KEY_LENGTH * 2
+        } hex characters)`
+      );
+    }
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      throw new Error(`Invalid encryption key format: ${error.message}`);
+    }
+    throw new Error("Invalid encryption key format");
+  }
 
-// Verify the encryption key is valid hex and correct length
-try {
-  const keyBuffer = Buffer.from(ENCRYPTION_KEY, "hex");
-  if (keyBuffer.length !== KEY_LENGTH) {
-    throw new Error(
-      `Encryption key must be ${KEY_LENGTH} bytes (${
-        KEY_LENGTH * 2
-      } hex characters)`
-    );
-  }
-} catch (error: unknown) {
-  if (error instanceof Error) {
-    throw new Error(`Invalid encryption key format: ${error.message}`);
-  }
-  throw new Error("Invalid encryption key format");
-}
+  return key;
+};
 
 async function deriveKey(salt: Uint8Array): Promise<CryptoKey> {
   // Convert hex string to ArrayBuffer for Web Crypto API
-  const keyBuffer = Buffer.from(ENCRYPTION_KEY, "hex");
+  const keyBuffer = Buffer.from(ENCRYPTION_KEY(), "hex");
 
   const keyMaterial = await crypto.subtle.importKey(
     "raw",

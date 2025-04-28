@@ -1,4 +1,4 @@
-import { clientEnv, serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 import {
   Pagination,
   PaginationContent,
@@ -31,7 +31,7 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
         <PaginationItem>
           <PaginationLink
             className="min-w-[54px]"
-            href={`${serverEnv.WEB_URL}/dashboard/caps?page=1`}
+            href={`/dashboard/caps?page=1`}
             isActive={currentPage === 1}
           >
             1

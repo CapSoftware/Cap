@@ -25,8 +25,8 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
       const row = rows[0];
       if (!row) throw new Error("User not found");
 
-      if (STRIPE_AVAILABLE) {
-        const customer = await stripe.customers.create({
+      if (STRIPE_AVAILABLE()) {
+        const customer = await stripe().customers.create({
           email: userData.email,
           metadata: {
             userId: nanoId(),

@@ -1,4 +1,4 @@
-'use server';
+"use server";
 
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
@@ -8,13 +8,13 @@ import { revalidatePath } from "next/cache";
 
 export async function editTitle(videoId: string, title: string) {
   const user = await getCurrentUser();
-  
+
   if (!user || !title || !videoId) {
     throw new Error("Missing required data for updating video title");
   }
 
   const userId = user.id;
-  const query = await db.select().from(videos).where(eq(videos.id, videoId));
+  const query = await db().select().from(videos).where(eq(videos.id, videoId));
 
   if (query.length === 0) {
     throw new Error("Video not found");
@@ -30,15 +30,12 @@ export async function editTitle(videoId: string, title: string) {
   }
 
   try {
-    await db
-      .update(videos)
-      .set({ name: title })
-      .where(eq(videos.id, videoId));
+    await db.update(videos).set({ name: title }).where(eq(videos.id, videoId));
 
-    revalidatePath('/dashboard/caps');
-    revalidatePath('/dashboard/shared-caps');
+    revalidatePath("/dashboard/caps");
+    revalidatePath("/dashboard/shared-caps");
     revalidatePath(`/s/${videoId}`);
-    
+
     return { success: true };
   } catch (error) {
     console.error("Error updating video title:", error);
@@ -47,4 +44,4 @@ export async function editTitle(videoId: string, title: string) {
     }
     throw new Error("Failed to update video title");
   }
-} 
+}

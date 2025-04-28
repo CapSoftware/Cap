@@ -30,10 +30,6 @@ interface ShareProps {
   data: VideoWithSpaceInfo;
   user: typeof userSelectProps | null;
   comments: CommentWithAuthor[];
-  individualFiles: {
-    fileName: string;
-    url: string;
-  }[];
   initialAnalytics: {
     views: number;
     comments: number;
@@ -47,13 +43,11 @@ export const Share: React.FC<ShareProps> = ({
   data,
   user,
   comments,
-  individualFiles,
   initialAnalytics,
   customDomain,
   domainVerified,
 }) => {
   const [analytics, setAnalytics] = useState(initialAnalytics);
-  // Use custom date from metadata if it exists, similar to CapCard.tsx
   const effectiveDate = data.metadata?.customCreatedAt
     ? new Date(data.metadata.customCreatedAt)
     : data.createdAt;
@@ -83,7 +77,6 @@ export const Share: React.FC<ShareProps> = ({
     fetchViewCount();
   }, [data.id]);
 
-  // Update analytics when comments change
   useEffect(() => {
     setAnalytics((prev) => ({
       ...prev,
@@ -98,7 +91,6 @@ export const Share: React.FC<ShareProps> = ({
         <ShareHeader
           data={{ ...data, createdAt: effectiveDate }}
           user={user}
-          individualFiles={individualFiles}
           customDomain={customDomain}
           domainVerified={domainVerified}
         />

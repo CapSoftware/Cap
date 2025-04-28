@@ -15,7 +15,7 @@ export async function PUT(request: NextRequest) {
     return Response.json({ error: true }, { status: 401 });
   }
 
-  const query = await db.select().from(videos).where(eq(videos.id, videoId));
+  const query = await db().select().from(videos).where(eq(videos.id, videoId));
 
   if (query.length === 0) {
     return Response.json({ error: true }, { status: 401 });

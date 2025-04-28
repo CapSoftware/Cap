@@ -1,4 +1,4 @@
-'use server';
+"use server";
 
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
@@ -9,13 +9,13 @@ import { revalidatePath } from "next/cache";
 
 export async function editDate(videoId: string, date: string) {
   const user = await getCurrentUser();
-  
+
   if (!user || !date || !videoId) {
     throw new Error("Missing required data for updating video date");
   }
 
   const userId = user.id;
-  const query = await db.select().from(videos).where(eq(videos.id, videoId));
+  const query = await db().select().from(videos).where(eq(videos.id, videoId));
 
   if (query.length === 0) {
     throw new Error("Video not found");
@@ -33,19 +33,19 @@ export async function editDate(videoId: string, date: string) {
   try {
     const newDate = new Date(date);
     const currentDate = new Date();
-    
+
     // Prevent future dates
     if (newDate > currentDate) {
       throw new Error("Cannot set a date in the future");
     }
-    
+
     // Store the custom date in the metadata field
-    const currentMetadata = video.metadata as VideoMetadata || {};
+    const currentMetadata = (video.metadata as VideoMetadata) || {};
     const updatedMetadata: VideoMetadata = {
       ...currentMetadata,
       customCreatedAt: newDate.toISOString(),
     };
-    
+
     await db
       .update(videos)
       .set({
@@ -54,9 +54,9 @@ export async function editDate(videoId: string, date: string) {
       .where(eq(videos.id, videoId));
 
     // Revalidate paths to update the UI
-    revalidatePath('/dashboard/caps');
-    revalidatePath('/dashboard/shared-caps');
-    
+    revalidatePath("/dashboard/caps");
+    revalidatePath("/dashboard/shared-caps");
+
     return { success: true };
   } catch (error) {
     console.error("Error updating video date:", error);
@@ -65,4 +65,4 @@ export async function editDate(videoId: string, date: string) {
     }
     throw new Error("Failed to update video date");
   }
-} 
+}

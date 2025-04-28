@@ -14,6 +14,10 @@ const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
   transpilePackages: ["@cap/ui", "@cap/utils", "@cap/web-api-contract"],
+  webpack: (config) => {
+    config.optimization.minimizer = [];
+    return config;
+  },
   eslint: {
     ignoreDuringBuilds: true,
   },
