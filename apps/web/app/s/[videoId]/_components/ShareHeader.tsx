@@ -99,7 +99,7 @@ export const ShareHeader = ({
         <div className="md:flex md:items-center md:justify-between space-x-0 md:space-x-6">
           <div className="md:flex items-center md:justify-between md:space-x-6">
             <div className="mb-3 md:mb-0">
-              <div className="flex items-center space-x-3">
+              <div className="flex items-center space-x-3  lg:min-w-[400px]">
                 {isEditing ? (
                   <input
                     value={title}
@@ -107,7 +107,7 @@ export const ShareHeader = ({
                     onBlur={handleBlur}
                     onKeyDown={handleKeyDown}
                     autoFocus
-                    className="text-xl sm:text-2xl font-semibold"
+                    className="text-xl sm:text-2xl font-semibold w-full"
                   />
                 ) : (
                   <h1
