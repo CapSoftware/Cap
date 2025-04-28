@@ -220,7 +220,10 @@ export const Footer = () => {
                 </ul>
 
                 <div className="pt-4">
-                  <Link href="/tools" className="text-lg font-semibold">
+                  <Link
+                    href="/tools"
+                    className="text-lg font-semibold text-gray-500"
+                  >
                     Tools
                   </Link>
                   <ul className="grid grid-cols-1 gap-2 pt-2">
