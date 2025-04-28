@@ -57,12 +57,12 @@ const footerLinks = {
     },
   ] as FooterLink[],
   tools: [
-    { label: "WebM to MP4", href: "/tools/webm-to-mp4" },
-    { label: "MOV to MP4", href: "/tools/mov-to-mp4" },
-    { label: "AVI to MP4", href: "/tools/avi-to-mp4" },
-    { label: "MP4 to GIF", href: "/tools/mp4-to-gif" },
-    { label: "MP4 to MP3", href: "/tools/mp4-to-mp3" },
-    { label: "MP4 to WebM", href: "/tools/mp4-to-webm" },
+    { label: "WebM to MP4", href: "/tools/convert/webm-to-mp4" },
+    { label: "MOV to MP4", href: "/tools/convert/mov-to-mp4" },
+    { label: "AVI to MP4", href: "/tools/convert/avi-to-mp4" },
+    { label: "MP4 to GIF", href: "/tools/convert/mp4-to-gif" },
+    { label: "MP4 to MP3", href: "/tools/convert/mp4-to-mp3" },
+    { label: "MP4 to WebM", href: "/tools/convert/mp4-to-webm" },
   ] as FooterLink[],
   useCases: [
     {
