@@ -16,26 +16,44 @@ WORKDIR /app
 
 # Install dependencies based on the preferred package manager
 COPY package.json yarn.lock* package-lock.json* pnpm-lock.yaml* .npmrc* ./
+
 COPY /patches ./patches
-RUN \
-	if [ -f yarn.lock ]; then yarn --frozen-lockfile; \
-	elif [ -f package-lock.json ]; then npm ci; \
-	elif [ -f pnpm-lock.yaml ]; then corepack enable pnpm && pnpm i; \
-	else echo "Lockfile not found." && exit 1; \
-	fi
+
+
+
+# Install dependencies based on lockfile
+RUN if [ -f yarn.lock ]; then \
+      yarn --frozen-lockfile; \
+    elif [ -f package-lock.json ]; then \
+      npm ci; \
+    elif [ -f pnpm-lock.yaml ]; then \
+      corepack enable pnpm; \
+    else \
+      echo "Lockfile not found." && exit 1; \
+    fi
+
+# Use mount cache for pnpm if pnpm-lock exists
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    if [ -f pnpm-lock.yaml ]; then \
+      pnpm i --frozen-lockfile; \
+    fi
 
 
 # 2. Rebuild the source code only when needed
 FROM base AS builder
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/patches ./patches
 COPY . .
 
 # build-time only variables
 ARG DOCKER_BUILD=true
 
-RUN corepack enable pnpm && pnpm run build:web
+RUN corepack enable pnpm && pnpm i && pnpm run build:web
+
+# We re-install packages instead of copy from deps due to an issue with pnpm and the way it installs app packages under certain conditions
+RUN corepack enable pnpm
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm i
+RUN pnpm run build:web
 
 # 3. Production image, copy all the files and run next
 FROM base AS runner
