@@ -23,6 +23,7 @@ import { LogoSection } from "../_components/LogoSection";
 import { FeatureCard } from "../SelfHostingPage";
 import LeftBlueHue from "./LeftBlueHue";
 import PowerfulFeaturesSVG from "./PowerfulFeaturesSVG";
+import { Testimonials } from "@/components/ui/Testimonials";
 export const HomePage = () => {
   const [videoToggled, setVideoToggled] = useState(false);
   const { platform, isIntel } = useDetectPlatform();
@@ -370,7 +371,7 @@ export const HomePage = () => {
           </div>
         </div>
       </div>
-      <div className="pb-32 wrapper md:pb-40" id="features">
+      <div className="pb-32 wrapper" id="features">
         <div className="space-y-3">
           {/* Section 1: 35% / 65% split */}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
@@ -432,7 +433,14 @@ export const HomePage = () => {
           </div>
         </div>
       </div>
-      <div className="px-5 mb-32 md:mb-40">
+      <div className="wrapper mb-32">
+        <Testimonials
+          amount={10}
+          title="What our users say about Cap after hitting record"
+          subtitle="Don't just take our word for it. Here's what our users are saying about their experience with Cap."
+        />
+      </div>
+      <div className="px-5 mb-32">
         <ReadyToGetStarted />
       </div>
     </ParallaxProvider>

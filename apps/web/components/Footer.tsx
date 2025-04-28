@@ -1,8 +1,8 @@
 "use client";
 
 import { Logo } from "@cap/ui";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
-
 type FooterLink = {
   label: string;
   href: string;
@@ -20,7 +20,6 @@ const footerLinks = {
       href: "https://github.com/CapSoftware/Cap",
       isExternal: true,
     },
-    { label: "Self-hosting", href: "/self-hosting" },
     {
       label: "Join the community",
       href: "https://discord.gg/y8gdQ3WRN3",
@@ -28,7 +27,10 @@ const footerLinks = {
     },
   ] as FooterLink[],
   help: [
+    { label: "About", href: "/about" },
+    { label: "Testimonials", href: "/testimonials" },
     { label: "FAQs", href: "/faq" },
+    { label: "Self-hosting", href: "/self-hosting" },
     { label: "Email Support", href: "mailto:hello@cap.so" },
     {
       label: "Chat Support",
@@ -53,6 +55,14 @@ const footerLinks = {
       href: "https://www.linkedin.com/company/caprecorder/",
       isExternal: true,
     },
+  ] as FooterLink[],
+  tools: [
+    { label: "WebM to MP4", href: "/tools/convert/webm-to-mp4" },
+    { label: "MOV to MP4", href: "/tools/convert/mov-to-mp4" },
+    { label: "AVI to MP4", href: "/tools/convert/avi-to-mp4" },
+    { label: "MP4 to GIF", href: "/tools/convert/mp4-to-gif" },
+    { label: "MP4 to MP3", href: "/tools/convert/mp4-to-mp3" },
+    { label: "MP4 to WebM", href: "/tools/convert/mp4-to-webm" },
   ] as FooterLink[],
   useCases: [
     {
@@ -102,11 +112,12 @@ export const Footer = () => {
         style={{ boxShadow: "0px 2px 8px rgba(18, 22, 31, 0.02)" }}
         className="mx-auto max-w-[1400px] bg-gray-1 border-[1px] border-gray-200 p-8 lg:p-12 rounded-[20px] mb-10 relative overflow-hidden"
       >
-        <div className="sm:grid space-y-8 sm:space-y-0 grid-cols-1 lg:grid-cols-12 gap-8 sm:items-start sm:justify-between z-10 relative">
-          <div className="space-y-2 sm:space-y-4 col-span-12 lg:col-span-6">
+        <div className="grid relative z-10 grid-cols-1 gap-8 justify-between items-start lg:grid-cols-12">
+          {/* Logo Column */}
+          <div className="col-span-12 space-y-2 sm:space-y-4 lg:col-span-5">
             <Logo className="w-[104px] h-auto" />
             <div className="w-full">
-              <p className="text-gray-1 max-w-md">
+              <p className="max-w-sm text-gray-500">
                 Cap is the open source alternative to Loom. Lightweight,
                 powerful, and cross-platform. Record and share in seconds.
               </p>
@@ -115,65 +126,23 @@ export const Footer = () => {
               © Cap Software, Inc. {new Date().getFullYear()}.
             </p>
             <div className="flex space-x-3">
-              <a className="text-gray-8 text-sm" href="/terms">
+              <a className="text-sm text-gray-8" href="/terms">
                 Terms of Service
               </a>
-              <a className="text-gray-8 text-sm" href="/privacy">
+              <a className="text-sm text-gray-8" href="/privacy">
                 Privacy Policy
               </a>
             </div>
           </div>
-          <div className="space-y-4 col-span-12 sm:col-span-6 lg:col-span-2">
-            <h3 className="text-lg font-semibold">Product</h3>
-            <ul className="space-y-2">
-              {footerLinks.product.map((link, index) => (
-                <li key={index}>
-                  <a
-                    href={link.href}
-                    target={link.isExternal ? "_blank" : undefined}
-                  >
-                    {link.label}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div className="space-y-4 col-span-12 sm:col-span-6 lg:col-span-2">
-            <h3 className="text-lg font-semibold">Help</h3>
-            <ul className="space-y-2">
-              {footerLinks.help.map((link, index) => (
-                <li key={index}>
-                  <a
-                    href={link.href}
-                    target={link.isExternal ? "_blank" : undefined}
-                  >
-                    {link.label}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div className="space-y-4 col-span-12 sm:col-span-6 lg:col-span-2">
-            <h3 className="text-lg font-semibold">Socials</h3>
-            <ul className="space-y-2">
-              {footerLinks.socials.map((link, index) => (
-                <li key={index}>
-                  <a
-                    href={link.href}
-                    target={link.isExternal ? "_blank" : undefined}
-                  >
-                    {link.label}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div className="space-y-4 col-span-12 sm:col-span-6 lg:col-span-12">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+
+          {/* Links Container Column */}
+          <div className="col-span-12 lg:col-span-7">
+            <div className="grid grid-cols-1 gap-8 xs:grid-cols-2 sm:grid-cols-3">
+              {/* Product Column */}
               <div className="space-y-4">
-                <h3 className="text-lg font-semibold">Additional Links</h3>
-                <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {footerLinks.additional.map((link, index) => (
+                <h3 className="text-lg font-semibold">Product</h3>
+                <ul className="space-y-2">
+                  {footerLinks.product.map((link, index) => (
                     <li key={index}>
                       <a
                         href={link.href}
@@ -184,11 +153,28 @@ export const Footer = () => {
                     </li>
                   ))}
                 </ul>
+
+                <div className="pt-4">
+                  <h3 className="text-lg font-semibold">Additional Links</h3>
+                  <ul className="grid grid-cols-1 gap-2 pt-2">
+                    {footerLinks.additional.map((link, index) => (
+                      <li key={index}>
+                        <a
+                          href={link.href}
+                          target={link.isExternal ? "_blank" : undefined}
+                        >
+                          {link.label}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               </div>
+
+              {/* Help Column */}
               <div className="space-y-4">
-                <h3 className="text-lg font-semibold">Use Cases</h3>
-                <ul className="grid grid-cols-1 gap-2">
-                  {footerLinks.useCases.map((link, index) => (
+                <ul className="space-y-2">
+                  {footerLinks.help.map((link, index) => (
                     <li key={index}>
                       <a
                         href={link.href}
@@ -199,6 +185,60 @@ export const Footer = () => {
                     </li>
                   ))}
                 </ul>
+
+                <div className="pt-4">
+                  <h3 className="text-lg font-semibold">Use Cases</h3>
+                  <ul className="grid grid-cols-1 gap-2 pt-2">
+                    {footerLinks.useCases.map((link, index) => (
+                      <li key={index}>
+                        <a
+                          href={link.href}
+                          target={link.isExternal ? "_blank" : undefined}
+                        >
+                          {link.label}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+
+              {/* Socials Column */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">Socials</h3>
+                <ul className="space-y-2">
+                  {footerLinks.socials.map((link, index) => (
+                    <li key={index}>
+                      <a
+                        href={link.href}
+                        target={link.isExternal ? "_blank" : undefined}
+                      >
+                        {link.label}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+
+                <div className="pt-4">
+                  <Link
+                    href="/tools"
+                    className="text-lg font-semibold text-gray-500"
+                  >
+                    Tools
+                  </Link>
+                  <ul className="grid grid-cols-1 gap-2 pt-2">
+                    {footerLinks.tools.map((link, index) => (
+                      <li key={index}>
+                        <a
+                          href={link.href}
+                          target={link.isExternal ? "_blank" : undefined}
+                        >
+                          {link.label}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               </div>
             </div>
           </div>

@@ -211,7 +211,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
               >
                 <Link
                   passHref
-                  prefetch={true}
+                  prefetch={false}
                   href={item.href}
                   className={classNames(
                     "relative transition-opacity duration-200 hover:opacity-75 z-3",

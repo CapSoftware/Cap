@@ -8,7 +8,7 @@ use std::{
 
 use cap_cursor_capture::RawCursorPosition;
 use cap_displays::Display;
-use cap_media::platform::Bounds;
+use cap_media::{platform::Bounds, sources::CropRatio};
 use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
 use cap_utils::spawn_actor;
 use device_query::{DeviceQuery, DeviceState};
@@ -48,7 +48,7 @@ impl CursorActor {
 pub fn spawn_cursor_recorder(
     #[allow(unused)] screen_bounds: Bounds,
     #[cfg(target_os = "macos")] display: Display,
-    #[cfg(target_os = "macos")] crop_ratio: ((f32, f32), (f32, f32)),
+    #[cfg(target_os = "macos")] crop_ratio: CropRatio,
     cursors_dir: PathBuf,
     prev_cursors: Cursors,
     next_cursor_id: u32,
@@ -135,7 +135,7 @@ pub fn spawn_cursor_recorder(
                         let cropped_position = position
                             .relative_to_display(display)
                             .normalize()
-                            .with_crop(crop_ratio.0, crop_ratio.1);
+                            .with_crop(crop_ratio.position, crop_ratio.size);
 
                         Some((cropped_position.x() as f64, cropped_position.y() as f64))
                     } else {

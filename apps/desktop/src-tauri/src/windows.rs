@@ -37,6 +37,7 @@ pub enum CapWindowId {
     InProgressRecording,
     Upgrade,
     ModeSelect,
+    Debug,
 }
 
 impl FromStr for CapWindowId {
@@ -53,6 +54,7 @@ impl FromStr for CapWindowId {
             "recordings-overlay" => Self::RecordingsOverlay,
             "upgrade" => Self::Upgrade,
             "mode-select" => Self::ModeSelect,
+            "debug" => Self::Debug,
             s if s.starts_with("editor-") => Self::Editor {
                 id: s
                     .replace("editor-", "")
@@ -86,6 +88,7 @@ impl std::fmt::Display for CapWindowId {
             Self::Upgrade => write!(f, "upgrade"),
             Self::ModeSelect => write!(f, "mode-select"),
             Self::Editor { id } => write!(f, "editor-{id}"),
+            Self::Debug => write!(f, "debug"),
         }
     }
 }

@@ -55,7 +55,7 @@ export async function DELETE(request: NextRequest) {
     .delete(videos)
     .where(and(eq(videos.id, videoId), eq(videos.ownerId, userId)));
 
-  const s3Client = await createS3Client(result.bucket);
+  const [s3Client] = await createS3Client(result.bucket);
   const Bucket = await getS3Bucket(result.bucket);
   const prefix = `${userId}/${videoId}/`;
 
@@ -70,7 +70,7 @@ export async function DELETE(request: NextRequest) {
     const deleteObjectsCommand = new DeleteObjectsCommand({
       Bucket,
       Delete: {
-        Objects: listedObjects.Contents.map((content) => ({
+        Objects: listedObjects.Contents.map((content: any) => ({
           Key: content.Key,
         })),
       },
