@@ -157,7 +157,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                     })}
                     <DialogTrigger className="mt-3 w-full">
                       <Button
-                        variant="white"
+                        variant="dark"
                         size="sm"
                         className="flex gap-1 items-center w-full"
                       >

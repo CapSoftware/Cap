@@ -9,7 +9,7 @@ const Card = forwardRef<
     ref={ref}
     className={classNames(
       !noStyle &&
-        "border p-5 bg-gray-1 rounded-2xl border-gray-4 text-card-foreground",
+        "border p-5 bg-gray-2 rounded-2xl border-gray-3 text-card-foreground",
       className
     )}
     {...props}
@@ -50,7 +50,10 @@ const CardDescription = forwardRef<
 >(({ className, ...props }, ref) => (
   <p
     ref={ref}
-    className={classNames("text-[0.875rem] leading-[1.25rem]", className)}
+    className={classNames(
+      "text-[0.875rem] text-gray-10 leading-[1.25rem]",
+      className
+    )}
     {...props}
   />
 ));

@@ -11,7 +11,10 @@ import {
 import { MoreVertical } from "lucide-react";
 import { useState } from "react";
 
-import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
+import {
+  useSharedContext,
+  useTheme,
+} from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 import {
   faGear,
@@ -19,6 +22,7 @@ import {
   faMessage,
   faMoon,
   faSignOut,
+  faSun,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
@@ -39,18 +43,27 @@ export default function DashboardInner({
     "/dashboard/settings/account": "Account Settings",
   };
   const title = titles[pathname] || "";
+  const { theme, setThemeHandler } = useTheme();
   return (
     <div className="flex flex-col pt-5 min-h-screen lg:gap-5">
       {/* Top Bar */}
       <div
         className={clsx(
-          "flex sticky z-50 justify-between items-center px-5 mt-10 w-full h-16 border-b border-gray-2 lg:border-b-0 lg:pl-0 lg:pr-5 lg:top-0 lg:relative top-[64px] lg:mt-0 lg:h-8"
+          "flex sticky z-50 justify-between items-center px-5 mt-10 w-full h-16 border-b bg-gray-1 lg:bg-transparent border-gray-3 lg:border-b-0 lg:pl-0 lg:pr-5 lg:top-0 lg:relative top-[64px] lg:mt-0 lg:h-8"
         )}
       >
         <p className="relative text-xl text-gray-12 lg:text-2xl">{title}</p>
         <div className="flex gap-4 items-center">
-          <div className="flex justify-center items-center rounded-full border transition-colors cursor-pointer bg-gray-4 hover:border-gray-6 hover:bg-gray-5 size-9 border-gray-5">
-            <FontAwesomeIcon className="text-gray-12 size-3.5" icon={faMoon} />
+          <div
+            onClick={() => {
+              setThemeHandler(theme === "light" ? "dark" : "light");
+            }}
+            className="hidden justify-center items-center rounded-full border transition-colors cursor-pointer lg:flex bg-gray-4 hover:border-gray-6 hover:bg-gray-5 size-9 border-gray-5"
+          >
+            <FontAwesomeIcon
+              className="text-gray-12 size-3.5"
+              icon={theme === "dark" ? faMoon : faSun}
+            />
           </div>
           <User />
         </div>
@@ -58,7 +71,7 @@ export default function DashboardInner({
       {/* Content Area */}
       <div
         className={clsx(
-          "flex overflow-auto flex-col flex-1 p-5 pb-5 border border-gray-3 bg-gray-1 lg:rounded-tl-2xl lg:p-8"
+          "flex overflow-auto flex-col flex-1 p-5 pb-5 border bg-gray-1 border-gray-3 lg:rounded-tl-2xl lg:p-8"
         )}
       >
         <div className="flex flex-col gap-4">{children}</div>
@@ -76,7 +89,7 @@ const User = () => {
         <div className="flex gap-2 justify-between items-center p-2 rounded-xl transition-colors cursor-pointer lg:gap-6 hover:bg-gray-3">
           <div className="flex items-center">
             <Avatar
-              letterClass="text-sm lg:text-md text-gray-1"
+              letterClass="text-sm lg:text-md"
               name={user.name ?? "User"}
               className="size-8"
             />

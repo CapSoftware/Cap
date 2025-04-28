@@ -36,7 +36,6 @@ function getColorScale(name, alpha = false) {
       extend: {
         colors: {
           gray: getColorScale("gray"),
-          white: getColorScale("white", true),
           blue: getColorScale("blue"),
           border: "hsl(var(--border))",
           input: "hsl(var(--input))",

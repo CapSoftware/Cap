@@ -21,7 +21,7 @@ export const SkeletonRows = () => {
                   <Skeleton
                     baseColor="var(--gray-4)"
                     highlightColor="var(--gray-5)"
-                    className="h-[150px] w-full aspect-video rounded-t-2xl"
+                    className="h-[150px] w-full aspect-video align-top !rounded-t-2xl !leading-none !rounded-b-none"
                   />
                   <div className="px-4 pb-4">
                     {/* Title */}

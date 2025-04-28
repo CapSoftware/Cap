@@ -14,6 +14,7 @@ import {
   faTrash,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import clsx from "clsx";
 import moment from "moment";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -28,22 +29,26 @@ interface CapCardProps {
     createdAt: Date;
     totalComments: number;
     totalReactions: number;
-    sharedSpaces: { id: string; name: string }[];
-    ownerName: string;
+    sharedSpaces?: { id: string; name: string }[];
+    ownerName: string | null;
     metadata?: VideoMetadata;
   };
+  children?: React.ReactNode;
   analytics: number;
-  onDelete: (videoId: string) => Promise<void>;
-  userId: string;
-  userSpaces: { id: string; name: string }[];
+  onDelete?: (videoId: string) => Promise<void>;
+  userId?: string;
+  userSpaces?: { id: string; name: string }[];
+  sharedCapCard?: boolean;
 }
 
 export const CapCard: React.FC<CapCardProps> = ({
   cap,
   analytics,
+  children,
   onDelete,
   userId,
   userSpaces,
+  sharedCapCard = false,
 }) => {
   const effectiveDate = cap.metadata?.customCreatedAt
     ? new Date(cap.metadata.customCreatedAt)
@@ -90,7 +95,7 @@ export const CapCard: React.FC<CapCardProps> = ({
 
   const handleSharingUpdated = (updatedSharedSpaces: string[]) => {
     setSharedSpaces(
-      userSpaces.filter((space) => updatedSharedSpaces.includes(space.id))
+      userSpaces?.filter((space) => updatedSharedSpaces.includes(space.id))
     );
     router.refresh(); // Add this line to refresh the page
   };
@@ -98,10 +103,12 @@ export const CapCard: React.FC<CapCardProps> = ({
   const isOwner = userId === cap.ownerId;
 
   const renderSharedStatus = () => {
-    const baseClassName =
-      "text-sm text-gray-10 transition-colors duration-200 hover:text-gray-12 cursor-pointer flex items-center mb-1";
+    const baseClassName = clsx(
+      "text-sm text-gray-10 transition-colors duration-200 flex items-center mb-1",
+      sharedCapCard ? "cursor-default" : "hover:text-gray-12 cursor-pointer"
+    );
     if (isOwner) {
-      if (cap.sharedSpaces.length === 0) {
+      if (cap.sharedSpaces?.length === 0) {
         return (
           <p
             className={baseClassName}
@@ -210,61 +217,67 @@ export const CapCard: React.FC<CapCardProps> = ({
         onClose={() => setIsSharingDialogOpen(false)}
         capId={cap.id}
         capName={cap.name}
-        sharedSpaces={sharedSpaces}
+        sharedSpaces={sharedSpaces || []}
         userSpaces={userSpaces}
         onSharingUpdated={handleSharingUpdated}
       />
-      <div className="flex relative flex-col gap-4 w-full h-full bg-gray-2 rounded-xl border-gray-3 transition-colors duration-300 group hover:border-blue-8 border-[1px]">
-        <div className="flex absolute duration-200 group-hover:opacity-100 opacity-0 top-2 right-2 z-[20] flex-col gap-2">
-          <Tooltip content="Copy link">
-            <Button
-              onClick={() =>
-                handleCopy(
-                  activeSpace?.space.customDomain
-                    ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
-                    : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-                    ? `https://cap.link/${cap.id}`
-                    : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
-                )
-              }
-              className="!size-8 delay-0 hover:opacity-80 rounded-full min-w-fit !p-0"
-              variant="white"
-              size="sm"
-            >
-              {!copyPressed ? (
-                <FontAwesomeIcon className="text-gray-1 size-4" icon={faLink} />
-              ) : (
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="24"
-                  height="24"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  className="text-gray-1 size-5 svgpathanimation"
-                >
-                  <path d="M20 6 9 17l-5-5" />
-                </svg>
-              )}
-            </Button>
-          </Tooltip>
-          <Tooltip content="Delete Cap">
-            <Button
-              onClick={() => onDelete(cap.id)}
-              className="!size-8 delay-100 hover:opacity-80 rounded-full min-w-fit !p-0"
-              variant="white"
-              size="sm"
-            >
-              <FontAwesomeIcon
-                className="text-gray-1 size-2.5"
-                icon={faTrash}
-              />
-            </Button>
-          </Tooltip>
-        </div>
+      <div className="flex relative cursor-default flex-col gap-4 w-full h-full bg-gray-2 rounded-xl border-gray-3 group hover:border-blue-8 border-[1px]">
+        {!sharedCapCard && (
+          <div className="flex absolute duration-200 group-hover:opacity-100 opacity-0 top-2 right-2 z-[20] flex-col gap-2">
+            <Tooltip content="Copy link">
+              <Button
+                onClick={() =>
+                  handleCopy(
+                    activeSpace?.space.customDomain
+                      ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
+                      : clientEnv.NEXT_PUBLIC_IS_CAP &&
+                        NODE_ENV === "production"
+                      ? `https://cap.link/${cap.id}`
+                      : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
+                  )
+                }
+                className="!size-8 delay-0 hover:opacity-80 rounded-full min-w-fit !p-0"
+                variant="white"
+                size="sm"
+              >
+                {!copyPressed ? (
+                  <FontAwesomeIcon
+                    className="text-gray-12 size-4"
+                    icon={faLink}
+                  />
+                ) : (
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="24"
+                    height="24"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    className="text-gray-12 size-5 svgpathanimation"
+                  >
+                    <path d="M20 6 9 17l-5-5" />
+                  </svg>
+                )}
+              </Button>
+            </Tooltip>
+            <Tooltip content="Delete Cap">
+              <Button
+                onClick={() => onDelete?.(cap.id)}
+                className="!size-8 delay-100 hover:opacity-80 rounded-full min-w-fit !p-0"
+                variant="white"
+                size="sm"
+              >
+                <FontAwesomeIcon
+                  className="text-gray-12 size-2.5"
+                  icon={faTrash}
+                />
+              </Button>
+            </Tooltip>
+          </div>
+        )}
         <Link
           className="block group"
           href={
@@ -282,9 +295,14 @@ export const CapCard: React.FC<CapCardProps> = ({
             alt={`${cap.name} Thumbnail`}
           />
         </Link>
-        <div className="flex flex-col flex-grow gap-3 px-4 pb-4 w-full cursor-pointer">
+        <div
+          className={clsx(
+            "flex flex-col flex-grow gap-3 px-4 pb-4 w-full",
+            !sharedCapCard ? "cursor-pointer" : "cursor-default"
+          )}
+        >
           <div>
-            {isEditing ? (
+            {isEditing && !sharedCapCard ? (
               <textarea
                 rows={1}
                 value={title}
@@ -298,8 +316,10 @@ export const CapCard: React.FC<CapCardProps> = ({
               <p
                 className="text-md truncate leading-[1.25rem] text-gray-12 font-medium mb-1"
                 onClick={() => {
-                  if (userId === cap.ownerId) {
-                    setIsEditing(true);
+                  if (!sharedCapCard) {
+                    if (userId === cap.ownerId) {
+                      setIsEditing(true);
+                    }
                   }
                 }}
               >
@@ -307,8 +327,8 @@ export const CapCard: React.FC<CapCardProps> = ({
               </p>
             )}
             {renderSharedStatus()}
-            <p className="mb-1">
-              {isDateEditing ? (
+            <div className="mb-1">
+              {isDateEditing && !sharedCapCard ? (
                 <div className="flex items-center">
                   <input
                     type="text"
@@ -333,8 +353,9 @@ export const CapCard: React.FC<CapCardProps> = ({
                   </p>
                 </Tooltip>
               )}
-            </p>
+            </div>
           </div>
+          {children}
           <CapCardAnalytics
             capId={cap.id}
             displayCount={displayCount}

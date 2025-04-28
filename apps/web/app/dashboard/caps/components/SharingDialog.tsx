@@ -13,7 +13,7 @@ interface SharingDialogProps {
   capId: string;
   capName: string;
   sharedSpaces: { id: string; name: string }[];
-  userSpaces: { id: string; name: string }[];
+  userSpaces?: { id: string; name: string }[];
   onSharingUpdated: (updatedSharedSpaces: string[]) => void;
 }
 
@@ -71,7 +71,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
     }
   };
 
-  const filteredSpaces = userSpaces.filter((space) =>
+  const filteredSpaces = userSpaces?.filter((space) =>
     space.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
@@ -90,7 +90,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
           leave="duration-200 ease-in"
           leaveFrom="opacity-100"
           leaveTo="opacity-0"
-          className="fixed inset-0 bg-black/30"
+          className="fixed inset-0 bg-black/60"
         />
         <Transition.Child
           enter="ease-out duration-300"
@@ -134,23 +134,23 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
                 />
               </div>
               <div className="overflow-y-auto max-h-60">
-                {filteredSpaces.length > 0 ? (
+                {filteredSpaces && filteredSpaces.length > 0 ? (
                   filteredSpaces.map((space) => (
                     <div
                       key={space.id}
                       className={clsx(
-                        `flex items-center border group transition-colors duration-200 border-gray-3 justify-between p-3 rounded-xl cursor-pointer`,
+                        `flex items-center border transition-colors duration-200 border-gray-3 justify-between p-3 rounded-xl cursor-pointer`,
                         selectedSpaces.has(space.id)
                           ? "bg-gray-1"
-                          : "hover:bg-gray-1"
+                          : "hover:bg-gray-3 hover:border-gray-4"
                       )}
                       onClick={() => handleToggleSpace(space.id)}
                     >
                       <div className="flex items-center">
-                        <div className="flex justify-center items-center mr-3 w-8 h-8 font-semibold rounded-md bg-blue-5 text-gray-12">
+                        <div className="flex justify-center items-center mr-3 w-8 h-8 font-semibold rounded-md bg-blue-10 text-gray-12">
                           {space.name.charAt(0).toUpperCase()}
                         </div>
-                        <span className="text-sm transition-colors duration-200 text-gray-11 group-hover:text-gray-12">
+                        <span className="text-sm transition-colors duration-200 text-gray-12">
                           {space.name}
                         </span>
                       </div>
@@ -174,7 +174,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
               <Button size="sm" variant="gray" onClick={onClose}>
                 Cancel
               </Button>
-              <Button size="sm" variant="normaldark" onClick={handleSave}>
+              <Button size="sm" variant="dark" onClick={handleSave}>
                 Save
               </Button>
             </div>

@@ -161,9 +161,9 @@ export const Workspace = () => {
       <div className="flex flex-col flex-1 gap-6 justify-center lg:flex-row">
         <Card className="flex flex-col flex-1 gap-3 justify-center items-center">
           <FontAwesomeIcon className="text-gray-10 size-5" icon={faChair} />
-          <p className="text-gray-10">
+          <p className="text-gray-12">
             Seats Remaining
-            <span className="ml-2 font-bold text-gray-1">
+            <span className="ml-2 font-bold text-gray-12">
               {(activeSpace?.inviteQuota ?? 1) -
                 (activeSpace?.totalInvites ?? 0)}
             </span>
@@ -171,9 +171,9 @@ export const Workspace = () => {
         </Card>
         <Card className="flex flex-col flex-1 gap-3 justify-center items-center">
           <FontAwesomeIcon className="text-gray-10 size-5" icon={faUserGroup} />
-          <p className="text-gray-10">
+          <p className="text-gray-12">
             Seats Capacity
-            <span className="ml-2 font-bold text-gray-1">
+            <span className="ml-2 font-bold text-gray-12">
               {activeSpace?.inviteQuota}
             </span>
           </p>
@@ -310,7 +310,7 @@ export const Workspace = () => {
             <Button
               type="button"
               size="sm"
-              variant="white"
+              variant="dark"
               onClick={() => {
                 if (!isOwner) {
                   showOwnerToast();
@@ -401,7 +401,7 @@ export const Workspace = () => {
         <Button
           type="button"
           size="sm"
-          variant="gray"
+          variant="dark"
           onClick={handleManageBilling}
           disabled={!isOwner}
         >

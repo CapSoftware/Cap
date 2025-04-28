@@ -172,7 +172,7 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
               Github
             </Button>
             <Button
-              variant="dark"
+              variant="darkgradient"
               href={auth === false ? "/login" : "/dashboard"}
               size="sm"
               className="w-full font-medium sm:w-auto"

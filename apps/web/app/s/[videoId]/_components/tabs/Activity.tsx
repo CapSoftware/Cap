@@ -34,7 +34,7 @@ export const Avatar: React.FC<{
 }> = ({ name, className = "", letterClass = "text-xs" }) => {
   const initial = name?.[0]?.toUpperCase() || "A";
   const bgColor = name ? "bg-gray-12" : "bg-gray-6";
-  const textColor = name ? "text-white" : "text-gray-1";
+  const textColor = name ? "text-gray-1" : "text-gray-12";
 
   return (
     <div
@@ -95,7 +95,7 @@ const CommentInput: React.FC<CommentInputProps> = ({
   return (
     <div className="flex items-start space-x-3">
       <div className="flex-1">
-        <div className="p-4 bg-gray-1 rounded-lg">
+        <div className="p-4 rounded-lg bg-gray-1">
           <textarea
             ref={inputRef}
             value={content}
@@ -592,7 +592,7 @@ export const Activity: React.FC<ActivityProps> = ({
         )}
       </div>
 
-      <div className="flex-none p-4 bg-gray-1 border-t border-gray-200">
+      <div className="flex-none p-4 border-t border-gray-200 bg-gray-1">
         {user ? (
           <CommentInput
             onSubmit={handleNewComment}
@@ -603,7 +603,7 @@ export const Activity: React.FC<ActivityProps> = ({
         ) : (
           <div
             onClick={() => setShowAuthOverlay(true)}
-            className="p-4 bg-gray-1 rounded-lg transition-colors cursor-pointer hover:bg-gray-200"
+            className="p-4 rounded-lg transition-colors cursor-pointer bg-gray-1 hover:bg-gray-200"
           >
             <span className="text-[15px] leading-[22px] text-gray-1">
               Sign in to leave a comment
