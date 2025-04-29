@@ -153,8 +153,6 @@ async function main() {
       envs.CAP_AWS_REGION = DOCKER_S3_ENVS.region;
       envs.CAP_AWS_ENDPOINT = DOCKER_S3_ENVS.endpoint;
     }
-  } else {
-    envs.VITE_SERVER_URL = "https://cap.so";
   }
 
   if (hasDesktop) {
@@ -162,6 +160,14 @@ async function main() {
 
     const values = await group(
       {
+        VITE_SERVER_URL: () => {
+          if (!hasWeb)
+            return text({
+              message: "VITE_SERVER_URL",
+              placeholder: "http://cap.so",
+              defaultValue: "http://cap.so",
+            });
+        },
         VITE_VERCEL_AUTOMATION_BYPASS_SECRET: () => {
           if (!hasWeb)
             return text({
