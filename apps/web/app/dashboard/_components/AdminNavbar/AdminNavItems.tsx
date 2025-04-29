@@ -12,11 +12,10 @@ import {
   PopoverTrigger,
 } from "@cap/ui";
 import { classNames } from "@cap/utils";
-import { Check, ChevronDown, Plus } from "lucide-react";
+import { Check, ChevronDown, Plus, Search } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
-
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 import { NewSpace } from "@/components/forms/NewSpace";
@@ -33,7 +32,6 @@ import {
   faBuilding,
   faDownload,
   faRecordVinyl,
-  faShareNodes,
   IconDefinition,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -43,6 +41,7 @@ import { updateActiveSpace } from "./server";
 
 export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
   const pathname = usePathname();
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const { spaceData, activeSpace, user, isSubscribed } = useSharedContext();
 
@@ -54,43 +53,27 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
       subNav: [],
     },
     {
-      name: "Shared Caps",
-      href: `/dashboard/shared-caps`,
-      icon: faShareNodes,
-      subNav: [],
-    },
-    {
       name: "Download App",
       href: `/download`,
       icon: faDownload,
       subNav: [],
     },
     {
-      name: "Workspace",
+      name: "Workspace Settings",
       href: `/dashboard/settings/workspace`,
       icon: faBuilding,
       subNav: [],
     },
-    ...(user.email.endsWith("@cap.so")
-      ? [
-          {
-            name: "Admin",
-            href: "/dashboard/admin",
-            icon: faBuilding, // Using Building icon as a fallback
-            subNav: [],
-          },
-        ]
-      : []),
   ];
 
   const navItemClass =
-    "flex items-center justify-start py-2 px-3 rounded-2xl outline-none tracking-tight w-full overflow-hidden";
+    "flex items-center justify-start p-2 rounded-2xl outline-none tracking-tight w-full overflow-hidden";
 
   const [dialogOpen, setDialogOpen] = useState(false);
 
   return (
     <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-      <Popover open={open} onOpenChange={setOpen}>
+      {/* <Popover open={open} onOpenChange={setOpen}>
         <Tooltip
           disable={open || collapsed === false}
           position="right"
@@ -142,6 +125,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                           onSelect={async () => {
                             await updateActiveSpace(space.space.id);
                             setOpen(false);
+                            router.push("/dashboard/shared-caps");
                           }}
                         >
                           {space.space.name}
@@ -171,14 +155,12 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
             </div>
           </PopoverTrigger>
         </Tooltip>
-      </Popover>
+      </Popover> */}
       <nav
         className="flex flex-col justify-between w-full h-full"
         aria-label="Sidebar"
       >
-        <div
-          className={clsx("mt-8 space-y-2.5", collapsed ? "items-center" : "")}
-        >
+        <div className={clsx("space-y-2.5", collapsed ? "items-center" : "")}>
           {manageNavigation.map((item) => (
             <div key={item.name} className="flex relative justify-center">
               {pathname.includes(item.href) ? (
@@ -233,6 +215,51 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
               </Tooltip>
             </div>
           ))}
+          {!collapsed && (
+            <div className="mb-4 px-2 pt-4 border-t border-gray-4">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-semibold text-gray-11">Spaces</h3>
+                <DialogTrigger asChild>
+                  <button className="p-1 rounded-lg hover:bg-gray-4">
+                    <Plus className="size-4 text-gray-11" />
+                  </button>
+                </DialogTrigger>
+              </div>
+              <Link
+                href="/dashboard/spaces"
+                className="flex items-center gap-2 mb-2 p-2 rounded-lg text-gray-12 text-sm font-medium hover:bg-gray-4"
+              >
+                <Search className="size-4 text-gray-11" />
+                View Spaces
+              </Link>
+              <div className="space-y-2">
+                {spaceData?.slice(0, 3).map((space) => (
+                  <div
+                    key={space.space.id}
+                    className={clsx(
+                      "flex items-center gap-2 py-1.5 px-2 rounded-lg cursor-pointer",
+                      activeSpace?.space.id === space.space.id
+                        ? "bg-gray-4"
+                        : "hover:bg-gray-4"
+                    )}
+                    onClick={async () => {
+                      await updateActiveSpace(space.space.id);
+                      router.push("/dashboard/shared-caps");
+                    }}
+                  >
+                    <Avatar
+                      letterClass="text-gray-1 text-xs"
+                      className="flex-shrink-0 size-5"
+                      name={space.space.name}
+                    />
+                    <span className="text-sm text-gray-12 truncate">
+                      {space.space.name}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
         <div className="pb-0 w-full lg:pb-5">
           <UsageButton

@@ -38,11 +38,14 @@ export default function DashboardInner({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const { activeSpace } = useSharedContext();
+
   const titles: Record<string, string> = {
-    "/dashboard/caps": "Caps",
-    "/dashboard/shared-caps": "Shared Caps",
+    "/dashboard/caps": "My Caps",
+    "/dashboard/shared-caps": activeSpace?.space.name || "Shared Caps",
     "/dashboard/settings/workspace": "Workspace Settings",
     "/dashboard/settings/account": "Account Settings",
+    "/dashboard/spaces": "Spaces",
   };
   const title = titles[pathname] || "";
   const { theme, setThemeHandler } = useTheme();
