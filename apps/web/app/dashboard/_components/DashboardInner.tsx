@@ -76,7 +76,7 @@ export default function DashboardInner({
           "flex overflow-auto flex-col flex-1 p-5 pb-5 border bg-gray-1 border-gray-3 lg:rounded-tl-2xl lg:p-8"
         )}
       >
-        <div className="flex flex-col gap-4">{children}</div>
+        <div className="flex flex-col flex-1 gap-4 h-full">{children}</div>
       </div>
     </div>
   );
