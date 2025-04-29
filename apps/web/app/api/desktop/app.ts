@@ -60,7 +60,7 @@ app.get("/plan", async (c) => {
 
   if (!isSubscribed && !user.stripeSubscriptionId && user.stripeCustomerId) {
     try {
-      const subscriptions = await stripe.subscriptions.list({
+      const subscriptions = await stripe().subscriptions.list({
         customer: user.stripeCustomerId,
       });
       const activeSubscription = subscriptions.data.find(
@@ -82,9 +82,10 @@ app.get("/plan", async (c) => {
   }
 
   let intercomHash = "";
-  if (serverEnv().INTERCOM_SECRET) {
+  const intercomSecret = serverEnv().INTERCOM_SECRET;
+  if (intercomSecret) {
     intercomHash = crypto
-      .createHmac("sha256", serverEnv().INTERCOM_SECRET)
+      .createHmac("sha256", intercomSecret)
       .update(user?.id ?? "")
       .digest("hex");
   }
@@ -114,7 +115,7 @@ app.post(
 
     if (user.stripeCustomerId === null) {
       console.log("[POST] Creating new Stripe customer");
-      const customer = await stripe.customers.create({
+      const customer = await stripe().customers.create({
         email: user.email,
         metadata: { userId: user.id },
       });
@@ -129,7 +130,7 @@ app.post(
     }
 
     console.log("[POST] Creating checkout session");
-    const checkoutSession = await stripe.checkout.sessions.create({
+    const checkoutSession = await stripe().checkout.sessions.create({
       customer: customerId as string,
       line_items: [{ price: priceId, quantity: 1 }],
       mode: "subscription",

@@ -54,9 +54,10 @@ export default async function RootLayout({
 }) {
   const user = await getCurrentUser();
   let intercomHash = "";
-  if (serverEnv().INTERCOM_SECRET) {
+  const intercomSecret = serverEnv().INTERCOM_SECRET;
+  if (intercomSecret) {
     intercomHash = crypto
-      .createHmac("sha256", serverEnv().INTERCOM_SECRET)
+      .createHmac("sha256", intercomSecret)
       .update(user?.id ?? "")
       .digest("hex");
   }

@@ -4,7 +4,7 @@ import { Tooltip } from "@/components/Tooltip";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
 import { usePublicEnv } from "@/utils/public-env";
 import { VideoMetadata } from "@cap/database/types";
-import { NODE_ENV } from "@cap/env";
+import { buildEnv, NODE_ENV } from "@cap/env";
 import { faBuilding, faUser } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import moment from "moment";
@@ -49,7 +49,7 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
         href={
           activeSpace?.space.customDomain && activeSpace.space.domainVerified
             ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
-            : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+            : buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
             ? `https://cap.link/${cap.id}`
             : `${publicEnv.webUrl}/s/${cap.id}`
         }

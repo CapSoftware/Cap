@@ -10,14 +10,16 @@ import { LoginLink } from "../emails/login-link";
 import { nanoId } from "../helpers";
 import WorkOSProvider from "next-auth/providers/workos";
 import { NODE_ENV, serverEnv } from "@cap/env";
+import type { Adapter } from "next-auth/adapters";
+import type { Provider } from "next-auth/providers/index";
 
 export const config = {
   maxDuration: 120,
 };
 
 export const authOptions = (): NextAuthOptions => {
-  let _adapter;
-  let _providers;
+  let _adapter: Adapter | undefined;
+  let _providers: Provider[] | undefined;
 
   return {
     get adapter() {

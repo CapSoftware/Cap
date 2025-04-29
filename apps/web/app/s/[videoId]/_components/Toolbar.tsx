@@ -7,7 +7,6 @@ import { useRouter } from "next/navigation";
 import { Button } from "@cap/ui";
 import toast from "react-hot-toast";
 import { AuthOverlay } from "./AuthOverlay";
-import { clientEnv } from "@cap/env";
 
 // million-ignore
 export const Toolbar = ({

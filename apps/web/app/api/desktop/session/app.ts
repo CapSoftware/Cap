@@ -31,7 +31,7 @@ app.get(
       serverEnv().WEB_URL
     }${url.pathname}${url.search}`;
 
-    const session = await getServerSession(authOptions);
+    const session = await getServerSession(authOptions());
     if (!session) return c.redirect(loginRedirectUrl);
 
     const token = getCookie(c, "next-auth.session-token");

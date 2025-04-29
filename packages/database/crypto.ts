@@ -8,6 +8,8 @@ const ITERATIONS = 100000;
 
 const ENCRYPTION_KEY = () => {
   const key = serverEnv().DATABASE_ENCRYPTION_KEY;
+  if (!key) return;
+
   // Verify the encryption key is valid hex and correct length
   try {
     const keyBuffer = Buffer.from(key, "hex");
@@ -29,8 +31,11 @@ const ENCRYPTION_KEY = () => {
 };
 
 async function deriveKey(salt: Uint8Array): Promise<CryptoKey> {
+  const key = ENCRYPTION_KEY();
+  if (!key) throw new Error("Encryption key is not available");
+
   // Convert hex string to ArrayBuffer for Web Crypto API
-  const keyBuffer = Buffer.from(ENCRYPTION_KEY(), "hex");
+  const keyBuffer = Buffer.from(key, "hex");
 
   const keyMaterial = await crypto.subtle.importKey(
     "raw",
@@ -76,9 +81,9 @@ export async function encrypt(text: string): Promise<string> {
 
     // Combine salt, IV, and encrypted content
     const result = Buffer.concat([
-      Buffer.from(salt),
-      Buffer.from(iv),
-      Buffer.from(encrypted),
+      Buffer.from(salt as any) as any,
+      Buffer.from(iv as any) as any,
+      Buffer.from(encrypted as any) as any,
     ]);
 
     return result.toString("base64");
@@ -104,7 +109,7 @@ export async function decrypt(encryptedText: string): Promise<string> {
     const content = encrypted.subarray(SALT_LENGTH + IV_LENGTH);
 
     // Derive the same key using the extracted salt
-    const key = await deriveKey(salt);
+    const key = await deriveKey(salt as Uint8Array);
 
     const decrypted = await crypto.subtle.decrypt(
       {

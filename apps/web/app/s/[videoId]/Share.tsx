@@ -2,7 +2,6 @@
 
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
-import { clientEnv } from "@cap/env";
 import { Logo } from "@cap/ui";
 import { useEffect, useRef, useState } from "react";
 import { ShareHeader } from "./_components/ShareHeader";

@@ -16,7 +16,7 @@ export async function manageBilling() {
   }
 
   if (!user.stripeCustomerId) {
-    const customer = await stripe.customers.create({
+    const customer = await stripe().customers.create({
       email: user.email,
       metadata: {
         userId: user.id,
@@ -33,7 +33,7 @@ export async function manageBilling() {
     customerId = customer.id;
   }
 
-  const { url } = await stripe.billingPortal.sessions.create({
+  const { url } = await stripe().billingPortal.sessions.create({
     customer: customerId as string,
     return_url: `${serverEnv().WEB_URL}/dashboard/settings/workspace`,
   });

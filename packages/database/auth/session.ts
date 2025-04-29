@@ -5,13 +5,13 @@ import { db } from "../";
 import { users } from "../schema";
 
 export const getSession = async () => {
-  const session = await getServerSession(authOptions);
+  const session = await getServerSession(authOptions());
 
   return session;
 };
 
 export const getCurrentUser = async (session?: Session) => {
-  const _session = session ?? (await getServerSession(authOptions));
+  const _session = session ?? (await getServerSession(authOptions()));
 
   if (!_session) {
     return null;

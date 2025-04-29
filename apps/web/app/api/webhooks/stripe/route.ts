@@ -99,7 +99,7 @@ export const POST = async (req: Request) => {
         status: 400,
       });
     }
-    event = stripe.webhooks.constructEvent(buf, sig, webhookSecret);
+    event = stripe().webhooks.constructEvent(buf, sig, webhookSecret);
     console.log(`✅ Event received: ${event.type}`);
   } catch (err: any) {
     console.log(`❌ Error message: ${err.message}`);
@@ -117,7 +117,7 @@ export const POST = async (req: Request) => {
           subscriptionId: session.subscription,
         });
 
-        const customer = await stripe.customers.retrieve(
+        const customer = await stripe().customers.retrieve(
           session.customer as string
         );
         console.log("Retrieved customer:", {
@@ -162,7 +162,7 @@ export const POST = async (req: Request) => {
           name: dbUser.name,
         });
 
-        const subscription = await stripe.subscriptions.retrieve(
+        const subscription = await stripe().subscriptions.retrieve(
           session.subscription as string
         );
         console.log("Retrieved subscription:", {
@@ -235,7 +235,7 @@ export const POST = async (req: Request) => {
           customerId: subscription.customer,
         });
 
-        const customer = await stripe.customers.retrieve(
+        const customer = await stripe().customers.retrieve(
           subscription.customer as string
         );
         console.log("Retrieved customer:", {
@@ -281,7 +281,7 @@ export const POST = async (req: Request) => {
         });
 
         // Get all active subscriptions for this customer
-        const subscriptions = await stripe.subscriptions.list({
+        const subscriptions = await stripe().subscriptions.list({
           customer: customer.id,
           status: "active",
         });
@@ -326,7 +326,7 @@ export const POST = async (req: Request) => {
 
       if (event.type === "customer.subscription.deleted") {
         const subscription = event.data.object as Stripe.Subscription;
-        const customer = await stripe.customers.retrieve(
+        const customer = await stripe().customers.retrieve(
           subscription.customer as string
         );
         let foundUserId;
@@ -346,7 +346,7 @@ export const POST = async (req: Request) => {
               foundUserId = userByEmail[0].id;
               console.log(`User found by email: ${foundUserId}`);
               // Update customer metadata with userId
-              await stripe.customers.update(customer.id, {
+              await stripe().customers.update(customer.id, {
                 metadata: { userId: foundUserId },
               });
             } else {
