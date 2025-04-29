@@ -543,7 +543,7 @@ importers:
         specifier: ^1.3.1
         version: 1.3.1(next@14.2.3(@opentelemetry/api@1.9.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))
       gif.js:
-        specifier: ^0.2.0
+        specifier: 0.2.0
         version: 0.2.0
       hls.js:
         specifier: ^1.5.3

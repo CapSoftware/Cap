@@ -318,7 +318,7 @@ const EmptyState = () => (
           d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
         />
       </svg>
-      <h3 className="text-sm font-medium text-gray-1">No comments yet</h3>
+      <h3 className="text-sm font-medium text-gray-12">No comments yet</h3>
       <p className="text-sm text-gray-8">
         Be the first to share your thoughts!
       </p>

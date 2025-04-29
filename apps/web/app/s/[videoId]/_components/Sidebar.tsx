@@ -124,13 +124,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className={classNames(
                 "flex-1 px-6 py-3 text-sm font-medium relative transition-colors duration-200",
                 "hover:bg-gray-1",
-                activeTab === tab.id ? "bg-gray-1" : ""
+                activeTab === tab.id ? "bg-gray-3" : ""
               )}
             >
               <span
                 className={classNames(
                   "relative z-10",
-                  activeTab === tab.id ? "text-gray-1" : "text-gray-8"
+                  activeTab === tab.id ? "text-gray-12" : "text-gray-9"
                 )}
               >
                 {tab.label}

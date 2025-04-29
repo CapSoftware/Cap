@@ -285,7 +285,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
       <div className="flex justify-center items-center h-full text-gray-1">
         <div className="text-center">
           <MessageSquare className="mx-auto mb-2 w-8 h-8 text-gray-300" />
-          <p className="text-sm font-medium text-gray-1">
+          <p className="text-sm font-medium text-gray-12">
             No transcript available
           </p>
         </div>
