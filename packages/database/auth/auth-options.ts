@@ -104,14 +104,14 @@ export const authOptions = (): NextAuthOptions => {
           const spaceId = nanoId();
 
           // Create space
-          await db.insert(spaces).values({
+          await db().insert(spaces).values({
             id: spaceId,
             name: "My Space",
             ownerId: user.id,
           });
 
           // Add user as member of the space
-          await db.insert(spaceMembers).values({
+          await db().insert(spaceMembers).values({
             id: nanoId(),
             userId: user.id,
             spaceId: spaceId,

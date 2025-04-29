@@ -9,7 +9,7 @@ import { serverEnv } from "@cap/env";
 export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
   return {
     async createUser(userData: any) {
-      await db.insert(users).values({
+      await db().insert(users).values({
         id: nanoId(),
         email: userData.email,
         emailVerified: userData.emailVerified,
@@ -82,7 +82,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
     },
     async updateUser({ id, ...userData }) {
       if (!id) throw new Error("User not found");
-      await db.update(users).set(userData).where(eq(users.id, id));
+      await db().update(users).set(userData).where(eq(users.id, id));
       const rows = await db
         .select()
         .from(users)
@@ -93,23 +93,25 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
       return row;
     },
     async deleteUser(userId) {
-      await db.delete(users).where(eq(users.id, userId));
+      await db().delete(users).where(eq(users.id, userId));
     },
     async linkAccount(account: any) {
-      await db.insert(accounts).values({
-        id: nanoId(),
-        userId: account.userId,
-        type: account.type,
-        provider: account.provider,
-        providerAccountId: account.providerAccountId,
-        access_token: account.access_token,
-        expires_in: account.expires_in as number,
-        id_token: account.id_token,
-        refresh_token: account.refresh_token,
-        refresh_token_expires_in: account.refresh_token_expires_in as number,
-        scope: account.scope,
-        token_type: account.token_type,
-      });
+      await db()
+        .insert(accounts)
+        .values({
+          id: nanoId(),
+          userId: account.userId,
+          type: account.type,
+          provider: account.provider,
+          providerAccountId: account.providerAccountId,
+          access_token: account.access_token,
+          expires_in: account.expires_in as number,
+          id_token: account.id_token,
+          refresh_token: account.refresh_token,
+          refresh_token_expires_in: account.refresh_token_expires_in as number,
+          scope: account.scope,
+          token_type: account.token_type,
+        });
     },
     async unlinkAccount({ providerAccountId, provider }: any) {
       await db
@@ -122,7 +124,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
         );
     },
     async createSession(data) {
-      await db.insert(sessions).values({
+      await db().insert(sessions).values({
         id: nanoId(),
         expires: data.expires,
         sessionToken: data.sessionToken,
@@ -180,7 +182,9 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
       return row;
     },
     async deleteSession(sessionToken) {
-      await db.delete(sessions).where(eq(sessions.sessionToken, sessionToken));
+      await db()
+        .delete(sessions)
+        .where(eq(sessions.sessionToken, sessionToken));
     },
     async createVerificationToken(verificationToken) {
       console.log({ verificationToken });
@@ -218,7 +222,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
       }
 
       // If the token does not exist, proceed to create a new one
-      await db.insert(verificationTokens).values({
+      await db().insert(verificationTokens).values({
         expires: verificationToken.expires,
         identifier: verificationToken.identifier,
         token: verificationToken.token,

@@ -30,7 +30,10 @@ export async function editTitle(videoId: string, title: string) {
   }
 
   try {
-    await db.update(videos).set({ name: title }).where(eq(videos.id, videoId));
+    await db()
+      .update(videos)
+      .set({ name: title })
+      .where(eq(videos.id, videoId));
 
     revalidatePath("/dashboard/caps");
     revalidatePath("/dashboard/shared-caps");
