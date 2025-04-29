@@ -60,8 +60,9 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
     },
   ];
 
-  const navItemClass =
-    "flex items-center justify-start p-2 rounded-2xl outline-none tracking-tight w-full overflow-hidden";
+  const navItemClass = `flex items-center justify-start p-2 rounded-2xl outline-none tracking-tight w-full overflow-hidden ${
+    collapsed ? "w-9" : "w-full"
+  }`;
 
   const [dialogOpen, setDialogOpen] = useState(false);
 
@@ -93,7 +94,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                   layoutId="underline"
                   id="underline"
                   className={clsx(
-                    "absolute inset-0 mx-auto -ml-0.5 rounded-xl shadow-sm border-gray-5 text-gray-8 border-[1px] shadow-gray-2"
+                    "absolute inset-0 mx-auto rounded-xl shadow-sm border-gray-5 text-gray-8 border-[1px] shadow-gray-2"
                   )}
                 />
               ) : null}
@@ -126,30 +127,72 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
               </Tooltip>
             </div>
           ))}
-          {!collapsed && (
-            <div className="pt-1">
-              <div className="px-2 pt-4 border-t border-gray-4">
-                <div className="flex items-center justify-between mb-2">
+          <div className="pt-1">
+            <div
+              className={clsx(
+                "border-gray-4",
+                !collapsed && "px-2 pt-4 border-t"
+              )}
+            >
+              <div
+                className={clsx(
+                  "flex items-center",
+                  collapsed ? "justify-center" : "justify-between mb-2"
+                )}
+              >
+                {!collapsed && (
                   <h3 className="text-sm font-semibold text-gray-11">Spaces</h3>
+                )}
+                <Tooltip
+                  content="Create Space"
+                  disable={!collapsed}
+                  position="right"
+                >
                   <DialogTrigger asChild>
-                    <button className="p-1 rounded-lg hover:bg-gray-4">
+                    <button
+                      className={clsx(
+                        "rounded-lg hover:bg-gray-4",
+                        collapsed ? "p-2" : "p-1"
+                      )}
+                    >
                       <Plus className="size-4 text-gray-11" />
                     </button>
                   </DialogTrigger>
-                </div>
+                </Tooltip>
+              </div>
+              <Tooltip
+                content="View Spaces"
+                disable={!collapsed}
+                position="right"
+              >
                 <Link
                   href="/dashboard/spaces"
-                  className="flex items-center gap-2 mb-2 p-2 rounded-lg text-gray-12 text-sm font-medium hover:bg-gray-4"
+                  className={clsx(
+                    "flex items-center gap-2 rounded-lg text-gray-12 text-sm font-medium hover:bg-gray-4",
+                    collapsed ? "p-2 justify-center" : "p-2 mb-2"
+                  )}
                 >
                   <Search className="size-4 text-gray-11" />
-                  View Spaces
+                  {!collapsed && <span className="text-sm">View Spaces</span>}
                 </Link>
-                <div className="space-y-2">
-                  {spaceData?.slice(0, 3).map((space) => (
+              </Tooltip>
+              <div
+                className={clsx(
+                  "space-y-2",
+                  collapsed && "flex flex-col items-center"
+                )}
+              >
+                {spaceData?.slice(0, 3).map((space) => (
+                  <Tooltip
+                    key={space.space.id}
+                    content={space.space.name}
+                    disable={!collapsed}
+                    position="right"
+                  >
                     <div
-                      key={space.space.id}
                       className={clsx(
-                        "flex items-center gap-2 py-1.5 px-2 rounded-lg cursor-pointer",
+                        "flex items-center cursor-pointer rounded-lg",
+                        collapsed ? "p-2 justify-center" : "gap-2 py-1.5 px-2",
                         activeSpace?.space.id === space.space.id
                           ? "bg-gray-4"
                           : "hover:bg-gray-4"
@@ -164,15 +207,17 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                         className="flex-shrink-0 size-5"
                         name={space.space.name}
                       />
-                      <span className="text-sm text-gray-12 truncate">
-                        {space.space.name}
-                      </span>
+                      {!collapsed && (
+                        <span className="text-sm text-gray-12 truncate">
+                          {space.space.name}
+                        </span>
+                      )}
                     </div>
-                  ))}
-                </div>
+                  </Tooltip>
+                ))}
               </div>
             </div>
-          )}
+          </div>
         </div>
         <div className="pb-0 w-full lg:pb-5 text-center">
           <UsageButton
