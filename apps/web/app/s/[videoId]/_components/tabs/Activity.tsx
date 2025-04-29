@@ -319,7 +319,7 @@ const EmptyState = () => (
         />
       </svg>
       <h3 className="text-sm font-medium text-gray-12">No comments yet</h3>
-      <p className="text-sm text-gray-8">
+      <p className="text-sm text-gray-10">
         Be the first to share your thoughts!
       </p>
     </div>

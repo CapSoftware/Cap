@@ -104,7 +104,7 @@ export const ShareHeader = ({
                   </h1>
                 )}
               </div>
-              <p className="text-sm text-gray-8">
+              <p className="text-sm text-gray-10">
                 {moment(data.createdAt).fromNow()}
               </p>
             </div>
