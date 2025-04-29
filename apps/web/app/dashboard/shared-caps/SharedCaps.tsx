@@ -1,4 +1,5 @@
 "use client";
+
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { VideoMetadata } from "@cap/database/types";

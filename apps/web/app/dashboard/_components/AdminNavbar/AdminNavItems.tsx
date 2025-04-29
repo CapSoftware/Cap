@@ -53,13 +53,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
       subNav: [],
     },
     {
-      name: "Download App",
-      href: `/download`,
-      icon: faDownload,
-      subNav: [],
-    },
-    {
-      name: "Workspace Settings",
+      name: "Settings",
       href: `/dashboard/settings/workspace`,
       icon: faBuilding,
       subNav: [],
@@ -73,89 +67,6 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
 
   return (
     <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-      {/* <Popover open={open} onOpenChange={setOpen}>
-        <Tooltip
-          disable={open || collapsed === false}
-          position="right"
-          content={activeSpace?.space.name ?? "No space found"}
-        >
-          <PopoverTrigger asChild>
-            <div
-              className={
-                "px-3 py-2.5 w-full rounded-xl border cursor-pointer bg-gray-3 border-gray-4"
-              }
-            >
-              <div
-                className="flex justify-between items-center cursor-pointer"
-                role="combobox"
-                aria-expanded={open}
-              >
-                <div className="flex justify-between items-center w-full text-left">
-                  <div className="flex items-center">
-                    <Avatar
-                      letterClass="text-gray-1 text-xs"
-                      className="relative flex-shrink-0 size-5"
-                      name={activeSpace?.space.name ?? "No space found"}
-                    />
-                    <p className="ml-2.5 text-sm text-gray-12 font-medium truncate">
-                      {activeSpace?.space.name ?? "No space found"}
-                    </p>
-                  </div>
-                  {!collapsed && (
-                    <ChevronDown className="w-5 h-auto text-gray-8" />
-                  )}
-                </div>
-              </div>
-              <PopoverContent
-                className={clsx(
-                  "p-0 w-[calc(100%-12px)] z-[60]",
-                  collapsed ? "ml-3" : "mx-auto"
-                )}
-              >
-                <Command>
-                  <CommandInput placeholder="Search spaces..." />
-                  <CommandEmpty>No spaces found</CommandEmpty>
-                  <CommandGroup>
-                    {spaceData?.map((space) => {
-                      const isSelected =
-                        activeSpace?.space.id === space.space.id;
-                      return (
-                        <CommandItem
-                          key={space.space.name + "-space"}
-                          onSelect={async () => {
-                            await updateActiveSpace(space.space.id);
-                            setOpen(false);
-                            router.push("/dashboard/shared-caps");
-                          }}
-                        >
-                          {space.space.name}
-                          <Check
-                            size={18}
-                            className={classNames(
-                              "ml-auto",
-                              isSelected ? "opacity-100" : "opacity-0"
-                            )}
-                          />
-                        </CommandItem>
-                      );
-                    })}
-                    <DialogTrigger className="mt-3 w-full">
-                      <Button
-                        variant="dark"
-                        size="sm"
-                        className="flex gap-1 items-center w-full"
-                      >
-                        <Plus className="w-4 h-auto" />
-                        Add new space
-                      </Button>
-                    </DialogTrigger>
-                  </CommandGroup>
-                </Command>
-              </PopoverContent>
-            </div>
-          </PopoverTrigger>
-        </Tooltip>
-      </Popover> */}
       <nav
         className="flex flex-col justify-between w-full h-full"
         aria-label="Sidebar"
@@ -182,7 +93,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                   layoutId="underline"
                   id="underline"
                   className={clsx(
-                    "absolute inset-0 mx-auto rounded-xl shadow-sm border-gray-5 text-gray-8 border-[1px] shadow-gray-2"
+                    "absolute inset-0 mx-auto -ml-0.5 rounded-xl shadow-sm border-gray-5 text-gray-8 border-[1px] shadow-gray-2"
                   )}
                 />
               ) : null}
@@ -216,57 +127,65 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
             </div>
           ))}
           {!collapsed && (
-            <div className="mb-4 px-2 pt-4 border-t border-gray-4">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-sm font-semibold text-gray-11">Spaces</h3>
-                <DialogTrigger asChild>
-                  <button className="p-1 rounded-lg hover:bg-gray-4">
-                    <Plus className="size-4 text-gray-11" />
-                  </button>
-                </DialogTrigger>
-              </div>
-              <Link
-                href="/dashboard/spaces"
-                className="flex items-center gap-2 mb-2 p-2 rounded-lg text-gray-12 text-sm font-medium hover:bg-gray-4"
-              >
-                <Search className="size-4 text-gray-11" />
-                View Spaces
-              </Link>
-              <div className="space-y-2">
-                {spaceData?.slice(0, 3).map((space) => (
-                  <div
-                    key={space.space.id}
-                    className={clsx(
-                      "flex items-center gap-2 py-1.5 px-2 rounded-lg cursor-pointer",
-                      activeSpace?.space.id === space.space.id
-                        ? "bg-gray-4"
-                        : "hover:bg-gray-4"
-                    )}
-                    onClick={async () => {
-                      await updateActiveSpace(space.space.id);
-                      router.push("/dashboard/shared-caps");
-                    }}
-                  >
-                    <Avatar
-                      letterClass="text-gray-1 text-xs"
-                      className="flex-shrink-0 size-5"
-                      name={space.space.name}
-                    />
-                    <span className="text-sm text-gray-12 truncate">
-                      {space.space.name}
-                    </span>
-                  </div>
-                ))}
+            <div className="pt-1">
+              <div className="px-2 pt-4 border-t border-gray-4">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-sm font-semibold text-gray-11">Spaces</h3>
+                  <DialogTrigger asChild>
+                    <button className="p-1 rounded-lg hover:bg-gray-4">
+                      <Plus className="size-4 text-gray-11" />
+                    </button>
+                  </DialogTrigger>
+                </div>
+                <Link
+                  href="/dashboard/spaces"
+                  className="flex items-center gap-2 mb-2 p-2 rounded-lg text-gray-12 text-sm font-medium hover:bg-gray-4"
+                >
+                  <Search className="size-4 text-gray-11" />
+                  View Spaces
+                </Link>
+                <div className="space-y-2">
+                  {spaceData?.slice(0, 3).map((space) => (
+                    <div
+                      key={space.space.id}
+                      className={clsx(
+                        "flex items-center gap-2 py-1.5 px-2 rounded-lg cursor-pointer",
+                        activeSpace?.space.id === space.space.id
+                          ? "bg-gray-4"
+                          : "hover:bg-gray-4"
+                      )}
+                      onClick={async () => {
+                        await updateActiveSpace(space.space.id);
+                        router.push("/dashboard/shared-caps");
+                      }}
+                    >
+                      <Avatar
+                        letterClass="text-gray-1 text-xs"
+                        className="flex-shrink-0 size-5"
+                        name={space.space.name}
+                      />
+                      <span className="text-sm text-gray-12 truncate">
+                        {space.space.name}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           )}
         </div>
-        <div className="pb-0 w-full lg:pb-5">
+        <div className="pb-0 w-full lg:pb-5 text-center">
           <UsageButton
             collapsed={collapsed ?? false}
             subscribed={isSubscribed}
           />
-          <p className="mt-4 text-xs text-center truncate text-gray-10">
+          <Link
+            href="/download"
+            className="inline-flex mt-3 text-xs text-center truncate font-semibold text-gray-10 hover:text-gray-12 hover:underline"
+          >
+            Download App
+          </Link>
+          <p className="mt-1 text-xs text-center truncate text-gray-10">
             Cap Software, Inc. {new Date().getFullYear()}.
           </p>
         </div>

@@ -16,9 +16,11 @@ import {
   useTheme,
 } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
+import { MembersDialog } from "@/app/dashboard/shared-caps/components/MembersDialog";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import {
   faCrown,
+  faDownload,
   faGear,
   faHome,
   faMessage,
@@ -39,6 +41,7 @@ export default function DashboardInner({
 }) {
   const pathname = usePathname();
   const { activeSpace } = useSharedContext();
+  const [membersDialogOpen, setMembersDialogOpen] = useState(false);
 
   const titles: Record<string, string> = {
     "/dashboard/caps": "My Caps",
@@ -49,15 +52,24 @@ export default function DashboardInner({
   };
   const title = titles[pathname] || "";
   const { theme, setThemeHandler } = useTheme();
+  const isSharedCapsPage = pathname === "/dashboard/shared-caps";
+
   return (
     <div className="flex flex-col pt-5 min-h-screen lg:gap-5">
-      {/* Top Bar */}
       <div
         className={clsx(
           "flex sticky z-50 justify-between items-center px-5 mt-10 w-full h-16 border-b bg-gray-1 lg:bg-transparent border-gray-3 lg:border-b-0 lg:pl-0 lg:pr-5 lg:top-0 lg:relative top-[64px] lg:mt-0 lg:h-8"
         )}
       >
-        <p className="relative text-xl text-gray-12 lg:text-2xl">{title}</p>
+        <div className="flex items-center gap-2">
+          <p className="relative text-xl text-gray-12 lg:text-2xl">{title}</p>
+          {isSharedCapsPage && activeSpace?.members && (
+            <MembersCount
+              count={activeSpace.members.length}
+              onClick={() => setMembersDialogOpen(true)}
+            />
+          )}
+        </div>
         <div className="flex gap-4 items-center">
           <div
             onClick={() => {
@@ -73,7 +85,6 @@ export default function DashboardInner({
           <User />
         </div>
       </div>
-      {/* Content Area */}
       <div
         className={clsx(
           "flex overflow-auto flex-col flex-1 p-5 pb-5 border bg-gray-1 border-gray-3 lg:rounded-tl-2xl lg:p-8"
@@ -81,9 +92,37 @@ export default function DashboardInner({
       >
         <div className="flex flex-col flex-1 gap-4 h-full">{children}</div>
       </div>
+
+      {isSharedCapsPage && activeSpace?.members && (
+        <MembersDialog
+          open={membersDialogOpen}
+          onOpenChange={setMembersDialogOpen}
+          members={activeSpace.members}
+          spaceName={activeSpace.space.name || ""}
+        />
+      )}
     </div>
   );
 }
+
+const MembersCount = ({
+  count,
+  onClick,
+}: {
+  count: number;
+  onClick: () => void;
+}) => {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-1 px-2 py-1 rounded-full bg-gray-4 hover:bg-gray-5 text-gray-11 transition-colors"
+    >
+      <span className="text-gray-11 text-sm">
+        {count} {count === 1 ? "member" : "members"}
+      </span>
+    </button>
+  );
+};
 
 const User = () => {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -177,6 +216,22 @@ const User = () => {
                   Chat Support
                 </span>
               </CommandItem>
+
+              <CommandItem
+                className="px-2 py-1.5 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-5 group"
+                onSelect={() =>
+                  window.open("https://cap.so/download", "_blank")
+                }
+              >
+                <FontAwesomeIcon
+                  icon={faDownload}
+                  className="mr-2 text-gray-11 transition-colors duration-300 size-3.5 group-hover:text-gray-12"
+                />
+                <span className="text-[13px] transition-colors duration-300 text-gray-11 group-hover:text-gray-12">
+                  Download App
+                </span>
+              </CommandItem>
+
               <CommandItem
                 className="px-2 py-1.5 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-5 group"
                 onSelect={() => signOut()}
