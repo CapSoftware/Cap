@@ -2,6 +2,7 @@
 
 import { Button } from "@cap/ui";
 import MuxPlayer from "@mux/mux-player-react";
+import { ReadyToGetStarted } from "../ReadyToGetStarted";
 
 export const AboutPage = () => {
   const handleSmoothScroll = (
@@ -218,36 +219,8 @@ export const AboutPage = () => {
             </div>
           </div>
 
-          {/* Final CTA Section */}
-          <div
-            className="max-w-[1000px] mx-auto rounded-3xl overflow-hidden relative flex flex-col justify-center p-12 mt-16"
-            style={{
-              minHeight: "300px",
-              background:
-                "linear-gradient(135deg, #4f46e5 0%, #3b82f6 50%, #0ea5e9 100%)",
-              boxShadow: "0 15px 50px rgba(0, 118, 255, 0.1)",
-            }}
-          >
-            <div className="wrapper mx-auto h-full flex flex-col justify-center items-center relative z-10">
-              <div className="text-center max-w-[800px] mx-auto mb-8">
-                <h2 className="text-3xl md:text-4xl font-bold text-white mb-4 drop-shadow-md">
-                  Ready to Try Cap?
-                </h2>
-                <p className="text-xl text-white/90 mb-6">
-                  Download now and see the difference for yourself.
-                </p>
-              </div>
-              <div>
-                <Button
-                  variant="white"
-                  href="/download"
-                  size="lg"
-                  className="shadow-[0_4px_14px_rgba(0,0,0,0.05)] hover:shadow-[0_8px_30px_rgba(255,255,255,0.2)] transform hover:-translate-y-[2px] transition-all duration-300 font-medium px-8 py-3"
-                >
-                  Download Cap
-                </Button>
-              </div>
-            </div>
+          <div className="mt-16">
+            <ReadyToGetStarted />
           </div>
         </div>
       </div>
