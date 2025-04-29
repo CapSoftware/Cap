@@ -1,10 +1,9 @@
-import { NextResponse } from "next/server";
-import type { NextRequest } from "next/server";
 import { db } from "@cap/database";
 import { spaces } from "@cap/database/schema";
-import { eq } from "drizzle-orm";
 import { serverEnv } from "@cap/env";
-import { getToken } from "next-auth/jwt";
+import { eq } from "drizzle-orm";
+import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 
 const mainDomains = [
   "cap.so",
@@ -20,7 +19,15 @@ export async function middleware(request: NextRequest) {
   const hostname = url.hostname;
   const path = url.pathname;
 
+  
   if (!hostname) return NextResponse.next();
+  
+  // we use this to set the theme to light mode outside of the dashboard
+  if (path) {
+    const response = NextResponse.next();
+    response.headers.set("x-current-path", path);
+    return response;
+  }
 
   if (mainDomains.some((d) => hostname.includes(d))) {
     // We just let the request go through for main domains, page-level logic will handle redirects

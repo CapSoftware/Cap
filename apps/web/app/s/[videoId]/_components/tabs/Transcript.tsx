@@ -1,10 +1,10 @@
 "use client";
 
 import { videos } from "@cap/database/schema";
-import { useState, useEffect } from "react";
-import { MessageSquare } from "lucide-react";
-import { S3_BUCKET_URL } from "@cap/utils";
 import { clientEnv } from "@cap/env";
+import { S3_BUCKET_URL } from "@cap/utils";
+import { MessageSquare } from "lucide-react";
+import { useEffect, useState } from "react";
 
 interface TranscriptProps {
   data: typeof videos.$inferSelect;
@@ -219,7 +219,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-full">
+      <div className="flex justify-center items-center h-full">
         <svg
           xmlns="http://www.w3.org/2000/svg"
           className="w-8 h-8"
@@ -248,12 +248,12 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
   if (isTranscriptionProcessing) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-500">
+      <div className="flex justify-center items-center h-full text-gray-1">
         <div className="text-center">
           <div className="mb-3">
             <svg
               xmlns="http://www.w3.org/2000/svg"
-              className="w-8 h-8 mx-auto"
+              className="mx-auto w-8 h-8"
               viewBox="0 0 24 24"
             >
               <style>
@@ -282,10 +282,10 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
   if (hasTimedOut || (!transcriptData.length && !isTranscriptionProcessing)) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-500">
+      <div className="flex justify-center items-center h-full text-gray-1">
         <div className="text-center">
-          <MessageSquare className="w-8 h-8 mx-auto mb-2 text-gray-300" />
-          <p className="text-sm text-gray-500 font-medium">
+          <MessageSquare className="mx-auto mb-2 w-8 h-8 text-gray-300" />
+          <p className="text-sm font-medium text-gray-1">
             No transcript available
           </p>
         </div>
@@ -295,19 +295,17 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-y-auto">
-        <div className="space-y-3 p-4">
+      <div className="overflow-y-auto flex-1">
+        <div className="p-4 space-y-3">
           {transcriptData.map((entry) => (
             <div
               key={entry.id}
               className={`group rounded-lg p-2 transition-colors cursor-pointer ${
-                selectedEntry === entry.id ? "bg-blue-50" : "hover:bg-gray-100"
+                selectedEntry === entry.id ? "bg-blue-50" : "hover:bg-gray-1"
               }`}
               onClick={() => handleTranscriptClick(entry)}
             >
-              <div className="text-sm text-gray-500 mb-1">
-                {entry.timestamp}
-              </div>
+              <div className="mb-1 text-sm text-gray-1">{entry.timestamp}</div>
               <div className="text-sm text-gray-900">{entry.text}</div>
             </div>
           ))}

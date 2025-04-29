@@ -1,5 +1,6 @@
 "use client";
 
+import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { clientEnv } from "@cap/env";
@@ -9,7 +10,6 @@ import { ShareHeader } from "./_components/ShareHeader";
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import { Toolbar } from "./_components/Toolbar";
-import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
   authorName: string | null;
@@ -133,7 +133,7 @@ export const Share: React.FC<ShareProps> = ({
         <a
           target="_blank"
           href={`${clientEnv.NEXT_PUBLIC_WEB_URL}?ref=video_${data.id}`}
-          className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 bg-gray-100 rounded-full new-card-style w-fit"
+          className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 bg-gray-1 rounded-full new-card-style w-fit"
         >
           <span className="text-sm">Recorded with</span>
           <Logo className="w-14 h-auto" />

@@ -1,8 +1,8 @@
 "use client";
 
-import toast from "react-hot-toast";
-import { useState } from "react";
 import { clientEnv } from "@cap/env";
+import { useState } from "react";
+import toast from "react-hot-toast";
 
 interface ShareProps {
   post: {
@@ -19,7 +19,7 @@ export function Share({ post }: ShareProps) {
 
   return (
     <>
-      <div className="mt-6 py-6 px-3 bg-gray-100 text-center rounded-xl">
+      <div className="mt-6 py-6 px-3 bg-gray-1 text-center rounded-xl">
         <h3 className="mb-2 mt-0 text-lg font-semibold">Share this post</h3>
         <div className="flex justify-center gap-4">
           <a

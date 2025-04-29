@@ -1,10 +1,10 @@
 "use client";
 
-import { Button } from "@cap/ui";
 import { SeoPageContent } from "@/components/seo/types";
-import { useEffect } from "react";
+import { Button } from "@cap/ui";
 import MuxPlayer from "@mux/mux-player-react";
 import { motion } from "framer-motion";
+import { useEffect } from "react";
 
 const renderHTML = (content: string) => {
   const styledContent = content.replace(
@@ -342,7 +342,7 @@ export const SeoPageTemplate = ({
             {content.features.map((feature, index) => (
               <div
                 key={index}
-                className="p-8 bg-white rounded-2xl shadow-md hover:shadow-xl transition-all duration-300 border border-gray-100 hover:border-blue-100 transform hover:-translate-y-1"
+                className="p-8 bg-gray-1 rounded-2xl shadow-md hover:shadow-xl transition-all duration-300 border border-gray-100 hover:border-blue-100 transform hover:-translate-y-1"
               >
                 <div className="bg-blue-50 w-12 h-12 flex items-center justify-center rounded-full mb-4">
                   <span className="text-blue-500 text-xl font-bold">
@@ -404,7 +404,7 @@ export const SeoPageTemplate = ({
               {content.comparison.map((item, index) => (
                 <div
                   key={index}
-                  className="p-8 bg-white rounded-2xl shadow-md hover:shadow-xl transition-all duration-300 border border-gray-100 hover:border-blue-100 transform hover:-translate-y-1"
+                  className="p-8 bg-gray-1 rounded-2xl shadow-md hover:shadow-xl transition-all duration-300 border border-gray-100 hover:border-blue-100 transform hover:-translate-y-1"
                 >
                   <div className="bg-indigo-50 w-12 h-12 flex items-center justify-center rounded-full mb-4">
                     <span className="text-indigo-500 text-xl font-bold">
@@ -468,7 +468,7 @@ export const SeoPageTemplate = ({
               </h2>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full max-w-4xl mx-auto bg-white rounded-xl shadow-md">
+              <table className="w-full max-w-4xl mx-auto bg-gray-1 rounded-xl shadow-md">
                 <thead className="bg-blue-50">
                   <tr>
                     {content.comparisonTable.headers.map((header, index) => (
@@ -485,7 +485,9 @@ export const SeoPageTemplate = ({
                   {content.comparisonTable.rows.map((row, rowIndex) => (
                     <tr
                       key={rowIndex}
-                      className={rowIndex % 2 === 0 ? "bg-white" : "bg-gray-50"}
+                      className={
+                        rowIndex % 2 === 0 ? "bg-gray-1" : "bg-gray-50"
+                      }
                     >
                       {row.map((cell, cellIndex) => (
                         <td
@@ -518,7 +520,7 @@ export const SeoPageTemplate = ({
             {content.useCases.map((useCase, index) => (
               <div
                 key={index}
-                className="p-8 bg-white rounded-2xl shadow-md hover:shadow-xl transition-all duration-300 border border-gray-100 hover:border-blue-100 transform hover:-translate-y-1"
+                className="p-8 bg-gray-1 rounded-2xl shadow-md hover:shadow-xl transition-all duration-300 border border-gray-100 hover:border-blue-100 transform hover:-translate-y-1"
               >
                 <div className="bg-blue-50 w-12 h-12 flex items-center justify-center rounded-full mb-4">
                   <span className="text-blue-500 text-xl font-bold">
@@ -549,7 +551,7 @@ export const SeoPageTemplate = ({
               {content.testimonials.items.map((testimonial, index) => (
                 <div
                   key={index}
-                  className="p-8 bg-white rounded-2xl shadow-md hover:shadow-xl transition-all duration-300 border border-gray-100"
+                  className="p-8 bg-gray-1 rounded-2xl shadow-md hover:shadow-xl transition-all duration-300 border border-gray-100"
                 >
                   <div className="mb-4 text-blue-500">
                     <svg
@@ -581,7 +583,7 @@ export const SeoPageTemplate = ({
                 <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
               </h2>
             </div>
-            <div className="max-w-3xl mx-auto bg-white p-8 rounded-2xl shadow-md">
+            <div className="max-w-3xl mx-auto bg-gray-1 p-8 rounded-2xl shadow-md">
               <ol className="list-none">
                 {content.migrationGuide.steps.map((step, index) => (
                   <li key={index} className="mb-6 flex items-start">
@@ -608,7 +610,7 @@ export const SeoPageTemplate = ({
             {content.faqs.map((faq, index) => (
               <div
                 key={index}
-                className="my-6 p-6 bg-white rounded-xl shadow-sm hover:shadow-md transition-all duration-300 border border-gray-100"
+                className="my-6 p-6 bg-gray-1 rounded-xl shadow-sm hover:shadow-md transition-all duration-300 border border-gray-100"
               >
                 <h2 className="text-xl text-gray-800 font-semibold mb-3">
                   {faq.question}

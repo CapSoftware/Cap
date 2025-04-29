@@ -9,9 +9,7 @@ export const DashboardTemplate = ({
 }) => {
   return (
     <div className="dashboard-page">
-      <DashboardInner emptyComponent={children}>
-        {children && children}
-      </DashboardInner>
+      <DashboardInner>{children && children}</DashboardInner>
     </div>
   );
 };

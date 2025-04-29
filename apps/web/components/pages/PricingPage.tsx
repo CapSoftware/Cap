@@ -10,6 +10,7 @@ import {
   Switch,
 } from "@cap/ui";
 import { getProPlanId } from "@cap/utils";
+import clsx from "clsx";
 import { Check } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -26,7 +27,7 @@ const QuantityButton = ({
   return (
     <button
       onClick={onClick}
-      className="px-2 py-0 h-6 w-6 bg-gray-200 rounded-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400 flex items-center justify-center"
+      className="flex justify-center items-center px-2 py-0 w-6 h-6 bg-gray-200 rounded-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400"
     >
       {children}
     </button>
@@ -223,20 +224,24 @@ export const PricingPage = () => {
       <div className="py-12 mt-16 space-y-24 wrapper">
         <div>
           <div className="text-center">
-            <div className={`mb-4 ${initialRender ? "fade-in-down" : ""}`}>
+            <div
+              className={clsx("mb-4", {
+                "fade-in-down animate-delay-1": initialRender,
+              })}
+            >
               <SimplePlans />
             </div>
             <h1
-              className={`text-4xl md:text-5xl ${
-                initialRender ? "fade-in-down" : ""
-              } mb-6`}
+              className={clsx("text-4xl md:text-5xl", {
+                "fade-in-down animate-delay-1 text-gray-12": initialRender,
+              })}
             >
               Early Adopter Pricing
             </h1>
             <p
-              className={`max-w-[800px] mx-auto mb-8 ${
-                initialRender ? "fade-in-down animate-delay-1" : ""
-              }`}
+              className={clsx("mx-auto mt-3 mb-8 max-w-[800px]", {
+                "mt-4 fade-in-down animate-delay-1 text-gray-10": initialRender,
+              })}
             >
               Cap is currently in public beta, and we're offering special early
               adopter pricing to our first users. This pricing will be locked in
@@ -246,9 +251,9 @@ export const PricingPage = () => {
 
           <div className="grid grid-cols-1 gap-3 items-stretch md:grid-cols-2">
             <Card
-              className={`bg-gray-100 rounded-xl min-h-[600px] flex-grow ${
-                initialRender ? "fade-in-down animate-delay-2" : ""
-              }`}
+              className={clsx("flex-grow rounded-xl bg-gray-1 min-h-[600px]", {
+                "fade-in-down animate-delay-2": initialRender,
+              })}
             >
               <div className="space-y-4">
                 <CardHeader>
@@ -347,7 +352,7 @@ export const PricingPage = () => {
                             <div className="w-5 h-5 m-0 p-0 flex items-center border-[2px] border-green-500 justify-center rounded-full">
                               <Check className="w-3 h-3 stroke-[4px] stroke-green-500" />
                             </div>
-                            <span className="ml-1.5 font-bold text-gray-500">
+                            <span className="ml-1.5 font-bold text-gray-12">
                               {item.text}
                             </span>
                           </li>
@@ -360,7 +365,7 @@ export const PricingPage = () => {
             </Card>
 
             <Card
-              className={`bg-gray-100 rounded-xl min-h-[600px] flex-grow border-blue-500 border-4 ${
+              className={`bg-gray-1 rounded-xl min-h-[600px] flex-grow border-blue-500 border-4 ${
                 initialRender ? "fade-in-up animate-delay-2" : ""
               }`}
             >
@@ -459,7 +464,7 @@ export const PricingPage = () => {
                             <div className="w-5 h-5 m-0 p-0 flex items-center border-[2px] border-green-500 justify-center rounded-full">
                               <Check className="w-3 h-3 stroke-[4px] stroke-green-500" />
                             </div>
-                            <span className="ml-1.5 text-gray-500 font-bold">
+                            <span className="ml-1.5 font-bold text-gray-12">
                               {item.text}
                             </span>
                           </li>

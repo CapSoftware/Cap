@@ -1,12 +1,12 @@
 "use client";
 
-import { Button, Logo } from "@cap/ui";
 import { userSelectProps } from "@cap/database/auth/session";
+import { Button, Logo } from "@cap/ui";
+import { LogOut } from "lucide-react";
+import { signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import toast from "react-hot-toast";
-import { signOut } from "next-auth/react";
-import { LogOut } from "lucide-react";
 
 type InviteAcceptProps = {
   inviteId: string;
@@ -83,7 +83,7 @@ export function InviteAccept({
   };
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 relative">
+    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-1 relative">
       <div className="bg-gray-50 p-4 rounded-[20px] border-[1px] border-gray-200 shadow-[0px 8px 16px rgba(18, 22, 31, 0.04)]">
         <Logo className="w-20 h-auto mb-4" />
         <h1 className="text-xl mb-4">
@@ -106,7 +106,7 @@ export function InviteAccept({
           onClick={() => signOut({ callbackUrl: "/login" })}
           size="sm"
           variant="white"
-          className="absolute bottom-4 left-4 text-gray-500 hover:text-gray-700"
+          className="absolute bottom-4 left-4 text-gray-1 hover:text-gray-700"
         >
           <LogOut className="w-4 h-4 mr-2" />
           Sign Out

@@ -77,7 +77,7 @@ const TestimonialCard = ({ testimonial }: TestimonialCardProps) => {
       href={testimonial.url}
       target="_blank"
       rel="noopener noreferrer"
-      className="p-6 bg-gray-100 rounded-xl border border-gray-200 w-full h-auto hover:scale-[1.015] hover:border-blue-500 hover:shadow-lg transition-all duration-300 cursor-pointer block"
+      className="p-6 bg-gray-2 rounded-xl border border-gray-4 w-full h-auto hover:scale-[1.008] hover:border-blue-500 hover:shadow-lg transition-all duration-300 cursor-pointer block"
       whileHover={{ scale: 1.03 }}
       whileTap={{ scale: 0.98 }}
     >

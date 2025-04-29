@@ -1,7 +1,7 @@
-import Link from "next/link";
-import Image from "next/image";
+import { BlogPost, getBlogPosts, PostMetadata } from "@/utils/blog";
 import { format, parseISO } from "date-fns";
-import { getBlogPosts, PostMetadata, BlogPost } from "@/utils/blog";
+import Image from "next/image";
+import Link from "next/link";
 
 const FEATURED_SLUGS = ["handling-a-stripe-payment-attack", "cap-v03-launch"];
 
@@ -42,11 +42,11 @@ export const UpdatesPage = () => {
 
       {featuredPosts.length > 0 && (
         <div className="mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
             {featuredPosts.map((post) => (
               <article
                 key={post.slug}
-                className="overflow-hidden w-full rounded-xl border border-gray-300 shadow-sm hover:shadow-md transition-shadow"
+                className="overflow-hidden w-full rounded-xl border transition-shadow border-gray-3 hover:shadow-md"
               >
                 <Link href={`/blog/${post.slug}`}>
                   {post.metadata.image && (
@@ -57,25 +57,25 @@ export const UpdatesPage = () => {
                         height={400}
                         objectFit="cover"
                         alt={post.metadata.title}
-                        className="w-full h-48 object-cover"
+                        className="object-cover w-full h-48"
                       />
                     </div>
                   )}
                   <div className="p-6 space-y-3">
-                    <h3 className="text-xl font-semibold text-gray-500">
+                    <h3 className="text-xl font-semibold text-gray-12">
                       {post.metadata.title}
                     </h3>
                     <div className="flex space-x-2 text-sm">
                       {"author" in post.metadata && (
                         <>
-                          <p className="text-gray-600">
+                          <p className="text-gray-10">
                             by {(post.metadata as PostMetadata).author}
                           </p>
                           <span>{` • `}</span>
                         </>
                       )}
                       {"publishedAt" in post.metadata && (
-                        <p className="text-gray-600">
+                        <p className="text-gray-10">
                           {format(
                             parseISO(
                               (post.metadata as PostMetadata).publishedAt
@@ -90,7 +90,7 @@ export const UpdatesPage = () => {
                         post.metadata.tags.split(", ").map((tag, index) => (
                           <p
                             key={index}
-                            className="rounded-md bg-gray-200 font-medium px-2 py-0.5 text-sm text-gray-500"
+                            className="rounded-md bg-gray-3 font-medium px-2 py-0.5 text-sm text-gray-12"
                           >
                             {tag}
                           </p>
@@ -125,20 +125,20 @@ export const UpdatesPage = () => {
                   </div>
                 )}
                 <div className="p-10 space-y-4">
-                  <h2 className="text-xl text-gray-500 md:text-4xl">
+                  <h2 className="text-xl text-gray-12 md:text-4xl">
                     {post.metadata.title}
                   </h2>
                   <div className="flex space-x-2">
                     {"author" in post.metadata && (
                       <>
-                        <p className="text-gray-600">
+                        <p className="text-gray-10">
                           by {(post.metadata as PostMetadata).author}
                         </p>
                         <span>{` • `}</span>
                       </>
                     )}
                     {"publishedAt" in post.metadata && (
-                      <p className="text-gray-600">
+                      <p className="text-gray-10">
                         {format(
                           parseISO((post.metadata as PostMetadata).publishedAt),
                           "MMMM dd, yyyy"
@@ -151,7 +151,7 @@ export const UpdatesPage = () => {
                       post.metadata.tags.split(", ").map((tag, index) => (
                         <p
                           key={index}
-                          className="rounded-md bg-gray-200 font-medium px-2 py-0.5 text-sm text-gray-500"
+                          className="rounded-md bg-gray-3 font-medium px-2 py-0.5 text-sm text-gray-12"
                         >
                           {tag}
                         </p>
