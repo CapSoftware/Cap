@@ -419,7 +419,9 @@ export const Workspace = () => {
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label htmlFor="emails">Email</Label>
+              <Label htmlFor="emails" className="mb-1">
+                Email
+              </Label>
               <Input
                 id="emails"
                 value={emailInput}
