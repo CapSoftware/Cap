@@ -3,6 +3,7 @@
 "use client";
 
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
+import { Testimonials } from "@/components/ui/Testimonials";
 import {
   getDownloadButtonText,
   getDownloadUrl,
@@ -23,7 +24,6 @@ import { LogoSection } from "../_components/LogoSection";
 import { FeatureCard } from "../SelfHostingPage";
 import LeftBlueHue from "./LeftBlueHue";
 import PowerfulFeaturesSVG from "./PowerfulFeaturesSVG";
-import { Testimonials } from "@/components/ui/Testimonials";
 export const HomePage = () => {
   const [videoToggled, setVideoToggled] = useState(false);
   const { platform, isIntel } = useDetectPlatform();
@@ -37,19 +37,19 @@ export const HomePage = () => {
             <Link
               href="https://x.com/richiemcilroy/status/1895526857807733018"
               target="_blank"
-              className="flex gap-3 transition-opacity duration-300
-                 hover:opacity-90 mb-[52px] items-center relative z-[20] px-4 py-2
-               mx-auto bg-[#2e2e2e] rounded-full border w-fit border-zinc-200"
+              className="flex gap-3 transition-colors duration-300 shadow-sm
+                 mb-[52px] items-center relative z-[20] px-3.5 py-1
+               mx-auto bg-gray-1 rounded-full border w-fit border-gray-5 hover:bg-gray-3"
             >
-              <p className="text-xs text-white sm:text-sm">
+              <p className="text-[13px] text-gray-12">
                 Launch Week Day 5:{" "}
-                <span className="text-xs font-bold text-blue-100 sm:text-sm">
+                <span className="text-[13px] font-bold text-blue-9">
                   Self-host Cap
                 </span>
               </p>
               <FontAwesomeIcon
                 fontWeight="light"
-                className="w-2 text-white"
+                className="w-2 text-gray-12"
                 icon={faAngleRight}
               />
             </Link>
@@ -433,7 +433,7 @@ export const HomePage = () => {
           </div>
         </div>
       </div>
-      <div className="wrapper mb-32">
+      <div className="mb-32 wrapper">
         <Testimonials
           amount={10}
           title="What our users say about Cap after hitting record"
