@@ -23,8 +23,8 @@ export async function POST(request: Request) {
         console.log("🔍 DB migrations triggered");
         console.log("💿 Running DB migrations...");
         const cwd = process.cwd();
-        // @ts-ignore
-        await migrate(db, {
+
+        await migrate(db(), {
           migrationsFolder: path.join(process.cwd(), "/migrations"),
         });
         migrations.run = true;

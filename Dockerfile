@@ -20,7 +20,6 @@ COPY package.json yarn.lock* package-lock.json* pnpm-lock.yaml* .npmrc* ./
 COPY /patches ./patches
 
 
-
 # Install dependencies based on lockfile
 RUN if [ -f yarn.lock ]; then \
       yarn --frozen-lockfile; \
@@ -31,7 +30,6 @@ RUN if [ -f yarn.lock ]; then \
     else \
       echo "Lockfile not found." && exit 1; \
     fi
-
 # Use mount cache for pnpm if pnpm-lock exists
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
     if [ -f pnpm-lock.yaml ]; then \
@@ -45,8 +43,12 @@ WORKDIR /app
 COPY --from=deps /app/patches ./patches
 COPY . .
 
+
 # build-time only variables
 ARG DOCKER_BUILD=true
+ENV NEXT_PUBLIC_WEB_URL=http://localhost:3000
+ENV NEXT_PUBLIC_CAP_AWS_BUCKET=capso
+ENV NEXT_PUBLIC_CAP_AWS_REGION=us-east-1
 
 RUN corepack enable pnpm && pnpm i && pnpm run build:web
 
@@ -54,6 +56,7 @@ RUN corepack enable pnpm && pnpm i && pnpm run build:web
 RUN corepack enable pnpm
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm i
 RUN pnpm run build:web
+
 
 # 3. Production image, copy all the files and run next
 FROM base AS runner
