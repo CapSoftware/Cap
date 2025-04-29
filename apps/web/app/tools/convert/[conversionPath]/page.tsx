@@ -89,13 +89,13 @@ export default function ConversionPage({ params }: ConversionPageProps) {
       {
         title: "High Quality Conversion",
         description:
-          "We use industry-standard FFmpeg technology to ensure high-quality conversion results.",
+          "We use browser technology to ensure high-quality and fast conversion results.",
       },
     ],
     faqs: [
       {
         question: `How does the ${sourceFormat.toUpperCase()} to ${targetFormat.toUpperCase()} converter work?`,
-        answer: `Our converter uses WebAssembly to run FFmpeg directly in your browser. When you upload a ${sourceFormat.toUpperCase()} file, it gets processed locally on your device and converted to ${targetFormat.toUpperCase()} format without ever being sent to a server.`,
+        answer: `Our converter uses Remotion (remotion.dev) directly in your browser. When you upload a ${sourceFormat.toUpperCase()} file, it gets processed locally on your device and converted to ${targetFormat.toUpperCase()} format without ever being sent to a server.`,
       },
       {
         question: "Is there a file size limit?",

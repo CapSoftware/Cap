@@ -22,7 +22,6 @@ export const SpeedController = () => {
   const [progress, setProgress] = useState(0);
   const [outputUrl, setOutputUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [mediaEngineLoaded, setMediaEngineLoaded] = useState(true);
   const [isDragging, setIsDragging] = useState(false);
   const [selectedSpeed, setSelectedSpeed] = useState<number>(1.5);
   const [videoInfo, setVideoInfo] = useState<{
@@ -112,7 +111,7 @@ export const SpeedController = () => {
   };
 
   const processVideo = async () => {
-    if (!file || !mediaEngineLoaded) return;
+    if (!file) return;
 
     setIsProcessing(true);
     setError(null);
@@ -636,7 +635,7 @@ export const SpeedController = () => {
           <Button
             variant="primary"
             onClick={processVideo}
-            disabled={!mediaEngineLoaded || isProcessing}
+            disabled={isProcessing}
             className="w-full"
           >
             {selectedSpeed < 1 ? "Slow Down" : "Speed Up"} Video (

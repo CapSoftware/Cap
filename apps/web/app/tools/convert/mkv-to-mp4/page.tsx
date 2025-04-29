@@ -50,14 +50,14 @@ export default function MKVToMP4Page() {
       {
         title: "High Quality Conversion",
         description:
-          "We use industry-standard FFmpeg technology to ensure high-quality conversion results.",
+          "We use browser technology to ensure high-quality and fast conversion results.",
       },
     ],
     faqs: [
       {
         question: "How does the MKV to MP4 converter work?",
         answer:
-          "Our converter uses WebAssembly to run FFmpeg directly in your browser. When you upload an MKV file, it gets processed locally on your device and converted to MP4 format without ever being sent to a server.",
+          "Our converter uses Remotion (remotion.dev) directly in your browser. When you upload an MKV file, it gets processed locally on your device and converted to MP4 format without ever being sent to a server.",
       },
       {
         question: "Is there a file size limit?",

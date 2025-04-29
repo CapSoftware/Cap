@@ -50,14 +50,14 @@ export default function MP4ToMP3Page() {
       {
         title: "High Quality Conversion",
         description:
-          "We use industry-standard FFmpeg technology to ensure high-quality audio extraction.",
+          "We use Remotion technology to ensure high-quality audio extraction.",
       },
     ],
     faqs: [
       {
         question: "How does the MP4 to MP3 converter work?",
         answer:
-          "Our converter uses WebAssembly to run FFmpeg directly in your browser. When you upload an MP4 file, it extracts the audio track locally on your device and saves it as an MP3 file without ever being sent to a server.",
+          "Our converter uses Remotion (remotion.dev) directly in your browser. When you upload an MP4 file, it extracts the audio track locally on your device and saves it as an MP3 file without ever being sent to a server.",
       },
       {
         question: "Is there a file size limit?",

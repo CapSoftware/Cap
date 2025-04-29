@@ -7,7 +7,7 @@ const content = {
     "Instantly speed up or slow down any MP4, WebM or MOV in your browser. No uploads, no quality loss.",
   featuresTitle: "Why Use Our Online Video Speed Controller?",
   featuresDescription:
-    "Powered by WebCodecs + WebAssembly, Cap processes every frame locally for near-instant results—while keeping your files 100% private.",
+    "Powered by WebCodecs + Remotion, Cap processes every frame locally for near-instant results—while keeping your files 100% private.",
   features: [
     {
       title: "WebCodecs-Level Speed",
@@ -43,7 +43,7 @@ const content = {
     {
       question: "Why is processing still slow on my laptop?",
       answer:
-        "WebCodecs relies on your device’s hardware. Older CPUs/GPUs or throttled mobiles will take longer.",
+        "WebCodecs relies on your device's hardware. Older CPUs/GPUs or throttled mobiles will take longer.",
     },
     {
       question: "Can I use this on iOS / Android?",
