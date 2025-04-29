@@ -30,7 +30,7 @@ export async function updateDomain(domain: string, spaceId: string) {
       throw new Error(addDomainResponse.error.message);
     }
 
-    await db
+    await db()
       .update(spaces)
       .set({
         customDomain: domain,
@@ -41,7 +41,7 @@ export async function updateDomain(domain: string, spaceId: string) {
     const status = await checkDomainStatus(domain);
 
     if (status.verified) {
-      await db
+      await db()
         .update(spaces)
         .set({
           domainVerified: new Date(),

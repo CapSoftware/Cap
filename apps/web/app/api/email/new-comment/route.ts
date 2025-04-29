@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
   try {
     console.log(`Fetching comment details for commentId: ${commentId}`);
     // Get the comment details
-    const commentDetails = await db
+    const commentDetails = await db()
       .select({
         id: comments.id,
         content: comments.content,
@@ -68,7 +68,7 @@ export async function POST(request: NextRequest) {
 
     console.log(`Fetching video details for videoId: ${comment.videoId}`);
     // Get the video details
-    const videoDetails = await db
+    const videoDetails = await db()
       .select({
         id: videos.id,
         name: videos.name,
@@ -97,7 +97,7 @@ export async function POST(request: NextRequest) {
 
     console.log(`Fetching owner details for userId: ${video.ownerId}`);
     // Get the video owner's email
-    const ownerDetails = await db
+    const ownerDetails = await db()
       .select({
         id: users.id,
         email: users.email,
@@ -128,7 +128,7 @@ export async function POST(request: NextRequest) {
     let commenterName = "Anonymous";
     if (comment.authorId) {
       console.log(`Fetching commenter details for userId: ${comment.authorId}`);
-      const commenterDetails = await db
+      const commenterDetails = await db()
         .select({
           id: users.id,
           name: users.name,
@@ -178,7 +178,7 @@ export async function POST(request: NextRequest) {
     console.log(
       `Checking for recent comments since ${fifteenMinutesAgo.toISOString()}`
     );
-    const recentComments = await db
+    const recentComments = await db()
       .select({
         id: comments.id,
       })

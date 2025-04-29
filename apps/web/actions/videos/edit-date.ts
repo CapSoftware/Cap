@@ -46,7 +46,7 @@ export async function editDate(videoId: string, date: string) {
       customCreatedAt: newDate.toISOString(),
     };
 
-    await db
+    await db()
       .update(videos)
       .set({
         metadata: updatedMetadata,

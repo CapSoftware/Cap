@@ -160,7 +160,7 @@ export async function generateVideoOgImage(videoId: string) {
 }
 
 async function getData(videoId: string) {
-  const query = await db
+  const query = await db()
     .select({
       video: videos,
       bucket: s3Buckets,

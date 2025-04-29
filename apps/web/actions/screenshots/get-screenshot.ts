@@ -17,7 +17,7 @@ export async function getScreenshot(userId: string, screenshotId: string) {
     throw new Error("userId or screenshotId not supplied");
   }
 
-  const query = await db
+  const query = await db()
     .select({ video: videos, bucket: s3Buckets })
     .from(videos)
     .leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))

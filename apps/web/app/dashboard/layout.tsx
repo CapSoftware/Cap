@@ -36,7 +36,7 @@ export default async function DashboardLayout({
     redirect("/onboarding");
   }
 
-  const spacesWithMembers = await db
+  const spacesWithMembers = await db()
     .select({
       space: spaces,
       member: spaceMembers,
@@ -57,7 +57,7 @@ export default async function DashboardLayout({
 
   let spaceInvitesData: (typeof spaceInvites.$inferSelect)[] = [];
   if (spaceIds.length > 0) {
-    spaceInvitesData = await db
+    spaceInvitesData = await db()
       .select()
       .from(spaceInvites)
       .where(inArray(spaceInvites.spaceId, spaceIds));
@@ -73,7 +73,7 @@ export default async function DashboardLayout({
         return acc;
       }, [])
       .map(async (space) => {
-        const allMembers = await db
+        const allMembers = await db()
           .select({
             member: spaceMembers,
             user: {
@@ -87,7 +87,7 @@ export default async function DashboardLayout({
           .leftJoin(users, eq(spaceMembers.userId, users.id))
           .where(eq(spaceMembers.spaceId, space.id));
 
-        const owner = await db
+        const owner = await db()
           .select({
             inviteQuota: users.inviteQuota,
           })
@@ -95,7 +95,7 @@ export default async function DashboardLayout({
           .where(eq(users.id, space.ownerId))
           .then((result) => result[0]);
 
-        const totalInvitesResult = await db
+        const totalInvitesResult = await db()
           .select({
             value: sql<number>`
               ${count(spaceMembers.id)} + ${count(spaceInvites.id)}

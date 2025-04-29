@@ -24,7 +24,7 @@ export async function DELETE(request: NextRequest) {
     return Response.json({ error: true }, { status: 401 });
   }
 
-  const query = await db
+  const query = await db()
     .select({ video: videos, bucket: s3Buckets })
     .from(videos)
     .leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
@@ -51,7 +51,7 @@ export async function DELETE(request: NextRequest) {
     );
   }
 
-  await db
+  await db()
     .delete(videos)
     .where(and(eq(videos.id, videoId), eq(videos.ownerId, userId)));
 

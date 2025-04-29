@@ -30,14 +30,14 @@ export async function checkWorkspaceDomain(spaceId: string) {
     const status = await checkDomainStatus(space.customDomain);
 
     if (status.verified && !space.domainVerified) {
-      await db
+      await db()
         .update(spaces)
         .set({
           domainVerified: new Date(),
         })
         .where(eq(spaces.id, spaceId));
     } else if (!status.verified && space.domainVerified) {
-      await db
+      await db()
         .update(spaces)
         .set({
           domainVerified: null,

@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-      const [bucket] = await db
+      const [bucket] = await db()
         .select()
         .from(s3Buckets)
         .where(eq(s3Buckets.ownerId, user.id));

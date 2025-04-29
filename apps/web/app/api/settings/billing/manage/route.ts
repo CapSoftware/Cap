@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    await db
+    await db()
       .update(users)
       .set({
         stripeCustomerId: customer.id,

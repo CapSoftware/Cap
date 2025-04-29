@@ -66,7 +66,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const query = await db
+  const query = await db()
     .select({
       video: videos,
       bucket: s3Buckets,
@@ -148,7 +148,7 @@ export async function GET(request: NextRequest) {
     );
 
     if (videoSegmentKeys.length > 149) {
-      await db
+      await db()
         .update(videos)
         .set({ skipProcessing: true })
         .where(eq(videos.id, videoId));

@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
 
   try {
     // Find the invite
-    const [invite] = await db
+    const [invite] = await db()
       .select()
       .from(spaceInvites)
       .where(eq(spaceInvites.id, inviteId));
@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Get the space owner's subscription ID
-    const [spaceOwner] = await db
+    const [spaceOwner] = await db()
       .select({
         stripeSubscriptionId: users.stripeSubscriptionId,
       })
@@ -53,7 +53,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Update the user's thirdPartyStripeSubscriptionId
-    await db
+    await db()
       .update(users)
       .set({
         thirdPartyStripeSubscriptionId: spaceOwner.stripeSubscriptionId,

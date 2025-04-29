@@ -25,7 +25,7 @@ export async function createSpace(args: { name: string }) {
     spaceId,
   });
 
-  await db
+  await db()
     .update(users)
     .set({ activeSpaceId: spaceId })
     .where(eq(users.id, user.id));

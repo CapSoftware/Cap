@@ -17,7 +17,7 @@ export const getCurrentUser = async (session?: Session) => {
     return null;
   }
 
-  const [currentUser] = await db
+  const [currentUser] = await db()
     .select()
     .from(users)
     .where(eq(users.id, _session?.user.id));

@@ -110,7 +110,7 @@ export default async function ShareVideoPage(props: Props) {
   const userId = user?.id as string | undefined;
   console.log("[ShareVideoPage] Current user:", userId);
 
-  const videoWithSpace = await db
+  const videoWithSpace = await db()
     .select({
       id: videos.id,
       name: videos.name,
@@ -148,7 +148,7 @@ export default async function ShareVideoPage(props: Props) {
   }
 
   if (video.sharedSpace?.spaceId) {
-    const space = await db
+    const space = await db()
       .select()
       .from(spaces)
       .where(eq(spaces.id, video.sharedSpace.spaceId))
@@ -190,7 +190,7 @@ export default async function ShareVideoPage(props: Props) {
   }
 
   console.log("[ShareVideoPage] Fetching comments for video:", videoId);
-  const commentsQuery: CommentWithAuthor[] = await db
+  const commentsQuery: CommentWithAuthor[] = await db()
     .select({
       id: comments.id,
       content: comments.content,
@@ -241,7 +241,7 @@ export default async function ShareVideoPage(props: Props) {
   let domainVerified = false;
 
   if (video.sharedSpace?.spaceId) {
-    const spaceData = await db
+    const spaceData = await db()
       .select({
         customDomain: spaces.customDomain,
         domainVerified: spaces.domainVerified,
@@ -259,7 +259,7 @@ export default async function ShareVideoPage(props: Props) {
   }
 
   if (!customDomain && video.ownerId) {
-    const ownerSpaces = await db
+    const ownerSpaces = await db()
       .select({
         customDomain: spaces.customDomain,
         domainVerified: spaces.domainVerified,
@@ -281,7 +281,7 @@ export default async function ShareVideoPage(props: Props) {
   }
 
   const membersList = video.sharedSpace?.spaceId
-    ? await db
+    ? await db()
         .select({
           userId: spaceMembers.userId,
         })

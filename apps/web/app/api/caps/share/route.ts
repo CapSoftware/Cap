@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Get current shared spaces
-    const currentSharedSpaces = await db
+    const currentSharedSpaces = await db()
       .select()
       .from(sharedVideos)
       .where(eq(sharedVideos.videoId, capId));
@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
     // Remove spaces that are no longer shared
     for (const sharedSpace of currentSharedSpaces) {
       if (!spaceIds.includes(sharedSpace.spaceId)) {
-        await db
+        await db()
           .delete(sharedVideos)
           .where(
             and(

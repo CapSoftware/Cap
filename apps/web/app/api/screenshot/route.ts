@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const query = await db
+  const query = await db()
     .select({ video: videos, bucket: s3Buckets })
     .from(videos)
     .leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))

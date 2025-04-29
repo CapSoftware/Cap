@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: true }, { status: 401 });
   }
 
-  await db
+  await db()
     .update(users)
     .set({
       name: firstName,
@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
     fullName += ` ${lastName}`;
   }
 
-  const [space] = await db
+  const [space] = await db()
     .select()
     .from(spaces)
     .where(or(eq(spaces.ownerId, user.id), eq(spaceMembers.userId, user.id)))
@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
       spaceId,
     });
 
-    await db
+    await db()
       .update(users)
       .set({ activeSpaceId: spaceId })
       .where(eq(users.id, user.id));

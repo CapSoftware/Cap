@@ -29,7 +29,7 @@ async function findUserWithRetry(
       // Try finding by userId first if available
       if (userId) {
         console.log(`Attempting to find user by ID: ${userId}`);
-        const userById = await db
+        const userById = await db()
           .select()
           .from(users)
           .where(eq(users.id, userId))
@@ -46,7 +46,7 @@ async function findUserWithRetry(
       // If not found by ID or no ID provided, try email
       if (email) {
         console.log(`Attempting to find user by email: ${email}`);
-        const userByEmail = await db
+        const userByEmail = await db()
           .select()
           .from(users)
           .where(eq(users.email, email))
@@ -182,7 +182,7 @@ export const POST = async (req: Request) => {
           inviteQuota,
         });
 
-        await db
+        await db()
           .update(users)
           .set({
             stripeSubscriptionId: session.subscription as string,
@@ -308,7 +308,7 @@ export const POST = async (req: Request) => {
           inviteQuota,
         });
 
-        await db
+        await db()
           .update(users)
           .set({
             stripeSubscriptionId: subscription.id,
@@ -336,7 +336,7 @@ export const POST = async (req: Request) => {
         if (!foundUserId) {
           console.log("No user found in metadata, checking customer email");
           if ("email" in customer && customer.email) {
-            const userByEmail = await db
+            const userByEmail = await db()
               .select()
               .from(users)
               .where(eq(users.email, customer.email))
@@ -363,7 +363,7 @@ export const POST = async (req: Request) => {
           }
         }
 
-        const userResult = await db
+        const userResult = await db()
           .select()
           .from(users)
           .where(eq(users.id, foundUserId));
@@ -373,7 +373,7 @@ export const POST = async (req: Request) => {
           return new Response("No user found", { status: 400 });
         }
 
-        await db
+        await db()
           .update(users)
           .set({
             stripeSubscriptionId: subscription.id,

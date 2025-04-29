@@ -39,7 +39,7 @@ export async function removeWorkspaceDomain(spaceId: string) {
       );
     }
 
-    await db
+    await db()
       .update(spaces)
       .set({
         customDomain: null,

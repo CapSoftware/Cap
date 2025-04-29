@@ -46,7 +46,7 @@ export async function middleware(request: NextRequest) {
     if (verifiedDomain?.value === hostname) return NextResponse.next();
 
     // Query the space with this custom domain
-    const [space] = await db
+    const [space] = await db()
       .select()
       .from(spaces)
       .where(eq(spaces.customDomain, hostname));

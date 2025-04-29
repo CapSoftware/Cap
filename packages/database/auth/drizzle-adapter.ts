@@ -17,7 +17,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
         image: userData.image,
         activeSpaceId: "",
       });
-      const rows = await db
+      const rows = await db()
         .select()
         .from(users)
         .where(eq(users.email, userData.email))
@@ -33,7 +33,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
           },
         });
 
-        await db
+        await db()
           .update(users)
           .set({
             stripeCustomerId: customer.id,
@@ -44,7 +44,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
       return row;
     },
     async getUser(id) {
-      const rows = await db
+      const rows = await db()
         .select()
         .from(users)
         .where(eq(users.id, id))
@@ -53,7 +53,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
       return row ?? null;
     },
     async getUserByEmail(email) {
-      const rows = await db
+      const rows = await db()
         .select()
         .from(users)
         .where(eq(users.email, email))
@@ -66,7 +66,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
       return row ?? null;
     },
     async getUserByAccount({ providerAccountId, provider }) {
-      const rows = await db
+      const rows = await db()
         .select()
         .from(users)
         .innerJoin(accounts, eq(users.id, accounts.userId))
@@ -83,7 +83,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
     async updateUser({ id, ...userData }) {
       if (!id) throw new Error("User not found");
       await db().update(users).set(userData).where(eq(users.id, id));
-      const rows = await db
+      const rows = await db()
         .select()
         .from(users)
         .where(eq(users.id, id))
@@ -114,7 +114,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
         });
     },
     async unlinkAccount({ providerAccountId, provider }: any) {
-      await db
+      await db()
         .delete(accounts)
         .where(
           and(
@@ -130,7 +130,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
         sessionToken: data.sessionToken,
         userId: data.userId,
       });
-      const rows = await db
+      const rows = await db()
         .select()
         .from(sessions)
         .where(eq(sessions.sessionToken, data.sessionToken))
@@ -140,7 +140,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
       return row;
     },
     async getSessionAndUser(sessionToken) {
-      const rows = await db
+      const rows = await db()
         .select({
           user: users,
           session: {
@@ -168,11 +168,11 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
       };
     },
     async updateSession(session) {
-      await db
+      await db()
         .update(sessions)
         .set(session)
         .where(eq(sessions.sessionToken, session.sessionToken));
-      const rows = await db
+      const rows = await db()
         .select()
         .from(sessions)
         .where(eq(sessions.sessionToken, session.sessionToken))
@@ -189,7 +189,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
     async createVerificationToken(verificationToken) {
       console.log({ verificationToken });
       // First, check if a token for the given identifier already exists
-      const existingTokens = await db
+      const existingTokens = await db()
         .select()
         .from(verificationTokens)
         .where(eq(verificationTokens.identifier, verificationToken.identifier))
@@ -199,7 +199,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
       // or handle it based on your business logic
       if (existingTokens.length > 0) {
         // For example, updating the existing token:
-        await db
+        await db()
           .update(verificationTokens)
           .set({
             token: verificationToken.token,
@@ -211,7 +211,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
           );
 
         // Return the updated token
-        return await db
+        return await db()
           .select()
           .from(verificationTokens)
           .where(
@@ -229,7 +229,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
       });
 
       // Retrieve and return the newly created token
-      const rows = await db
+      const rows = await db()
         .select()
         .from(verificationTokens)
         .where(eq(verificationTokens.token, verificationToken.token))
@@ -239,14 +239,14 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
       return row;
     },
     async useVerificationToken({ identifier, token }) {
-      const rows = await db
+      const rows = await db()
         .select()
         .from(verificationTokens)
         .where(eq(verificationTokens.token, token))
         .limit(1);
       const row = rows[0];
       if (!row) return null;
-      await db
+      await db()
         .delete(verificationTokens)
         .where(
           and(

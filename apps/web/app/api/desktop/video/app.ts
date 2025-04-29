@@ -39,7 +39,7 @@ app.get(
     if (!isUpgraded && duration && duration > 300)
       return c.json({ error: "upgrade_required" }, { status: 403 });
 
-    const [bucket] = await db
+    const [bucket] = await db()
       .select()
       .from(s3Buckets)
       .where(eq(s3Buckets.ownerId, user.id));
@@ -53,7 +53,7 @@ app.get(
     })} ${date.getFullYear()}`;
 
     if (videoId !== undefined) {
-      const [video] = await db
+      const [video] = await db()
         .select()
         .from(videos)
         .where(eq(videos.id, videoId));
@@ -99,7 +99,7 @@ app.get(
 
     // Check if this is the user's first video and send the first shareable link email
     try {
-      const videoCount = await db
+      const videoCount = await db()
         .select({ count: count() })
         .from(videos)
         .where(eq(videos.ownerId, user.id));

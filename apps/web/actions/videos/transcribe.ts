@@ -34,7 +34,7 @@ export async function transcribeVideo(
     };
   }
 
-  const query = await db
+  const query = await db()
     .select({
       video: videos,
       bucket: s3Buckets,
@@ -78,7 +78,7 @@ export async function transcribeVideo(
     };
   }
 
-  await db
+  await db()
     .update(videos)
     .set({ transcriptionStatus: "PROCESSING" })
     .where(eq(videos.id, videoId));
@@ -111,7 +111,7 @@ export async function transcribeVideo(
 
     await s3Client.send(uploadCommand);
 
-    await db
+    await db()
       .update(videos)
       .set({ transcriptionStatus: "COMPLETE" })
       .where(eq(videos.id, videoId));
@@ -121,7 +121,7 @@ export async function transcribeVideo(
       message: "VTT file generated and uploaded successfully",
     };
   } catch (error) {
-    await db
+    await db()
       .update(videos)
       .set({ transcriptionStatus: "ERROR" })
       .where(eq(videos.id, videoId));

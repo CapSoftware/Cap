@@ -23,7 +23,7 @@ export async function manageBilling() {
       },
     });
 
-    await db
+    await db()
       .update(users)
       .set({
         stripeCustomerId: customer.id,

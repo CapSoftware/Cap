@@ -30,7 +30,7 @@ export async function PUT(request: NextRequest) {
     return Response.json({ error: true }, { status: 401 });
   }
 
-  await db
+  await db()
     .update(videos)
     .set({
       metadata: metadata,

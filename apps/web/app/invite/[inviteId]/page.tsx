@@ -25,7 +25,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 }
 
 async function getInviteDetails(inviteId: string) {
-  const query = await db
+  const query = await db()
     .select({
       invite: spaceInvites,
       spaceName: spaces.name,

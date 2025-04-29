@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
 
       console.log("Created Stripe customer:", customer.id);
 
-      await db
+      await db()
         .update(users)
         .set({
           stripeCustomerId: customer.id,

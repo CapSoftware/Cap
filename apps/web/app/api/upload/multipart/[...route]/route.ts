@@ -322,7 +322,7 @@ app.post(
 );
 
 async function getUserBucketWithClient(userId: string) {
-  const [bucket] = await db
+  const [bucket] = await db()
     .select()
     .from(s3Buckets)
     .where(eq(s3Buckets.ownerId, userId));

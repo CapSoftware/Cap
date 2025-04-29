@@ -20,7 +20,7 @@ export async function DELETE(request: NextRequest) {
 
   try {
     // First, verify that the comment belongs to the user
-    const query = await db
+    const query = await db()
       .select()
       .from(comments)
       .where(and(eq(comments.id, commentId), eq(comments.authorId, user.id)));
@@ -36,7 +36,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     // Delete the comment and all its replies
-    await db
+    await db()
       .delete(comments)
       .where(
         or(eq(comments.id, commentId), eq(comments.parentCommentId, commentId))

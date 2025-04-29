@@ -119,7 +119,7 @@ export const authOptions = (): NextAuthOptions => {
           });
 
           // Update user's activeSpaceId
-          await db
+          await db()
             .update(users)
             .set({ activeSpaceId: spaceId })
             .where(eq(users.id, user.id));
@@ -140,7 +140,7 @@ export const authOptions = (): NextAuthOptions => {
         return session;
       },
       async jwt({ token, user }) {
-        const [dbUser] = await db
+        const [dbUser] = await db()
           .select()
           .from(users)
           .where(eq(users.email, token.email || ""))

@@ -68,7 +68,7 @@ app.get("/plan", async (c) => {
       );
       if (activeSubscription) {
         isSubscribed = true;
-        await db
+        await db()
           .update(users)
           .set({
             stripeSubscriptionStatus: activeSubscription.status,
@@ -119,7 +119,7 @@ app.post(
         metadata: { userId: user.id },
       });
 
-      await db
+      await db()
         .update(users)
         .set({ stripeCustomerId: customer.id })
         .where(eq(users.id, user.id));

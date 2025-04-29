@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
     return Response.json({ auth: false }, { status: 401 });
   }
 
-  const numberOfVideos = await db
+  const numberOfVideos = await db()
     .select({ count: count() })
     .from(videos)
     .where(eq(videos.ownerId, user.id));

@@ -27,7 +27,7 @@ export async function updateWorkspaceDetails(
     throw new Error("Only the owner can update workspace details");
   }
 
-  await db
+  await db()
     .update(spaces)
     .set({
       name: workspaceName,
