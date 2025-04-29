@@ -301,11 +301,11 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
             <div
               key={entry.id}
               className={`group rounded-lg p-2 transition-colors cursor-pointer ${
-                selectedEntry === entry.id ? "bg-gray-2" : "hover:bg-gray-1"
+                selectedEntry === entry.id ? "bg-gray-2" : "hover:bg-gray-2"
               }`}
               onClick={() => handleTranscriptClick(entry)}
             >
-              <div className="mb-1 text-sm text-gray-4 font-semibold">
+              <div className="mb-1 text-sm text-gray-8 font-semibold">
                 {entry.timestamp}
               </div>
               <div className="text-sm text-gray-12">{entry.text}</div>
