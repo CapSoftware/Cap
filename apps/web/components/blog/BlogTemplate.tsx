@@ -119,7 +119,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
   }, []);
 
   return (
-    <article className="px-3 max-w-3xl mx-auto py-24 bg-gradient-to-b from-white to-gray-50 relative z-10">
+    <article className="px-3 max-w-3xl mx-auto py-24 relative z-10">
       {/* Header */}
       <header className="mb-16 text-center">
         <div className="mb-4 text-sm font-medium text-blue-600 fade-in-down">
