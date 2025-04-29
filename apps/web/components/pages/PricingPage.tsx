@@ -16,6 +16,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { SimplePlans } from "../text/SimplePlans";
+import { Testimonials } from "../ui/Testimonials";
 
 const QuantityButton = ({
   onClick,
@@ -97,6 +98,20 @@ export const PricingPage = () => {
 
     init();
   }, []);
+
+  const scrollToTestimonials = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const testimonials = document.getElementById("testimonials");
+    if (testimonials) {
+      const offset = 80;
+      const topPos =
+        testimonials.getBoundingClientRect().top + window.pageYOffset - offset;
+      window.scrollTo({
+        top: topPos,
+        behavior: "smooth",
+      });
+    }
+  };
 
   const planCheckout = async (planId?: string) => {
     setProLoading(true);
@@ -223,7 +238,7 @@ export const PricingPage = () => {
     <div>
       <div className="py-12 mt-16 space-y-24 wrapper">
         <div>
-          <div className="text-center">
+          <div className="text-center mb-8">
             <div
               className={clsx("mb-4", {
                 "fade-in-down animate-delay-1": initialRender,
@@ -239,7 +254,7 @@ export const PricingPage = () => {
               Early Adopter Pricing
             </h1>
             <p
-              className={clsx("mx-auto mt-3 mb-8 max-w-[800px]", {
+              className={clsx("mx-auto mt-3 max-w-[800px]", {
                 "mt-4 fade-in-down animate-delay-1 text-gray-10": initialRender,
               })}
             >
@@ -247,6 +262,13 @@ export const PricingPage = () => {
               adopter pricing to our first users. This pricing will be locked in
               for the lifetime of your subscription.
             </p>
+            <a
+              className="mt-3 inline-flex text-gray-10 text-sm font-bold hover:underline fade-in-down animate-delay-1"
+              href="#testimonials"
+              onClick={scrollToTestimonials}
+            >
+              Loved by 10k+ users
+            </a>
           </div>
 
           <div className="grid grid-cols-1 gap-3 items-stretch md:grid-cols-2">
@@ -476,6 +498,13 @@ export const PricingPage = () => {
               </div>
             </Card>
           </div>
+        </div>
+        <div className="mb-32 wrapper" id="testimonials">
+          <Testimonials
+            amount={24}
+            title="What our users say about Cap after hitting record"
+            subtitle="Don't just take our word for it. Here's what our users are saying about their experience with Cap."
+          />
         </div>
         <div>
           <img
