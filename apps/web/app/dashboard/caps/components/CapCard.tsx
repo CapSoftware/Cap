@@ -330,7 +330,6 @@ export const CapCard: React.FC<CapCardProps> = ({
             </Tooltip>
           </div>
         )}
-        {/* Selection checkbox */}
         {!sharedCapCard && onSelectToggle && (
           <div
             className={`absolute top-2 left-2 z-[20] duration-200 ${

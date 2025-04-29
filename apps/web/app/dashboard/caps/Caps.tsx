@@ -71,6 +71,49 @@ export const Caps = ({
     fetchAnalytics();
   }, [data]);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && selectedCaps.length > 0) {
+        setSelectedCaps([]);
+      }
+
+      if (
+        (e.key === "Delete" || e.key === "Backspace") &&
+        selectedCaps.length > 0
+      ) {
+        if (e.key === "Backspace") {
+          e.preventDefault();
+        }
+
+        if (
+          !["INPUT", "TEXTAREA", "SELECT"].includes(
+            document.activeElement?.tagName || ""
+          )
+        ) {
+          deleteSelectedCaps();
+        }
+      }
+
+      if (e.key === "a" && (e.ctrlKey || e.metaKey) && data.length > 0) {
+        if (
+          !["INPUT", "TEXTAREA", "SELECT"].includes(
+            document.activeElement?.tagName || ""
+          )
+        ) {
+          e.preventDefault();
+          setSelectedCaps(data.map((cap) => cap.id));
+          setAnimateDirection("up");
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [selectedCaps.length, data]);
+
   const deleteCap = async (videoId: string) => {
     if (
       !window.confirm(
@@ -98,7 +141,6 @@ export const Caps = ({
         ? prev.filter((id) => id !== capId)
         : [...prev, capId];
 
-      // Set animation direction based on count change
       previousCountRef.current = prev.length;
       setAnimateDirection(newSelection.length > prev.length ? "up" : "down");
 
