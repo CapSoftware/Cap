@@ -30,10 +30,15 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
     new Set(sharedSpaces.map((space) => space.id))
   );
   const [searchTerm, setSearchTerm] = useState("");
+  const [initialSelectedSpaces, setInitialSelectedSpaces] = useState<
+    Set<string>
+  >(new Set(sharedSpaces.map((space) => space.id)));
 
   useEffect(() => {
     if (isOpen) {
-      setSelectedSpaces(new Set(sharedSpaces.map((space) => space.id)));
+      const currentSpaceIds = new Set(sharedSpaces.map((space) => space.id));
+      setSelectedSpaces(currentSpaceIds);
+      setInitialSelectedSpaces(currentSpaceIds);
       setSearchTerm("");
     }
   }, [isOpen, sharedSpaces]);
@@ -62,8 +67,37 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
         throw new Error("Failed to update sharing settings");
       }
 
-      toast.success("Sharing settings updated successfully");
-      onSharingUpdated(Array.from(selectedSpaces));
+      const newSelectedSpaces = Array.from(selectedSpaces);
+      const initialSpaces = Array.from(initialSelectedSpaces);
+
+      const addedSpaceIds = newSelectedSpaces.filter(
+        (id) => !initialSpaces.includes(id)
+      );
+      const removedSpaceIds = initialSpaces.filter(
+        (id) => !newSelectedSpaces.includes(id)
+      );
+
+      if (addedSpaceIds.length === 1 && removedSpaceIds.length === 0) {
+        const addedSpaceName = userSpaces?.find(
+          (space) => space.id === addedSpaceIds[0]
+        )?.name;
+        toast.success(`Shared to ${addedSpaceName}`);
+      } else if (removedSpaceIds.length === 1 && addedSpaceIds.length === 0) {
+        const removedSpaceName = sharedSpaces.find(
+          (space) => space.id === removedSpaceIds[0]
+        )?.name;
+        toast.success(`Unshared from ${removedSpaceName}`);
+      } else if (addedSpaceIds.length > 0 && removedSpaceIds.length === 0) {
+        toast.success(`Shared to ${addedSpaceIds.length} spaces`);
+      } else if (removedSpaceIds.length > 0 && addedSpaceIds.length === 0) {
+        toast.success(`Unshared from ${removedSpaceIds.length} spaces`);
+      } else if (addedSpaceIds.length > 0 && removedSpaceIds.length > 0) {
+        toast.success(`Sharing settings updated`);
+      } else {
+        toast.success("No changes to sharing settings");
+      }
+
+      onSharingUpdated(newSelectedSpaces);
       onClose();
     } catch (error) {
       console.error("Error updating sharing settings:", error);

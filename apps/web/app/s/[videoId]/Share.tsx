@@ -24,6 +24,7 @@ interface Analytics {
 type VideoWithSpaceInfo = typeof videos.$inferSelect & {
   spaceMembers?: string[];
   spaceId?: string;
+  sharedSpaces?: { id: string; name: string }[];
 };
 
 interface ShareProps {
@@ -37,6 +38,7 @@ interface ShareProps {
   };
   customDomain: string | null;
   domainVerified: boolean;
+  userSpaces?: { id: string; name: string }[];
 }
 
 export const Share: React.FC<ShareProps> = ({
@@ -46,6 +48,7 @@ export const Share: React.FC<ShareProps> = ({
   initialAnalytics,
   customDomain,
   domainVerified,
+  userSpaces = [],
 }) => {
   const [analytics, setAnalytics] = useState(initialAnalytics);
   const effectiveDate = data.metadata?.customCreatedAt
@@ -93,6 +96,8 @@ export const Share: React.FC<ShareProps> = ({
           user={user}
           customDomain={customDomain}
           domainVerified={domainVerified}
+          sharedSpaces={data.sharedSpaces || []}
+          userSpaces={userSpaces}
         />
 
         <div className="mt-4">

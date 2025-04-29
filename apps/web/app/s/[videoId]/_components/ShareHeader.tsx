@@ -6,27 +6,39 @@ import { clientEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
 import { isUserOnProPlan } from "@cap/utils";
 import { Copy, Globe2 } from "lucide-react";
+import { faChevronDown } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import moment from "moment";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "react-hot-toast";
+import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
+import clsx from "clsx";
 
 export const ShareHeader = ({
   data,
   user,
   customDomain,
   domainVerified,
+  sharedSpaces = [],
+  userSpaces = [],
 }: {
   data: typeof videos.$inferSelect;
   user: typeof userSelectProps | null;
   customDomain: string | null;
   domainVerified: boolean;
+  sharedSpaces?: { id: string; name: string }[];
+  userSpaces?: { id: string; name: string }[];
 }) => {
   const { push, refresh } = useRouter();
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(data.name);
   const [isDownloading, setIsDownloading] = useState(false);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+  const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
+  const [currentSharedSpaces, setCurrentSharedSpaces] = useState(sharedSpaces);
+
+  const isOwner = user !== null && user.id.toString() === data.ownerId;
 
   const handleBlur = async () => {
     setIsEditing(false);
@@ -72,8 +84,55 @@ export const ShareHeader = ({
       })
     : false;
 
+  const handleSharingUpdated = (updatedSharedSpaces: string[]) => {
+    setCurrentSharedSpaces(
+      userSpaces?.filter((space) => updatedSharedSpaces.includes(space.id))
+    );
+    refresh();
+  };
+
+  const renderSharedStatus = () => {
+    const baseClassName =
+      "text-sm text-gray-10 transition-colors duration-200 flex items-center";
+
+    if (isOwner) {
+      if (currentSharedSpaces?.length === 0) {
+        return (
+          <p
+            className={clsx(baseClassName, "hover:text-gray-12 cursor-pointer")}
+            onClick={() => setIsSharingDialogOpen(true)}
+          >
+            Not shared{" "}
+            <FontAwesomeIcon className="ml-2 size-2.5" icon={faChevronDown} />
+          </p>
+        );
+      } else {
+        return (
+          <p
+            className={clsx(baseClassName, "hover:text-gray-12 cursor-pointer")}
+            onClick={() => setIsSharingDialogOpen(true)}
+          >
+            Shared{" "}
+            <FontAwesomeIcon className="ml-1 size-2.5" icon={faChevronDown} />
+          </p>
+        );
+      }
+    } else {
+      return <p className={baseClassName}>Shared with you</p>;
+    }
+  };
+
   return (
     <>
+      <SharingDialog
+        isOpen={isSharingDialogOpen}
+        onClose={() => setIsSharingDialogOpen(false)}
+        capId={data.id}
+        capName={data.name}
+        sharedSpaces={currentSharedSpaces || []}
+        userSpaces={userSpaces}
+        onSharingUpdated={handleSharingUpdated}
+      />
       <div>
         <div className="space-x-0 md:flex md:items-center md:justify-between md:space-x-6">
           <div className="items-center md:flex md:justify-between md:space-x-6">
@@ -104,7 +163,8 @@ export const ShareHeader = ({
                   </h1>
                 )}
               </div>
-              <p className="text-sm text-gray-10">
+              {user && renderSharedStatus()}
+              <p className="text-sm text-gray-10 mt-1">
                 {moment(data.createdAt).fromNow()}
               </p>
             </div>
