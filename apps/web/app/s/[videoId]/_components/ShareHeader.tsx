@@ -1,15 +1,15 @@
-import { Button } from "@cap/ui";
-import { videos } from "@cap/database/schema";
-import moment from "moment";
+import { editTitle } from "@/actions/videos/edit-title";
+import { UpgradeModal } from "@/components/UpgradeModal";
 import { userSelectProps } from "@cap/database/auth/session";
+import { videos } from "@cap/database/schema";
+import { clientEnv, NODE_ENV } from "@cap/env";
+import { Button } from "@cap/ui";
+import { isUserOnProPlan } from "@cap/utils";
+import { Copy, Globe2 } from "lucide-react";
+import moment from "moment";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "react-hot-toast";
-import { Copy, Globe2 } from "lucide-react";
-import { clientEnv, NODE_ENV } from "@cap/env";
-import { editTitle } from "@/actions/videos/edit-title";
-import { isUserOnProPlan } from "@cap/utils";
-import { UpgradeModal } from "@/components/UpgradeModal";
 
 export const ShareHeader = ({
   data,
@@ -75,8 +75,8 @@ export const ShareHeader = ({
   return (
     <>
       <div>
-        <div className="md:flex md:items-center md:justify-between space-x-0 md:space-x-6">
-          <div className="md:flex items-center md:justify-between md:space-x-6">
+        <div className="space-x-0 md:flex md:items-center md:justify-between md:space-x-6">
+          <div className="items-center md:flex md:justify-between md:space-x-6">
             <div className="mb-3 md:mb-0">
               <div className="flex items-center space-x-3  lg:min-w-[400px]">
                 {isEditing ? (
@@ -86,7 +86,7 @@ export const ShareHeader = ({
                     onBlur={handleBlur}
                     onKeyDown={handleKeyDown}
                     autoFocus
-                    className="text-xl sm:text-2xl font-semibold w-full"
+                    className="w-full text-xl font-semibold sm:text-2xl"
                   />
                 ) : (
                   <h1
@@ -104,7 +104,7 @@ export const ShareHeader = ({
                   </h1>
                 )}
               </div>
-              <p className="text-gray-400 text-sm">
+              <p className="text-sm text-gray-8">
                 {moment(data.createdAt).fromNow()}
               </p>
             </div>
@@ -120,14 +120,14 @@ export const ShareHeader = ({
                   }}
                 >
                   {getDisplayLink()}
-                  <Copy className="ml-2 h-4 w-4" />
+                  <Copy className="ml-2 w-4 h-4" />
                 </Button>
                 {user !== null && !isUserPro && (
                   <button
-                    className="cursor-pointer flex items-center text-sm text-gray-400 hover:text-blue-500 mt-1"
+                    className="flex items-center mt-1 text-sm text-gray-400 cursor-pointer hover:text-blue-500"
                     onClick={() => setUpgradeModalOpen(true)}
                   >
-                    <Globe2 className="w-4 h-4 mr-1" />
+                    <Globe2 className="mr-1 w-4 h-4" />
                     Connect a custom domain
                   </button>
                 )}
@@ -139,7 +139,7 @@ export const ShareHeader = ({
                       push(`${clientEnv.NEXT_PUBLIC_WEB_URL}/dashboard`);
                     }}
                   >
-                    <span className="hidden lg:block text-white text-sm">
+                    <span className="hidden text-sm text-white lg:block">
                       Go to
                     </span>{" "}
                     Dashboard

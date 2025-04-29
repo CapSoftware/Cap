@@ -1,3 +1,10 @@
+@import '@radix-ui/colors/red.css';
+@import '@radix-ui/colors/red-dark.css';
+@import '@radix-ui/colors/gray.css';
+@import '@radix-ui/colors/gray-alpha.css';
+@import '@radix-ui/colors/gray-dark.css';
+@import '@radix-ui/colors/blue.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -240,7 +247,7 @@ p,
 span,
 input,
 label, button {
-  @apply tracking-tight text-gray-400 font-normal text-[1rem] leading-[1.5rem];
+  @apply tracking-tight text-gray-10 font-normal text-[1rem] leading-[1.5rem];
 }
 
 a,
@@ -413,14 +420,14 @@ label {
 ul {
   @apply pl-5 list-disc;
 }
-
+/* 
 .embossed {
-  @apply bg-white border-2 border-filler-3 relative w-[320px] max-w-full min-h-[60px] rounded-xl z-10;
+  @apply bg-white-a12 border-2 border-filler-3 relative w-[320px] max-w-full min-h-[60px] rounded-xl z-10;
 }
 
 .embossed button {
   width: 100%;
-}
+} */
 
 .dashboard-page {
   @apply flex flex-col;
@@ -435,7 +442,7 @@ ul {
 }
 
 .dashboard-page h1, .dashboard-page h2, .dashboard-page h3, .dashboard-page h4, .dashboard-page h5 {
-  @apply text-[1rem] font-medium leading-[1.25rem] text-gray-500 !important;
+  @apply text-[1rem] font-medium leading-[1.25rem] text-gray-12 !important;
 }
 
 .dashboard-header p {
@@ -519,7 +526,7 @@ footer a {
 }
 
 .prose p, .prose li {
-  @apply text-gray-500/80 !important;
+  @apply text-gray-12 !important;
 }
 
 .new-card-style {

@@ -9,12 +9,13 @@ import { VideoMetadata } from "@cap/database/types";
 import { clientEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
 import {
+  faCheck,
   faChevronDown,
   faLink,
   faTrash,
-  faCheck,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import clsx from "clsx";
 import moment from "moment";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -29,14 +30,16 @@ export interface CapCardProps {
     createdAt: Date;
     totalComments: number;
     totalReactions: number;
-    sharedSpaces: { id: string; name: string }[];
-    ownerName: string;
+    sharedSpaces?: { id: string; name: string }[];
+    ownerName: string | null;
     metadata?: VideoMetadata;
   };
+  children?: React.ReactNode;
   analytics: number;
-  onDelete: (videoId: string) => Promise<void>;
-  userId: string;
-  userSpaces: { id: string; name: string }[];
+  onDelete?: (videoId: string) => Promise<void>;
+  userId?: string;
+  userSpaces?: { id: string; name: string }[];
+  sharedCapCard?: boolean;
   isSelected?: boolean;
   onSelectToggle?: () => void;
   anyCapSelected?: boolean;
@@ -45,9 +48,11 @@ export interface CapCardProps {
 export const CapCard: React.FC<CapCardProps> = ({
   cap,
   analytics,
+  children,
   onDelete,
   userId,
   userSpaces,
+  sharedCapCard = false,
   isSelected = false,
   onSelectToggle,
   anyCapSelected = false,
@@ -97,7 +102,7 @@ export const CapCard: React.FC<CapCardProps> = ({
 
   const handleSharingUpdated = (updatedSharedSpaces: string[]) => {
     setSharedSpaces(
-      userSpaces.filter((space) => updatedSharedSpaces.includes(space.id))
+      userSpaces?.filter((space) => updatedSharedSpaces.includes(space.id))
     );
     router.refresh();
   };
@@ -105,10 +110,12 @@ export const CapCard: React.FC<CapCardProps> = ({
   const isOwner = userId === cap.ownerId;
 
   const renderSharedStatus = () => {
-    const baseClassName =
-      "text-sm text-gray-400 transition-colors duration-300 hover:text-gray-500 cursor-pointer flex items-center mb-1";
+    const baseClassName = clsx(
+      "text-sm text-gray-10 transition-colors duration-200 flex items-center mb-1",
+      sharedCapCard ? "cursor-default" : "hover:text-gray-12 cursor-pointer"
+    );
     if (isOwner) {
-      if (cap.sharedSpaces.length === 0) {
+      if (cap.sharedSpaces?.length === 0) {
         return (
           <p
             className={baseClassName}
@@ -241,127 +248,139 @@ export const CapCard: React.FC<CapCardProps> = ({
         onClose={() => setIsSharingDialogOpen(false)}
         capId={cap.id}
         capName={cap.name}
-        sharedSpaces={sharedSpaces}
+        sharedSpaces={sharedSpaces || []}
         userSpaces={userSpaces}
         onSharingUpdated={handleSharingUpdated}
       />
       <div
-        className={`flex relative flex-col gap-4 w-full h-full bg-gray-50 rounded-2xl border-gray-200 transition-colors duration-300 group ${
+        onClick={handleCardClick}
+        className={clsx(
+          "flex relative flex-col gap-4 w-full h-full rounded-xl cursor-default bg-gray-2 border-gray-3 group border-[1px]",
           isSelected
-            ? "border-blue-500 border-[1px]"
+            ? "!border-blue-10 border-[1px]"
             : anyCapSelected
-            ? "border-blue-300 border-[1px]"
-            : "hover:border-blue-300 border-[1px]"
-        } ${anyCapSelected ? "cursor-pointer" : ""}`}
-        onClick={anyCapSelected ? handleCardClick : undefined}
+            ? "border-blue-10 border-[1px] hover:border-blue-10"
+            : "hover:border-blue-10"
+        )}
       >
-        {anyCapSelected && (
+        {anyCapSelected && !sharedCapCard && (
           <div
             className="absolute inset-0 z-10"
             onClick={handleCardClick}
           ></div>
         )}
-        <div
-          className={`flex absolute duration-200 ${
-            anyCapSelected ? "opacity-0" : "group-hover:opacity-100 opacity-0"
-          } top-2 right-2 z-[20] flex-col gap-2`}
-        >
-          <Tooltip content="Copy link">
-            <Button
-              onClick={(e) => {
-                e.stopPropagation();
-                handleCopy(capUrl);
-              }}
-              className="!size-8 delay-0 hover:opacity-80 rounded-full min-w-fit !p-0"
-              variant="white"
-              size="sm"
-            >
-              {!copyPressed ? (
-                <FontAwesomeIcon
-                  className="text-gray-400 size-4"
-                  icon={faLink}
-                />
-              ) : (
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="24"
-                  height="24"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="text-gray-400 size-5 svgpathanimation"
-                >
-                  <path d="M20 6 9 17l-5-5" />
-                </svg>
-              )}
-            </Button>
-          </Tooltip>
-          <Tooltip content="Delete Cap">
-            <Button
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete(cap.id);
-              }}
-              className="!size-8 delay-100 hover:opacity-80 rounded-full min-w-fit !p-0"
-              variant="white"
-              size="sm"
-            >
-              <FontAwesomeIcon
-                className="text-gray-400 size-2.5"
-                icon={faTrash}
-              />
-            </Button>
-          </Tooltip>
-        </div>
-
-        <div
-          className={`absolute top-2 left-2 z-[20] duration-200 ${
-            isSelected || anyCapSelected
-              ? "opacity-100"
-              : "group-hover:opacity-100 opacity-0"
-          }`}
-          onClick={(e) => {
-            e.stopPropagation();
-            handleSelectClick(e);
-          }}
-        >
+        {!sharedCapCard && (
           <div
-            className={`flex items-center justify-center w-6 h-6 rounded-md border cursor-pointer hover:bg-gray-200/60 transition-colors ${
-              isSelected
-                ? "bg-blue-500 border-blue-500"
-                : "border-gray-400 bg-white/80"
-            }`}
-          >
-            {isSelected && (
-              <FontAwesomeIcon icon={faCheck} className="text-white size-3" />
+            className={clsx(
+              "flex absolute duration-200",
+              anyCapSelected
+                ? "opacity-0"
+                : "opacity-0 group-hover:opacity-100",
+              "top-2 right-2 flex-col gap-2 z-[20]"
             )}
-          </div>
-        </div>
-
-        <div className="relative">
-          <Link
-            className={`block group ${
-              anyCapSelected ? "pointer-events-none" : ""
-            }`}
-            href={capUrl}
           >
-            <VideoThumbnail
-              imageClass={`${
-                anyCapSelected ? "opacity-50" : "group-hover:opacity-50"
-              } transition-opacity duration-200`}
-              userId={cap.ownerId}
-              videoId={cap.id}
-              alt={`${cap.name} Thumbnail`}
-            />
-          </Link>
-        </div>
-
-        <div className="flex flex-col flex-grow gap-3 px-4 pb-4 w-full">
+            <Tooltip content="Copy link">
+              <Button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleCopy(capUrl);
+                }}
+                className="!size-8 delay-0 hover:opacity-80 rounded-full min-w-fit !p-0"
+                variant="white"
+                size="sm"
+              >
+                {!copyPressed ? (
+                  <FontAwesomeIcon
+                    className="text-gray-12 size-4"
+                    icon={faLink}
+                  />
+                ) : (
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="24"
+                    height="24"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="text-gray-12 size-5 svgpathanimation"
+                  >
+                    <path d="M20 6 9 17l-5-5" />
+                  </svg>
+                )}
+              </Button>
+            </Tooltip>
+            <Tooltip content="Delete Cap">
+              <Button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete?.(cap.id);
+                }}
+                className="!size-8 delay-100 hover:opacity-80 rounded-full min-w-fit !p-0"
+                variant="white"
+                size="sm"
+              >
+                <FontAwesomeIcon
+                  className="text-gray-12 size-2.5"
+                  icon={faTrash}
+                />
+              </Button>
+            </Tooltip>
+          </div>
+        )}
+        {/* Selection checkbox */}
+        {!sharedCapCard && onSelectToggle && (
+          <div
+            className={`absolute top-2 left-2 z-[20] duration-200 ${
+              isSelected || anyCapSelected
+                ? "opacity-100"
+                : "group-hover:opacity-100 opacity-0"
+            }`}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleSelectClick(e);
+            }}
+          >
+            <div
+              className={clsx(
+                "flex justify-center items-center w-6 h-6 rounded-md border transition-colors cursor-pointer hover:bg-gray-3/60",
+                isSelected
+                  ? "bg-blue-10 border-blue-10"
+                  : "border-white-95 bg-gray-1/80"
+              )}
+            >
+              {isSelected && (
+                <FontAwesomeIcon icon={faCheck} className="text-white size-3" />
+              )}
+            </div>
+          </div>
+        )}
+        <Link
+          className={clsx(
+            "block group",
+            anyCapSelected && "cursor-pointer pointer-events-none"
+          )}
+          href={capUrl}
+        >
+          <VideoThumbnail
+            imageClass={`${
+              anyCapSelected ? "opacity-50" : "group-hover:opacity-50"
+            } transition-opacity duration-200`}
+            userId={cap.ownerId}
+            videoId={cap.id}
+            alt={`${cap.name} Thumbnail`}
+          />
+        </Link>
+        <div
+          className={clsx(
+            "flex flex-col flex-grow gap-3 px-4 pb-4 w-full",
+            !sharedCapCard ? "cursor-pointer" : "cursor-default"
+          )}
+        >
           <div>
-            {isEditing ? (
+            {isEditing && !sharedCapCard ? (
               <textarea
                 rows={1}
                 value={title}
@@ -369,14 +388,16 @@ export const CapCard: React.FC<CapCardProps> = ({
                 onBlur={() => handleTitleBlur(cap.name)}
                 onKeyDown={(e) => handleTitleKeyDown(e, cap.name)}
                 autoFocus
-                className="text-md resize-none truncate w-full border-0 outline-0 leading-[1.25rem] text-gray-500 font-medium mb-1"
+                className="text-md resize-none bg-transparent truncate w-full border-0 outline-0 leading-[1.25rem] text-gray-12 font-medium mb-1"
               />
             ) : (
               <p
-                className="text-md truncate leading-[1.25rem] text-gray-500 font-medium mb-1"
+                className="text-md truncate leading-[1.25rem] text-gray-12 font-medium mb-1"
                 onClick={() => {
-                  if (userId === cap.ownerId) {
-                    setIsEditing(true);
+                  if (!sharedCapCard) {
+                    if (userId === cap.ownerId) {
+                      setIsEditing(true);
+                    }
                   }
                 }}
               >
@@ -384,8 +405,8 @@ export const CapCard: React.FC<CapCardProps> = ({
               </p>
             )}
             {renderSharedStatus()}
-            <p className="mb-1">
-              {isDateEditing ? (
+            <div className="mb-1">
+              {isDateEditing && !sharedCapCard ? (
                 <div className="flex items-center">
                   <input
                     type="text"
@@ -394,14 +415,14 @@ export const CapCard: React.FC<CapCardProps> = ({
                     onBlur={handleDateBlur}
                     onKeyDown={handleDateKeyDown}
                     autoFocus
-                    className="text-sm truncate mt-2 leading-[1.25rem] text-gray-400 bg-transparent focus:outline-none"
+                    className="text-sm truncate mt-2 leading-[1.25rem] text-gray-10 bg-transparent focus:outline-none"
                     placeholder="YYYY-MM-DD HH:mm:ss"
                   />
                 </div>
               ) : (
                 <Tooltip content={`Cap created at ${effectiveDate}`}>
                   <p
-                    className="text-sm truncate mt-2 leading-[1.25rem] text-gray-400 cursor-pointer flex items-center"
+                    className="text-sm truncate mt-2 leading-[1.25rem] text-gray-10 cursor-pointer flex items-center"
                     onClick={handleDateClick}
                   >
                     {showFullDate
@@ -410,8 +431,9 @@ export const CapCard: React.FC<CapCardProps> = ({
                   </p>
                 </Tooltip>
               )}
-            </p>
+            </div>
           </div>
+          {children}
           <CapCardAnalytics
             capId={cap.id}
             displayCount={displayCount}

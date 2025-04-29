@@ -13,7 +13,7 @@ interface SharingDialogProps {
   capId: string;
   capName: string;
   sharedSpaces: { id: string; name: string }[];
-  userSpaces: { id: string; name: string }[];
+  userSpaces?: { id: string; name: string }[];
   onSharingUpdated: (updatedSharedSpaces: string[]) => void;
 }
 
@@ -71,7 +71,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
     }
   };
 
-  const filteredSpaces = userSpaces.filter((space) =>
+  const filteredSpaces = userSpaces?.filter((space) =>
     space.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
@@ -90,7 +90,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
           leave="duration-200 ease-in"
           leaveFrom="opacity-100"
           leaveTo="opacity-0"
-          className="fixed inset-0 bg-black/30"
+          className="fixed inset-0 bg-black/60"
         />
         <Transition.Child
           enter="ease-out duration-300"
@@ -99,22 +99,22 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
           leave="ease-in duration-200"
           leaveFrom="opacity-100 scale-100"
           leaveTo="opacity-0 scale-95"
-          className="flex fixed inset-0 justify-center items-center p-4"
+          className="flex fixed inset-0 justify-center items-center p-4 bg-gray-1/70"
         >
-          <Dialog.Panel className="w-full max-w-md bg-white rounded-xl">
-            <Dialog.Title className="p-5 font-semibold border-b flex items-center gap-3 border-gray-200 text-[16px]">
-              <div className="flex justify-center items-center bg-gray-100 rounded-full border border-gray-200 size-10">
+          <Dialog.Panel className="w-full max-w-md rounded-xl border bg-gray-1 border-gray-2">
+            <Dialog.Title className="p-5 font-semibold border-b flex gap-3 border-gray-2 text-[16px]">
+              <div className="flex justify-center items-center rounded-full border border-gray-3 bg-gray-2 size-10">
                 <FontAwesomeIcon
-                  className="text-gray-400 size-3"
+                  className="text-gray-10 size-3"
                   icon={faShareNodes}
                 />
               </div>
               <div className="flex flex-col">
-                <p className="text-gray-500 text-md">
+                <p className="text-gray-12 text-md">
                   Share{" "}
-                  <span className="font-bold text-gray-500">{capName}</span>
+                  <span className="font-bold text-gray-12">{capName}</span>
                 </p>
-                <p className="text-sm text-gray-400">
+                <p className="text-sm text-gray-10">
                   Select the spaces you would like to share with
                 </p>
               </div>
@@ -129,28 +129,28 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
                 <Search
-                  className="absolute right-3 top-1/2 text-gray-400 transform -translate-y-1/2"
+                  className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-10"
                   size={20}
                 />
               </div>
               <div className="overflow-y-auto max-h-60">
-                {filteredSpaces.length > 0 ? (
+                {filteredSpaces && filteredSpaces.length > 0 ? (
                   filteredSpaces.map((space) => (
                     <div
                       key={space.id}
                       className={clsx(
-                        `flex items-center border group transition-colors duration-300 border-gray-200 justify-between p-3 rounded-2xl cursor-pointer`,
+                        `flex items-center border transition-colors duration-200 border-gray-3 justify-between p-3 rounded-xl cursor-pointer`,
                         selectedSpaces.has(space.id)
-                          ? "bg-gray-100"
-                          : "hover:bg-gray-100"
+                          ? "bg-gray-1"
+                          : "hover:bg-gray-3 hover:border-gray-4"
                       )}
                       onClick={() => handleToggleSpace(space.id)}
                     >
                       <div className="flex items-center">
-                        <div className="flex justify-center items-center mr-3 w-8 h-8 font-semibold text-white bg-blue-500 rounded-md">
+                        <div className="flex justify-center items-center mr-3 w-8 h-8 font-semibold rounded-md bg-blue-10 text-gray-12">
                           {space.name.charAt(0).toUpperCase()}
                         </div>
-                        <span className="text-sm transition-colors duration-300 group-hover:text-gray-500">
+                        <span className="text-sm transition-colors duration-200 text-gray-12">
                           {space.name}
                         </span>
                       </div>
@@ -159,18 +159,18 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
                           Added
                         </span>
                       ) : (
-                        <Plus className="text-gray-400" size={20} />
+                        <Plus className="text-gray-10" size={20} />
                       )}
                     </div>
                   ))
                 ) : (
                   <div className="flex gap-2 justify-center items-center pt-2 text-sm">
-                    <p className="font-medium text-gray-500">No spaces found</p>
+                    <p className="text-gray-12">No spaces found</p>
                   </div>
                 )}
               </div>
             </div>
-            <div className="flex justify-end p-5 space-x-2 border-t border-gray-200">
+            <div className="flex justify-end p-5 space-x-2 border-t border-gray-2">
               <Button size="sm" variant="gray" onClick={onClose}>
                 Cancel
               </Button>

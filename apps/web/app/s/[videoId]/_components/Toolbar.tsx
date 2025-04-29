@@ -1,13 +1,12 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
-import { MessageSquare } from "lucide-react";
-import { videos } from "@cap/database/schema";
 import { userSelectProps } from "@cap/database/auth/session";
-import { useRouter } from "next/navigation";
+import { videos } from "@cap/database/schema";
+import { clientEnv } from "@cap/env";
 import { Button } from "@cap/ui";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { AuthOverlay } from "./AuthOverlay";
-import { clientEnv } from "@cap/env";
 
 // million-ignore
 export const Toolbar = ({
@@ -151,7 +150,7 @@ export const Toolbar = ({
   const Emoji = ({ label, emoji }: { label: string; emoji: string }) => (
     <div className="relative w-fit">
       <button
-        className="font-emoji text-xl sm:text-2xl leading-6 bg-transparent p-1 relative transition-bg-color duration-600 inline-flex justify-center items-center align-middle rounded-full ease-in-out hover:bg-gray-200 active:bg-gray-400 active:duration-0"
+        className="inline-flex relative justify-center items-center p-1 text-xl leading-6 align-middle bg-transparent rounded-full ease-in-out font-emoji sm:text-2xl transition-bg-color duration-600 hover:bg-gray-200 active:bg-gray-400 active:duration-0"
         role="img"
         aria-label={label ? label : ""}
         aria-hidden={label ? "false" : "true"}
@@ -161,7 +160,7 @@ export const Toolbar = ({
         {currentEmoji && currentEmoji.emoji === emoji && (
           <span
             key={currentEmoji.id}
-            className="font-emoji absolute -top-10 left-0 right-0 mx-auto animate-flyEmoji duration-3000"
+            className="absolute right-0 left-0 -top-10 mx-auto font-emoji animate-flyEmoji duration-3000"
           >
             {currentEmoji.emoji}
           </span>
@@ -228,14 +227,14 @@ export const Toolbar = ({
           <div className="flex">
             <div className="flex-grow p-1">
               {commentBoxOpen === true ? (
-                <div className="w-full flex items-center justify-between">
+                <div className="flex justify-between items-center w-full">
                   <input
                     autoFocus
                     type="text"
                     value={comment}
                     onChange={(e) => setComment(e.target.value)}
                     placeholder="Add a comment"
-                    className="flex-grow h-full outline-none px-3"
+                    className="flex-grow px-3 h-full outline-none"
                     maxLength={255}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
@@ -276,7 +275,7 @@ export const Toolbar = ({
                   </div>
                 </div>
               ) : (
-                <div className="grid items-center justify-center grid-flow-col">
+                <div className="grid grid-flow-col justify-center items-center">
                   {REACTIONS.map((reaction) => (
                     <Emoji
                       key={reaction.emoji}
@@ -288,9 +287,9 @@ export const Toolbar = ({
                   <div className="flex items-center">
                     <button
                       onClick={handleCommentClick}
-                      className="font-medium bg-gray-200 py-1 px-3 relative transition-bg-color duration-600 flex justify-center items-center rounded-full ease-in-out hover:bg-gray-200 active:bg-gray-400 active:duration-0"
+                      className="flex relative justify-center items-center px-3 py-1 font-medium bg-gray-200 rounded-full ease-in-out transition-bg-color duration-600 hover:bg-gray-200 active:bg-gray-400 active:duration-0"
                     >
-                      <span className="text-sm text-gray-500 font-medium">
+                      <span className="text-sm font-medium text-gray-12">
                         Comment (c)
                       </span>
                     </button>

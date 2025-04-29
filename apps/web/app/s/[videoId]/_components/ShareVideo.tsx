@@ -1248,14 +1248,14 @@ export const ShareVideo = forwardRef<
               })}
             </div>
           )}
-          <div className="absolute top-2.5 w-full h-1 sm:h-1.5 bg-white bg-opacity-50 rounded-full z-10" />
+          <div className="absolute top-2.5 w-full h-1 sm:h-1.5 bg-gray-1 bg-opacity-50 rounded-full z-10" />
           <div
-            className="absolute top-2.5 h-1 sm:h-1.5 bg-white rounded-full cursor-pointer z-10"
+            className="absolute top-2.5 h-1 sm:h-1.5 bg-gray-1 rounded-full cursor-pointer z-10"
             style={{ width: `${watchedPercentage}%` }}
           />
           <div
             className={clsx(
-              "drag-button absolute top-2.5 z-20 -mt-1.5 -ml-2 w-4 h-4 bg-white rounded-full  cursor-pointer focus:outline-none",
+              "drag-button absolute top-2.5 z-20 -mt-1.5 -ml-2 w-4 h-4 bg-gray-1 rounded-full  cursor-pointer focus:outline-none",
               seeking
                 ? "scale-125 transition-transform ring-blue-300 ring-offset-2 ring-2"
                 : ""

@@ -22,7 +22,7 @@ export const DownloadPage = () => {
         {/* Debug toggle button in top-right corner */}
         <button
           onClick={() => setShowDebug(!showDebug)}
-          className="absolute top-4 right-4 px-2 py-1 text-xs text-gray-400 bg-gray-800 rounded hover:text-gray-300"
+          className="absolute top-4 right-4 px-2 py-1 text-xs text-gray-8 bg-gray-800 rounded hover:text-gray-300"
         >
           {showDebug ? "Hide Debug" : "Debug"}
         </button>
@@ -59,7 +59,7 @@ export const DownloadPage = () => {
               >
                 macOS (Apple Silicon)
               </button>
-              <div className="mt-2 text-xs text-gray-400">
+              <div className="mt-2 text-xs text-gray-8">
                 Current: {platform}{" "}
                 {platform === "macos" &&
                   (isIntel ? "(Intel)" : "(Apple Silicon)")}
@@ -87,7 +87,7 @@ export const DownloadPage = () => {
               {getDownloadButtonText(platform, loading, isIntel)}
             </Button>
 
-            <div className="text-sm text-gray-400">
+            <div className="text-sm text-gray-8">
               {getVersionText(platform)}
             </div>
 
@@ -103,7 +103,7 @@ export const DownloadPage = () => {
                   className="mx-auto w-full rounded-md shadow-md"
                   style={{ maxWidth: "300px" }}
                 />
-                <p className="mt-2 text-sm text-gray-400">
+                <p className="mt-2 text-sm text-gray-8">
                   Whilst Cap for Windows is in early beta, after downloading and
                   running the app, follow the steps above to whitelist Cap on
                   your PC.
@@ -116,14 +116,14 @@ export const DownloadPage = () => {
         <PlatformIcons />
 
         <div className="pb-4 mt-6 fade-in-up animate-delay-2">
-          <h3 className="mb-2 text-sm font-medium text-gray-400">
+          <h3 className="mb-2 text-sm font-medium text-gray-8">
             Other download options:
           </h3>
           <div className="flex flex-col gap-3 justify-center items-center md:flex-row">
             {platform !== "windows" && (
               <a
                 href="/download/windows"
-                className="text-sm text-gray-400 transition-all hover:underline"
+                className="text-sm text-gray-8 transition-all hover:underline"
               >
                 Windows (Beta)
               </a>
@@ -131,7 +131,7 @@ export const DownloadPage = () => {
             {platform === "macos" && isIntel && (
               <a
                 href="/download/apple-silicon"
-                className="text-sm text-gray-400 transition-all hover:underline"
+                className="text-sm text-gray-8 transition-all hover:underline"
               >
                 Apple Silicon
               </a>
@@ -139,7 +139,7 @@ export const DownloadPage = () => {
             {platform === "macos" && !isIntel && (
               <a
                 href="/download/apple-intel"
-                className="text-sm text-gray-400 transition-all hover:underline"
+                className="text-sm text-gray-8 transition-all hover:underline"
               >
                 Apple Intel
               </a>
@@ -148,13 +148,13 @@ export const DownloadPage = () => {
               <>
                 <a
                   href="/download/apple-silicon"
-                  className="text-sm text-gray-400 transition-all hover:underline"
+                  className="text-sm text-gray-8 transition-all hover:underline"
                 >
                   Apple Silicon
                 </a>
                 <a
                   href="/download/apple-intel"
-                  className="text-sm text-gray-400 transition-all hover:underline"
+                  className="text-sm text-gray-8 transition-all hover:underline"
                 >
                   Apple Intel
                 </a>
@@ -164,39 +164,39 @@ export const DownloadPage = () => {
         </div>
 
         {/* Discreet SEO Links */}
-        <div className="pt-8 mt-32 text-xs text-gray-500 border-t border-gray-200 opacity-70">
+        <div className="pt-8 mt-32 text-xs text-gray-1 border-t border-gray-200 opacity-70">
           <div className="flex flex-wrap gap-y-2 gap-x-4 justify-center mx-auto max-w-lg">
             <a
               href="/screen-recorder"
-              className="text-xs hover:text-gray-400 hover:underline"
+              className="text-xs hover:text-gray-8 hover:underline"
             >
               Screen Recorder
             </a>
             <span className="hidden md:inline">•</span>
             <a
               href="/free-screen-recorder"
-              className="text-xs hover:text-gray-400 hover:underline"
+              className="text-xs hover:text-gray-8 hover:underline"
             >
               Free Screen Recorder
             </a>
             <span className="hidden md:inline">•</span>
             <a
               href="/screen-recorder-mac"
-              className="text-xs hover:text-gray-400 hover:underline"
+              className="text-xs hover:text-gray-8 hover:underline"
             >
               Mac Screen Recorder
             </a>
             <span className="hidden md:inline">•</span>
             <a
               href="/screen-recorder-windows"
-              className="text-xs hover:text-gray-400 hover:underline"
+              className="text-xs hover:text-gray-8 hover:underline"
             >
               Windows Screen Recorder
             </a>
             <span className="hidden md:inline">•</span>
             <a
               href="/screen-recording-software"
-              className="text-xs hover:text-gray-400 hover:underline"
+              className="text-xs hover:text-gray-8 hover:underline"
             >
               Recording Software
             </a>

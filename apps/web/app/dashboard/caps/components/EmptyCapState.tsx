@@ -6,22 +6,22 @@ interface EmptyCapStateProps {
 }
 
 export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
-  const { rive, RiveComponent: EmptyCap } = useRive({
+  const { RiveComponent: EmptyCap } = useRive({
     src: "/rive/capsempty.riv",
     artboard: "empty",
     autoplay: true,
   });
   return (
-    <div className="flex flex-col flex-1 justify-center items-center w-full">
-      <div className="flex flex-col gap-3 items-center h-full text-center">
+    <div className="flex flex-col flex-1 justify-center items-center w-full h-full">
+      <div className="flex flex-col gap-3 justify-center items-center h-full text-center">
         <div className="mx-auto w-full mb-10 max-w-[450px] flex justify-center items-center">
           <EmptyCap className="h-[150px] w-[400px]" />
         </div>
         <div className="flex flex-col items-center">
-          <p className="mb-1 text-xl font-semibold text-gray-500">
+          <p className="mb-1 text-xl font-semibold text-gray-12">
             Hey{userName ? ` ${userName}` : ""}! Record your first Cap
           </p>
-          <p className="max-w-md text-gray-400 text-md">
+          <p className="max-w-md text-gray-10 text-md">
             Craft your narrative with Cap - get projects done quicker.
           </p>
         </div>

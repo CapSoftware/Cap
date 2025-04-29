@@ -7,29 +7,10 @@ import { serverEnv } from "@cap/env";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import crypto from "crypto";
 import type { Metadata } from "next";
-import localFont from "next/font/local";
+import { cookies, headers } from "next/headers";
 import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "./AuthProvider";
 import { PostHogProvider, Providers } from "./providers";
-
-const SfProDisplay = localFont({
-  src: [
-    {
-      path: "./fonts/SFPRODISPLAYREGULAR.woff2",
-      weight: "300",
-    },
-    {
-      path: "./fonts/SFPRODISPLAYBOLD.woff2",
-      weight: "700",
-    },
-    {
-      path: "./fonts/SFPRODISPLAYMEDIUM.woff2",
-      weight: "500",
-    },
-  ],
-  display: "swap",
-  variable: "--font-sf-pro-display",
-});
 
 export const metadata: Metadata = {
   title: "Cap — Beautiful screen recordings, owned by you.",
@@ -59,6 +40,15 @@ export default async function RootLayout({
       .digest("hex");
   }
 
+  const path = headers().get("x-current-path");
+  const isPathDashboard =
+    path?.startsWith("/dashboard") ||
+    path?.startsWith("/login") ||
+    path?.startsWith("/onboarding");
+
+  const cookieStore = await cookies();
+  const theme = cookieStore.get("theme")?.value === "dark" ? "dark" : "light";
+
   return (
     <html lang="en">
       <head>
@@ -85,7 +75,7 @@ export default async function RootLayout({
         <meta name="msapplication-TileColor" content="#da532c" />
         <meta name="theme-color" content="#ffffff" />
       </head>
-      <body>
+      <body className={isPathDashboard ? theme : "light"}>
         <TooltipPrimitive.Provider>
           <PostHogProvider>
             <AuthProvider>
