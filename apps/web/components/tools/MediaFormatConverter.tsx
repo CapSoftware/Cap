@@ -2,8 +2,6 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@cap/ui";
-import { FFmpeg } from "@ffmpeg/ffmpeg";
-import { fetchFile } from "@ffmpeg/util";
 import { trackEvent } from "@/app/utils/analytics";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
@@ -24,7 +22,6 @@ export const CONVERSION_CONFIGS: Record<
   string,
   {
     acceptType: string;
-    command: (input: string, output: string) => string[];
     outputType: string;
     title: (source: string, target: string) => string;
     description: (source: string, target: string) => string;
@@ -32,21 +29,6 @@ export const CONVERSION_CONFIGS: Record<
 > = {
   "webm-to-mp4": {
     acceptType: "video/webm",
-    command: (input, output) => [
-      "-i",
-      input,
-      "-c:v",
-      "libx264",
-      "-preset",
-      "medium",
-      "-crf",
-      "23",
-      "-c:a",
-      "aac",
-      "-b:a",
-      "128k",
-      output,
-    ],
     outputType: "video/mp4",
     title: (source, target) =>
       `${source.toUpperCase()} to ${target.toUpperCase()} Converter`,
@@ -55,19 +37,6 @@ export const CONVERSION_CONFIGS: Record<
   },
   "mp4-to-webm": {
     acceptType: "video/mp4",
-    command: (input, output) => [
-      "-i",
-      input,
-      "-c:v",
-      "libvpx",
-      "-crf",
-      "30",
-      "-b:v",
-      "0",
-      "-c:a",
-      "libvorbis",
-      output,
-    ],
     outputType: "video/webm",
     title: (source, target) =>
       `${source.toUpperCase()} to ${target.toUpperCase()} Converter`,
@@ -76,26 +45,6 @@ export const CONVERSION_CONFIGS: Record<
   },
   "mov-to-mp4": {
     acceptType: "video/quicktime",
-    command: (input, output) => [
-      "-i",
-      input,
-      "-c:v",
-      "libx264",
-      "-preset",
-      "fast",
-      "-crf",
-      "23",
-      "-movflags",
-      "+faststart",
-      "-pix_fmt",
-      "yuv420p",
-      "-c:a",
-      "aac",
-      "-b:a",
-      "128k",
-      "-y",
-      output,
-    ],
     outputType: "video/mp4",
     title: (source, target) =>
       `${source.toUpperCase()} to ${target.toUpperCase()} Converter`,
@@ -104,21 +53,6 @@ export const CONVERSION_CONFIGS: Record<
   },
   "avi-to-mp4": {
     acceptType: "video/x-msvideo",
-    command: (input, output) => [
-      "-i",
-      input,
-      "-c:v",
-      "libx264",
-      "-preset",
-      "medium",
-      "-crf",
-      "23",
-      "-c:a",
-      "aac",
-      "-b:a",
-      "128k",
-      output,
-    ],
     outputType: "video/mp4",
     title: (source, target) =>
       `${source.toUpperCase()} to ${target.toUpperCase()} Converter`,
@@ -127,60 +61,22 @@ export const CONVERSION_CONFIGS: Record<
   },
   "mkv-to-mp4": {
     acceptType: "video/x-matroska",
-    command: (input, output) => [
-      "-i",
-      input,
-      "-c:v",
-      "libx264",
-      "-preset",
-      "medium",
-      "-crf",
-      "23",
-      "-c:a",
-      "aac",
-      "-b:a",
-      "128k",
-      output,
-    ],
     outputType: "video/mp4",
     title: (source, target) =>
       `${source.toUpperCase()} to ${target.toUpperCase()} Converter`,
     description: (source, target) =>
       `Convert ${source.toUpperCase()} videos to ${target.toUpperCase()} format directly in your browser`,
   },
-
   "mp4-to-mp3": {
     acceptType: "video/mp4",
-    command: (input, output) => [
-      "-i",
-      input,
-      "-vn",
-      "-ar",
-      "44100",
-      "-ac",
-      "2",
-      "-b:a",
-      "192k",
-      output,
-    ],
     outputType: "audio/mp3",
     title: (source, target) =>
       `${source.toUpperCase()} to ${target.toUpperCase()} Converter`,
     description: (source, target) =>
       `Extract audio from ${source.toUpperCase()} videos and save as ${target.toUpperCase()} files`,
   },
-
   "mp4-to-gif": {
     acceptType: "video/mp4",
-    command: (input, output) => [
-      "-i",
-      input,
-      "-vf",
-      "fps=10,scale=320:-1:flags=lanczos",
-      "-c:v",
-      "gif",
-      output,
-    ],
     outputType: "image/gif",
     title: (source, target) =>
       `${source.toUpperCase()} to ${target.toUpperCase()} Converter`,
@@ -260,16 +156,24 @@ export const MediaFormatConverter = ({
   const [progress, setProgress] = useState(0);
   const [outputUrl, setOutputUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [ffmpegLoaded, setFfmpegLoaded] = useState(false);
+  const [mediaEngineLoaded, setMediaEngineLoaded] = useState(true);
   const [isDragging, setIsDragging] = useState(false);
   const [currentSourceFormat, setCurrentSourceFormat] = useState(sourceFormat);
   const [currentTargetFormat, setCurrentTargetFormat] = useState(targetFormat);
+  const [supportedFormats, setSupportedFormats] = useState<string[]>([
+    "mp4",
+    "webm",
+  ]);
+  const [isSafari, setIsSafari] = useState(false);
+  const [isFirefox, setIsFirefox] = useState(false);
 
   const conversionPath = `${currentSourceFormat}-to-${currentTargetFormat}`;
   const config = CONVERSION_CONFIGS[conversionPath];
 
-  const ffmpegRef = useRef<FFmpeg | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
 
   useEffect(() => {
     if (
@@ -294,32 +198,26 @@ export const MediaFormatConverter = ({
   ]);
 
   useEffect(() => {
-    const loadFFmpeg = async () => {
-      try {
-        const ffmpegInstance = new FFmpeg();
-        ffmpegRef.current = ffmpegInstance;
-
-        ffmpegInstance.on("progress", ({ progress }: { progress: number }) => {
-          setProgress(Math.round(progress * 100));
-        });
-
-        await ffmpegInstance.load();
-        setFfmpegLoaded(true);
-        trackEvent(`${conversionPath}_tool_loaded`);
-      } catch (err) {
-        setError("Failed to load FFmpeg. Please try again later.");
-        console.error("FFmpeg loading error:", err);
+    const checkSupport = async () => {
+      if (MediaRecorder.isTypeSupported("video/webm")) {
+        setSupportedFormats((prev) => [...prev, "webm"]);
       }
+
+      trackEvent(`${conversionPath}_tool_loaded`);
     };
 
-    loadFFmpeg();
-
-    return () => {
-      if (outputUrl) {
-        URL.revokeObjectURL(outputUrl);
-      }
-    };
+    checkSupport();
   }, [conversionPath]);
+
+  useEffect(() => {
+    const isSafariBrowser = /^((?!chrome|android).)*safari/i.test(
+      navigator.userAgent
+    );
+    setIsSafari(isSafariBrowser);
+
+    const isFirefoxBrowser = navigator.userAgent.indexOf("Firefox") !== -1;
+    setIsFirefox(isFirefoxBrowser);
+  }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -400,7 +298,7 @@ export const MediaFormatConverter = ({
   };
 
   const convertFile = async () => {
-    if (!file || !ffmpegLoaded || !ffmpegRef.current || !config) return;
+    if (!file || !mediaEngineLoaded || !config) return;
 
     setIsConverting(true);
     setError(null);
@@ -412,53 +310,23 @@ export const MediaFormatConverter = ({
     });
 
     try {
-      const ffmpeg = ffmpegRef.current;
-      const inputFileName = `input.${currentSourceFormat}`;
-      const outputFileName = `output.${currentTargetFormat}`;
-
       console.log(`Starting conversion: ${conversionPath}`);
       console.log(`Input file: ${file.name}, size: ${file.size} bytes`);
 
-      await ffmpeg.writeFile(inputFileName, await fetchFile(file));
-      console.log("File written to FFmpeg virtual filesystem");
+      const fileUrl = URL.createObjectURL(file);
 
-      const command = config.command(inputFileName, outputFileName);
-      console.log("FFmpeg command:", command);
-
-      await ffmpeg.exec(command);
-      console.log("FFmpeg command executed");
-
-      const data = await ffmpeg.readFile(outputFileName);
-      console.log(`Output data received, type: ${typeof data}`);
-
-      if (!data) {
-        throw new Error(
-          "Conversion resulted in an empty file. Please try again."
-        );
+      if (currentTargetFormat === "mp3" && currentSourceFormat === "mp4") {
+        await extractAudioFromVideo(fileUrl);
+      } else if (
+        currentTargetFormat === "gif" &&
+        currentSourceFormat === "mp4"
+      ) {
+        await convertVideoToGif(fileUrl);
+      } else {
+        await convertVideoFormat(fileUrl);
       }
 
-      const blob = new Blob([data], { type: config.outputType });
-      console.log(`Output blob created, size: ${blob.size} bytes`);
-
-      if (blob.size < 1024 && file.size > 10 * 1024) {
-        throw new Error(
-          "Conversion produced an unusually small file. It may be corrupted."
-        );
-      }
-
-      const url = URL.createObjectURL(blob);
-
-      setOutputUrl(url);
-
-      trackEvent(`${conversionPath}_conversion_completed`, {
-        fileSize: file.size,
-        fileName: file.name,
-        outputSize: blob.size,
-        conversionTime: Date.now(),
-      });
-
-      await ffmpeg.deleteFile(inputFileName);
-      await ffmpeg.deleteFile(outputFileName);
+      URL.revokeObjectURL(fileUrl);
     } catch (err: any) {
       console.error("Detailed conversion error:", err);
 
@@ -483,11 +351,240 @@ export const MediaFormatConverter = ({
     }
   };
 
+  const extractAudioFromVideo = async (fileUrl: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const audio = new Audio();
+      audio.src = fileUrl;
+      audio.muted = false;
+
+      const audioContext = new AudioContext();
+      const mediaSource = audioContext.createMediaElementSource(audio);
+      const destination = audioContext.createMediaStreamDestination();
+      mediaSource.connect(destination);
+
+      const recorder = new MediaRecorder(destination.stream);
+      const chunks: BlobPart[] = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          chunks.push(e.data);
+        }
+      };
+
+      recorder.onstop = () => {
+        const blob = new Blob(chunks, { type: "audio/mp3" });
+        const url = URL.createObjectURL(blob);
+        setOutputUrl(url);
+
+        trackEvent(`${conversionPath}_conversion_completed`, {
+          fileSize: file!.size,
+          fileName: file!.name,
+          outputSize: blob.size,
+        });
+
+        resolve();
+      };
+
+      recorder.onerror = (e) => {
+        reject(new Error("Error recording audio"));
+      };
+
+      audio.oncanplaythrough = () => {
+        recorder.start();
+        audio.play();
+
+        const interval = setInterval(() => {
+          if (audio.duration) {
+            const currentProgress = (audio.currentTime / audio.duration) * 100;
+            setProgress(Math.min(Math.round(currentProgress), 99));
+          }
+        }, 500);
+
+        audio.onended = () => {
+          clearInterval(interval);
+          recorder.stop();
+          setProgress(100);
+        };
+      };
+
+      audio.onerror = () => {
+        reject(new Error("Error loading audio from video"));
+      };
+    });
+  };
+
+  const convertVideoToGif = async (fileUrl: string): Promise<void> => {
+    setError(
+      "Converting video to GIF is currently not fully supported in the browser version. Please try using Google Chrome."
+    );
+    setProgress(100);
+    return Promise.resolve();
+  };
+
+  const convertVideoFormat = async (fileUrl: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const video = document.createElement("video");
+      videoRef.current = video;
+      video.src = fileUrl;
+      video.muted = false;
+
+      video.oncanplay = async () => {
+        try {
+          const canvas = document.createElement("canvas");
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          const ctx = canvas.getContext("2d");
+
+          if (!ctx) {
+            throw new Error("Failed to create canvas context");
+          }
+
+          const targetMimeType = getMimeType(currentTargetFormat);
+
+          const mimeTypes =
+            isFirefox && currentTargetFormat === "mp4"
+              ? [
+                  "video/webm;codecs=vp8,opus",
+                  "video/webm;codecs=vp8",
+                  "video/webm",
+                ]
+              : [
+                  targetMimeType,
+                  "video/webm;codecs=vp9",
+                  "video/webm;codecs=vp8",
+                  "video/webm",
+                  "video/mp4",
+                ];
+
+          let selectedMimeType = "";
+          for (const type of mimeTypes) {
+            if (MediaRecorder.isTypeSupported(type)) {
+              selectedMimeType = type;
+              break;
+            }
+          }
+
+          if (!selectedMimeType) {
+            throw new Error(
+              "None of the media formats are supported by this browser"
+            );
+          }
+
+          if (
+            isFirefox &&
+            currentSourceFormat === "webm" &&
+            currentTargetFormat === "mp4"
+          ) {
+            console.warn(
+              "Firefox has limited support for MP4 encoding. Using WebM container instead."
+            );
+          }
+
+          const stream = canvas.captureStream(30);
+
+          video.muted = true;
+          try {
+            const audioContext = new AudioContext();
+            const source = audioContext.createMediaElementSource(video);
+            const destination = audioContext.createMediaStreamDestination();
+            source.connect(destination);
+
+            destination.stream.getAudioTracks().forEach((track) => {
+              stream.addTrack(track);
+            });
+          } catch (audioErr) {
+            console.warn(
+              "Could not add audio track, continuing without audio",
+              audioErr
+            );
+          }
+
+          const recorder = new MediaRecorder(stream, {
+            mimeType: selectedMimeType,
+          });
+          mediaRecorderRef.current = recorder;
+          recordedChunksRef.current = [];
+
+          recorder.ondataavailable = (e) => {
+            if (e.data.size > 0) {
+              recordedChunksRef.current.push(e.data);
+            }
+          };
+
+          recorder.onstop = () => {
+            const chunks = recordedChunksRef.current;
+            const outputMimeType = selectedMimeType.split(";")[0];
+            const blob = new Blob(chunks, { type: outputMimeType });
+            const url = URL.createObjectURL(blob);
+
+            setOutputUrl(url);
+
+            trackEvent(`${conversionPath}_conversion_completed`, {
+              fileSize: file!.size,
+              fileName: file!.name,
+              outputSize: blob.size,
+            });
+
+            videoRef.current = null;
+            mediaRecorderRef.current = null;
+            resolve();
+          };
+
+          recorder.start(1000);
+          video.play();
+
+          const interval = setInterval(() => {
+            if (video.duration) {
+              const currentProgress =
+                (video.currentTime / video.duration) * 100;
+              setProgress(Math.min(Math.round(currentProgress), 99));
+
+              ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            }
+          }, 30);
+
+          video.onended = () => {
+            clearInterval(interval);
+            setTimeout(() => {
+              recorder.stop();
+              setProgress(100);
+            }, 500);
+          };
+        } catch (err) {
+          reject(err);
+        }
+      };
+
+      video.onerror = () => {
+        reject(new Error("Error loading video"));
+      };
+    });
+  };
+
   const handleDownload = () => {
     if (!outputUrl || !file) return;
 
+    let actualExtension = currentTargetFormat;
+
+    if (recordedChunksRef.current.length > 0) {
+      const firstChunk = recordedChunksRef.current[0];
+      if (firstChunk) {
+        const type = firstChunk.type;
+
+        if (type.includes("mp4")) {
+          actualExtension = "mp4";
+        } else if (type.includes("webm")) {
+          actualExtension = "webm";
+        } else if (type.includes("mp3")) {
+          actualExtension = "mp3";
+        } else if (type.includes("gif")) {
+          actualExtension = "gif";
+        }
+      }
+    }
+
     const fileExtension = `.${currentSourceFormat}`;
-    const newExtension = `.${currentTargetFormat}`;
+    const newExtension = `.${actualExtension}`;
     const downloadFileName = file.name.replace(
       new RegExp(`${fileExtension}$`),
       newExtension
@@ -507,10 +604,24 @@ export const MediaFormatConverter = ({
     if (outputUrl) {
       URL.revokeObjectURL(outputUrl);
     }
+
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state !== "inactive"
+    ) {
+      mediaRecorderRef.current.stop();
+    }
+
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.src = "";
+    }
+
     setFile(null);
     setOutputUrl(null);
     setProgress(0);
     setError(null);
+    recordedChunksRef.current = [];
 
     trackEvent(`${conversionPath}_reset`);
 
@@ -579,7 +690,6 @@ export const MediaFormatConverter = ({
         {config.title(currentSourceFormat, currentTargetFormat)}
       </h2>
 
-      {/* Format Selector */}
       <div className="w-full mb-6">
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-2">
           <div className="w-full sm:w-auto flex flex-col sm:flex-row items-center">
@@ -777,7 +887,7 @@ export const MediaFormatConverter = ({
           <Button
             variant="primary"
             onClick={convertFile}
-            disabled={!ffmpegLoaded || isConverting}
+            disabled={!mediaEngineLoaded || isConverting}
             className="w-full"
           >
             Convert to {currentTargetFormat.toUpperCase()}
@@ -796,22 +906,35 @@ export const MediaFormatConverter = ({
         )}
       </div>
 
-      {!ffmpegLoaded && !error && (
-        <div className="mt-6 text-center text-gray-500">
-          <p>Loading conversion engine...</p>
-          <div className="mt-2 w-8 h-8 border-4 border-blue-200 border-t-blue-500 rounded-full animate-spin mx-auto"></div>
-        </div>
-      )}
-
       <div className="mt-8 pt-6 border-t border-gray-200 text-sm text-gray-500 text-center">
         <p>
           This converter works entirely in your browser. Your files are never
           uploaded to any server.
         </p>
         <p className="mt-1">
-          The conversion is performed using FFmpeg, which runs locally on your
-          device.
+          Powered by modern browser APIs like MediaRecorder and WebAudio for
+          fast and efficient conversion.
         </p>
+        {isSafari && (
+          <div className="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-md text-yellow-700">
+            <p>
+              <strong>Safari Compatibility Notice:</strong> Safari has limited
+              support for some media conversion features. For best results,
+              consider using Chrome or Firefox.
+            </p>
+          </div>
+        )}
+        {isFirefox &&
+          currentSourceFormat === "webm" &&
+          currentTargetFormat === "mp4" && (
+            <div className="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-md text-yellow-700">
+              <p>
+                <strong>Firefox Compatibility Notice:</strong> Firefox doesn't
+                fully support converting WebM to MP4. The file will be encoded
+                using WebM container format. For best results, try using Chrome.
+              </p>
+            </div>
+          )}
       </div>
     </div>
   );

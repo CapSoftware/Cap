@@ -90,6 +90,13 @@ export const testimonials = [
     url: "https://x.com/minimalnerd/status/1909263024180904368",
   },
   {
+    name: "evening kid",
+    handle: "@eveningkid",
+    image: "/testimonials/eveningkid.jpg",
+    content: "I've been looking for *ages* for a screen recording app that does the job + allows to zoom in/out easily and @Cap is AWESOME!\n\nFree, cross-platform, fully-featured, open-source. I mean...unless you love spending +$200 for recording your screen, use Cap!",
+    url: "https://x.com/eveningkid/status/1916136666898813076",
+  },
+  {
     name: "Prayag",
     handle: "@prayagtushar",
     image: "/testimonials/prayagtushar.jpg",
@@ -112,6 +119,13 @@ export const testimonials = [
     content:
       "Congratulations on the launch! I tried Cap some time ago, and it's such a great product.",
     url: "https://www.producthunt.com/products/cap-3?comment=4174570#cap-4",
+  },
+  {
+    name: "Jay Ghiya",
+    handle: "@BeLikeBumblebee",
+    image: "/testimonials/BeLikeBumblebee.jpg",
+    content: "Just purchased Cap commercial lifetime. If you need to capture product videos for your startup cap is the easiest one to get started along with solid feature roadmap.",
+    url: "https://x.com/BeLikeBumblebee/status/1916330489528431058",
   },
   {
     name: "Tony Tong",

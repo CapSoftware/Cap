@@ -110,7 +110,7 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
 
   return (
     <>
-      <div className="fixed border-b border-b-zinc-100 inset-0 z-20 p-4 w-full backdrop-blur-md bg-white/70 h-[60px]">
+      <div className="fixed border-b border-b-zinc-100 inset-0 z-50 p-4 w-full backdrop-blur-md bg-white/70 h-[60px]">
         <div className="flex justify-between items-center mx-auto max-w-4xl h-full transition-all">
           <div className="flex items-center">
             <Link passHref href="/home">

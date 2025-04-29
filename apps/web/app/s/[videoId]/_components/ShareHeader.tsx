@@ -1,11 +1,11 @@
 import { editTitle } from "@/actions/videos/edit-title";
+import { UpgradeModal } from "@/components/UpgradeModal";
 import { userSelectProps } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import { clientEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
-import { saveAs } from "file-saver";
-import JSZip from "jszip";
-import { Copy, Loader2 } from "lucide-react";
+import { isUserOnProPlan } from "@cap/utils";
+import { Copy, Globe2 } from "lucide-react";
 import moment from "moment";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -14,16 +14,11 @@ import { toast } from "react-hot-toast";
 export const ShareHeader = ({
   data,
   user,
-  individualFiles,
   customDomain,
   domainVerified,
 }: {
   data: typeof videos.$inferSelect;
   user: typeof userSelectProps | null;
-  individualFiles?: {
-    fileName: string;
-    url: string;
-  }[];
   customDomain: string | null;
   domainVerified: boolean;
 }) => {
@@ -31,6 +26,7 @@ export const ShareHeader = ({
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(data.name);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 
   const handleBlur = async () => {
     setIsEditing(false);
@@ -54,29 +50,6 @@ export const ShareHeader = ({
     }
   };
 
-  const downloadZip = async () => {
-    if (!individualFiles) return;
-
-    setIsDownloading(true);
-    const zip = new JSZip();
-
-    try {
-      for (const file of individualFiles) {
-        const response = await fetch(file.url);
-        const blob = await response.blob();
-        zip.file(file.fileName, blob);
-      }
-
-      const content = await zip.generateAsync({ type: "blob" });
-      saveAs(content, `${data.id}.zip`);
-    } catch (error) {
-      console.error("Error downloading zip:", error);
-      toast.error("Failed to download files. Please try again.");
-    } finally {
-      setIsDownloading(false);
-    }
-  };
-
   const getVideoLink = () => {
     return customDomain && domainVerified
       ? `https://${customDomain}/s/${data.id}`
@@ -93,11 +66,17 @@ export const ShareHeader = ({
       : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${data.id}`;
   };
 
+  const isUserPro = user
+    ? isUserOnProPlan({
+        subscriptionStatus: user.stripeSubscriptionStatus,
+      })
+    : false;
+
   return (
     <>
       <div>
-        <div className="md:flex md:items-center md:justify-between space-x-0 md:space-x-6">
-          <div className="md:flex items-center md:justify-between md:space-x-6">
+        <div className="space-x-0 md:flex md:items-center md:justify-between md:space-x-6">
+          <div className="items-center md:flex md:justify-between md:space-x-6">
             <div className="mb-3 md:mb-0">
               <div className="flex items-center space-x-3  lg:min-w-[400px]">
                 {isEditing ? (
@@ -107,7 +86,7 @@ export const ShareHeader = ({
                     onBlur={handleBlur}
                     onKeyDown={handleKeyDown}
                     autoFocus
-                    className="text-xl sm:text-2xl font-semibold w-full"
+                    className="w-full text-xl font-semibold sm:text-2xl"
                   />
                 ) : (
                   <h1
@@ -125,43 +104,34 @@ export const ShareHeader = ({
                   </h1>
                 )}
               </div>
-              <p className="text-gray-8 text-sm">
+              <p className="text-sm text-gray-8">
                 {moment(data.createdAt).fromNow()}
               </p>
             </div>
           </div>
-          {(user !== null ||
-            (individualFiles && individualFiles.length > 0)) && (
-            <div className="flex items-center space-x-2">
-              {individualFiles && individualFiles.length > 0 && (
-                <div>
-                  <Button
-                    variant="gray"
-                    onClick={downloadZip}
-                    disabled={isDownloading}
+          {user !== null && (
+            <div className="flex space-x-2">
+              <div>
+                <Button
+                  variant="white"
+                  onClick={() => {
+                    navigator.clipboard.writeText(getVideoLink());
+                    toast.success("Link copied to clipboard!");
+                  }}
+                >
+                  {getDisplayLink()}
+                  <Copy className="ml-2 w-4 h-4" />
+                </Button>
+                {user !== null && !isUserPro && (
+                  <button
+                    className="flex items-center mt-1 text-sm text-gray-400 cursor-pointer hover:text-blue-500"
+                    onClick={() => setUpgradeModalOpen(true)}
                   >
-                    {isDownloading ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Downloading...
-                      </>
-                    ) : (
-                      "Download Assets"
-                    )}
-                  </Button>
-                </div>
-              )}
-              <Button
-                variant="gray"
-                className="hover:bg-gray-300"
-                onClick={() => {
-                  navigator.clipboard.writeText(getVideoLink());
-                  toast.success("Link copied to clipboard!");
-                }}
-              >
-                {getDisplayLink()}
-                <Copy className="ml-2 h-4 w-4" />
-              </Button>
+                    <Globe2 className="mr-1 w-4 h-4" />
+                    Connect a custom domain
+                  </button>
+                )}
+              </div>
               {user !== null && (
                 <div className="hidden md:flex">
                   <Button
@@ -169,7 +139,10 @@ export const ShareHeader = ({
                       push(`${clientEnv.NEXT_PUBLIC_WEB_URL}/dashboard`);
                     }}
                   >
-                    Go to Dashboard
+                    <span className="hidden text-sm text-white lg:block">
+                      Go to
+                    </span>{" "}
+                    Dashboard
                   </Button>
                 </div>
               )}
@@ -177,6 +150,10 @@ export const ShareHeader = ({
           )}
         </div>
       </div>
+      <UpgradeModal
+        open={upgradeModalOpen}
+        onOpenChange={setUpgradeModalOpen}
+      />
     </>
   );
 };

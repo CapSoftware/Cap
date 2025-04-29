@@ -104,7 +104,7 @@ export const CapCard: React.FC<CapCardProps> = ({
     setSharedSpaces(
       userSpaces?.filter((space) => updatedSharedSpaces.includes(space.id))
     );
-    router.refresh(); // Add this line to refresh the page
+    router.refresh();
   };
 
   const isOwner = userId === cap.ownerId;
@@ -217,6 +217,16 @@ export const CapCard: React.FC<CapCardProps> = ({
     }
   };
 
+  const handleCardClick = (e: React.MouseEvent) => {
+    if (anyCapSelected) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (onSelectToggle) {
+        onSelectToggle();
+      }
+    }
+  };
+
   const handleSelectClick = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -224,6 +234,12 @@ export const CapCard: React.FC<CapCardProps> = ({
       onSelectToggle();
     }
   };
+
+  const capUrl = activeSpace?.space.customDomain
+    ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
+    : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+    ? `https://cap.link/${cap.id}`
+    : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`;
 
   return (
     <>
@@ -237,11 +253,7 @@ export const CapCard: React.FC<CapCardProps> = ({
         onSharingUpdated={handleSharingUpdated}
       />
       <div
-        onClick={() => {
-          if (anyCapSelected && onSelectToggle) {
-            onSelectToggle();
-          }
-        }}
+        onClick={handleCardClick}
         className={clsx(
           "flex relative flex-col gap-4 w-full h-full rounded-xl cursor-default bg-gray-2 border-gray-3 group border-[1px]",
           isSelected
@@ -251,6 +263,12 @@ export const CapCard: React.FC<CapCardProps> = ({
             : "hover:border-blue-10"
         )}
       >
+        {anyCapSelected && !sharedCapCard && (
+          <div
+            className="absolute inset-0 z-10"
+            onClick={handleCardClick}
+          ></div>
+        )}
         {!sharedCapCard && (
           <div
             className={clsx(
@@ -263,16 +281,10 @@ export const CapCard: React.FC<CapCardProps> = ({
           >
             <Tooltip content="Copy link">
               <Button
-                onClick={() =>
-                  handleCopy(
-                    activeSpace?.space.customDomain
-                      ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
-                      : clientEnv.NEXT_PUBLIC_IS_CAP &&
-                        NODE_ENV === "production"
-                      ? `https://cap.link/${cap.id}`
-                      : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
-                  )
-                }
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleCopy(capUrl);
+                }}
                 className="!size-8 delay-0 hover:opacity-80 rounded-full min-w-fit !p-0"
                 variant="white"
                 size="sm"
@@ -302,7 +314,10 @@ export const CapCard: React.FC<CapCardProps> = ({
             </Tooltip>
             <Tooltip content="Delete Cap">
               <Button
-                onClick={() => onDelete?.(cap.id)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete?.(cap.id);
+                }}
                 className="!size-8 delay-100 hover:opacity-80 rounded-full min-w-fit !p-0"
                 variant="white"
                 size="sm"
@@ -315,7 +330,6 @@ export const CapCard: React.FC<CapCardProps> = ({
             </Tooltip>
           </div>
         )}
-
         {/* Selection checkbox */}
         {!sharedCapCard && onSelectToggle && (
           <div
@@ -324,7 +338,10 @@ export const CapCard: React.FC<CapCardProps> = ({
                 ? "opacity-100"
                 : "group-hover:opacity-100 opacity-0"
             }`}
-            onClick={handleSelectClick}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleSelectClick(e);
+            }}
           >
             <div
               className={clsx(
@@ -345,13 +362,7 @@ export const CapCard: React.FC<CapCardProps> = ({
             "block group",
             anyCapSelected && "cursor-pointer pointer-events-none"
           )}
-          href={
-            activeSpace?.space.customDomain
-              ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
-              : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-              ? `https://cap.link/${cap.id}`
-              : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
-          }
+          href={capUrl}
         >
           <VideoThumbnail
             imageClass={`${

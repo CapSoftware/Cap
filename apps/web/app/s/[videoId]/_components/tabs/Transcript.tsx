@@ -15,7 +15,7 @@ interface TranscriptEntry {
   id: number;
   timestamp: string;
   text: string;
-  startTime: number; // in seconds
+  startTime: number;
 }
 
 const parseVTT = (vttContent: string): TranscriptEntry[] => {
@@ -69,16 +69,13 @@ const parseVTT = (vttContent: string): TranscriptEntry[] => {
 
     const trimmedLine = line.trim();
 
-    // Skip WEBVTT header
     if (trimmedLine === "WEBVTT") continue;
 
-    // Parse cue ID (number)
     if (/^\d+$/.test(trimmedLine)) {
       currentId = parseInt(trimmedLine, 10);
       continue;
     }
 
-    // Parse timestamp line
     if (trimmedLine.includes("-->")) {
       const [startTimeStr, endTimeStr] = trimmedLine.split(" --> ");
       if (!startTimeStr || !endTimeStr) continue;
@@ -94,7 +91,6 @@ const parseVTT = (vttContent: string): TranscriptEntry[] => {
       continue;
     }
 
-    // Parse text content
     if (currentEntry.timestamp && !currentEntry.text) {
       currentEntry.text = trimmedLine;
       if (
@@ -118,6 +114,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
   const [selectedEntry, setSelectedEntry] = useState<number | null>(null);
   const [isTranscriptionProcessing, setIsTranscriptionProcessing] =
     useState(false);
+  const [hasTimedOut, setHasTimedOut] = useState(false);
 
   useEffect(() => {
     const fetchTranscript = async () => {
@@ -127,10 +124,8 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
         data.bucket &&
         data.awsBucket !== clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET
       ) {
-        // For custom S3 buckets, fetch through the API
         transcriptionUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&fileType=transcription`;
       } else {
-        // For default Cap storage
         transcriptionUrl = `${S3_BUCKET_URL}/${data.ownerId}/${data.id}/transcription.vtt`;
       }
 
@@ -145,8 +140,16 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
       setIsLoading(false);
     };
 
+    const videoCreationTime = new Date(data.createdAt).getTime();
+    const fiveMinutesInMs = 5 * 60 * 1000;
+    const isVideoOlderThanFiveMinutes =
+      Date.now() - videoCreationTime > fiveMinutesInMs;
+
     if (data.transcriptionStatus === "COMPLETE") {
       fetchTranscript();
+    } else if (isVideoOlderThanFiveMinutes && !data.transcriptionStatus) {
+      setIsLoading(false);
+      setHasTimedOut(true);
     } else {
       const startTime = Date.now();
       const maxDuration = 2 * 60 * 1000;
@@ -181,11 +184,11 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
     data.bucket,
     data.awsBucket,
     data.transcriptionStatus,
+    data.createdAt,
   ]);
 
   const handleReset = () => {
     setIsLoading(true);
-    // Re-fetch the transcript
     const fetchTranscript = async () => {
       const transcriptionUrl =
         data.bucket && data.awsBucket !== clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET
@@ -209,7 +212,6 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
   const handleTranscriptClick = (entry: TranscriptEntry) => {
     setSelectedEntry(entry.id);
 
-    // Use the onSeek callback to handle video seeking
     if (onSeek) {
       onSeek(entry.startTime);
     }
@@ -217,29 +219,73 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
+      <div className="flex justify-center items-center h-full">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          className="w-8 h-8"
+          viewBox="0 0 24 24"
+        >
+          <style>
+            {"@keyframes spinner_AtaB{to{transform:rotate(360deg)}}"}
+          </style>
+          <path
+            fill="#4B5563"
+            d="M12 1a11 11 0 1 0 11 11A11 11 0 0 0 12 1Zm0 19a8 8 0 1 1 8-8 8 8 0 0 1-8 8Z"
+            opacity={0.25}
+          />
+          <path
+            fill="#4B5563"
+            d="M10.14 1.16a11 11 0 0 0-9 8.92A1.59 1.59 0 0 0 2.46 12a1.52 1.52 0 0 0 1.65-1.3 8 8 0 0 1 6.66-6.61A1.42 1.42 0 0 0 12 2.69a1.57 1.57 0 0 0-1.86-1.53Z"
+            style={{
+              transformOrigin: "center",
+              animation: "spinner_AtaB .75s infinite linear",
+            }}
+          />
+        </svg>
       </div>
     );
   }
 
   if (isTranscriptionProcessing) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-1">
+      <div className="flex justify-center items-center h-full text-gray-1">
         <div className="text-center">
-          <MessageSquare className="w-8 h-8 mx-auto mb-2 text-gray-8 animate-pulse" />
+          <div className="mb-3">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="mx-auto w-8 h-8"
+              viewBox="0 0 24 24"
+            >
+              <style>
+                {"@keyframes spinner_AtaB{to{transform:rotate(360deg)}}"}
+              </style>
+              <path
+                fill="#9CA3AF"
+                d="M12 1a11 11 0 1 0 11 11A11 11 0 0 0 12 1Zm0 19a8 8 0 1 1 8-8 8 8 0 0 1-8 8Z"
+                opacity={0.25}
+              />
+              <path
+                fill="#9CA3AF"
+                d="M10.14 1.16a11 11 0 0 0-9 8.92A1.59 1.59 0 0 0 2.46 12a1.52 1.52 0 0 0 1.65-1.3 8 8 0 0 1 6.66-6.61A1.42 1.42 0 0 0 12 2.69a1.57 1.57 0 0 0-1.86-1.53Z"
+                style={{
+                  transformOrigin: "center",
+                  animation: "spinner_AtaB .75s infinite linear",
+                }}
+              />
+            </svg>
+          </div>
           <p>Transcription in progress...</p>
         </div>
       </div>
     );
   }
 
-  if (!transcriptData.length) {
+  if (hasTimedOut || (!transcriptData.length && !isTranscriptionProcessing)) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-1">
+      <div className="flex justify-center items-center h-full text-gray-1">
         <div className="text-center">
-          <MessageSquare className="w-8 h-8 mx-auto mb-2 text-gray-300" />
-          <p className="text-sm text-gray-1 font-medium">
+          <MessageSquare className="mx-auto mb-2 w-8 h-8 text-gray-300" />
+          <p className="text-sm font-medium text-gray-1">
             No transcript available
           </p>
         </div>
@@ -249,8 +295,8 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-y-auto">
-        <div className="space-y-3 p-4">
+      <div className="overflow-y-auto flex-1">
+        <div className="p-4 space-y-3">
           {transcriptData.map((entry) => (
             <div
               key={entry.id}
@@ -259,7 +305,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
               }`}
               onClick={() => handleTranscriptClick(entry)}
             >
-              <div className="text-sm text-gray-1 mb-1">{entry.timestamp}</div>
+              <div className="mb-1 text-sm text-gray-1">{entry.timestamp}</div>
               <div className="text-sm text-gray-900">{entry.text}</div>
             </div>
           ))}

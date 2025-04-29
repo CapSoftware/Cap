@@ -63,6 +63,7 @@ const footerLinks = {
     { label: "MP4 to GIF", href: "/tools/convert/mp4-to-gif" },
     { label: "MP4 to MP3", href: "/tools/convert/mp4-to-mp3" },
     { label: "MP4 to WebM", href: "/tools/convert/mp4-to-webm" },
+    { label: "Video Speed Controller", href: "/tools/video-speed-controller" },
   ] as FooterLink[],
   useCases: [
     {
