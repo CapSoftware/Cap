@@ -30,7 +30,7 @@ export const FeatureCard: React.FC<FeatureCardProps> = ({
       style={{
         backgroundImage: `url(${bg})`,
       }}
-      className={`bg-[#FAFAFA]/50 rounded-[12px] p-8 pt-0 h-full backdrop-blur-md relative z-10 flex flex-col overflow-hidden ${className}`}
+      className={`bg-gray-2 rounded-xl border border-gray-4 p-8 pt-0 h-full backdrop-blur-md relative z-10 flex flex-col overflow-hidden ${className}`}
     >
       <img
         src={imagePath}
