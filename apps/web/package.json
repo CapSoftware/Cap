@@ -52,7 +52,7 @@
     "cookies-next": "^4.1.0",
     "date-fns": "^3.2.0",
     "dotenv": "^16.3.1",
-    "drizzle-orm": "0.30.9",
+    "drizzle-orm": "0.43.1",
     "dub": "^0.33.1",
     "file-saver": "^2.0.5",
     "framer-motion": "^11.13.1",
