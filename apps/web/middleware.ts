@@ -26,7 +26,7 @@ export async function middleware(request: NextRequest) {
   const path = url.pathname;
 
   if((buildEnv.NEXT_PUBLIC_IS_CAP !== "true" &&
-    (path.startsWith("/s/") ||
+    !(path.startsWith("/s/") ||
       path.startsWith("/dashboard") ||
       path.startsWith("/onboarding") ||
       path.startsWith("/api") || 
