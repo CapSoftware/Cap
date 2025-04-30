@@ -3,7 +3,6 @@
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
-import { clientEnv } from "@cap/env";
 import { Logo } from "@cap/ui";
 import { useEffect, useRef, useState } from "react";
 import { ShareHeader } from "./_components/ShareHeader";
@@ -137,7 +136,7 @@ export const Share: React.FC<ShareProps> = ({
       <div className="py-4 mt-auto">
         <a
           target="_blank"
-          href={`${clientEnv.NEXT_PUBLIC_WEB_URL}?ref=video_${data.id}`}
+          href={`/?ref=video_${data.id}`}
           className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 bg-gray-1 rounded-full new-card-style w-fit"
         >
           <span className="text-sm">Recorded with</span>

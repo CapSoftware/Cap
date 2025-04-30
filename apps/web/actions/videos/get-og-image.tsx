@@ -2,7 +2,7 @@ import { ImageResponse } from "next/og";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
-import { clientEnv, serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
@@ -160,7 +160,7 @@ export async function generateVideoOgImage(videoId: string) {
 }
 
 async function getData(videoId: string) {
-  const query = await db
+  const query = await db()
     .select({
       video: videos,
       bucket: s3Buckets,
@@ -174,10 +174,10 @@ async function getData(videoId: string) {
   if (!result) return;
 
   const defaultBucket = {
-    name: clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET,
-    region: clientEnv.NEXT_PUBLIC_CAP_AWS_REGION,
-    accessKeyId: serverEnv.CAP_AWS_ACCESS_KEY,
-    secretAccessKey: serverEnv.CAP_AWS_SECRET_KEY,
+    name: serverEnv().CAP_AWS_BUCKET,
+    region: serverEnv().CAP_AWS_REGION,
+    accessKeyId: serverEnv().CAP_AWS_ACCESS_KEY,
+    secretAccessKey: serverEnv().CAP_AWS_SECRET_KEY,
   };
 
   return {

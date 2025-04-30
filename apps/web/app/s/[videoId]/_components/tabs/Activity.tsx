@@ -4,6 +4,7 @@ import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { CapCardAnalytics } from "@/app/dashboard/caps/components/CapCardAnalytics";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema } from "@cap/database/schema";
+import { Button } from "@cap/ui";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
@@ -102,22 +103,16 @@ const CommentInput: React.FC<CommentInputProps> = ({
             onChange={(e) => setContent(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={placeholder || "Leave a comment"}
-            className="w-full text-[15px] leading-[22px] text-gray-1 bg-transparent focus:outline-none"
+            className="w-full text-[15px] leading-[22px] text-gray-12 bg-transparent focus:outline-none"
           />
           <div className="flex mt-2 space-x-2">
-            <button
-              onClick={() => handleSubmit()}
-              className="px-2 py-1.5 bg-blue-500 text-white text-xs font-medium rounded-full hover:bg-blue-600 focus:outline-none"
-            >
+            <Button size="sm" variant="primary" onClick={() => handleSubmit()}>
               {buttonLabel}
-            </button>
+            </Button>
             {showCancelButton && onCancel && (
-              <button
-                onClick={onCancel}
-                className="px-2 py-1.5 bg-gray-1 text-gray-700 text-xs font-medium rounded-full hover:bg-gray-200 focus:outline-none"
-              >
+              <Button size="sm" variant="white" onClick={onCancel}>
                 Cancel
-              </button>
+              </Button>
             )}
           </div>
         </div>

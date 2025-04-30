@@ -1,6 +1,6 @@
 import { authOptions } from "@cap/database/auth/auth-options";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { clientEnv, serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
@@ -24,12 +24,14 @@ app.get(
   async (c) => {
     const { port, platform } = c.req.valid("query");
 
-    const secret = serverEnv.NEXTAUTH_SECRET;
+    const secret = serverEnv().NEXTAUTH_SECRET;
 
     const url = new URL(c.req.url);
-    const loginRedirectUrl = `${clientEnv.NEXT_PUBLIC_WEB_URL}/login?next=${clientEnv.NEXT_PUBLIC_WEB_URL}${url.pathname}${url.search}`;
+    const loginRedirectUrl = `${serverEnv().WEB_URL}/login?next=${
+      serverEnv().WEB_URL
+    }${url.pathname}${url.search}`;
 
-    const session = await getServerSession(authOptions);
+    const session = await getServerSession(authOptions());
     if (!session) return c.redirect(loginRedirectUrl);
 
     const token = getCookie(c, "next-auth.session-token");

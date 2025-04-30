@@ -14,7 +14,7 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: true }, { status: 401 });
   }
 
-  await db
+  await db()
     .update(users)
     .set({
       name: firstName,

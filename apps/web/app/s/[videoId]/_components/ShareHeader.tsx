@@ -1,17 +1,18 @@
-import { editTitle } from "@/actions/videos/edit-title";
-import { UpgradeModal } from "@/components/UpgradeModal";
-import { userSelectProps } from "@cap/database/auth/session";
-import { videos } from "@cap/database/schema";
-import { clientEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
-import { isUserOnProPlan } from "@cap/utils";
-import { Copy, Globe2 } from "lucide-react";
+import { videos } from "@cap/database/schema";
+import moment from "moment";
+import { userSelectProps } from "@cap/database/auth/session";
 import { faChevronDown } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import moment from "moment";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "react-hot-toast";
+import { Copy, Globe2 } from "lucide-react";
+import { buildEnv, NODE_ENV } from "@cap/env";
+import { editTitle } from "@/actions/videos/edit-title";
+import { usePublicEnv } from "@/utils/public-env";
+import { isUserOnProPlan } from "@cap/utils";
+import { UpgradeModal } from "@/components/UpgradeModal";
 import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
 import clsx from "clsx";
 
@@ -40,6 +41,8 @@ export const ShareHeader = ({
 
   const isOwner = user !== null && user.id.toString() === data.ownerId;
 
+  const { webUrl } = usePublicEnv();
+
   const handleBlur = async () => {
     setIsEditing(false);
 
@@ -65,17 +68,17 @@ export const ShareHeader = ({
   const getVideoLink = () => {
     return customDomain && domainVerified
       ? `https://${customDomain}/s/${data.id}`
-      : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+      : buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
       ? `https://cap.link/${data.id}`
-      : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${data.id}`;
+      : `${webUrl}/s/${data.id}`;
   };
 
   const getDisplayLink = () => {
     return customDomain && domainVerified
       ? `${customDomain}/s/${data.id}`
-      : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+      : buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
       ? `cap.link/${data.id}`
-      : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${data.id}`;
+      : `${webUrl}/s/${data.id}`;
   };
 
   const isUserPro = user
@@ -196,7 +199,7 @@ export const ShareHeader = ({
                 <div className="hidden md:flex">
                   <Button
                     onClick={() => {
-                      push(`${clientEnv.NEXT_PUBLIC_WEB_URL}/dashboard`);
+                      push("/dashboard");
                     }}
                   >
                     <span className="hidden text-sm text-white lg:block">

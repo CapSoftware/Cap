@@ -1,3 +1,6 @@
+import { useRive } from "@rive-app/react-canvas";
+import { useTheme } from "../../_components/DynamicSharedLayout";
+
 interface EmptySharedCapStateProps {
   spaceName: string;
 }
@@ -5,13 +8,18 @@ interface EmptySharedCapStateProps {
 export const EmptySharedCapState: React.FC<EmptySharedCapStateProps> = ({
   spaceName,
 }) => {
+  const { theme } = useTheme();
+  const { RiveComponent: EmptyCap } = useRive({
+    src: "/rive/empty.riv",
+    artboard: theme === "light" ? "emptyshared" : "darkemptyshared",
+    autoplay: true,
+  });
   return (
     <div className="flex flex-col flex-1 justify-center items-center w-full h-full">
-      <div className="mx-auto w-full max-w-md">
-        <img
-          className="w-full max-w-[400px] h-auto"
-          src="/illustrations/person-microphone.svg"
-          alt="Person using microphone"
+      <div className="mx-auto mb-20 w-full max-w-md">
+        <EmptyCap
+          key={theme + "empty-shared-cap"}
+          className="max-w-[300px] w-full mx-auto md:max-w-[600px] h-[250px]"
         />
       </div>
       <div className="text-center pb-[30px]">

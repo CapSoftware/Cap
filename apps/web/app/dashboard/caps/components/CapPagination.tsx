@@ -1,4 +1,4 @@
-import { clientEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 import {
   Pagination,
   PaginationContent,
@@ -24,16 +24,14 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
         {currentPage > 1 && (
           <PaginationItem>
             <PaginationPrevious
-              href={`${clientEnv.NEXT_PUBLIC_WEB_URL}/dashboard/caps?page=${
-                currentPage - 1
-              }`}
+              href={`/dashboard/caps?page=${currentPage - 1}`}
             />
           </PaginationItem>
         )}
         <PaginationItem>
           <PaginationLink
             className="min-w-[54px]"
-            href={`${clientEnv.NEXT_PUBLIC_WEB_URL}/dashboard/caps?page=1`}
+            href={`/dashboard/caps?page=1`}
             isActive={currentPage === 1}
           >
             1
@@ -42,7 +40,7 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
         {currentPage !== 1 && (
           <PaginationItem>
             <PaginationLink
-              href={`${clientEnv.NEXT_PUBLIC_WEB_URL}/dashboard/caps?page=${currentPage}`}
+              href={`/dashboard/caps?page=${currentPage}`}
               isActive={true}
             >
               {currentPage}
@@ -52,9 +50,7 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
         {totalPages > currentPage + 1 && (
           <PaginationItem>
             <PaginationLink
-              href={`${clientEnv.NEXT_PUBLIC_WEB_URL}/dashboard/caps?page=${
-                currentPage + 1
-              }`}
+              href={`/dashboard/caps?page=${currentPage + 1}`}
               isActive={false}
             >
               {currentPage + 1}
@@ -64,7 +60,7 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
         {currentPage > 2 && <PaginationEllipsis />}
         <PaginationItem>
           <PaginationNext
-            href={`${clientEnv.NEXT_PUBLIC_WEB_URL}/dashboard/caps?page=${
+            href={`/dashboard/caps?page=${
               currentPage === totalPages ? currentPage : currentPage + 1
             }`}
           />

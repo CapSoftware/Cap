@@ -1,7 +1,7 @@
 import { serverEnv } from "@cap/env";
 import type { Config } from "drizzle-kit";
 
-const URL = serverEnv.DATABASE_MIGRATION_URL ?? serverEnv.DATABASE_URL;
+const URL = serverEnv().DATABASE_MIGRATION_URL ?? serverEnv().DATABASE_URL;
 
 if (!URL)
   throw new Error("DATABASE_URL or DATABASE_MIGRATION_URL must be set!");

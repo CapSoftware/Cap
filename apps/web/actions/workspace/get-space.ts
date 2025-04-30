@@ -9,7 +9,7 @@ export async function getSpace(spaceId: string) {
     throw new Error("Space ID is required");
   }
 
-  const [space] = await db
+  const [space] = await db()
     .select({
       workosOrganizationId: spaces.workosOrganizationId,
       workosConnectionId: spaces.workosConnectionId,
@@ -27,4 +27,4 @@ export async function getSpace(spaceId: string) {
     connectionId: space.workosConnectionId,
     name: space.name,
   };
-} 
+}

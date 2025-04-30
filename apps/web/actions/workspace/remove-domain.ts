@@ -1,4 +1,4 @@
-'use server';
+"use server";
 
 import { getCurrentUser } from "@cap/database/auth/session";
 import { spaces } from "@cap/database/schema";
@@ -13,7 +13,10 @@ export async function removeWorkspaceDomain(spaceId: string) {
     throw new Error("Unauthorized");
   }
 
-  const [space] = await db.select().from(spaces).where(eq(spaces.id, spaceId));
+  const [space] = await db()
+    .select()
+    .from(spaces)
+    .where(eq(spaces.id, spaceId));
 
   if (!space || space.ownerId !== user.id) {
     throw new Error("Only the owner can remove the custom domain");
@@ -36,7 +39,7 @@ export async function removeWorkspaceDomain(spaceId: string) {
       );
     }
 
-    await db
+    await db()
       .update(spaces)
       .set({
         customDomain: null,
@@ -44,8 +47,8 @@ export async function removeWorkspaceDomain(spaceId: string) {
       })
       .where(eq(spaces.id, spaceId));
 
-    revalidatePath('/dashboard/settings/workspace');
-    
+    revalidatePath("/dashboard/settings/workspace");
+
     return { success: true };
   } catch (error) {
     if (error instanceof Error) {
@@ -53,4 +56,4 @@ export async function removeWorkspaceDomain(spaceId: string) {
     }
     throw new Error("Failed to remove domain");
   }
-} 
+}

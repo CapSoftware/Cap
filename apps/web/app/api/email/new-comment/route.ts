@@ -5,7 +5,7 @@ import { db } from "@cap/database";
 import { eq, and, gt, ne } from "drizzle-orm";
 import { sendEmail } from "@cap/database/emails/config";
 import { NewComment } from "@cap/database/emails/new-comment";
-import { clientEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 
 // Cache to store the last email sent time for each user
 const lastEmailSentCache = new Map<string, Date>();
@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
   try {
     console.log(`Fetching comment details for commentId: ${commentId}`);
     // Get the comment details
-    const commentDetails = await db
+    const commentDetails = await db()
       .select({
         id: comments.id,
         content: comments.content,
@@ -68,7 +68,7 @@ export async function POST(request: NextRequest) {
 
     console.log(`Fetching video details for videoId: ${comment.videoId}`);
     // Get the video details
-    const videoDetails = await db
+    const videoDetails = await db()
       .select({
         id: videos.id,
         name: videos.name,
@@ -97,7 +97,7 @@ export async function POST(request: NextRequest) {
 
     console.log(`Fetching owner details for userId: ${video.ownerId}`);
     // Get the video owner's email
-    const ownerDetails = await db
+    const ownerDetails = await db()
       .select({
         id: users.id,
         email: users.email,
@@ -128,7 +128,7 @@ export async function POST(request: NextRequest) {
     let commenterName = "Anonymous";
     if (comment.authorId) {
       console.log(`Fetching commenter details for userId: ${comment.authorId}`);
-      const commenterDetails = await db
+      const commenterDetails = await db()
         .select({
           id: users.id,
           name: users.name,
@@ -178,7 +178,7 @@ export async function POST(request: NextRequest) {
     console.log(
       `Checking for recent comments since ${fifteenMinutesAgo.toISOString()}`
     );
-    const recentComments = await db
+    const recentComments = await db()
       .select({
         id: comments.id,
       })
@@ -205,9 +205,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Generate the video URL
-    const videoUrl = clientEnv.NEXT_PUBLIC_IS_CAP
+    const videoUrl = buildEnv.NEXT_PUBLIC_IS_CAP
       ? `https://cap.link/${video.id}`
-      : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${video.id}`;
+      : `${serverEnv().WEB_URL}/s/${video.id}`;
     console.log(`Generated video URL: ${videoUrl}`);
 
     // Send the email

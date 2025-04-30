@@ -8,9 +8,8 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@cap/ui";
-import { MoreVertical } from "lucide-react";
+import { MoreVertical, Sparkles } from "lucide-react";
 import { useState } from "react";
-
 import {
   useSharedContext,
   useTheme,

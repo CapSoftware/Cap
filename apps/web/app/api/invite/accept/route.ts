@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
 
   try {
     // Find the invite
-    const [invite] = await db
+    const [invite] = await db()
       .select()
       .from(spaceInvites)
       .where(eq(spaceInvites.id, inviteId));
@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Get the space owner's subscription ID
-    const [spaceOwner] = await db
+    const [spaceOwner] = await db()
       .select({
         stripeSubscriptionId: users.stripeSubscriptionId,
       })
@@ -45,7 +45,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Create a new space member
-    await db.insert(spaceMembers).values({
+    await db().insert(spaceMembers).values({
       id: nanoId(),
       spaceId: invite.spaceId,
       userId: user.id,
@@ -53,7 +53,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Update the user's thirdPartyStripeSubscriptionId
-    await db
+    await db()
       .update(users)
       .set({
         thirdPartyStripeSubscriptionId: spaceOwner.stripeSubscriptionId,
@@ -61,7 +61,7 @@ export async function POST(request: NextRequest) {
       .where(eq(users.id, user.id));
 
     // Delete the invite
-    await db.delete(spaceInvites).where(eq(spaceInvites.id, inviteId));
+    await db().delete(spaceInvites).where(eq(spaceInvites.id, inviteId));
 
     return NextResponse.json({ success: true });
   } catch (error) {

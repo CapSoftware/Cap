@@ -52,8 +52,8 @@ async function main() {
 
   if (hasWeb) {
     envs.VITE_SERVER_URL = "http://localhost:3000";
-    envs.NEXT_PUBLIC_WEB_URL = "http://localhost:3000";
-    envs.NEXTAUTH_URL = envs.NEXT_PUBLIC_WEB_URL;
+    envs.WEB_URL = "http://localhost:3000";
+    envs.NEXTAUTH_URL = envs.WEB_URL;
 
     if (!allEnvs.NEXTAUTH_SECRET) {
       allEnvs.NEXTAUTH_SECRET = crypto.randomBytes(32).toString("base64");
@@ -117,26 +117,25 @@ async function main() {
               placeholder: allEnvs.CAP_AWS_SECRET_KEY,
               defaultValue: allEnvs.CAP_AWS_SECRET_KEY,
             }),
-          NEXT_PUBLIC_CAP_AWS_BUCKET: () =>
+          CAP_AWS_BUCKET: () =>
             text({
-              message: "NEXT_PUBLIC_CAP_AWS_BUCKET",
-              defaultValue: allEnvs.NEXT_PUBLIC_CAP_AWS_BUCKET,
-              placeholder: allEnvs.NEXT_PUBLIC_CAP_AWS_BUCKET,
+              message: "CAP_AWS_BUCKET",
+              defaultValue: allEnvs.CAP_AWS_BUCKET,
+              placeholder: allEnvs.CAP_AWS_BUCKET,
             }),
-          NEXT_PUBLIC_CAP_AWS_REGION: () =>
+          CAP_AWS_REGION: () =>
             text({
-              message: "NEXT_PUBLIC_CAP_AWS_REGION",
+              message: "CAP_AWS_REGION",
               defaultValue: allEnvs.NEXT_PUBLIC_CAP_AWS_REGION,
               placeholder: allEnvs.NEXT_PUBLIC_CAP_AWS_REGION,
             }),
-          NEXT_PUBLIC_CAP_AWS_ENDPOINT: () =>
+          CAP_AWS_ENDPOINT: () =>
             text({
-              message: "NEXT_PUBLIC_CAP_AWS_ENDPOINT",
+              message: "CAP_AWS_ENDPOINT",
               defaultValue: allEnvs.NEXT_PUBLIC_CAP_AWS_ENDPOINT,
               placeholder: allEnvs.NEXT_PUBLIC_CAP_AWS_ENDPOINT,
             }),
-          NEXT_PUBLIC_CAP_AWS_BUCKET_URL: () =>
-            text({ message: "NEXT_PUBLIC_CAP_AWS_BUCKET_URL" }),
+          CAP_AWS_BUCKET_URL: () => text({ message: "CAP_AWS_BUCKET_URL" }),
           CAP_CLOUDFRONT_DISTRIBUTION_ID: () =>
             text({ message: "CAP_CLOUDFRONT_DISTRIBUTION_ID" }),
         },
@@ -150,12 +149,14 @@ async function main() {
 
       envs.CAP_AWS_ACCESS_KEY = DOCKER_S3_ENVS.accessKey;
       envs.CAP_AWS_SECRET_KEY = DOCKER_S3_ENVS.secretKey;
-      envs.NEXT_PUBLIC_CAP_AWS_BUCKET = DOCKER_S3_ENVS.bucket;
-      envs.NEXT_PUBLIC_CAP_AWS_REGION = DOCKER_S3_ENVS.region;
-      envs.NEXT_PUBLIC_CAP_AWS_ENDPOINT = DOCKER_S3_ENVS.endpoint;
+      envs.CAP_AWS_BUCKET = DOCKER_S3_ENVS.bucket;
+      envs.CAP_AWS_REGION = DOCKER_S3_ENVS.region;
+      envs.CAP_AWS_ENDPOINT = DOCKER_S3_ENVS.endpoint;
     }
-  } else {
-    envs.VITE_SERVER_URL = "https://cap.so";
+
+    envs.NEXT_PUBLIC_WEB_URL = envs.WEB_URL;
+    envs.NEXT_PUBLIC_CAP_AWS_BUCKET = envs.CAP_AWS_BUCKET;
+    envs.NEXT_PUBLIC_CAP_AWS_REGION = envs.CAP_AWS_REGION;
   }
 
   if (hasDesktop) {
@@ -163,6 +164,14 @@ async function main() {
 
     const values = await group(
       {
+        VITE_SERVER_URL: () => {
+          if (!hasWeb)
+            return text({
+              message: "VITE_SERVER_URL",
+              placeholder: "http://cap.so",
+              defaultValue: "http://cap.so",
+            });
+        },
         VITE_VERCEL_AUTOMATION_BYPASS_SECRET: () => {
           if (!hasWeb)
             return text({

@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
 
   try {
     // First, get the video to find the owner or shared space
-    const video = await db
+    const video = await db()
       .select({
         id: videos.id,
         ownerId: videos.ownerId,
@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Check if the video is shared with a space
-    const sharedVideo = await db
+    const sharedVideo = await db()
       .select({
         spaceId: sharedVideos.spaceId,
       })
@@ -47,7 +47,7 @@ export async function GET(request: NextRequest) {
 
     // If we have a space ID, get the space's custom domain
     if (spaceId) {
-      const space = await db
+      const space = await db()
         .select({
           customDomain: spaces.customDomain,
           domainVerified: spaces.domainVerified,
@@ -65,7 +65,7 @@ export async function GET(request: NextRequest) {
     }
 
     // If no shared space or no custom domain, check the owner's space
-    const ownerSpaces = await db
+    const ownerSpaces = await db()
       .select({
         customDomain: spaces.customDomain,
         domainVerified: spaces.domainVerified,

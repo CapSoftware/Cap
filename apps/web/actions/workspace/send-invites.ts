@@ -1,4 +1,4 @@
-'use server';
+"use server";
 
 import { getCurrentUser } from "@cap/database/auth/session";
 import { spaces, spaceInvites } from "@cap/database/schema";
@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 import { nanoId } from "@cap/database/helpers";
 import { sendEmail } from "@cap/database/emails/config";
 import { WorkspaceInvite } from "@cap/database/emails/workspace-invite";
-import { clientEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 import { revalidatePath } from "next/cache";
 
 export async function sendWorkspaceInvites(
@@ -20,7 +20,7 @@ export async function sendWorkspaceInvites(
     throw new Error("Unauthorized");
   }
 
-  const space = await db.select().from(spaces).where(eq(spaces.id, spaceId));
+  const space = await db().select().from(spaces).where(eq(spaces.id, spaceId));
 
   if (!space || space.length === 0) {
     throw new Error("Workspace not found");
@@ -37,7 +37,7 @@ export async function sendWorkspaceInvites(
 
   for (const email of validEmails) {
     const inviteId = nanoId();
-    await db.insert(spaceInvites).values({
+    await db().insert(spaceInvites).values({
       id: inviteId,
       spaceId: spaceId,
       invitedEmail: email.trim(),
@@ -46,7 +46,7 @@ export async function sendWorkspaceInvites(
     });
 
     // Send invitation email
-    const inviteUrl = `${clientEnv.NEXT_PUBLIC_WEB_URL}/invite/${inviteId}`;
+    const inviteUrl = `${serverEnv().WEB_URL}/invite/${inviteId}`;
     await sendEmail({
       email: email.trim(),
       subject: `Invitation to join ${space[0].name} on Cap`,
@@ -58,7 +58,7 @@ export async function sendWorkspaceInvites(
     });
   }
 
-  revalidatePath('/dashboard/settings/workspace');
-  
+  revalidatePath("/dashboard/settings/workspace");
+
   return { success: true };
-} 
+}

@@ -1,4 +1,4 @@
-'use server';
+"use server";
 
 import { dub } from "@/utils/dub";
 import { ClicksCount } from "dub/models/components";
@@ -9,7 +9,7 @@ export async function getVideoAnalytics(videoId: string) {
   }
 
   try {
-    const response = await dub.analytics.retrieve({
+    const response = await dub().analytics.retrieve({
       domain: "cap.link",
       key: videoId,
     });
@@ -28,4 +28,4 @@ export async function getVideoAnalytics(videoId: string) {
     console.error("Error fetching video analytics:", error);
     return { count: 0 };
   }
-} 
+}

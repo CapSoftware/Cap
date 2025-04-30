@@ -21,6 +21,7 @@ const nextConfig = {
     ignoreBuildErrors: true,
   },
   experimental: {
+    instrumentationHook: process.env.DOCKER_BUILD === "true",
     optimizePackageImports: ["@cap/ui", "@cap/utils", "@cap/web-api-contract"],
     serverComponentsExternalPackages: [
       "@react-email/components",
@@ -61,15 +62,15 @@ const nextConfig = {
         destination: "https://l.cap.so/api/commercial/:path*",
       },
       {
-        source: '/s/:videoId',
-        destination: '/s/:videoId',
+        source: "/s/:videoId",
+        destination: "/s/:videoId",
         has: [
           {
-            type: 'host',
-            value: '(?!cap\.so|cap\.link).*',
+            type: "host",
+            value: "(?!cap.so|cap.link).*",
           },
         ],
-      }
+      },
     ];
   },
   async redirects() {
@@ -100,6 +101,8 @@ const nextConfig = {
   env: {
     appVersion: version,
   },
+  // If the DOCKER_BUILD environment variable is set to true, we are output nextjs to standalone ready for docker deployment
+  output: process.env.DOCKER_BUILD === "true" ? "standalone" : undefined,
 };
 
 export default nextConfig;

@@ -4,10 +4,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { db } from "@cap/database";
 import { and, eq } from "drizzle-orm";
-import {
-  DeleteObjectsCommand,
-  ListObjectsV2Command,
-} from "@aws-sdk/client-s3";
+import { DeleteObjectsCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
 
 export async function deleteVideo(videoId: string) {
@@ -22,7 +19,7 @@ export async function deleteVideo(videoId: string) {
       };
     }
 
-    const query = await db
+    const query = await db()
       .select({ video: videos, bucket: s3Buckets })
       .from(videos)
       .leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
@@ -43,7 +40,7 @@ export async function deleteVideo(videoId: string) {
       };
     }
 
-    await db
+    await db()
       .delete(videos)
       .where(and(eq(videos.id, videoId), eq(videos.ownerId, userId)));
 
@@ -82,4 +79,4 @@ export async function deleteVideo(videoId: string) {
       message: "Failed to delete video",
     };
   }
-} 
+}

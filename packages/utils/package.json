@@ -8,8 +8,7 @@
   },
   "scripts": {
     "lint": "eslint src --cache",
-    "typecheck": "tsc -b",
-    "build": "tsc"
+    "typecheck": "tsc -b"
   },
   "devDependencies": {
     "react": "^18.2.0",

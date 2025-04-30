@@ -8,7 +8,7 @@ export async function POST(request: NextRequest) {
 
   try {
     // Delete the invite
-    await db.delete(spaceInvites).where(eq(spaceInvites.id, inviteId));
+    await db().delete(spaceInvites).where(eq(spaceInvites.id, inviteId));
 
     return NextResponse.json({ success: true });
   } catch (error) {

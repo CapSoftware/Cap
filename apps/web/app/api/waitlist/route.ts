@@ -14,7 +14,7 @@ export async function POST(request: Request) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${serverEnv.NEXT_LOOPS_KEY}`,
+      Authorization: `Bearer ${serverEnv().NEXT_LOOPS_KEY}`,
     },
     body: JSON.stringify({
       email,
