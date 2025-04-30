@@ -4,6 +4,7 @@
     { "path": "./packages/ui" },
     { "path": "./packages/ui-solid" },
     { "path": "./packages/utils" },
-    { "path": "./apps/desktop" }
+    { "path": "./apps/desktop" },
+    { "path": "./apps/web" }
   ]
 }

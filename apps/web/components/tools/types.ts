@@ -1,11 +1,7 @@
 export interface ToolPageContent {
-  slug: string;
   title: string;
   description: string;
-  publishedAt: string;
-  category: string;
-  author: string;
-  tags: string[];
+  tags?: string[];
 
   cta: {
     title: string;

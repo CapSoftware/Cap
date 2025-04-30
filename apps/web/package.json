@@ -67,8 +67,8 @@
     "lodash": "^4.17.21",
     "lucide-react": "^0.294.0",
     "moment": "^2.30.1",
-    "next": "14.2.3",
-    "next-auth": "^4.24.5",
+    "next": "^14.2.28",
+    "next-auth": "^4.24.11",
     "next-contentlayer2": "^0.5.3",
     "next-mdx-remote": "^4.4.1",
     "nextjs-cors": "^2.2.0",
@@ -90,7 +90,7 @@
     "tailwind-merge": "^2.1.0",
     "uuid": "^9.0.1",
     "video.js": "^8.17.3",
-    "zod": "^3.24.2"
+    "zod": "^3.24.3"
   },
   "devDependencies": {
     "@types/file-saver": "^2.0.7",
