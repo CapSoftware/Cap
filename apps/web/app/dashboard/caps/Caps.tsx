@@ -206,7 +206,7 @@ export const Caps = ({
     }
   };
 
-  if (data.length === 0) {
+  if (data.length > 0) {
     return <EmptyCapState />;
   }
 
