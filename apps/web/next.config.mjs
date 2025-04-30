@@ -21,7 +21,7 @@ const nextConfig = {
     ignoreBuildErrors: true,
   },
   experimental: {
-    instrumentationHook: true,
+    instrumentationHook: process.env.DOCKER_BUILD === "true",
     optimizePackageImports: ["@cap/ui", "@cap/utils", "@cap/web-api-contract"],
     serverComponentsExternalPackages: [
       "@react-email/components",
