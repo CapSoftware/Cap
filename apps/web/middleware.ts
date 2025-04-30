@@ -1,5 +1,6 @@
 import { db } from "@cap/database";
 import { organizations } from "@cap/database/schema";
+import { serverEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
 import { buildEnv, serverEnv } from "@cap/env";
 import { notFound } from "next/navigation";
@@ -39,6 +40,7 @@ export async function middleware(request: NextRequest) {
     // We're on a custom domain at this point
     // Only allow /s/ routes for custom domains
     if (!path.startsWith("/s/")) {
+
       const url = new URL(request.url);
       url.hostname = webUrl;
       console.log({ url });
