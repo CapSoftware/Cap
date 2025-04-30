@@ -9,8 +9,8 @@ interface EmptyCapStateProps {
 export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
   const { theme } = useTheme();
   const { RiveComponent: EmptyCap } = useRive({
-    src: theme === "light" ? "/rive/capsempty.riv" : "/rive/darkcapsempty.riv",
-    artboard: "empty",
+    src: "/rive/empty.riv",
+    artboard: theme === "light" ? "empty" : "darkempty",
     autoplay: true,
   });
   return (
@@ -19,7 +19,7 @@ export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
         <div className="mx-auto w-full mb-10 max-w-[450px] flex justify-center items-center">
           <EmptyCap key={theme + "empty-cap"} className="h-[150px] w-[400px]" />
         </div>
-        <div className="flex flex-col items-center">
+        <div className="flex flex-col items-center px-5">
           <p className="mb-1 text-xl font-semibold text-gray-12">
             Hey{userName ? ` ${userName}` : ""}! Record your first Cap
           </p>
