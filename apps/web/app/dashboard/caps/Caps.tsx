@@ -2,10 +2,11 @@
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { useApiClient } from "@/utils/web-api";
 import { VideoMetadata } from "@cap/database/types";
+import { AnimatePresence, motion } from "framer-motion";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
-import { CapCard, CapCardProps } from "./components/CapCard";
+import { CapCard } from "./components/CapCard";
 import { CapPagination } from "./components/CapPagination";
 import { EmptyCapState } from "./components/EmptyCapState";
 import { Button } from "@cap/ui";
@@ -42,6 +43,8 @@ export const Caps = ({
   const limit = 15;
   const totalPages = Math.ceil(count / limit);
   const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
+  const previousCountRef = useRef<number>(0);
+  const [animateDirection, setAnimateDirection] = useState<"up" | "down">("up");
   const [isDeleting, setIsDeleting] = useState(false);
 
   const anyCapSelected = selectedCaps.length > 0;
@@ -70,6 +73,49 @@ export const Caps = ({
     fetchAnalytics();
   }, [data]);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && selectedCaps.length > 0) {
+        setSelectedCaps([]);
+      }
+
+      if (
+        (e.key === "Delete" || e.key === "Backspace") &&
+        selectedCaps.length > 0
+      ) {
+        if (e.key === "Backspace") {
+          e.preventDefault();
+        }
+
+        if (
+          !["INPUT", "TEXTAREA", "SELECT"].includes(
+            document.activeElement?.tagName || ""
+          )
+        ) {
+          deleteSelectedCaps();
+        }
+      }
+
+      if (e.key === "a" && (e.ctrlKey || e.metaKey) && data.length > 0) {
+        if (
+          !["INPUT", "TEXTAREA", "SELECT"].includes(
+            document.activeElement?.tagName || ""
+          )
+        ) {
+          e.preventDefault();
+          setSelectedCaps(data.map((cap) => cap.id));
+          setAnimateDirection("up");
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [selectedCaps.length, data]);
+
   const deleteCap = async (videoId: string) => {
     if (
       !window.confirm(
@@ -91,12 +137,17 @@ export const Caps = ({
     }
   };
 
-  const toggleCapSelection = (capId: string) => {
-    setSelectedCaps((prevSelected) =>
-      prevSelected.includes(capId)
-        ? prevSelected.filter((id) => id !== capId)
-        : [...prevSelected, capId]
-    );
+  const handleCapSelection = (capId: string) => {
+    setSelectedCaps((prev) => {
+      const newSelection = prev.includes(capId)
+        ? prev.filter((id) => id !== capId)
+        : [...prev, capId];
+
+      previousCountRef.current = prev.length;
+      setAnimateDirection(newSelection.length > prev.length ? "up" : "down");
+
+      return newSelection;
+    });
   };
 
   const deleteSelectedCaps = async () => {
@@ -162,7 +213,7 @@ export const Caps = ({
   }
 
   return (
-    <div className="flex flex-col w-full relative">
+    <div className="flex relative flex-col w-full">
       <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
         {data.map((cap) => (
           <CapCard
@@ -173,7 +224,7 @@ export const Caps = ({
             userId={user?.id}
             userSpaces={userSpaces}
             isSelected={selectedCaps.includes(cap.id)}
-            onSelectToggle={() => toggleCapSelection(cap.id)}
+            onSelectToggle={() => handleCapSelection(cap.id)}
             anyCapSelected={anyCapSelected}
           />
         ))}
@@ -184,35 +235,72 @@ export const Caps = ({
         </div>
       )}
 
-      {selectedCaps.length > 0 && (
-        <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-white shadow-lg rounded-xl border border-gray-200 px-6 py-4 flex justify-between items-center z-50 w-full max-w-xl mx-auto">
-          <div className="text-sm font-medium text-gray-400">
-            {selectedCaps.length} cap{selectedCaps.length !== 1 ? "s" : ""}{" "}
-            selected
-          </div>
-          <div className="flex gap-2 ml-4">
-            <Button
-              style={{ minWidth: "auto" }}
-              variant="destructive"
-              onClick={deleteSelectedCaps}
-              disabled={isDeleting}
-              className="text-sm w-[50px]"
-              spinner={isDeleting}
-              size="sm"
-            >
-              <FontAwesomeIcon icon={faTrash} />
-            </Button>
-            <Button
-              variant="white"
-              onClick={() => setSelectedCaps([])}
-              className="text-sm"
-              size="sm"
-            >
-              Cancel
-            </Button>
-          </div>
-        </div>
-      )}
+      <AnimatePresence>
+        {selectedCaps.length > 0 && (
+          <motion.div
+            className="flex fixed right-0 left-0 bottom-4 z-50 justify-between items-center px-6 py-3 mx-auto w-full max-w-xl rounded-xl border shadow-lg border-gray-3 bg-gray-2"
+            initial={{ opacity: 0, y: 10, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{
+              opacity: 0,
+              y: 10,
+              scale: 0.9,
+              transition: { duration: 0.2 },
+            }}
+            transition={{
+              type: "spring",
+              damping: 15,
+              stiffness: 200,
+            }}
+          >
+            <div className="flex gap-1 text-sm font-medium text-gray-12">
+              <AnimatePresence initial={false} mode="wait">
+                <motion.div
+                  initial={{
+                    opacity: 0,
+                    y: animateDirection === "up" ? 10 : -10,
+                    scale: 0.9,
+                  }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  key={selectedCaps.length}
+                  layoutId="selected-caps-count"
+                  className="tabular-nums"
+                  exit={{
+                    opacity: 0,
+                    y: animateDirection === "up" ? -10 : 10,
+                    scale: 0.9,
+                  }}
+                  transition={{ duration: 0.1, ease: "easeInOut" }}
+                >
+                  {selectedCaps.length}
+                </motion.div>
+              </AnimatePresence>
+              cap{selectedCaps.length !== 1 ? "s" : ""} selected
+            </div>
+            <div className="flex gap-2 ml-4">
+              <Button
+                variant="dark"
+                onClick={() => setSelectedCaps([])}
+                className="text-sm"
+                size="sm"
+              >
+                Cancel
+              </Button>
+              <Button
+                style={{ minWidth: "auto" }}
+                variant="destructive"
+                onClick={deleteSelectedCaps}
+                disabled={isDeleting}
+                className="text-sm w-[40px]"
+                spinner={isDeleting}
+                size="sm"
+              >
+                <FontAwesomeIcon icon={faTrash} />
+              </Button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

@@ -1,15 +1,15 @@
 "use client";
 
-import { createContext, PropsWithChildren, useEffect } from "react";
+import { PropsWithChildren, useEffect } from "react";
 import { identifyUser, initAnonymousUser, trackEvent } from "./utils/analytics";
 import posthog from "posthog-js";
 import { PostHogProvider as PHProvider } from "posthog-js/react";
-import { buildEnv, serverEnv } from "@cap/env";
+import { buildEnv } from "@cap/env";
 import PostHogPageView from "./PosthogPageView";
 import Intercom from "@intercom/messenger-js-sdk";
 import { usePathname } from "next/navigation";
 
-export function PostHogProvider({ children }: { children: React.ReactNode }) {
+export function PostHogProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     const key = buildEnv.NEXT_PUBLIC_POSTHOG_KEY;
     const host = buildEnv.NEXT_PUBLIC_POSTHOG_HOST;

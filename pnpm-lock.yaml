@@ -435,12 +435,6 @@ importers:
       '@deepgram/sdk':
         specifier: ^3.3.4
         version: 3.7.0(encoding@0.1.13)
-      '@ffmpeg/ffmpeg':
-        specifier: ^0.12.10
-        version: 0.12.10
-      '@ffmpeg/util':
-        specifier: ^0.12.1
-        version: 0.12.1
       '@fortawesome/free-brands-svg-icons':
         specifier: ^6.7.2
         version: 6.7.2
@@ -471,6 +465,9 @@ importers:
       '@octokit/rest':
         specifier: ^20.0.2
         version: 20.1.1
+      '@radix-ui/colors':
+        specifier: ^3.0.0
+        version: 3.0.0
       '@radix-ui/react-tooltip':
         specifier: ^1.2.0
         version: 1.2.0(@types/react-dom@18.3.0)(@types/react@18.3.9)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -480,6 +477,12 @@ importers:
       '@react-email/render':
         specifier: 0.0.11
         version: 0.0.11
+      '@remotion/media-parser':
+        specifier: ^4.0.291
+        version: 4.0.291
+      '@remotion/webcodecs':
+        specifier: ^4.0.291
+        version: 4.0.291
       '@rive-app/react-canvas':
         specifier: ^4.18.7
         version: 4.18.7(react@18.3.1)
@@ -501,6 +504,9 @@ importers:
       '@ts-rest/core':
         specifier: ^3.52.1
         version: 3.52.1(@types/node@20.16.9)(zod@3.24.2)
+      '@types/js-cookie':
+        specifier: ^3.0.6
+        version: 3.0.6
       '@uidotdev/usehooks':
         specifier: ^2.4.1
         version: 2.4.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -537,12 +543,18 @@ importers:
       geist:
         specifier: ^1.3.1
         version: 1.3.1(next@14.2.3(@opentelemetry/api@1.9.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))
+      gif.js:
+        specifier: 0.2.0
+        version: 0.2.0
       hls.js:
         specifier: ^1.5.3
         version: 1.5.15
       hono:
         specifier: ^4.7.1
         version: 4.7.1
+      js-cookie:
+        specifier: ^3.0.5
+        version: 3.0.5
       jszip:
         specifier: ^3.10.1
         version: 3.10.1
@@ -563,7 +575,7 @@ importers:
         version: 4.24.8(next@14.2.3(@opentelemetry/api@1.9.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(nodemailer@6.9.15)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       next-contentlayer2:
         specifier: ^0.5.3
-        version: 0.5.3(acorn@8.14.0)(contentlayer2@0.5.3(acorn@8.14.0)(esbuild@0.25.2))(esbuild@0.25.2)(next@14.2.3(@opentelemetry/api@1.9.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+        version: 0.5.3(acorn@8.14.1)(contentlayer2@0.5.3(acorn@8.14.1)(esbuild@0.25.2))(esbuild@0.25.2)(next@14.2.3(@opentelemetry/api@1.9.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       next-mdx-remote:
         specifier: ^4.4.1
         version: 4.4.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -3133,18 +3145,6 @@ packages:
     resolution: {integrity: sha512-vBZP4NlzfOlerQTnba4aqZoMhE/a9HY7HRqoOPaETQcSQuWEIyZMHGfVu6w9wGtGK5fED5qRs2DteVCjOH60sA==}
     engines: {node: '>=14'}
 
-  '@ffmpeg/ffmpeg@0.12.10':
-    resolution: {integrity: sha512-lVtk8PW8e+NUzGZhPTWj2P1J4/NyuCrbDD3O9IGpSeLYtUZKBqZO8CNj1WYGghep/MXoM8e1qVY1GztTkf8YYQ==}
-    engines: {node: '>=18.x'}
-
-  '@ffmpeg/types@0.12.2':
-    resolution: {integrity: sha512-NJtxwPoLb60/z1Klv0ueshguWQ/7mNm106qdHkB4HL49LXszjhjCCiL+ldHJGQ9ai2Igx0s4F24ghigy//ERdA==}
-    engines: {node: '>=16.x'}
-
-  '@ffmpeg/util@0.12.1':
-    resolution: {integrity: sha512-10jjfAKWaDyb8+nAkijcsi9wgz/y26LOc1NKJradNMyCIl6usQcBbhkjX5qhALrSBcOy6TOeksunTYa+a03qNQ==}
-    engines: {node: '>=18.x'}
-
   '@floating-ui/core@1.6.8':
     resolution: {integrity: sha512-7XJ9cPU+yI2QeLS+FCSlqNFZJq8arvswefkZrYI1yQBbftw6FyrZOxYSh+9S7z7TpeWlRt9zJ5IhM1WIL334jA==}
 
@@ -4382,6 +4382,9 @@ packages:
   '@pulumiverse/vercel@1.14.3':
     resolution: {integrity: sha512-Wdq/vNPNWh/cjzv+VHCjT30gBBhrrmX5J8E8VlNJ8bQ5mkMfEZDPpHaY+6NTFIb6arF+KUGdIsUFsndT50pmeA==}
 
+  '@radix-ui/colors@3.0.0':
+    resolution: {integrity: sha512-FUOsGBkHrYJwCSEtWRCIfQbZG7q1e6DgxCIOe1SUQzDe/7rXXeA47s8yCn6fuTNQAj1Zq4oTFi9Yjp3wzElcxg==}
+
   '@radix-ui/primitive@1.0.0':
     resolution: {integrity: sha512-3e7rn8FDMin4CgeL7Z/49smCA3rFYY3Ha2rUQ7HRWFadS5iCRw08ZgVT1LaNTCNqgvrUiyczLflrVrF0SRQtNA==}
 
@@ -5143,6 +5146,15 @@ packages:
     resolution: {integrity: sha512-baiMx18+IMuD1yyvOGaHM9QrVUPGGG0jC+z+IPHnRJWUAUvaKuWKyE8gjDj2rzv3sz9zOGoRSPgeBVHRhZnBlA==}
     engines: {node: '>=14.0.0'}
 
+  '@remotion/licensing@4.0.291':
+    resolution: {integrity: sha512-+0yfhhgXHPfRUG7Oqo99wN6EqjKRCtDZc9dGDB9mQjMiyJYkyFUjZRtp+CYTIhA8fBy9FsUQAZEheb3/AkHmdw==}
+
+  '@remotion/media-parser@4.0.291':
+    resolution: {integrity: sha512-NV+qetN27mmBGNu6k8YG03/y0mLPkIoZ1xmuZDbejobyRcdY2mklVOde8+iD8QcssL8KjZhjC8hRsCOt7o9Mqg==}
+
+  '@remotion/webcodecs@4.0.291':
+    resolution: {integrity: sha512-v9kd/Wves5ZRH1zUoBipD/FnZtJvL75r/c7mdFSCO3fEC+gzEw4BLcz+HzY4Gyoj3VuOFpFTxyH3fpmwM/PZ0g==}
+
   '@rive-app/canvas@2.26.7':
     resolution: {integrity: sha512-0/L3jsLdpVXfZHqkK6famgLQf7wFT1TuWrB4A8I8K+/uLPulpTK76/jJ78odCdZ7WyO5OpRkK2OwuW5MvH4qJg==}
 
@@ -5899,10 +5911,10 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@9.0.0-beta.4':
-    resolution: {integrity: sha512-D718PrP4rbppHUE7HsosbHxTQNGRal4BazV6RCrDWnu4+UG64qur3KztjxeGZdU+Sv7UEF5BJiYEokQHH0aBNw==}
+  '@storybook/builder-vite@9.0.0-beta.6':
+    resolution: {integrity: sha512-eOv2hlqVdwtyMgMxTaZliEkWEKt+BoxTUZOHmw0mcY7aa6iKhegMLRMEMddr2Dqn+QuAEOCi+O3af6eQwrSm5g==}
     peerDependencies:
-      storybook: ^9.0.0-beta.4
+      storybook: ^9.0.0-beta.6
       vite: ^5.0.0 || ^6.0.0
 
   '@storybook/core@8.3.3':
@@ -5913,10 +5925,10 @@ packages:
     peerDependencies:
       storybook: ^8.3.3
 
-  '@storybook/csf-plugin@9.0.0-beta.4':
-    resolution: {integrity: sha512-eHyYQBWW5kwn8HtaDooIeT0nuhQysafyHL5QfPlyErAzDn1oVR+0EDWPlEgXy0pzqVzY3Axh3SqZ37ccA7kIeA==}
+  '@storybook/csf-plugin@9.0.0-beta.6':
+    resolution: {integrity: sha512-dS6hgrs6z+e2He+s1mzxo669tLTkiFsDft5/suRaoM8kEKSW4Q7FSbizPC9xAhF7YJDzgBRAhMXe92ldDngmyg==}
     peerDependencies:
-      storybook: ^9.0.0-beta.4
+      storybook: ^9.0.0-beta.6
 
   '@storybook/csf@0.1.11':
     resolution: {integrity: sha512-dHYFQH3mA+EtnCkHXzicbLgsvzYjcDJ1JWsogbItZogkPHgSJM/Wr71uMkcvw8v9mmCyP4NpXJuu6bPoVsOnzg==}
@@ -6391,6 +6403,9 @@ packages:
 
   '@types/jest@29.5.13':
     resolution: {integrity: sha512-wd+MVEZCHt23V0/L642O5APvspWply/rGY5BcW4SUETo2UzPU3Z26qr8jC2qxpimI2jjx9h7+2cj2FwIr01bXg==}
+
+  '@types/js-cookie@3.0.6':
+    resolution: {integrity: sha512-wkw9yd1kEXOPnvEeEV1Go1MmxtBJL0RR79aOTAApecWFVu7w0NNXNqhcWgvw2YgZDYadliXkl14pa3WXw5jlCQ==}
 
   '@types/js-yaml@4.0.9':
     resolution: {integrity: sha512-k4MGaQl5TGo/iipqb2UDG2UwjXziSWkh0uysQelTlJpX1qGlpUZYm8PnO4DxG1qBomtJUdYJ6qR6xdIah10JLg==}
@@ -9020,6 +9035,9 @@ packages:
 
   get-tsconfig@4.8.1:
     resolution: {integrity: sha512-k9PN+cFBmaLWtVz29SkUoqU5O0slLuHJXt/2P+tMVFT+phsSGXGkp9t3rQIqdz0e+06EHNGs3oM6ZX1s2zHxRg==}
+
+  gif.js@0.2.0:
+    resolution: {integrity: sha512-bYxCoT8OZKmbxY8RN4qDiYuj4nrQDTzgLRcFVovyona1PTWNePzI4nzOmotnlOFIzTk/ZxAHtv+TfVLiBWj/hw==}
 
   giget@2.0.0:
     resolution: {integrity: sha512-L5bGsVkxJbJgdnwyuheIunkGatUF/zssUoxxjACCseZYAVbaqdh9Tsmmlkl8vYan09H7sbvKt4pS8GqKLBrEzA==}
@@ -14972,9 +14990,9 @@ snapshots:
     dependencies:
       commander: 9.4.1
 
-  '@contentlayer2/cli@0.5.3(acorn@8.14.0)(esbuild@0.25.2)':
+  '@contentlayer2/cli@0.5.3(acorn@8.14.1)(esbuild@0.25.2)':
     dependencies:
-      '@contentlayer2/core': 0.5.3(acorn@8.14.0)(esbuild@0.25.2)
+      '@contentlayer2/core': 0.5.3(acorn@8.14.1)(esbuild@0.25.2)
       '@contentlayer2/utils': 0.5.3
       clipanion: 3.2.1(typanion@3.14.0)
       typanion: 3.14.0
@@ -14985,9 +15003,9 @@ snapshots:
       - markdown-wasm
       - supports-color
 
-  '@contentlayer2/client@0.5.3(acorn@8.14.0)(esbuild@0.25.2)':
+  '@contentlayer2/client@0.5.3(acorn@8.14.1)(esbuild@0.25.2)':
     dependencies:
-      '@contentlayer2/core': 0.5.3(acorn@8.14.0)(esbuild@0.25.2)
+      '@contentlayer2/core': 0.5.3(acorn@8.14.1)(esbuild@0.25.2)
     transitivePeerDependencies:
       - '@effect-ts/otel-node'
       - acorn
@@ -14995,13 +15013,13 @@ snapshots:
       - markdown-wasm
       - supports-color
 
-  '@contentlayer2/core@0.5.3(acorn@8.14.0)(esbuild@0.25.2)':
+  '@contentlayer2/core@0.5.3(acorn@8.14.1)(esbuild@0.25.2)':
     dependencies:
       '@contentlayer2/utils': 0.5.3
       camel-case: 4.1.2
       comment-json: 4.2.5
       gray-matter: 4.0.3
-      mdx-bundler: 10.0.3(acorn@8.14.0)(esbuild@0.25.2)
+      mdx-bundler: 10.0.3(acorn@8.14.1)(esbuild@0.25.2)
       rehype-stringify: 10.0.1
       remark-frontmatter: 5.0.0
       remark-parse: 11.0.0
@@ -15016,9 +15034,9 @@ snapshots:
       - acorn
       - supports-color
 
-  '@contentlayer2/source-files@0.5.3(acorn@8.14.0)(esbuild@0.25.2)':
+  '@contentlayer2/source-files@0.5.3(acorn@8.14.1)(esbuild@0.25.2)':
     dependencies:
-      '@contentlayer2/core': 0.5.3(acorn@8.14.0)(esbuild@0.25.2)
+      '@contentlayer2/core': 0.5.3(acorn@8.14.1)(esbuild@0.25.2)
       '@contentlayer2/utils': 0.5.3
       chokidar: 3.6.0
       fast-glob: 3.3.3
@@ -15036,10 +15054,10 @@ snapshots:
       - markdown-wasm
       - supports-color
 
-  '@contentlayer2/source-remote-files@0.5.3(acorn@8.14.0)(esbuild@0.25.2)':
+  '@contentlayer2/source-remote-files@0.5.3(acorn@8.14.1)(esbuild@0.25.2)':
     dependencies:
-      '@contentlayer2/core': 0.5.3(acorn@8.14.0)(esbuild@0.25.2)
-      '@contentlayer2/source-files': 0.5.3(acorn@8.14.0)(esbuild@0.25.2)
+      '@contentlayer2/core': 0.5.3(acorn@8.14.1)(esbuild@0.25.2)
+      '@contentlayer2/source-files': 0.5.3(acorn@8.14.1)(esbuild@0.25.2)
       '@contentlayer2/utils': 0.5.3
     transitivePeerDependencies:
       - '@effect-ts/otel-node'
@@ -15909,14 +15927,6 @@ snapshots:
 
   '@fastify/busboy@2.1.1': {}
 
-  '@ffmpeg/ffmpeg@0.12.10':
-    dependencies:
-      '@ffmpeg/types': 0.12.2
-
-  '@ffmpeg/types@0.12.2': {}
-
-  '@ffmpeg/util@0.12.1': {}
-
   '@floating-ui/core@1.6.8':
     dependencies:
       '@floating-ui/utils': 0.2.8
@@ -16431,9 +16441,9 @@ snapshots:
       '@planetscale/database': 1.19.0
       mysql2: 3.11.3
 
-  '@mdx-js/esbuild@3.1.0(acorn@8.14.0)(esbuild@0.25.2)':
+  '@mdx-js/esbuild@3.1.0(acorn@8.14.1)(esbuild@0.25.2)':
     dependencies:
-      '@mdx-js/mdx': 3.1.0(acorn@8.14.0)
+      '@mdx-js/mdx': 3.1.0(acorn@8.14.1)
       '@types/unist': 3.0.3
       esbuild: 0.25.2
       source-map: 0.7.4
@@ -16465,7 +16475,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@mdx-js/mdx@3.1.0(acorn@8.14.0)':
+  '@mdx-js/mdx@3.1.0(acorn@8.14.1)':
     dependencies:
       '@types/estree': 1.0.6
       '@types/estree-jsx': 1.0.5
@@ -16479,7 +16489,7 @@ snapshots:
       hast-util-to-jsx-runtime: 2.3.2
       markdown-extensions: 2.0.0
       recma-build-jsx: 1.0.0
-      recma-jsx: 1.0.0(acorn@8.14.0)
+      recma-jsx: 1.0.0(acorn@8.14.1)
       recma-stringify: 1.0.0
       rehype-recma: 1.0.0
       remark-mdx: 3.1.0
@@ -17458,6 +17468,8 @@ snapshots:
       - supports-color
       - ts-node
       - typescript
+
+  '@radix-ui/colors@3.0.0': {}
 
   '@radix-ui/primitive@1.0.0':
     dependencies:
@@ -18454,6 +18466,15 @@ snapshots:
 
   '@remix-run/router@1.19.2': {}
 
+  '@remotion/licensing@4.0.291': {}
+
+  '@remotion/media-parser@4.0.291': {}
+
+  '@remotion/webcodecs@4.0.291':
+    dependencies:
+      '@remotion/licensing': 4.0.291
+      '@remotion/media-parser': 4.0.291
+
   '@rive-app/canvas@2.26.7': {}
 
   '@rive-app/canvas@2.26.8': {}
@@ -19345,9 +19366,9 @@ snapshots:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
 
-  '@storybook/builder-vite@9.0.0-beta.4(storybook@8.3.3)(vite@6.1.2(@types/node@22.12.0)(jiti@2.4.2)(terser@5.34.0)(yaml@2.7.0))':
+  '@storybook/builder-vite@9.0.0-beta.6(storybook@8.3.3)(vite@6.1.2(@types/node@22.12.0)(jiti@2.4.2)(terser@5.34.0)(yaml@2.7.0))':
     dependencies:
-      '@storybook/csf-plugin': 9.0.0-beta.4(storybook@8.3.3)
+      '@storybook/csf-plugin': 9.0.0-beta.6(storybook@8.3.3)
       browser-assert: 1.2.1
       storybook: 8.3.3
       ts-dedent: 2.2.0
@@ -19378,7 +19399,7 @@ snapshots:
       storybook: 8.3.3
       unplugin: 1.16.1
 
-  '@storybook/csf-plugin@9.0.0-beta.4(storybook@8.3.3)':
+  '@storybook/csf-plugin@9.0.0-beta.6(storybook@8.3.3)':
     dependencies:
       storybook: 8.3.3
       unplugin: 1.16.1
@@ -19915,6 +19936,8 @@ snapshots:
     dependencies:
       expect: 29.7.0
       pretty-format: 29.7.0
+
+  '@types/js-cookie@3.0.6': {}
 
   '@types/js-yaml@4.0.9': {}
 
@@ -20453,10 +20476,6 @@ snapshots:
       mime-types: 3.0.0
       negotiator: 1.0.0
 
-  acorn-import-attributes@1.9.5(acorn@8.14.0):
-    dependencies:
-      acorn: 8.14.0
-
   acorn-import-attributes@1.9.5(acorn@8.14.1):
     dependencies:
       acorn: 8.14.1
@@ -20468,10 +20487,6 @@ snapshots:
   acorn-jsx@5.3.2(acorn@8.12.1):
     dependencies:
       acorn: 8.12.1
-
-  acorn-jsx@5.3.2(acorn@8.14.0):
-    dependencies:
-      acorn: 8.14.0
 
   acorn-jsx@5.3.2(acorn@8.14.1):
     dependencies:
@@ -21408,13 +21423,13 @@ snapshots:
 
   content-type@1.0.5: {}
 
-  contentlayer2@0.5.3(acorn@8.14.0)(esbuild@0.25.2):
+  contentlayer2@0.5.3(acorn@8.14.1)(esbuild@0.25.2):
     dependencies:
-      '@contentlayer2/cli': 0.5.3(acorn@8.14.0)(esbuild@0.25.2)
-      '@contentlayer2/client': 0.5.3(acorn@8.14.0)(esbuild@0.25.2)
-      '@contentlayer2/core': 0.5.3(acorn@8.14.0)(esbuild@0.25.2)
-      '@contentlayer2/source-files': 0.5.3(acorn@8.14.0)(esbuild@0.25.2)
-      '@contentlayer2/source-remote-files': 0.5.3(acorn@8.14.0)(esbuild@0.25.2)
+      '@contentlayer2/cli': 0.5.3(acorn@8.14.1)(esbuild@0.25.2)
+      '@contentlayer2/client': 0.5.3(acorn@8.14.1)(esbuild@0.25.2)
+      '@contentlayer2/core': 0.5.3(acorn@8.14.1)(esbuild@0.25.2)
+      '@contentlayer2/source-files': 0.5.3(acorn@8.14.1)(esbuild@0.25.2)
+      '@contentlayer2/source-remote-files': 0.5.3(acorn@8.14.1)(esbuild@0.25.2)
       '@contentlayer2/utils': 0.5.3
     transitivePeerDependencies:
       - '@effect-ts/otel-node'
@@ -23241,6 +23256,8 @@ snapshots:
     dependencies:
       resolve-pkg-maps: 1.0.0
 
+  gif.js@0.2.0: {}
+
   giget@2.0.0:
     dependencies:
       citty: 0.1.6
@@ -23705,8 +23722,8 @@ snapshots:
 
   import-in-the-middle@1.13.1:
     dependencies:
-      acorn: 8.14.0
-      acorn-import-attributes: 1.9.5(acorn@8.14.0)
+      acorn: 8.14.1
+      acorn-import-attributes: 1.9.5(acorn@8.14.1)
       cjs-module-lexer: 1.4.1
       module-details-from-path: 1.0.3
 
@@ -24998,12 +25015,12 @@ snapshots:
     dependencies:
       '@types/mdast': 4.0.4
 
-  mdx-bundler@10.0.3(acorn@8.14.0)(esbuild@0.25.2):
+  mdx-bundler@10.0.3(acorn@8.14.1)(esbuild@0.25.2):
     dependencies:
       '@babel/runtime': 7.25.6
       '@esbuild-plugins/node-resolve': 0.2.2(esbuild@0.25.2)
       '@fal-works/esbuild-plugin-global-externals': 2.1.2
-      '@mdx-js/esbuild': 3.1.0(acorn@8.14.0)(esbuild@0.25.2)
+      '@mdx-js/esbuild': 3.1.0(acorn@8.14.1)(esbuild@0.25.2)
       esbuild: 0.25.2
       gray-matter: 4.0.3
       remark-frontmatter: 5.0.0
@@ -25260,8 +25277,8 @@ snapshots:
 
   micromark-extension-mdxjs@1.0.1:
     dependencies:
-      acorn: 8.14.0
-      acorn-jsx: 5.3.2(acorn@8.14.0)
+      acorn: 8.14.1
+      acorn-jsx: 5.3.2(acorn@8.14.1)
       micromark-extension-mdx-expression: 1.0.8
       micromark-extension-mdx-jsx: 1.0.5
       micromark-extension-mdx-md: 1.0.1
@@ -25811,11 +25828,11 @@ snapshots:
     optionalDependencies:
       nodemailer: 6.9.15
 
-  next-contentlayer2@0.5.3(acorn@8.14.0)(contentlayer2@0.5.3(acorn@8.14.0)(esbuild@0.25.2))(esbuild@0.25.2)(next@14.2.3(@opentelemetry/api@1.9.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
+  next-contentlayer2@0.5.3(acorn@8.14.1)(contentlayer2@0.5.3(acorn@8.14.1)(esbuild@0.25.2))(esbuild@0.25.2)(next@14.2.3(@opentelemetry/api@1.9.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
     dependencies:
-      '@contentlayer2/core': 0.5.3(acorn@8.14.0)(esbuild@0.25.2)
+      '@contentlayer2/core': 0.5.3(acorn@8.14.1)(esbuild@0.25.2)
       '@contentlayer2/utils': 0.5.3
-      contentlayer2: 0.5.3(acorn@8.14.0)(esbuild@0.25.2)
+      contentlayer2: 0.5.3(acorn@8.14.1)(esbuild@0.25.2)
       next: 14.2.3(@opentelemetry/api@1.9.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
@@ -27005,9 +27022,9 @@ snapshots:
       estree-util-build-jsx: 3.0.1
       vfile: 6.0.3
 
-  recma-jsx@1.0.0(acorn@8.14.0):
+  recma-jsx@1.0.0(acorn@8.14.1):
     dependencies:
-      acorn-jsx: 5.3.2(acorn@8.14.0)
+      acorn-jsx: 5.3.2(acorn@8.14.1)
       estree-util-to-js: 2.0.0
       recma-parse: 1.0.0
       recma-stringify: 1.0.0
@@ -27778,7 +27795,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.2(storybook@8.3.3)(vite@6.1.2(@types/node@22.12.0)(jiti@2.4.2)(terser@5.34.0)(yaml@2.7.0)):
     dependencies:
-      '@storybook/builder-vite': 9.0.0-beta.4(storybook@8.3.3)(vite@6.1.2(@types/node@22.12.0)(jiti@2.4.2)(terser@5.34.0)(yaml@2.7.0))
+      '@storybook/builder-vite': 9.0.0-beta.6(storybook@8.3.3)(vite@6.1.2(@types/node@22.12.0)(jiti@2.4.2)(terser@5.34.0)(yaml@2.7.0))
     transitivePeerDependencies:
       - storybook
       - vite

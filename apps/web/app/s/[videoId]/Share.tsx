@@ -1,5 +1,6 @@
 "use client";
 
+import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { Logo } from "@cap/ui";
@@ -8,7 +9,6 @@ import { ShareHeader } from "./_components/ShareHeader";
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import { Toolbar } from "./_components/Toolbar";
-import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
   authorName: string | null;
@@ -23,6 +23,7 @@ interface Analytics {
 type VideoWithSpaceInfo = typeof videos.$inferSelect & {
   spaceMembers?: string[];
   spaceId?: string;
+  sharedSpaces?: { id: string; name: string }[];
 };
 
 interface ShareProps {
@@ -36,6 +37,7 @@ interface ShareProps {
   };
   customDomain: string | null;
   domainVerified: boolean;
+  userSpaces?: { id: string; name: string }[];
 }
 
 export const Share: React.FC<ShareProps> = ({
@@ -45,6 +47,7 @@ export const Share: React.FC<ShareProps> = ({
   initialAnalytics,
   customDomain,
   domainVerified,
+  userSpaces = [],
 }) => {
   const [analytics, setAnalytics] = useState(initialAnalytics);
   const effectiveDate = data.metadata?.customCreatedAt
@@ -92,6 +95,8 @@ export const Share: React.FC<ShareProps> = ({
           user={user}
           customDomain={customDomain}
           domainVerified={domainVerified}
+          sharedSpaces={data.sharedSpaces || []}
+          userSpaces={userSpaces}
         />
 
         <div className="mt-4">
@@ -132,7 +137,7 @@ export const Share: React.FC<ShareProps> = ({
         <a
           target="_blank"
           href={`/?ref=video_${data.id}`}
-          className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 bg-gray-100 rounded-full new-card-style w-fit"
+          className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 bg-gray-1 rounded-full new-card-style w-fit"
         >
           <span className="text-sm">Recorded with</span>
           <Logo className="w-14 h-auto" />

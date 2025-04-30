@@ -23,7 +23,7 @@ export const CapCardActions = ({
     <div className="absolute top-2 right-2 space-y-2 z-20">
       <button
         type="button"
-        className="cursor-pointer border border-gray-300 relative bg-white hover:bg-gray-200 w-8 h-8 m-0 p-0 rounded-full flex items-center justify-center transition-all"
+        className="cursor-pointer border border-gray-300 relative bg-gray-1 hover:bg-gray-200 w-8 h-8 m-0 p-0 rounded-full flex items-center justify-center transition-all"
         onClick={copyLink}
         data-tooltip-id={capId + "_copy"}
         data-tooltip-content="Copy shareable Cap link"
@@ -33,7 +33,7 @@ export const CapCardActions = ({
       </button>
       <button
         type="button"
-        className="cursor-pointer border border-gray-300 relative bg-white hover:bg-gray-200 w-8 h-8 m-0 p-0 rounded-full flex items-center justify-center transition-all"
+        className="cursor-pointer border border-gray-300 relative bg-gray-1 hover:bg-gray-200 w-8 h-8 m-0 p-0 rounded-full flex items-center justify-center transition-all"
         onClick={() => onDelete(capId)}
         data-tooltip-id={capId + "_delete"}
         data-tooltip-content="Delete your Cap recording"

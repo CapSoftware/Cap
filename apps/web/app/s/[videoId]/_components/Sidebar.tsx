@@ -1,13 +1,13 @@
 "use client";
 
-import { useState } from "react";
-import { Activity } from "./tabs/Activity";
-import { Transcript } from "./tabs/Transcript";
-import { Settings } from "./tabs/Settings";
-import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { userSelectProps } from "@cap/database/auth/session";
+import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { classNames } from "@cap/utils";
 import { AnimatePresence, motion } from "framer-motion";
+import { useState } from "react";
+import { Activity } from "./tabs/Activity";
+import { Settings } from "./tabs/Settings";
+import { Transcript } from "./tabs/Transcript";
 
 type TabType = "activity" | "transcript" | "settings";
 
@@ -123,14 +123,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
               }
               className={classNames(
                 "flex-1 px-6 py-3 text-sm font-medium relative transition-colors duration-200",
-                "hover:bg-gray-100",
-                activeTab === tab.id ? "bg-gray-100" : ""
+                "hover:bg-gray-1",
+                activeTab === tab.id ? "bg-gray-3" : ""
               )}
             >
               <span
                 className={classNames(
                   "relative z-10",
-                  activeTab === tab.id ? "text-gray-500" : "text-gray-400"
+                  activeTab === tab.id ? "text-gray-12" : "text-gray-9"
                 )}
               >
                 {tab.label}

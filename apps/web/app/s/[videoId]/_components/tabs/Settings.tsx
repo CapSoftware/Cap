@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
 import { Switch } from "@cap/ui";
+import { useState } from "react";
 
 interface SettingOption {
   id: string;
@@ -48,18 +48,18 @@ export const Settings = () => {
       <div className="p-4 border-b border-gray-200">
         <h3 className="text-sm font-medium">Settings</h3>
       </div>
-      <div className="flex-1 overflow-y-auto">
-        <div className="space-y-6 p-4">
+      <div className="overflow-y-auto flex-1">
+        <div className="p-4 space-y-6">
           {settings.map((setting) => (
-            <div key={setting.id} className="flex items-center justify-between">
+            <div key={setting.id} className="flex justify-between items-center">
               <div className="flex-1">
-                <div className="flex items-center justify-between">
+                <div className="flex justify-between items-center">
                   <div>
                     <h4 className="text-sm font-medium text-gray-900">
                       {setting.label}
                     </h4>
                     {setting.description && (
-                      <p className="text-sm text-gray-500">
+                      <p className="text-sm text-gray-12">
                         {setting.description}
                       </p>
                     )}

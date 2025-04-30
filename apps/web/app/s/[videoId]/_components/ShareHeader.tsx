@@ -2,6 +2,8 @@ import { Button } from "@cap/ui";
 import { videos } from "@cap/database/schema";
 import moment from "moment";
 import { userSelectProps } from "@cap/database/auth/session";
+import { faChevronDown } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "react-hot-toast";
@@ -11,23 +13,34 @@ import { editTitle } from "@/actions/videos/edit-title";
 import { usePublicEnv } from "@/utils/public-env";
 import { isUserOnProPlan } from "@cap/utils";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
+import clsx from "clsx";
 
 export const ShareHeader = ({
   data,
   user,
   customDomain,
   domainVerified,
+  sharedSpaces = [],
+  userSpaces = [],
 }: {
   data: typeof videos.$inferSelect;
   user: typeof userSelectProps | null;
   customDomain: string | null;
   domainVerified: boolean;
+  sharedSpaces?: { id: string; name: string }[];
+  userSpaces?: { id: string; name: string }[];
 }) => {
   const { push, refresh } = useRouter();
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(data.name);
   const [isDownloading, setIsDownloading] = useState(false);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+  const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
+  const [currentSharedSpaces, setCurrentSharedSpaces] = useState(sharedSpaces);
+
+  const isOwner = user !== null && user.id.toString() === data.ownerId;
+
   const { webUrl } = usePublicEnv();
 
   const handleBlur = async () => {
@@ -74,11 +87,58 @@ export const ShareHeader = ({
       })
     : false;
 
+  const handleSharingUpdated = (updatedSharedSpaces: string[]) => {
+    setCurrentSharedSpaces(
+      userSpaces?.filter((space) => updatedSharedSpaces.includes(space.id))
+    );
+    refresh();
+  };
+
+  const renderSharedStatus = () => {
+    const baseClassName =
+      "text-sm text-gray-10 transition-colors duration-200 flex items-center";
+
+    if (isOwner) {
+      if (currentSharedSpaces?.length === 0) {
+        return (
+          <p
+            className={clsx(baseClassName, "hover:text-gray-12 cursor-pointer")}
+            onClick={() => setIsSharingDialogOpen(true)}
+          >
+            Not shared{" "}
+            <FontAwesomeIcon className="ml-2 size-2.5" icon={faChevronDown} />
+          </p>
+        );
+      } else {
+        return (
+          <p
+            className={clsx(baseClassName, "hover:text-gray-12 cursor-pointer")}
+            onClick={() => setIsSharingDialogOpen(true)}
+          >
+            Shared{" "}
+            <FontAwesomeIcon className="ml-1 size-2.5" icon={faChevronDown} />
+          </p>
+        );
+      }
+    } else {
+      return <p className={baseClassName}>Shared with you</p>;
+    }
+  };
+
   return (
     <>
+      <SharingDialog
+        isOpen={isSharingDialogOpen}
+        onClose={() => setIsSharingDialogOpen(false)}
+        capId={data.id}
+        capName={data.name}
+        sharedSpaces={currentSharedSpaces || []}
+        userSpaces={userSpaces}
+        onSharingUpdated={handleSharingUpdated}
+      />
       <div>
-        <div className="md:flex md:items-center md:justify-between space-x-0 md:space-x-6">
-          <div className="md:flex items-center md:justify-between md:space-x-6">
+        <div className="space-x-0 md:flex md:items-center md:justify-between md:space-x-6">
+          <div className="items-center md:flex md:justify-between md:space-x-6">
             <div className="mb-3 md:mb-0">
               <div className="flex items-center space-x-3  lg:min-w-[400px]">
                 {isEditing ? (
@@ -88,7 +148,7 @@ export const ShareHeader = ({
                     onBlur={handleBlur}
                     onKeyDown={handleKeyDown}
                     autoFocus
-                    className="text-xl sm:text-2xl font-semibold w-full"
+                    className="w-full text-xl font-semibold sm:text-2xl"
                   />
                 ) : (
                   <h1
@@ -106,7 +166,8 @@ export const ShareHeader = ({
                   </h1>
                 )}
               </div>
-              <p className="text-gray-400 text-sm">
+              {user && renderSharedStatus()}
+              <p className="text-sm text-gray-10 mt-1">
                 {moment(data.createdAt).fromNow()}
               </p>
             </div>
@@ -122,14 +183,14 @@ export const ShareHeader = ({
                   }}
                 >
                   {getDisplayLink()}
-                  <Copy className="ml-2 h-4 w-4" />
+                  <Copy className="ml-2 w-4 h-4" />
                 </Button>
                 {user !== null && !isUserPro && (
                   <button
-                    className="cursor-pointer flex items-center text-sm text-gray-400 hover:text-blue-500 mt-1"
+                    className="flex items-center mt-1 text-sm text-gray-400 cursor-pointer hover:text-blue-500"
                     onClick={() => setUpgradeModalOpen(true)}
                   >
-                    <Globe2 className="w-4 h-4 mr-1" />
+                    <Globe2 className="mr-1 w-4 h-4" />
                     Connect a custom domain
                   </button>
                 )}
@@ -141,7 +202,7 @@ export const ShareHeader = ({
                       push("/dashboard");
                     }}
                   >
-                    <span className="hidden lg:block text-white text-sm">
+                    <span className="hidden text-sm text-white lg:block">
                       Go to
                     </span>{" "}
                     Dashboard

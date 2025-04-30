@@ -18,21 +18,21 @@ export const CapCardAnalytics: React.FC<CapCardAnalyticsProps> = ({
   return (
     <div className="flex flex-wrap gap-4 items-center text-sm text-gray-60">
       <Tooltip content={`${displayCount} unique views`}>
-        <div className="flex gap-1 items-center">
-          <FontAwesomeIcon className="text-gray-400 size-4" icon={faEye} />
-          <span className="text-sm text-gray-500">{displayCount ?? "-"}</span>
+        <div className="flex gap-2 items-center">
+          <FontAwesomeIcon className="text-gray-8 size-4" icon={faEye} />
+          <span className="text-sm text-gray-12">{displayCount ?? "-"}</span>
         </div>
       </Tooltip>
       <Tooltip content={`${totalComments} comments`}>
-        <div className="flex gap-1 items-center">
-          <FontAwesomeIcon className="text-gray-400 size-4" icon={faComment} />
-          <span className="text-sm text-gray-500">{totalComments}</span>
+        <div className="flex gap-2 items-center">
+          <FontAwesomeIcon className="text-gray-8 size-4" icon={faComment} />
+          <span className="text-sm text-gray-12">{totalComments}</span>
         </div>
       </Tooltip>
       <Tooltip content={`${totalReactions} reactions`}>
-        <div className="flex gap-1 items-center">
-          <FontAwesomeIcon className="text-gray-400 size-4" icon={faSmile} />
-          <span className="text-sm text-gray-500">{totalReactions}</span>
+        <div className="flex gap-2 items-center">
+          <FontAwesomeIcon className="text-gray-8 size-4" icon={faSmile} />
+          <span className="text-sm text-gray-12">{totalReactions}</span>
         </div>
       </Tooltip>
     </div>

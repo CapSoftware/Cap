@@ -1,8 +1,8 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { useEffect } from "react";
 import MuxPlayer from "@mux/mux-player-react";
+import { ReadyToGetStarted } from "../ReadyToGetStarted";
 
 export const AboutPage = () => {
   const handleSmoothScroll = (
@@ -44,7 +44,7 @@ export const AboutPage = () => {
               See it in Action
             </Button>
             <Button
-              variant="radialblue"
+              variant="primary"
               href="/download"
               size="lg"
               className="relative z-[20] w-full font-medium text-md sm:w-auto"
@@ -60,10 +60,10 @@ export const AboutPage = () => {
         </div>
 
         {/* Main Content */}
-        <div className="wrapper py-24 bg-gradient-to-b from-white to-gray-50">
+        <div className="wrapper pb-24">
           <div className="max-w-4xl mx-auto">
-            <div className="p-8 bg-white rounded-2xl border border-gray-100/60 backdrop-blur-sm mb-12 shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] transition-all duration-300">
-              <p className="text-lg">
+            <div className="mb-48">
+              <p className="text-3xl text-center font-light">
                 Your recordings shouldn't be locked away in systems you don't
                 control. At Cap, we're building a screen recording tool that
                 puts you first, respects your privacy, and gives you full
@@ -91,7 +91,7 @@ export const AboutPage = () => {
             </div>
 
             <div className="space-y-8">
-              <div className="p-8 bg-white rounded-2xl border border-gray-100/60 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] hover:border-blue-100/40 transition-all duration-300 transform hover:-translate-y-[2px]">
+              <div className="p-8 bg-gray-1 rounded-2xl border border-gray-4 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] transition-all duration-300 transform hover:-translate-y-[2px]">
                 <h2 className="text-2xl font-semibold mb-4 text-gray-800">
                   Why Cap?
                 </h2>
@@ -104,7 +104,7 @@ export const AboutPage = () => {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <div className="p-8 bg-white rounded-2xl border border-gray-100/60 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] hover:border-blue-100/40 transition-all duration-300 transform hover:-translate-y-[2px]">
+                <div className="p-8 bg-gray-1 rounded-2xl border border-gray-4 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] transition-all duration-300 transform hover:-translate-y-[2px]">
                   <div className="bg-blue-50 w-12 h-12 flex items-center justify-center rounded-full mb-4">
                     <span className="text-blue-500 text-xl font-bold">1</span>
                   </div>
@@ -120,7 +120,7 @@ export const AboutPage = () => {
                   </p>
                 </div>
 
-                <div className="p-8 bg-white rounded-2xl border border-gray-100/60 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] hover:border-blue-100/40 transition-all duration-300 transform hover:-translate-y-[2px]">
+                <div className="p-8 bg-gray-1 rounded-2xl border border-gray-4 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] transition-all duration-300 transform hover:-translate-y-[2px]">
                   <div className="bg-blue-50 w-12 h-12 flex items-center justify-center rounded-full mb-4">
                     <span className="text-blue-500 text-xl font-bold">2</span>
                   </div>
@@ -139,7 +139,7 @@ export const AboutPage = () => {
                 </div>
               </div>
 
-              <div className="p-8 bg-white rounded-2xl border border-gray-100/60 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] hover:border-blue-100/40 transition-all duration-300 transform hover:-translate-y-[2px]">
+              <div className="p-8 bg-gray-1 rounded-2xl border border-gray-4 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] transition-all duration-300 transform hover:-translate-y-[2px]">
                 <h2 className="text-2xl font-semibold mb-4 text-gray-800">
                   Two Ways to Record
                 </h2>
@@ -168,7 +168,7 @@ export const AboutPage = () => {
                 </div>
               </div>
 
-              <div className="p-8 bg-white rounded-2xl border border-gray-100/60 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] hover:border-blue-100/40 transition-all duration-300 transform hover:-translate-y-[2px]">
+              <div className="p-8 bg-gray-1 rounded-2xl border border-gray-4 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] transition-all duration-300 transform hover:-translate-y-[2px]">
                 <h2 className="text-2xl font-semibold mb-4 text-gray-800">
                   Privacy First
                 </h2>
@@ -180,7 +180,7 @@ export const AboutPage = () => {
                 </p>
               </div>
 
-              <div className="p-8 bg-white rounded-2xl border border-gray-100/60 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] hover:border-blue-100/40 transition-all duration-300 transform hover:-translate-y-[2px]">
+              <div className="p-8 bg-gray-1 rounded-2xl border border-gray-4  backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)]transition-all duration-300 transform hover:-translate-y-[2px]">
                 <h2 className="text-2xl font-semibold mb-4 text-gray-800">
                   Open to Everyone
                 </h2>
@@ -192,7 +192,7 @@ export const AboutPage = () => {
                 </p>
               </div>
 
-              <div className="p-8 bg-white rounded-2xl border border-gray-100/60 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] hover:border-blue-100/40 transition-all duration-300 transform hover:-translate-y-[2px]">
+              <div className="p-8 bg-gray-1 rounded-2xl border border-gray-4 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] transition-all duration-300 transform hover:-translate-y-[2px]">
                 <h2 className="text-2xl font-semibold mb-4 text-gray-800">
                   Join Us
                 </h2>
@@ -207,7 +207,7 @@ export const AboutPage = () => {
                 </p>
                 <div className="mt-6">
                   <Button
-                    className="inline-flex shadow-[0_4px_14px_rgba(0,0,0,0.1)] hover:shadow-[0_6px_20px_rgba(0,118,255,0.23)] transform hover:-translate-y-[2px] transition-all duration-300"
+                    className="inline-flex transform hover:-translate-y-[2px] transition-all duration-300"
                     href="/download"
                     variant="primary"
                     size="lg"
@@ -219,36 +219,8 @@ export const AboutPage = () => {
             </div>
           </div>
 
-          {/* Final CTA Section */}
-          <div
-            className="max-w-[1000px] mx-auto rounded-3xl overflow-hidden relative flex flex-col justify-center p-12 mt-16"
-            style={{
-              minHeight: "300px",
-              background:
-                "linear-gradient(135deg, #4f46e5 0%, #3b82f6 50%, #0ea5e9 100%)",
-              boxShadow: "0 15px 50px rgba(0, 118, 255, 0.1)",
-            }}
-          >
-            <div className="wrapper mx-auto h-full flex flex-col justify-center items-center relative z-10">
-              <div className="text-center max-w-[800px] mx-auto mb-8">
-                <h2 className="text-3xl md:text-4xl font-bold text-white mb-4 drop-shadow-md">
-                  Ready to Try Cap?
-                </h2>
-                <p className="text-xl text-white/90 mb-6">
-                  Download now and see the difference for yourself.
-                </p>
-              </div>
-              <div>
-                <Button
-                  variant="white"
-                  href="/download"
-                  size="lg"
-                  className="shadow-[0_4px_14px_rgba(0,0,0,0.05)] hover:shadow-[0_8px_30px_rgba(255,255,255,0.2)] transform hover:-translate-y-[2px] transition-all duration-300 font-medium px-8 py-3"
-                >
-                  Download Cap
-                </Button>
-              </div>
-            </div>
+          <div className="mt-16">
+            <ReadyToGetStarted />
           </div>
         </div>
       </div>

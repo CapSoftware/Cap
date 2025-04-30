@@ -160,23 +160,20 @@ export const Workspace = () => {
 
       <div className="flex flex-col flex-1 gap-6 justify-center lg:flex-row">
         <Card className="flex flex-col flex-1 gap-3 justify-center items-center">
-          <FontAwesomeIcon className="text-gray-400 size-5" icon={faChair} />
-          <p>
+          <FontAwesomeIcon className="text-gray-10 size-5" icon={faChair} />
+          <p className="text-gray-12">
             Seats Remaining
-            <span className="ml-2 font-bold text-gray-500">
+            <span className="ml-2 font-bold text-gray-12">
               {(activeSpace?.inviteQuota ?? 1) -
                 (activeSpace?.totalInvites ?? 0)}
             </span>
           </p>
         </Card>
         <Card className="flex flex-col flex-1 gap-3 justify-center items-center">
-          <FontAwesomeIcon
-            className="text-gray-400 size-5"
-            icon={faUserGroup}
-          />
-          <p>
+          <FontAwesomeIcon className="text-gray-10 size-5" icon={faUserGroup} />
+          <p className="text-gray-12">
             Seats Capacity
-            <span className="ml-2 font-bold text-gray-500">
+            <span className="ml-2 font-bold text-gray-12">
               {activeSpace?.inviteQuota}
             </span>
           </p>
@@ -189,7 +186,7 @@ export const Workspace = () => {
             <div className="flex-1 w-full">
               <div className="space-y-1">
                 <Label htmlFor="workspaceName">Name</Label>
-                <p className="text-sm text-gray-400">
+                <p className="text-sm text-gray-10">
                   Changing the name will update how your workspace appears to
                   others members.
                 </p>
@@ -209,7 +206,7 @@ export const Workspace = () => {
             <div className="flex-1 w-full">
               <div className="space-y-1">
                 <Label htmlFor="allowedEmailDomain">Access email domain</Label>
-                <p className="mt-1 text-sm text-gray-400">
+                <p className="mt-1 text-sm text-gray-10">
                   Only emails from this domain can access shared videos.{" "}
                   <b>Leave blank to allow everyone.</b>
                 </p>
@@ -264,13 +261,13 @@ export const Workspace = () => {
             </div> */}
           {/* <div
               onClick={() => fileInputRef.current?.click()}
-              className="w-full hover:bg-gray-100 transition-all duration-300 gap-3 border-gray-300 mt-4 border px-4 flex items-center justify-center py-[14px] border-dashed rounded-2xl"
+              className="w-full hover:bg-gray-1 transition-all duration-300 gap-3 border-gray-300 mt-4 border px-4 flex items-center justify-center py-[14px] border-dashed rounded-2xl"
             >
               <FontAwesomeIcon
-                className="text-gray-400 size-5"
+                className="text-gray-10 size-5"
                 icon={faCloudUpload}
               />
-              <p className="text-xs text-gray-400 truncate">
+              <p className="text-xs truncate text-gray-10">
                 Choose a file or drag & drop it here
               </p>
             </div> */}
@@ -313,7 +310,7 @@ export const Workspace = () => {
             <Button
               type="button"
               size="sm"
-              variant="white"
+              variant="dark"
               onClick={() => {
                 if (!isOwner) {
                   showOwnerToast();
@@ -404,7 +401,7 @@ export const Workspace = () => {
         <Button
           type="button"
           size="sm"
-          variant="gray"
+          variant="dark"
           onClick={handleManageBilling}
           disabled={!isOwner}
         >
@@ -422,7 +419,9 @@ export const Workspace = () => {
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label htmlFor="emails">Email</Label>
+              <Label htmlFor="emails" className="mb-1">
+                Email
+              </Label>
               <Input
                 id="emails"
                 value={emailInput}
@@ -441,7 +440,7 @@ export const Workspace = () => {
               {inviteEmails.map((email) => (
                 <div
                   key={email}
-                  className="flex justify-between items-center p-2 bg-gray-100 rounded"
+                  className="flex justify-between items-center p-2 rounded bg-gray-1"
                 >
                   <span>{email}</span>
                   <Button

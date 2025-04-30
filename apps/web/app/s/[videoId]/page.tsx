@@ -36,6 +36,7 @@ type VideoWithSpace = typeof videos.$inferSelect & {
   } | null;
   spaceMembers?: string[];
   spaceId?: string;
+  sharedSpaces?: { id: string; name: string }[];
 };
 
 type SpaceMember = {
@@ -280,6 +281,43 @@ export default async function ShareVideoPage(props: Props) {
     }
   }
 
+  const sharedSpacesData = await db
+    .select({
+      id: spaces.id,
+      name: spaces.name,
+    })
+    .from(spaces)
+    .innerJoin(sharedVideos, eq(spaces.id, sharedVideos.spaceId))
+    .where(eq(sharedVideos.videoId, videoId));
+
+  let userSpaces: { id: string; name: string }[] = [];
+  if (userId) {
+    const ownedSpaces = await db
+      .select({
+        id: spaces.id,
+        name: spaces.name,
+      })
+      .from(spaces)
+      .where(eq(spaces.ownerId, userId));
+
+    const memberSpaces = await db
+      .select({
+        id: spaces.id,
+        name: spaces.name,
+      })
+      .from(spaces)
+      .innerJoin(spaceMembers, eq(spaces.id, spaceMembers.spaceId))
+      .where(eq(spaceMembers.userId, userId));
+
+    const allSpaces = [...ownedSpaces, ...memberSpaces];
+    const uniqueSpaceIds = new Set();
+    userSpaces = allSpaces.filter((space) => {
+      if (uniqueSpaceIds.has(space.id)) return false;
+      uniqueSpaceIds.add(space.id);
+      return true;
+    });
+  }
+
   const membersList = video.sharedSpace?.spaceId
     ? await db()
         .select({
@@ -293,6 +331,7 @@ export default async function ShareVideoPage(props: Props) {
     ...video,
     spaceMembers: membersList.map((member) => member.userId),
     spaceId: video.sharedSpace?.spaceId ?? undefined,
+    sharedSpaces: sharedSpacesData,
   };
 
   return (
@@ -303,6 +342,7 @@ export default async function ShareVideoPage(props: Props) {
       initialAnalytics={initialAnalytics}
       customDomain={customDomain}
       domainVerified={domainVerified}
+      userSpaces={userSpaces}
     />
   );
 }

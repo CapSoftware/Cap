@@ -9,6 +9,7 @@ import {
   users,
 } from "@cap/database/schema";
 import { count, eq, inArray, or, sql } from "drizzle-orm";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 export type Space = {
@@ -135,12 +136,15 @@ export default async function DashboardLayout({
       user.stripeSubscriptionStatus !== "cancelled") ||
     !!user.thirdPartyStripeSubscriptionId;
 
+  const theme = cookies().get("theme")?.value ?? "light";
+
   return (
     <DynamicSharedLayout
       spaceData={spaceSelect}
       activeSpace={findActiveSpace || null}
       user={user}
       isSubscribed={isSubscribed}
+      initialTheme={theme as "light" | "dark"}
     >
       <div className="full-layout">
         <DashboardTemplate>{children}</DashboardTemplate>

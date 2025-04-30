@@ -1,10 +1,10 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import Link from "next/link";
-import { formatDate } from "../../lib/utils";
-import { useEffect } from "react";
 import MuxPlayer from "@mux/mux-player-react";
+import Link from "next/link";
+import { useEffect } from "react";
+import { formatDate } from "../../lib/utils";
 
 interface BlogPost {
   title: string;
@@ -119,7 +119,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
   }, []);
 
   return (
-    <article className="px-3 max-w-3xl mx-auto py-24 bg-gradient-to-b from-white to-gray-50 relative z-10">
+    <article className="px-3 max-w-3xl mx-auto py-24 relative z-10">
       {/* Header */}
       <header className="mb-16 text-center">
         <div className="mb-4 text-sm font-medium text-blue-600 fade-in-down">
@@ -131,7 +131,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
         <p className="text-xl md:text-2xl mb-8 max-w-3xl mx-auto text-gray-700 fade-in-down animate-delay-1">
           {content.description}
         </p>
-        <div className="flex items-center justify-center space-x-2 text-sm text-gray-500 fade-in-down animate-delay-2">
+        <div className="flex items-center justify-center space-x-2 text-sm text-gray-1 fade-in-down animate-delay-2">
           <time dateTime={content.publishedAt}>
             {formatDate(content.publishedAt)}
           </time>
@@ -196,7 +196,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
                 {content.comparisonTable.rows.map((row, rowIndex) => (
                   <tr
                     key={rowIndex}
-                    className={rowIndex % 2 === 0 ? "bg-white" : "bg-gray-50"}
+                    className={rowIndex % 2 === 0 ? "bg-gray-1" : "bg-gray-50"}
                   >
                     {row.map((cell, cellIndex) => (
                       <td
@@ -226,7 +226,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
             {method.steps.map((step, stepIndex) => (
               <div
                 key={stepIndex}
-                className="mb-8 p-6 bg-white rounded-xl shadow-md hover:shadow-xl transition-all duration-300 border border-gray-100 hover:border-blue-100 transform hover:-translate-y-1"
+                className="mb-8 p-6 bg-gray-1 rounded-xl shadow-md hover:shadow-xl transition-all duration-300 border border-gray-100 hover:border-blue-100 transform hover:-translate-y-1"
               >
                 {step.title && (
                   <h3 className="text-2xl font-semibold text-gray-800 mb-4">
@@ -253,7 +253,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
             {content.troubleshooting.items.map((item, index) => (
               <details
                 key={index}
-                className="bg-white p-6 rounded-xl shadow-md hover:shadow-xl transition-all duration-300 border border-gray-100 hover:border-blue-100"
+                className="bg-gray-1 p-6 rounded-xl shadow-md hover:shadow-xl transition-all duration-300 border border-gray-100 hover:border-blue-100"
               >
                 <summary className="text-xl font-semibold text-gray-800 cursor-pointer">
                   {item.question}
@@ -320,7 +320,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
             {content.faqs.map((faq, index) => (
               <details
                 key={index}
-                className="bg-white p-6 rounded-xl shadow-md hover:shadow-xl transition-all duration-300 border border-gray-100 hover:border-blue-100"
+                className="bg-gray-1 p-6 rounded-xl shadow-md hover:shadow-xl transition-all duration-300 border border-gray-100 hover:border-blue-100"
               >
                 <summary className="text-xl font-semibold text-gray-800 cursor-pointer">
                   {faq.question}
@@ -340,7 +340,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
             <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
           </h2>
 
-          <blockquote className="bg-white p-8 rounded-xl shadow-md hover:shadow-xl transition-all duration-300 border-l-4 border-blue-500 transform hover:-translate-y-1">
+          <blockquote className="bg-gray-1 p-8 rounded-xl shadow-md hover:shadow-xl transition-all duration-300 border-l-4 border-blue-500 transform hover:-translate-y-1">
             <p className="text-xl italic text-gray-700 mb-6">
               "{content.testimonial.quote}"
             </p>

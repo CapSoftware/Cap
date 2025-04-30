@@ -10,7 +10,7 @@ export function ReadyToGetStarted() {
     >
       <div
         id="cloud-4"
-        className="absolute top-0 -right-20 opacity-50 z-0 pointer-events-none"
+        className="absolute top-0 -right-20 z-0 opacity-50 pointer-events-none"
       >
         <img
           className="max-w-[40vw] h-auto"
@@ -20,7 +20,7 @@ export function ReadyToGetStarted() {
       </div>
       <div
         id="cloud-5"
-        className="absolute bottom-0 left-0 opacity-50 z-0 pointer-events-none"
+        className="absolute bottom-0 left-0 z-0 opacity-50 pointer-events-none"
       >
         <img
           className="max-w-[40vw] h-auto"
@@ -28,9 +28,9 @@ export function ReadyToGetStarted() {
           alt="Footer Cloud Two"
         />
       </div>
-      <div className="wrapper mx-auto h-full flex flex-col justify-center items-center relative z-10">
+      <div className="flex relative z-10 flex-col justify-center items-center mx-auto h-full wrapper">
         <div className="text-center max-w-[800px] mx-auto mb-8">
-          <h2 className="text-xl sm:text-3xl text-white mb-3">
+          <h2 className="mb-3 text-xl text-white sm:text-3xl">
             Beautiful screen recordings, owned by you.
           </h2>
           <p className="text-[1rem] sm:text-lg text-white">
@@ -39,7 +39,7 @@ export function ReadyToGetStarted() {
             S3 bucket support.
           </p>
         </div>
-        <div className="flex flex-col sm:flex-row items-center justify-center space-y-2 sm:space-y-0 sm:space-x-2">
+        <div className="flex flex-col justify-center items-center space-y-2 sm:flex-row sm:space-y-0 sm:space-x-2">
           <Button
             variant="white"
             href="/pricing"
@@ -49,7 +49,7 @@ export function ReadyToGetStarted() {
             Get Started
           </Button>
           <Button
-            variant="secondary"
+            variant="primary"
             href="/download"
             size="lg"
             className="w-full sm:w-auto"

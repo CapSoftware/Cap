@@ -1,9 +1,9 @@
 "use client";
 
-import * as React from "react";
+import { classNames } from "@cap/utils";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
-import { classNames } from "@cap/utils";
+import * as React from "react";
 
 const Dialog = DialogPrimitive.Root;
 const DialogTrigger = DialogPrimitive.Trigger;
@@ -15,10 +15,7 @@ const DialogOverlay = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Overlay
     ref={ref}
-    className={classNames(
-      "fixed inset-0 z-50 bg-black/80 backdrop-blur-sm",
-      className
-    )}
+    className={classNames("fixed inset-0 z-50 bg-black/60", className)}
     {...props}
   />
 ));
@@ -30,18 +27,18 @@ const DialogContent = React.forwardRef<
 >(({ className, children, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="flex fixed inset-0 z-50 justify-center items-center">
       <DialogPrimitive.Content
         ref={ref}
         className={classNames(
-          "relative bg-white p-6 shadow-lg sm:rounded-lg w-full max-w-lg",
+          "relative p-6 w-full max-w-lg rounded-xl shadow-lg bg-gray-3 border-gray-9",
           className
         )}
         {...props}
       >
         {children}
         <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
-          <X className="h-5 w-5" />
+          <X className="w-5 h-5 text-gray-9" />
           <span className="sr-only">Close</span>
         </DialogPrimitive.Close>
       </DialogPrimitive.Content>
@@ -56,7 +53,7 @@ const DialogHeader = ({
 }: React.HTMLAttributes<HTMLDivElement>) => (
   <div
     className={classNames(
-      "flex flex-col space-y-1.5 text-center sm:text-left pb-4 mb-4 border-b border-subtle",
+      "flex flex-col space-y-1.5 text-center sm:text-left pb-4 mb-4 border-b border-gray-6",
       className
     )}
     {...props}
@@ -70,7 +67,7 @@ const DialogFooter = ({
 }: React.HTMLAttributes<HTMLDivElement>) => (
   <div
     className={classNames(
-      "flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2 mt-6 pt-4 border-t border-subtle",
+      "flex flex-col-reverse pt-4 mt-6 border-t sm:flex-row sm:justify-end sm:space-x-2 border-subtle",
       className
     )}
     {...props}
@@ -85,7 +82,7 @@ const DialogTitle = React.forwardRef<
   <DialogPrimitive.Title
     ref={ref}
     className={classNames(
-      "text-xl font-bold leading-none tracking-tight",
+      "text-xl font-bold tracking-tight leading-none text-gray-12",
       className
     )}
     {...props}
@@ -99,7 +96,7 @@ const DialogDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
-    className={classNames("text-sm text-muted-foreground", className)}
+    className={classNames("text-sm text-gray-11", className)}
     {...props}
   />
 ));
@@ -107,10 +104,10 @@ DialogDescription.displayName = DialogPrimitive.Description.displayName;
 
 export {
   Dialog,
-  DialogTrigger,
   DialogContent,
-  DialogHeader,
-  DialogFooter,
-  DialogTitle,
   DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
 };

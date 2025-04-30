@@ -23,7 +23,17 @@ export async function generateMetadata({
     return;
   }
 
-  let { title, publishedAt: publishedTime, description, image } = post.metadata;
+  let {
+    title,
+    publishedAt: publishedTime,
+    description,
+    image,
+  } = post.metadata as {
+    title: string;
+    publishedAt: string;
+    description: string;
+    image: string;
+  };
   let ogImage = `${buildEnv.NEXT_PUBLIC_WEB_URL}${image}`;
 
   return {
@@ -76,10 +86,16 @@ export default async function PostPage({ params }: PostProps) {
 
         <div className="wrapper">
           <header>
-            <h1 className="mb-2">{post.metadata.title}</h1>
-            <p className="space-x-1 text-xs text-gray-500">
+            <h1 className="mb-2 font-semibold">{post.metadata.title}</h1>
+            <p className="space-x-1 text-xs text-gray-12">
               <span>
-                {format(parseISO(post.metadata.publishedAt), "MMMM dd, yyyy")}
+                {format(
+                  parseISO(
+                    (post.metadata as any).publishedAt ||
+                      new Date().toISOString()
+                  ),
+                  "MMMM dd, yyyy"
+                )}
               </span>
               <span>—</span>
               <span>{readingTime} min read</span>

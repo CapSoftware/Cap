@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import Script from "next/script";
 import { users } from "@cap/database/schema";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 
 declare global {
   interface Window {

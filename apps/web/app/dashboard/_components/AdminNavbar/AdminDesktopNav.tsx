@@ -11,9 +11,7 @@ import { AdminNavItems } from "./AdminNavItems";
 
 export const AdminDesktopNav = () => {
   const { platform } = useDetectPlatform();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(
-    localStorage.getItem("sidebarCollapsed") === "true"
-  );
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const toggleCollapse = () => {
     setSidebarCollapsed(!sidebarCollapsed);
     localStorage.setItem("sidebarCollapsed", String(!sidebarCollapsed));
@@ -80,12 +78,12 @@ export const AdminDesktopNav = () => {
           >
             <button
               onClick={toggleCollapse}
-              className="absolute right-[-12px] hover:border-gray-400 top-[50%] transform -translate-y-1/2 bg-gray-50 rounded-full p-1 border border-gray-200 hover:bg-gray-50 transition-colors z-10"
+              className="absolute right-[-12px] hover:border-gray-4 hover:bg-gray-3 top-[50%] transform -translate-y-1/2 rounded-full p-1 border bg-gray-2 border-gray-3 transition-colors z-10"
             >
               {sidebarCollapsed ? (
-                <ChevronRight size={16} className="text-gray-500" />
+                <ChevronRight size={16} className="text-gray-12" />
               ) : (
-                <ChevronLeft size={16} className="text-gray-500" />
+                <ChevronLeft size={16} className="text-gray-12" />
               )}
             </button>
           </Tooltip>

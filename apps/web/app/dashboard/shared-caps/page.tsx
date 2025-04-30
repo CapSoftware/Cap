@@ -1,16 +1,16 @@
-import { SharedCaps } from "./SharedCaps";
 import { db } from "@cap/database";
+import { getCurrentUser } from "@cap/database/auth/session";
 import {
   comments,
-  videos,
   sharedVideos,
+  spaceMembers,
   spaces,
   users,
-  spaceMembers,
+  videos,
 } from "@cap/database/schema";
-import { desc, eq, sql, count, and } from "drizzle-orm";
-import { getCurrentUser } from "@cap/database/auth/session";
+import { count, desc, eq, sql } from "drizzle-orm";
 import { Metadata } from "next";
+import { SharedCaps } from "./SharedCaps";
 
 export const metadata: Metadata = {
   title: "Shared Caps — Cap",
@@ -142,11 +142,5 @@ export default async function SharedCapsPage({
     console.log(debugVideos);
   }
 
-  return (
-    <SharedCaps
-      data={processedSharedVideoData}
-      count={totalCount}
-      activeSpaceId={activeSpaceId}
-    />
-  );
+  return <SharedCaps data={processedSharedVideoData} count={totalCount} />;
 }

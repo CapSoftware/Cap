@@ -5,33 +5,16 @@ import { Navbar } from "@/components/Navbar";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { buildEnv, serverEnv } from "@cap/env";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
-import crypto from "crypto";
 import type { Metadata } from "next";
-import localFont from "next/font/local";
 import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "./AuthProvider";
 import { PostHogProvider, Providers } from "./providers";
 import { PublicEnvContext } from "@/utils/public-env";
 import { S3_BUCKET_URL } from "@cap/utils";
-
-const SfProDisplay = localFont({
-  src: [
-    {
-      path: "./fonts/SFPRODISPLAYREGULAR.woff2",
-      weight: "300",
-    },
-    {
-      path: "./fonts/SFPRODISPLAYBOLD.woff2",
-      weight: "700",
-    },
-    {
-      path: "./fonts/SFPRODISPLAYMEDIUM.woff2",
-      weight: "500",
-    },
-  ],
-  display: "swap",
-  variable: "--font-sf-pro-display",
-});
+import { PropsWithChildren } from "react";
+import crypto from "crypto";
+//@ts-expect-error
+import { script } from "./themeScript";
 
 export const metadata: Metadata = {
   title: "Cap — Beautiful screen recordings, owned by you.",
@@ -47,20 +30,16 @@ export const metadata: Metadata = {
   },
 };
 
-export default async function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  const user = undefined; // await getCurrentUser();
+export default async function RootLayout({ children }: PropsWithChildren) {
+  const user = await getCurrentUser();
+  const intercomSecret = serverEnv().INTERCOM_SECRET;
   let intercomHash = "";
-  // const intercomSecret = serverEnv().INTERCOM_SECRET;
-  // if (intercomSecret) {
-  //   intercomHash = crypto
-  //     .createHmac("sha256", intercomSecret)
-  //     .update(user?.id ?? "")
-  //     .digest("hex");
-  // }
+  if (intercomSecret) {
+    intercomHash = crypto
+      .createHmac("sha256", intercomSecret)
+      .update(user?.id ?? "")
+      .digest("hex");
+  }
 
   return (
     <html lang="en">
@@ -88,7 +67,10 @@ export default async function RootLayout({
         <meta name="msapplication-TileColor" content="#da532c" />
         <meta name="theme-color" content="#ffffff" />
       </head>
-      <body>
+      <body suppressHydrationWarning>
+        <script
+          dangerouslySetInnerHTML={{ __html: `(${script.toString()})()` }}
+        />
         <TooltipPrimitive.Provider>
           <PostHogProvider>
             <AuthProvider>

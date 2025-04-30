@@ -1,10 +1,9 @@
-import { NextResponse } from "next/server";
-import type { NextRequest } from "next/server";
 import { db } from "@cap/database";
 import { spaces } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { buildEnv, serverEnv } from "@cap/env";
 import { notFound } from "next/navigation";
+import { NextRequest, NextResponse } from "next/server";
 
 const mainOrigins = [
   "https://cap.so",

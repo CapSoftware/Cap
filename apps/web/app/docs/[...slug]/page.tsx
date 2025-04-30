@@ -143,7 +143,7 @@ export default async function DocPage(props: DocProps) {
                     <div className="p-4 rounded-lg border transition-colors hover:border-blue-500">
                       <h3 className="m-0">{doc.metadata.title}</h3>
                       {doc.metadata.summary && (
-                        <p className="m-0 mt-2 text-gray-600 dark:text-gray-400">
+                        <p className="m-0 mt-2 text-gray-600 dark:text-gray-8">
                           {doc.metadata.summary}
                         </p>
                       )}
@@ -152,7 +152,7 @@ export default async function DocPage(props: DocProps) {
                           {doc.metadata.tags.split(", ").map((tag) => (
                             <span
                               key={tag}
-                              className="px-2 py-1 text-xs text-gray-600 bg-gray-100 rounded-full dark:bg-gray-800 dark:text-gray-400"
+                              className="px-2 py-1 text-xs text-gray-600 bg-gray-1 rounded-full dark:bg-gray-800 dark:text-gray-8"
                             >
                               {tag}
                             </span>

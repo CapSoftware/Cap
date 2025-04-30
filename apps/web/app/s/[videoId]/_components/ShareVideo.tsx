@@ -5,6 +5,7 @@ import { NODE_ENV } from "@cap/env";
 import { Logo, LogoSpinner } from "@cap/ui";
 import { isUserOnProPlan } from "@cap/utils";
 import clsx from "clsx";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   Maximize,
   MessageSquare,
@@ -75,6 +76,7 @@ export const ShareVideo = forwardRef<
   const [isTranscriptionProcessing, setIsTranscriptionProcessing] =
     useState(false);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+  const [tempOverlayVisible, setTempOverlayVisible] = useState(false);
 
   // Scrubbing preview states
   const [showPreview, setShowPreview] = useState(false);
@@ -220,6 +222,39 @@ export const ShareVideo = forwardRef<
   }, [videoMetadataLoaded]);
 
   useEffect(() => {
+    const handleShortcuts = (e: KeyboardEvent) => {
+      // Skip handling if user is typing in form controls
+      const target = e.target as HTMLElement;
+      const isFormElement =
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.tagName === "SELECT" ||
+        target.isContentEditable ||
+        target.getAttribute("role") === "textbox";
+
+      // Only handle shortcuts if not typing in a form control
+      if (!isFormElement && videoRef.current) {
+        if (e.code === "Space") {
+          e.preventDefault(); // Prevent page scrolling
+          if (isPlaying) {
+            videoRef.current.pause();
+            setIsPlaying(false);
+          } else {
+            videoRef.current.play();
+            setIsPlaying(true);
+          }
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleShortcuts);
+
+    return () => {
+      window.removeEventListener("keydown", handleShortcuts);
+    };
+  }, [isPlaying, videoRef]);
+
+  useEffect(() => {
     const onVideoLoadedMetadata = () => {
       if (videoRef.current) {
         setLongestDuration(videoRef.current.duration);
@@ -231,6 +266,16 @@ export const ShareVideo = forwardRef<
     const onCanPlay = () => {
       setVideoMetadataLoaded(true);
       setVideoReadyToPlay(true);
+
+      // Autoplay the video when it's ready on initial render
+      setIsPlaying(true);
+      if (videoRef.current) {
+        videoRef.current.play().catch((error) => {
+          console.error("Error auto-playing video:", error);
+          // If autoplay fails (common on mobile), don't set isPlaying
+          setIsPlaying(false);
+        });
+      }
 
       // If the video is already playing (user clicked play before it was ready),
       // ensure it actually starts playing now
@@ -436,6 +481,20 @@ export const ShareVideo = forwardRef<
       window.removeEventListener("touchmove", preventScroll);
     };
   }, [seeking]);
+
+  // Show overlay temporarily when play state changes
+  useEffect(() => {
+    // When video play state changes, show overlay temporarily
+    setTempOverlayVisible(true);
+
+    // Hide temporary overlay after 500ms
+    const timer = setTimeout(() => {
+      setTempOverlayVisible(false);
+    }, 500);
+
+    // Clean up timer on unmount or when isPlaying changes again
+    return () => clearTimeout(timer);
+  }, [isPlaying]);
 
   // Set up a hidden video element for scrubbing previews
   useEffect(() => {
@@ -1073,7 +1132,10 @@ export const ShareVideo = forwardRef<
         {!isLoading && (
           <div
             className={`absolute inset-0 z-20 flex items-center justify-center bg-black bg-opacity-50 transition-opacity duration-300 ${
-              (overlayVisible || isHovering) && !forceHideControls
+              ((overlayVisible || isHovering) &&
+                !forceHideControls &&
+                isPlaying) ||
+              tempOverlayVisible
                 ? "opacity-100"
                 : "opacity-0"
             }`}
@@ -1097,11 +1159,37 @@ export const ShareVideo = forwardRef<
                 }
               }}
             >
-              {isPlaying ? (
-                <Pause className="w-auto h-10 text-white sm:h-12 md:h-14 hover:opacity-50" />
-              ) : (
-                <Play className="w-auto h-10 text-white sm:h-12 md:h-14 hover:opacity-50" />
-              )}
+              <AnimatePresence initial={false} mode="popLayout">
+                {isPlaying ? (
+                  <motion.div
+                    key="pause-button"
+                    className="flex relative z-30 justify-center items-center size-20"
+                    initial={{ opacity: 0, scale: 0 }}
+                    animate={{
+                      scale: 1,
+                      opacity: 1,
+                    }}
+                    style={{ transformOrigin: "center center" }}
+                    transition={{ duration: 0.4, ease: "easeOut" }}
+                  >
+                    <Pause className="w-auto h-10 text-white sm:h-12 md:h-14 hover:opacity-50" />
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="play-button"
+                    className="flex relative z-30 justify-center items-center size-20"
+                    initial={{ opacity: 0, scale: 0 }}
+                    animate={{
+                      scale: 1,
+                      opacity: 1,
+                    }}
+                    style={{ transformOrigin: "center center" }}
+                    transition={{ duration: 0.4, ease: "easeOut" }}
+                  >
+                    <Play className="w-auto h-10 text-white sm:h-12 md:h-14 hover:opacity-50" />
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </button>
           </div>
         )}
@@ -1250,14 +1338,14 @@ export const ShareVideo = forwardRef<
               })}
             </div>
           )}
-          <div className="absolute top-2.5 w-full h-1 sm:h-1.5 bg-white bg-opacity-50 rounded-full z-10" />
+          <div className="absolute top-2.5 w-full h-1 sm:h-1.5 bg-gray-1 bg-opacity-50 rounded-full z-10" />
           <div
-            className="absolute top-2.5 h-1 sm:h-1.5 bg-white rounded-full cursor-pointer z-10"
+            className="absolute top-2.5 h-1 sm:h-1.5 bg-gray-1 rounded-full cursor-pointer z-10"
             style={{ width: `${watchedPercentage}%` }}
           />
           <div
             className={clsx(
-              "drag-button absolute top-2.5 z-20 -mt-1.5 -ml-2 w-4 h-4 bg-white rounded-full  cursor-pointer focus:outline-none",
+              "drag-button absolute top-2.5 z-20 -mt-1.5 -ml-2 w-4 h-4 bg-gray-1 rounded-full  cursor-pointer focus:outline-none",
               seeking
                 ? "scale-125 transition-transform ring-blue-300 ring-offset-2 ring-2"
                 : ""
