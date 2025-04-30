@@ -1,13 +1,13 @@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@cap/ui";
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 
-interface SpaceMember {
+interface OrganizationMember {
   id: string;
   role: string;
   createdAt: Date;
   updatedAt: Date;
   userId: string;
-  spaceId: string;
+  organizationId: string;
   user: {
     id: string;
     name: string | null;
@@ -21,18 +21,18 @@ export const MembersDialog = ({
   open,
   onOpenChange,
   members,
-  spaceName,
+  organizationName,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  members: SpaceMember[];
-  spaceName: string;
+  members: OrganizationMember[];
+  organizationName: string;
 }) => {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{spaceName} Members</DialogTitle>
+          <DialogTitle>{organizationName} Members</DialogTitle>
         </DialogHeader>
         <div className="max-h-[60vh] overflow-auto py-4">
           <div className="flex flex-col gap-2">
