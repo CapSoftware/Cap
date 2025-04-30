@@ -3,8 +3,8 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import {
   comments,
   sharedVideos,
-  spaceMembers,
-  spaces,
+  organizationMembers,
+  organizations,
   users,
   videos,
 } from "@cap/database/schema";
@@ -55,12 +55,12 @@ export default async function CapsPage({
       metadata: videos.metadata,
       totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
       totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
-      sharedSpaces: sql<{ id: string; name: string }[]>`
+      sharedOrganizations: sql<{ id: string; name: string }[]>`
         COALESCE(
           JSON_ARRAYAGG(
             JSON_OBJECT(
-              'id', ${spaces.id},
-              'name', ${spaces.name}
+              'id', ${organizations.id},
+              'name', ${organizations.name}
             )
           ),
           JSON_ARRAY()
@@ -77,7 +77,7 @@ export default async function CapsPage({
     .from(videos)
     .leftJoin(comments, eq(videos.id, comments.videoId))
     .leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
-    .leftJoin(spaces, eq(sharedVideos.spaceId, spaces.id))
+    .leftJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
     .leftJoin(users, eq(videos.ownerId, users.id))
     .where(eq(videos.ownerId, userId))
     .groupBy(
@@ -97,21 +97,26 @@ export default async function CapsPage({
     .limit(limit)
     .offset(offset);
 
-  const userSpaces = await db()
+  const userOrganizations = await db()
     .select({
-      id: spaces.id,
-      name: spaces.name,
+      id: organizations.id,
+      name: organizations.name,
     })
-    .from(spaces)
-    .leftJoin(spaceMembers, eq(spaces.id, spaceMembers.spaceId))
-    .where(eq(spaceMembers.userId, userId));
+    .from(organizations)
+    .leftJoin(
+      organizationMembers,
+      eq(organizations.id, organizationMembers.organizationId)
+    )
+    .where(eq(organizationMembers.userId, userId));
 
   const processedVideoData = videoData.map((video) => {
     const { effectiveDate, ...videoWithoutEffectiveDate } = video;
 
     return {
       ...videoWithoutEffectiveDate,
-      sharedSpaces: video.sharedSpaces.filter((space) => space.id !== null),
+      sharedOrganizations: video.sharedOrganizations.filter(
+        (organization) => organization.id !== null
+      ),
       ownerName: video.ownerName ?? "",
       metadata: video.metadata as
         | {
@@ -126,7 +131,7 @@ export default async function CapsPage({
     <Caps
       data={processedVideoData}
       count={totalCount}
-      userSpaces={userSpaces}
+      userOrganizations={userOrganizations}
     />
   );
 }

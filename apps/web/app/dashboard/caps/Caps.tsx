@@ -21,7 +21,7 @@ type VideoData = {
   createdAt: Date;
   totalComments: number;
   totalReactions: number;
-  sharedSpaces: { id: string; name: string }[];
+  sharedOrganizations: { id: string; name: string }[];
   ownerName: string;
   metadata?: VideoMetadata;
 }[];
@@ -29,11 +29,11 @@ type VideoData = {
 export const Caps = ({
   data,
   count,
-  userSpaces,
+  userOrganizations,
 }: {
   data: VideoData;
   count: number;
-  userSpaces: { id: string; name: string }[];
+  userOrganizations: { id: string; name: string }[];
 }) => {
   const { refresh } = useRouter();
   const params = useSearchParams();
@@ -222,7 +222,7 @@ export const Caps = ({
             analytics={analytics[cap.id] || 0}
             onDelete={deleteCap}
             userId={user?.id}
-            userSpaces={userSpaces}
+            userOrganizations={userOrganizations}
             isSelected={selectedCaps.includes(cap.id)}
             onSelectToggle={() => handleCapSelection(cap.id)}
             anyCapSelected={anyCapSelected}

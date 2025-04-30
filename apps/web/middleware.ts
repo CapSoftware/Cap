@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { spaces } from "@cap/database/schema";
+import { organizations } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { buildEnv, serverEnv } from "@cap/env";
 import { notFound } from "next/navigation";
@@ -25,9 +25,20 @@ export async function middleware(request: NextRequest) {
   const hostname = url.hostname;
   const path = url.pathname;
 
+  if((buildEnv.NEXT_PUBLIC_IS_CAP !== "true" &&
+    !(path.startsWith("/s/") ||
+      path.startsWith("/dashboard") ||
+      path.startsWith("/onboarding") ||
+      path.startsWith("/api") || 
+      path.startsWith("/login") || 
+      path.startsWith("/invite") ||
+      path.startsWith("/self-hosting") ||
+      path.startsWith("/terms")))) {
+    return NextResponse.redirect(new URL("/login", url.origin));
+  }
+
   if (
-    buildEnv.NEXT_PUBLIC_IS_CAP !== "true" ||
-    mainOrigins.some((d) => url.origin === d)
+    mainOrigins.some((d) => url.origin.startsWith(d))
   ) {
     // We just let the request go through for main domains, page-level logic will handle redirects
     return NextResponse.next();
@@ -50,12 +61,12 @@ export async function middleware(request: NextRequest) {
     if (verifiedDomain?.value === hostname) return NextResponse.next();
 
     // Query the space with this custom domain
-    const [space] = await db()
+    const [organization] = await db()
       .select()
-      .from(spaces)
-      .where(eq(spaces.customDomain, hostname));
+      .from(organizations)
+      .where(eq(organizations.customDomain, hostname));
 
-    if (!space || !space.domainVerified) {
+    if (!organization || !organization.domainVerified) {
       // If no verified custom domain found, redirect to main domain
       const url = new URL(request.url);
       url.hostname = webUrl;

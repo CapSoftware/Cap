@@ -15,13 +15,13 @@ interface SharedCapCardProps {
     metadata?: VideoMetadata;
   };
   analytics: number;
-  spaceName: string;
+  organizationName: string;
 }
 
 export const SharedCapCard: React.FC<SharedCapCardProps> = ({
   cap,
   analytics,
-  spaceName,
+  organizationName,
 }) => {
   const displayCount =
     analytics === 0
@@ -45,7 +45,7 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
           <p className="text-sm pointer-events-none text-gray-10">
             Shared with{" "}
             <span className="text-sm font-medium text-gray-12">
-              {spaceName}
+              {organizationName}
             </span>
           </p>
         </div>

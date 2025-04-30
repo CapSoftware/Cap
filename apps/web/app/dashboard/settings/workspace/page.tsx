@@ -1,12 +1,5 @@
-import { Metadata } from "next";
-import { Workspace } from "./Workspace";
+import { redirect } from "next/navigation";
 
-export const metadata: Metadata = {
-  title: "Workspace Settings — Cap",
-};
-
-export const revalidate = 0;
-
-export default function BillingPage() {
-  return <Workspace />;
+export default function WorkspaceSettingsPage() {
+  redirect("/dashboard/settings/organization");
 }

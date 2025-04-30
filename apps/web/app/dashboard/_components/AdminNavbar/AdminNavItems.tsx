@@ -19,7 +19,7 @@ import { useState } from "react";
 
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
-import { NewSpace } from "@/components/forms/NewSpace";
+import { NewOrganization } from "@/components/forms/NewOrganization";
 import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
 import {
@@ -39,13 +39,15 @@ import {
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { updateActiveSpace } from "./server";
 import { buildEnv } from "@cap/env";
+
+import { updateActiveOrganization } from "./server";
 
 export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
-  const { spaceData, activeSpace, user, isSubscribed } = useSharedContext();
+  const { organizationData, activeOrganization, user, isSubscribed } =
+    useSharedContext();
 
   const manageNavigation = [
     {
@@ -67,8 +69,8 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
       subNav: [],
     },
     {
-      name: "Workspace",
-      href: `/dashboard/settings/workspace`,
+      name: "Organization",
+      href: `/dashboard/settings/organization`,
       icon: faBuilding,
       subNav: [],
     },
@@ -95,7 +97,9 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
         <Tooltip
           disable={open || collapsed === false}
           position="right"
-          content={activeSpace?.space.name ?? "No space found"}
+          content={
+            activeOrganization?.organization.name ?? "No organization found"
+          }
         >
           <PopoverTrigger asChild>
             <div
@@ -113,10 +117,14 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                     <Avatar
                       letterClass="text-gray-1 text-xs"
                       className="relative flex-shrink-0 size-5"
-                      name={activeSpace?.space.name ?? "No space found"}
+                      name={
+                        activeOrganization?.organization.name ??
+                        "No organization found"
+                      }
                     />
                     <p className="ml-2.5 text-sm text-gray-12 font-medium truncate">
-                      {activeSpace?.space.name ?? "No space found"}
+                      {activeOrganization?.organization.name ??
+                        "No organization found"}
                     </p>
                   </div>
                   {!collapsed && (
@@ -131,21 +139,24 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                 )}
               >
                 <Command>
-                  <CommandInput placeholder="Search spaces..." />
-                  <CommandEmpty>No spaces found</CommandEmpty>
+                  <CommandInput placeholder="Search organizations..." />
+                  <CommandEmpty>No organizations found</CommandEmpty>
                   <CommandGroup>
-                    {spaceData?.map((space) => {
+                    {organizationData?.map((organization) => {
                       const isSelected =
-                        activeSpace?.space.id === space.space.id;
+                        activeOrganization?.organization.id ===
+                        organization.organization.id;
                       return (
                         <CommandItem
-                          key={space.space.name + "-space"}
+                          key={organization.organization.name + "-organization"}
                           onSelect={async () => {
-                            await updateActiveSpace(space.space.id);
+                            await updateActiveOrganization(
+                              organization.organization.id
+                            );
                             setOpen(false);
                           }}
                         >
-                          {space.space.name}
+                          {organization.organization.name}
                           <Check
                             size={18}
                             className={classNames(
@@ -163,7 +174,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                         className="flex gap-1 items-center w-full"
                       >
                         <Plus className="w-4 h-auto" />
-                        Add new space
+                        Add new organization
                       </Button>
                     </DialogTrigger>
                   </CommandGroup>
@@ -247,10 +258,10 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
       </nav>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Create a new Space</DialogTitle>
+          <DialogTitle>Create a new Organization</DialogTitle>
         </DialogHeader>
         <DialogDescription>
-          <NewSpace onSpaceCreated={() => setDialogOpen(false)} />
+          <NewOrganization onOrganizationCreated={() => setDialogOpen(false)} />
         </DialogDescription>
       </DialogContent>
     </Dialog>

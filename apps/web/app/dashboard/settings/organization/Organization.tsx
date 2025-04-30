@@ -1,9 +1,9 @@
 "use client";
 
-import { manageBilling } from "@/actions/workspace/manage-billing";
-import { removeWorkspaceInvite } from "@/actions/workspace/remove-invite";
-import { sendWorkspaceInvites } from "@/actions/workspace/send-invites";
-import { updateWorkspaceDetails } from "@/actions/workspace/update-details";
+import { manageBilling } from "@/actions/organization/manage-billing";
+import { removeOrganizationInvite } from "@/actions/organization/remove-invite";
+import { sendOrganizationInvites } from "@/actions/organization/send-invites";
+import { updateOrganizationDetails } from "@/actions/organization/update-details";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Tooltip } from "@/components/Tooltip";
 import {
@@ -35,12 +35,12 @@ import { useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { CustomDomain } from "./components/CustomDomain";
 
-export const Workspace = () => {
-  const { activeSpace, user } = useSharedContext();
-  const workspaceName = activeSpace?.space.name;
+export const Organization = () => {
+  const { activeOrganization, user } = useSharedContext();
+  const organizationName = activeOrganization?.organization.name;
   const router = useRouter();
   const [loading, setLoading] = useState(false);
-  const isOwner = user?.id === activeSpace?.space.ownerId;
+  const isOwner = user?.id === activeOrganization?.organization.ownerId;
   const [isInviteDialogOpen, setIsInviteDialogOpen] = useState(false);
   const [inviteEmails, setInviteEmails] = useState<string[]>([]);
   const [emailInput, setEmailInput] = useState("");
@@ -66,14 +66,14 @@ export const Workspace = () => {
     }
 
     const formData = new FormData(e.currentTarget);
-    const workspaceName = formData.get("workspaceName") as string;
+    const organizationName = formData.get("organizationName") as string;
     const allowedEmailDomain = formData.get("allowedEmailDomain") as string;
 
     try {
-      await updateWorkspaceDetails(
-        workspaceName,
+      await updateOrganizationDetails(
+        organizationName,
         allowedEmailDomain,
-        activeSpace?.space.id as string
+        activeOrganization?.organization.id as string
       );
       toast.success("Settings updated successfully");
       router.refresh();
@@ -103,7 +103,10 @@ export const Workspace = () => {
     }
 
     try {
-      await sendWorkspaceInvites(inviteEmails, activeSpace?.space.id as string);
+      await sendOrganizationInvites(
+        inviteEmails,
+        activeOrganization?.organization.id as string
+      );
       toast.success("Invites sent successfully");
       setInviteEmails([]);
       setIsInviteDialogOpen(false);
@@ -121,7 +124,10 @@ export const Workspace = () => {
     }
 
     try {
-      await removeWorkspaceInvite(inviteId, activeSpace?.space.id as string);
+      await removeOrganizationInvite(
+        inviteId,
+        activeOrganization?.organization.id as string
+      );
       toast.success("Invite deleted successfully");
       router.refresh();
     } catch (error) {
@@ -153,7 +159,7 @@ export const Workspace = () => {
         <Card>
           <CardTitle>*Only the owner can make changes</CardTitle>
           <CardDescription>
-            Only the owner can make changes to this workspace.
+            Only the owner can make changes to this organization.
           </CardDescription>
         </Card>
       )}
@@ -164,8 +170,8 @@ export const Workspace = () => {
           <p className="text-gray-12">
             Seats Remaining
             <span className="ml-2 font-bold text-gray-12">
-              {(activeSpace?.inviteQuota ?? 1) -
-                (activeSpace?.totalInvites ?? 0)}
+              {(activeOrganization?.inviteQuota ?? 1) -
+                (activeOrganization?.totalInvites ?? 0)}
             </span>
           </p>
         </Card>
@@ -174,7 +180,7 @@ export const Workspace = () => {
           <p className="text-gray-12">
             Seats Capacity
             <span className="ml-2 font-bold text-gray-12">
-              {activeSpace?.inviteQuota}
+              {activeOrganization?.inviteQuota}
             </span>
           </p>
         </Card>
@@ -185,18 +191,18 @@ export const Workspace = () => {
           <div className="flex flex-col gap-6 justify-center lg:flex-row">
             <div className="flex-1 w-full">
               <div className="space-y-1">
-                <Label htmlFor="workspaceName">Name</Label>
+                <Label htmlFor="organizationName">Name</Label>
                 <p className="text-sm text-gray-10">
-                  Changing the name will update how your workspace appears to
+                  Changing the name will update how your organization appears to
                   others members.
                 </p>
               </div>
               <Input
                 className="mt-4"
                 type="text"
-                defaultValue={workspaceName as string}
-                id="workspaceName"
-                name="workspaceName"
+                defaultValue={organizationName as string}
+                id="organizationName"
+                name="organizationName"
                 disabled={!isOwner}
                 onChange={() => {
                   if (!isOwner) showOwnerToast();
@@ -214,7 +220,9 @@ export const Workspace = () => {
               <Input
                 type="text"
                 placeholder="e.g. company.com"
-                defaultValue={activeSpace?.space.allowedEmailDomain || ""}
+                defaultValue={
+                  activeOrganization?.organization.allowedEmailDomain || ""
+                }
                 id="allowedEmailDomain"
                 name="allowedEmailDomain"
                 disabled={!isOwner}
@@ -243,8 +251,8 @@ export const Workspace = () => {
             <div className="space-y-1">
               <Label htmlFor="customDomain">Custom Domain</Label>
               <CardDescription className="w-full max-w-[400px]">
-                Set up a custom domain for your workspace's shared caps and make
-                it unique.
+                Set up a custom domain for your organization's shared caps and
+                make it unique.
               </CardDescription>
             </div>
             <div className="mt-4">
@@ -290,7 +298,7 @@ export const Workspace = () => {
         <div className="flex flex-wrap gap-6 justify-between items-center w-full">
           <CardHeader>
             <CardTitle>Members</CardTitle>
-            <CardDescription>Manage your workspace members.</CardDescription>
+            <CardDescription>Manage your organization members.</CardDescription>
           </CardHeader>
           <div className="flex flex-wrap gap-3">
             <Tooltip
@@ -315,8 +323,9 @@ export const Workspace = () => {
                 if (!isOwner) {
                   showOwnerToast();
                 } else if (
-                  activeSpace &&
-                  activeSpace.inviteQuota <= activeSpace.totalInvites
+                  activeOrganization &&
+                  activeOrganization.inviteQuota <=
+                    activeOrganization.totalInvites
                 ) {
                   toast.error(
                     "Invite limit reached, please purchase more seats"
@@ -343,13 +352,13 @@ export const Workspace = () => {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {activeSpace?.members &&
-              activeSpace.members.map((member) => (
+            {activeOrganization?.members &&
+              activeOrganization.members.map((member) => (
                 <TableRow key={member.id}>
                   <TableCell>{member.user.name}</TableCell>
                   <TableCell>{member.user.email}</TableCell>
                   <TableCell>
-                    {member.user.id === activeSpace?.space.ownerId
+                    {member.user.id === activeOrganization?.organization.ownerId
                       ? "Owner"
                       : "Member"}
                   </TableCell>
@@ -360,8 +369,8 @@ export const Workspace = () => {
                   <TableCell>-</TableCell>
                 </TableRow>
               ))}
-            {activeSpace?.invites &&
-              activeSpace.invites.map((invite) => (
+            {activeOrganization?.invites &&
+              activeOrganization.invites.map((invite) => (
                 <TableRow key={invite.id}>
                   <TableCell>{invite.id}</TableCell>
                   <TableCell>{invite.invitedEmail}</TableCell>
@@ -414,7 +423,8 @@ export const Workspace = () => {
           <DialogHeader>
             <DialogTitle>Invite Teammates</DialogTitle>
             <DialogDescription>
-              Invite your teammates to join {activeSpace?.space.name} workspace.
+              Invite your teammates to join{" "}
+              {activeOrganization?.organization.name} organization.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">

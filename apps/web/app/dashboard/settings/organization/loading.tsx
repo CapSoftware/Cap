@@ -66,9 +66,8 @@ export default function Loading() {
             </div>
           </div>
 
-          {/* Workspace details and Custom domain */}
           <div className="flex flex-col gap-6 items-stretch xl:flex-row">
-            {/* Workspace details card */}
+            {/* Organization details card */}
             <div className="flex flex-col flex-1 justify-between p-5 rounded-2xl border bg-gray-3 border-gray-4">
               <div className="flex flex-col gap-6 lg:flex-row">
                 {/* Name field */}

@@ -1,5 +1,4 @@
 import { type NextRequest } from "next/server";
-import { getCurrentUser } from "@cap/database/auth/session";
 import { videos, comments, users } from "@cap/database/schema";
 import { db } from "@cap/database";
 import { eq, and, gt, ne } from "drizzle-orm";
@@ -7,7 +6,6 @@ import { sendEmail } from "@cap/database/emails/config";
 import { NewComment } from "@cap/database/emails/new-comment";
 import { buildEnv, serverEnv } from "@cap/env";
 
-// Cache to store the last email sent time for each user
 const lastEmailSentCache = new Map<string, Date>();
 
 export async function POST(request: NextRequest) {
@@ -50,7 +48,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Only send email notifications for text comments
     if (
       !comment ||
       comment.type !== "text" ||
@@ -124,7 +121,6 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: "Invalid owner data" }, { status: 500 });
     }
 
-    // Get the commenter's name
     let commenterName = "Anonymous";
     if (comment.authorId) {
       console.log(`Fetching commenter details for userId: ${comment.authorId}`);
@@ -152,7 +148,6 @@ export async function POST(request: NextRequest) {
       console.log("No authorId provided, using 'Anonymous'");
     }
 
-    // Check if we've sent an email to this user in the last 15 minutes
     const now = new Date();
     const lastEmailSent = lastEmailSentCache.get(owner.id);
 
@@ -172,8 +167,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Also check the database for recent comments that might have triggered emails
-    // This handles cases where the server restarts and the cache is cleared
     const fifteenMinutesAgo = new Date(now.getTime() - 15 * 60 * 1000);
     console.log(
       `Checking for recent comments since ${fifteenMinutesAgo.toISOString()}`
@@ -188,12 +181,11 @@ export async function POST(request: NextRequest) {
           eq(comments.videoId, comment.videoId),
           eq(comments.type, "text"),
           gt(comments.createdAt, fifteenMinutesAgo),
-          ne(comments.id, commentId) // Exclude the current comment
+          ne(comments.id, commentId)
         )
       )
       .limit(1);
 
-    // If there are recent comments (other than this one), don't send another email
     if (recentComments && recentComments.length > 0 && recentComments[0]) {
       console.log(
         `Found recent comment ${recentComments[0].id}, skipping email notification`
@@ -210,7 +202,6 @@ export async function POST(request: NextRequest) {
       : `${serverEnv().WEB_URL}/s/${video.id}`;
     console.log(`Generated video URL: ${videoUrl}`);
 
-    // Send the email
     console.log(
       `Sending email to ${owner.email} about comment on video "${video.name}"`
     );
@@ -232,7 +223,6 @@ export async function POST(request: NextRequest) {
       console.log("Email send result:", emailResult);
       console.log("Email sent successfully");
 
-      // Update the cache
       lastEmailSentCache.set(owner.id, now);
       console.log(`Updated email cache for user ${owner.id}`);
 
