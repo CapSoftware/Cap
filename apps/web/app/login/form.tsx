@@ -1,6 +1,6 @@
 "use client";
 
-import { getSpace } from "@/actions/workspace/get-space";
+import { getOrganization } from "@/actions/organization/get-organization";
 import { NODE_ENV } from "@cap/env";
 import { Button, Input, LogoBadge } from "@cap/ui";
 import {
@@ -25,8 +25,8 @@ export function LoginForm() {
   const [emailSent, setEmailSent] = useState(false);
   const [oauthError, setOauthError] = useState(false);
   const [showOrgInput, setShowOrgInput] = useState(false);
-  const [spaceId, setSpaceId] = useState("");
-  const [spaceName, setSpaceName] = useState<string | null>(null);
+  const [organizationId, setOrganizationId] = useState("");
+  const [organizationName, setOrganizationName] = useState<string | null>(null);
   const theme = localStorage.getItem("theme") || "light";
 
   useEffect(() => {
@@ -100,16 +100,16 @@ export function LoginForm() {
     });
   };
 
-  const handleSpaceLookup = async (e: React.FormEvent) => {
+  const handleOrganizationLookup = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!spaceId) {
-      toast.error("Please enter a space ID");
+    if (!organizationId) {
+      toast.error("Please enter an organization ID");
       return;
     }
 
     try {
-      const data = await getSpace(spaceId);
-      setSpaceName(data.name);
+      const data = await getOrganization(organizationId);
+      setOrganizationName(data.name);
 
       signIn("workos", undefined, {
         organization: data.organizationId,
@@ -117,7 +117,7 @@ export function LoginForm() {
       });
     } catch (error) {
       console.error("Lookup Error:", error);
-      toast.error("Space not found or SSO not configured");
+      toast.error("Organization not found or SSO not configured");
     }
   };
 
@@ -171,12 +171,10 @@ export function LoginForm() {
                     transition={{ duration: 0.2, type: "spring", bounce: 0.2 }}
                   >
                     <LoginWithSSO
-                      showOrgInput={showOrgInput}
-                      setShowOrgInput={setShowOrgInput}
-                      handleSpaceLookup={handleSpaceLookup}
-                      spaceId={spaceId}
-                      setSpaceId={setSpaceId}
-                      spaceName={spaceName}
+                      handleOrganizationLookup={handleOrganizationLookup}
+                      organizationId={organizationId}
+                      setOrganizationId={setOrganizationId}
+                      organizationName={organizationName}
                     />
                   </motion.div>
                 ) : (
@@ -275,30 +273,30 @@ export function LoginForm() {
 }
 
 const LoginWithSSO = ({
-  handleSpaceLookup,
-  spaceId,
-  setSpaceId,
-  spaceName,
+  handleOrganizationLookup,
+  organizationId,
+  setOrganizationId,
+  organizationName,
 }: {
-  showOrgInput: boolean;
-  setShowOrgInput: (show: boolean) => void;
-  handleSpaceLookup: (e: React.FormEvent) => void;
-  spaceId: string;
-  setSpaceId: (spaceId: string) => void;
-  spaceName: string | null;
+  handleOrganizationLookup: (e: React.FormEvent) => void;
+  organizationId: string;
+  setOrganizationId: (organizationId: string) => void;
+  organizationName: string | null;
 }) => {
   return (
     <>
-      <form onSubmit={handleSpaceLookup} className="relative space-y-2">
+      <form onSubmit={handleOrganizationLookup} className="relative space-y-2">
         <Input
-          id="spaceId"
-          placeholder="Enter your Space ID..."
-          value={spaceId}
-          onChange={(e) => setSpaceId(e.target.value)}
+          id="organizationId"
+          placeholder="Enter your Organization ID..."
+          value={organizationId}
+          onChange={(e) => setOrganizationId(e.target.value)}
           className="w-full max-w-full"
         />
-        {spaceName && (
-          <p className="text-sm text-gray-1">Signing in to: {spaceName}</p>
+        {organizationName && (
+          <p className="text-sm text-gray-1">
+            Signing in to: {organizationName}
+          </p>
         )}
         <div>
           <Button type="submit" variant="dark" className="w-full max-w-full">

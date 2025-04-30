@@ -18,7 +18,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
-import { NewSpace } from "@/components/forms/NewSpace";
+import { NewOrganization } from "@/components/forms/NewOrganization";
 import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
 import {
@@ -37,14 +37,16 @@ import {
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { updateActiveSpace } from "./server";
 import { buildEnv } from "@cap/env";
+
+import { updateActiveOrganization } from "./server";
 
 export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
   const pathname = usePathname();
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const { spaceData, activeSpace, user, isSubscribed } = useSharedContext();
+  const { organizationData, activeOrganization, user, isSubscribed } =
+    useSharedContext();
 
   const manageNavigation = [
     {
@@ -54,8 +56,14 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
       subNav: [],
     },
     {
-      name: "Settings",
-      href: `/dashboard/settings/workspace`,
+      name: "Download App",
+      href: `/download`,
+      icon: faDownload,
+      subNav: [],
+    },
+    {
+      name: "Organization",
+      href: `/dashboard/settings/organization`,
       icon: faBuilding,
       subNav: [],
     },
@@ -69,6 +77,97 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
 
   return (
     <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      <Popover open={open} onOpenChange={setOpen}>
+        <Tooltip
+          disable={open || collapsed === false}
+          position="right"
+          content={
+            activeOrganization?.organization.name ?? "No organization found"
+          }
+        >
+          <PopoverTrigger asChild>
+            <div
+              className={
+                "px-3 py-2.5 w-full rounded-xl border cursor-pointer bg-gray-3 border-gray-4"
+              }
+            >
+              <div
+                className="flex justify-between items-center cursor-pointer"
+                role="combobox"
+                aria-expanded={open}
+              >
+                <div className="flex justify-between items-center w-full text-left">
+                  <div className="flex items-center">
+                    <Avatar
+                      letterClass="text-gray-1 text-xs"
+                      className="relative flex-shrink-0 size-5"
+                      name={
+                        activeOrganization?.organization.name ??
+                        "No organization found"
+                      }
+                    />
+                    <p className="ml-2.5 text-sm text-gray-12 font-medium truncate">
+                      {activeOrganization?.organization.name ??
+                        "No organization found"}
+                    </p>
+                  </div>
+                  {!collapsed && (
+                    <ChevronDown className="w-5 h-auto text-gray-8" />
+                  )}
+                </div>
+              </div>
+              <PopoverContent
+                className={clsx(
+                  "p-0 w-[calc(100%-12px)] z-[60]",
+                  collapsed ? "ml-3" : "mx-auto"
+                )}
+              >
+                <Command>
+                  <CommandInput placeholder="Search organizations..." />
+                  <CommandEmpty>No organizations found</CommandEmpty>
+                  <CommandGroup>
+                    {organizationData?.map((organization) => {
+                      const isSelected =
+                        activeOrganization?.organization.id ===
+                        organization.organization.id;
+                      return (
+                        <CommandItem
+                          key={organization.organization.name + "-organization"}
+                          onSelect={async () => {
+                            await updateActiveOrganization(
+                              organization.organization.id
+                            );
+                            setOpen(false);
+                          }}
+                        >
+                          {organization.organization.name}
+                          <Check
+                            size={18}
+                            className={classNames(
+                              "ml-auto",
+                              isSelected ? "opacity-100" : "opacity-0"
+                            )}
+                          />
+                        </CommandItem>
+                      );
+                    })}
+                    <DialogTrigger className="mt-3 w-full">
+                      <Button
+                        variant="dark"
+                        size="sm"
+                        className="flex gap-1 items-center w-full"
+                      >
+                        <Plus className="w-4 h-auto" />
+                        Add new organization
+                      </Button>
+                    </DialogTrigger>
+                  </CommandGroup>
+                </Command>
+              </PopoverContent>
+            </div>
+          </PopoverTrigger>
+        </Tooltip>
+      </Popover>
       <nav
         className="flex flex-col justify-between w-full h-full"
         aria-label="Sidebar"
@@ -128,97 +227,6 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
               </Tooltip>
             </div>
           ))}
-          <div className="pt-1">
-            <div
-              className={clsx(
-                "border-gray-4",
-                !collapsed && "px-2 pt-4 border-t"
-              )}
-            >
-              <div
-                className={clsx(
-                  "flex items-center",
-                  collapsed ? "justify-center" : "justify-between mb-2"
-                )}
-              >
-                {!collapsed && (
-                  <h3 className="text-sm font-semibold text-gray-11">Spaces</h3>
-                )}
-                <Tooltip
-                  content="Create Space"
-                  disable={!collapsed}
-                  position="right"
-                >
-                  <DialogTrigger asChild>
-                    <button
-                      className={clsx(
-                        "rounded-lg hover:bg-gray-4",
-                        collapsed ? "p-2" : "p-1"
-                      )}
-                    >
-                      <Plus className="size-4 text-gray-11" />
-                    </button>
-                  </DialogTrigger>
-                </Tooltip>
-              </div>
-              <Tooltip
-                content="View Spaces"
-                disable={!collapsed}
-                position="right"
-              >
-                <Link
-                  href="/dashboard/spaces"
-                  className={clsx(
-                    "flex items-center gap-2 rounded-lg text-gray-12 text-sm font-medium hover:bg-gray-4",
-                    collapsed ? "p-2 justify-center" : "p-2 mb-2"
-                  )}
-                >
-                  <Search className="size-4 text-gray-11" />
-                  {!collapsed && <span className="text-sm">View Spaces</span>}
-                </Link>
-              </Tooltip>
-              <div
-                className={clsx(
-                  "space-y-2",
-                  collapsed && "flex flex-col items-center"
-                )}
-              >
-                {spaceData?.slice(0, 3).map((space) => (
-                  <Tooltip
-                    key={space.space.id}
-                    content={space.space.name}
-                    disable={!collapsed}
-                    position="right"
-                  >
-                    <div
-                      className={clsx(
-                        "flex items-center cursor-pointer rounded-lg",
-                        collapsed ? "p-2 justify-center" : "gap-2 py-1.5 px-2",
-                        activeSpace?.space.id === space.space.id
-                          ? "bg-gray-4"
-                          : "hover:bg-gray-4"
-                      )}
-                      onClick={async () => {
-                        await updateActiveSpace(space.space.id);
-                        router.push("/dashboard/shared-caps");
-                      }}
-                    >
-                      <Avatar
-                        letterClass="text-gray-1 text-xs"
-                        className="flex-shrink-0 size-5"
-                        name={space.space.name}
-                      />
-                      {!collapsed && (
-                        <span className="text-sm text-gray-12 truncate">
-                          {space.space.name}
-                        </span>
-                      )}
-                    </div>
-                  </Tooltip>
-                ))}
-              </div>
-            </div>
-          </div>
         </div>
         <div className="pb-0 w-full lg:pb-5 text-center">
           <UsageButton
@@ -238,10 +246,10 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
       </nav>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Create a new Space</DialogTitle>
+          <DialogTitle>Create a new Organization</DialogTitle>
         </DialogHeader>
         <DialogDescription>
-          <NewSpace onSpaceCreated={() => setDialogOpen(false)} />
+          <NewOrganization onOrganizationCreated={() => setDialogOpen(false)} />
         </DialogDescription>
       </DialogContent>
     </Dialog>

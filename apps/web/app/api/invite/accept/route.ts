@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { spaceInvites, spaceMembers, users } from "@cap/database/schema";
+import { organizationInvites, organizationMembers, users } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { nanoId } from "@cap/database/helpers";
 
@@ -17,37 +17,34 @@ export async function POST(request: NextRequest) {
     // Find the invite
     const [invite] = await db()
       .select()
-      .from(spaceInvites)
-      .where(eq(spaceInvites.id, inviteId));
+      .from(organizationInvites)
+      .where(eq(organizationInvites.id, inviteId));
 
     if (!invite) {
       return NextResponse.json({ error: "Invite not found" }, { status: 404 });
     }
 
-    // Check if the user's email matches the invited email
     if (user.email !== invite.invitedEmail) {
       return NextResponse.json({ error: "Email mismatch" }, { status: 403 });
     }
 
-    // Get the space owner's subscription ID
-    const [spaceOwner] = await db()
+    const [organizationOwner] = await db()
       .select({
         stripeSubscriptionId: users.stripeSubscriptionId,
       })
       .from(users)
       .where(eq(users.id, invite.invitedByUserId));
 
-    if (!spaceOwner || !spaceOwner.stripeSubscriptionId) {
+    if (!organizationOwner || !organizationOwner.stripeSubscriptionId) {
       return NextResponse.json(
-        { error: "Space owner not found or has no subscription" },
+        { error: "Organization owner not found or has no subscription" },
         { status: 404 }
       );
     }
 
-    // Create a new space member
-    await db().insert(spaceMembers).values({
+    await db().insert(organizationMembers).values({
       id: nanoId(),
-      spaceId: invite.spaceId,
+      organizationId: invite.organizationId,
       userId: user.id,
       role: invite.role,
     });
@@ -56,12 +53,11 @@ export async function POST(request: NextRequest) {
     await db()
       .update(users)
       .set({
-        thirdPartyStripeSubscriptionId: spaceOwner.stripeSubscriptionId,
+        thirdPartyStripeSubscriptionId: organizationOwner.stripeSubscriptionId,
       })
       .where(eq(users.id, user.id));
 
-    // Delete the invite
-    await db().delete(spaceInvites).where(eq(spaceInvites.id, inviteId));
+    await db().delete(organizationInvites).where(eq(organizationInvites.id, inviteId));
 
     return NextResponse.json({ success: true });
   } catch (error) {

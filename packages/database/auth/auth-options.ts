@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { DrizzleAdapter } from "./drizzle-adapter";
 import { db } from "../";
-import { users, spaces, spaceMembers } from "../schema";
+import { users, organizations, organizationMembers } from "../schema";
 import EmailProvider from "next-auth/providers/email";
 import GoogleProvider from "next-auth/providers/google";
 import type { NextAuthOptions } from "next-auth";
@@ -102,28 +102,24 @@ export const authOptions = (): NextAuthOptions => {
     events: {
       async signIn({ user, account, isNewUser }) {
         if (isNewUser) {
-          // Create initial space for the user
-          const spaceId = nanoId();
-
-          // Create space
-          await db().insert(spaces).values({
-            id: spaceId,
-            name: "My Space",
+          const organizationId = nanoId();
+  
+          await db().insert(organizations).values({
+            id: organizationId,
+            name: "My Organization",
             ownerId: user.id,
           });
-
-          // Add user as member of the space
-          await db().insert(spaceMembers).values({
+  
+          await db().insert(organizationMembers).values({
             id: nanoId(),
             userId: user.id,
-            spaceId: spaceId,
+            organizationId: organizationId,
             role: "owner",
           });
-
-          // Update user's activeSpaceId
+  
           await db()
             .update(users)
-            .set({ activeSpaceId: spaceId })
+            .set({ activeOrganizationId: organizationId })
             .where(eq(users.id, user.id));
         }
       },
@@ -164,5 +160,5 @@ export const authOptions = (): NextAuthOptions => {
         };
       },
     },
-  };
+  }
 };

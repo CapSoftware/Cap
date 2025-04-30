@@ -1,5 +1,3 @@
-import { S3_BUCKET_URL } from "@cap/utils";
-
 export function generateM3U8Playlist(
   urls: {
     url: string;

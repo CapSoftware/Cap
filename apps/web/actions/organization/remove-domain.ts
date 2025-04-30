@@ -1,33 +1,33 @@
 "use server";
 
 import { getCurrentUser } from "@cap/database/auth/session";
-import { spaces } from "@cap/database/schema";
+import { organizations } from "@cap/database/schema";
 import { db } from "@cap/database";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
-export async function removeWorkspaceDomain(spaceId: string) {
+export async function removeOrganizationDomain(organizationId: string) {
   const user = await getCurrentUser();
 
   if (!user) {
     throw new Error("Unauthorized");
   }
 
-  const [space] = await db()
+  const [organization] = await db()
     .select()
-    .from(spaces)
-    .where(eq(spaces.id, spaceId));
+    .from(organizations)
+    .where(eq(organizations.id, organizationId));
 
-  if (!space || space.ownerId !== user.id) {
+  if (!organization || organization.ownerId !== user.id) {
     throw new Error("Only the owner can remove the custom domain");
   }
 
   try {
-    if (space.customDomain) {
+    if (organization.customDomain) {
       await fetch(
         `https://api.vercel.com/v9/projects/${
           process.env.VERCEL_PROJECT_ID
-        }/domains/${space.customDomain.toLowerCase()}?teamId=${
+        }/domains/${organization.customDomain.toLowerCase()}?teamId=${
           process.env.VERCEL_TEAM_ID
         }`,
         {
@@ -40,15 +40,15 @@ export async function removeWorkspaceDomain(spaceId: string) {
     }
 
     await db()
-      .update(spaces)
+      .update(organizations)
       .set({
         customDomain: null,
         domainVerified: null,
       })
-      .where(eq(spaces.id, spaceId));
+      .where(eq(organizations.id, organizationId));
 
-    revalidatePath("/dashboard/settings/workspace");
-
+    revalidatePath('/dashboard/settings/organization');
+    
     return { success: true };
   } catch (error) {
     if (error instanceof Error) {

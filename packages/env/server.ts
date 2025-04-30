@@ -56,7 +56,7 @@ function createServerEnv() {
   });
 }
 
-let _cached: ReturnType<typeof createServerEnv> | undefined;
+let _cached = undefined;
 export const serverEnv = () => {
   if (_cached) return _cached;
   _cached = createServerEnv();

@@ -1,6 +1,6 @@
 import { type NextRequest } from "next/server";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { spaceMembers, spaces, users } from "@cap/database/schema";
+import { organizationMembers, organizations, users } from "@cap/database/schema";
 import { db } from "@cap/database";
 import { eq, or } from "drizzle-orm";
 import { nanoId } from "@cap/database/helpers";
@@ -28,37 +28,34 @@ export async function POST(request: NextRequest) {
     fullName += ` ${lastName}`;
   }
 
-  const [space] = await db()
+  const [organization] = await db()
     .select()
-    .from(spaces)
-    .where(or(eq(spaces.ownerId, user.id), eq(spaceMembers.userId, user.id)))
-    .leftJoin(spaceMembers, eq(spaces.id, spaceMembers.spaceId));
+    .from(organizations)
+    .where(or(eq(organizations.ownerId, user.id), eq(organizationMembers.userId, user.id)))
+    .leftJoin(organizationMembers, eq(organizations.id, organizationMembers.organizationId));
 
-  if (!space) {
-    const spaceId = nanoId();
+  if (!organization) {
+    const organizationId = nanoId();
 
-    await db()
-      .insert(spaces)
-      .values({
-        id: spaceId,
-        ownerId: user.id,
-        name: `${fullName}'s Space`,
-      });
+    await db().insert(organizations).values({
+      id: organizationId,
+      ownerId: user.id,
+      name: `${fullName}'s Organization`,
+    });
 
-    await db().insert(spaceMembers).values({
+    await db().insert(organizationMembers).values({
       id: nanoId(),
       userId: user.id,
       role: "owner",
-      spaceId,
+      organizationId,
     });
 
     await db()
       .update(users)
-      .set({ activeSpaceId: spaceId })
+      .set({ activeOrganizationId: organizationId })
       .where(eq(users.id, user.id));
   }
 
-  // After updating user and creating space
   return Response.json(
     { success: true, message: "Onboarding completed successfully" },
     { status: 200 }

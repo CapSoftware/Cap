@@ -39,13 +39,13 @@ export default function DashboardInner({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const { activeSpace } = useSharedContext();
+  const { activeOrganization } = useSharedContext();
   const [membersDialogOpen, setMembersDialogOpen] = useState(false);
 
   const titles: Record<string, string> = {
-    "/dashboard/caps": "My Caps",
-    "/dashboard/shared-caps": activeSpace?.space.name || "Shared Caps",
-    "/dashboard/settings/workspace": "Workspace Settings",
+    "/dashboard/caps": "Caps",
+    "/dashboard/shared-caps": "Shared Caps",
+    "/dashboard/settings/organization": "Organization Settings",
     "/dashboard/settings/account": "Account Settings",
     "/dashboard/spaces": "Spaces",
   };
@@ -62,9 +62,9 @@ export default function DashboardInner({
       >
         <div className="flex items-center gap-2">
           <p className="relative text-xl text-gray-12 lg:text-2xl">{title}</p>
-          {isSharedCapsPage && activeSpace?.members && (
+          {isSharedCapsPage && activeOrganization?.members && (
             <MembersCount
-              count={activeSpace.members.length}
+              count={activeOrganization.members.length}
               onClick={() => setMembersDialogOpen(true)}
             />
           )}
@@ -92,12 +92,12 @@ export default function DashboardInner({
         <div className="flex flex-col flex-1 gap-4 h-full">{children}</div>
       </div>
 
-      {isSharedCapsPage && activeSpace?.members && (
+      {isSharedCapsPage && activeOrganization?.members && (
         <MembersDialog
           open={membersDialogOpen}
           onOpenChange={setMembersDialogOpen}
-          members={activeSpace.members}
-          spaceName={activeSpace.space.name || ""}
+          members={activeOrganization.members}
+          organizationName={activeOrganization.organization.name || ""}
         />
       )}
     </div>

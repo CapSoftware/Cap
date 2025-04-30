@@ -1,14 +1,14 @@
 "use client";
 import AdminMobileNav from "@/app/dashboard/_components/AdminNavbar/AdminMobileNav";
-import { Space } from "@/app/dashboard/layout";
+import { Organization } from "@/app/dashboard/layout";
 import { users } from "@cap/database/schema";
 import Cookies from "js-cookie";
 import React, { createContext, useContext, useEffect, useState } from "react";
 import AdminDesktopNav from "./AdminNavbar/AdminDesktopNav";
 
 type SharedContext = {
-  spaceData: Space[] | null;
-  activeSpace: Space | null;
+  organizationData: Organization[] | null;
+  activeOrganization: Organization | null;
   user: typeof users.$inferSelect;
   isSubscribed: boolean;
 };
@@ -29,15 +29,15 @@ export const useTheme = () => useContext(ThemeContext);
 
 export default function DynamicSharedLayout({
   children,
-  spaceData,
-  activeSpace,
+  organizationData,
+  activeOrganization,
   user,
   isSubscribed,
   initialTheme,
 }: {
   children: React.ReactNode;
-  spaceData: SharedContext["spaceData"];
-  activeSpace: SharedContext["activeSpace"];
+  organizationData: SharedContext["organizationData"];
+  activeOrganization: SharedContext["activeOrganization"];
   user: SharedContext["user"];
   isSubscribed: SharedContext["isSubscribed"];
   initialTheme: ITheme;
@@ -62,8 +62,8 @@ export default function DynamicSharedLayout({
     <ThemeContext.Provider value={{ theme, setThemeHandler }}>
       <Context.Provider
         value={{
-          spaceData,
-          activeSpace,
+          organizationData,
+          activeOrganization,
           user,
           isSubscribed,
         }}

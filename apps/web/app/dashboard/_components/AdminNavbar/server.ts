@@ -2,28 +2,35 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { spaceMembers, spaces, users } from "@cap/database/schema";
+import {
+  organizationMembers,
+  organizations,
+  users,
+} from "@cap/database/schema";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
-export async function updateActiveSpace(spaceId: string) {
+export async function updateActiveOrganization(organizationId: string) {
   const user = await getCurrentUser();
   if (!user) throw new Error("Unauthorized");
 
-  const [space] = await db()
-    .select({ space: spaces })
-    .from(spaces)
+  const [organization] = await db()
+    .select({ organization: organizations })
+    .from(organizations)
     .innerJoin(
-      spaceMembers,
-      and(eq(spaceMembers.spaceId, spaces.id), eq(spaceMembers.userId, user.id))
+      organizationMembers,
+      and(
+        eq(organizationMembers.organizationId, organizations.id),
+        eq(organizationMembers.userId, user.id)
+      )
     )
-    .where(eq(spaces.id, spaceId));
+    .where(eq(organizations.id, organizationId));
 
-  if (!space) throw new Error("Space not found");
+  if (!organization) throw new Error("Organization not found");
 
   await db()
     .update(users)
-    .set({ activeSpaceId: space.space.id })
+    .set({ activeOrganizationId: organization.organization.id })
     .where(eq(users.id, user.id));
 
   revalidatePath("/dashboard");

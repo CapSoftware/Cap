@@ -1,12 +1,19 @@
 {
-  "version": "5",
+  "version": "7",
   "dialect": "mysql",
   "entries": [
     {
       "idx": 0,
       "version": "5",
-      "when": 1743020179593,
-      "tag": "0000_brown_sunfire",
+      "when": 1745976420272,
+      "tag": "0000_oval_wendigo",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1745977344716,
+      "tag": "0001_eager_the_order",
       "breakpoints": true
     }
   ]

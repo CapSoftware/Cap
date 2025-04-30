@@ -3,31 +3,31 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
-import { spaceMembers, spaces, users } from "@cap/database/schema";
+import { organizationMembers, organizations, users } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
-export async function createSpace(args: { name: string }) {
+export async function createOrganization(args: { name: string }) {
   const user = await getCurrentUser();
   if (!user) throw new Error("Unauthorized");
 
-  const spaceId = nanoId();
-  await db().insert(spaces).values({
-    id: spaceId,
+  const organizationId = nanoId();
+  await db().insert(organizations).values({
+    id: organizationId,
     ownerId: user.id,
     name: args.name,
   });
 
-  await db().insert(spaceMembers).values({
+  await db().insert(organizationMembers).values({
     id: nanoId(),
     userId: user.id,
     role: "owner",
-    spaceId,
+    organizationId,
   });
 
   await db()
     .update(users)
-    .set({ activeSpaceId: spaceId })
+    .set({ activeOrganizationId: organizationId })
     .where(eq(users.id, user.id));
 
   revalidatePath("/dashboard");

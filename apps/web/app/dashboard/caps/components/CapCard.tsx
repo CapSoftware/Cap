@@ -31,14 +31,14 @@ interface Props extends PropsWithChildren {
     createdAt: Date;
     totalComments: number;
     totalReactions: number;
-    sharedSpaces?: { id: string; name: string }[];
+    sharedOrganizations?: { id: string; name: string }[];
     ownerName: string | null;
     metadata?: VideoMetadata;
   };
   analytics: number;
   onDelete?: (videoId: string) => Promise<void>;
   userId?: string;
-  userSpaces?: { id: string; name: string }[];
+  userOrganizations?: { id: string; name: string }[];
   sharedCapCard?: boolean;
   isSelected?: boolean;
   onSelectToggle?: () => void;
@@ -51,7 +51,7 @@ export const CapCard = ({
   children,
   onDelete,
   userId,
-  userSpaces,
+  userOrganizations,
   sharedCapCard = false,
   isSelected = false,
   onSelectToggle,
@@ -64,7 +64,9 @@ export const CapCard = ({
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(cap.name);
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
-  const [sharedSpaces, setSharedSpaces] = useState(cap.sharedSpaces);
+  const [sharedOrganizations, setSharedOrganizations] = useState(
+    cap.sharedOrganizations
+  );
   const [isDateEditing, setIsDateEditing] = useState(false);
   const [copyPressed, setCopyPressed] = useState(false);
   const [dateValue, setDateValue] = useState(
@@ -72,7 +74,7 @@ export const CapCard = ({
   );
   const [showFullDate, setShowFullDate] = useState(false);
   const router = useRouter();
-  const { activeSpace } = useSharedContext();
+  const { activeOrganization } = useSharedContext();
 
   const handleTitleBlur = async (capName: string) => {
     if (capName === title) return;
@@ -100,9 +102,11 @@ export const CapCard = ({
       ? Math.max(cap.totalComments, cap.totalReactions)
       : analytics;
 
-  const handleSharingUpdated = (updatedSharedSpaces: string[]) => {
-    setSharedSpaces(
-      userSpaces?.filter((space) => updatedSharedSpaces.includes(space.id))
+  const handleSharingUpdated = (updatedSharedOrganizations: string[]) => {
+    setSharedOrganizations(
+      userOrganizations?.filter((organization) =>
+        updatedSharedOrganizations.includes(organization.id)
+      )
     );
     router.refresh();
   };
@@ -115,7 +119,7 @@ export const CapCard = ({
       sharedCapCard ? "cursor-default" : "hover:text-gray-12 cursor-pointer"
     );
     if (isOwner) {
-      if (cap.sharedSpaces?.length === 0) {
+      if (cap.sharedOrganizations?.length === 0) {
         return (
           <p
             className={baseClassName}
@@ -238,8 +242,9 @@ export const CapCard = ({
   const { webUrl } = usePublicEnv();
 
   const capUrl =
-    activeSpace?.space.customDomain && activeSpace.space.domainVerified
-      ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
+    activeOrganization?.organization.customDomain &&
+    activeOrganization?.organization.domainVerified
+      ? `https://${activeOrganization.organization.customDomain}/s/${cap.id}`
       : buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
       ? `https://cap.link/${cap.id}`
       : `${webUrl}/s/${cap.id}`;
@@ -251,8 +256,8 @@ export const CapCard = ({
         onClose={() => setIsSharingDialogOpen(false)}
         capId={cap.id}
         capName={cap.name}
-        sharedSpaces={sharedSpaces || []}
-        userSpaces={userSpaces}
+        sharedOrganizations={cap.sharedOrganizations || []}
+        userOrganizations={userOrganizations}
         onSharingUpdated={handleSharingUpdated}
       />
       <div
