@@ -1,6 +1,5 @@
 import { db } from "@cap/database";
 import { organizations } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
 import { buildEnv, serverEnv } from "@cap/env";
 import { notFound } from "next/navigation";
@@ -28,7 +27,7 @@ export async function middleware(request: NextRequest) {
 
   if (
     buildEnv.NEXT_PUBLIC_IS_CAP !== "true" ||
-    mainOrigins.some((d) => url.origin === d)
+    mainOrigins.some((d) => url.origin.startsWith(d))
   ) {
     // We just let the request go through for main domains, page-level logic will handle redirects
     return NextResponse.next();
@@ -40,7 +39,6 @@ export async function middleware(request: NextRequest) {
     // We're on a custom domain at this point
     // Only allow /s/ routes for custom domains
     if (!path.startsWith("/s/")) {
-
       const url = new URL(request.url);
       url.hostname = webUrl;
       console.log({ url });
