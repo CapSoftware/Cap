@@ -153,6 +153,10 @@ async function main() {
       envs.CAP_AWS_REGION = DOCKER_S3_ENVS.region;
       envs.CAP_AWS_ENDPOINT = DOCKER_S3_ENVS.endpoint;
     }
+
+    envs.NEXT_PUBLIC_WEB_URL = envs.WEB_URL;
+    envs.NEXT_PUBLIC_CAP_AWS_BUCKET = envs.CAP_AWS_BUCKET;
+    envs.NEXT_PUBLIC_CAP_AWS_REGION = envs.CAP_AWS_REGION;
   }
 
   if (hasDesktop) {

@@ -1,6 +1,14 @@
 import { createEnv } from "@t3-oss/env-nextjs";
 import { z } from "zod";
 
+const boolString = (_default = false) =>
+  z
+    .string()
+    .optional()
+    .default(_default ? "true" : "false")
+    .transform((v) => v === "true")
+    .pipe(z.boolean());
+
 function createServerEnv() {
   return createEnv({
     server: {
@@ -9,6 +17,7 @@ function createServerEnv() {
       WEB_URL: z.string(),
       DATABASE_MIGRATION_URL: z.string().optional(),
       DATABASE_ENCRYPTION_KEY: z.string().optional(),
+      S3_PATH_STYLE: boolString(true),
       CAP_AWS_BUCKET: z.string(),
       CAP_AWS_REGION: z.string(),
       CAP_AWS_BUCKET_URL: z.string().optional(),
@@ -25,6 +34,7 @@ function createServerEnv() {
       WORKOS_API_KEY: z.string().optional(),
       DUB_API_KEY: z.string().optional(),
       RESEND_API_KEY: z.string().optional(),
+      RESEND_FROM_DOMAIN: z.string().optional(),
       DEEPGRAM_API_KEY: z.string().optional(),
       NEXT_LOOPS_KEY: z.string().optional(),
       STRIPE_SECRET_KEY_TEST: z.string().optional(),
@@ -50,5 +60,6 @@ let _cached: ReturnType<typeof createServerEnv> | undefined;
 export const serverEnv = () => {
   if (_cached) return _cached;
   _cached = createServerEnv();
+  console.log({ S3_PATH_STYLE: _cached.S3_PATH_STYLE });
   return _cached;
 };

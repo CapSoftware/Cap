@@ -39,7 +39,9 @@ export const sendEmail = async ({
       ? "Richie from Cap <richie@send.cap.so>"
       : buildEnv.NEXT_PUBLIC_IS_CAP
       ? "Cap Auth <no-reply@auth.cap.so>"
-      : `auth@${buildEnv.NEXT_PUBLIC_WEB_URL}`,
+      : `auth@${
+          serverEnv().RESEND_FROM_DOMAIN ?? buildEnv.NEXT_PUBLIC_WEB_URL
+        }`,
     to: test ? "delivered@resend.dev" : email,
     subject,
     react,

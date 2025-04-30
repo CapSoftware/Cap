@@ -5,6 +5,8 @@ import { count, eq } from "drizzle-orm";
 import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
   const url = new URL(request.url);

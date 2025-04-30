@@ -17,7 +17,6 @@ export function BentoScript({
   user?: typeof users.$inferSelect | null;
 }) {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
 
   useEffect(() => {
     if (window.bento !== undefined) {
@@ -26,7 +25,7 @@ export function BentoScript({
       }
       window.bento.view();
     }
-  }, [pathname, searchParams]);
+  }, [pathname]);
 
   return (
     <Script

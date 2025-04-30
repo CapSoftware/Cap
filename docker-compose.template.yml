@@ -41,8 +41,8 @@ services:
         "--max_connections=1000",
         "--default-authentication-plugin=mysql_native_password",
       ]
-    expose:
-      - 3306
+    ports:
+      - "3306:3306"
     volumes:
       - ps-mysql:/var/lib/mysql
 
@@ -63,23 +63,6 @@ services:
     volumes:
       - minio-data:/bitnami/minio/data
       - minio-certs:/certs
-
-  # DISABLE THIS IF YOU ARE NOT USING MINIO VIA THIS DOCKER COMPOSE FILE
-  createbuckets:
-    container_name: cap-minio-bucket-creation
-    image: minio/mc
-    depends_on:
-      - minio
-    # CHANGE THE ENTRYPIONT "/usr/bin/mc alias set myminio http://minio:3902 capS3root capS3root;" TO USE MINIO USERNAME AND PASSWORD.
-    entrypoint: >
-      /bin/sh -c "
-      sleep 10;
-      /usr/bin/mc alias set myminio http://minio:3902 capS3root capS3root;
-      /usr/bin/mc mb myminio/capso;
-      echo '{\"Version\": \"2012-10-17\",\"Statement\": [{\"Effect\": \"Allow\",\"Principal\": {\"AWS\": [\"*\"]},\"Action\": [\"s3:GetObject\"],\"Resource\": [\"arn:aws:s3:::capso/*\"]}]}' > /tmp/policy.json;
-      /usr/bin/mc anonymous set-json /tmp/policy.json myminio/capso;
-      exit 0;
-      "
 volumes:
   ps-mysql:
   # REMOVE THESE IF YOU ARE NOT USING MINIO VIA THIS DOCKER COMPOSE FILE

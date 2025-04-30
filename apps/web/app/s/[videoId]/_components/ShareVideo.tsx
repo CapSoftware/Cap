@@ -3,7 +3,7 @@ import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
 import { Logo, LogoSpinner } from "@cap/ui";
-import { isUserOnProPlan, S3_BUCKET_URL } from "@cap/utils";
+import { isUserOnProPlan } from "@cap/utils";
 import clsx from "clsx";
 import {
   Maximize,

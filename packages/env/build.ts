@@ -26,7 +26,7 @@ export const buildEnv = createEnv({
     NEXT_PUBLIC_CAP_AWS_REGION:
       process.env.CAP_AWS_REGION ?? process.env.NEXT_PUBLIC_CAP_AWS_REGION,
     NEXT_PUBLIC_CAP_AWS_ENDPOINT:
-      process.env.CAP_AWS_REGION ?? process.env.NEXT_PUBLIC_CAP_AWS_ENDPOINT,
+      process.env.CAP_AWS_ENDPOINT ?? process.env.NEXT_PUBLIC_CAP_AWS_ENDPOINT,
     NEXT_PUBLIC_CAP_AWS_BUCKET_URL:
       process.env.CAP_AWS_URL ?? process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL,
   },

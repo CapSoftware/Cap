@@ -52,15 +52,15 @@ export default async function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const user = await getCurrentUser();
+  const user = undefined; // await getCurrentUser();
   let intercomHash = "";
-  const intercomSecret = serverEnv().INTERCOM_SECRET;
-  if (intercomSecret) {
-    intercomHash = crypto
-      .createHmac("sha256", intercomSecret)
-      .update(user?.id ?? "")
-      .digest("hex");
-  }
+  // const intercomSecret = serverEnv().INTERCOM_SECRET;
+  // if (intercomSecret) {
+  //   intercomHash = crypto
+  //     .createHmac("sha256", intercomSecret)
+  //     .update(user?.id ?? "")
+  //     .digest("hex");
+  // }
 
   return (
     <html lang="en">

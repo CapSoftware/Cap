@@ -3,7 +3,6 @@
 import { videos } from "@cap/database/schema";
 import { useState, useEffect } from "react";
 import { MessageSquare } from "lucide-react";
-import { S3_BUCKET_URL } from "@cap/utils";
 import { usePublicEnv } from "@/utils/public-env";
 
 interface TranscriptProps {
