@@ -1,7 +1,6 @@
 "use client";
 import { userSelectProps } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
-import { clientEnv } from "@cap/env";
 import { Button } from "@cap/ui";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";

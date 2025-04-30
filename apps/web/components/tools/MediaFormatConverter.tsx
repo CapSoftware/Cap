@@ -2,7 +2,6 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@cap/ui";
-import { fetchFile } from "@ffmpeg/util";
 import { trackEvent } from "@/app/utils/analytics";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";

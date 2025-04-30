@@ -1,7 +1,7 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { cookies } from "next/headers";
 import { createMiddleware } from "hono/factory";
-import { buildEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 import { cors } from "hono/cors";
 import { getServerSession, Session } from "next-auth";
 import { authOptions } from "@cap/database/auth/auth-options";

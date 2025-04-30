@@ -281,7 +281,7 @@ export default async function ShareVideoPage(props: Props) {
     }
   }
 
-  const sharedSpacesData = await db
+  const sharedSpacesData = await db()
     .select({
       id: spaces.id,
       name: spaces.name,
@@ -292,7 +292,7 @@ export default async function ShareVideoPage(props: Props) {
 
   let userSpaces: { id: string; name: string }[] = [];
   if (userId) {
-    const ownedSpaces = await db
+    const ownedSpaces = await db()
       .select({
         id: spaces.id,
         name: spaces.name,
@@ -300,7 +300,7 @@ export default async function ShareVideoPage(props: Props) {
       .from(spaces)
       .where(eq(spaces.ownerId, userId));
 
-    const memberSpaces = await db
+    const memberSpaces = await db()
       .select({
         id: spaces.id,
         name: spaces.name,
