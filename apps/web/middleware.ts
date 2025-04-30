@@ -5,22 +5,25 @@ import { buildEnv, serverEnv } from "@cap/env";
 import { notFound } from "next/navigation";
 import { NextRequest, NextResponse } from "next/server";
 
+const addHttps = (s?: string) => {
+  if (!s) return s;
+  return `https://${s}`;
+};
+
 const mainOrigins = [
   "https://cap.so",
   "https://cap.link",
   "http://localhost",
   serverEnv().WEB_URL,
-  serverEnv().VERCEL_URL,
-  serverEnv().VERCEL_BRANCH_URL,
-  serverEnv().VERCEL_PROJECT_PRODUCTION_URL,
+  addHttps(serverEnv().VERCEL_URL),
+  addHttps(serverEnv().VERCEL_BRANCH_URL),
+  addHttps(serverEnv().VERCEL_PROJECT_PRODUCTION_URL),
 ].filter(Boolean) as string[];
 
 export async function middleware(request: NextRequest) {
   const url = new URL(request.url);
   const hostname = url.hostname;
   const path = url.pathname;
-
-  const webUrl = new URL(serverEnv().WEB_URL).hostname;
 
   if (
     buildEnv.NEXT_PUBLIC_IS_CAP !== "true" ||
@@ -29,6 +32,8 @@ export async function middleware(request: NextRequest) {
     // We just let the request go through for main domains, page-level logic will handle redirects
     return NextResponse.next();
   }
+
+  const webUrl = new URL(serverEnv().WEB_URL).hostname;
 
   try {
     // We're on a custom domain at this point
