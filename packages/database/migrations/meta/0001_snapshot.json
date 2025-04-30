@@ -1,8 +1,8 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "b08d5e93-8b36-4743-bcfb-7671d65af504",
-  "prevId": "00000000-0000-0000-0000-000000000000",
+  "id": "94acb4a1-1de9-4bcf-bb06-5aeae407cd92",
+  "prevId": "b08d5e93-8b36-4743-bcfb-7671d65af504",
   "tables": {
     "accounts": {
       "name": "accounts",
@@ -263,6 +263,337 @@
       },
       "checkConstraint": {}
     },
+    "organization_invites": {
+      "name": "organization_invites",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "organizationId": {
+          "name": "organizationId",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "invitedEmail": {
+          "name": "invitedEmail",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "invitedByUserId": {
+          "name": "invitedByUserId",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "role": {
+          "name": "role",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'pending'"
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "onUpdate": true,
+          "default": "(now())"
+        },
+        "expiresAt": {
+          "name": "expiresAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "organization_id_idx": {
+          "name": "organization_id_idx",
+          "columns": [
+            "organizationId"
+          ],
+          "isUnique": false
+        },
+        "invited_email_idx": {
+          "name": "invited_email_idx",
+          "columns": [
+            "invitedEmail"
+          ],
+          "isUnique": false
+        },
+        "invited_by_user_id_idx": {
+          "name": "invited_by_user_id_idx",
+          "columns": [
+            "invitedByUserId"
+          ],
+          "isUnique": false
+        },
+        "status_idx": {
+          "name": "status_idx",
+          "columns": [
+            "status"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "organization_invites_id": {
+          "name": "organization_invites_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {
+        "organization_invites_id_unique": {
+          "name": "organization_invites_id_unique",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "checkConstraint": {}
+    },
+    "organization_members": {
+      "name": "organization_members",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "organizationId": {
+          "name": "organizationId",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "role": {
+          "name": "role",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "onUpdate": true,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "user_id_idx": {
+          "name": "user_id_idx",
+          "columns": [
+            "userId"
+          ],
+          "isUnique": false
+        },
+        "organization_id_idx": {
+          "name": "organization_id_idx",
+          "columns": [
+            "organizationId"
+          ],
+          "isUnique": false
+        },
+        "user_id_organization_id_idx": {
+          "name": "user_id_organization_id_idx",
+          "columns": [
+            "userId",
+            "organizationId"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "organization_members_id": {
+          "name": "organization_members_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {
+        "organization_members_id_unique": {
+          "name": "organization_members_id_unique",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "checkConstraint": {}
+    },
+    "organizations": {
+      "name": "organizations",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ownerId": {
+          "name": "ownerId",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "allowedEmailDomain": {
+          "name": "allowedEmailDomain",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "customDomain": {
+          "name": "customDomain",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "domainVerified": {
+          "name": "domainVerified",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "onUpdate": true,
+          "default": "(now())"
+        },
+        "workosOrganizationId": {
+          "name": "workosOrganizationId",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "workosConnectionId": {
+          "name": "workosConnectionId",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "owner_id_idx": {
+          "name": "owner_id_idx",
+          "columns": [
+            "ownerId"
+          ],
+          "isUnique": false
+        },
+        "custom_domain_idx": {
+          "name": "custom_domain_idx",
+          "columns": [
+            "customDomain"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "organizations_id": {
+          "name": "organizations_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {
+        "organizations_id_unique": {
+          "name": "organizations_id_unique",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "checkConstraint": {}
+    },
     "s3_buckets": {
       "name": "s3_buckets",
       "columns": {
@@ -451,8 +782,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "spaceId": {
-          "name": "spaceId",
+        "organizationId": {
+          "name": "organizationId",
           "type": "varchar(15)",
           "primaryKey": false,
           "notNull": true,
@@ -482,10 +813,10 @@
           ],
           "isUnique": false
         },
-        "space_id_idx": {
-          "name": "space_id_idx",
+        "organization_id_idx": {
+          "name": "organization_id_idx",
           "columns": [
-            "spaceId"
+            "organizationId"
           ],
           "isUnique": false
         },
@@ -496,11 +827,11 @@
           ],
           "isUnique": false
         },
-        "video_id_space_id_idx": {
-          "name": "video_id_space_id_idx",
+        "video_id_organization_id_idx": {
+          "name": "video_id_organization_id_idx",
           "columns": [
             "videoId",
-            "spaceId"
+            "organizationId"
           ],
           "isUnique": false
         }
@@ -517,337 +848,6 @@
       "uniqueConstraints": {
         "shared_videos_id_unique": {
           "name": "shared_videos_id_unique",
-          "columns": [
-            "id"
-          ]
-        }
-      },
-      "checkConstraint": {}
-    },
-    "space_invites": {
-      "name": "space_invites",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "varchar(15)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "spaceId": {
-          "name": "spaceId",
-          "type": "varchar(15)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "invitedEmail": {
-          "name": "invitedEmail",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "invitedByUserId": {
-          "name": "invitedByUserId",
-          "type": "varchar(15)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "role": {
-          "name": "role",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "status": {
-          "name": "status",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'pending'"
-        },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(now())"
-        },
-        "updatedAt": {
-          "name": "updatedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "onUpdate": true,
-          "default": "(now())"
-        },
-        "expiresAt": {
-          "name": "expiresAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "space_id_idx": {
-          "name": "space_id_idx",
-          "columns": [
-            "spaceId"
-          ],
-          "isUnique": false
-        },
-        "invited_email_idx": {
-          "name": "invited_email_idx",
-          "columns": [
-            "invitedEmail"
-          ],
-          "isUnique": false
-        },
-        "invited_by_user_id_idx": {
-          "name": "invited_by_user_id_idx",
-          "columns": [
-            "invitedByUserId"
-          ],
-          "isUnique": false
-        },
-        "status_idx": {
-          "name": "status_idx",
-          "columns": [
-            "status"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {
-        "space_invites_id": {
-          "name": "space_invites_id",
-          "columns": [
-            "id"
-          ]
-        }
-      },
-      "uniqueConstraints": {
-        "space_invites_id_unique": {
-          "name": "space_invites_id_unique",
-          "columns": [
-            "id"
-          ]
-        }
-      },
-      "checkConstraint": {}
-    },
-    "space_members": {
-      "name": "space_members",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "varchar(15)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "userId": {
-          "name": "userId",
-          "type": "varchar(15)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "spaceId": {
-          "name": "spaceId",
-          "type": "varchar(15)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "role": {
-          "name": "role",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(now())"
-        },
-        "updatedAt": {
-          "name": "updatedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "onUpdate": true,
-          "default": "(now())"
-        }
-      },
-      "indexes": {
-        "user_id_idx": {
-          "name": "user_id_idx",
-          "columns": [
-            "userId"
-          ],
-          "isUnique": false
-        },
-        "space_id_idx": {
-          "name": "space_id_idx",
-          "columns": [
-            "spaceId"
-          ],
-          "isUnique": false
-        },
-        "user_id_space_id_idx": {
-          "name": "user_id_space_id_idx",
-          "columns": [
-            "userId",
-            "spaceId"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {
-        "space_members_id": {
-          "name": "space_members_id",
-          "columns": [
-            "id"
-          ]
-        }
-      },
-      "uniqueConstraints": {
-        "space_members_id_unique": {
-          "name": "space_members_id_unique",
-          "columns": [
-            "id"
-          ]
-        }
-      },
-      "checkConstraint": {}
-    },
-    "spaces": {
-      "name": "spaces",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "varchar(15)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "name": {
-          "name": "name",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "ownerId": {
-          "name": "ownerId",
-          "type": "varchar(15)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "metadata": {
-          "name": "metadata",
-          "type": "json",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "allowedEmailDomain": {
-          "name": "allowedEmailDomain",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "customDomain": {
-          "name": "customDomain",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "domainVerified": {
-          "name": "domainVerified",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(now())"
-        },
-        "updatedAt": {
-          "name": "updatedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "onUpdate": true,
-          "default": "(now())"
-        },
-        "workosOrganizationId": {
-          "name": "workosOrganizationId",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "workosConnectionId": {
-          "name": "workosConnectionId",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "owner_id_idx": {
-          "name": "owner_id_idx",
-          "columns": [
-            "ownerId"
-          ],
-          "isUnique": false
-        },
-        "custom_domain_idx": {
-          "name": "custom_domain_idx",
-          "columns": [
-            "customDomain"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {
-        "spaces_id": {
-          "name": "spaces_id",
-          "columns": [
-            "id"
-          ]
-        }
-      },
-      "uniqueConstraints": {
-        "spaces_id_unique": {
-          "name": "spaces_id_unique",
           "columns": [
             "id"
           ]
@@ -935,8 +935,8 @@
           "notNull": false,
           "autoincrement": false
         },
-        "activeSpaceId": {
-          "name": "activeSpaceId",
+        "activeOrganizationId": {
+          "name": "activeOrganizationId",
           "type": "varchar(15)",
           "primaryKey": false,
           "notNull": false,
@@ -1269,8 +1269,17 @@
   "views": {},
   "_meta": {
     "schemas": {},
-    "tables": {},
-    "columns": {}
+    "tables": {
+      "\"space_invites\"": "\"organization_invites\"",
+      "\"space_members\"": "\"organization_members\"",
+      "\"spaces\"": "\"organizations\""
+    },
+    "columns": {
+      "\"shared_videos\".\"spaceId\"": "\"shared_videos\".\"organizationId\"",
+      "\"organization_invites\".\"spaceId\"": "\"organization_invites\".\"organizationId\"",
+      "\"organization_members\".\"spaceId\"": "\"organization_members\".\"organizationId\"",
+      "\"users\".\"activeSpaceId\"": "\"users\".\"activeOrganizationId\""
+    }
   },
   "internal": {
     "tables": {},

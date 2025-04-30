@@ -20,14 +20,14 @@ interface Analytics {
   reactions: number;
 }
 
-type VideoWithSpaceInfo = typeof videos.$inferSelect & {
-  spaceMembers?: string[];
-  spaceId?: string;
-  sharedSpaces?: { id: string; name: string }[];
+type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
+  organizationMembers?: string[];
+  organizationId?: string;
+  sharedOrganizations?: { id: string; name: string }[];
 };
 
 interface ShareProps {
-  data: VideoWithSpaceInfo;
+  data: VideoWithOrganizationInfo;
   user: typeof userSelectProps | null;
   comments: CommentWithAuthor[];
   initialAnalytics: {
@@ -37,7 +37,7 @@ interface ShareProps {
   };
   customDomain: string | null;
   domainVerified: boolean;
-  userSpaces?: { id: string; name: string }[];
+  userOrganizations?: { id: string; name: string }[];
 }
 
 export const Share: React.FC<ShareProps> = ({
@@ -47,7 +47,7 @@ export const Share: React.FC<ShareProps> = ({
   initialAnalytics,
   customDomain,
   domainVerified,
-  userSpaces = [],
+  userOrganizations = [],
 }) => {
   const [analytics, setAnalytics] = useState(initialAnalytics);
   const effectiveDate = data.metadata?.customCreatedAt
@@ -95,8 +95,8 @@ export const Share: React.FC<ShareProps> = ({
           user={user}
           customDomain={customDomain}
           domainVerified={domainVerified}
-          sharedSpaces={data.sharedSpaces || []}
-          userSpaces={userSpaces}
+          sharedOrganizations={data.sharedOrganizations || []}
+          userOrganizations={userOrganizations}
         />
 
         <div className="mt-4">

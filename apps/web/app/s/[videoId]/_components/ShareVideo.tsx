@@ -953,7 +953,6 @@ export const ShareVideo = forwardRef<
   };
 
   const publicEnv = usePublicEnv();
-
   const apiClient = useApiClient();
 
   useEffect(() => {

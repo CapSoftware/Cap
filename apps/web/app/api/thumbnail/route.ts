@@ -7,7 +7,7 @@ import { s3Buckets, videos } from "@cap/database/schema";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { S3_BUCKET_URL } from "@cap/utils";
-import { buildEnv, serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 
 export const revalidate = 0;
 
@@ -85,7 +85,7 @@ export async function GET(request: NextRequest) {
     const listResponse = await s3Client.send(listCommand);
     const contents = listResponse.Contents || [];
 
-    const thumbnailKey = contents.find((item) =>
+    const thumbnailKey = contents.find((item: any) =>
       item.Key?.endsWith("screen-capture.jpg")
     )?.Key;
 

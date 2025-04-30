@@ -15,9 +15,9 @@ type CommentType = typeof commentsSchema.$inferSelect & {
   authorName?: string | null;
 };
 
-type VideoWithSpaceInfo = typeof videos.$inferSelect & {
-  spaceMembers?: string[];
-  spaceId?: string;
+type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
+  organizationMembers?: string[];
+  organizationId?: string;
 };
 
 interface Analytics {
@@ -27,7 +27,7 @@ interface Analytics {
 }
 
 interface SidebarProps {
-  data: VideoWithSpaceInfo;
+  data: VideoWithOrganizationInfo;
   user: typeof userSelectProps | null;
   comments: CommentType[];
   analytics: Analytics;
@@ -69,7 +69,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const isOwnerOrMember: boolean = Boolean(
     user?.id === data.ownerId ||
-      (data.spaceId && data.spaceMembers?.includes(user?.id ?? ""))
+      (data.organizationId &&
+        data.organizationMembers?.includes(user?.id ?? ""))
   );
 
   const [activeTab, setActiveTab] = useState<TabType>("activity");

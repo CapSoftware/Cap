@@ -12,9 +12,9 @@ interface SharingDialogProps {
   onClose: () => void;
   capId: string;
   capName: string;
-  sharedSpaces: { id: string; name: string }[];
-  userSpaces?: { id: string; name: string }[];
-  onSharingUpdated: (updatedSharedSpaces: string[]) => void;
+  sharedOrganizations: { id: string; name: string }[];
+  userOrganizations?: { id: string; name: string }[];
+  onSharingUpdated: (updatedSharedOrganizations: string[]) => void;
 }
 
 export const SharingDialog: React.FC<SharingDialogProps> = ({
@@ -22,34 +22,37 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
   onClose,
   capId,
   capName,
-  sharedSpaces,
-  userSpaces,
+  sharedOrganizations,
+  userOrganizations,
   onSharingUpdated,
 }) => {
-  const [selectedSpaces, setSelectedSpaces] = useState<Set<string>>(
-    new Set(sharedSpaces.map((space) => space.id))
-  );
-  const [searchTerm, setSearchTerm] = useState("");
-  const [initialSelectedSpaces, setInitialSelectedSpaces] = useState<
+  const [selectedOrganizations, setSelectedOrganizations] = useState<
     Set<string>
-  >(new Set(sharedSpaces.map((space) => space.id)));
+  >(new Set(sharedOrganizations.map((organization) => organization.id)));
+  const [searchTerm, setSearchTerm] = useState("");
+  const [initialSelectedOrganizations, setInitialSelectedOrganizations] =
+    useState<Set<string>>(
+      new Set(sharedOrganizations.map((organization) => organization.id))
+    );
 
   useEffect(() => {
     if (isOpen) {
-      const currentSpaceIds = new Set(sharedSpaces.map((space) => space.id));
-      setSelectedSpaces(currentSpaceIds);
-      setInitialSelectedSpaces(currentSpaceIds);
+      const currentOrganizationIds = new Set(
+        sharedOrganizations.map((organization) => organization.id)
+      );
+      setSelectedOrganizations(currentOrganizationIds);
+      setInitialSelectedOrganizations(currentOrganizationIds);
       setSearchTerm("");
     }
-  }, [isOpen, sharedSpaces]);
+  }, [isOpen, sharedOrganizations]);
 
-  const handleToggleSpace = (spaceId: string) => {
-    setSelectedSpaces((prev) => {
+  const handleToggleOrganization = (organizationId: string) => {
+    setSelectedOrganizations((prev) => {
       const newSet = new Set(prev);
-      if (newSet.has(spaceId)) {
-        newSet.delete(spaceId);
+      if (newSet.has(organizationId)) {
+        newSet.delete(organizationId);
       } else {
-        newSet.add(spaceId);
+        newSet.add(organizationId);
       }
       return newSet;
     });
@@ -60,44 +63,64 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
       const response = await fetch("/api/caps/share", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ capId, spaceIds: Array.from(selectedSpaces) }),
+        body: JSON.stringify({
+          capId,
+          organizationIds: Array.from(selectedOrganizations),
+        }),
       });
 
       if (!response.ok) {
         throw new Error("Failed to update sharing settings");
       }
 
-      const newSelectedSpaces = Array.from(selectedSpaces);
-      const initialSpaces = Array.from(initialSelectedSpaces);
+      const newSelectedOrganizations = Array.from(selectedOrganizations);
+      const initialOrganizations = Array.from(initialSelectedOrganizations);
 
-      const addedSpaceIds = newSelectedSpaces.filter(
-        (id) => !initialSpaces.includes(id)
+      const addedOrganizationIds = newSelectedOrganizations.filter(
+        (id) => !initialOrganizations.includes(id)
       );
-      const removedSpaceIds = initialSpaces.filter(
-        (id) => !newSelectedSpaces.includes(id)
+      const removedOrganizationIds = initialOrganizations.filter(
+        (id) => !newSelectedOrganizations.includes(id)
       );
 
-      if (addedSpaceIds.length === 1 && removedSpaceIds.length === 0) {
-        const addedSpaceName = userSpaces?.find(
-          (space) => space.id === addedSpaceIds[0]
+      if (
+        addedOrganizationIds.length === 1 &&
+        removedOrganizationIds.length === 0
+      ) {
+        const addedOrganizationName = userOrganizations?.find(
+          (organization) => organization.id === addedOrganizationIds[0]
         )?.name;
-        toast.success(`Shared to ${addedSpaceName}`);
-      } else if (removedSpaceIds.length === 1 && addedSpaceIds.length === 0) {
-        const removedSpaceName = sharedSpaces.find(
-          (space) => space.id === removedSpaceIds[0]
+        toast.success(`Shared to ${addedOrganizationName}`);
+      } else if (
+        removedOrganizationIds.length === 1 &&
+        addedOrganizationIds.length === 0
+      ) {
+        const removedOrganizationName = sharedOrganizations.find(
+          (organization) => organization.id === removedOrganizationIds[0]
         )?.name;
-        toast.success(`Unshared from ${removedSpaceName}`);
-      } else if (addedSpaceIds.length > 0 && removedSpaceIds.length === 0) {
-        toast.success(`Shared to ${addedSpaceIds.length} spaces`);
-      } else if (removedSpaceIds.length > 0 && addedSpaceIds.length === 0) {
-        toast.success(`Unshared from ${removedSpaceIds.length} spaces`);
-      } else if (addedSpaceIds.length > 0 && removedSpaceIds.length > 0) {
+        toast.success(`Unshared from ${removedOrganizationName}`);
+      } else if (
+        addedOrganizationIds.length > 0 &&
+        removedOrganizationIds.length === 0
+      ) {
+        toast.success(`Shared to ${addedOrganizationIds.length} organizations`);
+      } else if (
+        removedOrganizationIds.length > 0 &&
+        addedOrganizationIds.length === 0
+      ) {
+        toast.success(
+          `Unshared from ${removedOrganizationIds.length} organizations`
+        );
+      } else if (
+        addedOrganizationIds.length > 0 &&
+        removedOrganizationIds.length > 0
+      ) {
         toast.success(`Sharing settings updated`);
       } else {
         toast.success("No changes to sharing settings");
       }
 
-      onSharingUpdated(newSelectedSpaces);
+      onSharingUpdated(newSelectedOrganizations);
       onClose();
     } catch (error) {
       console.error("Error updating sharing settings:", error);
@@ -105,8 +128,8 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
     }
   };
 
-  const filteredSpaces = userSpaces?.filter((space) =>
-    space.name.toLowerCase().includes(searchTerm.toLowerCase())
+  const filteredOrganizations = userOrganizations?.filter((organization) =>
+    organization.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
@@ -149,7 +172,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
                   <span className="font-bold text-gray-12">{capName}</span>
                 </p>
                 <p className="text-sm text-gray-10">
-                  Select the spaces you would like to share with
+                  Select the organizations you would like to share with
                 </p>
               </div>
             </Dialog.Title>
@@ -168,27 +191,27 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
                 />
               </div>
               <div className="overflow-y-auto max-h-60">
-                {filteredSpaces && filteredSpaces.length > 0 ? (
-                  filteredSpaces.map((space) => (
+                {filteredOrganizations && filteredOrganizations.length > 0 ? (
+                  filteredOrganizations.map((organization) => (
                     <div
-                      key={space.id}
+                      key={organization.id}
                       className={clsx(
                         `flex items-center border transition-colors duration-200 border-gray-3 justify-between p-3 rounded-xl cursor-pointer`,
-                        selectedSpaces.has(space.id)
+                        selectedOrganizations.has(organization.id)
                           ? "bg-gray-1"
                           : "hover:bg-gray-3 hover:border-gray-4"
                       )}
-                      onClick={() => handleToggleSpace(space.id)}
+                      onClick={() => handleToggleOrganization(organization.id)}
                     >
                       <div className="flex items-center">
                         <div className="flex justify-center items-center mr-3 w-8 h-8 font-semibold rounded-md bg-blue-10 text-gray-12">
-                          {space.name.charAt(0).toUpperCase()}
+                          {organization.name.charAt(0).toUpperCase()}
                         </div>
                         <span className="text-sm transition-colors duration-200 text-gray-12">
-                          {space.name}
+                          {organization.name}
                         </span>
                       </div>
-                      {selectedSpaces.has(space.id) ? (
+                      {selectedOrganizations.has(organization.id) ? (
                         <span className="text-sm font-medium text-blue-500">
                           Added
                         </span>
@@ -199,7 +222,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
                   ))
                 ) : (
                   <div className="flex gap-2 justify-center items-center pt-2 text-sm">
-                    <p className="text-gray-12">No spaces found</p>
+                    <p className="text-gray-12">No organizations found</p>
                   </div>
                 )}
               </div>

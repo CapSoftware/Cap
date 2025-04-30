@@ -29,7 +29,7 @@ export const SharedCaps = ({
   const params = useSearchParams();
   const page = Number(params.get("page")) || 1;
   const [analytics, setAnalytics] = useState<Record<string, number>>({});
-  const { activeSpace } = useSharedContext();
+  const { activeOrganization } = useSharedContext();
   const limit = 15;
   const totalPages = Math.ceil(count / limit);
 
@@ -48,7 +48,11 @@ export const SharedCaps = ({
   }, [data]);
 
   if (data.length === 0) {
-    return <EmptySharedCapState spaceName={activeSpace?.space.name || ""} />;
+    return (
+      <EmptySharedCapState
+        organizationName={activeOrganization?.organization.name || ""}
+      />
+    );
   }
 
   return (
@@ -59,7 +63,7 @@ export const SharedCaps = ({
             key={cap.id}
             cap={cap}
             analytics={analytics[cap.id] || 0}
-            spaceName={activeSpace?.space.name || ""}
+            organizationName={activeOrganization?.organization.name || ""}
           />
         ))}
       </div>
