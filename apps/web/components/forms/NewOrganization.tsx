@@ -13,9 +13,9 @@ import {
 } from "@cap/ui";
 import { Input } from "@cap/ui";
 import { useForm } from "react-hook-form";
-import { createSpace } from "./server";
+import { createOrganization } from "./server";
 
-export function NewSpace(props: { onSpaceCreated: () => void }) {
+export function NewOrganization(props: { onOrganizationCreated: () => void }) {
   const formSchema = z.object({
     name: z.string().min(1),
   });
@@ -28,8 +28,8 @@ export function NewSpace(props: { onSpaceCreated: () => void }) {
     <Form {...form}>
       <form
         onSubmit={form.handleSubmit(async (args) => {
-          await createSpace(args);
-          props.onSpaceCreated();
+          await createOrganization(args);
+          props.onOrganizationCreated();
         })}
       >
         <div className="space-y-4 mb-8">
@@ -40,7 +40,7 @@ export function NewSpace(props: { onSpaceCreated: () => void }) {
               <FormItem>
                 <FormLabel>Name</FormLabel>
                 <FormControl>
-                  <Input placeholder="Your space name" {...field} />
+                  <Input placeholder="Your organization name" {...field} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -48,7 +48,7 @@ export function NewSpace(props: { onSpaceCreated: () => void }) {
           />
         </div>
         <Button type="submit" disabled={form.formState.isSubmitting}>
-          {form.formState.isSubmitting ? "Loading..." : "Create Space"}
+          {form.formState.isSubmitting ? "Loading..." : "Create Organization"}
         </Button>
       </form>
     </Form>

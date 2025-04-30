@@ -35,7 +35,7 @@ export async function manageBilling() {
 
   const { url } = await stripe.billingPortal.sessions.create({
     customer: customerId as string,
-    return_url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/dashboard/settings/workspace`,
+    return_url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/dashboard/settings/organization`,
   });
   
   return url;

@@ -2,9 +2,9 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const fetchCache = "force-no-store";
 
-import { checkWorkspaceDomain } from "@/actions/workspace/check-domain";
-import { removeWorkspaceDomain } from "@/actions/workspace/remove-domain";
-import { updateDomain } from "@/actions/workspace/update-domain";
+import { checkOrganizationDomain } from "@/actions/organization/check-domain";
+import { removeOrganizationDomain } from "@/actions/organization/remove-domain";
+import { updateDomain } from "@/actions/organization/update-domain";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Button, Input } from "@cap/ui";
 import { faRefresh, faTrash } from "@fortawesome/free-solid-svg-icons";
@@ -45,12 +45,14 @@ type VerificationResponse = {
 
 export function CustomDomain() {
   const router = useRouter();
-  const { activeSpace, isSubscribed } = useSharedContext();
-  const [domain, setDomain] = useState(activeSpace?.space.customDomain || "");
+  const { activeOrganization, isSubscribed } = useSharedContext();
+  const [domain, setDomain] = useState(
+    activeOrganization?.organization.customDomain || ""
+  );
   const [loading, setLoading] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [isVerified, setIsVerified] = useState(
-    !!activeSpace?.space.domainVerified
+    !!activeOrganization?.organization.domainVerified
   );
   const [domainConfig, setDomainConfig] = useState<DomainConfig | null>(null);
   const [copiedField, setCopiedField] = useState<"name" | "value" | null>(null);
@@ -93,10 +95,16 @@ export function CustomDomain() {
   };
 
   const checkVerification = async (showToasts = true) => {
-    if (!activeSpace?.space.id || !activeSpace?.space.customDomain) return;
+    if (
+      !activeOrganization?.organization.id ||
+      !activeOrganization?.organization.customDomain
+    )
+      return;
     setVerifying(true);
     try {
-      const data = await checkWorkspaceDomain(activeSpace.space.id);
+      const data = await checkOrganizationDomain(
+        activeOrganization.organization.id
+      );
 
       setIsVerified(data.verified);
       setDomainConfig(data.config);
@@ -125,7 +133,7 @@ export function CustomDomain() {
   };
 
   useEffect(() => {
-    if (activeSpace?.space.customDomain && !isVerified) {
+    if (activeOrganization?.organization.customDomain && !isVerified) {
       if (pollInterval.current) {
         clearInterval(pollInterval.current);
       }
@@ -143,14 +151,17 @@ export function CustomDomain() {
         pollInterval.current = undefined;
       }
     };
-  }, [activeSpace?.space.customDomain, isVerified]);
+  }, [activeOrganization?.organization.customDomain, isVerified]);
 
   useEffect(() => {
-    if (!initialCheckDone.current && activeSpace?.space.customDomain) {
+    if (
+      !initialCheckDone.current &&
+      activeOrganization?.organization.customDomain
+    ) {
       initialCheckDone.current = true;
       checkVerification(false);
     }
-  }, [activeSpace?.space.customDomain]);
+  }, [activeOrganization?.organization.customDomain]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -172,7 +183,7 @@ export function CustomDomain() {
     try {
       const data = await updateDomain(
         cleanedDomain,
-        activeSpace?.space.id as string
+        activeOrganization?.organization.id as string
       );
 
       toast.success("Domain settings updated");
@@ -205,7 +216,9 @@ export function CustomDomain() {
 
     setLoading(true);
     try {
-      await removeWorkspaceDomain(activeSpace?.space.id as string);
+      await removeOrganizationDomain(
+        activeOrganization?.organization.id as string
+      );
 
       if (pollInterval.current) {
         clearInterval(pollInterval.current);
@@ -237,7 +250,7 @@ export function CustomDomain() {
             className="flex-1"
           />
           <div className="flex gap-2 justify-between items-center mt-4">
-            {activeSpace?.space.customDomain &&
+            {activeOrganization?.organization.customDomain &&
               (isVerified ? (
                 <>
                   <div className="flex items-center gap-1.5 text-green-500 bg-green-200 px-2.5 py-1.5 rounded-xl text-sm">
@@ -269,7 +282,7 @@ export function CustomDomain() {
               {loading ? "Saving..." : "Save"}
             </Button>
             <div className="flex gap-3 items-center">
-              {activeSpace?.space.customDomain && (
+              {activeOrganization?.organization.customDomain && (
                 <Button
                   type="button"
                   variant="white"
@@ -289,7 +302,7 @@ export function CustomDomain() {
                   Refresh
                 </Button>
               )}
-              {activeSpace?.space.customDomain && (
+              {activeOrganization?.organization.customDomain && (
                 <Button
                   type="button"
                   size="sm"
@@ -304,7 +317,7 @@ export function CustomDomain() {
             </div>
           </div>
         </div>
-        {activeSpace?.space.customDomain && (
+        {activeOrganization?.organization.customDomain && (
           <div className="mt-4 space-y-4">
             {!isVerified && domainConfig?.verification?.[0] && (
               <div className="overflow-hidden rounded-lg border border-gray-200">

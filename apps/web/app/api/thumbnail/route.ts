@@ -77,7 +77,7 @@ export async function GET(request: NextRequest) {
   }
 
   const Bucket = await getS3Bucket(result.bucket);
-  const s3Client = await createS3Client(result.bucket);
+  const [s3ClientInstance] = await createS3Client(result.bucket);
 
   try {
     const listCommand = new ListObjectsV2Command({
@@ -85,10 +85,10 @@ export async function GET(request: NextRequest) {
       Prefix: prefix,
     });
 
-    const listResponse = await s3Client.send(listCommand);
+    const listResponse = await s3ClientInstance.send(listCommand);
     const contents = listResponse.Contents || [];
 
-    const thumbnailKey = contents.find((item) =>
+    const thumbnailKey = contents.find((item: any) =>
       item.Key?.endsWith("screen-capture.jpg")
     )?.Key;
 
@@ -106,7 +106,7 @@ export async function GET(request: NextRequest) {
     }
 
     thumbnailUrl = await getSignedUrl(
-      s3Client,
+      s3ClientInstance,
       new GetObjectCommand({
         Bucket,
         Key: thumbnailKey,

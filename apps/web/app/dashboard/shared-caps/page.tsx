@@ -3,8 +3,8 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import {
   comments,
   sharedVideos,
-  spaceMembers,
-  spaces,
+  organizationMembers,
+  organizations,
   users,
   videos,
 } from "@cap/database/schema";
@@ -28,23 +28,28 @@ export default async function SharedCapsPage({
   const user = await getCurrentUser();
   const userId = user?.id as string;
 
-  let activeSpaceId = user?.activeSpaceId;
-  if (!activeSpaceId) {
-    // Get the first available space if activeSpaceId doesn't exist
-    const firstSpace = await db
-      .select({ id: spaces.id })
-      .from(spaces)
-      .innerJoin(spaceMembers, eq(spaces.id, spaceMembers.spaceId))
-      .where(eq(spaceMembers.userId, userId))
+  let activeOrganizationId = user?.activeOrganizationId;
+  if (!activeOrganizationId) {
+    const firstOrganization = await db
+      .select({ id: organizations.id })
+      .from(organizations)
+      .innerJoin(
+        organizationMembers,
+        eq(organizations.id, organizationMembers.organizationId)
+      )
+      .where(eq(organizationMembers.userId, userId))
       .limit(1)
       .then((result) => result[0]);
 
-    activeSpaceId = firstSpace?.id;
+    activeOrganizationId = firstOrganization?.id;
   }
 
-  if (!activeSpaceId) {
-    // Handle the case where the user has no spaces
-    return <div>No spaces available. Please create or join a space.</div>;
+  if (!activeOrganizationId) {
+    return (
+      <div>
+        No organizations available. Please create or join an organization.
+      </div>
+    );
   }
 
   const offset = (page - 1) * limit;
@@ -52,7 +57,7 @@ export default async function SharedCapsPage({
   const totalCountResult = await db
     .select({ count: count() })
     .from(sharedVideos)
-    .where(eq(sharedVideos.spaceId, activeSpaceId));
+    .where(eq(sharedVideos.organizationId, activeOrganizationId));
 
   const totalCount = totalCountResult[0]?.count || 0;
 
@@ -77,7 +82,7 @@ export default async function SharedCapsPage({
     .innerJoin(videos, eq(sharedVideos.videoId, videos.id))
     .leftJoin(comments, eq(videos.id, comments.videoId))
     .leftJoin(users, eq(videos.ownerId, users.id))
-    .where(eq(sharedVideos.spaceId, activeSpaceId))
+    .where(eq(sharedVideos.organizationId, activeOrganizationId))
     .groupBy(
       videos.id,
       videos.ownerId,
@@ -114,20 +119,15 @@ export default async function SharedCapsPage({
   console.log("sharedVideoData:");
   console.log(processedSharedVideoData);
 
-  // Debug: Check if there are any shared videos for this space
   const debugSharedVideos = await db
     .select({
       id: sharedVideos.id,
       videoId: sharedVideos.videoId,
-      spaceId: sharedVideos.spaceId,
+      organizationId: sharedVideos.organizationId,
     })
     .from(sharedVideos)
-    .where(eq(sharedVideos.spaceId, activeSpaceId));
+    .where(eq(sharedVideos.organizationId, activeOrganizationId));
 
-  console.log("Debug: Shared videos for this space:");
-  console.log(debugSharedVideos);
-
-  // Debug: Check if the videos exist
   if (debugSharedVideos.length > 0) {
     const debugVideos = await db
       .select({
@@ -146,7 +146,7 @@ export default async function SharedCapsPage({
     <SharedCaps
       data={processedSharedVideoData}
       count={totalCount}
-      activeSpaceId={activeSpaceId}
+      activeOrganizationId={activeOrganizationId}
     />
   );
 }

@@ -31,7 +31,12 @@ export const UpdatePage = ({ postSlug }: { postSlug: string }) => {
         <h1 className="mb-2">{post.metadata.title}</h1>
         <p className="space-x-1 text-xs text-gray-12">
           <span>
-            {format(parseISO(post.metadata.publishedAt), "MMMM dd, yyyy")}
+            {"publishedAt" in post.metadata
+              ? format(
+                  parseISO(post.metadata.publishedAt as string),
+                  "MMMM dd, yyyy"
+                )
+              : ""}
           </span>
         </p>
       </header>

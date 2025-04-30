@@ -1,7 +1,11 @@
 "use server";
 import { db } from "@cap/database";
 import { eq } from "drizzle-orm";
-import { spaceInvites, spaces, users } from "@cap/database/schema";
+import {
+  organizationInvites,
+  organizations,
+  users,
+} from "@cap/database/schema";
 import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
@@ -20,22 +24,25 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   }
 
   return {
-    title: `Join ${invite.spaceName} on Cap`,
-    description: `You've been invited to join ${invite.spaceName} on Cap.`,
+    title: `Join ${invite.organizationName} on Cap`,
+    description: `You've been invited to join ${invite.organizationName} on Cap.`,
   };
 }
 
 async function getInviteDetails(inviteId: string) {
   const query = await db
     .select({
-      invite: spaceInvites,
-      spaceName: spaces.name,
+      invite: organizationInvites,
+      organizationName: organizations.name,
       inviterName: users.name,
     })
-    .from(spaceInvites)
-    .leftJoin(spaces, eq(spaceInvites.spaceId, spaces.id))
-    .leftJoin(users, eq(spaceInvites.invitedByUserId, users.id))
-    .where(eq(spaceInvites.id, inviteId));
+    .from(organizationInvites)
+    .leftJoin(
+      organizations,
+      eq(organizationInvites.organizationId, organizations.id)
+    )
+    .leftJoin(users, eq(organizationInvites.invitedByUserId, users.id))
+    .where(eq(organizationInvites.id, inviteId));
 
   return query[0];
 }
@@ -49,14 +56,14 @@ export default async function InvitePage({ params }: Props) {
     return notFound();
   }
 
-  if (!inviteDetails.spaceName || !inviteDetails.inviterName) {
+  if (!inviteDetails.organizationName || !inviteDetails.inviterName) {
     return notFound();
   }
 
   return (
     <InviteAccept
       inviteId={inviteId}
-      teamName={inviteDetails.spaceName}
+      organizationName={inviteDetails.organizationName}
       inviterName={inviteDetails.inviterName}
       user={user as typeof userSelectProps | null}
     />

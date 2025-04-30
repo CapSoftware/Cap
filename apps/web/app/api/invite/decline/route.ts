@@ -1,14 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@cap/database";
-import { spaceInvites } from "@cap/database/schema";
+import { organizationInvites } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 
 export async function POST(request: NextRequest) {
   const { inviteId } = await request.json();
 
   try {
-    // Delete the invite
-    await db.delete(spaceInvites).where(eq(spaceInvites.id, inviteId));
+    await db.delete(organizationInvites).where(eq(organizationInvites.id, inviteId));
 
     return NextResponse.json({ success: true });
   } catch (error) {

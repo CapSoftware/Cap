@@ -12,11 +12,12 @@ export const CapCardActions: React.FC<CapCardActionsProps> = ({
   capId,
   onDelete,
 }) => {
-  const { activeSpace } = useSharedContext();
+  const { activeOrganization } = useSharedContext();
   const copyLink = () => {
     const link =
-      activeSpace?.space.customDomain && activeSpace.space.domainVerified
-        ? `https://${activeSpace.space.customDomain}/s/${capId}`
+      activeOrganization?.organization.customDomain &&
+      activeOrganization.organization.domainVerified
+        ? `https://${activeOrganization.organization.customDomain}/s/${capId}`
         : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
         ? `https://cap.link/${capId}`
         : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${capId}`;

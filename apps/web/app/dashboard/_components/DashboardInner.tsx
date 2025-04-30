@@ -41,7 +41,7 @@ export default function DashboardInner({
   const titles: Record<string, string> = {
     "/dashboard/caps": "Caps",
     "/dashboard/shared-caps": "Shared Caps",
-    "/dashboard/settings/workspace": "Workspace Settings",
+    "/dashboard/settings/organization": "Organization Settings",
     "/dashboard/settings/account": "Account Settings",
   };
   const title = titles[pathname] || "";

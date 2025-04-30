@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { videos, sharedVideos, spaces } from "@cap/database/schema";
+import { videos, sharedVideos, organizations } from "@cap/database/schema";
 import { eq, and } from "drizzle-orm";
 import { NextRequest } from "next/server";
 
@@ -12,7 +12,6 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // First, get the video to find the owner or shared space
     const video = await db
       .select({
         id: videos.id,
@@ -31,61 +30,57 @@ export async function GET(request: NextRequest) {
       return Response.json({ error: "Invalid video data" }, { status: 500 });
     }
 
-    // Check if the video is shared with a space
     const sharedVideo = await db
       .select({
-        spaceId: sharedVideos.spaceId,
+        organizationId: sharedVideos.organizationId,
       })
       .from(sharedVideos)
       .where(eq(sharedVideos.videoId, videoId))
       .limit(1);
 
-    let spaceId = null;
-    if (sharedVideo.length > 0 && sharedVideo[0] && sharedVideo[0].spaceId) {
-      spaceId = sharedVideo[0].spaceId;
+    let organizationId = null;
+    if (sharedVideo.length > 0 && sharedVideo[0] && sharedVideo[0].organizationId) {
+      organizationId = sharedVideo[0].organizationId;
     }
 
-    // If we have a space ID, get the space's custom domain
-    if (spaceId) {
-      const space = await db
+    if (organizationId) {
+      const organization = await db
         .select({
-          customDomain: spaces.customDomain,
-          domainVerified: spaces.domainVerified,
+          customDomain: organizations.customDomain,
+          domainVerified: organizations.domainVerified,
         })
-        .from(spaces)
-        .where(eq(spaces.id, spaceId))
+        .from(organizations)
+        .where(eq(organizations.id, organizationId))
         .limit(1);
 
-      if (space.length > 0 && space[0] && space[0].customDomain) {
+      if (organization.length > 0 && organization[0] && organization[0].customDomain) {
         return Response.json({
-          customDomain: space[0].customDomain,
-          domainVerified: space[0].domainVerified || false,
+          customDomain: organization[0].customDomain,
+          domainVerified: organization[0].domainVerified || false,
         });
       }
     }
 
-    // If no shared space or no custom domain, check the owner's space
-    const ownerSpaces = await db
+    const ownerOrganizations = await db
       .select({
-        customDomain: spaces.customDomain,
-        domainVerified: spaces.domainVerified,
+        customDomain: organizations.customDomain,
+        domainVerified: organizations.domainVerified,
       })
-      .from(spaces)
-      .where(eq(spaces.ownerId, videoData.ownerId))
+      .from(organizations)
+      .where(eq(organizations.ownerId, videoData.ownerId))
       .limit(1);
 
     if (
-      ownerSpaces.length > 0 &&
-      ownerSpaces[0] &&
-      ownerSpaces[0].customDomain
+      ownerOrganizations.length > 0 &&
+      ownerOrganizations[0] &&
+      ownerOrganizations[0].customDomain
     ) {
       return Response.json({
-        customDomain: ownerSpaces[0].customDomain,
-        domainVerified: ownerSpaces[0].domainVerified || false,
+        customDomain: ownerOrganizations[0].customDomain,
+        domainVerified: ownerOrganizations[0].domainVerified || false,
       });
     }
 
-    // No custom domain found
     return Response.json({
       customDomain: null,
       domainVerified: false,

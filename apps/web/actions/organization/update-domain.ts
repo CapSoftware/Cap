@@ -1,22 +1,25 @@
 'use server';
 
 import { getCurrentUser } from "@cap/database/auth/session";
-import { spaces } from "@cap/database/schema";
+import { organizations } from "@cap/database/schema";
 import { db } from "@cap/database";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { addDomain, checkDomainStatus } from "./domain-utils";
 
-export async function updateDomain(domain: string, spaceId: string) {
+export async function updateDomain(domain: string, organizationId: string) {
   const user = await getCurrentUser();
 
   if (!user) {
     throw new Error("Unauthorized");
   }
 
-  const [space] = await db.select().from(spaces).where(eq(spaces.id, spaceId));
+  const [organization] = await db
+    .select()
+    .from(organizations)
+    .where(eq(organizations.id, organizationId));
 
-  if (!space || space.ownerId !== user.id) {
+  if (!organization || organization.ownerId !== user.id) {
     throw new Error("Only the owner can update the custom domain");
   }
 
@@ -28,26 +31,26 @@ export async function updateDomain(domain: string, spaceId: string) {
     }
 
     await db
-      .update(spaces)
+      .update(organizations)
       .set({
         customDomain: domain,
         domainVerified: null,
       })
-      .where(eq(spaces.id, spaceId));
+      .where(eq(organizations.id, organizationId));
 
     const status = await checkDomainStatus(domain);
 
     if (status.verified) {
       await db
-        .update(spaces)
+        .update(organizations)
         .set({
           domainVerified: new Date(),
         })
-        .where(eq(spaces.id, spaceId));
+        .where(eq(organizations.id, organizationId));
     }
 
-    revalidatePath('/dashboard/settings/workspace');
-    
+    revalidatePath("/dashboard/settings/organization");
+
     return status;
   } catch (error) {
     if (error instanceof Error) {

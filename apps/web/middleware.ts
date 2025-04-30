@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { spaces } from "@cap/database/schema";
+import { organizations } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
@@ -78,13 +78,13 @@ export async function middleware(request: NextRequest) {
   }
 
   try {
-    // Query the space with this custom domain
-    const [space] = await db
+    // Query the organization with this custom domain
+    const [organization] = await db
       .select()
-      .from(spaces)
-      .where(eq(spaces.customDomain, hostname));
+      .from(organizations)
+      .where(eq(organizations.customDomain, hostname));
 
-    if (!space || !space.domainVerified) {
+    if (!organization || !organization.domainVerified) {
       // If no verified custom domain found, redirect to main domain
       const url = new URL(request.url);
       url.hostname = "cap.so";

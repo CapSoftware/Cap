@@ -6,12 +6,16 @@ import { Onboarding } from "./Onboarding";
 export default async function OnboardingPage() {
   const user = await getCurrentUser();
 
+  if (!user) {
+    redirect("/login");
+  }
+
   if (
     user &&
     user.name &&
     user.name.length > 1 &&
-    user.activeSpaceId &&
-    user.activeSpaceId.length > 1
+    user.activeOrganizationId &&
+    user.activeOrganizationId.length > 1
   ) {
     redirect("/dashboard");
   } else if (!user) {

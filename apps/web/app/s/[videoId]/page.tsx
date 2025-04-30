@@ -6,8 +6,8 @@ import {
   comments,
   users,
   sharedVideos,
-  spaceMembers,
-  spaces,
+  organizationMembers,
+  organizations,
 } from "@cap/database/schema";
 import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
 import type { Metadata, ResolvingMetadata } from "next";
@@ -30,16 +30,16 @@ type CommentWithAuthor = typeof comments.$inferSelect & {
   authorName: string | null;
 };
 
-type VideoWithSpace = typeof videos.$inferSelect & {
-  sharedSpace?: {
-    spaceId: string;
+type VideoWithOrganization = typeof videos.$inferSelect & {
+  sharedOrganization?: {
+    organizationId: string;
   } | null;
-  spaceMembers?: string[];
-  spaceId?: string;
-  sharedSpaces?: { id: string; name: string }[];
+  organizationMembers?: string[];
+  organizationId?: string;
+  sharedOrganizations?: { id: string; name: string }[];
 };
 
-type SpaceMember = {
+type OrganizationMember = {
   userId: string;
 };
 
@@ -111,7 +111,7 @@ export default async function ShareVideoPage(props: Props) {
   const userId = user?.id as string | undefined;
   console.log("[ShareVideoPage] Current user:", userId);
 
-  const videoWithSpace = await db
+  const videoWithOrganization = await db
     .select({
       id: videos.id,
       name: videos.name,
@@ -132,8 +132,8 @@ export default async function ShareVideoPage(props: Props) {
       skipProcessing: videos.skipProcessing,
       transcriptionStatus: videos.transcriptionStatus,
       source: videos.source,
-      sharedSpace: {
-        spaceId: sharedVideos.spaceId,
+      sharedOrganization: {
+        organizationId: sharedVideos.organizationId,
       },
     })
     .from(videos)
@@ -141,28 +141,28 @@ export default async function ShareVideoPage(props: Props) {
     .where(eq(videos.id, videoId))
     .execute();
 
-  const video = videoWithSpace[0];
+  const video = videoWithOrganization[0];
 
   if (!video) {
     console.log("[ShareVideoPage] No video found for videoId:", videoId);
     return <p>No video found</p>;
   }
 
-  if (video.sharedSpace?.spaceId) {
-    const space = await db
+  if (video.sharedOrganization?.organizationId) {
+    const organization = await db
       .select()
-      .from(spaces)
-      .where(eq(spaces.id, video.sharedSpace.spaceId))
+      .from(organizations)
+      .where(eq(organizations.id, video.sharedOrganization.organizationId))
       .limit(1);
 
-    if (space[0]?.allowedEmailDomain) {
+    if (organization[0]?.allowedEmailDomain) {
       if (
         !user?.email ||
-        !user.email.endsWith(`@${space[0].allowedEmailDomain}`)
+        !user.email.endsWith(`@${organization[0].allowedEmailDomain}`)
       ) {
         console.log(
           "[ShareVideoPage] Access denied - domain restriction:",
-          space[0].allowedEmailDomain
+          organization[0].allowedEmailDomain
         );
         return (
           <div className="flex flex-col items-center justify-center min-h-screen p-4 text-center">
@@ -241,108 +241,120 @@ export default async function ShareVideoPage(props: Props) {
   let customDomain: string | null = null;
   let domainVerified = false;
 
-  if (video.sharedSpace?.spaceId) {
-    const spaceData = await db
+  if (video.sharedOrganization?.organizationId) {
+    const organizationData = await db
       .select({
-        customDomain: spaces.customDomain,
-        domainVerified: spaces.domainVerified,
+        customDomain: organizations.customDomain,
+        domainVerified: organizations.domainVerified,
       })
-      .from(spaces)
-      .where(eq(spaces.id, video.sharedSpace.spaceId))
+      .from(organizations)
+      .where(eq(organizations.id, video.sharedOrganization.organizationId))
       .limit(1);
 
-    if (spaceData.length > 0 && spaceData[0] && spaceData[0].customDomain) {
-      customDomain = spaceData[0].customDomain;
-      if (spaceData[0].domainVerified !== null) {
+    if (
+      organizationData.length > 0 &&
+      organizationData[0] &&
+      organizationData[0].customDomain
+    ) {
+      customDomain = organizationData[0].customDomain;
+      if (organizationData[0].domainVerified !== null) {
         domainVerified = true;
       }
     }
   }
 
   if (!customDomain && video.ownerId) {
-    const ownerSpaces = await db
+    const ownerOrganizations = await db
       .select({
-        customDomain: spaces.customDomain,
-        domainVerified: spaces.domainVerified,
+        customDomain: organizations.customDomain,
+        domainVerified: organizations.domainVerified,
       })
-      .from(spaces)
-      .where(eq(spaces.ownerId, video.ownerId))
+      .from(organizations)
+      .where(eq(organizations.ownerId, video.ownerId))
       .limit(1);
 
     if (
-      ownerSpaces.length > 0 &&
-      ownerSpaces[0] &&
-      ownerSpaces[0].customDomain
+      ownerOrganizations.length > 0 &&
+      ownerOrganizations[0] &&
+      ownerOrganizations[0].customDomain
     ) {
-      customDomain = ownerSpaces[0].customDomain;
-      if (ownerSpaces[0].domainVerified !== null) {
+      customDomain = ownerOrganizations[0].customDomain;
+      if (ownerOrganizations[0].domainVerified !== null) {
         domainVerified = true;
       }
     }
   }
 
-  const sharedSpacesData = await db
+  const sharedOrganizationsData = await db
     .select({
-      id: spaces.id,
-      name: spaces.name,
+      id: sharedVideos.organizationId,
+      name: organizations.name,
     })
-    .from(spaces)
-    .innerJoin(sharedVideos, eq(spaces.id, sharedVideos.spaceId))
+    .from(sharedVideos)
+    .innerJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
     .where(eq(sharedVideos.videoId, videoId));
 
-  let userSpaces: { id: string; name: string }[] = [];
+  let userOrganizations: { id: string; name: string }[] = [];
   if (userId) {
-    const ownedSpaces = await db
+    const ownedOrganizations = await db
       .select({
-        id: spaces.id,
-        name: spaces.name,
+        id: organizations.id,
+        name: organizations.name,
       })
-      .from(spaces)
-      .where(eq(spaces.ownerId, userId));
+      .from(organizations)
+      .where(eq(organizations.ownerId, userId));
 
-    const memberSpaces = await db
+    const memberOrganizations = await db
       .select({
-        id: spaces.id,
-        name: spaces.name,
+        id: organizations.id,
+        name: organizations.name,
       })
-      .from(spaces)
-      .innerJoin(spaceMembers, eq(spaces.id, spaceMembers.spaceId))
-      .where(eq(spaceMembers.userId, userId));
+      .from(organizations)
+      .innerJoin(
+        organizationMembers,
+        eq(organizations.id, organizationMembers.organizationId)
+      )
+      .where(eq(organizationMembers.userId, userId));
 
-    const allSpaces = [...ownedSpaces, ...memberSpaces];
-    const uniqueSpaceIds = new Set();
-    userSpaces = allSpaces.filter((space) => {
-      if (uniqueSpaceIds.has(space.id)) return false;
-      uniqueSpaceIds.add(space.id);
+    const allOrganizations = [...ownedOrganizations, ...memberOrganizations];
+    const uniqueOrganizationIds = new Set();
+    userOrganizations = allOrganizations.filter((organization) => {
+      if (uniqueOrganizationIds.has(organization.id)) return false;
+      uniqueOrganizationIds.add(organization.id);
       return true;
     });
   }
 
-  const membersList = video.sharedSpace?.spaceId
+  const membersList = video.sharedOrganization?.organizationId
     ? await db
         .select({
-          userId: spaceMembers.userId,
+          userId: organizationMembers.userId,
         })
-        .from(spaceMembers)
-        .where(eq(spaceMembers.spaceId, video.sharedSpace.spaceId))
+        .from(organizationMembers)
+        .where(
+          eq(
+            organizationMembers.organizationId,
+            video.sharedOrganization.organizationId
+          )
+        )
     : [];
 
-  const videoWithSpaceInfo: VideoWithSpace = {
+  const videoWithOrganizationInfo: VideoWithOrganization = {
     ...video,
-    spaceMembers: membersList.map((member) => member.userId),
-    spaceId: video.sharedSpace?.spaceId ?? undefined,
-    sharedSpaces: sharedSpacesData,
+    organizationMembers: membersList.map((member) => member.userId),
+    organizationId: video.sharedOrganization?.organizationId ?? undefined,
+    sharedOrganizations: sharedOrganizationsData,
   };
 
   return (
     <Share
-      data={videoWithSpaceInfo}
+      data={videoWithOrganizationInfo}
       user={user}
       comments={commentsQuery}
       initialAnalytics={initialAnalytics}
       customDomain={customDomain}
       domainVerified={domainVerified}
-      userSpaces={userSpaces}
+      userOrganizations={userOrganizations}
     />
   );
 }

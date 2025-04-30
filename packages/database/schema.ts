@@ -313,6 +313,13 @@ export const accountsRelations = relations(accounts, ({ one }) => ({
   }),
 }));
 
+export const s3BucketsRelations = relations(s3Buckets, ({ one }) => ({
+  owner: one(users, {
+    fields: [s3Buckets.ownerId],
+    references: [users.id],
+  }),
+}));
+
 export const organizationsRelations = relations(organizations, ({ one, many }) => ({
   owner: one(users, {
     fields: [organizations.ownerId],
