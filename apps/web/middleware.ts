@@ -25,8 +25,19 @@ export async function middleware(request: NextRequest) {
   const hostname = url.hostname;
   const path = url.pathname;
 
+  if((buildEnv.NEXT_PUBLIC_IS_CAP !== "true" &&
+    (path.startsWith("/s/") ||
+      path.startsWith("/dashboard") ||
+      path.startsWith("/onboarding") ||
+      path.startsWith("/api") || 
+      path.startsWith("/login") || 
+      path.startsWith("/invite") ||
+      path.startsWith("/self-hosting") ||
+      path.startsWith("/terms")))) {
+    return NextResponse.redirect(new URL("/login", url.origin));
+  }
+
   if (
-    buildEnv.NEXT_PUBLIC_IS_CAP !== "true" ||
     mainOrigins.some((d) => url.origin.startsWith(d))
   ) {
     // We just let the request go through for main domains, page-level logic will handle redirects

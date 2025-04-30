@@ -1,7 +1,7 @@
 import { createEnv } from "@t3-oss/env-nextjs";
 import { z } from "zod";
 
-export const NODE_ENV = process.env.NODE_ENV as string;
+export const NODE_ENV = process.env.NODE_ENV || "";
 
 // Environment variables that are needed in the build process, and may be incorrect on the client.
 // Some are only provided by `NEXT_PUBLIC`, but others can be provdied at runtime
