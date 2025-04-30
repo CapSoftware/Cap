@@ -8,9 +8,8 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@cap/ui";
-import { MoreVertical } from "lucide-react";
+import { MoreVertical, Sparkles } from "lucide-react";
 import { useState } from "react";
-
 import {
   useSharedContext,
   useTheme,
@@ -18,12 +17,12 @@ import {
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import {
-  faCrown,
   faGear,
   faHome,
   faMessage,
   faMoon,
   faSignOut,
+  faCrown,
   faSun,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";

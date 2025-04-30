@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "dotenv -e ../../.env -- next dev",
     "build": "next build",
+    "build:web": "next build",
+    "build:web:docker": "cd ../.. && docker build -t cap-web-docker . --no-cache --progress=plain",
     "start": "next start",
     "lint": "next lint",
     "compress-images": "bash tools/compress-images.sh"

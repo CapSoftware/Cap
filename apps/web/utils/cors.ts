@@ -1,7 +1,7 @@
-import { clientEnv } from "@cap/env";
+import { buildEnv } from "@cap/env";
 
 export const allowedOrigins = [
-  clientEnv.NEXT_PUBLIC_WEB_URL,
+  buildEnv.NEXT_PUBLIC_WEB_URL,
   "http://localhost:3001",
   "http://localhost:3000",
   "tauri://localhost",

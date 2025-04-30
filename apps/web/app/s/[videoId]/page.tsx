@@ -13,7 +13,7 @@ import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
 import type { Metadata, ResolvingMetadata } from "next";
 import { notFound } from "next/navigation";
 import { ImageViewer } from "./_components/ImageViewer";
-import { clientEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { transcribeVideo } from "@/actions/videos/transcribe";
 import { getScreenshot } from "@/actions/screenshots/get-screenshot";
@@ -52,7 +52,7 @@ export async function generateMetadata(
     "[generateMetadata] Fetching video metadata for videoId:",
     videoId
   );
-  const query = await db.select().from(videos).where(eq(videos.id, videoId));
+  const query = await db().select().from(videos).where(eq(videos.id, videoId));
 
   if (query.length === 0) {
     console.log("[generateMetadata] No video found for videoId:", videoId);
@@ -74,7 +74,7 @@ export async function generateMetadata(
           {
             url: new URL(
               `/api/video/og?videoId=${videoId}`,
-              clientEnv.NEXT_PUBLIC_WEB_URL
+              buildEnv.NEXT_PUBLIC_WEB_URL
             ).toString(),
             width: 1200,
             height: 630,
@@ -92,7 +92,7 @@ export async function generateMetadata(
         {
           url: new URL(
             `/api/video/og?videoId=${videoId}`,
-            clientEnv.NEXT_PUBLIC_WEB_URL
+            buildEnv.NEXT_PUBLIC_WEB_URL
           ).toString(),
           width: 1200,
           height: 630,
@@ -111,7 +111,7 @@ export default async function ShareVideoPage(props: Props) {
   const userId = user?.id as string | undefined;
   console.log("[ShareVideoPage] Current user:", userId);
 
-  const videoWithSpace = await db
+  const videoWithSpace = await db()
     .select({
       id: videos.id,
       name: videos.name,
@@ -149,7 +149,7 @@ export default async function ShareVideoPage(props: Props) {
   }
 
   if (video.sharedSpace?.spaceId) {
-    const space = await db
+    const space = await db()
       .select()
       .from(spaces)
       .where(eq(spaces.id, video.sharedSpace.spaceId))
@@ -191,7 +191,7 @@ export default async function ShareVideoPage(props: Props) {
   }
 
   console.log("[ShareVideoPage] Fetching comments for video:", videoId);
-  const commentsQuery: CommentWithAuthor[] = await db
+  const commentsQuery: CommentWithAuthor[] = await db()
     .select({
       id: comments.id,
       content: comments.content,
@@ -242,7 +242,7 @@ export default async function ShareVideoPage(props: Props) {
   let domainVerified = false;
 
   if (video.sharedSpace?.spaceId) {
-    const spaceData = await db
+    const spaceData = await db()
       .select({
         customDomain: spaces.customDomain,
         domainVerified: spaces.domainVerified,
@@ -260,7 +260,7 @@ export default async function ShareVideoPage(props: Props) {
   }
 
   if (!customDomain && video.ownerId) {
-    const ownerSpaces = await db
+    const ownerSpaces = await db()
       .select({
         customDomain: spaces.customDomain,
         domainVerified: spaces.domainVerified,
@@ -281,7 +281,7 @@ export default async function ShareVideoPage(props: Props) {
     }
   }
 
-  const sharedSpacesData = await db
+  const sharedSpacesData = await db()
     .select({
       id: spaces.id,
       name: spaces.name,
@@ -292,7 +292,7 @@ export default async function ShareVideoPage(props: Props) {
 
   let userSpaces: { id: string; name: string }[] = [];
   if (userId) {
-    const ownedSpaces = await db
+    const ownedSpaces = await db()
       .select({
         id: spaces.id,
         name: spaces.name,
@@ -300,7 +300,7 @@ export default async function ShareVideoPage(props: Props) {
       .from(spaces)
       .where(eq(spaces.ownerId, userId));
 
-    const memberSpaces = await db
+    const memberSpaces = await db()
       .select({
         id: spaces.id,
         name: spaces.name,
@@ -319,7 +319,7 @@ export default async function ShareVideoPage(props: Props) {
   }
 
   const membersList = video.sharedSpace?.spaceId
-    ? await db
+    ? await db()
         .select({
           userId: spaceMembers.userId,
         })

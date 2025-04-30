@@ -1,9 +1,4 @@
-"use server";
-
-import {
-  GetObjectCommand,
-  PutObjectCommand,
-} from "@aws-sdk/client-s3";
+import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createClient } from "@deepgram/sdk";
 import { db } from "@cap/database";
@@ -21,7 +16,7 @@ export async function transcribeVideo(
   videoId: string,
   userId: string
 ): Promise<TranscribeResult> {
-  if (!serverEnv.DEEPGRAM_API_KEY) {
+  if (!serverEnv().DEEPGRAM_API_KEY) {
     return {
       success: false,
       message: "Missing necessary environment variables",
@@ -35,7 +30,7 @@ export async function transcribeVideo(
     };
   }
 
-  const query = await db
+  const query = await db()
     .select({
       video: videos,
       bucket: s3Buckets,
@@ -79,7 +74,7 @@ export async function transcribeVideo(
     };
   }
 
-  await db
+  await db()
     .update(videos)
     .set({ transcriptionStatus: "PROCESSING" })
     .where(eq(videos.id, videoId));
@@ -112,7 +107,7 @@ export async function transcribeVideo(
 
     await s3Client.send(uploadCommand);
 
-    await db
+    await db()
       .update(videos)
       .set({ transcriptionStatus: "COMPLETE" })
       .where(eq(videos.id, videoId));
@@ -122,7 +117,7 @@ export async function transcribeVideo(
       message: "VTT file generated and uploaded successfully",
     };
   } catch (error) {
-    await db
+    await db()
       .update(videos)
       .set({ transcriptionStatus: "ERROR" })
       .where(eq(videos.id, videoId));
@@ -179,7 +174,7 @@ function formatTimestamp(seconds: number): string {
 }
 
 async function transcribeAudio(videoUrl: string): Promise<string> {
-  const deepgram = createClient(serverEnv.DEEPGRAM_API_KEY as string);
+  const deepgram = createClient(serverEnv().DEEPGRAM_API_KEY as string);
 
   const { result, error } = await deepgram.listen.prerecorded.transcribeUrl(
     {
@@ -201,4 +196,4 @@ async function transcribeAudio(videoUrl: string): Promise<string> {
   const captions = formatToWebVTT(result);
 
   return captions;
-} 
+}

@@ -8,7 +8,7 @@ import toast from "react-hot-toast";
 export const Settings = ({
   user,
 }: {
-  user: typeof users.$inferSelect | null;
+  user?: typeof users.$inferSelect | null;
 }) => {
   const firstName = user ? user?.name : "";
   const lastName = user ? user?.lastName : "";

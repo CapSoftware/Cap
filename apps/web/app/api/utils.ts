@@ -1,7 +1,7 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { cookies } from "next/headers";
 import { createMiddleware } from "hono/factory";
-import { clientEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 import { cors } from "hono/cors";
 import { getServerSession, Session } from "next-auth";
 import { authOptions } from "@cap/database/auth/auth-options";
@@ -20,7 +20,7 @@ async function getAuth(c: Context) {
     });
   }
 
-  const session = await getServerSession(authOptions);
+  const session = await getServerSession(authOptions());
   if (!session) return;
   const user = await getCurrentUser(session);
   if (!user) return;
@@ -60,7 +60,7 @@ export const withAuth = createMiddleware<{
 });
 
 const allowedOrigins = [
-  clientEnv.NEXT_PUBLIC_WEB_URL,
+  buildEnv.NEXT_PUBLIC_WEB_URL,
   "http://localhost:3001",
   "http://localhost:3000",
   "tauri://localhost",

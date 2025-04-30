@@ -1,4 +1,4 @@
-'use server';
+"use server";
 
 import { getCurrentUser } from "@cap/database/auth/session";
 import { spaces } from "@cap/database/schema";
@@ -13,7 +13,10 @@ export async function checkWorkspaceDomain(spaceId: string) {
     throw new Error("Unauthorized");
   }
 
-  const [space] = await db.select().from(spaces).where(eq(spaces.id, spaceId));
+  const [space] = await db()
+    .select()
+    .from(spaces)
+    .where(eq(spaces.id, spaceId));
 
   if (!space || space.ownerId !== user.id) {
     throw new Error("Only the owner can check domain status");
@@ -27,14 +30,14 @@ export async function checkWorkspaceDomain(spaceId: string) {
     const status = await checkDomainStatus(space.customDomain);
 
     if (status.verified && !space.domainVerified) {
-      await db
+      await db()
         .update(spaces)
         .set({
           domainVerified: new Date(),
         })
         .where(eq(spaces.id, spaceId));
     } else if (!status.verified && space.domainVerified) {
-      await db
+      await db()
         .update(spaces)
         .set({
           domainVerified: null,
@@ -49,4 +52,4 @@ export async function checkWorkspaceDomain(spaceId: string) {
     }
     throw new Error("Failed to check domain status");
   }
-} 
+}

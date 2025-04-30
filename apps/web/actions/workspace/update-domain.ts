@@ -1,4 +1,4 @@
-'use server';
+"use server";
 
 import { getCurrentUser } from "@cap/database/auth/session";
 import { spaces } from "@cap/database/schema";
@@ -14,7 +14,10 @@ export async function updateDomain(domain: string, spaceId: string) {
     throw new Error("Unauthorized");
   }
 
-  const [space] = await db.select().from(spaces).where(eq(spaces.id, spaceId));
+  const [space] = await db()
+    .select()
+    .from(spaces)
+    .where(eq(spaces.id, spaceId));
 
   if (!space || space.ownerId !== user.id) {
     throw new Error("Only the owner can update the custom domain");
@@ -27,7 +30,7 @@ export async function updateDomain(domain: string, spaceId: string) {
       throw new Error(addDomainResponse.error.message);
     }
 
-    await db
+    await db()
       .update(spaces)
       .set({
         customDomain: domain,
@@ -38,7 +41,7 @@ export async function updateDomain(domain: string, spaceId: string) {
     const status = await checkDomainStatus(domain);
 
     if (status.verified) {
-      await db
+      await db()
         .update(spaces)
         .set({
           domainVerified: new Date(),
@@ -46,8 +49,8 @@ export async function updateDomain(domain: string, spaceId: string) {
         .where(eq(spaces.id, spaceId));
     }
 
-    revalidatePath('/dashboard/settings/workspace');
-    
+    revalidatePath("/dashboard/settings/workspace");
+
     return status;
   } catch (error) {
     if (error instanceof Error) {
@@ -55,4 +58,4 @@ export async function updateDomain(domain: string, spaceId: string) {
     }
     throw new Error("Failed to update domain");
   }
-} 
+}

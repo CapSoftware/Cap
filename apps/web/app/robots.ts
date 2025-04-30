@@ -1,7 +1,6 @@
 import { seoPages } from "@/lib/seo-pages";
 import { MetadataRoute } from "next";
 
-export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export default function robots(): MetadataRoute.Robots {

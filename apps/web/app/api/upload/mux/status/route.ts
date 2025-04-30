@@ -6,10 +6,10 @@ import {
   MediaConvertClient,
   GetJobCommand,
 } from "@aws-sdk/client-mediaconvert";
-import { serverEnv, clientEnv } from "@cap/env";
+import { serverEnv, buildEnv } from "@cap/env";
 
 const allowedOrigins = [
-  clientEnv.NEXT_PUBLIC_WEB_URL,
+  buildEnv.NEXT_PUBLIC_WEB_URL,
   "http://localhost:3001",
   "tauri://localhost",
   "http://tauri.localhost",
@@ -64,7 +64,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const query = await db.select().from(videos).where(eq(videos.id, videoId));
+  const query = await db().select().from(videos).where(eq(videos.id, videoId));
 
   if (query.length === 0) {
     return new Response(
@@ -118,10 +118,10 @@ export async function GET(request: NextRequest) {
   }
 
   const mediaConvertClient = new MediaConvertClient({
-    region: clientEnv.NEXT_PUBLIC_CAP_AWS_REGION || "",
+    region: serverEnv().CAP_AWS_REGION || "",
     credentials: {
-      accessKeyId: serverEnv.CAP_AWS_ACCESS_KEY || "",
-      secretAccessKey: serverEnv.CAP_AWS_SECRET_KEY || "",
+      accessKeyId: serverEnv().CAP_AWS_ACCESS_KEY || "",
+      secretAccessKey: serverEnv().CAP_AWS_SECRET_KEY || "",
     },
   });
 
@@ -133,7 +133,7 @@ export async function GET(request: NextRequest) {
     const jobResponse = await mediaConvertClient.send(getJobCommand);
     const jobStatus = jobResponse.Job?.Status;
 
-    await db.update(videos).set({ jobStatus }).where(eq(videos.id, videoId));
+    await db().update(videos).set({ jobStatus }).where(eq(videos.id, videoId));
 
     return new Response(JSON.stringify({ jobStatus: jobStatus }), {
       status: 200,

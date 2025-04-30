@@ -4,7 +4,7 @@ import { users } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
-import { serverEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 import { PostHog } from "posthog-node";
 
 const relevantEvents = new Set([
@@ -29,7 +29,7 @@ async function findUserWithRetry(
       // Try finding by userId first if available
       if (userId) {
         console.log(`Attempting to find user by ID: ${userId}`);
-        const userById = await db
+        const userById = await db()
           .select()
           .from(users)
           .where(eq(users.id, userId))
@@ -46,7 +46,7 @@ async function findUserWithRetry(
       // If not found by ID or no ID provided, try email
       if (email) {
         console.log(`Attempting to find user by email: ${email}`);
-        const userByEmail = await db
+        const userByEmail = await db()
           .select()
           .from(users)
           .where(eq(users.email, email))
@@ -89,7 +89,7 @@ export const POST = async (req: Request) => {
   console.log("Webhook received");
   const buf = await req.text();
   const sig = req.headers.get("Stripe-Signature") as string;
-  const webhookSecret = serverEnv.STRIPE_WEBHOOK_SECRET;
+  const webhookSecret = serverEnv().STRIPE_WEBHOOK_SECRET;
   let event: Stripe.Event;
 
   try {
@@ -99,7 +99,7 @@ export const POST = async (req: Request) => {
         status: 400,
       });
     }
-    event = stripe.webhooks.constructEvent(buf, sig, webhookSecret);
+    event = stripe().webhooks.constructEvent(buf, sig, webhookSecret);
     console.log(`✅ Event received: ${event.type}`);
   } catch (err: any) {
     console.log(`❌ Error message: ${err.message}`);
@@ -117,7 +117,7 @@ export const POST = async (req: Request) => {
           subscriptionId: session.subscription,
         });
 
-        const customer = await stripe.customers.retrieve(
+        const customer = await stripe().customers.retrieve(
           session.customer as string
         );
         console.log("Retrieved customer:", {
@@ -162,7 +162,7 @@ export const POST = async (req: Request) => {
           name: dbUser.name,
         });
 
-        const subscription = await stripe.subscriptions.retrieve(
+        const subscription = await stripe().subscriptions.retrieve(
           session.subscription as string
         );
         console.log("Retrieved subscription:", {
@@ -182,7 +182,7 @@ export const POST = async (req: Request) => {
           inviteQuota,
         });
 
-        await db
+        await db()
           .update(users)
           .set({
             stripeSubscriptionId: session.subscription as string,
@@ -198,8 +198,8 @@ export const POST = async (req: Request) => {
         try {
           // Initialize server-side PostHog
           const serverPostHog = new PostHog(
-            process.env.NEXT_PUBLIC_POSTHOG_KEY || "",
-            { host: process.env.NEXT_PUBLIC_POSTHOG_HOST || "" }
+            buildEnv.NEXT_PUBLIC_POSTHOG_KEY || "",
+            { host: buildEnv.NEXT_PUBLIC_POSTHOG_HOST || "" }
           );
 
           // Track subscription completed event
@@ -235,7 +235,7 @@ export const POST = async (req: Request) => {
           customerId: subscription.customer,
         });
 
-        const customer = await stripe.customers.retrieve(
+        const customer = await stripe().customers.retrieve(
           subscription.customer as string
         );
         console.log("Retrieved customer:", {
@@ -281,7 +281,7 @@ export const POST = async (req: Request) => {
         });
 
         // Get all active subscriptions for this customer
-        const subscriptions = await stripe.subscriptions.list({
+        const subscriptions = await stripe().subscriptions.list({
           customer: customer.id,
           status: "active",
         });
@@ -308,7 +308,7 @@ export const POST = async (req: Request) => {
           inviteQuota,
         });
 
-        await db
+        await db()
           .update(users)
           .set({
             stripeSubscriptionId: subscription.id,
@@ -326,7 +326,7 @@ export const POST = async (req: Request) => {
 
       if (event.type === "customer.subscription.deleted") {
         const subscription = event.data.object as Stripe.Subscription;
-        const customer = await stripe.customers.retrieve(
+        const customer = await stripe().customers.retrieve(
           subscription.customer as string
         );
         let foundUserId;
@@ -336,7 +336,7 @@ export const POST = async (req: Request) => {
         if (!foundUserId) {
           console.log("No user found in metadata, checking customer email");
           if ("email" in customer && customer.email) {
-            const userByEmail = await db
+            const userByEmail = await db()
               .select()
               .from(users)
               .where(eq(users.email, customer.email))
@@ -346,7 +346,7 @@ export const POST = async (req: Request) => {
               foundUserId = userByEmail[0].id;
               console.log(`User found by email: ${foundUserId}`);
               // Update customer metadata with userId
-              await stripe.customers.update(customer.id, {
+              await stripe().customers.update(customer.id, {
                 metadata: { userId: foundUserId },
               });
             } else {
@@ -363,7 +363,7 @@ export const POST = async (req: Request) => {
           }
         }
 
-        const userResult = await db
+        const userResult = await db()
           .select()
           .from(users)
           .where(eq(users.id, foundUserId));
@@ -373,7 +373,7 @@ export const POST = async (req: Request) => {
           return new Response("No user found", { status: 400 });
         }
 
-        await db
+        await db()
           .update(users)
           .set({
             stripeSubscriptionId: subscription.id,

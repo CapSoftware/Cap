@@ -16,7 +16,7 @@ import {
 import { getHeaders, CACHE_CONTROL_HEADERS } from "@/utils/helpers";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
 import { S3_BUCKET_URL } from "@cap/utils";
-import { clientEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 
 export const revalidate = 3599;
 
@@ -48,7 +48,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const query = await db
+  const query = await db()
     .select({ video: videos, bucket: s3Buckets })
     .from(videos)
     .leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
@@ -83,7 +83,7 @@ export async function GET(request: NextRequest) {
   const Bucket = await getS3Bucket(bucket);
   const [s3Client] = await createS3Client(bucket);
 
-  if (!bucket || video.awsBucket === clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET) {
+  if (!bucket || video.awsBucket === serverEnv().CAP_AWS_BUCKET) {
     if (video.source.type === "desktopMP4") {
       return new Response(null, {
         status: 302,
@@ -283,9 +283,13 @@ export async function GET(request: NextRequest) {
       const generatedPlaylist = await generateMasterPlaylist(
         videoMetadata?.Metadata?.resolution ?? "",
         videoMetadata?.Metadata?.bandwidth ?? "",
-        `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${userId}&videoId=${videoId}&videoType=video`,
+        `${
+          serverEnv().WEB_URL
+        }/api/playlist?userId=${userId}&videoId=${videoId}&videoType=video`,
         audioMetadata
-          ? `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${userId}&videoId=${videoId}&videoType=audio`
+          ? `${
+              serverEnv().WEB_URL
+            }/api/playlist?userId=${userId}&videoId=${videoId}&videoType=audio`
           : null,
         video.xStreamInfo ?? ""
       );

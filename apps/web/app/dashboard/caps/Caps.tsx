@@ -1,11 +1,7 @@
 "use client";
-import { deleteVideo } from "@/actions/videos/delete";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { apiClient } from "@/utils/web-api";
+import { useApiClient } from "@/utils/web-api";
 import { VideoMetadata } from "@cap/database/types";
-import { Button } from "@cap/ui";
-import { faTrash } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { AnimatePresence, motion } from "framer-motion";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -13,6 +9,10 @@ import toast from "react-hot-toast";
 import { CapCard } from "./components/CapCard";
 import { CapPagination } from "./components/CapPagination";
 import { EmptyCapState } from "./components/EmptyCapState";
+import { Button } from "@cap/ui";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faTrash } from "@fortawesome/free-solid-svg-icons";
+import { deleteVideo } from "@/actions/videos/delete";
 
 type VideoData = {
   id: string;
@@ -48,6 +48,8 @@ export const Caps = ({
   const [isDeleting, setIsDeleting] = useState(false);
 
   const anyCapSelected = selectedCaps.length > 0;
+
+  const apiClient = useApiClient();
 
   useEffect(() => {
     const fetchAnalytics = async () => {

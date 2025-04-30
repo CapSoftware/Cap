@@ -7,7 +7,7 @@ import { s3Buckets, videos } from "@cap/database/schema";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { S3_BUCKET_URL } from "@cap/utils";
-import { clientEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 
 export const revalidate = 0;
 
@@ -30,7 +30,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const query = await db
+  const query = await db()
     .select({
       video: videos,
       bucket: s3Buckets,
@@ -65,10 +65,7 @@ export async function GET(request: NextRequest) {
 
   let thumbnailUrl: string;
 
-  if (
-    !result.bucket ||
-    video.awsBucket === clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET
-  ) {
+  if (!result.bucket || video.awsBucket === serverEnv().CAP_AWS_BUCKET) {
     thumbnailUrl = `${S3_BUCKET_URL}/${prefix}screenshot/screen-capture.jpg`;
     return new Response(JSON.stringify({ screen: thumbnailUrl }), {
       status: 200,
@@ -77,7 +74,7 @@ export async function GET(request: NextRequest) {
   }
 
   const Bucket = await getS3Bucket(result.bucket);
-  const s3Client = await createS3Client(result.bucket);
+  const [s3Client] = await createS3Client(result.bucket);
 
   try {
     const listCommand = new ListObjectsV2Command({

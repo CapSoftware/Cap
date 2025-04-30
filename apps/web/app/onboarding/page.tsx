@@ -3,6 +3,8 @@ import { LogoBadge } from "@cap/ui";
 import { redirect } from "next/navigation";
 import { Onboarding } from "./Onboarding";
 
+export const dynamic = "force-dynamic";
+
 export default async function OnboardingPage() {
   const user = await getCurrentUser();
 

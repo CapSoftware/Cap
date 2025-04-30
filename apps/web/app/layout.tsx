@@ -3,14 +3,18 @@ import { BentoScript } from "@/components/BentoScript";
 import { Footer } from "@/components/Footer";
 import { Navbar } from "@/components/Navbar";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { serverEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
-import crypto from "crypto";
 import type { Metadata } from "next";
-import { cookies, headers } from "next/headers";
 import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "./AuthProvider";
 import { PostHogProvider, Providers } from "./providers";
+import { PublicEnvContext } from "@/utils/public-env";
+import { S3_BUCKET_URL } from "@cap/utils";
+import { PropsWithChildren } from "react";
+import crypto from "crypto";
+//@ts-expect-error
+import { script } from "./themeScript";
 
 export const metadata: Metadata = {
   title: "Cap — Beautiful screen recordings, owned by you.",
@@ -26,28 +30,16 @@ export const metadata: Metadata = {
   },
 };
 
-export default async function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default async function RootLayout({ children }: PropsWithChildren) {
   const user = await getCurrentUser();
+  const intercomSecret = serverEnv().INTERCOM_SECRET;
   let intercomHash = "";
-  if (serverEnv.INTERCOM_SECRET) {
+  if (intercomSecret) {
     intercomHash = crypto
-      .createHmac("sha256", serverEnv.INTERCOM_SECRET)
+      .createHmac("sha256", intercomSecret)
       .update(user?.id ?? "")
       .digest("hex");
   }
-
-  const path = headers().get("x-current-path");
-  const isPathDashboard =
-    path?.startsWith("/dashboard") ||
-    path?.startsWith("/login") ||
-    path?.startsWith("/onboarding");
-
-  const cookieStore = await cookies();
-  const theme = cookieStore.get("theme")?.value === "dark" ? "dark" : "light";
 
   return (
     <html lang="en">
@@ -75,24 +67,35 @@ export default async function RootLayout({
         <meta name="msapplication-TileColor" content="#da532c" />
         <meta name="theme-color" content="#ffffff" />
       </head>
-      <body className={isPathDashboard ? theme : "light"}>
+      <body suppressHydrationWarning>
+        <script
+          dangerouslySetInnerHTML={{ __html: `(${script.toString()})()` }}
+        />
         <TooltipPrimitive.Provider>
           <PostHogProvider>
             <AuthProvider>
-              <Providers
-                userId={user?.id}
-                intercomHash={intercomHash}
-                name={`${user?.name ?? ""} ${user?.lastName ?? ""}`}
-                email={user?.email ?? ""}
+              <PublicEnvContext
+                value={{
+                  webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
+                  awsBucket: buildEnv.NEXT_PUBLIC_CAP_AWS_BUCKET,
+                  s3BucketUrl: S3_BUCKET_URL,
+                }}
               >
-                <Toaster />
-                <main className="overflow-x-hidden w-full">
-                  <Navbar auth={user ? true : false} />
-                  {children}
-                  <Footer />
-                </main>
-                <BentoScript user={user} />
-              </Providers>
+                <Providers
+                  userId={user?.id}
+                  intercomHash={intercomHash}
+                  name={`${user?.name ?? ""} ${user?.lastName ?? ""}`}
+                  email={user?.email ?? ""}
+                >
+                  <Toaster />
+                  <main className="overflow-x-hidden w-full">
+                    <Navbar auth={user ? true : false} />
+                    {children}
+                    <Footer />
+                  </main>
+                  <BentoScript user={user} />
+                </Providers>
+              </PublicEnvContext>
             </AuthProvider>
           </PostHogProvider>
         </TooltipPrimitive.Provider>

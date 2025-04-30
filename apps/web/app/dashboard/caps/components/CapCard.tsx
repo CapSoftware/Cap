@@ -5,24 +5,25 @@ import { CapCardAnalytics } from "@/app/dashboard/caps/components/CapCardAnalyti
 import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
 import { Tooltip } from "@/components/Tooltip";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
+import { usePublicEnv } from "@/utils/public-env";
 import { VideoMetadata } from "@cap/database/types";
-import { clientEnv, NODE_ENV } from "@cap/env";
+import { buildEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
 import {
-  faCheck,
   faChevronDown,
   faLink,
   faTrash,
+  faCheck,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import moment from "moment";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, PropsWithChildren } from "react";
 import { toast } from "react-hot-toast";
 
-export interface CapCardProps {
+interface Props extends PropsWithChildren {
   cap: {
     id: string;
     ownerId: string;
@@ -34,7 +35,6 @@ export interface CapCardProps {
     ownerName: string | null;
     metadata?: VideoMetadata;
   };
-  children?: React.ReactNode;
   analytics: number;
   onDelete?: (videoId: string) => Promise<void>;
   userId?: string;
@@ -45,7 +45,7 @@ export interface CapCardProps {
   anyCapSelected?: boolean;
 }
 
-export const CapCard: React.FC<CapCardProps> = ({
+export const CapCard = ({
   cap,
   analytics,
   children,
@@ -56,7 +56,7 @@ export const CapCard: React.FC<CapCardProps> = ({
   isSelected = false,
   onSelectToggle,
   anyCapSelected = false,
-}) => {
+}: Props) => {
   const effectiveDate = cap.metadata?.customCreatedAt
     ? new Date(cap.metadata.customCreatedAt)
     : cap.createdAt;
@@ -235,11 +235,14 @@ export const CapCard: React.FC<CapCardProps> = ({
     }
   };
 
-  const capUrl = activeSpace?.space.customDomain
-    ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
-    : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-    ? `https://cap.link/${cap.id}`
-    : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`;
+  const { webUrl } = usePublicEnv();
+
+  const capUrl =
+    activeSpace?.space.customDomain && activeSpace.space.domainVerified
+      ? `https://${activeSpace.space.customDomain}/s/${cap.id}`
+      : buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+      ? `https://cap.link/${cap.id}`
+      : `${webUrl}/s/${cap.id}`;
 
   return (
     <>

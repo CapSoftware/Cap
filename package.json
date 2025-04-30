@@ -2,6 +2,8 @@
   "type": "module",
   "scripts": {
     "build": "dotenv -e .env -- turbo run build",
+    "build:web": "turbo run build:web",
+    "build:web:docker": "pnpm run --filter=@cap/web build:web:docker",
     "cap-setup": "dotenv -e .env -- node scripts/setup.js",
     "db:generate": "dotenv -e .env -- pnpm --dir packages/database db:generate",
     "db:push": "dotenv -e .env -- pnpm --dir packages/database db:push",

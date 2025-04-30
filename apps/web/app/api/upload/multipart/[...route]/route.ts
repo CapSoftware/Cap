@@ -13,7 +13,7 @@ import { eq } from "drizzle-orm";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { clientEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 import { handle } from "hono/vercel";
 import { withAuth, corsMiddleware } from "@/app/api/utils";
 
@@ -265,7 +265,7 @@ app.post(
           const videoId = fileKey.split("/")[1];
           if (videoId) {
             try {
-              await fetch(`${clientEnv.NEXT_PUBLIC_WEB_URL}/api/revalidate`, {
+              await fetch(`${serverEnv().WEB_URL}/api/revalidate`, {
                 method: "POST",
                 headers: {
                   "Content-Type": "application/json",
@@ -322,7 +322,7 @@ app.post(
 );
 
 async function getUserBucketWithClient(userId: string) {
-  const [bucket] = await db
+  const [bucket] = await db()
     .select()
     .from(s3Buckets)
     .where(eq(s3Buckets.ownerId, userId));

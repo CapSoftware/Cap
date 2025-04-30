@@ -1,4 +1,4 @@
-'use server';
+"use server";
 
 import { getCurrentUser } from "@cap/database/auth/session";
 import { spaces } from "@cap/database/schema";
@@ -17,7 +17,7 @@ export async function updateWorkspaceDetails(
     throw new Error("Unauthorized");
   }
 
-  const space = await db.select().from(spaces).where(eq(spaces.id, spaceId));
+  const space = await db().select().from(spaces).where(eq(spaces.id, spaceId));
 
   if (!space || space.length === 0) {
     throw new Error("Workspace not found");
@@ -27,7 +27,7 @@ export async function updateWorkspaceDetails(
     throw new Error("Only the owner can update workspace details");
   }
 
-  await db
+  await db()
     .update(spaces)
     .set({
       name: workspaceName,
@@ -35,7 +35,7 @@ export async function updateWorkspaceDetails(
     })
     .where(eq(spaces.id, spaceId));
 
-  revalidatePath('/dashboard/settings/workspace');
-  
+  revalidatePath("/dashboard/settings/workspace");
+
   return { success: true };
-} 
+}

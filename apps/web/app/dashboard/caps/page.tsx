@@ -39,14 +39,14 @@ export default async function CapsPage({
   const limit = Number(searchParams.limit) || 15;
   const offset = (page - 1) * limit;
 
-  const totalCountResult = await db
+  const totalCountResult = await db()
     .select({ count: count() })
     .from(videos)
     .where(eq(videos.ownerId, userId));
 
   const totalCount = totalCountResult[0]?.count || 0;
 
-  const videoData = await db
+  const videoData = await db()
     .select({
       id: videos.id,
       ownerId: videos.ownerId,
@@ -69,7 +69,7 @@ export default async function CapsPage({
       ownerName: users.name,
       effectiveDate: sql<string>`
         COALESCE(
-          JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')), 
+          JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
           ${videos.createdAt}
         )
       `,
@@ -90,14 +90,14 @@ export default async function CapsPage({
     )
     .orderBy(
       desc(sql`COALESCE(
-      JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')), 
+      JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
       ${videos.createdAt}
     )`)
     )
     .limit(limit)
     .offset(offset);
 
-  const userSpaces = await db
+  const userSpaces = await db()
     .select({
       id: spaces.id,
       name: spaces.name,

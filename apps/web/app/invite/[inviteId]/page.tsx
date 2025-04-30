@@ -1,4 +1,3 @@
-"use server";
 import { db } from "@cap/database";
 import { eq } from "drizzle-orm";
 import { spaceInvites, spaces, users } from "@cap/database/schema";
@@ -26,7 +25,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 }
 
 async function getInviteDetails(inviteId: string) {
-  const query = await db
+  const query = await db()
     .select({
       invite: spaceInvites,
       spaceName: spaces.name,

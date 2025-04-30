@@ -40,6 +40,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import { updateActiveSpace } from "./server";
+import { buildEnv } from "@cap/env";
 
 export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
   const pathname = usePathname();
@@ -71,12 +72,12 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
       icon: faBuilding,
       subNav: [],
     },
-    ...(user.email.endsWith("@cap.so")
+    ...(buildEnv.NEXT_PUBLIC_IS_CAP && user.email.endsWith("@cap.so")
       ? [
           {
-            name: "Admin",
+            name: "Admin Dev",
             href: "/dashboard/admin",
-            icon: faBuilding, // Using Building icon as a fallback
+            icon: faBuilding,
             subNav: [],
           },
         ]

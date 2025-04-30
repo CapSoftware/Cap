@@ -31,7 +31,7 @@ export default async function SharedCapsPage({
   let activeSpaceId = user?.activeSpaceId;
   if (!activeSpaceId) {
     // Get the first available space if activeSpaceId doesn't exist
-    const firstSpace = await db
+    const firstSpace = await db()
       .select({ id: spaces.id })
       .from(spaces)
       .innerJoin(spaceMembers, eq(spaces.id, spaceMembers.spaceId))
@@ -49,14 +49,14 @@ export default async function SharedCapsPage({
 
   const offset = (page - 1) * limit;
 
-  const totalCountResult = await db
+  const totalCountResult = await db()
     .select({ count: count() })
     .from(sharedVideos)
     .where(eq(sharedVideos.spaceId, activeSpaceId));
 
   const totalCount = totalCountResult[0]?.count || 0;
 
-  const sharedVideoData = await db
+  const sharedVideoData = await db()
     .select({
       id: videos.id,
       ownerId: videos.ownerId,
@@ -68,7 +68,7 @@ export default async function SharedCapsPage({
       ownerName: users.name,
       effectiveDate: sql<string>`
         COALESCE(
-          JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')), 
+          JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
           ${videos.createdAt}
         )
       `,
@@ -88,7 +88,7 @@ export default async function SharedCapsPage({
     )
     .orderBy(
       desc(sql`COALESCE(
-      JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')), 
+      JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
       ${videos.createdAt}
     )`)
     )
@@ -115,7 +115,7 @@ export default async function SharedCapsPage({
   console.log(processedSharedVideoData);
 
   // Debug: Check if there are any shared videos for this space
-  const debugSharedVideos = await db
+  const debugSharedVideos = await db()
     .select({
       id: sharedVideos.id,
       videoId: sharedVideos.videoId,
@@ -129,7 +129,7 @@ export default async function SharedCapsPage({
 
   // Debug: Check if the videos exist
   if (debugSharedVideos.length > 0) {
-    const debugVideos = await db
+    const debugVideos = await db()
       .select({
         id: videos.id,
         name: videos.name,
@@ -142,11 +142,5 @@ export default async function SharedCapsPage({
     console.log(debugVideos);
   }
 
-  return (
-    <SharedCaps
-      data={processedSharedVideoData}
-      count={totalCount}
-      activeSpaceId={activeSpaceId}
-    />
-  );
+  return <SharedCaps data={processedSharedVideoData} count={totalCount} />;
 }
