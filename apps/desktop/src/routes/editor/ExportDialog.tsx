@@ -199,7 +199,7 @@ export function ExportDialog() {
 
       const savePath = await saveDialog({
         filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
-        defaultPath: `~/Desktop/${meta?.prettyName}.mp4`,
+        defaultPath: `~/Desktop/${meta().prettyName}.mp4`,
       });
       if (!savePath) {
         setExportState(reconcile({ type: "idle" }));
@@ -300,7 +300,7 @@ export function ExportDialog() {
         setExportState({ type: "uploading", progress: 0 });
 
         // Now proceed with upload
-        const result = meta?.sharing
+        const result = meta().sharing
           ? await commands.uploadExportedVideo(projectPath, "Reupload")
           : await commands.uploadExportedVideo(projectPath, {
               Initial: { pre_created_video: null },
@@ -316,11 +316,13 @@ export function ExportDialog() {
         unlisten();
       }
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       const d = dialog();
       if ("type" in d && d.type === "export") setDialog({ ...d, open: true });
 
-      refetchMeta();
+      await refetchMeta();
+
+      console.log(meta().sharing);
 
       setExportState({ type: "done" });
     },
@@ -797,7 +799,7 @@ export function ExportDialog() {
                 >
                   <div class="relative">
                     <a
-                      href={meta.sharing?.link}
+                      href={meta().sharing!.link}
                       target="_blank"
                       rel="noreferrer"
                       class="block"
@@ -808,7 +810,7 @@ export function ExportDialog() {
                           setTimeout(() => {
                             setCopyPressed(false);
                           }, 2000);
-                          navigator.clipboard.writeText(meta.sharing?.link!);
+                          navigator.clipboard.writeText(meta().sharing!.link!);
                         }}
                         variant="lightdark"
                         class="flex gap-2 justify-center items-center"

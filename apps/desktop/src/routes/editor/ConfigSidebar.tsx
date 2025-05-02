@@ -243,7 +243,9 @@ export function ConfigSidebar() {
             {
               id: TAB_IDS.cursor,
               icon: IconCapCursor,
-              disabled: !(meta.type === "multiple" && meta.segments[0].cursor),
+              disabled: !(
+                meta().type === "multiple" && (meta() as any).segments[0].cursor
+              ),
             },
             // { id: "hotkeys" as const, icon: IconCapHotkeys },
           ]}
@@ -378,7 +380,7 @@ export function ConfigSidebar() {
                 </Subfield>
               </ComingSoonTooltip> */}
           </Field>
-          {meta.hasMicrophone && (
+          {meta().hasMicrophone && (
             <Field
               name="Microphone Volume"
               icon={<IconCapMicrophone class="size-4" />}
@@ -396,7 +398,7 @@ export function ConfigSidebar() {
               />
             </Field>
           )}
-          {meta.hasSystemAudio && (
+          {meta().hasSystemAudio && (
             <Field
               name="System Audio Volume"
               icon={<IconLucideMonitor class="size-4" />}

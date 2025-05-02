@@ -54,7 +54,7 @@ export type RenderState =
 
 export const [EditorContextProvider, useEditorContext] = createContextProvider(
   (props: {
-    meta: TransformedMeta;
+    meta: () => TransformedMeta;
     editorInstance: SerializedEditorInstance;
     refetchMeta(): Promise<void>;
   }) => {
@@ -197,7 +197,9 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 
     return {
       ...editorInstanceContext,
-      meta: props.meta,
+      meta() {
+        return props.meta();
+      },
       refetchMeta: () => props.refetchMeta(),
       editorInstance: props.editorInstance,
       dialog,

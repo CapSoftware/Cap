@@ -82,7 +82,7 @@ export function Header() {
         />
 
         <p class="text-sm text-gray-500">
-          {meta.prettyName}
+          {meta().prettyName}
           <span class="text-sm text-gray-400">.cap</span>
         </p>
         {/* <ErrorBoundary fallback={<></>}>

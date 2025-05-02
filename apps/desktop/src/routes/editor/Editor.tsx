@@ -54,14 +54,14 @@ export function Editor() {
 
           return {
             editorInstance,
-            meta: mergeProps(() => {
+            meta() {
               const d = ctx.metaQuery.data;
               if (!d)
                 throw new Error(
                   "metaQuery.data is undefined - how did this happen?"
                 );
               return d;
-            }),
+            },
             refetchMeta: async () => {
               await ctx.metaQuery.refetch();
             },
