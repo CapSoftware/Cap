@@ -7,6 +7,10 @@ use cap_desktop::DynLoggingLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {
+    unsafe {
+        std::env::set_var("RUST_LOG", "trace");
+    }
+
     // We have to hold onto the ClientInitGuard until the very end
     let _guard = std::option_env!("CAP_DESKTOP_SENTRY_URL").map(|url| {
         sentry::init((
