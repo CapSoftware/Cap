@@ -1016,7 +1016,9 @@ async fn create_editor_instance(window: Window) -> Result<SerializedEditorInstan
 #[tauri::command]
 #[specta::specta]
 async fn get_editor_meta(editor: WindowEditorInstance) -> Result<RecordingMeta, String> {
-    Ok(editor.meta().clone())
+    // Always reload the latest meta from disk using the project path
+    let path = editor.project_path.clone();
+    RecordingMeta::load_for_project(&path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

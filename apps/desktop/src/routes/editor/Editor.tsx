@@ -1,7 +1,6 @@
 import { Button } from "@cap/ui-solid";
 import { trackDeep } from "@solid-primitives/deep";
 import { throttle } from "@solid-primitives/scheduled";
-import { useSearchParams } from "@solidjs/router";
 import { createMutation } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
@@ -13,7 +12,6 @@ import {
   createSignal,
   on,
   onMount,
-  untrack,
 } from "solid-js";
 import { createStore } from "solid-js/store";
 
@@ -55,7 +53,7 @@ export function Editor() {
 
           return {
             editorInstance,
-            meta: ctx.metaQuery.data,
+            meta: () => ctx.metaQuery.data,
             refetchMeta: async () => {
               await ctx.metaQuery.refetch();
             },
