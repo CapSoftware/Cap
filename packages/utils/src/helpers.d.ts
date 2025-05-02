@@ -1,0 +1,10 @@
+import { type ClassValue } from "clsx";
+export declare function classNames(...inputs: ClassValue[]): string;
+export declare const uuidParse: (uuid: string) => string;
+export declare const uuidFormat: (uuid: string) => string;
+export declare const CAP_LOGO_URL = "https://raw.githubusercontent.com/CapSoftware/cap/main/apps/desktop/src-tauri/icons/Square310x310Logo.png";
+export declare const saveLatestVideoId: (videoId: string) => void;
+export declare const getLatestVideoId: () => string;
+export declare const saveUserId: (userId: string) => Promise<void>;
+export declare const getUserId: () => Promise<string>;
+export declare const isUserPro: () => Promise<string | false>;

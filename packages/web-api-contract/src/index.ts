@@ -1,15 +1,11 @@
 import { z } from "zod";
-import desktop from "./desktop";
-import { c } from "./util";
-import {
-  ClientInferRequest,
-  ClientInferResponseBody,
-  ClientInferResponses,
-} from "@ts-rest/core";
+import { initContract } from "@ts-rest/core";
 
-export const contract = c.router({
+import desktop from "./desktop";
+
+export const contract = initContract().router({
   desktop,
-  video: c.router({
+  video: initContract().router({
     getTranscribeStatus: {
       method: "GET",
       path: "/video/transcribe/status",
@@ -39,7 +35,7 @@ export const contract = c.router({
   }),
 });
 
-export const licenseContract = c.router({
+export const licenseContract = initContract().router({
   activateCommercialLicense: {
     method: "POST",
     path: "/commercial/activate",
