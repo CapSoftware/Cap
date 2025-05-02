@@ -330,6 +330,8 @@ pub enum CursorAnimationStyle {
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct CursorConfiguration {
+    #[serde(default)]
+    pub hide: bool,
     hide_when_idle: bool,
     pub size: u32,
     r#type: CursorType,
@@ -346,6 +348,7 @@ pub struct CursorConfiguration {
 impl Default for CursorConfiguration {
     fn default() -> Self {
         Self {
+            hide: false,
             hide_when_idle: false,
             size: 100,
             r#type: CursorType::default(),
