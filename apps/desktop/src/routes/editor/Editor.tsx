@@ -14,8 +14,9 @@ import {
   onMount,
 } from "solid-js";
 import { createStore } from "solid-js/store";
-
+import { mergeProps } from "solid-js";
 import { makePersisted } from "@solid-primitives/storage";
+
 import Cropper, { cropToFloor } from "~/components/Cropper";
 import Tooltip from "~/components/Tooltip";
 import { events, type Crop } from "~/utils/tauri";
@@ -53,7 +54,14 @@ export function Editor() {
 
           return {
             editorInstance,
-            meta: () => ctx.metaQuery.data,
+            meta: mergeProps(() => {
+              const d = ctx.metaQuery.data;
+              if (!d)
+                throw new Error(
+                  "metaQuery.data is undefined - how did this happen?"
+                );
+              return d;
+            }),
             refetchMeta: async () => {
               await ctx.metaQuery.refetch();
             },

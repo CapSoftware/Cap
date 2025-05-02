@@ -86,7 +86,7 @@ function ShareButton() {
         setUploadState({ type: "uploading", progress: 0 });
 
         // Now proceed with upload
-        const result = meta()?.sharing
+        const result = meta.sharing
           ? await commands.uploadExportedVideo(projectPath, "Reupload")
           : await commands.uploadExportedVideo(projectPath, {
               Initial: { pre_created_video: null },
@@ -136,7 +136,7 @@ function ShareButton() {
 
   return (
     <div class="relative">
-      <Show when={meta()?.sharing}>
+      <Show when={meta.sharing}>
         {(sharing) => {
           const url = () => new URL(sharing().link);
 
