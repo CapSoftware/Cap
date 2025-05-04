@@ -7,6 +7,7 @@ import {
   organizationMembers,
   organizations,
   users,
+  spaces,
 } from "@cap/database/schema";
 import { count, eq, inArray, or, sql } from "drizzle-orm";
 import { cookies } from "next/headers";
@@ -20,6 +21,13 @@ export type Organization = {
   invites: (typeof organizationInvites.$inferSelect)[];
   inviteQuota: number;
   totalInvites: number;
+};
+
+export type Space = {
+  id: string;
+  name: string;
+  description: string | null;
+  organizationId: string;
 };
 
 export const dynamic = "force-dynamic";
@@ -74,6 +82,20 @@ export default async function DashboardLayout({
       .select()
       .from(organizationInvites)
       .where(inArray(organizationInvites.organizationId, organizationIds));
+  }
+
+  // Fetch spaces for the user's organizations
+  let spacesData: Space[] = [];
+  if (organizationIds.length > 0) {
+    spacesData = await db()
+      .select({
+        id: spaces.id,
+        name: spaces.name,
+        description: spaces.description,
+        organizationId: spaces.organizationId,
+      })
+      .from(spaces)
+      .where(inArray(spaces.organizationId, organizationIds));
   }
 
   const organizationSelect: Organization[] = await Promise.all(
@@ -162,6 +184,7 @@ export default async function DashboardLayout({
     <DynamicSharedLayout
       organizationData={organizationSelect}
       activeOrganization={findActiveOrganization || null}
+      spacesData={spacesData}
       user={user}
       isSubscribed={isSubscribed}
       initialTheme={theme as "light" | "dark"}

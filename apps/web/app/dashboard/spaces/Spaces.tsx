@@ -13,11 +13,9 @@ import {
   DialogTrigger,
   Input,
 } from "@cap/ui";
-import { NewSpace } from "@/components/forms/NewSpace";
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 import { EmptySpaceState } from "./components/EmptySpaceState";
 import { CapPagination } from "../caps/components/CapPagination";
-import { updateActiveSpace } from "../_components/AdminNavbar/server";
 
 type SpaceData = {
   id: string;
@@ -107,7 +105,7 @@ export const Spaces = ({
                     key={space.id}
                     className="border-b border-gray-4 last:border-0 hover:bg-gray-3 cursor-pointer transition-colors"
                     onClick={async () => {
-                      await updateActiveSpace(space.id);
+                      // await updateActiveSpace(space.id);
                       refresh();
                       router.push("/dashboard/shared-caps");
                     }}
@@ -161,11 +159,11 @@ export const Spaces = ({
                 <div
                   key={space.id}
                   className="border-b border-gray-4 last:border-0 p-4 hover:bg-gray-3 cursor-pointer transition-colors"
-                  onClick={async () => {
-                    await updateActiveSpace(space.id);
-                    refresh();
-                    router.push("/dashboard/shared-caps");
-                  }}
+                  // onClick={async () => {
+                  //   await updateActiveSpace(space.id);
+                  //   refresh();
+                  //   router.push("/dashboard/shared-caps");
+                  // }}
                 >
                   <div className="flex items-center gap-3 mb-2">
                     <Avatar
@@ -225,12 +223,12 @@ export const Spaces = ({
             <DialogTitle>Create a new Space</DialogTitle>
           </DialogHeader>
           <DialogDescription>
-            <NewSpace
+            {/* <NewSpace
               onSpaceCreated={() => {
                 setDialogOpen(false);
                 refresh();
               }}
-            />
+            /> */}
           </DialogDescription>
         </DialogContent>
       </Dialog>

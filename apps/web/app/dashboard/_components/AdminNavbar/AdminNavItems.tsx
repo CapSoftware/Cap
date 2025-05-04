@@ -39,14 +39,20 @@ import clsx from "clsx";
 import { motion } from "framer-motion";
 import { buildEnv } from "@cap/env";
 
-import { updateActiveOrganization } from "./server";
+import { updateActiveOrganization, createSpace } from "./server";
 
 export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
   const pathname = usePathname();
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const { organizationData, activeOrganization, user, isSubscribed } =
-    useSharedContext();
+  const [spacesOpen, setSpacesOpen] = useState(false);
+  const {
+    organizationData,
+    activeOrganization,
+    user,
+    isSubscribed,
+    spacesData,
+  } = useSharedContext();
 
   const manageNavigation = [
     {
@@ -56,13 +62,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
       subNav: [],
     },
     {
-      name: "Download App",
-      href: `/download`,
-      icon: faDownload,
-      subNav: [],
-    },
-    {
-      name: "Organization",
+      name: "Settings",
       href: `/dashboard/settings/organization`,
       icon: faBuilding,
       subNav: [],
@@ -74,6 +74,50 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
   }`;
 
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [spaceDialogOpen, setSpaceDialogOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [newSpaceName, setNewSpaceName] = useState("");
+  const [newSpaceDescription, setNewSpaceDescription] = useState("");
+  const [isCreatingSpace, setIsCreatingSpace] = useState(false);
+  const [spaceError, setSpaceError] = useState<string | null>(null);
+
+  // Filter spaces based on search query
+  const filteredSpaces =
+    spacesData?.filter(
+      (space) =>
+        space.name.toLowerCase().includes(searchQuery.toLowerCase()) &&
+        space.organizationId === activeOrganization?.organization.id
+    ) || [];
+
+  const handleCreateSpace = async () => {
+    if (!newSpaceName.trim()) {
+      setSpaceError("Space name is required");
+      return;
+    }
+
+    setIsCreatingSpace(true);
+    setSpaceError(null);
+
+    try {
+      const result = await createSpace(
+        newSpaceName.trim(),
+        newSpaceDescription.trim() || null
+      );
+
+      if (result.success) {
+        setSpaceDialogOpen(false);
+        setNewSpaceName("");
+        setNewSpaceDescription("");
+      } else {
+        setSpaceError(result.error || "Failed to create space");
+      }
+    } catch (error) {
+      setSpaceError("An unexpected error occurred");
+      console.error(error);
+    } finally {
+      setIsCreatingSpace(false);
+    }
+  };
 
   return (
     <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -227,6 +271,90 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
               </Tooltip>
             </div>
           ))}
+
+          {/* Spaces Section */}
+          <div className="mt-6 pt-4 border-t border-gray-3">
+            <div className="flex justify-between items-center px-3 py-2">
+              <h3 className="text-sm text-gray-10 font-medium">Spaces</h3>
+              <button
+                onClick={() => setSpaceDialogOpen(true)}
+                className="text-gray-8 hover:text-gray-12"
+              >
+                <Plus className="w-5 h-auto" />
+              </button>
+            </div>
+
+            {/* Search Spaces */}
+            <div className="px-3 mt-2">
+              <div className="relative">
+                <Search className="absolute left-3 top-2.5 text-gray-8 w-4 h-4" />
+                <input
+                  type="text"
+                  placeholder="Search spaces"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full h-9 pl-9 pr-3 rounded-lg bg-gray-3 border border-gray-4 text-sm text-gray-12 focus:outline-none focus:ring-1 focus:ring-blue-10"
+                />
+              </div>
+            </div>
+
+            {/* All Organization Space */}
+            <Tooltip
+              content={`All ${
+                activeOrganization?.organization.name || "Organization"
+              }`}
+              disable={collapsed === false}
+              position="right"
+            >
+              <Link
+                href="/dashboard/shared-caps"
+                className={classNames(
+                  "flex gap-2 items-center px-3 py-2 mt-2 rounded-lg",
+                  pathname.includes("/dashboard/shared-caps")
+                    ? "bg-gray-4 text-gray-12"
+                    : "text-gray-10 hover:text-gray-12 hover:bg-gray-3"
+                )}
+              >
+                <Avatar
+                  letterClass="text-gray-1 text-xs"
+                  className="relative flex-shrink-0 size-5"
+                  name={activeOrganization?.organization.name || "All"}
+                />
+                <span className="text-sm font-medium truncate">
+                  All {activeOrganization?.organization.name || "Organization"}
+                </span>
+              </Link>
+            </Tooltip>
+
+            {/* Space List */}
+            {filteredSpaces.map((space) => (
+              <Tooltip
+                key={space.id}
+                content={space.name}
+                disable={collapsed === false}
+                position="right"
+              >
+                <Link
+                  href={`/dashboard/spaces/${space.id}`}
+                  className={classNames(
+                    "flex gap-2 items-center px-3 py-2 mt-1 rounded-lg",
+                    pathname.includes(`/dashboard/spaces/${space.id}`)
+                      ? "bg-gray-4 text-gray-12"
+                      : "text-gray-10 hover:text-gray-12 hover:bg-gray-3"
+                  )}
+                >
+                  <Avatar
+                    letterClass="text-gray-1 text-xs"
+                    className="relative flex-shrink-0 size-5"
+                    name={space.name}
+                  />
+                  <span className="text-sm font-medium truncate">
+                    {space.name}
+                  </span>
+                </Link>
+              </Tooltip>
+            ))}
+          </div>
         </div>
         <div className="pb-0 w-full lg:pb-5 text-center">
           <UsageButton
@@ -252,6 +380,64 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
           <NewOrganization onOrganizationCreated={() => setDialogOpen(false)} />
         </DialogDescription>
       </DialogContent>
+
+      {/* New Space Dialog */}
+      <Dialog open={spaceDialogOpen} onOpenChange={setSpaceDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create a new Space</DialogTitle>
+          </DialogHeader>
+          <DialogDescription>
+            <div className="space-y-4 pt-2">
+              <div>
+                <label
+                  htmlFor="spaceName"
+                  className="block text-sm font-medium text-gray-12"
+                >
+                  Space Name
+                </label>
+                <input
+                  type="text"
+                  id="spaceName"
+                  value={newSpaceName}
+                  onChange={(e) => setNewSpaceName(e.target.value)}
+                  className="mt-1 w-full rounded-md border border-gray-4 bg-gray-2 px-3 py-2 text-gray-12 focus:border-blue-10 focus:outline-none focus:ring-1 focus:ring-blue-10"
+                  placeholder="Enter space name"
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="spaceDescription"
+                  className="block text-sm font-medium text-gray-12"
+                >
+                  Description (optional)
+                </label>
+                <textarea
+                  id="spaceDescription"
+                  rows={3}
+                  value={newSpaceDescription}
+                  onChange={(e) => setNewSpaceDescription(e.target.value)}
+                  className="mt-1 w-full rounded-md border border-gray-4 bg-gray-2 px-3 py-2 text-gray-12 focus:border-blue-10 focus:outline-none focus:ring-1 focus:ring-blue-10"
+                  placeholder="Describe the purpose of this space"
+                />
+              </div>
+              {spaceError && (
+                <p className="text-red-500 text-sm">{spaceError}</p>
+              )}
+              <div className="pt-2">
+                <Button
+                  variant="dark"
+                  className="w-full"
+                  disabled={isCreatingSpace}
+                  onClick={handleCreateSpace}
+                >
+                  {isCreatingSpace ? "Creating..." : "Create Space"}
+                </Button>
+              </div>
+            </div>
+          </DialogDescription>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 };

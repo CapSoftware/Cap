@@ -15,6 +15,13 @@
       "when": 1745977344716,
       "tag": "0001_eager_the_order",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1746321555631,
+      "tag": "0002_zippy_rocket_raccoon",
+      "breakpoints": true
     }
   ]
 }

@@ -304,6 +304,8 @@ export const usersRelations = relations(users, ({ many, one }) => ({
   videos: many(videos),
   sharedVideos: many(sharedVideos),
   customBucket: one(s3Buckets),
+  spaces: many(spaces),
+  spaceMembers: many(spaceMembers),
 }));
 
 export const accountsRelations = relations(accounts, ({ one }) => ({
@@ -328,6 +330,7 @@ export const organizationsRelations = relations(organizations, ({ one, many }) =
   organizationMembers: many(organizationMembers),
   sharedVideos: many(sharedVideos),
   organizationInvites: many(organizationInvites),
+  spaces: many(spaces),
 }));
 
 export const sessionsRelations = relations(sessions, ({ one }) => ({
@@ -374,6 +377,7 @@ export const videosRelations = relations(videos, ({ one, many }) => ({
     references: [users.id],
   }),
   sharedVideos: many(sharedVideos),
+  spaceVideos: many(spaceVideos),
 }));
 
 export const sharedVideosRelations = relations(sharedVideos, ({ one }) => ({
@@ -387,6 +391,102 @@ export const sharedVideosRelations = relations(sharedVideos, ({ one }) => ({
   }),
   sharedByUser: one(users, {
     fields: [sharedVideos.sharedByUserId],
+    references: [users.id],
+  }),
+}));
+
+export const spaces = mysqlTable(
+  "spaces",
+  {
+    id: nanoId("id").notNull().primaryKey().unique(),
+    name: varchar("name", { length: 255 }).notNull(),
+    organizationId: nanoId("organizationId").notNull(),
+    createdById: nanoId("createdById").notNull(),
+    description: varchar("description", { length: 1000 }),
+    createdAt: timestamp("createdAt").notNull().defaultNow(),
+    updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+  },
+  (table) => ({
+    organizationIdIndex: index("organization_id_idx").on(table.organizationId),
+    createdByIdIndex: index("created_by_id_idx").on(table.createdById),
+  })
+);
+
+export const spaceMembers = mysqlTable(
+  "space_members",
+  {
+    id: nanoId("id").notNull().primaryKey().unique(),
+    spaceId: nanoId("spaceId").notNull(),
+    userId: nanoId("userId").notNull(),
+    role: varchar("role", { length: 255 }).notNull(),
+    createdAt: timestamp("createdAt").notNull().defaultNow(),
+    updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+  },
+  (table) => ({
+    spaceIdIndex: index("space_id_idx").on(table.spaceId),
+    userIdIndex: index("user_id_idx").on(table.userId),
+    spaceIdUserIdIndex: index("space_id_user_id_idx").on(
+      table.spaceId,
+      table.userId
+    ),
+  })
+);
+
+export const spaceVideos = mysqlTable(
+  "space_videos",
+  {
+    id: nanoId("id").notNull().primaryKey().unique(),
+    spaceId: nanoId("spaceId").notNull(),
+    videoId: nanoId("videoId").notNull(),
+    addedById: nanoId("addedById").notNull(),
+    addedAt: timestamp("addedAt").notNull().defaultNow(),
+  },
+  (table) => ({
+    spaceIdIndex: index("space_id_idx").on(table.spaceId),
+    videoIdIndex: index("video_id_idx").on(table.videoId),
+    addedByIdIndex: index("added_by_id_idx").on(table.addedById),
+    spaceIdVideoIdIndex: index("space_id_video_id_idx").on(
+      table.spaceId,
+      table.videoId
+    ),
+  })
+);
+
+export const spacesRelations = relations(spaces, ({ one, many }) => ({
+  organization: one(organizations, {
+    fields: [spaces.organizationId],
+    references: [organizations.id],
+  }),
+  createdBy: one(users, {
+    fields: [spaces.createdById],
+    references: [users.id],
+  }),
+  spaceMembers: many(spaceMembers),
+  spaceVideos: many(spaceVideos),
+}));
+
+export const spaceMembersRelations = relations(spaceMembers, ({ one }) => ({
+  space: one(spaces, {
+    fields: [spaceMembers.spaceId],
+    references: [spaces.id],
+  }),
+  user: one(users, {
+    fields: [spaceMembers.userId],
+    references: [users.id],
+  }),
+}));
+
+export const spaceVideosRelations = relations(spaceVideos, ({ one }) => ({
+  space: one(spaces, {
+    fields: [spaceVideos.spaceId],
+    references: [spaces.id],
+  }),
+  video: one(videos, {
+    fields: [spaceVideos.videoId],
+    references: [videos.id],
+  }),
+  addedBy: one(users, {
+    fields: [spaceVideos.addedById],
     references: [users.id],
   }),
 }));

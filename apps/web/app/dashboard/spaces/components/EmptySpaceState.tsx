@@ -10,7 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@cap/ui";
-import { NewSpace } from "@/components/forms/NewSpace";
+// import { NewSpace } from "@/components/forms/NewSpace";
 import { useRouter } from "next/navigation";
 
 export const EmptySpaceState = () => {
@@ -70,12 +70,12 @@ export const EmptySpaceState = () => {
             <DialogTitle>Create a new Space</DialogTitle>
           </DialogHeader>
           <DialogDescription>
-            <NewSpace
+            {/* <NewSpace
               onSpaceCreated={() => {
                 setDialogOpen(false);
                 refresh();
               }}
-            />
+            /> */}
           </DialogDescription>
         </DialogContent>
       </Dialog>
