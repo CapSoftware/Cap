@@ -136,6 +136,12 @@ export function Player() {
         >
           Crop
         </EditorButton>
+        <Show when={currentSpeed()}>
+          <div class="flex items-center gap-1 px-3 py-1 bg-blue-500/20 rounded-lg text-gray-600 font-medium">
+            <IconLucideClock class="size-4 mr-1" />
+            {currentSpeed()}
+          </div>
+        </Show>
       </div>
       <PreviewCanvas />
       <div class="flex z-10 overflow-hidden flex-row gap-3 justify-between items-center p-5">

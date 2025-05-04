@@ -325,6 +325,7 @@ pub struct AudioPlaybackBuffer<T: FromSampleBytes> {
     frame_buffer: AudioRenderer,
     resampler: AudioResampler,
     resampled_buffer: HeapRb<T>,
+    current_timescale: f64,
 }
 
 impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
@@ -349,11 +350,45 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
             frame_buffer,
             resampler,
             resampled_buffer,
+            current_timescale: 1.0,
         }
     }
 
     pub fn set_playhead(&mut self, playhead: f64, project: &ProjectConfiguration) {
-        self.resampler.reset();
+        let current_timescale = if let Some(timeline) = &project.timeline {
+            let mut accum_duration = 0.0;
+
+            for segment in timeline.segments.iter() {
+                let segment_duration = segment.duration();
+                if playhead < accum_duration + segment_duration {
+                    return self.set_playhead_with_timescale(playhead, project, segment.timescale);
+                }
+
+                accum_duration += segment_duration;
+            }
+
+            1.0
+        } else {
+            1.0
+        };
+
+        self.set_playhead_with_timescale(playhead, project, current_timescale);
+    }
+
+    fn set_playhead_with_timescale(
+        &mut self,
+        playhead: f64,
+        project: &ProjectConfiguration,
+        timescale: f64,
+    ) {
+        if self.current_timescale != timescale {
+            self.resampler.reset();
+            self.resampler.set_timescale(timescale).unwrap_or_else(|e| {
+                tracing::error!("Failed to set timescale: {}", e);
+            });
+            self.current_timescale = timescale;
+        }
+
         self.resampled_buffer.clear();
         self.frame_buffer.set_playhead(playhead, project);
     }
@@ -400,6 +435,7 @@ pub struct AudioResampler {
     pub output_frame: FFAudio,
     delay: Option<resampling::Delay>,
     output: AudioInfo,
+    timescale: f64,
 }
 
 impl AudioResampler {
@@ -422,11 +458,38 @@ impl AudioResampler {
             context,
             output_frame: FFAudio::empty(),
             delay: None,
+            timescale: 1.0,
         })
     }
 
     pub fn reset(&mut self) {
-        *self = Self::new(self.output).unwrap();
+        *self = Self::new(self.output.clone()).unwrap();
+    }
+
+    pub fn set_timescale(&mut self, timescale: f64) -> Result<(), MediaError> {
+        if self.timescale == timescale {
+            return Ok(());
+        }
+        let adjusted_rate = (AudioData::SAMPLE_RATE as f64 * timescale).round() as u32;
+
+        self.context = ffmpeg::software::resampler(
+            (
+                AudioData::SAMPLE_FORMAT,
+                ChannelLayout::STEREO,
+                adjusted_rate,
+            ),
+            (
+                self.output.sample_format,
+                self.output.channel_layout(),
+                self.output.sample_rate,
+            ),
+        )?;
+
+        self.timescale = timescale;
+        self.delay = None;
+        self.output_frame = FFAudio::empty();
+
+        Ok(())
     }
 
     fn current_frame_data(&self) -> &[u8] {
