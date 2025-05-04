@@ -17,6 +17,7 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
     projectHistory,
     editorState,
     totalDuration,
+    setEditorState,
   } = useEditorContext();
 
   const { secsPerPixel, duration } = useTimelineContext();
@@ -46,7 +47,8 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
               class={cx(
                 "overflow-hidden border border-transparent transition-colors duration-300 group",
                 "hover:border-gray-500",
-                "bg-gradient-to-r timeline-gradient-border from-[#2675DB] via-[#4FA0FF] to-[#2675DB] shadow-[inset_0_5px_10px_5px_rgba(255,255,255,0.2)]"
+                "bg-gradient-to-r timeline-gradient-border from-[#2675DB] via-[#4FA0FF] to-[#2675DB] shadow-[inset_0_5px_10px_5px_rgba(255,255,255,0.2)]",
+                segment.timescale !== 1 && "bg-stripes-blue"
               )}
               innerClass="ring-blue-300"
               segment={{
@@ -77,6 +79,9 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                     segments[i()].end = splitTime;
                   })
                 );
+              }}
+              onClick={() => {
+                setEditorState("selectedClipIndex", i());
               }}
             >
               <Markings segment={segment} prevDuration={prevDuration()} />
@@ -159,6 +164,12 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                           <IconLucideClock class="size-3.5" />{" "}
                           {(segment.end - segment.start).toFixed(1)}s
                         </div>
+                        <Show when={segment.timescale !== 1}>
+                          <div class="flex gap-1 items-center text-gray-50 dark:text-gray-500 text-md bg-blue-500/20 px-2 py-0.5 rounded-full mt-1">
+                            <IconLucideClock class="size-3" />{" "}
+                            {(1 / segment.timescale).toFixed(2)}x
+                          </div>
+                        </Show>
                       </div>
                     </Show>
                   );

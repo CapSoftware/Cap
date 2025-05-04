@@ -200,6 +200,7 @@ const TAB_IDS = {
   transcript: "transcript",
   audio: "audio",
   cursor: "cursor",
+  clips: "clips",
   hotkeys: "hotkeys",
 } as const;
 
@@ -214,6 +215,7 @@ export function ConfigSidebar() {
       | "transcript"
       | "audio"
       | "cursor"
+      | "clips"
       | "hotkeys",
   });
 
@@ -247,6 +249,7 @@ export function ConfigSidebar() {
                 meta().type === "multiple" && (meta() as any).segments[0].cursor
               ),
             },
+            { id: TAB_IDS.clips, icon: IconCapScissors },
             // { id: "hotkeys" as const, icon: IconCapHotkeys },
           ]}
         >
@@ -417,6 +420,7 @@ export function ConfigSidebar() {
             </Field>
           )}
         </KTabs.Content>
+        <ClipConfig scrollRef={scrollRef} />
         <KTabs.Content value="cursor" class="flex flex-col gap-6">
           <Field
             name="Cursor"
@@ -1880,6 +1884,237 @@ function ZoomSegmentConfig(props: {
         </KTabs>
       </Field>
     </div>
+  );
+}
+
+function ClipConfig(props: { scrollRef: HTMLDivElement }) {
+  const { project, setProject, editorState, setEditorState } =
+    useEditorContext();
+
+  const SPEED_PRESETS = [
+    { label: "0.25x", value: 4 },
+    { label: "0.5x", value: 2 },
+    { label: "0.75x", value: 1.33 },
+    { label: "1x (Normal)", value: 1 },
+    { label: "1.25x", value: 0.8 },
+    { label: "1.5x", value: 0.67 },
+    { label: "2x", value: 0.5 },
+    { label: "3x", value: 0.33 },
+    { label: "4x", value: 0.25 },
+  ];
+
+  const segments = () => project.timeline?.segments ?? [];
+  const selectedSegmentIndex = () => editorState.selectedClipIndex;
+
+  const hasSelectedSegment = () =>
+    selectedSegmentIndex() !== null &&
+    segments().length > 0 &&
+    typeof selectedSegmentIndex() === "number" &&
+    selectedSegmentIndex()! >= 0 &&
+    selectedSegmentIndex()! < segments().length;
+
+  const selectedSegment = () =>
+    hasSelectedSegment() ? segments()[selectedSegmentIndex()!] : null;
+
+  return (
+    <KTabs.Content value="clips" class="flex flex-col gap-6">
+      <Field name="Clip Settings" icon={<IconCapScissors />}>
+        <Show
+          when={segments().length > 0}
+          fallback={
+            <div class="text-gray-500 text-center py-4">
+              No clips available. Split your recording to create clips.
+            </div>
+          }
+        >
+          <div class="flex flex-col gap-4">
+            <Subfield name="Select Clip" required>
+              <KSelect
+                options={segments().map((_, index) => ({
+                  label: `Clip ${index + 1}`,
+                  value: index,
+                }))}
+                optionValue="value"
+                optionTextValue="label"
+                value={
+                  hasSelectedSegment()
+                    ? {
+                        label: `Clip ${selectedSegmentIndex()! + 1}`,
+                        value: selectedSegmentIndex()!,
+                      }
+                    : undefined
+                }
+                onChange={(selected) => {
+                  if (selected) {
+                    setEditorState("selectedClipIndex", selected.value);
+                  }
+                }}
+                placeholder="Select a clip"
+                itemComponent={(props) => (
+                  <MenuItem<typeof KSelect.Item>
+                    as={KSelect.Item}
+                    item={props.item}
+                  >
+                    <KSelect.ItemLabel class="flex-1">
+                      {props.item.rawValue.label}
+                    </KSelect.ItemLabel>
+                  </MenuItem>
+                )}
+              >
+                <KSelect.Trigger class="flex flex-row gap-2 items-center px-2 w-full h-8 bg-gray-200 rounded-lg transition-colors disabled:text-gray-400">
+                  <KSelect.Value<{
+                    label: string;
+                    value: number;
+                  }> class="flex-1 text-sm text-left truncate text-[--gray-500] font-normal">
+                    {(state) =>
+                      state.selectedOption() ? (
+                        <span>{state.selectedOption().label}</span>
+                      ) : (
+                        <span class="text-gray-400">Select clip</span>
+                      )
+                    }
+                  </KSelect.Value>
+                  <KSelect.Icon<ValidComponent>
+                    as={(props) => (
+                      <IconCapChevronDown
+                        {...props}
+                        class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]"
+                      />
+                    )}
+                  />
+                </KSelect.Trigger>
+                <KSelect.Portal>
+                  <PopperContent<typeof KSelect.Content>
+                    as={KSelect.Content}
+                    class={cx(topSlideAnimateClasses, "z-50")}
+                  >
+                    <MenuItemList<typeof KSelect.Listbox>
+                      class="overflow-y-auto max-h-32"
+                      as={KSelect.Listbox}
+                    />
+                  </PopperContent>
+                </KSelect.Portal>
+              </KSelect>
+            </Subfield>
+
+            <Show when={hasSelectedSegment() && selectedSegment()}>
+              <Subfield name="Playback Speed" required>
+                <KSelect
+                  options={SPEED_PRESETS}
+                  optionValue="value"
+                  optionTextValue="label"
+                  value={
+                    SPEED_PRESETS.find(
+                      (preset) =>
+                        Math.abs(preset.value - selectedSegment()!.timescale) <
+                        0.01
+                    ) || {
+                      label: `${(1 / selectedSegment()!.timescale).toFixed(
+                        2
+                      )}x`,
+                      value: selectedSegment()!.timescale,
+                    }
+                  }
+                  onChange={(selected) => {
+                    if (selected) {
+                      setProject(
+                        "timeline",
+                        "segments",
+                        selectedSegmentIndex()!,
+                        "timescale",
+                        selected.value
+                      );
+                    }
+                  }}
+                  itemComponent={(props) => (
+                    <MenuItem<typeof KSelect.Item>
+                      as={KSelect.Item}
+                      item={props.item}
+                    >
+                      <KSelect.ItemLabel class="flex-1">
+                        {props.item.rawValue.label}
+                      </KSelect.ItemLabel>
+                    </MenuItem>
+                  )}
+                >
+                  <KSelect.Trigger class="flex flex-row gap-2 items-center px-2 w-full h-8 bg-gray-200 rounded-lg transition-colors disabled:text-gray-400">
+                    <KSelect.Value<{
+                      label: string;
+                      value: number;
+                    }> class="flex-1 text-sm text-left truncate text-[--gray-500] font-normal">
+                      {(state) => <span>{state.selectedOption().label}</span>}
+                    </KSelect.Value>
+                    <KSelect.Icon<ValidComponent>
+                      as={(props) => (
+                        <IconCapChevronDown
+                          {...props}
+                          class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]"
+                        />
+                      )}
+                    />
+                  </KSelect.Trigger>
+                  <KSelect.Portal>
+                    <PopperContent<typeof KSelect.Content>
+                      as={KSelect.Content}
+                      class={cx(topSlideAnimateClasses, "z-50")}
+                    >
+                      <MenuItemList<typeof KSelect.Listbox>
+                        class="overflow-y-auto max-h-32"
+                        as={KSelect.Listbox}
+                      />
+                    </PopperContent>
+                  </KSelect.Portal>
+                </KSelect>
+              </Subfield>
+
+              <Subfield name="Custom Speed">
+                <div class="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="0.1"
+                    max="10"
+                    step="0.1"
+                    value={(1 / selectedSegment()!.timescale).toFixed(2)}
+                    onInput={(e) => {
+                      const value = parseFloat(e.currentTarget.value);
+                      if (!isNaN(value) && value > 0) {
+                        setProject(
+                          "timeline",
+                          "segments",
+                          selectedSegmentIndex()!,
+                          "timescale",
+                          1 / value
+                        );
+                      }
+                    }}
+                    class="w-20 px-2 py-1 rounded border border-gray-300 bg-white"
+                  />
+                  <span class="text-gray-500">x</span>
+                </div>
+              </Subfield>
+
+              <div class="mt-2">
+                <p class="text-xs text-gray-500">
+                  Original duration:{" "}
+                  {(selectedSegment()!.end - selectedSegment()!.start).toFixed(
+                    2
+                  )}
+                  s
+                </p>
+                <p class="text-xs text-gray-500">
+                  Playback duration:{" "}
+                  {(
+                    (selectedSegment()!.end - selectedSegment()!.start) /
+                    selectedSegment()!.timescale
+                  ).toFixed(2)}
+                  s
+                </p>
+              </div>
+            </Show>
+          </div>
+        </Show>
+      </Field>
+    </KTabs.Content>
   );
 }
 

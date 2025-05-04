@@ -86,6 +86,31 @@ export function Player() {
     }
   });
 
+  const currentSegment = () => {
+    if (!project.timeline?.segments?.length) return null;
+
+    let currentTime = 0;
+    for (const segment of project.timeline.segments) {
+      const segmentDuration = (segment.end - segment.start) / segment.timescale;
+      if (
+        editorState.playbackTime >= currentTime &&
+        editorState.playbackTime < currentTime + segmentDuration
+      ) {
+        return segment;
+      }
+      currentTime += segmentDuration;
+    }
+
+    return null;
+  };
+
+  const currentSpeed = () => {
+    const segment = currentSegment();
+    return segment && segment.timescale !== 1
+      ? (1 / segment.timescale).toFixed(2) + "x"
+      : null;
+  };
+
   return (
     <div class="flex flex-col flex-1 bg-gray-100 dark:bg-gray-100 rounded-xl shadow-sm">
       <div class="flex gap-3 justify-center p-3">
@@ -124,6 +149,11 @@ export function Player() {
           />
           <span class="text-gray-400 text-[0.875rem] tabular-nums"> / </span>
           <Time seconds={totalDuration()} />
+          <Show when={currentSpeed()}>
+            <span class="ml-2 text-xs px-2 py-0.5 bg-blue-500/20 rounded-full text-gray-500">
+              {currentSpeed()}
+            </span>
+          </Show>
         </div>
         <div class="flex flex-row items-center justify-center text-gray-400 gap-8 text-[0.875rem]">
           <button
