@@ -8,7 +8,6 @@ import { SignInButton } from "~/components/SignInButton";
 
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
-import { commands } from "~/utils/tauri";
 
 type MenuItem =
   | { type?: "link"; href: string; name: string; icon: any }
