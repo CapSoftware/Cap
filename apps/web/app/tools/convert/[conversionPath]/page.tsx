@@ -69,7 +69,7 @@ export default function ConversionPage({ params }: ConversionPageProps) {
   const { sourceFormat, targetFormat } = parseFormats(conversionPath);
   const config = CONVERSION_CONFIGS[conversionPath];
 
-  const pageContent = {
+  const pageContent: ToolPageContent = {
     title: config.title(sourceFormat, targetFormat),
     description: config.description(sourceFormat, targetFormat),
     featuresTitle: "Features",

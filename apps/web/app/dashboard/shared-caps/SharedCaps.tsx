@@ -22,9 +22,11 @@ type SharedVideoData = {
 export const SharedCaps = ({
   data,
   count,
+  activeOrganizationId,
 }: {
   data: SharedVideoData;
   count: number;
+  activeOrganizationId: string;
 }) => {
   const params = useSearchParams();
   const page = Number(params.get("page")) || 1;

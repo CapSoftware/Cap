@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { initContract } from "@ts-rest/core";
+import { c } from "./util";
 
 const CHANGELOG = z.object({
   metadata: z.object({
@@ -13,7 +13,7 @@ const CHANGELOG = z.object({
   slug: z.number(),
 });
 
-const publicContract = initContract().router({
+const publicContract = c.router({
   getChangelogPosts: {
     method: "GET",
     path: "/changelog",
@@ -38,7 +38,7 @@ const publicContract = initContract().router({
   },
 });
 
-const protectedContract = initContract().router(
+const protectedContract = c.router(
   {
     submitFeedback: {
       method: "POST",

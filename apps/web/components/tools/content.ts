@@ -1,9 +1,13 @@
 import { ToolPageContent } from "@/components/tools/types";
 
 export const webmToMp4Content: ToolPageContent = {
+  slug: "webm-to-mp4",
   title: "WEBM to MP4 Converter",
   description:
     "Convert WEBM to MP4 online for free. No watermark, no registration required.",
+  publishedAt: "2023-11-19",
+  category: "Tool",
+  author: "Cap",
   tags: ["webm to mp4", "video converter", "free", "online"],
 
   cta: {
@@ -74,9 +78,13 @@ export const webmToMp4Content: ToolPageContent = {
 };
 
 export const mp4ToWebmContent: ToolPageContent = {
+  slug: "mp4-to-webm",
   title: "MP4 to WEBM Converter",
   description:
     "Convert MP4 to WEBM online for free. No watermark, no registration required.",
+  publishedAt: "2023-11-19",
+  category: "Tool",
+  author: "Cap",
   tags: ["mp4 to webm", "video converter", "free", "online"],
 
   cta: {
@@ -147,16 +155,14 @@ export const mp4ToWebmContent: ToolPageContent = {
 };
 
 export const videoSpeedControllerContent: ToolPageContent = {
+  slug: "video-speed-controller",
   title: "Video Speed Controller",
   description:
     "Speed up or slow down videos online for free. No watermark, no quality loss.",
-  tags: [
-    "video speed control",
-    "speed up video",
-    "slow motion",
-    "free",
-    "online",
-  ],
+  publishedAt: "2023-11-20",
+  category: "Tool",
+  author: "Cap",
+  tags: ["video speed control", "speed up video", "slow motion", "free", "online"],
 
   cta: {
     title: "Need advanced screen recording with effects?",
@@ -226,36 +232,35 @@ export const videoSpeedControllerContent: ToolPageContent = {
 };
 
 export const trimVideoContent: ToolPageContent = {
+  slug: "trim-video-online",
   title: "Trim Video Online",
   description:
     "Cut unwanted sections from MP4, WebM, MOV and more. Instantly in your browser with zero quality loss.",
+  publishedAt: "2023-11-21",
+  category: "Tools",
+  author: "Cap",
   tags: ["Video Trimming", "Online Tools", "Browser", "Free"],
 
   cta: {
     title: "The open source Loom alternative",
-    description:
-      "Cap is lightweight, powerful, and cross-platform. Record and share securely in seconds with custom S3 bucket support..",
+    description: "Cap is lightweight, powerful, and cross-platform. Record and share securely in seconds with custom S3 bucket support..",
     buttonText: "Download Cap Free",
   },
 
   featuresTitle: "Why Use Cap's Online Video Trimmer?",
-  featuresDescription:
-    "Our local-first trimmer does one thing stupid-fast: cut video. No sign-ups, no waiting.",
+  featuresDescription: "Our local-first trimmer does one thing stupid-fast: cut video. No sign-ups, no waiting.",
   features: [
     {
       title: "Instant & Private",
-      description:
-        "All processing happens on-device. Nothing ever touches our servers.",
+      description: "All processing happens on-device. Nothing ever touches our servers.",
     },
     {
       title: "Lossless Export",
-      description:
-        "We snip at keyframes, so quality stays identical to the original.",
+      description: "We snip at keyframes, so quality stays identical to the original.",
     },
     {
       title: "Any Format",
-      description:
-        "MP4, WebM, MOV, MKV, GIF. If your browser plays it, we can trim it.",
+      description: "MP4, WebM, MOV, MKV, GIF. If your browser plays it, we can trim it.",
     },
     {
       title: "No Watermarks",
@@ -263,16 +268,14 @@ export const trimVideoContent: ToolPageContent = {
     },
     {
       title: "Works Offline",
-      description:
-        "Once the page loads you can trim even without internet. Perfect on planes.",
+      description: "Once the page loads you can trim even without internet. Perfect on planes.",
     },
   ],
 
   faqs: [
     {
       question: "What's the maximum file size?",
-      answer:
-        "Browser memory is the only limit. Works fine up to ~500MB in Chrome.",
+      answer: "Browser memory is the only limit. Works fine up to ~500MB in Chrome.",
     },
     {
       question: "Can I trim Zoom or Loom recordings?",
@@ -280,13 +283,11 @@ export const trimVideoContent: ToolPageContent = {
     },
     {
       question: "How does the online trimmer work?",
-      answer:
-        "Our trimmer uses the MediaRecorder API to capture the portion of video you selected, then saves it as a new file. This all happens locally in your browser.",
+      answer: "Our trimmer uses the MediaRecorder API to capture the portion of video you selected, then saves it as a new file. This all happens locally in your browser.",
     },
     {
       question: "Which browsers work best?",
-      answer:
-        "Chrome, Edge, and Firefox provide the best performance and compatibility. Safari has some limitations with video processing in the browser.",
+      answer: "Chrome, Edge, and Firefox provide the best performance and compatibility. Safari has some limitations with video processing in the browser.",
     },
   ],
-};
+}; 

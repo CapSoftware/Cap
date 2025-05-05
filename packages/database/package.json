@@ -1,14 +1,8 @@
 {
   "name": "@cap/database",
   "private": true,
-  "exports": {
-    ".": "./src/index.ts",
-    "./*": "./src/*.ts",
-    "./types": "./src/types/index.ts",
-    "./types/*": "./src/types/*",
-    "./emails/*": "./src/emails/*.tsx",
-    "./emails/config": "./src/emails/config.ts"
-  },
+  "types": "./index.ts",
+  "main": "index.js",
   "scripts": {
     "db:generate": "drizzle-kit generate --config=drizzle.config.ts",
     "db:push": "drizzle-kit push --config=drizzle.config.ts",
@@ -26,8 +20,8 @@
     "@react-email/render": "0.0.11",
     "drizzle-orm": "0.43.1",
     "nanoid": "^5.0.4",
-    "next": "^14.2.28",
-    "next-auth": "^4.24.11",
+    "next": "14.2.9",
+    "next-auth": "^4.24.5",
     "react-email": "^1.10.1",
     "resend": "4.1.2"
   },
