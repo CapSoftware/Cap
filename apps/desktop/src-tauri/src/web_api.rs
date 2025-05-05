@@ -1,10 +1,16 @@
+use std::sync::{Arc, RwLock};
+
 use reqwest::StatusCode;
 use tauri::{Emitter, Manager, Runtime};
 use tauri_specta::Event;
 
 use crate::auth::{AuthStore, AuthenticationInvalid};
 
-pub fn make_url(pathname: impl AsRef<str>) -> String {
+pub struct ServerURL(Arc<RwLock<String>>);
+
+trait MakeServerURL {}
+
+pub fn make_url(pathname: impl AsRef<str>, base: &str) -> String {
     let server_url_base = std::option_env!("VITE_SERVER_URL").unwrap_or("https://cap.so");
     format!("{server_url_base}{}", pathname.as_ref())
 }

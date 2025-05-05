@@ -111,6 +111,7 @@ pub struct App {
     current_recording: Option<InProgressRecording>,
     #[serde(skip)]
     recording_logging_handle: LoggingHandle,
+    server_url: String,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]

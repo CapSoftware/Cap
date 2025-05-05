@@ -19,6 +19,8 @@ import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
 import { CheckMenuItem, Menu, MenuItem } from "@tauri-apps/api/menu";
+import { TextInput } from "~/routes/editor/TextInput";
+import { Button } from "@cap/ui-solid";
 
 export default function GeneralSettings() {
   const [store] = createResource(() => generalSettingsStore.get());
@@ -29,6 +31,8 @@ export default function GeneralSettings() {
     </Show>
   );
 }
+
+const SERVER_URL_DEFAULT = "https://cap.so";
 
 function AppearanceSection(props: {
   currentTheme: AppTheme;
@@ -255,6 +259,18 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
               <IconCapChevronDown class="size-4" />
             </button>
           </Setting>
+          <Setting
+            label="Cap Server URL"
+            description="This setting should only be changed if you are self hosting your own instance of Cap Web."
+          >
+            <div class="flex flex-col gap-2 items-end">
+              <TextInput
+                class="border border-gray-300 bg-gray-50 rounded-md px-2 py-1 flex flex-row items-center gap-1 max-w-48"
+                value={SERVER_URL_DEFAULT}
+              />
+              <Button size="sm">Update</Button>
+            </div>
+          </Setting>
         </div>
       </div>
     </div>
@@ -269,7 +285,7 @@ function Setting(
   } & ParentProps
 ) {
   return (
-    <div class="py-3 flex flex-row justify-between items-start text-sm">
+    <div class="py-3 flex flex-row gap-2 justify-between items-start text-sm">
       <div class="flex justify-between items-start space-y-2 flex-col">
         {props.pro && (
           <span class="px-2 py-1 text-xs font-medium text-gray-50 bg-blue-400 rounded-lg">
