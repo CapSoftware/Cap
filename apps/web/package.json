@@ -32,6 +32,7 @@
     "@intercom/messenger-js-sdk": "^0.0.14",
     "@mux/mux-node": "^8.5.1",
     "@mux/mux-player-react": "^3.3.0",
+    "@number-flow/react": "^0.5.9",
     "@octokit/rest": "^20.0.2",
     "@radix-ui/colors": "^3.0.0",
     "@radix-ui/react-tooltip": "^1.2.0",

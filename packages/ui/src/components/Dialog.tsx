@@ -26,14 +26,20 @@ const DialogContent = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
 >(({ className, children, ...props }, ref) => (
   <DialogPortal>
-    <DialogOverlay />
+    <DialogOverlay className="animate-fadeIn" />
     <div className="flex fixed inset-0 z-50 justify-center items-center">
       <DialogPrimitive.Content
         ref={ref}
         className={classNames(
-          "relative p-6 w-full max-w-lg rounded-xl shadow-lg bg-gray-3 border-gray-9",
+          "relative p-0 w-full max-w-md rounded-xl border shadow-lg bg-gray-2 border-gray-4 animate-contentShow",
           className
         )}
+        style={{
+          position: 'fixed',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+        }}
         {...props}
       >
         {children}
@@ -47,17 +53,37 @@ const DialogContent = React.forwardRef<
 ));
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
+type DialogHeaderProps = React.HTMLAttributes<HTMLDivElement> & {
+  icon?: React.JSX.Element;
+  description?: string;
+};
+
 const DialogHeader = ({
   className,
+  icon,
+  description,
+  children,
   ...props
-}: React.HTMLAttributes<HTMLDivElement>) => (
+}: DialogHeaderProps) => (
   <div
     className={classNames(
-      "flex flex-col space-y-1.5 text-center sm:text-left pb-4 mb-4 border-b border-gray-6",
+      "flex gap-3 items-center p-5 border-b border-gray-4",
       className
     )}
     {...props}
-  />
+  >
+    {icon && (
+      <div className="flex justify-center items-center rounded-full border text-gray-12 border-gray-5 bg-gray-3 size-10">
+        {icon}
+      </div>
+    )}
+    <div className="flex flex-col">
+      {children}
+      {description && (
+        <p className="text-sm text-gray-10">{description}</p>
+      )}
+    </div>
+  </div>
 );
 DialogHeader.displayName = "DialogHeader";
 
@@ -67,7 +93,7 @@ const DialogFooter = ({
 }: React.HTMLAttributes<HTMLDivElement>) => (
   <div
     className={classNames(
-      "flex flex-col-reverse pt-4 mt-6 border-t sm:flex-row sm:justify-end sm:space-x-2 border-subtle",
+      "flex flex-col-reverse gap-1 p-5 border-t border-gray-4 sm:flex-row sm:justify-end sm:space-x-2",
       className
     )}
     {...props}
@@ -82,7 +108,7 @@ const DialogTitle = React.forwardRef<
   <DialogPrimitive.Title
     ref={ref}
     className={classNames(
-      "text-xl font-bold tracking-tight leading-none text-gray-12",
+      "text-lg font-bold text-gray-12",
       className
     )}
     {...props}
@@ -96,7 +122,7 @@ const DialogDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
-    className={classNames("text-sm text-gray-11", className)}
+    className={classNames("p-5 text-sm text-gray-11", className)}
     {...props}
   />
 ));
@@ -109,5 +135,7 @@ export {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
+  DialogTrigger
 };
+
+export type { DialogHeaderProps };

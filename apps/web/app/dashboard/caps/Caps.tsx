@@ -13,6 +13,7 @@ import { Button } from "@cap/ui";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faTrash } from "@fortawesome/free-solid-svg-icons";
 import { deleteVideo } from "@/actions/videos/delete";
+import NumberFlow from "@number-flow/react";
 
 type VideoData = {
   id: string;
@@ -235,6 +236,7 @@ export const Caps = ({
         </div>
       )}
 
+        
       <AnimatePresence>
         {selectedCaps.length > 0 && (
           <motion.div
@@ -253,28 +255,11 @@ export const Caps = ({
               stiffness: 200,
             }}
           >
-            <div className="flex gap-1 text-sm font-medium text-gray-12">
-              <AnimatePresence initial={false} mode="wait">
-                <motion.div
-                  initial={{
-                    opacity: 0,
-                    y: animateDirection === "up" ? 10 : -10,
-                    scale: 0.9,
-                  }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  key={selectedCaps.length}
-                  layoutId="selected-caps-count"
-                  className="tabular-nums"
-                  exit={{
-                    opacity: 0,
-                    y: animateDirection === "up" ? -10 : 10,
-                    scale: 0.9,
-                  }}
-                  transition={{ duration: 0.1, ease: "easeInOut" }}
-                >
-                  {selectedCaps.length}
-                </motion.div>
-              </AnimatePresence>
+            <div className="flex gap-1 text-sm font-medium text-gray-10">
+              <NumberFlow
+                value={selectedCaps.length}
+                className="tabular-nums text-md text-gray-12"
+              />
               cap{selectedCaps.length !== 1 ? "s" : ""} selected
             </div>
             <div className="flex gap-2 ml-4">

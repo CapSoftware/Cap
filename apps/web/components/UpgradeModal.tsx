@@ -1,7 +1,8 @@
 "use client";
 
-import { Button, Dialog, DialogContent, DialogTitle, Switch } from "@cap/ui";
+import { Button, Dialog, DialogContent, Switch } from "@cap/ui";
 import { getProPlanId } from "@cap/utils";
+import NumberFlow from '@number-flow/react';
 import { useRive } from "@rive-app/react-canvas";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -79,52 +80,52 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
 
   const proFeatures = [
     {
-      icon: <Globe className="w-8 h-8 text-blue-500" />,
+      icon: <Globe className="text-blue-500 size-6" />,
       title: "Custom domain",
       description: "Connect your own domain to Cap",
     },
     {
-      icon: <Share2 className="w-8 h-8 text-blue-500" />,
+      icon: <Share2 className="text-blue-500 size-6" />,
       title: "Unlimited sharing",
       description: "Cloud storage & shareable links",
     },
     {
-      icon: <Database className="w-8 h-8 text-blue-500" />,
+      icon: <Database className="text-blue-500 size-6" />,
       title: "Custom storage",
       description: "Connect your own S3 bucket",
     },
     {
-      icon: <Shield className="w-8 h-8 text-blue-500" />,
+      icon: <Shield className="text-blue-500 size-6" />,
       title: "Commercial license",
       description: "Commercial license for desktop app automatically included",
     },
     {
-      icon: <Users className="w-8 h-8 text-blue-500" />,
+      icon: <Users className="text-blue-500 size-6" />,
       title: "Team features",
       description: "Collaborate with your team and create shared spaces",
     },
     {
-      icon: <Sparkles className="w-8 h-8 text-blue-500" />,
+      icon: <Sparkles className="text-blue-500 size-6" />,
       title: "Cap AI (Coming Soon)",
       description: "Automatic video chapters, summaries & more",
     },
     {
-      icon: <Infinity className="w-8 h-8 text-blue-500" />,
+      icon: <Infinity className="text-blue-500 size-6" />,
       title: "Unlimited views",
       description: "No limits on video views",
     },
     {
-      icon: <Lock className="w-8 h-8 text-blue-500" />,
+      icon: <Lock className="text-blue-500 size-6" />,
       title: "Password protected videos",
       description: "Enhanced security for your content",
     },
     {
-      icon: <BarChart3 className="w-8 h-8 text-blue-500" />,
+      icon: <BarChart3 className="text-blue-500 size-6" />,
       title: "Analytics",
       description: "Video viewing insights",
     },
     {
-      icon: <Headphones className="w-8 h-8 text-blue-500" />,
+      icon: <Headphones className="text-blue-500 size-6" />,
       title: "Priority support",
       description: "Get help when you need it",
     },
@@ -165,24 +166,23 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[650px] bg-gray-2 border border-gray-4 max-h-[90vh] overflow-y-auto p-6">
+      <DialogContent className="sm:max-w-[1100px] w-[calc(100%-20px)] custom-scroll bg-gray-2 border 
+      border-gray-4 overflow-y-auto md:overflow-hidden max-h-[90vh] p-0">
         <AnimatePresence mode="wait">
           {open && (
             <motion.div
-              className="relative"
+              className="flex relative flex-col h-full md:flex-row"
               variants={modalVariants}
               initial="hidden"
               animate="visible"
               exit="exit"
             >
-              <div className="sr-only">
-                <DialogTitle>Upgrade to Cap Pro</DialogTitle>
-              </div>
+              <div className="flex flex-1 justify-center items-center self-stretch p-8 border-r-0 border-b md:border-b-0 md:border-r border-gray-4">
 
               <div className="flex flex-col items-center py-6">
                 <div className="flex flex-col items-center">
                   <Pro
-                    className="w-[250px] h-[120px]"
+                    className="w-[300px] h-[140px]"
                     onMouseEnter={handleProHover}
                   />
                   <h1 className="text-3xl font-bold text-gray-12">
@@ -190,28 +190,33 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
                   </h1>
                 </div>
 
-                <p className="mt-1 text-lg text-gray-11">
+                <p className="mt-1 text-lg text-center text-gray-11">
                   You can cancel anytime. Early adopter pricing locked in.
                 </p>
 
                 <div className="flex flex-col items-center mt-3 mb-4 w-full">
                   <div className="flex items-end mb-1">
-                    <h3 className="text-3xl font-medium text-gray-12">
-                      ${totalPrice}/mo
-                    </h3>
+                    <NumberFlow
+                      value={totalPrice}
+                      className="text-3xl font-medium text-gray-12"
+                      format={{
+                        style: "currency",
+                        currency: "USD",
+                      }}
+                    />
                     <span className="mb-1 ml-2 text-gray-11">
                       {proQuantity === 1 ? (
                         `per user, ${billingText}`
                       ) : (
                         <>
-                          for <strong>{proQuantity}</strong> users,{" "}
+                          for <strong className="text-gray-12">{proQuantity}</strong> users,{" "}
                           {billingText}
                         </>
                       )}
                     </span>
                   </div>
 
-                  <div className="flex justify-between items-center mt-8 w-full max-w-md">
+                  <div className="flex gap-10 justify-evenly items-center mt-8 w-full max-w-md">
                     <div className="flex items-center">
                       <span className="mr-3 text-gray-12">Annual billing</span>
                       <Switch
@@ -249,26 +254,24 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
                 <Button
                   variant="primary"
                   onClick={planCheckout}
-                  className="w-full max-w-md h-14 text-lg rounded-xl"
+                  className="mt-5 w-full max-w-sm h-14 text-lg rounded-xl"
                   disabled={proLoading}
                 >
                   {proLoading ? "Loading..." : "Upgrade to Cap Pro"}
                 </Button>
               </div>
+              </div>
 
-              <div className="pt-8 mt-4 border-t border-gray-5">
-                <h2 className="mb-10 text-2xl font-bold text-center text-gray-12">
-                  Here's what's included
-                </h2>
-
-                <div className="grid grid-cols-1 gap-x-10 gap-y-12 md:grid-cols-2">
+              
+              <div className="flex flex-1 justify-center items-center self-stretch p-8 bg-transparent md:bg-gray-3">
+                <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
                   {proFeatures.map((feature, index) => (
-                    <div key={index} className="flex flex-col items-center">
-                      <div className="mb-3">{feature.icon}</div>
-                      <h3 className="mb-1 text-lg font-medium text-gray-12">
+                    <div key={index} className="flex flex-col justify-center items-center">
+                      <div className="mb-3.5">{feature.icon}</div>
+                      <h3 className="text-base font-medium text-center text-gray-12">
                         {feature.title}
                       </h3>
-                      <p className="text-center text-gray-11">
+                      <p className="text-sm text-center text-gray-11">
                         {feature.description}
                       </p>
                     </div>
