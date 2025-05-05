@@ -1,21 +1,23 @@
 {
   "compilerOptions": {
-    "composite": true,
     "target": "ESNext",
     "useDefineForClassFields": true,
     "module": "ESNext",
     "skipLibCheck": true,
     "esModuleInterop": true,
+
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
+    "noEmit": true,
     "jsx": "react-jsx",
+
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "declaration": true,
-    "emitDeclarationOnly": true
-  }
+    "declaration": true
+  },
+  "references": [{ "path": "./tsconfig.node.json" }]
 }

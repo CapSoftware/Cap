@@ -100,23 +100,23 @@ export const authOptions = (): NextAuthOptions => {
       },
     },
     events: {
-      async signIn({ user, isNewUser }) {
+      async signIn({ user, account, isNewUser }) {
         if (isNewUser) {
           const organizationId = nanoId();
-
+  
           await db().insert(organizations).values({
             id: organizationId,
             name: "My Organization",
             ownerId: user.id,
           });
-
+  
           await db().insert(organizationMembers).values({
             id: nanoId(),
             userId: user.id,
             organizationId: organizationId,
             role: "owner",
           });
-
+  
           await db()
             .update(users)
             .set({ activeOrganizationId: organizationId })
@@ -160,5 +160,5 @@ export const authOptions = (): NextAuthOptions => {
         };
       },
     },
-  };
+  }
 };
