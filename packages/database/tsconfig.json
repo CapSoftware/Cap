@@ -1,14 +1,12 @@
 {
   "extends": "../config/base.tsconfig.json",
   "exclude": ["node_modules"],
-  "include": ["src/**/*.ts*", "src/**/*.d.ts"],
+  "include": ["next-env.d.ts", ".next/types/**/*.ts", "**/*.ts", "**/*.tsx"],
   "compilerOptions": {
     "baseUrl": ".",
     "moduleResolution": "bundler",
     "paths": {
       "@/emails/*": ["./emails/*"]
-    },
-    "outDir": "dist",
-    "rootDir": "src"
+    }
   }
 }

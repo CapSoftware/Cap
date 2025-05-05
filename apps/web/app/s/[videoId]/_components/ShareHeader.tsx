@@ -25,9 +25,9 @@ export const ShareHeader = ({
   userOrganizations = [],
 }: {
   data: typeof videos.$inferSelect;
-  user?: typeof userSelectProps | null;
-  customDomain?: string | null;
-  domainVerified?: boolean;
+  user: typeof userSelectProps | null;
+  customDomain: string | null;
+  domainVerified: boolean;
   sharedOrganizations?: { id: string; name: string }[];
   userOrganizations?: { id: string; name: string }[];
 }) => {
@@ -40,7 +40,7 @@ export const ShareHeader = ({
   const [currentSharedOrganizations, setCurrentSharedOrganizations] =
     useState(sharedOrganizations);
 
-  const isOwner = user?.id?.toString() === data.ownerId;
+  const isOwner = user !== null && user.id.toString() === data.ownerId;
 
   const { webUrl } = usePublicEnv();
 
@@ -157,8 +157,12 @@ export const ShareHeader = ({
                   <h1
                     className="text-xl sm:text-2xl"
                     onClick={() => {
-                      if (user?.id.toString() === data.ownerId)
+                      if (
+                        user !== null &&
+                        user.id.toString() === data.ownerId
+                      ) {
                         setIsEditing(true);
+                      }
                     }}
                   >
                     {title}

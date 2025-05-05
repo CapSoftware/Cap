@@ -21,7 +21,7 @@ export type DocMetadata = {
 };
 
 export interface BlogPost {
-  metadata: PostMetadata;
+  metadata: PostMetadata | DocMetadata;
   slug: string;
   content: string;
   isManual?: boolean;
@@ -49,8 +49,8 @@ export const manualBlogPosts: ManualBlogPost[] = [
       publishedAt: recordScreenMacContent.publishedAt,
       author: recordScreenMacContent.author,
       tags: recordScreenMacContent.tags,
-    },
-  },
+    }
+  }
 ];
 
 function parseFrontmatter(fileContent: string) {
@@ -63,7 +63,7 @@ function parseFrontmatter(fileContent: string) {
   let frontMatterBlock = match[1];
   let content = fileContent.replace(frontmatterRegex, "").trim();
   let frontMatterLines = frontMatterBlock.trim().split("\n");
-  let metadata: Record<string, any> = {};
+  let metadata: Partial<PostMetadata | DocMetadata> = {};
 
   frontMatterLines.forEach((line) => {
     let [key, ...valueArr] = line.split(": ");
@@ -71,11 +71,11 @@ function parseFrontmatter(fileContent: string) {
 
     let value = valueArr.join(": ").trim();
     value = value.replace(/^['"](.*)['"]$/, "$1"); // Remove quotes
-    metadata[key.trim()] = value;
+    metadata[key.trim() as keyof (PostMetadata | DocMetadata)] = value;
   });
 
   return {
-    metadata: metadata as any,
+    metadata: metadata as PostMetadata | DocMetadata,
     content,
   };
 }
@@ -128,7 +128,7 @@ function getMDXData(dir: string): BlogPost[] {
       metadata,
       slug,
       content,
-      isManual: false,
+      isManual: false
     };
   });
 }
@@ -144,11 +144,11 @@ export function getManualBlogPosts(): BlogPost[] {
           publishedAt: content.publishedAt,
           summary: content.description,
           description: content.description,
-          tags: content.tags?.join(", ") || "",
-          image: content.image,
+          tags: content.tags?.join(', ') || '',
+          image: content.image
         },
-        content: "",
-        isManual: true,
+        content: '',
+        isManual: true
       } as BlogPost;
     });
   } catch (error) {
@@ -160,7 +160,7 @@ export function getManualBlogPosts(): BlogPost[] {
 export function getBlogPosts(): BlogPost[] {
   const mdxPosts = getMDXData(path.join(process.cwd(), "content/blog"));
   const manualPosts = getManualBlogPosts();
-
+  
   return [...mdxPosts, ...manualPosts];
 }
 

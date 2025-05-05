@@ -1,6 +1,6 @@
 import { initClient } from "@ts-rest/core";
 import { contract } from "@cap/web-api-contract";
-import { useState } from "react";
+import { useContext, useState } from "react";
 
 import { usePublicEnv } from "./public-env";
 
