@@ -14,7 +14,6 @@ import {
   CardTitle,
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -25,7 +24,7 @@ import {
   TableCell,
   TableHead,
   TableHeader,
-  TableRow,
+  TableRow
 } from "@cap/ui";
 import { faChair, faUserGroup } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -45,7 +44,6 @@ export const Organization = () => {
   const [inviteEmails, setInviteEmails] = useState<string[]>([]);
   const [emailInput, setEmailInput] = useState("");
   const ownerToastShown = useRef(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const showOwnerToast = () => {
     if (!ownerToastShown.current) {
@@ -419,19 +417,19 @@ export const Organization = () => {
       </Card>
 
       <Dialog open={isInviteDialogOpen} onOpenChange={setIsInviteDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Invite Teammates</DialogTitle>
-            <DialogDescription>
-              Invite your teammates to join{" "}
-              {activeOrganization?.organization.name} organization.
-            </DialogDescription>
+        <DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
+          <DialogHeader
+            icon={<FontAwesomeIcon icon={faUserGroup} className="size-3.5" />}
+            description="Invite your teammates to join the organization"
+          >
+            <DialogTitle>
+              Invite to{" "}
+              <span className="font-bold text-gray-12">
+                {activeOrganization?.organization.name}
+              </span>
+            </DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label htmlFor="emails" className="mb-1">
-                Email
-              </Label>
+          <div className="p-5">
               <Input
                 id="emails"
                 value={emailInput}
@@ -445,18 +443,20 @@ export const Organization = () => {
                   }
                 }}
               />
-            </div>
-            <div className="space-y-2">
+            <div className="flex overflow-y-auto flex-col gap-2.5 mt-4 max-h-60">
               {inviteEmails.map((email) => (
                 <div
                   key={email}
-                  className="flex justify-between items-center p-2 rounded bg-gray-1"
+                  className="flex justify-between items-center p-3 rounded-xl border transition-colors duration-200 cursor-pointer border-gray-3"
                 >
-                  <span>{email}</span>
+                  <span className="text-sm text-gray-12">{email}</span>
                   <Button
+                    style={{
+                      "--gradient-border-radius": "8px",
+                    } as React.CSSProperties}
                     type="button"
                     variant="destructive"
-                    size="sm"
+                    size="xs"
                     onClick={() => handleRemoveEmail(email)}
                     disabled={!isOwner}
                   >
@@ -466,23 +466,24 @@ export const Organization = () => {
               ))}
             </div>
           </div>
-          <DialogFooter className="flex justify-between items-center">
+          <DialogFooter className="p-5 border-t border-gray-4">
             <Button
               type="button"
-              variant="white"
+              size="sm"
+              variant="gray"
               onClick={() => setIsInviteDialogOpen(false)}
             >
               Cancel
             </Button>
-            <div className="flex space-x-2">
-              <Button
-                type="button"
-                onClick={handleSendInvites}
-                disabled={inviteEmails.length === 0}
-              >
-                Send Invites
-              </Button>
-            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="dark"
+              onClick={handleSendInvites}
+              disabled={inviteEmails.length === 0}
+            >
+              Send Invites
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

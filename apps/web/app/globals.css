@@ -30,6 +30,7 @@
   --foreground-rgb: #000000;
   --background-start-rgb: 214, 219, 220;
   --background-end-rgb: 255, 255, 255;
+  --gradient-border-radius: 12px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -233,7 +234,7 @@ a.bg-primary:hover {
   position: absolute;
   inset: 0;
   padding: 1px;
-  border-radius: 12px;
+  border-radius: var(--gradient-border-radius);
   background: linear-gradient(to bottom, #ffffff40 70%, #ffffff00 100%);
   -webkit-mask:
     linear-gradient(#fff 0 0) content-box,
