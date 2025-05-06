@@ -1,4 +1,17 @@
 module.exports = function (app, options) {
+
+// Function to generate color scales for Radix colors
+function getColorScale(name, alpha = false) {
+  let scale = {};
+  for (let i = 1; i <= 12; i++) {
+    scale[i] = `var(--${name}-${i})`;
+    // next line only needed if using alpha values
+    if (alpha) scale[`a${i}`] = `var(--${name}-a${i})`
+  }
+
+  return scale;
+}
+
   const config = {
     content: [
       `../../apps/*/pages/**/*.{js,ts,jsx,tsx,mdx}`,
@@ -8,6 +21,14 @@ module.exports = function (app, options) {
       "../../packages/*/src/**/*.{ts,tsx,html,stories.tsx}",
     ],
     theme: {
+      screens: {
+        'xs': '480px',
+        'sm': '640px',
+        'md': '768px',
+        'lg': '1024px',
+        'xl': '1280px',
+        '2xl': '1536px',
+      },
       fontWeight: {
         thin: "300",
         hairline: "300",
@@ -22,6 +43,8 @@ module.exports = function (app, options) {
       },
       extend: {
         colors: {
+          gray: getColorScale("gray"),
+          blue: getColorScale("blue"),
           border: "hsl(var(--border))",
           input: "hsl(var(--input))",
           ring: "hsl(var(--ring))",
@@ -68,14 +91,6 @@ module.exports = function (app, options) {
             DEFAULT: "hsl(var(--card))",
             foreground: "hsl(var(--card-foreground))",
           },
-          gray: {
-            50: "#FFFFFF",
-            100: "#F7F8FA",
-            200: "#E7EAF0",
-            300: "#C9CEDB",
-            400: "#8991A3",
-            500: "#12161F",
-          },
           "black-transparent": {
             5: "rgba(18,22,31,0.05)",
             10: "rgba(18,22,31,0.1)",
@@ -89,13 +104,6 @@ module.exports = function (app, options) {
             10: "rgba(255,255,255,0.1)",
             20: "rgba(255,255,255,0.2)",
             40: "rgba(255,255,255,0.4)",
-          },
-          blue: {
-            50: "#EBF1FF",
-            100: "#ADC9FF",
-            200: "#85ADFF",
-            300: "#4785FF",
-            400: "#3F75E0",
           },
           "blue-transparent": {
             10: "rgba(34,64,122,0.1)",
@@ -118,7 +126,7 @@ module.exports = function (app, options) {
             "conic-gradient(from 180deg at 50% 50%, var(--tw-gradient-stops))",
         },
         fontFamily: {
-          primary: ['var(--font-geist-sans)', 'sans-serif'],
+          primary: ['var(--font-sf-pro-display)', 'sans-serif'],
         },
         keyframes: {
           flyEmoji: {
@@ -131,9 +139,24 @@ module.exports = function (app, options) {
               opacity: "0",
             },
           },
+          fadeIn: {
+            from: { opacity: 0 },
+            to: { opacity: 1 }
+          },
+          fadeOut: {
+            from: { opacity: 1 },
+            to: { opacity: 0 }
+          },
+          contentShow: {
+            from: { opacity: 0, transform: "translate(-50%, -48%) scale(0.96)" },
+            to: { opacity: 1, transform: "translate(-50%, -50%) scale(1)" }
+          },
         },
         animation: {
           flyEmoji: "flyEmoji 1.5s forwards",
+          fadeIn: "fadeIn 200ms ease-out",
+          fadeOut: "fadeOut 150ms ease-in",
+          contentShow: "contentShow 200ms ease-out",
         },
       },
     },

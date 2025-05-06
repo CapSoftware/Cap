@@ -1,2 +1,2 @@
-export { clientEnv, NODE_ENV } from "./client";
+export { buildEnv, NODE_ENV } from "./build";
 export { serverEnv } from "./server";

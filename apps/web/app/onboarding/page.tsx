@@ -1,38 +1,43 @@
-import { Button, LogoBadge } from "@cap/ui";
-import { Suspense } from "react";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { LogoBadge } from "@cap/ui";
 import { redirect } from "next/navigation";
 import { Onboarding } from "./Onboarding";
 
+export const dynamic = "force-dynamic";
+
 export default async function OnboardingPage() {
   const user = await getCurrentUser();
+
+  if (!user) {
+    redirect("/login");
+  }
 
   if (
     user &&
     user.name &&
     user.name.length > 1 &&
-    user.activeSpaceId &&
-    user.activeSpaceId.length > 1
+    user.activeOrganizationId &&
+    user.activeOrganizationId.length > 1
   ) {
     redirect("/dashboard");
+  } else if (!user) {
+    redirect("/login");
   }
 
   return (
-    <div className="muted-custom-bg-2 w-full h-screen flex items-center justify-center">
-      <div className="w-full max-w-lg relative overflow-hidden sm:rounded-2xl p-4 space-y-4">
+    <div className="flex justify-center items-center w-full h-screen bg-gray-1">
+      <div className="overflow-hidden relative p-4 space-y-6 w-full max-w-lg sm:rounded-2xl">
         <a href="/">
-          <LogoBadge className="h-14 mx-auto w-auto fade-in-down" />
+          <LogoBadge className="mx-auto w-auto h-14" />
         </a>
-        <div className="text-center flex flex-col items-center justify-center space-y-3">
-          <h1 className="text-3xl font-semibold fade-in-down animate-delay-1">
-            Let's get you started.
+        <div className="flex flex-col justify-center items-center space-y-1 text-center">
+          <h1 className="text-3xl font-semibold text-gray-12">
+            Let's get you started
           </h1>
-          <p className="text-2xl text-gray-500 fade-in-down animate-delay-1">
-            What's your name?
-          </p>
+          <p className="text-2xl text-gray-11">What's your name?</p>
         </div>
-        <div className="fade-in-down animate-delay-2 flex flex-col space-y-3">
-          <Onboarding user={user ?? null} />
+        <div className="flex flex-col space-y-3">
+          <Onboarding />
         </div>
       </div>
     </div>

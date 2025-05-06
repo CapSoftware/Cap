@@ -1,42 +1,88 @@
 "use client";
-import { createContext, useContext } from "react";
-import AdminDesktopNav from "@/app/dashboard/_components/AdminNavbar/AdminDesktopNav";
 import AdminMobileNav from "@/app/dashboard/_components/AdminNavbar/AdminMobileNav";
-import { users, spaces } from "@cap/database/schema";
-import { Space } from "@/app/dashboard/layout";
+import { Organization } from "@/app/dashboard/layout";
+import { users } from "@cap/database/schema";
+import Cookies from "js-cookie";
+import React, { createContext, useContext, useEffect, useState } from "react";
+import AdminDesktopNav from "./AdminNavbar/AdminDesktopNav";
 
 type SharedContext = {
-  spaceData: Space[] | null;
-  activeSpace: Space | null;
+  organizationData: Organization[] | null;
+  activeOrganization: Organization | null;
   user: typeof users.$inferSelect;
   isSubscribed: boolean;
 };
 
+type ITheme = "light" | "dark";
+
 const Context = createContext<SharedContext>({} as SharedContext);
+
+const ThemeContext = createContext<{
+  theme: ITheme;
+  setThemeHandler: (newTheme: ITheme) => void;
+}>({
+  theme: "light",
+  setThemeHandler: () => {},
+});
+
+export const useTheme = () => useContext(ThemeContext);
 
 export default function DynamicSharedLayout({
   children,
-  spaceData,
-  activeSpace,
+  organizationData,
+  activeOrganization,
   user,
   isSubscribed,
+  initialTheme,
 }: {
   children: React.ReactNode;
-  spaceData: SharedContext["spaceData"];
-  activeSpace: SharedContext["activeSpace"];
+  organizationData: SharedContext["organizationData"];
+  activeOrganization: SharedContext["activeOrganization"];
   user: SharedContext["user"];
   isSubscribed: SharedContext["isSubscribed"];
+  initialTheme: ITheme;
 }) {
+  const [theme, setTheme] = useState<ITheme>(initialTheme);
+  const setThemeHandler = (newTheme: ITheme) => {
+    setTheme(newTheme);
+    Cookies.set("theme", newTheme, {
+      expires: 365,
+    });
+    document.body.className = newTheme;
+  };
+  useEffect(() => {
+    if (Cookies.get("theme")) {
+      document.body.className = Cookies.get("theme") as ITheme;
+    }
+    return () => {
+      document.body.className = "light";
+    };
+  }, [theme]);
   return (
-    <Context.Provider value={{ spaceData, activeSpace, user, isSubscribed }}>
-      <div className="dashboard-layout h-screen min-h-full flex">
-        <AdminDesktopNav />
-        <div className="flex-1 overflow-auto focus:outline-none">
-          <AdminMobileNav />
-          <main className="min-h-screen w-full">{children}</main>
+    <ThemeContext.Provider value={{ theme, setThemeHandler }}>
+      <Context.Provider
+        value={{
+          organizationData,
+          activeOrganization,
+          user,
+          isSubscribed,
+        }}
+      >
+        {/* CSS Grid layout for dashboard */}
+        <div className="grid grid-cols-[auto,1fr] bg-gray-2 grid-rows-[auto,1fr] h-screen min-h-screen">
+          {/* Sidebar */}
+          <aside className="z-10 col-span-1 row-span-2">
+            <AdminDesktopNav />
+          </aside>
+          {/* Header/topbar is now expected to be rendered by children if needed */}
+          {/* Main content area */}
+          <div className="overflow-y-auto col-span-1 row-span-2 custom-scroll focus:outline-none">
+            <AdminMobileNav />
+            {children}
+          </div>
         </div>
-      </div>
-    </Context.Provider>
+      </Context.Provider>
+    </ThemeContext.Provider>
   );
 }
 

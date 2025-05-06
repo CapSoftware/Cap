@@ -18,3 +18,5 @@ mp4 = "0.14.0"
 thiserror.workspace = true
 futures = "0.3.31"
 ffmpeg = { workspace = true }
+serde = "1.0.219"
+specta.workspace = true

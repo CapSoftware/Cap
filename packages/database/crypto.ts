@@ -6,28 +6,36 @@ const SALT_LENGTH = 16;
 const KEY_LENGTH = 32;
 const ITERATIONS = 100000;
 
-const ENCRYPTION_KEY = serverEnv.DATABASE_ENCRYPTION_KEY as string;
+const ENCRYPTION_KEY = () => {
+  const key = serverEnv().DATABASE_ENCRYPTION_KEY;
+  if (!key) return;
 
-// Verify the encryption key is valid hex and correct length
-try {
-  const keyBuffer = Buffer.from(ENCRYPTION_KEY, "hex");
-  if (keyBuffer.length !== KEY_LENGTH) {
-    throw new Error(
-      `Encryption key must be ${KEY_LENGTH} bytes (${
-        KEY_LENGTH * 2
-      } hex characters)`
-    );
+  // Verify the encryption key is valid hex and correct length
+  try {
+    const keyBuffer = Buffer.from(key, "hex");
+    if (keyBuffer.length !== KEY_LENGTH) {
+      throw new Error(
+        `Encryption key must be ${KEY_LENGTH} bytes (${
+          KEY_LENGTH * 2
+        } hex characters)`
+      );
+    }
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      throw new Error(`Invalid encryption key format: ${error.message}`);
+    }
+    throw new Error("Invalid encryption key format");
   }
-} catch (error: unknown) {
-  if (error instanceof Error) {
-    throw new Error(`Invalid encryption key format: ${error.message}`);
-  }
-  throw new Error("Invalid encryption key format");
-}
+
+  return key;
+};
 
 async function deriveKey(salt: Uint8Array): Promise<CryptoKey> {
+  const key = ENCRYPTION_KEY();
+  if (!key) throw new Error("Encryption key is not available");
+
   // Convert hex string to ArrayBuffer for Web Crypto API
-  const keyBuffer = Buffer.from(ENCRYPTION_KEY, "hex");
+  const keyBuffer = Buffer.from(key, "hex");
 
   const keyMaterial = await crypto.subtle.importKey(
     "raw",
@@ -73,9 +81,9 @@ export async function encrypt(text: string): Promise<string> {
 
     // Combine salt, IV, and encrypted content
     const result = Buffer.concat([
-      Buffer.from(salt),
-      Buffer.from(iv),
-      Buffer.from(encrypted),
+      Buffer.from(salt as any) as any,
+      Buffer.from(iv as any) as any,
+      Buffer.from(encrypted as any) as any,
     ]);
 
     return result.toString("base64");
@@ -101,7 +109,7 @@ export async function decrypt(encryptedText: string): Promise<string> {
     const content = encrypted.subarray(SALT_LENGTH + IV_LENGTH);
 
     // Derive the same key using the extracted salt
-    const key = await deriveKey(salt);
+    const key = await deriveKey(salt as Uint8Array);
 
     const decrypted = await crypto.subtle.decrypt(
       {

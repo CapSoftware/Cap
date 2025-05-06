@@ -13,6 +13,8 @@ use crate::{
     MediaError,
 };
 
+use super::AudioEncoder;
+
 pub struct OggFile {
     encoder: OpusEncoder,
     output: format::context::Output,
@@ -282,6 +284,16 @@ impl OpusEncoder {
         self.encoder.send_eof().unwrap();
 
         self.process_packets(output);
+    }
+}
+
+impl AudioEncoder for OpusEncoder {
+    fn queue_frame(&mut self, frame: FFAudio, output: &mut format::context::Output) {
+        self.queue_frame(frame, output);
+    }
+
+    fn finish(&mut self, output: &mut format::context::Output) {
+        self.finish(output);
     }
 }
 

@@ -1,275 +1,295 @@
 "use client";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
-  Plus,
-  LogOut,
-  ChevronDown,
-  User,
-  MoreVertical,
-  Settings,
-  MessageSquare,
-  Share2,
-  Check,
-  Building,
-} from "lucide-react";
-import Link from "next/link";
-import { classNames } from "@cap/utils";
-import {
+  Button,
   Command,
   CommandEmpty,
   CommandGroup,
   CommandInput,
   CommandItem,
-  DialogTrigger,
-} from "@cap/ui";
-import { Popover, PopoverContent, PopoverTrigger } from "@cap/ui";
-import { useState } from "react";
-
-import {
   Dialog,
   DialogContent,
-  DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
+  Popover,
+  PopoverContent,
+  PopoverTrigger
 } from "@cap/ui";
-import { NewSpace } from "@/components/forms/NewSpace";
-import { signOut } from "next-auth/react";
+import { classNames } from "@cap/utils";
+import { Check, ChevronDown, Plus } from "lucide-react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { UsageButton } from "@/components/UsageButton";
-import { updateActiveSpace } from "./server";
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
+import { NewOrganization } from "@/components/forms/NewOrganization";
+import { Tooltip } from "@/components/Tooltip";
+import { UsageButton } from "@/components/UsageButton";
+import { buildEnv } from "@cap/env";
+import {
+  faBuilding,
+  faDownload,
+  faRecordVinyl,
+  faShareNodes,
+  IconDefinition,
+} from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import clsx from "clsx";
+import { motion } from "framer-motion";
 
-const Clapperboard = ({ className }: { className: string }) => (
-  <svg
-    xmlns="http://www.w3.org/2000/svg"
-    fill="none"
-    viewBox="0 0 18 15"
-    className={className}
-  >
-    <path
-      stroke="#8991A3"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="1.667"
-      d="M1.5 5.833h15m-15 0v5a2.5 2.5 0 002.5 2.5h10a2.5 2.5 0 002.5-2.5v-5m-15 0V4.167a2.5 2.5 0 012.5-2.5h10a2.5 2.5 0 012.5 2.5v1.666M5.583 2.083l-.666 3.334m4.416-3.334l-.666 3.334m4.416-3.334l-.666 3.334"
-    ></path>
-  </svg>
-);
+import { useState } from "react";
+import { updateActiveOrganization } from "./server";
 
-const Download = ({ className }: { className: string }) => (
-  <svg
-    xmlns="http://www.w3.org/2000/svg"
-    fill="none"
-    viewBox="0 0 16 15"
-    className={className}
-  >
-    <path
-      stroke="#8991A3"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="1.667"
-      d="M14.667 10v1.667a2.5 2.5 0 01-2.5 2.5H3.833a2.5 2.5 0 01-2.5-2.5V10M8 9.583V.833m0 8.75L5.083 6.667M8 9.583l2.917-2.916"
-    ></path>
-  </svg>
-);
-
-export const AdminNavItems = () => {
+export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
-  const { spaceData, activeSpace, user, isSubscribed } = useSharedContext();
-  const [menuOpen, setMenuOpen] = useState(false);
-  const router = useRouter();
+  const { user } =
+    useSharedContext();
 
   const manageNavigation = [
     {
       name: "My Caps",
       href: `/dashboard/caps`,
-      icon: Clapperboard,
+      icon: faRecordVinyl,
       subNav: [],
     },
     {
       name: "Shared Caps",
       href: `/dashboard/shared-caps`,
-      icon: Share2,
+      icon: faShareNodes,
       subNav: [],
     },
     {
       name: "Download App",
       href: `/download`,
-      icon: Download,
+      icon: faDownload,
       subNav: [],
     },
     {
-      name: "Workspace",
-      href: `/dashboard/settings/workspace`,
-      icon: Building,
+      name: "Organization",
+      href: `/dashboard/settings/organization`,
+      icon: faBuilding,
       subNav: [],
     },
-    user.email.endsWith("@cap.so") && {
-      name: "Admin",
-      href: "/dashboard/admin",
-      icon: () => {},
-      subNav: [],
-    },
-  ].filter(Boolean);
+    ...(buildEnv.NEXT_PUBLIC_IS_CAP && user.email.endsWith("@cap.so")
+      ? [
+          {
+            name: "Admin Dev",
+            href: "/dashboard/admin",
+            icon: faBuilding,
+            subNav: [],
+          },
+        ]
+      : []),
+  ];
 
   const navItemClass =
-    "flex items-center justify-start py-2 px-3 rounded-full outline-none tracking-tight w-full";
+    "flex items-center justify-start py-2 px-3 rounded-2xl outline-none tracking-tight w-full overflow-hidden";
+
   const searchParams = useSearchParams();
   const [dialogOpen, setDialogOpen] = useState(searchParams.get('createSpace') === 'true');
+  const { organizationData: orgData, activeOrganization: activeOrg, isSubscribed: userIsSubscribed } =
+    useSharedContext();
+  const [formRef, setFormRef] = useState<HTMLFormElement | null>(null);
+
 
   return (
     <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-      <div className="w-full py-3 my-4 border-b-2 border-t-2 border-gray-300 border-dotted">
-        <Popover open={open} onOpenChange={setOpen}>
+      <Popover open={open} onOpenChange={setOpen}>
+        <Tooltip
+          disable={open || collapsed === false}
+          position="right"
+          content={
+            activeOrg?.organization.name ?? "No organization found"
+          }
+        >
           <PopoverTrigger asChild>
             <div
-              className="flex items-center justify-between cursor-pointer"
-              role="combobox"
-              aria-expanded={open}
+              className={
+                "px-3 py-2.5 w-full rounded-xl border cursor-pointer bg-gray-3 border-gray-4"
+              }
             >
-              <div className="flex items-center w-full text-left">
-                <div>
-                  <p className="text-[0.875rem]">
-                    {activeSpace?.space.name ?? "No space found"}
-                  </p>
+              <div
+                className="flex justify-between items-center cursor-pointer"
+                role="combobox"
+                aria-expanded={open}
+              >
+                <div className="flex justify-between items-center w-full text-left">
+                  <div className="flex items-center">
+                    <Avatar
+                      letterClass="text-gray-1 text-xs"
+                      className="relative flex-shrink-0 size-5"
+                      name={
+                        activeOrg?.organization.name ??
+                        "No organization found"
+                      }
+                    />
+                    <p className="ml-2.5 text-sm text-gray-12 font-medium truncate">
+                      {activeOrg?.organization.name ??
+                        "No organization found"}
+                    </p>
+                  </div>
+                  {!collapsed && (
+                    <ChevronDown className="w-5 h-auto text-gray-8" />
+                  )}
                 </div>
               </div>
-              <div>
-                <ChevronDown className="w-[20px] h-auto text-gray-400" />
-              </div>
-            </div>
-          </PopoverTrigger>
-          <PopoverContent className="w-full p-0 z-10 bg-white">
-            <Command>
-              <CommandInput placeholder="Search spaces..." />
-              <CommandEmpty>No spaces found.</CommandEmpty>
-              <CommandGroup>
-                {spaceData?.map((space) => {
-                  const isSelected = activeSpace?.space.id === space.space.id;
-
-                  return (
-                    <CommandItem
-                      key={space.space.name + "-space"}
-                      onSelect={async () => {
-                        await updateActiveSpace(space.space.id);
-                        setOpen(false);
-                      }}
-                    >
-                      {space.space.name}
-                      <Check
-                        size={18}
-                        className={classNames(
-                          "ml-auto",
-                          isSelected ? "opacity-100" : "opacity-0"
-                        )}
-                      />
-                    </CommandItem>
-                  );
-                })}
-                <DialogTrigger className="w-full">
-                  <CommandItem className=" bg-filler aria-selected:bg-gray-200 rounded-lg">
-                    <Plus className="w-4 h-auto mr-1" />
-                    <span className="text-[0.875rem]">Add new space</span>
-                  </CommandItem>
-                </DialogTrigger>
-              </CommandGroup>
-            </Command>
-          </PopoverContent>
-        </Popover>
-      </div>
-      <nav
-        className="w-full flex flex-col justify-between h-full"
-        aria-label="Sidebar"
-      >
-        <div className="space-y-1">
-          {manageNavigation.map((item) => (
-            <div key={item.name}>
-              <Link
-                passHref
-                prefetch={false}
-                href={item.href}
-                className={classNames(
-                  pathname.includes(item.href)
-                    ? "bg-white text-black border-[1px] border-gray-200"
-                    : "opacity-50 hover:opacity-75",
-                  navItemClass
+              <PopoverContent
+                className={clsx(
+                  "p-0 w-[calc(100%-12px)] z-[60]",
+                  collapsed ? "ml-3" : "mx-auto"
                 )}
               >
-                <item.icon
-                  className={classNames(
-                    "flex-shrink-0 w-5 h-5 stroke-[1.5px]",
-                    pathname.includes(item.href) ? "text-black" : ""
+                <Command>
+                  <CommandInput placeholder="Search organizations..." />
+                  <CommandEmpty>No organizations found</CommandEmpty>
+                  <CommandGroup>
+                    {orgData?.map((organization) => {
+                      const isSelected =
+                        activeOrg?.organization.id ===
+                        organization.organization.id;
+                      return (
+                        <CommandItem
+                          className={clsx(
+                            "transition-colors duration-300",
+                            isSelected ? "pointer-events-none text-gray-12"
+                            : "!text-gray-10 hover:!text-gray-12"
+                          )}
+                          key={organization.organization.name + "-organization"}
+                          onSelect={async () => {
+                            await updateActiveOrganization(
+                              organization.organization.id
+                            );
+                            setOpen(false);
+                          }}
+                        >
+                          {organization.organization.name}
+                          {isSelected && (
+                            <Check
+                              size={18}
+                              className={"ml-auto"}
+                            />
+                          )}
+                        </CommandItem>
+                      );
+                    })}
+                    <DialogTrigger className="mt-3 w-full">
+                      <Button
+                        variant="dark"
+                        size="sm"
+                        className="flex gap-1 items-center w-full"
+                      >
+                        <Plus className="w-4 h-auto" />
+                        Add new organization
+                      </Button>
+                    </DialogTrigger>
+                  </CommandGroup>
+                </Command>
+              </PopoverContent>
+            </div>
+          </PopoverTrigger>
+        </Tooltip>
+      </Popover>
+      <nav
+        className="flex flex-col justify-between w-full h-full"
+        aria-label="Sidebar"
+      >
+        <div
+          className={clsx("mt-8 space-y-2.5", collapsed ? "items-center" : "")}
+        >
+          {manageNavigation.map((item) => (
+            <div key={item.name} className="flex relative justify-center">
+              {pathname.includes(item.href) ? (
+                <motion.div
+                  initial={{
+                    width: collapsed ? 40 : "100%",
+                    height: collapsed ? 40 : "100%",
+                  }}
+                  animate={{
+                    width: collapsed ? 40 : "100%",
+                    height: collapsed ? 40 : "100%",
+                  }}
+                  transition={{
+                    type: "spring",
+                    bounce: 0.2,
+                    duration: 0.4,
+                    width: { type: "tween", duration: 0.05 },
+                  }}
+                  layoutId="underline"
+                  id="underline"
+                  className={clsx(
+                    "absolute inset-0 mx-auto rounded-xl shadow-sm border-gray-5 text-gray-8 border-[1px] shadow-gray-2"
                   )}
-                  aria-hidden="true"
                 />
-                <span className="text-base ml-2.5 text-black">{item.name}</span>
-              </Link>
+              ) : null}
+              <Tooltip
+                content={item.name}
+                disable={collapsed === false}
+                position="right"
+              >
+                <Link
+                  passHref
+                  prefetch={false}
+                  href={item.href}
+                  className={classNames(
+                    "relative transition-opacity duration-200 hover:opacity-75 z-3",
+                    navItemClass
+                  )}
+                >
+                  <FontAwesomeIcon
+                    icon={item.icon as IconDefinition}
+                    className={classNames(
+                      "flex-shrink-0 w-5 h-5 transition-colors duration-200 stroke-[1.5px]",
+                      collapsed ? "text-gray-12" : "text-gray-10"
+                    )}
+                    aria-hidden="true"
+                  />
+                  <span className="text-base ml-2.5 text-gray-12 truncate">
+                    {item.name}
+                  </span>
+                </Link>
+              </Tooltip>
             </div>
           ))}
         </div>
-        <div className="mt-auto">
-          <div className="w-full mb-3 pb-5 border-b-2 border-gray-200 border-dotted">
-            <UsageButton subscribed={isSubscribed} />
-          </div>
-          <Popover open={menuOpen} onOpenChange={setMenuOpen}>
-            <PopoverTrigger asChild>
-              <div className="flex items-center justify-between cursor-pointer hover:bg-gray-100 p-2 rounded-lg transition-colors">
-                <div className="flex items-center">
-                  <Avatar name={user.name ?? "User"} className="h-8 w-8" />
-                  <span className="ml-2 text-sm">{user.name ?? "User"}</span>
-                </div>
-                <MoreVertical className="h-5 w-5 text-gray-500 group-hover:text-gray-500" />
-              </div>
-            </PopoverTrigger>
-            <PopoverContent className="bg-gray-100 w-48 p-1">
-              <Command>
-                <CommandGroup>
-                  <CommandItem
-                    className="py-2 px-2 rounded-lg hover:bg-gray-200 cursor-pointer group"
-                    onSelect={() => {
-                      router.push("/dashboard/settings");
-                      setMenuOpen(false);
-                    }}
-                  >
-                    <Settings className="mr-2 h-4 w-4 text-gray-400 group-hover:text-gray-500" />
-                    <span className="text-gray-400 group-hover:text-gray-500 text-sm">
-                      Settings
-                    </span>
-                  </CommandItem>
-                  <CommandItem
-                    className="py-2 px-2 rounded-lg hover:bg-gray-200 cursor-pointer group"
-                    onSelect={() =>
-                      window.open("https://cap.link/discord", "_blank")
-                    }
-                  >
-                    <MessageSquare className="mr-2 h-4 w-4 text-gray-400 group-hover:text-gray-500" />
-                    <span className="text-gray-400 group-hover:text-gray-500 text-sm">
-                      Chat Support
-                    </span>
-                  </CommandItem>
-                  <CommandItem
-                    className="py-2 px-2 rounded-lg hover:bg-gray-200 cursor-pointer group"
-                    onSelect={() => signOut()}
-                  >
-                    <LogOut className="mr-2 h-4 w-4 text-gray-400 group-hover:text-gray-500" />
-                    <span className="text-gray-400 group-hover:text-gray-500 text-sm">
-                      Sign Out
-                    </span>
-                  </CommandItem>
-                </CommandGroup>
-              </Command>
-            </PopoverContent>
-          </Popover>
+        <div className="pb-0 w-full lg:pb-5">
+          <UsageButton
+            collapsed={collapsed ?? false}
+            subscribed={userIsSubscribed}
+          />
+          <p className="mt-4 text-xs text-center truncate text-gray-10">
+            Cap Software, Inc. {new Date().getFullYear()}.
+          </p>
         </div>
       </nav>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Create a new Space</DialogTitle>
+      <DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
+        <DialogHeader icon={<FontAwesomeIcon icon={faBuilding} />} description="A new organization to share caps with your team">
+          <DialogTitle className="text-lg text-gray-12">Create New Organization</DialogTitle>
         </DialogHeader>
-        <DialogDescription>
-          <NewSpace onSpaceCreated={() => setDialogOpen(false)} />
-        </DialogDescription>
+        <div className="p-5">
+          <NewOrganization 
+            onOrganizationCreated={() => setDialogOpen(false)}
+            formRef={setFormRef}
+          />
+        </div>
+        <DialogFooter>
+          <Button 
+            variant="gray" 
+            size="sm" 
+            onClick={() => setDialogOpen(false)}
+          >
+            Cancel
+          </Button>
+          <Button 
+            variant="dark" 
+            size="sm" 
+            onClick={() => formRef?.requestSubmit()}
+            type="submit"
+          >
+            Create
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

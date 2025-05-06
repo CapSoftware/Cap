@@ -42,3 +42,6 @@ tauri.windows.conf.json
 
 # sst
 .sst
+
+# Cursor
+.cursor

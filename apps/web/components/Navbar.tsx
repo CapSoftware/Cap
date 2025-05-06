@@ -19,7 +19,6 @@ import { Menu, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { seoPages } from "../lib/seo-pages";
 
 const Links = [
   {
@@ -50,6 +49,10 @@ const Links = [
   {
     label: "Download",
     href: "/download",
+  },
+  {
+    label: "Testimonials",
+    href: "/testimonials",
   },
   {
     label: "Help",
@@ -92,8 +95,6 @@ const Links = [
 
 export const Navbar = ({ auth }: { auth: boolean }) => {
   const pathname = usePathname();
-  const isHomePage = pathname === "/";
-  const isSeoPage = pathname.slice(1) in seoPages;
   const [showMobileMenu, setShowMobileMenu] = useState(false);
 
   if (
@@ -103,17 +104,16 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
     pathname.includes("/invite") ||
     pathname.includes("/s/") ||
     pathname.includes("/onboarding") ||
-    pathname.includes("/record") ||
     (typeof window !== "undefined" && window.location.href.includes("cap.link"))
   )
     return null;
 
   return (
     <>
-      <div className="fixed border-b border-b-zinc-100 inset-0 z-20 p-4 w-full backdrop-blur-md bg-white/70 h-[60px]">
-        <div className="flex justify-between items-center mx-auto max-w-3xl h-full transition-all">
+      <div className="fixed border-b border-b-zinc-100 inset-0 z-50 p-4 w-full backdrop-blur-md bg-white/70 h-[60px]">
+        <div className="flex justify-between items-center mx-auto max-w-4xl h-full transition-all">
           <div className="flex items-center">
-            <Link passHref href="/">
+            <Link passHref href="/home">
               <Logo className="w-[90px]" />
             </Link>
             <div className="hidden md:block">
@@ -162,20 +162,20 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
               </NavigationMenu>
             </div>
           </div>
-          <div className="hidden items-center space-x-2 sm:flex">
+          <div className="hidden items-center space-x-2 md:flex">
             <Button
               variant="white"
               href="https://github.com/CapSoftware/Cap"
-              size="md"
+              size="sm"
               className="w-full font-medium sm:w-auto"
-              icon={<FontAwesomeIcon icon={faGithub} />}
+              icon={<FontAwesomeIcon className="size-4" icon={faGithub} />}
             >
               Github
             </Button>
             <Button
-              variant="dark"
+              variant="darkgradient"
               href={auth === false ? "/login" : "/dashboard"}
-              size="md"
+              size="sm"
               className="w-full font-medium sm:w-auto"
             >
               {auth === false ? "Login" : "Dashboard"}
@@ -189,7 +189,7 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
         </div>
       </div>
       {showMobileMenu && (
-        <div className="fixed top-0 left-0 w-full h-full px-4 bg-white z-[100000] overflow-auto">
+        <div className="fixed top-0 left-0 w-full h-full px-4 bg-gray-1 z-[100000] overflow-auto">
           <div
             className="bg-gradient-to-b from-white to-[rgba(255,255,255,0.3)] 
           pt-3 pb-12 sticky top-0 flex items-center justify-between"
@@ -295,17 +295,25 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
                     <span className="ml-2">Join the community</span>
                   </Link>
                 </li>
-                <li>
-                  <Button
-                    variant="radialblue"
-                    className="font-medium h-[50px] !text-white"
-                    href={auth === false ? "/download" : "/dashboard"}
-                    size="lg"
-                  >
-                    {auth === false ? "Download App" : "Dashboard"}
-                  </Button>
-                </li>
               </ul>
+              <div className="flex flex-col gap-4 items-center mt-10">
+                <Button
+                  variant="dark"
+                  href="/login"
+                  size="sm"
+                  className="font-medium h-[50px] !text-white"
+                >
+                  Login
+                </Button>
+                <Button
+                  variant="radialblue"
+                  className="font-medium h-[50px] !text-white"
+                  href={auth === false ? "/download" : "/dashboard"}
+                  size="lg"
+                >
+                  {auth === false ? "Download App" : "Dashboard"}
+                </Button>
+              </div>
             </nav>
           </div>
         </div>

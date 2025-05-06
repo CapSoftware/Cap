@@ -48,7 +48,7 @@ pub struct CaptureArea {
     pub bounds: Bounds,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase", tag = "variant")]
 pub enum ScreenCaptureTarget {
     Window { id: u32 },
@@ -57,6 +57,13 @@ pub enum ScreenCaptureTarget {
 }
 
 impl ScreenCaptureTarget {
+    // only available on mac and windows
+    pub fn primary_display() -> Self {
+        ScreenCaptureTarget::Screen {
+            id: scap::get_main_display().id,
+        }
+    }
+
     pub fn get_target(&self) -> Option<scap::Target> {
         let targets = scap::get_all_targets();
 
@@ -87,36 +94,6 @@ impl ScreenCaptureTarget {
     }
 }
 
-// impl PartialEq<Target> for ScreenCaptureTarget {
-//     fn eq(&self, other: &Target) -> bool {
-//         match (self, other) {
-//             (Self::Window(capture_window), Target::Window(window)) => {
-//                 window.id == capture_window.id
-//             }
-//             (ScreenCaptureTarget::Area(capture_area), Target::Display(display)) => {
-//                 display.id == capture_area.screen.id
-//             }
-//             (ScreenCaptureTarget::Screen(capture_screen), Target::Display(display)) => {
-//                 display.id == capture_screen.id
-//             }
-//             (&ScreenCaptureTarget::Window(_), &scap::Target::Display(_))
-//             | (&ScreenCaptureTarget::Screen(_), &scap::Target::Window(_))
-//             | (&ScreenCaptureTarget::Area(_), &scap::Target::Window(_)) => todo!(),
-//         }
-//     }
-// }
-
-// impl ScreenCaptureTarget {
-//     pub fn recording_fps(&self) -> u32 {
-//         match self {
-//             ScreenCaptureTarget::Window(window) => window.
-//             ScreenCaptureTarget::Screen(screen) => screen.refresh_rate,
-//             ScreenCaptureTarget::Area(area) => area.screen.refresh_rate,
-//         }
-//         .min(MAX_FPS)
-//     }
-// }
-
 pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
     target: ScreenCaptureTarget,
     output_resolution: Option<ScapResolution>,
@@ -127,6 +104,8 @@ pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
     show_camera: bool,
     force_show_cursor: bool,
     bounds: Bounds,
+    // logical display size
+    display_size: (f32, f32),
     video_tx: Sender<(TCaptureFormat::VideoFormat, f64)>,
     audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
     _phantom: std::marker::PhantomData<TCaptureFormat>,
@@ -187,6 +166,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCapture
             show_camera: self.show_camera,
             force_show_cursor: self.force_show_cursor,
             bounds: self.bounds,
+            display_size: self.display_size,
             video_tx: self.video_tx.clone(),
             audio_tx: self.audio_tx.clone(),
             _phantom: std::marker::PhantomData,
@@ -195,7 +175,17 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCapture
     }
 }
 
-const MAX_FPS: u32 = 60;
+struct OptionsConfig {
+    scap_target: scap::Target,
+    bounds: Bounds,
+    crop_area: Option<Area>,
+    display_size: (f32, f32),
+}
+
+pub struct CropRatio {
+    pub position: (f32, f32),
+    pub size: (f32, f32),
+}
 
 impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
     pub fn init(
@@ -210,10 +200,14 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
     ) -> Result<Self, String> {
         cap_fail::fail!("media::screen_capture::init");
 
-        let (scap_target, bounds, crop_area) = Self::get_options_config(&target)?;
+        let OptionsConfig {
+            scap_target,
+            bounds,
+            crop_area,
+            display_size,
+        } = Self::get_options_config(&target)?;
 
-        let fps =
-            get_target_fps(&scap_target).ok_or_else(|| "Failed to get target fps".to_string())?;
+        let fps = get_target_fps(&scap_target).map_err(|e| format!("target_fps / {e}"))?;
         let fps = fps.min(max_fps);
 
         if !(fps > 0) {
@@ -230,6 +224,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, 0, 0, 0),
             options: Arc::new(Default::default()),
             bounds,
+            display_size,
             show_camera,
             force_show_cursor,
             video_tx,
@@ -242,12 +237,16 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 
         this.options = Arc::new(options);
 
-        this.video_info = VideoInfo::from_raw(
-            RawVideoFormat::Bgra,
-            bounds.width as u32,
-            bounds.height as u32,
-            fps,
-        );
+        #[cfg(target_os = "macos")]
+        let video_size = {
+            let [x, y] = scap::capturer::get_output_frame_size(&this.options);
+            (x, y)
+        };
+        #[cfg(windows)]
+        let video_size = (bounds.width as u32, bounds.height as u32);
+
+        this.video_info =
+            VideoInfo::from_raw(RawVideoFormat::Bgra, video_size.0, video_size.1, fps);
 
         Ok(this)
     }
@@ -256,9 +255,27 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         &self.bounds
     }
 
-    fn get_options_config(
-        target: &ScreenCaptureTarget,
-    ) -> Result<(scap::Target, Bounds, Option<Area>), String> {
+    pub fn crop_ratio(&self) -> CropRatio {
+        if let Some(crop_area) = &self.options.crop_area {
+            CropRatio {
+                position: (
+                    crop_area.origin.x as f32 / self.display_size.0,
+                    crop_area.origin.y as f32 / self.display_size.1,
+                ),
+                size: (
+                    crop_area.size.width as f32 / self.display_size.0,
+                    crop_area.size.height as f32 / self.display_size.1,
+                ),
+            }
+        } else {
+            CropRatio {
+                position: (0.0, 0.0),
+                size: (1.0, 1.0),
+            }
+        }
+    }
+
+    fn get_options_config(target: &ScreenCaptureTarget) -> Result<OptionsConfig, String> {
         let targets = scap::get_all_targets();
 
         Ok(match target {
@@ -308,16 +325,20 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                     },
                 };
 
-                (
-                    Target::Display(display),
-                    Bounds {
+                OptionsConfig {
+                    scap_target: Target::Display(display),
+                    bounds: Bounds {
                         x: crop.origin.x,
                         y: crop.origin.y,
                         width: crop.size.width,
                         height: crop.size.height,
                     },
-                    Some(crop),
-                )
+                    crop_area: Some(crop),
+                    display_size: (
+                        monitor_bounds.size.width as f32,
+                        monitor_bounds.size.height as f32,
+                    ),
+                }
             }
             ScreenCaptureTarget::Screen { id } => {
                 let screens = list_screens();
@@ -327,18 +348,28 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                     .find(|(i, t)| i.id == *id)
                     .ok_or_else(|| "Target for screen capture not found".to_string())?;
 
-                (target, platform::monitor_bounds(screen_info.id), None)
+                let bounds = platform::monitor_bounds(screen_info.id);
+
+                OptionsConfig {
+                    scap_target: target,
+                    bounds,
+                    crop_area: None,
+                    display_size: (bounds.width as f32, bounds.height as f32),
+                }
             }
             ScreenCaptureTarget::Area { screen, bounds } => {
-                let screens = list_screens();
+                let screen_bounds = platform::monitor_bounds(*screen);
 
-                (
-                    screens
-                        .into_iter()
-                        .find_map(|(i, t)| (i.id == *screen).then_some(t))
-                        .ok_or_else(|| "Target for screen capture not found".to_string())?,
-                    *bounds,
-                    Some(Area {
+                let screens = list_screens();
+                let screen = screens
+                    .into_iter()
+                    .find_map(|(i, t)| (i.id == *screen).then_some(t))
+                    .ok_or_else(|| "Target for screen capture not found".to_string())?;
+
+                OptionsConfig {
+                    scap_target: screen,
+                    bounds: *bounds,
+                    crop_area: Some(Area {
                         size: Size {
                             width: bounds.width,
                             height: bounds.height,
@@ -348,7 +379,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                             y: bounds.y,
                         },
                     }),
-                )
+                    display_size: (screen_bounds.width as f32, screen_bounds.height as f32),
+                }
             }
         })
     }
@@ -644,6 +676,14 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                             }
                         }
                         SCStreamOutputType::Audio => {
+                            let res = || {
+                                cap_fail::fail_err!("screen_capture audio skip", ());
+                                Ok::<(), ()>(())
+                            };
+                            if let Err(_) = res() {
+                                return ControlFlow::Continue(());
+                            }
+
                             let Some(audio_tx) = &audio_tx else {
                                 return ControlFlow::Continue(());
                             };
@@ -707,7 +747,7 @@ pub fn list_screens() -> Vec<(CaptureScreen, Target)> {
                     .cloned()
                     .unwrap_or_else(|| format!("Screen {}", idx + 1)),
                 refresh_rate: {
-                    let Some(fps) = get_target_fps(&Target::Display(screen.clone())) else {
+                    let Ok(fps) = get_target_fps(&Target::Display(screen.clone())) else {
                         continue;
                     };
 
@@ -755,20 +795,23 @@ pub fn list_windows() -> Vec<(CaptureWindow, Target)> {
         .collect()
 }
 
-pub fn get_target_fps(target: &scap::Target) -> Option<u32> {
+pub fn get_target_fps(target: &scap::Target) -> Result<u32, String> {
     #[cfg(target_os = "macos")]
     match target {
         scap::Target::Display(display) => platform::get_display_refresh_rate(display.raw_handle.id),
-        scap::Target::Window(window) => {
-            platform::get_display_refresh_rate(platform::display_for_window(window.raw_handle)?.id)
-        }
+        scap::Target::Window(window) => platform::get_display_refresh_rate(
+            platform::display_for_window(window.raw_handle)
+                .ok_or_else(|| "failed to get display for window".to_string())?
+                .id,
+        ),
     }
     #[cfg(target_os = "windows")]
     match target {
         scap::Target::Display(display) => platform::get_display_refresh_rate(display.raw_handle),
-        scap::Target::Window(window) => {
-            platform::get_display_refresh_rate(platform::display_for_window(window.raw_handle)?)
-        }
+        scap::Target::Window(window) => platform::get_display_refresh_rate(
+            platform::display_for_window(window.raw_handle)
+                .ok_or_else(|| "failed to get display for window".to_string())?,
+        ),
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     None

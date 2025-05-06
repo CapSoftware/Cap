@@ -1,15 +1,14 @@
 "use client";
 
+import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
-import { clientEnv } from "@cap/env";
 import { Logo } from "@cap/ui";
 import { useEffect, useRef, useState } from "react";
 import { ShareHeader } from "./_components/ShareHeader";
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import { Toolbar } from "./_components/Toolbar";
-import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
   authorName: string | null;
@@ -21,19 +20,16 @@ interface Analytics {
   reactions: number;
 }
 
-type VideoWithSpaceInfo = typeof videos.$inferSelect & {
-  spaceMembers?: string[];
-  spaceId?: string;
+type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
+  organizationMembers?: string[];
+  organizationId?: string;
+  sharedOrganizations?: { id: string; name: string }[];
 };
 
 interface ShareProps {
-  data: VideoWithSpaceInfo;
+  data: VideoWithOrganizationInfo;
   user: typeof userSelectProps | null;
   comments: CommentWithAuthor[];
-  individualFiles: {
-    fileName: string;
-    url: string;
-  }[];
   initialAnalytics: {
     views: number;
     comments: number;
@@ -41,19 +37,19 @@ interface ShareProps {
   };
   customDomain: string | null;
   domainVerified: boolean;
+  userOrganizations?: { id: string; name: string }[];
 }
 
 export const Share: React.FC<ShareProps> = ({
   data,
   user,
   comments,
-  individualFiles,
   initialAnalytics,
   customDomain,
   domainVerified,
+  userOrganizations = [],
 }) => {
   const [analytics, setAnalytics] = useState(initialAnalytics);
-  // Use custom date from metadata if it exists, similar to CapCard.tsx
   const effectiveDate = data.metadata?.customCreatedAt
     ? new Date(data.metadata.customCreatedAt)
     : data.createdAt;
@@ -83,7 +79,6 @@ export const Share: React.FC<ShareProps> = ({
     fetchViewCount();
   }, [data.id]);
 
-  // Update analytics when comments change
   useEffect(() => {
     setAnalytics((prev) => ({
       ...prev,
@@ -98,9 +93,10 @@ export const Share: React.FC<ShareProps> = ({
         <ShareHeader
           data={{ ...data, createdAt: effectiveDate }}
           user={user}
-          individualFiles={individualFiles}
           customDomain={customDomain}
           domainVerified={domainVerified}
+          sharedOrganizations={data.sharedOrganizations || []}
+          userOrganizations={userOrganizations}
         />
 
         <div className="mt-4">
@@ -140,8 +136,8 @@ export const Share: React.FC<ShareProps> = ({
       <div className="py-4 mt-auto">
         <a
           target="_blank"
-          href={`${clientEnv.NEXT_PUBLIC_WEB_URL}?ref=video_${data.id}`}
-          className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 bg-gray-100 rounded-full new-card-style w-fit"
+          href={`/?ref=video_${data.id}`}
+          className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 bg-gray-1 rounded-full new-card-style w-fit"
         >
           <span className="text-sm">Recorded with</span>
           <Logo className="w-14 h-auto" />

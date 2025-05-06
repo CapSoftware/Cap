@@ -1,27 +1,43 @@
 import { Button } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
-import { createMutation } from "@tanstack/solid-query";
-import { Channel } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
+import { makePersisted } from "@solid-primitives/storage";
+import {
+  createMutation,
+  createQuery,
+  keepPreviousData,
+  useQueryClient,
+} from "@tanstack/solid-query";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import {
-  createResource,
+  createEffect,
+  createRoot,
   createSignal,
   For,
   JSX,
+  Match,
+  on,
   Show,
+  Switch,
   ValidComponent,
 } from "solid-js";
-import { createStore, produce } from "solid-js/store";
+import { createStore, produce, reconcile } from "solid-js/store";
+import toast from "solid-toast";
 
-import { makePersisted } from "@solid-primitives/storage";
 import Tooltip from "~/components/Tooltip";
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
-import { commands, events, RenderProgress } from "~/utils/tauri";
-import { useEditorContext } from "./context";
+import { exportVideo } from "~/utils/export";
+import {
+  commands,
+  events,
+  ExportCompression,
+  FramesRendered,
+} from "~/utils/tauri";
+import { RenderState, useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
 import {
+  Dialog,
   DialogContent,
   MenuItem,
   MenuItemList,
@@ -29,12 +45,15 @@ import {
   topSlideAnimateClasses,
 } from "./ui";
 
-export const COMPRESSION_OPTIONS = [
-  { label: "Studio", value: "studio" },
-  { label: "Social Media", value: "social" },
-  { label: "Web", value: "web" },
-  { label: "Web (Low)", value: "web_low" },
-] as const;
+export const COMPRESSION_OPTIONS: Array<{
+  label: string;
+  value: ExportCompression;
+}> = [
+  { label: "Minimal", value: "Minimal" },
+  { label: "Social Media", value: "Social" },
+  { label: "Web", value: "Web" },
+  { label: "Potato", value: "Potato" },
+];
 
 export const FPS_OPTIONS = [
   { label: "15 FPS", value: 15 },
@@ -67,51 +86,69 @@ export const FORMAT_OPTIONS = [
 
 type ExportToOption = (typeof EXPORT_TO_OPTIONS)[number]["value"];
 
-const ExportDialog = () => {
+export function ExportDialog() {
   const {
-    prettyName,
+    dialog,
     setDialog,
-    exportState,
-    setExportState,
-    exportProgress,
-    setExportProgress,
-    copyState,
-    setCopyState,
-    uploadState,
-    setUploadState,
-    metaUpdateStore,
     editorInstance,
+    setExportState,
+    exportState,
+    meta,
+    refetchMeta,
   } = useEditorContext();
+
+  const queryClient = useQueryClient();
 
   const [settings, setSettings] = makePersisted(
     createStore({
-      format: "mp4",
+      format: "mp4" as "mp4" | "gif",
       fps: 30,
       exportTo: "file" as ExportToOption,
       resolution: { label: "720p", value: "720p", width: 1280, height: 720 },
-      compression: "social",
+      compression: "Minimal" as ExportCompression,
     }),
     { name: "export_settings" }
   );
 
-  const [copyPressed, setCopyPressed] = createSignal(false);
+  // just a wrapper of exportVideo that provides the current settings
+  const exportWithSettings = (onProgress: (progress: FramesRendered) => void) =>
+    exportVideo(
+      projectPath,
+      {
+        fps: settings.fps,
+        resolution_base: {
+          x: settings.resolution.width,
+          y: settings.resolution.height,
+        },
+        compression: settings.compression,
+      },
+      onProgress
+    );
+
+  const [outputPath, setOutputPath] = createSignal<string | null>(null);
 
   const selectedStyle =
     "ring-1 ring-offset-2 ring-offset-gray-200 bg-gray-300 ring-gray-500";
 
   const projectPath = editorInstance.path;
 
-  const [exportEstimates] = createResource(
-    () => ({
-      resolution: {
-        x: settings.resolution.width,
-        y: settings.resolution.height,
+  const exportEstimates = createQuery(() => ({
+    // prevents flicker when modifying settings
+    placeholderData: keepPreviousData,
+    queryKey: [
+      "exportEstimates",
+      {
+        resolution: {
+          x: settings.resolution.width,
+          y: settings.resolution.height,
+        },
+        fps: settings.fps,
       },
-      fps: settings.fps,
-    }),
-    (params) =>
-      commands.getExportEstimates(projectPath, params.resolution, params.fps)
-  );
+    ] as const,
+    queryFn: ({ queryKey: [_, { resolution, fps }] }) =>
+      commands.getExportEstimates(projectPath, resolution, fps),
+  }));
+
   const exportButtonIcon: Record<"file" | "clipboard" | "link", JSX.Element> = {
     file: <IconCapFile class="text-solid-white size-4" />,
     clipboard: <IconCapCopy class="text-solid-white size-4" />,
@@ -120,147 +157,74 @@ const ExportDialog = () => {
 
   const copy = createMutation(() => ({
     mutationFn: async () => {
-      setCopyState({
-        type: "starting",
-      });
+      if (exportState.type !== "idle") return;
+      setExportState(reconcile({ action: "copy", type: "starting" }));
 
-      try {
-        const progress = new Channel<RenderProgress>();
+      const outputPath = await exportWithSettings((progress) =>
+        setExportState({ type: "rendering", progress })
+      );
 
-        progress.onmessage = (msg) => {
-          if (msg.type === "EstimatedTotalFrames") {
-            setCopyState({
-              type: "rendering",
-            });
-            setExportProgress({
-              renderedFrames: 0,
-              totalFrames: msg.total_frames,
-            });
-          } else
-            setCopyState(
-              produce((state) => {
-                if (
-                  msg.type === "FrameRendered" &&
-                  state.type === "rendering"
-                ) {
-                  setExportProgress({
-                    renderedFrames: msg.current_frame,
-                    totalFrames: exportProgress()?.totalFrames ?? 0,
-                  });
-                }
-              })
-            );
-        };
+      setExportState({ type: "copying" });
 
-        // First try to get existing rendered video
-        const outputPath = await commands.exportVideo(
-          projectPath,
-          progress,
-          settings.fps,
-          {
-            x: settings.resolution.width,
-            y: settings.resolution.height,
-          }
-        );
-
-        await commands.copyVideoToClipboard(outputPath);
-      } catch (error) {
-        console.error("Error in copy media:", error);
-        throw error;
-      }
+      await commands.copyVideoToClipboard(outputPath);
     },
     onError: (error) => {
       commands.globalMessageDialog(
         error instanceof Error ? error.message : "Failed to copy recording"
       );
-      setCopyState({ type: "idle" });
+      setExportState(reconcile({ type: "idle" }));
     },
     onSuccess() {
-      setCopyState({
-        type: "copied",
-      });
-      setTimeout(() => {
-        setExportProgress(null);
-        setDialog((d) => ({ ...d, open: false }));
-      }, 1000);
-      setTimeout(() => {
-        setCopyState({
-          type: "idle",
+      setExportState({ type: "done" });
+
+      if (dialog().open) {
+        createRoot((dispose) => {
+          createEffect(
+            on(
+              () => dialog().open,
+              () => {
+                dispose();
+              },
+              { defer: true }
+            )
+          );
         });
-      }, 1500);
+      } else toast.success("Recording exported to clipboard");
     },
   }));
 
-  const [recordingMeta, metaActions] = createResource(() =>
-    commands.getRecordingMeta(projectPath, "recording")
-  );
-
-  const exportWithSettings = createMutation(() => ({
+  const save = createMutation(() => ({
     mutationFn: async () => {
-      setExportState({ type: "idle" });
+      if (exportState.type !== "idle") return;
 
-      const outputPath = await save({
+      const savePath = await saveDialog({
         filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
-        defaultPath: `~/Desktop/${prettyName()}.mp4`,
+        defaultPath: `~/Desktop/${meta().prettyName}.mp4`,
       });
-      if (!outputPath) return;
+      if (!savePath) {
+        setExportState(reconcile({ type: "idle" }));
+        return;
+      }
+
+      setExportState(reconcile({ action: "save", type: "starting" }));
+
+      setOutputPath(savePath);
 
       trackEvent("export_started", {
         resolution: settings.resolution,
         fps: settings.fps,
-        path: outputPath,
+        path: savePath,
       });
 
-      setExportState({ type: "starting" });
+      const videoPath = await exportWithSettings((progress) => {
+        setExportState({ type: "rendering", progress });
+      });
 
-      const progress = new Channel<RenderProgress>();
+      setExportState({ type: "copying" });
 
-      progress.onmessage = (msg) => {
-        if (msg.type === "EstimatedTotalFrames") {
-          setExportState({
-            type: "rendering",
-          });
-          setExportProgress({
-            renderedFrames: 0,
-            totalFrames: msg.total_frames,
-          });
-        } else if (msg.type === "FrameRendered") {
-          setExportState(
-            produce((state) => {
-              if (state.type === "rendering") {
-                setExportProgress({
-                  renderedFrames: msg.current_frame,
-                  totalFrames: exportProgress()?.totalFrames ?? 0,
-                });
-              }
-            })
-          );
-        }
-      };
+      await commands.copyFileToPath(videoPath, savePath);
 
-      try {
-        const videoPath = await commands.exportVideo(
-          projectPath,
-          progress,
-          settings.fps,
-          {
-            x: settings.resolution.width,
-            y: settings.resolution.height,
-          }
-        );
-
-        setExportState({ type: "saving", done: false });
-
-        await commands.copyFileToPath(videoPath, outputPath);
-
-        setExportState({ type: "saving", done: true });
-        //needs to be here so if the user cancels file selection the dialog does not close
-        setTimeout(() => {
-          setDialog((d) => ({ ...d, open: false }));
-        }, 1000);
-      } catch (error) {
-        throw error;
-      }
+      setExportState({ type: "done" });
     },
     onError: (error) => {
       commands.globalMessageDialog(
@@ -268,40 +232,38 @@ const ExportDialog = () => {
       );
       setExportState({ type: "idle" });
     },
-    onSettled() {
-      setTimeout(() => {
-        exportWithSettings.reset();
-        setExportProgress(null);
-      }, 1000);
-      setTimeout(() => {
-        setExportState({ type: "idle" });
-      }, 1500);
+    onSuccess() {
+      if (dialog().open) {
+        createRoot((dispose) => {
+          createEffect(
+            on(
+              () => dialog().open,
+              () => {
+                dispose();
+              },
+              { defer: true }
+            )
+          );
+        });
+      } else toast.success("Recording exported to file");
     },
   }));
 
-  const uploadVideo = createMutation(() => ({
+  const upload = createMutation(() => ({
     mutationFn: async () => {
-      setUploadState({ type: "starting" });
-
-      console.log("Starting upload process...");
+      if (exportState.type !== "idle") return;
+      setExportState(reconcile({ action: "upload", type: "starting" }));
 
       // Check authentication first
       const existingAuth = await authStore.get();
-      if (!existingAuth) {
+      if (!existingAuth)
         throw new Error("You need to sign in to share recordings");
-      }
 
       trackEvent("create_shareable_link_clicked", {
         resolution: settings.resolution,
         fps: settings.fps,
         has_existing_auth: !!existingAuth,
       });
-
-      const meta = recordingMeta();
-      if (!meta) {
-        console.error("No recording metadata available");
-        throw new Error("Recording metadata not available");
-      }
 
       const metadata = await commands.getVideoMetadata(projectPath);
       const plan = await commands.checkUpgradedAndUpdate();
@@ -321,7 +283,7 @@ const ExportDialog = () => {
 
       const unlisten = await events.uploadProgress.listen((event) => {
         console.log("Upload progress event:", event.payload);
-        setUploadState(
+        setExportState(
           produce((state) => {
             if (state.type !== "uploading") return;
 
@@ -331,98 +293,51 @@ const ExportDialog = () => {
       });
 
       try {
-        // Setup progress listener before starting upload
+        await exportWithSettings((progress) =>
+          setExportState({ type: "rendering", progress })
+        );
 
-        console.log("Starting actual upload...");
-
-        const progress = new Channel<RenderProgress>();
-
-        progress.onmessage = (msg) => {
-          if (msg.type === "EstimatedTotalFrames") {
-            setUploadState({
-              type: "rendering",
-            });
-            setExportProgress({
-              renderedFrames: 0,
-              totalFrames: msg.total_frames,
-            });
-          } else
-            setUploadState(
-              produce((state) => {
-                if (
-                  msg.type === "FrameRendered" &&
-                  state.type === "rendering"
-                ) {
-                  setExportProgress({
-                    renderedFrames: msg.current_frame,
-                    totalFrames: exportProgress()?.totalFrames ?? 0,
-                  });
-                }
-              })
-            );
-        };
-
-        await commands.exportVideo(projectPath, progress, settings.fps, {
-          x: settings.resolution.width,
-          y: settings.resolution.height,
-        });
-
-        setUploadState({ type: "uploading", progress: 0 });
+        setExportState({ type: "uploading", progress: 0 });
 
         // Now proceed with upload
-        const result = recordingMeta()?.sharing
+        const result = meta().sharing
           ? await commands.uploadExportedVideo(projectPath, "Reupload")
           : await commands.uploadExportedVideo(projectPath, {
               Initial: { pre_created_video: null },
             });
 
-        if (result === "NotAuthenticated") {
+        if (result === "NotAuthenticated")
           throw new Error("You need to sign in to share recordings");
-        } else if (result === "PlanCheckFailed")
+        else if (result === "PlanCheckFailed")
           throw new Error("Failed to verify your subscription status");
         else if (result === "UpgradeRequired")
           throw new Error("This feature requires an upgraded plan");
-
-        setUploadState({ type: "link-copied" });
-
-        return result;
-      } catch (error) {
-        console.error("Upload error:", error);
-        throw error instanceof Error
-          ? error
-          : new Error("Failed to upload recording");
       } finally {
         unlisten();
       }
     },
-    onSuccess: () => {
-      metaActions.refetch();
-      setUploadState({ type: "complete" });
-      metaUpdateStore.notifyUpdate(projectPath);
+    onSuccess: async () => {
+      const d = dialog();
+      if ("type" in d && d.type === "export") setDialog({ ...d, open: true });
+
+      await refetchMeta();
+
+      console.log(meta().sharing);
+
+      setExportState({ type: "done" });
     },
     onError: (error) => {
       commands.globalMessageDialog(
         error instanceof Error ? error.message : "Failed to upload recording"
       );
-      setUploadState({ type: "idle" });
-    },
-    onSettled() {
-      uploadVideo.reset();
-      setExportProgress(null);
+
+      setExportState(reconcile({ type: "idle" }));
     },
   }));
 
-  console.log(settings.resolution.label);
-
   return (
     <>
-      <Show
-        when={
-          exportState.type === "idle" &&
-          uploadState.type === "idle" &&
-          copyState.type === "idle"
-        }
-      >
+      <Show when={exportState.type === "idle"}>
         <DialogContent
           title="Export"
           confirm={
@@ -430,13 +345,9 @@ const ExportDialog = () => {
               class="flex gap-2 items-center"
               variant="primary"
               onClick={() => {
-                if (settings.exportTo === "file") {
-                  exportWithSettings.mutate();
-                } else if (settings.exportTo === "link") {
-                  uploadVideo.mutate();
-                } else {
-                  copy.mutate();
-                }
+                if (settings.exportTo === "file") save.mutate();
+                else if (settings.exportTo === "link") upload.mutate();
+                else copy.mutate();
               }}
             >
               {exportButtonIcon[settings.exportTo]} Export to{" "}
@@ -445,7 +356,7 @@ const ExportDialog = () => {
           }
           leftFooterContent={
             <div>
-              <Show when={exportEstimates.latest}>
+              <Show when={exportEstimates.data}>
                 {(est) => (
                   <div
                     class={cx(
@@ -524,7 +435,12 @@ const ExportDialog = () => {
                         <Tooltip content={"Coming soon"}>
                           <Button
                             variant="secondary"
-                            onClick={() => setSettings("format", option.value)}
+                            onClick={() =>
+                              setSettings(
+                                "format",
+                                option.value as "mp4" | "gif"
+                              )
+                            }
                             disabled={option.disabled}
                             autofocus={false}
                             class={cx(
@@ -537,7 +453,9 @@ const ExportDialog = () => {
                       ) : (
                         <Button
                           variant="secondary"
-                          onClick={() => setSettings("format", option.value)}
+                          onClick={() =>
+                            setSettings("format", option.value as "mp4")
+                          }
                           autofocus={false}
                           class={cx(
                             settings.format === option.value && selectedStyle
@@ -634,14 +552,21 @@ const ExportDialog = () => {
             {/* Compression */}
             <div class="p-4 bg-gray-100 rounded-xl">
               <div class="flex flex-col gap-3">
-                <h3 class="text-gray-400">Compression (Coming Soon)</h3>
+                <h3 class="text-gray-500">Compression</h3>
                 <div class="flex gap-2">
                   <For each={COMPRESSION_OPTIONS}>
                     {(option) => (
                       <Button
-                        onClick={() => setSettings("compression", option.value)}
+                        onClick={() => {
+                          setSettings(
+                            "compression",
+                            option.value as ExportCompression
+                          );
+                        }}
                         variant="secondary"
-                        disabled
+                        class={cx(
+                          settings.compression === option.value && selectedStyle
+                        )}
                       >
                         {option.label}
                       </Button>
@@ -655,7 +580,13 @@ const ExportDialog = () => {
               <div class="flex flex-col gap-3">
                 <h3 class="text-gray-500">Resolution</h3>
                 <div class="flex gap-2">
-                  <For each={RESOLUTION_OPTIONS}>
+                  <For
+                    each={[
+                      RESOLUTION_OPTIONS._720p,
+                      RESOLUTION_OPTIONS._1080p,
+                      RESOLUTION_OPTIONS._4k,
+                    ]}
+                  >
                     {(option) => (
                       <Button
                         class={cx(
@@ -677,262 +608,305 @@ const ExportDialog = () => {
           </div>
         </DialogContent>
       </Show>
-      <Show
-        when={
-          exportState.type !== "idle" ||
-          uploadState.type !== "idle" ||
-          copyState.type !== "idle"
-        }
-      >
-        <DialogContent
-          title={"Export"}
-          confirm={
-            <Show when={uploadState.type === "complete"}>
-              <div class="relative">
-                <a
-                  href={recordingMeta()?.sharing?.link}
-                  target="_blank"
-                  rel="noreferrer"
-                  class="block"
-                >
-                  <Button
-                    variant="lightdark"
-                    class="flex gap-2 justify-center items-center"
-                  >
-                    <p>Open Link</p>
-                    <div class="size-6" />{" "}
-                    {/* Placeholder for the copy button */}
-                  </Button>
-                </a>
-                {/* Absolutely positioned copy button that sits on top */}
-                <Tooltip
-                  childClass="absolute right-4 top-1/2 transform -translate-y-1/2"
-                  content="Copy link"
-                >
+      <Show when={exportState.type !== "idle" && exportState} keyed>
+        {(exportState) => {
+          const [copyPressed, setCopyPressed] = createSignal(false);
+          const [clipboardCopyPressed, setClipboardCopyPressed] =
+            createSignal(false);
+          const [showCompletionScreen, setShowCompletionScreen] = createSignal(
+            exportState.type === "done" && exportState.action === "save"
+          );
+
+          createEffect(() => {
+            if (exportState.type === "done" && exportState.action === "save") {
+              setShowCompletionScreen(true);
+            }
+          });
+
+          return (
+            <>
+              <Dialog.Header>
+                <div class="flex justify-between items-center w-full">
+                  <span class="text-gray-500 dark:text-gray-500">Export</span>
                   <div
-                    onClick={() => {
-                      setCopyPressed(true);
-                      setTimeout(() => {
-                        setCopyPressed(false);
-                      }, 2000);
-                      navigator.clipboard.writeText(
-                        recordingMeta()?.sharing?.link!
-                      );
-                    }}
-                    class="flex justify-center items-center rounded-lg transition-colors duration-300 cursor-pointer bg-gray-450 group hover:bg-gray-400 size-6"
+                    onClick={() => setDialog((d) => ({ ...d, open: false }))}
+                    class="flex justify-center items-center p-1 rounded-full transition-colors cursor-pointer hover:bg-gray-200"
                   >
-                    {!copyPressed() ? (
-                      <IconCapCopy class="size-2.5 text-gray-50 group-hover:text-gray-500 transition-colors duration-300" />
-                    ) : (
-                      <IconLucideCheck class="size-2.5 svgpathanimation text-gray-50 group-hover:text-gray-500 transition-colors duration-300" />
-                    )}
+                    <IconCapCircleX class="text-gray-500 size-4" />
                   </div>
-                </Tooltip>
-              </div>
-            </Show>
-          }
-          close={
-            <Show when={uploadState.type === "complete"}>
-              <Button
-                onClick={() => {
-                  setUploadState({ type: "idle" });
-                }}
-                variant="secondary"
-                class="flex gap-2 justify-center h-[44px] items-center"
-              >
-                Back
-              </Button>
-            </Show>
-          }
-          class="text-gray-500 bg-gray-600 dark:text-gray-500"
-        >
-          <div class="relative z-10 px-5 py-4 mx-auto space-y-6 w-full text-center">
-            {/** Upload success */}
-            <Show when={uploadState.type === "complete"}>
-              <UploadingSuccessContent />
-            </Show>
-            {/** Copying to clipboard */}
-            <Show when={copyState.type !== "idle"}>
-              <CopyingContent />
-            </Show>
-            {/** Exporting to shareable link */}
-            <Show
-              when={
-                uploadState.type !== "idle" &&
-                (uploadVideo.isPending ||
-                  uploadState.type === "starting" ||
-                  uploadState.type === "rendering")
-              }
-            >
-              <UploadingCapContent />
-            </Show>
-            {/** Exporting to file */}
-            <Show when={exportState.type !== "idle"}>
-              <ExportingFileContent />
-            </Show>
-          </div>
-        </DialogContent>
+                </div>
+              </Dialog.Header>
+              <Dialog.Content class="text-gray-500 bg-gray-600 dark:text-gray-500">
+                <div class="relative z-10 px-5 py-4 mx-auto space-y-6 w-full text-center">
+                  <Switch>
+                    <Match
+                      when={exportState.action === "copy" && exportState}
+                      keyed
+                    >
+                      {(copyState) => (
+                        <div class="flex flex-col gap-4 justify-center items-center h-full">
+                          <h1 class="text-lg font-medium text-gray-500">
+                            {copyState.type === "starting"
+                              ? "Preparing..."
+                              : copyState.type === "rendering"
+                              ? "Rendering video..."
+                              : copyState.type === "copying"
+                              ? "Copying to clipboard..."
+                              : "Copied to clipboard"}
+                          </h1>
+                          <Show
+                            when={
+                              (copyState.type === "rendering" ||
+                                copyState.type === "starting") &&
+                              copyState
+                            }
+                            keyed
+                          >
+                            {(copyState) => (
+                              <RenderProgress state={copyState} />
+                            )}
+                          </Show>
+                        </div>
+                      )}
+                    </Match>
+                    <Match
+                      when={exportState.action === "save" && exportState}
+                      keyed
+                    >
+                      {(saveState) => (
+                        <div class="flex flex-col gap-4 justify-center items-center h-full">
+                          <Show
+                            when={
+                              showCompletionScreen() &&
+                              saveState.type === "done"
+                            }
+                            fallback={
+                              <>
+                                <h1 class="text-lg font-medium text-gray-500">
+                                  {saveState.type === "starting"
+                                    ? "Preparing..."
+                                    : saveState.type === "rendering"
+                                    ? "Rendering video..."
+                                    : saveState.type === "copying"
+                                    ? "Exporting to file..."
+                                    : "Export completed"}
+                                </h1>
+                                <Show
+                                  when={
+                                    (saveState.type === "rendering" ||
+                                      saveState.type === "starting") &&
+                                    saveState
+                                  }
+                                  keyed
+                                >
+                                  {(copyState) => (
+                                    <RenderProgress state={copyState} />
+                                  )}
+                                </Show>
+                              </>
+                            }
+                          >
+                            <div class="flex flex-col gap-6 items-center duration-500 animate-in fade-in">
+                              <div class="flex flex-col gap-3 items-center">
+                                <div class="flex justify-center items-center mb-2 bg-gray-500 rounded-full size-10">
+                                  <IconLucideCheck class="text-gray-50 size-5" />
+                                </div>
+                                <div class="flex flex-col gap-1 items-center">
+                                  <h1 class="text-xl font-medium text-gray-600">
+                                    Export Completed
+                                  </h1>
+                                  <p class="text-sm text-gray-400">
+                                    Your video has been successfully exported
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          </Show>
+                        </div>
+                      )}
+                    </Match>
+                    <Match
+                      when={exportState.action === "upload" && exportState}
+                      keyed
+                    >
+                      {(uploadState) => (
+                        <Switch>
+                          <Match
+                            when={uploadState.type !== "done" && uploadState}
+                            keyed
+                          >
+                            {(uploadState) => (
+                              <div class="flex flex-col gap-4 justify-center items-center">
+                                <h1 class="text-lg font-medium text-center text-gray-500">
+                                  Uploading Cap...
+                                </h1>
+                                <Switch>
+                                  <Match
+                                    when={
+                                      uploadState.type === "uploading" &&
+                                      uploadState
+                                    }
+                                    keyed
+                                  >
+                                    {(uploadState) => (
+                                      <ProgressView
+                                        amount={uploadState.progress}
+                                        label={`Uploading - ${Math.floor(
+                                          uploadState.progress
+                                        )}%`}
+                                      />
+                                    )}
+                                  </Match>
+                                  <Match
+                                    when={
+                                      uploadState.type !== "uploading" &&
+                                      uploadState
+                                    }
+                                    keyed
+                                  >
+                                    {(renderState) => (
+                                      <RenderProgress state={renderState} />
+                                    )}
+                                  </Match>
+                                </Switch>
+                              </div>
+                            )}
+                          </Match>
+                          <Match when={uploadState.type === "done"}>
+                            <div class="flex flex-col gap-5 justify-center items-center">
+                              <div class="flex flex-col gap-1 items-center">
+                                <h1 class="mx-auto text-lg font-medium text-center text-gray-500">
+                                  Upload Complete
+                                </h1>
+                                <p class="text-sm text-gray-400">
+                                  Your Cap has been uploaded successfully
+                                </p>
+                              </div>
+                            </div>
+                          </Match>
+                        </Switch>
+                      )}
+                    </Match>
+                  </Switch>
+                </div>
+              </Dialog.Content>
+              <Dialog.Footer>
+                <Show
+                  when={
+                    exportState.action === "upload" &&
+                    exportState.type === "done"
+                  }
+                >
+                  <div class="relative">
+                    <a
+                      href={meta().sharing!.link}
+                      target="_blank"
+                      rel="noreferrer"
+                      class="block"
+                    >
+                      <Button
+                        onClick={() => {
+                          setCopyPressed(true);
+                          setTimeout(() => {
+                            setCopyPressed(false);
+                          }, 2000);
+                          navigator.clipboard.writeText(meta().sharing!.link!);
+                        }}
+                        variant="lightdark"
+                        class="flex gap-2 justify-center items-center"
+                      >
+                        {!copyPressed() ? (
+                          <IconCapCopy class="text-gray-50 transition-colors duration-300 size-4 group-hover:text-gray-500" />
+                        ) : (
+                          <IconLucideCheck class="text-gray-50 transition-colors duration-300 size-4 svgpathanimation group-hover:text-gray-500" />
+                        )}
+                        <p>Open Link</p>
+                      </Button>
+                    </a>
+                  </div>
+                </Show>
+
+                <Show
+                  when={
+                    exportState.action === "save" && exportState.type === "done"
+                  }
+                >
+                  <div class="flex gap-4 w-full">
+                    <Button
+                      variant="secondary"
+                      class="flex gap-2 items-center"
+                      onClick={() => {
+                        const path = outputPath();
+                        if (path) {
+                          commands.openFilePath(path);
+                        }
+                      }}
+                    >
+                      <IconCapFile class="size-4" />
+                      Open File
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      class="flex gap-2 items-center"
+                      onClick={async () => {
+                        const path = outputPath();
+                        if (path) {
+                          setClipboardCopyPressed(true);
+                          setTimeout(() => {
+                            setClipboardCopyPressed(false);
+                          }, 2000);
+                          await commands.copyVideoToClipboard(path);
+                          toast.success("Video copied to clipboard");
+                        }
+                      }}
+                    >
+                      {!clipboardCopyPressed() ? (
+                        <IconCapCopy class="size-4" />
+                      ) : (
+                        <IconLucideCheck class="size-4 svgpathanimation" />
+                      )}
+                      Copy to Clipboard
+                    </Button>
+                  </div>
+                </Show>
+              </Dialog.Footer>
+            </>
+          );
+        }}
       </Show>
     </>
   );
-};
+}
 
-const CopyingContent = () => {
-  const { exportProgress, copyState } = useEditorContext();
+function RenderProgress(props: { state: RenderState }) {
   return (
-    <div class="flex flex-col gap-4 justify-center items-center h-full">
-      <h1 class="text-lg font-medium text-gray-500">
-        {copyState.type === "rendering"
-          ? "Rendering video..."
-          : copyState.type === "copied"
-          ? "Copied to clipboard"
-          : "Copying to clipboard..."}
-      </h1>
-      <Show
-        when={copyState.type === "rendering" || copyState.type === "starting"}
-      >
-        <div class="w-full bg-gray-200 rounded-full h-2.5">
-          <div
-            class="bg-blue-300 h-2.5 rounded-full"
-            style={{
-              width: `${
-                copyState.type === "rendering"
-                  ? Math.min(
-                      ((exportProgress()?.renderedFrames ?? 0) /
-                        (exportProgress()?.totalFrames ?? 0)) *
-                        100
-                    )
-                  : 0
-              }%`,
-            }}
-          />
-        </div>
-      </Show>
-      <Show
-        when={copyState.type === "rendering" || copyState.type === "starting"}
-      >
-        <p class="text-xs">
-          {copyState.type === "rendering"
-            ? `${exportProgress()?.renderedFrames}/${
-                exportProgress()?.totalFrames
-              } frames`
-            : copyState.type === "starting"
-            ? "Preparing to render..."
-            : ""}
-        </p>
-      </Show>
-    </div>
+    <ProgressView
+      amount={
+        props.state.type === "rendering"
+          ? (props.state.progress.renderedCount /
+              props.state.progress.totalFrames) *
+            100
+          : 0
+      }
+      label={
+        props.state.type === "rendering"
+          ? `Rendering video (${props.state.progress.renderedCount}/${props.state.progress.totalFrames} frames)`
+          : "Preparing to render..."
+      }
+    />
   );
-};
+}
 
-const ExportingFileContent = () => {
-  const { exportProgress, exportState } = useEditorContext();
+function ProgressView(props: { amount: number; label?: string }) {
   return (
-    <div class="flex flex-col gap-4 justify-center items-center h-full">
-      <h1 class="text-lg font-medium text-gray-500">
-        {exportState.type === "rendering"
-          ? "Rendering video..."
-          : exportState.type === "saving"
-          ? "Exported successfully"
-          : "Exporting to file..."}
-      </h1>
-      <Show
-        when={
-          exportState.type === "starting" || exportState.type === "rendering"
-        }
-      >
-        <div class="w-full bg-gray-200 rounded-full h-2.5">
-          <div
-            class="bg-blue-300 h-2.5 rounded-full"
-            style={{
-              width: `${
-                exportState.type === "saving"
-                  ? 100
-                  : exportState.type === "rendering"
-                  ? Math.min(
-                      ((exportProgress()?.renderedFrames ?? 0) /
-                        (exportProgress()?.totalFrames ?? 0)) *
-                        100,
-                      100
-                    )
-                  : 0
-              }%`,
-            }}
-          />
-        </div>
-      </Show>
-      <Show
-        when={
-          exportState.type === "starting" || exportState.type === "rendering"
-        }
-      >
-        <p class="text-xs">
-          {exportState.type === "starting"
-            ? "Preparing to render..."
-            : exportState.type === "rendering"
-            ? `${exportProgress()?.renderedFrames}/${
-                exportProgress()?.totalFrames
-              } frames`
-            : ""}
-        </p>
-      </Show>
-    </div>
-  );
-};
-
-const UploadingSuccessContent = () => {
-  return (
-    <div class="flex flex-col gap-5 justify-center items-center">
-      <div class="flex flex-col gap-1 items-center">
-        <h1 class="mx-auto text-lg font-medium text-center text-gray-500">
-          Upload Complete
-        </h1>
-        <p class="text-sm text-gray-400">
-          Your Cap has been uploaded successfully
-        </p>
-      </div>
-    </div>
-  );
-};
-
-const UploadingCapContent = () => {
-  const { exportProgress, uploadState } = useEditorContext();
-  return (
-    <div class="flex flex-col gap-4 justify-center items-center">
-      <h1 class="text-lg font-medium text-center text-gray-500">
-        Uploading Cap...
-      </h1>
+    <>
       <div class="w-full bg-gray-200 rounded-full h-2.5">
         <div
           class="bg-blue-300 h-2.5 rounded-full"
-          style={{
-            width: `${
-              uploadState.type === "uploading"
-                ? uploadState.progress
-                : uploadState.type === "rendering"
-                ? Math.min(
-                    ((exportProgress()?.renderedFrames ?? 0) /
-                      (exportProgress()?.totalFrames ?? 0)) *
-                      100,
-                    100
-                  )
-                : 0
-            }%`,
-          }}
+          style={{ width: `${props.amount}%` }}
         />
       </div>
-      <p class="text-xs">
-        {uploadState.type == "idle" || uploadState.type === "starting"
-          ? "Preparing to render..."
-          : uploadState.type === "rendering"
-          ? `Rendering video (${exportProgress()?.renderedFrames}/${
-              exportProgress()?.totalFrames
-            } frames)`
-          : uploadState.type === "uploading" &&
-            `Uploading - ${Math.floor(uploadState.progress)}%`}
-      </p>
-    </div>
+      <p class="text-xs tabular-nums">{props.label}</p>
+    </>
   );
-};
-
-export default ExportDialog;
+}

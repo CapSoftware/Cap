@@ -24,7 +24,7 @@ const faqContent = [
   {
     title: "Can I self-host Cap?",
     answer:
-      "Yes! Cap can be self-hosted on your own infrastructure, giving you full control over your data. Self-hosting is free for personal use, but requires a license for commercial purposes starting at $9/month per user (with a minimum of 10 users). Self-hosted instances include white labeling options, custom branding, and dedicated support.",
+      "Yes! Cap can be self-hosted on your own infrastructure, giving you full control over your data.",
   },
   {
     title: "Is there a commercial license available?",

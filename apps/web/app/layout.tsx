@@ -3,13 +3,18 @@ import { BentoScript } from "@/components/BentoScript";
 import { Footer } from "@/components/Footer";
 import { Navbar } from "@/components/Navbar";
 import { getCurrentUser } from "@cap/database/auth/session";
-import crypto from "crypto";
-import { GeistSans } from "geist/font/sans";
+import { buildEnv, serverEnv } from "@cap/env";
+import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import type { Metadata } from "next";
 import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "./AuthProvider";
 import { PostHogProvider, Providers } from "./providers";
-import { serverEnv } from "@cap/env";
+import { PublicEnvContext } from "@/utils/public-env";
+import { S3_BUCKET_URL } from "@cap/utils";
+import { PropsWithChildren } from "react";
+import crypto from "crypto";
+//@ts-expect-error
+import { script } from "./themeScript";
 
 export const metadata: Metadata = {
   title: "Cap — Beautiful screen recordings, owned by you.",
@@ -25,22 +30,19 @@ export const metadata: Metadata = {
   },
 };
 
-export default async function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default async function RootLayout({ children }: PropsWithChildren) {
   const user = await getCurrentUser();
+  const intercomSecret = serverEnv().INTERCOM_SECRET;
   let intercomHash = "";
-  if (serverEnv.INTERCOM_SECRET) {
+  if (intercomSecret) {
     intercomHash = crypto
-      .createHmac("sha256", serverEnv.INTERCOM_SECRET)
+      .createHmac("sha256", intercomSecret)
       .update(user?.id ?? "")
       .digest("hex");
   }
 
   return (
-    <html className={`${GeistSans.variable}`} lang="en">
+    <html lang="en">
       <head>
         <link
           rel="apple-touch-icon"
@@ -65,25 +67,38 @@ export default async function RootLayout({
         <meta name="msapplication-TileColor" content="#da532c" />
         <meta name="theme-color" content="#ffffff" />
       </head>
-      <body>
-        <PostHogProvider>
-          <AuthProvider>
-            <Providers
-              userId={user?.id}
-              intercomHash={intercomHash}
-              name={`${user?.name ?? ""} ${user?.lastName ?? ""}`}
-              email={user?.email ?? ""}
-            >
-              <Toaster />
-              <main className="overflow-hidden w-full">
-                <Navbar auth={user ? true : false} />
-                {children}
-                <Footer />
-              </main>
-              <BentoScript user={user} />
-            </Providers>
-          </AuthProvider>
-        </PostHogProvider>
+      <body suppressHydrationWarning>
+        <script
+          dangerouslySetInnerHTML={{ __html: `(${script.toString()})()` }}
+        />
+        <TooltipPrimitive.Provider>
+          <PostHogProvider>
+            <AuthProvider>
+              <PublicEnvContext
+                value={{
+                  webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
+                  awsBucket: buildEnv.NEXT_PUBLIC_CAP_AWS_BUCKET,
+                  s3BucketUrl: S3_BUCKET_URL,
+                }}
+              >
+                <Providers
+                  userId={user?.id}
+                  intercomHash={intercomHash}
+                  name={`${user?.name ?? ""} ${user?.lastName ?? ""}`}
+                  email={user?.email ?? ""}
+                >
+                  <Toaster />
+                  <main className="overflow-x-hidden w-full">
+                    <Navbar auth={user ? true : false} />
+                    {children}
+                    <Footer />
+                  </main>
+                  <BentoScript user={user} />
+                </Providers>
+              </PublicEnvContext>
+            </AuthProvider>
+          </PostHogProvider>
+        </TooltipPrimitive.Provider>
       </body>
     </html>
   );

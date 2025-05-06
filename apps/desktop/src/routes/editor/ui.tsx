@@ -24,10 +24,15 @@ import { useEditorContext } from "./context";
 import { TextInput } from "./TextInput";
 
 export function Field(
-  props: ParentProps<{ name: string; icon?: JSX.Element; value?: JSX.Element }>
+  props: ParentProps<{
+    name: string;
+    icon?: JSX.Element;
+    value?: JSX.Element;
+    class?: string;
+  }>
 ) {
   return (
-    <div class="flex flex-col gap-4">
+    <div class={cx("flex flex-col gap-4", props.class)}>
       <span class="flex flex-row items-center gap-[0.375rem] text-gray-500 font-medium text-sm">
         {props.icon}
         {props.name}
@@ -70,7 +75,7 @@ export function Slider(
     formatTooltip?: string | ((v: number) => string);
   }
 ) {
-  const { history } = useEditorContext();
+  const { projectHistory: history } = useEditorContext();
 
   // Pause history when slider is being dragged
   let resumeHistory: (() => void) | null = null;
@@ -214,16 +219,13 @@ export const Dialog = {
       <div
         class={cx(
           "h-[4rem] px-[1rem] gap-3 flex flex-row items-center",
-          props.leftFooterContent ? "justify-between" : "justify-end",
+          props.leftFooterContent ? "justify-between" : "justify-center",
           props.class
         )}
         {...props}
       >
         {props.leftFooterContent}
-        <div class="flex flex-row gap-3 items-center">
-          {props.close ?? <Dialog.CloseButton />}
-          {props.children}
-        </div>
+        <div class="flex flex-row gap-3 items-center">{props.children}</div>
       </div>
     );
   },

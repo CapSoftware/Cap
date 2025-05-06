@@ -1,17 +1,17 @@
-import { Caps } from "./Caps";
 import { db } from "@cap/database";
+import { getCurrentUser } from "@cap/database/auth/session";
 import {
   comments,
-  videos,
   sharedVideos,
-  spaces,
+  organizationMembers,
+  organizations,
   users,
-  spaceMembers,
+  videos,
 } from "@cap/database/schema";
-import { desc, eq, sql, count, or } from "drizzle-orm";
-import { getCurrentUser } from "@cap/database/auth/session";
+import { count, desc, eq, sql } from "drizzle-orm";
 import { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { Caps } from "./Caps";
 
 export const metadata: Metadata = {
   title: "My Caps — Cap",
@@ -39,14 +39,14 @@ export default async function CapsPage({
   const limit = Number(searchParams.limit) || 15;
   const offset = (page - 1) * limit;
 
-  const totalCountResult = await db
+  const totalCountResult = await db()
     .select({ count: count() })
     .from(videos)
     .where(eq(videos.ownerId, userId));
 
   const totalCount = totalCountResult[0]?.count || 0;
 
-  const videoData = await db
+  const videoData = await db()
     .select({
       id: videos.id,
       ownerId: videos.ownerId,
@@ -55,12 +55,12 @@ export default async function CapsPage({
       metadata: videos.metadata,
       totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
       totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
-      sharedSpaces: sql<{ id: string; name: string }[]>`
+      sharedOrganizations: sql<{ id: string; name: string }[]>`
         COALESCE(
           JSON_ARRAYAGG(
             JSON_OBJECT(
-              'id', ${spaces.id},
-              'name', ${spaces.name}
+              'id', ${organizations.id},
+              'name', ${organizations.name}
             )
           ),
           JSON_ARRAY()
@@ -69,7 +69,7 @@ export default async function CapsPage({
       ownerName: users.name,
       effectiveDate: sql<string>`
         COALESCE(
-          JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')), 
+          JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
           ${videos.createdAt}
         )
       `,
@@ -77,7 +77,7 @@ export default async function CapsPage({
     .from(videos)
     .leftJoin(comments, eq(videos.id, comments.videoId))
     .leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
-    .leftJoin(spaces, eq(sharedVideos.spaceId, spaces.id))
+    .leftJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
     .leftJoin(users, eq(videos.ownerId, users.id))
     .where(eq(videos.ownerId, userId))
     .groupBy(
@@ -90,28 +90,33 @@ export default async function CapsPage({
     )
     .orderBy(
       desc(sql`COALESCE(
-      JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')), 
+      JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
       ${videos.createdAt}
     )`)
     )
     .limit(limit)
     .offset(offset);
 
-  const userSpaces = await db
+  const userOrganizations = await db()
     .select({
-      id: spaces.id,
-      name: spaces.name,
+      id: organizations.id,
+      name: organizations.name,
     })
-    .from(spaces)
-    .leftJoin(spaceMembers, eq(spaces.id, spaceMembers.spaceId))
-    .where(eq(spaceMembers.userId, userId));
+    .from(organizations)
+    .leftJoin(
+      organizationMembers,
+      eq(organizations.id, organizationMembers.organizationId)
+    )
+    .where(eq(organizationMembers.userId, userId));
 
   const processedVideoData = videoData.map((video) => {
     const { effectiveDate, ...videoWithoutEffectiveDate } = video;
 
     return {
       ...videoWithoutEffectiveDate,
-      sharedSpaces: video.sharedSpaces.filter((space) => space.id !== null),
+      sharedOrganizations: video.sharedOrganizations.filter(
+        (organization) => organization.id !== null
+      ),
       ownerName: video.ownerName ?? "",
       metadata: video.metadata as
         | {
@@ -126,7 +131,7 @@ export default async function CapsPage({
     <Caps
       data={processedVideoData}
       count={totalCount}
-      userSpaces={userSpaces}
+      userOrganizations={userOrganizations}
     />
   );
 }

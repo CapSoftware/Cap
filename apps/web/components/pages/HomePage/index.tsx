@@ -3,8 +3,8 @@
 "use client";
 
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
+import { Testimonials } from "@/components/ui/Testimonials";
 import {
-  detectPlatform,
   getDownloadButtonText,
   getDownloadUrl,
   getPlatformIcon,
@@ -16,34 +16,18 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import MuxPlayer from "@mux/mux-player-react";
 import { useClickAway } from "@uidotdev/usehooks";
 import { AnimatePresence, motion } from "framer-motion";
+import { useDetectPlatform } from "hooks/useDetectPlatform";
 import Link from "next/link";
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { Parallax, ParallaxProvider } from "react-scroll-parallax";
 import { LogoSection } from "../_components/LogoSection";
+import { FeatureCard } from "../SelfHostingPage";
 import LeftBlueHue from "./LeftBlueHue";
 import PowerfulFeaturesSVG from "./PowerfulFeaturesSVG";
-import { FeatureCard } from "../SelfHostingPage";
 export const HomePage = () => {
   const [videoToggled, setVideoToggled] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [platform, setPlatform] = useState<string | null>(null);
-  const [isIntel, setIsIntel] = useState(false);
-
-  useEffect(() => {
-    const detectUserPlatform = async () => {
-      try {
-        const { platform, isIntel } = await detectPlatform();
-        setPlatform(platform);
-        setIsIntel(isIntel);
-      } catch (error) {
-        console.error("Error detecting platform:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    detectUserPlatform();
-  }, []);
+  const { platform, isIntel } = useDetectPlatform();
+  const loading = platform === null;
 
   return (
     <ParallaxProvider>
@@ -53,19 +37,19 @@ export const HomePage = () => {
             <Link
               href="https://x.com/richiemcilroy/status/1895526857807733018"
               target="_blank"
-              className="flex gap-3 transition-opacity duration-300
-                 hover:opacity-90 mb-[52px] items-center relative z-[20] px-4 py-2
-               mx-auto bg-[#2e2e2e] rounded-full border w-fit border-zinc-200"
+              className="flex gap-3 transition-colors duration-300 shadow-sm
+                 mb-[52px] items-center relative z-[20] px-3.5 py-1
+               mx-auto bg-gray-1 rounded-full border w-fit border-gray-5 hover:bg-gray-3"
             >
-              <p className="text-xs text-white sm:text-sm">
+              <p className="text-[13px] text-gray-12">
                 Launch Week Day 5:{" "}
-                <span className="text-xs font-bold text-blue-100 sm:text-sm">
+                <span className="text-[13px] font-bold text-blue-9">
                   Self-host Cap
                 </span>
               </p>
               <FontAwesomeIcon
                 fontWeight="light"
-                className="w-2 text-white"
+                className="w-2 text-gray-12"
                 icon={faAngleRight}
               />
             </Link>
@@ -387,7 +371,7 @@ export const HomePage = () => {
           </div>
         </div>
       </div>
-      <div className="pb-32 wrapper md:pb-40" id="features">
+      <div className="pb-32 wrapper" id="features">
         <div className="space-y-3">
           {/* Section 1: 35% / 65% split */}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
@@ -449,7 +433,14 @@ export const HomePage = () => {
           </div>
         </div>
       </div>
-      <div className="px-5 mb-32 md:mb-40">
+      <div className="mb-32 wrapper">
+        <Testimonials
+          amount={10}
+          title="What our users say about Cap after hitting record"
+          subtitle="Don't just take our word for it. Here's what our users are saying about their experience with Cap."
+        />
+      </div>
+      <div className="px-5 mb-32">
         <ReadyToGetStarted />
       </div>
     </ParallaxProvider>
@@ -480,7 +471,7 @@ const VideoModal = ({ setVideoToggled }: Props) => {
           damping: 20,
         }}
         ref={ref}
-        className="w-[calc(100%-20px)] max-w-[1000px] bg-white rounded-[16px] md:h-[700px] h-[300px]"
+        className="w-[calc(100%-20px)] max-w-[1000px] bg-gray-1 rounded-[16px] md:h-[700px] h-[300px]"
       >
         <MuxPlayer
           playbackId="A6oZoUWVZjOIVZB6XnBMLagYnXE6xhDhp8Hcyky018hk"

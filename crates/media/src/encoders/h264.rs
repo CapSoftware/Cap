@@ -9,6 +9,122 @@ use ffmpeg::{
     Dictionary,
 };
 
+pub struct H264EncoderBuilder {
+    name: &'static str,
+    bpp: f32,
+    input_config: VideoInfo,
+    preset: H264Preset,
+}
+
+#[derive(Clone, Copy)]
+pub enum H264Preset {
+    Slow,
+    Medium,
+    Ultrafast,
+}
+
+impl H264EncoderBuilder {
+    pub const QUALITY_BPP: f32 = 0.3;
+
+    pub fn new(name: &'static str, input_config: VideoInfo) -> Self {
+        Self {
+            name,
+            input_config,
+            bpp: Self::QUALITY_BPP,
+            preset: H264Preset::Ultrafast,
+        }
+    }
+
+    pub fn with_preset(mut self, preset: H264Preset) -> Self {
+        self.preset = preset;
+        self
+    }
+
+    pub fn with_bpp(mut self, bpp: f32) -> Self {
+        self.bpp = bpp;
+        self
+    }
+
+    pub fn build(self, output: &mut format::context::Output) -> Result<H264Encoder, MediaError> {
+        let input_config = &self.input_config;
+        let (codec, encoder_options) = get_codec_and_options(&input_config, self.preset)?;
+
+        let (format, converter) = if !codec
+            .video()
+            .unwrap()
+            .formats()
+            .unwrap()
+            .any(|f| f == input_config.pixel_format)
+        {
+            let format = ffmpeg::format::Pixel::YUV420P;
+            tracing::debug!(
+                "Converting from {:?} to {:?} for H264 encoding",
+                input_config.pixel_format,
+                format
+            );
+            (
+                format,
+                Some(
+                    ffmpeg::software::converter(
+                        (input_config.width, input_config.height),
+                        input_config.pixel_format,
+                        format,
+                    )
+                    .map_err(|e| {
+                        tracing::error!(
+                            "Failed to create converter from {:?} to YUV420P: {:?}",
+                            input_config.pixel_format,
+                            e
+                        );
+                        MediaError::Any("Failed to create frame converter".into())
+                    })?,
+                ),
+            )
+        } else {
+            (input_config.pixel_format, None)
+        };
+
+        let mut encoder_ctx = context::Context::new_with_codec(codec);
+
+        encoder_ctx.set_threading(Config::count(4));
+        let mut encoder = encoder_ctx.encoder().video()?;
+
+        encoder.set_width(input_config.width);
+        encoder.set_height(input_config.height);
+        encoder.set_format(format);
+        encoder.set_time_base(input_config.frame_rate.invert());
+        encoder.set_frame_rate(Some(input_config.frame_rate));
+
+        // let target_bitrate = compression.bitrate();
+        let bitrate = get_bitrate(
+            input_config.width,
+            input_config.height,
+            input_config.frame_rate.0 as f32 / input_config.frame_rate.1 as f32,
+            self.bpp,
+        );
+
+        encoder.set_bit_rate(bitrate);
+        encoder.set_max_bit_rate(bitrate);
+
+        let video_encoder = encoder.open_with(encoder_options)?;
+
+        let mut output_stream = output.add_stream(codec)?;
+        let stream_index = output_stream.index();
+        output_stream.set_time_base(input_config.frame_rate.invert());
+        output_stream.set_rate(input_config.frame_rate);
+        output_stream.set_parameters(&video_encoder);
+
+        Ok(H264Encoder {
+            tag: self.name,
+            encoder: video_encoder,
+            stream_index,
+            config: self.input_config,
+            converter,
+            packet: FFPacket::empty(),
+        })
+    }
+}
+
 pub struct H264Encoder {
     tag: &'static str,
     encoder: encoder::Video,
@@ -19,85 +135,8 @@ pub struct H264Encoder {
 }
 
 impl H264Encoder {
-    pub fn factory(
-        tag: &'static str,
-        config: VideoInfo,
-    ) -> impl FnOnce(&mut format::context::Output) -> Result<Self, MediaError> {
-        move |o| Self::init(tag, config, o)
-    }
-
-    pub fn init(
-        tag: &'static str,
-        config: VideoInfo,
-        output: &mut format::context::Output,
-    ) -> Result<Self, MediaError> {
-        let (codec, options) = get_codec_and_options(&config)?;
-
-        let (format, converter) = if !codec
-            .video()
-            .unwrap()
-            .formats()
-            .unwrap()
-            .any(|f| f == config.pixel_format)
-        {
-            let format = ffmpeg::format::Pixel::YUV420P;
-            tracing::debug!(
-                "Converting from {:?} to {:?} for H264 encoding",
-                config.pixel_format,
-                format
-            );
-            (
-                format,
-                Some(
-                    ffmpeg::software::converter(
-                        (config.width, config.height),
-                        config.pixel_format,
-                        format,
-                    )
-                    .map_err(|e| {
-                        tracing::error!(
-                            "Failed to create converter from {:?} to YUV420P: {:?}",
-                            config.pixel_format,
-                            e
-                        );
-                        MediaError::Any("Failed to create frame converter".into())
-                    })?,
-                ),
-            )
-        } else {
-            (config.pixel_format, None)
-        };
-
-        let mut encoder_ctx = context::Context::new_with_codec(codec);
-
-        // TODO: Configure this per system
-        encoder_ctx.set_threading(Config::count(4));
-        let mut encoder = encoder_ctx.encoder().video()?;
-
-        encoder.set_width(config.width);
-        encoder.set_height(config.height);
-        encoder.set_format(format);
-        encoder.set_time_base(config.frame_rate.invert());
-        encoder.set_frame_rate(Some(config.frame_rate));
-        encoder.set_bit_rate(12_000_000);
-        encoder.set_max_bit_rate(12_000_000);
-
-        let video_encoder = encoder.open_with(options)?;
-
-        let mut output_stream = output.add_stream(codec)?;
-        let stream_index = output_stream.index();
-        output_stream.set_time_base(config.frame_rate.invert());
-        output_stream.set_rate(config.frame_rate);
-        output_stream.set_parameters(&video_encoder);
-
-        Ok(Self {
-            tag,
-            encoder: video_encoder,
-            stream_index,
-            config,
-            converter,
-            packet: FFPacket::empty(),
-        })
+    pub fn builder(name: &'static str, input_config: VideoInfo) -> H264EncoderBuilder {
+        H264EncoderBuilder::new(name, input_config)
     }
 
     pub fn queue_frame(&mut self, frame: FFVideo, output: &mut format::context::Output) {
@@ -153,7 +192,10 @@ impl H264Encoder {
     }
 }
 
-fn get_codec_and_options(config: &VideoInfo) -> Result<(Codec, Dictionary), MediaError> {
+fn get_codec_and_options(
+    config: &VideoInfo,
+    preset: H264Preset,
+) -> Result<(Codec, Dictionary), MediaError> {
     let encoder_name = {
         if cfg!(target_os = "macos") {
             "libx264"
@@ -163,28 +205,43 @@ fn get_codec_and_options(config: &VideoInfo) -> Result<(Codec, Dictionary), Medi
             "libx264"
         }
     };
+
     if let Some(codec) = encoder::find_by_name(encoder_name) {
         let mut options = Dictionary::new();
 
         if encoder_name == "h264_videotoolbox" {
-            // options.set("constant_bit_rate", "true");
             options.set("realtime", "true");
         } else {
             let keyframe_interval_secs = 2;
             let keyframe_interval = keyframe_interval_secs * config.frame_rate.numerator();
             let keyframe_interval_str = keyframe_interval.to_string();
 
-            options.set("preset", "ultrafast");
-            options.set("tune", "zerolatency");
+            options.set(
+                "preset",
+                match preset {
+                    H264Preset::Slow => "slow",
+                    H264Preset::Medium => "medium",
+                    H264Preset::Ultrafast => "ultrafast",
+                },
+            );
+            if let H264Preset::Ultrafast = preset {
+                options.set("tune", "zerolatency");
+            }
             options.set("vsync", "1");
             options.set("g", &keyframe_interval_str);
             options.set("keyint_min", &keyframe_interval_str);
-            // // TODO: Is it worth limiting quality? Maybe make this configurable
-            // options.set("crf", "14");
         }
 
         return Ok((codec, options));
     }
 
     Err(MediaError::MissingCodec("H264 video"))
+}
+
+fn get_bitrate(width: u32, height: u32, frame_rate: f32, bpp: f32) -> usize {
+    // higher frame rates don't really need double the bitrate lets be real
+    let frame_rate_multiplier = (frame_rate - 30.0).max(0.0) * 0.6 + 30.0;
+    let pixels_per_second = (width * height) as f32 * frame_rate_multiplier;
+
+    (pixels_per_second * bpp) as usize
 }

@@ -1,7 +1,7 @@
 use std::{
     path::PathBuf,
     sync::Arc,
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use cap_flags::FLAGS;
@@ -38,6 +38,7 @@ enum StudioRecordingActorState {
         pipeline_done_rx: oneshot::Receiver<()>,
         index: u32,
         segment_start_time: f64,
+        segment_start_instant: Instant,
     },
     Paused {
         next_index: u32,
@@ -211,6 +212,7 @@ pub async fn spawn_studio_recording_actor(
                 pipeline_done_rx,
                 index,
                 segment_start_time,
+                segment_start_instant: Instant::now(),
             };
 
             'outer: loop {
@@ -220,6 +222,7 @@ pub async fn spawn_studio_recording_actor(
                         mut pipeline_done_rx,
                         index,
                         segment_start_time,
+                        segment_start_instant,
                     } => {
                         info!("recording actor recording");
                         loop {
@@ -301,6 +304,14 @@ pub async fn spawn_studio_recording_actor(
                                     }
                                 }
                                 StudioRecordingActorControlMessage::Stop(tx) => {
+                                    tokio::time::sleep_until(
+                                        segment_start_instant
+                                            .checked_add(Duration::from_secs(1))
+                                            .unwrap()
+                                            .into(),
+                                    )
+                                    .await;
+
                                     let res =
                                         shutdown(pipeline, &mut actor, segment_start_time).await;
                                     let res = match res {
@@ -360,6 +371,7 @@ pub async fn spawn_studio_recording_actor(
                                                 pipeline_done_rx,
                                                 index: next_index,
                                                 segment_start_time: current_time_f64(),
+                                                segment_start_instant: Instant::now(),
                                             },
                                             Ok(()),
                                         ),
@@ -408,7 +420,6 @@ pub async fn spawn_studio_recording_actor(
 pub struct CompletedStudioRecording {
     pub id: String,
     pub project_path: PathBuf,
-    pub display_source: ScreenCaptureTarget,
     pub meta: StudioRecordingMeta,
     pub cursor_data: cap_project::CursorImages,
     pub segments: Vec<StudioRecordingSegment>,
@@ -488,7 +499,7 @@ async fn stop_recording(
         project_path: actor.recording_dir.clone(),
         meta,
         cursor_data: Default::default(),
-        display_source: actor.options.capture_target,
+        // display_source: actor.options.capture_target,
         segments: actor.segments,
     })
 }
@@ -521,6 +532,7 @@ async fn create_segment_pipeline(
         system_audio.0,
         start_time,
     )?;
+    let screen_crop_ratio = screen_source.crop_ratio();
 
     let camera_feed = match camera_feed.as_ref() {
         Some(camera_feed) => Some(camera_feed.lock().await),
@@ -655,7 +667,7 @@ async fn create_segment_pipeline(
         let mut camera_encoder = MP4File::init(
             "camera",
             output_path.clone(),
-            H264Encoder::factory("camera", camera_config),
+            |o| H264Encoder::builder("camera", camera_config).build(o),
             |_| None,
         )?;
 
@@ -707,9 +719,25 @@ async fn create_segment_pipeline(
 
     let (mut pipeline, pipeline_done_rx) = pipeline_builder.build().await?;
 
-    let cursor = custom_cursor_capture.then(|| {
+    let cursor = custom_cursor_capture.then(move || {
         let cursor = spawn_cursor_recorder(
             screen.bounds.clone(),
+            #[cfg(target_os = "macos")]
+            cap_displays::Display::list()
+                .into_iter()
+                .find(|m| match &options.capture_target {
+                    ScreenCaptureTarget::Screen { id }
+                    | ScreenCaptureTarget::Area { screen: id, .. } => {
+                        m.raw_handle().inner().id == *id
+                    }
+                    ScreenCaptureTarget::Window { id } => {
+                        m.raw_handle().inner().id
+                            == cap_media::platform::display_for_window(*id).unwrap().id
+                    }
+                })
+                .unwrap(),
+            #[cfg(target_os = "macos")]
+            screen_crop_ratio,
             cursors_dir.clone(),
             prev_cursors,
             next_cursors_id,

@@ -25,10 +25,10 @@ import { makePersisted } from "@solid-primitives/storage";
 import { createStore, produce, SetStoreFunction } from "solid-js/store";
 import IconLucideClock from "~icons/lucide/clock";
 
-import { commands, events, RenderProgress, UploadResult } from "~/utils/tauri";
-import { createPresets } from "~/utils/createPresets";
+import { commands, events, FramesRendered, UploadResult } from "~/utils/tauri";
 import { FPS, OUTPUT_SIZE } from "./editor/context";
 import { authStore } from "~/store";
+import { exportVideo } from "~/utils/export";
 
 type MediaEntry = {
   path: string;
@@ -552,6 +552,16 @@ function createRecordingMutations(
     queryFn: () => commands.getRecordingMeta(media.path, type),
   }));
 
+  // just a wrapper of exportVideo to provide base settings
+  const exportWithDefaultSettings = (
+    onProgress: (progress: FramesRendered) => void
+  ) =>
+    exportVideo(
+      media.path,
+      { fps: FPS, resolution_base: OUTPUT_SIZE, compression: "Web" },
+      onProgress
+    );
+
   const copy = createMutation(() => ({
     mutationFn: async () => {
       setActionState({
@@ -561,14 +571,9 @@ function createRecordingMutations(
 
       try {
         if (isRecording) {
-          const progress = createRenderProgressChannel("copy", setActionState);
-
           // First try to get existing rendered video
-          const outputPath = await commands.exportVideo(
-            media.path,
-            progress,
-            FPS,
-            OUTPUT_SIZE
+          const outputPath = await exportWithDefaultSettings(
+            createRenderProgressCallback("copy", setActionState)
           );
 
           // Show quick progress animation for existing video
@@ -652,14 +657,8 @@ function createRecordingMutations(
       });
 
       if (isRecording) {
-        const progress = createRenderProgressChannel("save", setActionState);
-
-        // Always force re-render when saving
-        const outputPath = await commands.exportVideo(
-          media.path,
-          progress,
-          FPS,
-          OUTPUT_SIZE
+        const outputPath = await exportWithDefaultSettings(
+          createRenderProgressCallback("save", setActionState)
         );
 
         await commands.copyFileToPath(outputPath, savePath);
@@ -738,14 +737,12 @@ function createRecordingMutations(
             state: { type: "rendering", state: { type: "starting" } },
           });
 
-          const progress = createRenderProgressChannel(
+          const progress = createRenderProgressCallback(
             "upload",
             setActionState
           );
 
-          // First try to get existing rendered video
-          await commands.exportVideo(media.path, progress, FPS, OUTPUT_SIZE);
-          console.log("Using existing rendered video");
+          await exportWithDefaultSettings(progress);
 
           // Show quick progress animation for existing video
           setActionState(
@@ -837,13 +834,11 @@ type ActionState =
         | { type: "link-copied" };
     };
 
-function createRenderProgressChannel(
+function createRenderProgressCallback(
   actionType: Exclude<ActionState["type"], "idle">,
   setActionState: SetStoreFunction<ActionState>
 ) {
-  const progress = new Channel<RenderProgress>();
-
-  progress.onmessage = (msg) => {
+  return (msg: FramesRendered) => {
     setActionState(
       produce((progressState) => {
         if (
@@ -852,27 +847,15 @@ function createRenderProgressChannel(
         )
           return;
 
-        const renderState = progressState.state.state;
-
-        if (
-          msg.type === "EstimatedTotalFrames" &&
-          renderState.type === "starting"
-        )
+        if (progressState.state.state.type === "rendering")
           progressState.state.state = {
             type: "rendering",
-            renderedFrames: 0,
-            totalFrames: msg.total_frames,
+            renderedFrames: msg.renderedCount,
+            totalFrames: msg.totalFrames,
           };
-        else if (
-          msg.type === "FrameRendered" &&
-          renderState.type === "rendering"
-        )
-          renderState.renderedFrames = msg.current_frame;
       })
     );
   };
-
-  return progress;
 }
 
 function actionProgressPercentage(state: ActionState): number {

@@ -20,7 +20,6 @@ export function createProgressBar(progress: () => number | undefined) {
 
   createEffect(() => {
     const p = progress();
-    console.log({ p });
     if (p === undefined)
       currentWindow.setProgressBar({ status: ProgressBarStatus.None });
     else currentWindow.setProgressBar({ progress: Math.round(p) });

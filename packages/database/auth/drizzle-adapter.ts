@@ -4,7 +4,6 @@ import { accounts, sessions, users, verificationTokens } from "../schema";
 import type { Adapter } from "next-auth/adapters";
 import type { PlanetScaleDatabase } from "drizzle-orm/planetscale-serverless";
 import { stripe, STRIPE_AVAILABLE } from "@cap/utils";
-import { serverEnv } from "@cap/env";
 
 export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
   return {
@@ -15,7 +14,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
         emailVerified: userData.emailVerified,
         name: userData.name,
         image: userData.image,
-        activeSpaceId: "",
+        activeOrganizationId: "",
       });
       const rows = await db
         .select()
@@ -25,8 +24,8 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
       const row = rows[0];
       if (!row) throw new Error("User not found");
 
-      if (STRIPE_AVAILABLE) {
-        const customer = await stripe.customers.create({
+      if (STRIPE_AVAILABLE()) {
+        const customer = await stripe().customers.create({
           email: userData.email,
           metadata: {
             userId: nanoId(),

@@ -1,13 +1,19 @@
 "use client";
-import { useRouter, useSearchParams } from "next/navigation";
-import toast from "react-hot-toast";
-import { useEffect, useState } from "react";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { CapCard } from "./components/CapCard";
-import { EmptyCapState } from "./components/EmptyCapState";
-import { CapPagination } from "./components/CapPagination";
-import { apiClient } from "@/utils/web-api";
+import { useApiClient } from "@/utils/web-api";
 import { VideoMetadata } from "@cap/database/types";
+import { AnimatePresence, motion } from "framer-motion";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import toast from "react-hot-toast";
+import { CapCard } from "./components/CapCard";
+import { CapPagination } from "./components/CapPagination";
+import { EmptyCapState } from "./components/EmptyCapState";
+import { Button } from "@cap/ui";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faTrash } from "@fortawesome/free-solid-svg-icons";
+import { deleteVideo } from "@/actions/videos/delete";
+import NumberFlow from "@number-flow/react";
 
 type VideoData = {
   id: string;
@@ -16,7 +22,7 @@ type VideoData = {
   createdAt: Date;
   totalComments: number;
   totalReactions: number;
-  sharedSpaces: { id: string; name: string }[];
+  sharedOrganizations: { id: string; name: string }[];
   ownerName: string;
   metadata?: VideoMetadata;
 }[];
@@ -24,19 +30,27 @@ type VideoData = {
 export const Caps = ({
   data,
   count,
-  userSpaces,
+  userOrganizations,
 }: {
   data: VideoData;
   count: number;
-  userSpaces: { id: string; name: string }[];
+  userOrganizations: { id: string; name: string }[];
 }) => {
-  const { refresh, replace } = useRouter();
+  const { refresh } = useRouter();
   const params = useSearchParams();
   const page = Number(params.get("page")) || 1;
   const [analytics, setAnalytics] = useState<Record<string, number>>({});
-  const { user, activeSpace } = useSharedContext();
+  const { user } = useSharedContext();
   const limit = 15;
   const totalPages = Math.ceil(count / limit);
+  const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
+  const previousCountRef = useRef<number>(0);
+  const [animateDirection, setAnimateDirection] = useState<"up" | "down">("up");
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const anyCapSelected = selectedCaps.length > 0;
+
+  const apiClient = useApiClient();
 
   useEffect(() => {
     const fetchAnalytics = async () => {
@@ -60,6 +74,49 @@ export const Caps = ({
     fetchAnalytics();
   }, [data]);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && selectedCaps.length > 0) {
+        setSelectedCaps([]);
+      }
+
+      if (
+        (e.key === "Delete" || e.key === "Backspace") &&
+        selectedCaps.length > 0
+      ) {
+        if (e.key === "Backspace") {
+          e.preventDefault();
+        }
+
+        if (
+          !["INPUT", "TEXTAREA", "SELECT"].includes(
+            document.activeElement?.tagName || ""
+          )
+        ) {
+          deleteSelectedCaps();
+        }
+      }
+
+      if (e.key === "a" && (e.ctrlKey || e.metaKey) && data.length > 0) {
+        if (
+          !["INPUT", "TEXTAREA", "SELECT"].includes(
+            document.activeElement?.tagName || ""
+          )
+        ) {
+          e.preventDefault();
+          setSelectedCaps(data.map((cap) => cap.id));
+          setAnimateDirection("up");
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [selectedCaps.length, data]);
+
   const deleteCap = async (videoId: string) => {
     if (
       !window.confirm(
@@ -69,46 +126,166 @@ export const Caps = ({
       return;
     }
 
-    const response = await apiClient.video.delete({ query: { videoId } });
+    const response = await deleteVideo(videoId);
 
-    if (response.status === 200) {
+    if (response.success) {
       refresh();
       toast.success("Cap deleted successfully");
     } else {
-      toast.error("Failed to delete Cap - please try again later");
+      toast.error(
+        response.message || "Failed to delete Cap - please try again later"
+      );
     }
   };
 
+  const handleCapSelection = (capId: string) => {
+    setSelectedCaps((prev) => {
+      const newSelection = prev.includes(capId)
+        ? prev.filter((id) => id !== capId)
+        : [...prev, capId];
+
+      previousCountRef.current = prev.length;
+      setAnimateDirection(newSelection.length > prev.length ? "up" : "down");
+
+      return newSelection;
+    });
+  };
+
+  const deleteSelectedCaps = async () => {
+    if (selectedCaps.length === 0) return;
+
+    if (
+      !window.confirm(
+        `Are you sure you want to delete ${selectedCaps.length} cap${
+          selectedCaps.length === 1 ? "" : "s"
+        }? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+
+    setIsDeleting(true);
+
+    const loadingToast = toast.loading(
+      `Deleting ${selectedCaps.length} cap${
+        selectedCaps.length === 1 ? "" : "s"
+      }...`
+    );
+
+    try {
+      const results = await Promise.allSettled(
+        selectedCaps.map((capId) => deleteVideo(capId))
+      );
+
+      toast.dismiss(loadingToast);
+
+      const successCount = results.filter(
+        (result) => result.status === "fulfilled" && result.value.success
+      ).length;
+
+      const errorCount = selectedCaps.length - successCount;
+
+      if (successCount > 0) {
+        toast.success(
+          `Successfully deleted ${successCount} cap${
+            successCount === 1 ? "" : "s"
+          }`
+        );
+      }
+
+      if (errorCount > 0) {
+        toast.error(
+          `Failed to delete ${errorCount} cap${errorCount === 1 ? "" : "s"}`
+        );
+      }
+
+      setSelectedCaps([]);
+      refresh();
+    } catch (error) {
+      toast.dismiss(loadingToast);
+      toast.error("An error occurred while deleting caps");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  if (data.length === 0) {
+    return <EmptyCapState />;
+  }
+
   return (
-    <div className="flex flex-col min-h-[calc(100vh-30px)] h-full">
-      <div className="mb-3">
-        <h1 className="text-3xl font-medium">My Caps</h1>
+    <div className="flex relative flex-col w-full">
+      <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+        {data.map((cap) => (
+          <CapCard
+            key={cap.id}
+            cap={cap}
+            analytics={analytics[cap.id] || 0}
+            onDelete={deleteCap}
+            userId={user?.id}
+            userOrganizations={userOrganizations}
+            isSelected={selectedCaps.includes(cap.id)}
+            onSelectToggle={() => handleCapSelection(cap.id)}
+            anyCapSelected={anyCapSelected}
+          />
+        ))}
       </div>
-      <div className="flex-grow flex inner">
-        {data.length === 0 ? (
-          <EmptyCapState userName={user?.name || ""} />
-        ) : (
-          <div className="flex flex-col w-full h-full">
-            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
-              {data.map((cap) => (
-                <CapCard
-                  key={cap.id}
-                  cap={cap}
-                  analytics={analytics[cap.id] || 0}
-                  onDelete={deleteCap}
-                  userId={user?.id}
-                  userSpaces={userSpaces}
-                />
-              ))}
+      {(data.length > limit || data.length === limit || page !== 1) && (
+        <div className="mt-10">
+          <CapPagination currentPage={page} totalPages={totalPages} />
+        </div>
+      )}
+
+        
+      <AnimatePresence>
+        {selectedCaps.length > 0 && (
+          <motion.div
+            className="flex fixed right-0 left-0 bottom-4 z-50 justify-between items-center px-6 py-3 mx-auto w-full max-w-xl rounded-xl border shadow-lg border-gray-3 bg-gray-2"
+            initial={{ opacity: 0, y: 10, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{
+              opacity: 0,
+              y: 10,
+              scale: 0.9,
+              transition: { duration: 0.2 },
+            }}
+            transition={{
+              type: "spring",
+              damping: 15,
+              stiffness: 200,
+            }}
+          >
+            <div className="flex gap-1 text-sm font-medium text-gray-10">
+              <NumberFlow
+                value={selectedCaps.length}
+                className="tabular-nums text-md text-gray-12"
+              />
+              cap{selectedCaps.length !== 1 ? "s" : ""} selected
             </div>
-            {(data.length > limit || data.length === limit || page !== 1) && (
-              <div className="mt-4">
-                <CapPagination currentPage={page} totalPages={totalPages} />
-              </div>
-            )}
-          </div>
+            <div className="flex gap-2 ml-4">
+              <Button
+                variant="dark"
+                onClick={() => setSelectedCaps([])}
+                className="text-sm"
+                size="sm"
+              >
+                Cancel
+              </Button>
+              <Button
+                style={{ minWidth: "auto" }}
+                variant="destructive"
+                onClick={deleteSelectedCaps}
+                disabled={isDeleting}
+                className="text-sm w-[40px]"
+                spinner={isDeleting}
+                size="sm"
+              >
+                <FontAwesomeIcon icon={faTrash} />
+              </Button>
+            </div>
+          </motion.div>
         )}
-      </div>
+      </AnimatePresence>
     </div>
   );
 };

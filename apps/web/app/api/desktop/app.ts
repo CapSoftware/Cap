@@ -1,4 +1,4 @@
-import { clientEnv, serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
@@ -19,7 +19,7 @@ app.post(
 
     try {
       // Send feedback to Discord channel
-      const discordWebhookUrl = serverEnv.DISCORD_FEEDBACK_WEBHOOK_URL;
+      const discordWebhookUrl = serverEnv().DISCORD_FEEDBACK_WEBHOOK_URL;
       if (!discordWebhookUrl)
         throw new Error("Discord webhook URL is not configured");
 
@@ -60,7 +60,7 @@ app.get("/plan", async (c) => {
 
   if (!isSubscribed && !user.stripeSubscriptionId && user.stripeCustomerId) {
     try {
-      const subscriptions = await stripe.subscriptions.list({
+      const subscriptions = await stripe().subscriptions.list({
         customer: user.stripeCustomerId,
       });
       const activeSubscription = subscriptions.data.find(
@@ -68,7 +68,7 @@ app.get("/plan", async (c) => {
       );
       if (activeSubscription) {
         isSubscribed = true;
-        await db
+        await db()
           .update(users)
           .set({
             stripeSubscriptionStatus: activeSubscription.status,
@@ -82,9 +82,10 @@ app.get("/plan", async (c) => {
   }
 
   let intercomHash = "";
-  if (serverEnv.INTERCOM_SECRET) {
+  const intercomSecret = serverEnv().INTERCOM_SECRET;
+  if (intercomSecret) {
     intercomHash = crypto
-      .createHmac("sha256", serverEnv.INTERCOM_SECRET)
+      .createHmac("sha256", intercomSecret)
       .update(user?.id ?? "")
       .digest("hex");
   }
@@ -114,12 +115,12 @@ app.post(
 
     if (user.stripeCustomerId === null) {
       console.log("[POST] Creating new Stripe customer");
-      const customer = await stripe.customers.create({
+      const customer = await stripe().customers.create({
         email: user.email,
         metadata: { userId: user.id },
       });
 
-      await db
+      await db()
         .update(users)
         .set({ stripeCustomerId: customer.id })
         .where(eq(users.id, user.id));
@@ -129,12 +130,12 @@ app.post(
     }
 
     console.log("[POST] Creating checkout session");
-    const checkoutSession = await stripe.checkout.sessions.create({
+    const checkoutSession = await stripe().checkout.sessions.create({
       customer: customerId as string,
       line_items: [{ price: priceId, quantity: 1 }],
       mode: "subscription",
-      success_url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/dashboard/caps?upgrade=true`,
-      cancel_url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/pricing`,
+      success_url: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true`,
+      cancel_url: `${serverEnv().WEB_URL}/pricing`,
       allow_promotion_codes: true,
     });
 

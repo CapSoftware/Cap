@@ -11,45 +11,41 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { capId, spaceIds } = await request.json();
+  const { capId, organizationIds } = await request.json();
 
   try {
-    // Check if the user owns the cap
-    const [cap] = await db.select().from(videos).where(eq(videos.id, capId));
+    const [cap] = await db().select().from(videos).where(eq(videos.id, capId));
     if (!cap || cap.ownerId !== user.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
     }
 
-    // Get current shared spaces
-    const currentSharedSpaces = await db
+    const currentSharedOrganizations = await db()
       .select()
       .from(sharedVideos)
       .where(eq(sharedVideos.videoId, capId));
 
-    // Remove spaces that are no longer shared
-    for (const sharedSpace of currentSharedSpaces) {
-      if (!spaceIds.includes(sharedSpace.spaceId)) {
-        await db
+    for (const sharedOrganization of currentSharedOrganizations) {
+      if (!organizationIds.includes(sharedOrganization.organizationId)) {
+        await db()
           .delete(sharedVideos)
           .where(
             and(
               eq(sharedVideos.videoId, capId),
-              eq(sharedVideos.spaceId, sharedSpace.spaceId)
+              eq(sharedVideos.organizationId, sharedOrganization.organizationId)
             )
           );
       }
     }
 
-    // Add new shared spaces
-    for (const spaceId of spaceIds) {
-      const existingShare = currentSharedSpaces.find(
-        (share) => share.spaceId === spaceId
+    for (const organizationId of organizationIds) {
+      const existingShare = currentSharedOrganizations.find(
+        (share) => share.organizationId === organizationId
       );
       if (!existingShare) {
-        await db.insert(sharedVideos).values({
+        await db().insert(sharedVideos).values({
           id: nanoId(),
           videoId: capId,
-          spaceId: spaceId,
+          organizationId: organizationId,
           sharedByUserId: user.id,
         });
       }

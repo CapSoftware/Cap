@@ -992,13 +992,15 @@ async fn produce_frame(
 
         DisplayLayer::render(&mut pipeline, &segment_frames);
 
-        constants.cursor_layer.render(
-            &mut pipeline,
-            &segment_frames,
-            uniforms.resolution_base,
-            &cursor,
-            &uniforms.zoom,
-        );
+        if !uniforms.project.cursor.hide {
+            constants.cursor_layer.render(
+                &mut pipeline,
+                &segment_frames,
+                uniforms.resolution_base,
+                &cursor,
+                &uniforms.zoom,
+            );
+        }
 
         if let (
             Some(camera_size),
