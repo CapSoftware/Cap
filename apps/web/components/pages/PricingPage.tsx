@@ -287,14 +287,15 @@ export const PricingPage = () => {
                           {isCommercialAnnual
                             ? licenseQuantity === 1
                               ? "billed annually"
-                              : `for ${licenseQuantity} licenses, billed annually`
+                              : <>for <NumberFlow value={licenseQuantity} className="text-sm font-medium tabular-nums" /> licenses, billed annually</>
                             : licenseQuantity === 1
                             ? "one-time payment"
-                            : `for ${licenseQuantity} licenses, one-time payment`}
+                            : <>for <NumberFlow value={licenseQuantity} className="text-sm font-medium tabular-nums" /> licenses, one-time payment</>
+                          }
                         </p>
                         {isCommercialAnnual && (
                           <p className="text-sm">
-                            or, ${58 * licenseQuantity} one-time payment
+                            or, <NumberFlow value={58 * licenseQuantity} className="text-sm tabular-nums" format={{ notation: "compact", style: "currency", currency: "USD" }} /> one-time payment
                           </p>
                         )}
                       </div>

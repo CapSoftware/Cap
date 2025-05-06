@@ -72,7 +72,7 @@ export default function DashboardInner({
       {/* Content Area */}
       <div
         className={clsx(
-          "flex overflow-auto flex-col flex-1 p-5 pb-5 border bg-gray-1 border-gray-3 lg:rounded-tl-2xl lg:p-8"
+          "flex overflow-auto flex-col flex-1 p-5 pb-5 border border-b-0 bg-gray-1 border-gray-3 lg:rounded-tl-2xl lg:p-8"
         )}
       >
         <div className="flex flex-col flex-1 gap-4 h-full">{children}</div>
