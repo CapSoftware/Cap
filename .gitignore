@@ -29,6 +29,7 @@ target
 *.sln
 *.sw?
 .turbo
+pnpm-lock.yaml
 .zed
 .output
 .vinxi
