@@ -307,10 +307,10 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
               position="right"
             >
               <Link
-                href="/dashboard/shared-caps"
+                href={`/dashboard/spaces/${activeOrganization?.organization.id}`}
                 className={classNames(
                   "flex gap-2 items-center px-3 py-2 mt-2 rounded-lg",
-                  pathname.includes("/dashboard/shared-caps")
+                  pathname.includes("/dashboard/spaces")
                     ? "bg-gray-4 text-gray-12"
                     : "text-gray-10 hover:text-gray-12 hover:bg-gray-3"
                 )}

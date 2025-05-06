@@ -5,7 +5,7 @@ import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayou
 import { VideoMetadata } from "@cap/database/types";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
-import { CapPagination } from "../caps/components/CapPagination";
+import { CapPagination } from "../../caps/components/CapPagination";
 import { EmptySharedCapState } from "./components/EmptySharedCapState";
 import { SharedCapCard } from "./components/SharedCapCard";
 

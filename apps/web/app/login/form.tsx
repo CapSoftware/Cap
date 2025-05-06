@@ -33,7 +33,6 @@ export function LoginForm() {
     theme === "dark"
       ? document.documentElement.classList.add("dark")
       : document.documentElement.classList.remove("dark");
-    //remove the dark mode when we leave the dashboard
     return () => {
       document.documentElement.classList.remove("dark");
     };

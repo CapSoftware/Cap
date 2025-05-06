@@ -15,7 +15,7 @@ import {
   useTheme,
 } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
-import { MembersDialog } from "@/app/dashboard/shared-caps/components/MembersDialog";
+import { MembersDialog } from "@/app/dashboard/spaces/[spaceId]/components/MembersDialog";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import {
   faCrown,
