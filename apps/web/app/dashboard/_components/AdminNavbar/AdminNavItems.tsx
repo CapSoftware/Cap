@@ -87,10 +87,12 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
   const navItemClass =
     "flex items-center justify-start py-2 px-3 rounded-2xl outline-none tracking-tight w-full overflow-hidden";
 
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const searchParams = useSearchParams();
+  const [dialogOpen, setDialogOpen] = useState(searchParams.get('createSpace') === 'true');
   const { organizationData: orgData, activeOrganization: activeOrg, isSubscribed: userIsSubscribed } =
     useSharedContext();
   const [formRef, setFormRef] = useState<HTMLFormElement | null>(null);
+
 
   return (
     <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
