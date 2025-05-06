@@ -262,7 +262,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
         </div>
       </nav>
       <DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
-        <DialogHeader icon={<FontAwesomeIcon icon={faBuilding} />} description="Create a new organization to share caps with your team">
+        <DialogHeader icon={<FontAwesomeIcon icon={faBuilding} />} description="A new organization to share caps with your team">
           <DialogTitle className="text-lg text-gray-12">Create New Organization</DialogTitle>
         </DialogHeader>
         <div className="p-5">
@@ -285,7 +285,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
             onClick={() => formRef?.requestSubmit()}
             type="submit"
           >
-            Create Organization
+            Create
           </Button>
         </DialogFooter>
       </DialogContent>

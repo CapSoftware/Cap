@@ -46,6 +46,21 @@ html {
   background-color: white;
 }
 
+::-webkit-scrollbar {
+  width: 7px;
+}
+
+/* Track */
+::-webkit-scrollbar-track {
+  border-radius: 10px;
+}
+
+/* Handle */
+::-webkit-scrollbar-thumb {
+  background: rgb(116, 116, 116);
+  border-radius: 10px;
+}
+
 ::selection {
   background: black;
   color: #ffffff;
@@ -470,7 +485,7 @@ slot:not(.dashboard-layout slot) {
 }
 
 .custom-scroll::-webkit-scrollbar-thumb {
-  @apply bg-gray-5 w-[7px] rounded-full;
+  @apply bg-gray-7 w-[7px] rounded-full;
 }
 
 #scrolling-section slot {
