@@ -54,7 +54,7 @@ export type RenderState =
 
 export const [EditorContextProvider, useEditorContext] = createContextProvider(
   (props: {
-    meta: TransformedMeta;
+    meta: () => TransformedMeta;
     editorInstance: SerializedEditorInstance;
     refetchMeta(): Promise<void>;
   }) => {
@@ -107,21 +107,6 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
           100
         : undefined
     );
-
-    // This is used in ShareButton.tsx to notify the component that the metadata has changed, from ExportDialog.tsx
-    // When a video is uploaded, the metadata is updated
-
-    const [lastMetaUpdate, setLastMetaUpdate] = createSignal<{
-      videoId: string;
-      timestamp: number;
-    } | null>(null);
-
-    const metaUpdateStore = {
-      notifyUpdate: (videoId: string) => {
-        setLastMetaUpdate({ videoId, timestamp: Date.now() });
-      },
-      getLastUpdate: lastMetaUpdate,
-    };
 
     createEffect(
       on(
@@ -212,8 +197,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 
     return {
       ...editorInstanceContext,
-      get meta() {
-        return props.meta;
+      meta() {
+        return props.meta();
       },
       refetchMeta: () => props.refetchMeta(),
       editorInstance: props.editorInstance,
@@ -221,9 +206,6 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       setDialog,
       project,
       setProject,
-      metaUpdateStore,
-      lastMetaUpdate,
-      setLastMetaUpdate,
       projectHistory: createStoreHistory(project, setProject),
       editorState,
       setEditorState,
@@ -312,6 +294,8 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
       queryFn: editorInstance()
         ? () => commands.getEditorMeta().then(transformMeta)
         : skipToken,
+      cacheTime: 0,
+      staleTime: 0,
     }));
 
     return {

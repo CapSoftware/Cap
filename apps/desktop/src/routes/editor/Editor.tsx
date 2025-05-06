@@ -1,7 +1,6 @@
 import { Button } from "@cap/ui-solid";
 import { trackDeep } from "@solid-primitives/deep";
 import { throttle } from "@solid-primitives/scheduled";
-import { useSearchParams } from "@solidjs/router";
 import { createMutation } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
@@ -13,11 +12,11 @@ import {
   createSignal,
   on,
   onMount,
-  untrack,
 } from "solid-js";
 import { createStore } from "solid-js/store";
-
+import { mergeProps } from "solid-js";
 import { makePersisted } from "@solid-primitives/storage";
+
 import Cropper, { cropToFloor } from "~/components/Cropper";
 import Tooltip from "~/components/Tooltip";
 import { events, type Crop } from "~/utils/tauri";
@@ -55,7 +54,14 @@ export function Editor() {
 
           return {
             editorInstance,
-            meta: ctx.metaQuery.data,
+            meta() {
+              const d = ctx.metaQuery.data;
+              if (!d)
+                throw new Error(
+                  "metaQuery.data is undefined - how did this happen?"
+                );
+              return d;
+            },
             refetchMeta: async () => {
               await ctx.metaQuery.refetch();
             },

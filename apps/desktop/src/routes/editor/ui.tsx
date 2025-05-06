@@ -24,10 +24,15 @@ import { useEditorContext } from "./context";
 import { TextInput } from "./TextInput";
 
 export function Field(
-  props: ParentProps<{ name: string; icon?: JSX.Element; value?: JSX.Element }>
+  props: ParentProps<{
+    name: string;
+    icon?: JSX.Element;
+    value?: JSX.Element;
+    class?: string;
+  }>
 ) {
   return (
-    <div class="flex flex-col gap-4">
+    <div class={cx("flex flex-col gap-4", props.class)}>
       <span class="flex flex-row items-center gap-[0.375rem] text-gray-500 font-medium text-sm">
         {props.icon}
         {props.name}

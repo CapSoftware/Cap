@@ -168,8 +168,8 @@ async function main() {
           if (!hasWeb)
             return text({
               message: "VITE_SERVER_URL",
-              placeholder: "http://cap.so",
-              defaultValue: "http://cap.so",
+              placeholder: "https://cap.so",
+              defaultValue: "https://cap.so",
             });
         },
         VITE_VERCEL_AUTOMATION_BYPASS_SECRET: () => {

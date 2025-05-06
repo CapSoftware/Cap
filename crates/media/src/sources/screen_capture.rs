@@ -677,7 +677,8 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                         }
                         SCStreamOutputType::Audio => {
                             let res = || {
-                                Ok::<_, ()>(cap_fail::fail_err!("screen_capture audio skip", ()))
+                                cap_fail::fail_err!("screen_capture audio skip", ());
+                                Ok::<(), ()>(())
                             };
                             if let Err(_) = res() {
                                 return ControlFlow::Continue(());

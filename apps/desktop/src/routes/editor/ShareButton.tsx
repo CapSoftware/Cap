@@ -1,16 +1,16 @@
 import { Button } from "@cap/ui-solid";
 import { createMutation } from "@tanstack/solid-query";
-import { createEffect, createResource, createSignal, Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 
 import Tooltip from "~/components/Tooltip";
 import { createProgressBar } from "~/routes/editor/utils";
 import { authStore } from "~/store";
+import { exportVideo } from "~/utils/export";
 import { commands, events } from "~/utils/tauri";
 import { useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
 import { Dialog, DialogContent } from "./ui";
-import { exportVideo } from "~/utils/export";
 
 function ShareButton() {
   const { editorInstance, meta } = useEditorContext();
@@ -86,7 +86,7 @@ function ShareButton() {
         setUploadState({ type: "uploading", progress: 0 });
 
         // Now proceed with upload
-        const result = meta?.sharing
+        const result = meta().sharing
           ? await commands.uploadExportedVideo(projectPath, "Reupload")
           : await commands.uploadExportedVideo(projectPath, {
               Initial: { pre_created_video: null },
@@ -136,7 +136,7 @@ function ShareButton() {
 
   return (
     <div class="relative">
-      <Show when={meta?.sharing}>
+      <Show when={meta().sharing}>
         {(sharing) => {
           const url = () => new URL(sharing().link);
 
