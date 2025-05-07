@@ -2,17 +2,17 @@ import "@/app/globals.css";
 import { BentoScript } from "@/components/BentoScript";
 import { Footer } from "@/components/Footer";
 import { Navbar } from "@/components/Navbar";
+import { SonnerToastProvider } from "@/components/SonnerToastProvider";
+import { PublicEnvContext } from "@/utils/public-env";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { buildEnv, serverEnv } from "@cap/env";
+import { S3_BUCKET_URL } from "@cap/utils";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
+import crypto from "crypto";
 import type { Metadata } from "next";
-import { Toaster } from "react-hot-toast";
+import { PropsWithChildren } from "react";
 import { AuthProvider } from "./AuthProvider";
 import { PostHogProvider, Providers } from "./providers";
-import { PublicEnvContext } from "@/utils/public-env";
-import { S3_BUCKET_URL } from "@cap/utils";
-import { PropsWithChildren } from "react";
-import crypto from "crypto";
 import { getBootstrapData } from "@/utils/getBootstrapData";
 //@ts-expect-error
 import { script } from "./themeScript";
@@ -89,7 +89,7 @@ export default async function RootLayout({ children }: PropsWithChildren) {
                   name={`${user?.name ?? ""} ${user?.lastName ?? ""}`}
                   email={user?.email ?? ""}
                 >
-                  <Toaster />
+                  <SonnerToastProvider />
                   <main className="overflow-x-hidden w-full">
                     <Navbar auth={user ? true : false} />
                     {children}

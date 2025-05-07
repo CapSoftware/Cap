@@ -4,17 +4,19 @@ import { Logo } from "@cap/ui";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { AdminNavItems } from "./AdminNavItems";
 
 export const AdminDesktopNav = () => {
   const { platform } = useDetectPlatform();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    JSON.parse(localStorage.getItem("sidebarCollapsed") || "false")
+  );
   const toggleCollapse = () => {
     setSidebarCollapsed(!sidebarCollapsed);
-    localStorage.setItem("sidebarCollapsed", String(!sidebarCollapsed));
+    localStorage.setItem("sidebarCollapsed", JSON.stringify(!sidebarCollapsed));
   };
   const cmdSymbol = platform === "macos" ? "⌘" : "Ctrl";
 
@@ -78,13 +80,9 @@ export const AdminDesktopNav = () => {
           >
             <button
               onClick={toggleCollapse}
-              className="absolute right-[-12px] hover:border-gray-4 hover:bg-gray-3 top-[50%] transform -translate-y-1/2 rounded-full p-1 border bg-gray-2 border-gray-3 transition-colors z-10"
+              className="absolute right-[-12px] hover:border-gray-5 hover:bg-gray-5 top-[50%] transform -translate-y-1/2 rounded-full p-1 border bg-gray-3 border-gray-4 transition-colors z-10"
             >
-              {sidebarCollapsed ? (
-                <ChevronRight size={16} className="text-gray-12" />
-              ) : (
-                <ChevronLeft size={16} className="text-gray-12" />
-              )}
+              <ChevronRight size={16} className={clsx("transition-transform duration-200 text-gray-12", sidebarCollapsed ? "rotate-180" : "")} />
             </button>
           </Tooltip>
         </div>

@@ -6,7 +6,7 @@ import { faChevronDown } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { toast } from "react-hot-toast";
+import { toast } from "sonner";
 import { Copy, Globe2 } from "lucide-react";
 import { buildEnv, NODE_ENV } from "@cap/env";
 import { editTitle } from "@/actions/videos/edit-title";

@@ -21,7 +21,7 @@ import {
   useRef,
   useState,
 } from "react";
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 import { Tooltip } from "react-tooltip";
 import { fromVtt, Subtitle } from "subtitles-parser-vtt";
 import { MP4VideoPlayer } from "./MP4VideoPlayer";
