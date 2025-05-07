@@ -3,7 +3,7 @@
 import { users } from "@cap/database/schema";
 import { Button, Card, CardDescription, CardTitle, Input } from "@cap/ui";
 import { useRouter } from "next/navigation";
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 
 export const Settings = ({
   user,

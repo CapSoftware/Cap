@@ -15,7 +15,7 @@ import clsx from "clsx";
 import { Check } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 import { SimplePlans } from "../text/SimplePlans";
 import { Testimonials } from "../ui/Testimonials";
 

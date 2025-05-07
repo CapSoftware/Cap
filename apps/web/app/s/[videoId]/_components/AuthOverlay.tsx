@@ -3,7 +3,7 @@ import { Button, Dialog, DialogContent, LogoBadge } from "@cap/ui";
 import { motion } from "framer-motion";
 import { signIn } from "next-auth/react";
 import { useState } from "react";
-import { toast } from "react-hot-toast";
+import { toast } from "sonner";
 
 interface AuthOverlayProps {
   isOpen: boolean;

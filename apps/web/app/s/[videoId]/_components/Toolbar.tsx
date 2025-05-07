@@ -4,7 +4,7 @@ import { videos } from "@cap/database/schema";
 import { Button } from "@cap/ui";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 import { AuthOverlay } from "./AuthOverlay";
 
 // million-ignore

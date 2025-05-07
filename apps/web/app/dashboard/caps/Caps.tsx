@@ -5,7 +5,7 @@ import { VideoMetadata } from "@cap/database/types";
 import { AnimatePresence, motion } from "framer-motion";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 import { CapCard } from "./components/CapCard";
 import { CapPagination } from "./components/CapPagination";
 import { EmptyCapState } from "./components/EmptyCapState";
@@ -166,44 +166,43 @@ export const Caps = ({
 
     setIsDeleting(true);
 
-    const loadingToast = toast.loading(
-      `Deleting ${selectedCaps.length} cap${
-        selectedCaps.length === 1 ? "" : "s"
-      }...`
-    );
-
     try {
-      const results = await Promise.allSettled(
-        selectedCaps.map((capId) => deleteVideo(capId))
+      await toast.promise(
+        async () => {
+          const results = await Promise.allSettled(
+            selectedCaps.map((capId) => deleteVideo(capId))
+          );
+          
+          const successCount = results.filter(
+            (result) => result.status === "fulfilled" && result.value.success
+          ).length;
+          
+          const errorCount = selectedCaps.length - successCount;
+          
+          if (successCount > 0 && errorCount > 0) {
+            return { success: successCount, error: errorCount };
+          } else if (successCount > 0) {
+            return { success: successCount };
+          } else {
+            throw new Error(`Failed to delete ${errorCount} cap${errorCount === 1 ? "" : "s"}`);
+          }
+        },
+        {
+          loading: `Deleting ${selectedCaps.length} cap${selectedCaps.length === 1 ? "" : "s"}...`,
+          success: (data) => {
+            if (data.error) {
+              return `Successfully deleted ${data.success} cap${data.success === 1 ? "" : "s"}, but failed to delete ${data.error} cap${data.error === 1 ? "" : "s"}`;
+            }
+            return `Successfully deleted ${data.success} cap${data.success === 1 ? "" : "s"}`;
+          },
+          error: (error) => error.message || "An error occurred while deleting caps"
+        }
       );
-
-      toast.dismiss(loadingToast);
-
-      const successCount = results.filter(
-        (result) => result.status === "fulfilled" && result.value.success
-      ).length;
-
-      const errorCount = selectedCaps.length - successCount;
-
-      if (successCount > 0) {
-        toast.success(
-          `Successfully deleted ${successCount} cap${
-            successCount === 1 ? "" : "s"
-          }`
-        );
-      }
-
-      if (errorCount > 0) {
-        toast.error(
-          `Failed to delete ${errorCount} cap${errorCount === 1 ? "" : "s"}`
-        );
-      }
 
       setSelectedCaps([]);
       refresh();
     } catch (error) {
-      toast.dismiss(loadingToast);
-      toast.error("An error occurred while deleting caps");
+      // Error is handled by toast.promise
     } finally {
       setIsDeleting(false);
     }

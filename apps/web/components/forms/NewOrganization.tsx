@@ -13,7 +13,9 @@ import { createOrganization } from "./server";
 
 export interface NewOrganizationProps {
   onOrganizationCreated: () => void;
-  formRef?: React.Dispatch<React.SetStateAction<HTMLFormElement | null>>;
+  formRef?: React.RefObject<HTMLFormElement>;
+  setCreateLoading?: React.Dispatch<React.SetStateAction<boolean>>;
+  onNameChange?: (name: string) => void;
 }
 
 export const NewOrganization: React.FC<NewOrganizationProps> = (props) => {
@@ -32,13 +34,16 @@ export const NewOrganization: React.FC<NewOrganizationProps> = (props) => {
     <Form {...form}>
       <form
         className="space-y-4"
-        ref={props.formRef ? (form) => props.formRef?.(form) : undefined}
+        ref={props.formRef}
         onSubmit={form.handleSubmit(async (values) => {
           try {
+            props.setCreateLoading?.(true);
             await createOrganization(values);
             props.onOrganizationCreated();
           } catch (error) {
             console.error("Error creating organization:", error);
+          } finally {
+            props.setCreateLoading?.(false);
           }
         })}
       >
@@ -48,7 +53,14 @@ export const NewOrganization: React.FC<NewOrganizationProps> = (props) => {
             name="name"
             render={({ field }) => (
               <FormControl>
-                <Input required placeholder="Your organization name" {...field} />
+                <Input 
+                  placeholder="Your organization name" 
+                  {...field} 
+                  onChange={(e) => {
+                    field.onChange(e);
+                    props.onNameChange?.(e.target.value);
+                  }}
+                />
               </FormControl>
             )}
           />
