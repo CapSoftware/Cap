@@ -5,6 +5,7 @@ import { checkOrganizationDomain } from "@/actions/organization/check-domain";
 import { removeOrganizationDomain } from "@/actions/organization/remove-domain";
 import { updateDomain } from "@/actions/organization/update-domain";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
+import { UpgradeModal } from "@/components/UpgradeModal";
 import { Button, Input } from "@cap/ui";
 import { faRefresh, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -12,7 +13,6 @@ import { Check, CheckCircle, Copy, XCircle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { UpgradeModal } from "@/components/UpgradeModal";
 
 type DomainVerification = {
   type: string;
@@ -32,15 +32,6 @@ type DomainConfig = {
   requiredAValue?: string;
 };
 
-type VerificationResponse = {
-  verified: boolean;
-  config: DomainConfig;
-  status: any;
-  aRecordConfig?: {
-    current: string;
-    required: string;
-  };
-};
 
 export function CustomDomain() {
   const router = useRouter();
@@ -276,6 +267,7 @@ export function CustomDomain() {
               size="sm"
               variant="dark"
               onClick={handleSubmit}
+              spinner={loading}
               disabled={loading}
             >
               {loading ? "Saving..." : "Save"}
