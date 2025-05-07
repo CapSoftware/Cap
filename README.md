@@ -22,9 +22,11 @@ Cap is the open source alternative to Loom. It's a video messaging tool that all
 
 <img src="https://raw.githubusercontent.com/CapSoftware/Cap/refs/heads/main/apps/web/public/landing-cover.png"/>
 
-# Cap Self Hosting
+# Cap Self Hosting *(Updated May 2025)*
 
-We're working on a self-hosting guide for Cap. This will include one-click deployment buttons for Vercel and Render, as well as an option to self host with Docker. Join the <a href="https://discord.gg/y8gdQ3WRN3">Cap Discord</a> if you want to help contribute to this particular project.
+Self-hosting deployment options for Cap are currently being worked on. This includes a [Dockerfile](https://github.com/CapSoftware/Cap/blob/main/Dockerfile) and also [one-click deployment via Railway](https://railway.com/template/PwpGcf). Documentation on how to deploy will be released as soon as we make the Dockerfile and Railway deployment template stable. You will be able to take your self hosted URL and paste directly into the desktop app for direct, instant use.
+
+Join the <a href="https://discord.gg/y8gdQ3WRN3">Cap Discord</a> if you want to help contribute to this particular project.
 
 # Monorepo App Architecture
 
