@@ -15,7 +15,10 @@ export const CustomDomainIconCard = ({
 }: CustomDomainCardProps) => {
   return (
     <Card className="flex flex-col flex-1 gap-6 w-full lg:flex-row">
-      <div className="flex-1">
+      <div className="flex-1 order-first lg:order-last">
+        <OrganizationIcon isOwner={isOwner} showOwnerToast={showOwnerToast} />
+      </div>
+      <div className="flex-1 order-last lg:order-first">
         <div className="space-y-1">
           <Label htmlFor="customDomain">Custom Domain</Label>
           <CardDescription className="w-full max-w-[400px]">
@@ -27,7 +30,6 @@ export const CustomDomainIconCard = ({
           <CustomDomain />
         </div>
       </div>
-      <OrganizationIcon isOwner={isOwner} showOwnerToast={showOwnerToast} />
     </Card>
   );
 };
