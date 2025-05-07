@@ -50,7 +50,7 @@ export default function DashboardInner({
       {/* Top Bar */}
       <div
         className={clsx(
-          "flex sticky z-50 justify-between items-center px-5 mt-10 w-full h-16 border-b bg-gray-1 lg:bg-transparent border-gray-3 lg:border-b-0 lg:pl-0 lg:pr-5 lg:top-0 lg:relative top-[64px] lg:mt-0 lg:h-8"
+          "flex sticky z-50 justify-between items-center px-5 mt-10 w-full h-16 border-b bg-gray-1 lg:bg-transparent border-gray-3 lg:border-b-0 lg:px-0 lg:top-0 lg:relative top-[64px] lg:mt-0 lg:h-8"
         )}
       >
         <p className="relative text-xl text-gray-12 lg:text-2xl">{title}</p>
@@ -72,7 +72,7 @@ export default function DashboardInner({
       {/* Content Area */}
       <div
         className={clsx(
-          "flex overflow-auto flex-col flex-1 p-5 pb-5 border border-b-0 bg-gray-1 border-gray-3 lg:rounded-tl-2xl lg:p-8"
+          "flex overflow-y-auto flex-col flex-1 p-5 pb-5 border border-b-0 bg-gray-1 border-gray-3 lg:rounded-t-2xl lg:p-8"
         )}
       >
         <div className="flex flex-col flex-1 gap-4 h-full">{children}</div>

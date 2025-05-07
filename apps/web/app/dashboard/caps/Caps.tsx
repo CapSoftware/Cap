@@ -42,7 +42,6 @@ export const Caps = ({
   const totalPages = Math.ceil(count / limit);
   const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
   const previousCountRef = useRef<number>(0);
-  const [, setAnimateDirection] = useState<"up" | "down">("up");
   const [isDeleting, setIsDeleting] = useState(false);
 
   const anyCapSelected = selectedCaps.length > 0;
@@ -102,7 +101,6 @@ export const Caps = ({
         ) {
           e.preventDefault();
           setSelectedCaps(data.map((cap) => cap.id));
-          setAnimateDirection("up");
         }
       }
     };
@@ -142,7 +140,6 @@ export const Caps = ({
         : [...prev, capId];
 
       previousCountRef.current = prev.length;
-      setAnimateDirection(newSelection.length > prev.length ? "up" : "down");
 
       return newSelection;
     });

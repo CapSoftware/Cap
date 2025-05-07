@@ -12,7 +12,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 import { BillingCard } from "./components/BillingCard";
-import { CustomDomainCard } from "./components/CustomDomainCard";
+import { CustomDomainIconCard } from "./components/CustomDomainIconCard";
 import { InviteDialog } from "./components/InviteDialog";
 import { MembersCard } from "./components/MembersCard";
 import { OrganizationDetailsCard } from "./components/OrganizationDetailsCard";
@@ -106,7 +106,10 @@ export const Organization = () => {
           showOwnerToast={showOwnerToast}
           organizationName={organizationName}
         />
-        <CustomDomainCard />
+        <CustomDomainIconCard 
+          isOwner={isOwner}
+          showOwnerToast={showOwnerToast}
+        />
       </div>
 
       <MembersCard 
