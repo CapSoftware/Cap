@@ -31,7 +31,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { format } from "date-fns";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 import { CustomDomain } from "./components/CustomDomain";
 
 export const Organization = () => {
@@ -44,6 +44,7 @@ export const Organization = () => {
   const [inviteEmails, setInviteEmails] = useState<string[]>([]);
   const [emailInput, setEmailInput] = useState("");
   const ownerToastShown = useRef(false);
+  const [inviteLoading, setInviteLoading] = useState(false);
 
   const showOwnerToast = () => {
     if (!ownerToastShown.current) {
@@ -101,6 +102,7 @@ export const Organization = () => {
     }
 
     try {
+      setInviteLoading(true);
       await sendOrganizationInvites(
         inviteEmails,
         activeOrganization?.organization.id as string
@@ -112,6 +114,8 @@ export const Organization = () => {
     } catch (error) {
       console.error("Error sending invites:", error);
       toast.error("An error occurred while sending invites");
+    } finally {
+      setInviteLoading(false);
     }
   };
 
@@ -479,8 +483,9 @@ export const Organization = () => {
               type="button"
               size="sm"
               variant="dark"
+              spinner={inviteLoading}
+              disabled={inviteLoading || inviteEmails.length === 0}
               onClick={handleSendInvites}
-              disabled={inviteEmails.length === 0}
             >
               Send Invites
             </Button>

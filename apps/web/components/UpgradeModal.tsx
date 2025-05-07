@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { memo, useState } from "react";
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 
 interface UpgradeModalProps {
   open: boolean;

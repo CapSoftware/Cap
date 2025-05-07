@@ -38,7 +38,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { updateActiveOrganization } from "./server";
 
 export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
@@ -90,7 +90,9 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
   const [dialogOpen, setDialogOpen] = useState(false);
   const { organizationData: orgData, activeOrganization: activeOrg, isSubscribed: userIsSubscribed } =
     useSharedContext();
-  const [formRef, setFormRef] = useState<HTMLFormElement | null>(null);
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const [createLoading, setCreateLoading] = useState(false);
+  const [organizationName, setOrganizationName] = useState("");
 
   return (
     <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -267,8 +269,10 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
         </DialogHeader>
         <div className="p-5">
           <NewOrganization 
+            setCreateLoading={setCreateLoading}
             onOrganizationCreated={() => setDialogOpen(false)}
-            formRef={setFormRef}
+            formRef={formRef}
+            onNameChange={setOrganizationName}
           />
         </div>
         <DialogFooter>
@@ -282,7 +286,9 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
           <Button 
             variant="dark" 
             size="sm" 
-            onClick={() => formRef?.requestSubmit()}
+            disabled={createLoading || !organizationName.trim().length}
+            spinner={createLoading}
+            onClick={() => formRef.current?.requestSubmit()}
             type="submit"
           >
             Create

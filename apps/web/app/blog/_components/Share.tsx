@@ -1,6 +1,6 @@
 "use client";
 
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 import { useState } from "react";
 
 interface ShareProps {
