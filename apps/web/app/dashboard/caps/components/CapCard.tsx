@@ -22,7 +22,7 @@ import moment from "moment";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, PropsWithChildren } from "react";
-import { toast } from "react-hot-toast";
+import { toast } from "sonner";
 
 interface Props extends PropsWithChildren {
   cap: {

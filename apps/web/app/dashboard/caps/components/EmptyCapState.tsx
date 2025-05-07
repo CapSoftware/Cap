@@ -9,7 +9,7 @@ interface EmptyCapStateProps {
 export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
   const { theme } = useTheme();
   const { RiveComponent: EmptyCap } = useRive({
-    src: "/rive/empty.riv",
+    src: "/rive/main.riv",
     artboard: theme === "light" ? "empty" : "darkempty",
     autoplay: true,
   });

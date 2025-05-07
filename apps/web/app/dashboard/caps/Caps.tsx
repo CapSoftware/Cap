@@ -1,18 +1,16 @@
 "use client";
+import { deleteVideo } from "@/actions/videos/delete";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { useApiClient } from "@/utils/web-api";
 import { VideoMetadata } from "@cap/database/types";
-import { AnimatePresence, motion } from "framer-motion";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 import { CapCard } from "./components/CapCard";
 import { CapPagination } from "./components/CapPagination";
 import { EmptyCapState } from "./components/EmptyCapState";
-import { Button } from "@cap/ui";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faTrash } from "@fortawesome/free-solid-svg-icons";
-import { deleteVideo } from "@/actions/videos/delete";
+import { SelectedCapsBar } from "./components/SelectedCapsBar";
+
 
 type VideoData = {
   id: string;
@@ -23,7 +21,7 @@ type VideoData = {
   totalReactions: number;
   sharedOrganizations: { id: string; name: string }[];
   ownerName: string;
-  metadata?: VideoMetadata;
+  metadata?: VideoMetadata
 }[];
 
 export const Caps = ({
@@ -44,7 +42,6 @@ export const Caps = ({
   const totalPages = Math.ceil(count / limit);
   const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
   const previousCountRef = useRef<number>(0);
-  const [animateDirection, setAnimateDirection] = useState<"up" | "down">("up");
   const [isDeleting, setIsDeleting] = useState(false);
 
   const anyCapSelected = selectedCaps.length > 0;
@@ -104,7 +101,6 @@ export const Caps = ({
         ) {
           e.preventDefault();
           setSelectedCaps(data.map((cap) => cap.id));
-          setAnimateDirection("up");
         }
       }
     };
@@ -144,7 +140,6 @@ export const Caps = ({
         : [...prev, capId];
 
       previousCountRef.current = prev.length;
-      setAnimateDirection(newSelection.length > prev.length ? "up" : "down");
 
       return newSelection;
     });
@@ -165,44 +160,43 @@ export const Caps = ({
 
     setIsDeleting(true);
 
-    const loadingToast = toast.loading(
-      `Deleting ${selectedCaps.length} cap${
-        selectedCaps.length === 1 ? "" : "s"
-      }...`
-    );
-
     try {
-      const results = await Promise.allSettled(
-        selectedCaps.map((capId) => deleteVideo(capId))
+      await toast.promise(
+        async () => {
+          const results = await Promise.allSettled(
+            selectedCaps.map((capId) => deleteVideo(capId))
+          );
+          
+          const successCount = results.filter(
+            (result) => result.status === "fulfilled" && result.value.success
+          ).length;
+          
+          const errorCount = selectedCaps.length - successCount;
+          
+          if (successCount > 0 && errorCount > 0) {
+            return { success: successCount, error: errorCount };
+          } else if (successCount > 0) {
+            return { success: successCount };
+          } else {
+            throw new Error(`Failed to delete ${errorCount} cap${errorCount === 1 ? "" : "s"}`);
+          }
+        },
+        {
+          loading: `Deleting ${selectedCaps.length} cap${selectedCaps.length === 1 ? "" : "s"}...`,
+          success: (data) => {
+            if (data.error) {
+              return `Successfully deleted ${data.success} cap${data.success === 1 ? "" : "s"}, but failed to delete ${data.error} cap${data.error === 1 ? "" : "s"}`;
+            }
+            return `Successfully deleted ${data.success} cap${data.success === 1 ? "" : "s"}`;
+          },
+          error: (error) => error.message || "An error occurred while deleting caps"
+        }
       );
-
-      toast.dismiss(loadingToast);
-
-      const successCount = results.filter(
-        (result) => result.status === "fulfilled" && result.value.success
-      ).length;
-
-      const errorCount = selectedCaps.length - successCount;
-
-      if (successCount > 0) {
-        toast.success(
-          `Successfully deleted ${successCount} cap${
-            successCount === 1 ? "" : "s"
-          }`
-        );
-      }
-
-      if (errorCount > 0) {
-        toast.error(
-          `Failed to delete ${errorCount} cap${errorCount === 1 ? "" : "s"}`
-        );
-      }
 
       setSelectedCaps([]);
       refresh();
     } catch (error) {
-      toast.dismiss(loadingToast);
-      toast.error("An error occurred while deleting caps");
+      // Error is handled by toast.promise
     } finally {
       setIsDeleting(false);
     }
@@ -235,72 +229,13 @@ export const Caps = ({
         </div>
       )}
 
-      <AnimatePresence>
-        {selectedCaps.length > 0 && (
-          <motion.div
-            className="flex fixed right-0 left-0 bottom-4 z-50 justify-between items-center px-6 py-3 mx-auto w-full max-w-xl rounded-xl border shadow-lg border-gray-3 bg-gray-2"
-            initial={{ opacity: 0, y: 10, scale: 0.9 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{
-              opacity: 0,
-              y: 10,
-              scale: 0.9,
-              transition: { duration: 0.2 },
-            }}
-            transition={{
-              type: "spring",
-              damping: 15,
-              stiffness: 200,
-            }}
-          >
-            <div className="flex gap-1 text-sm font-medium text-gray-12">
-              <AnimatePresence initial={false} mode="wait">
-                <motion.div
-                  initial={{
-                    opacity: 0,
-                    y: animateDirection === "up" ? 10 : -10,
-                    scale: 0.9,
-                  }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  key={selectedCaps.length}
-                  layoutId="selected-caps-count"
-                  className="tabular-nums"
-                  exit={{
-                    opacity: 0,
-                    y: animateDirection === "up" ? -10 : 10,
-                    scale: 0.9,
-                  }}
-                  transition={{ duration: 0.1, ease: "easeInOut" }}
-                >
-                  {selectedCaps.length}
-                </motion.div>
-              </AnimatePresence>
-              cap{selectedCaps.length !== 1 ? "s" : ""} selected
-            </div>
-            <div className="flex gap-2 ml-4">
-              <Button
-                variant="dark"
-                onClick={() => setSelectedCaps([])}
-                className="text-sm"
-                size="sm"
-              >
-                Cancel
-              </Button>
-              <Button
-                style={{ minWidth: "auto" }}
-                variant="destructive"
-                onClick={deleteSelectedCaps}
-                disabled={isDeleting}
-                className="text-sm w-[40px]"
-                spinner={isDeleting}
-                size="sm"
-              >
-                <FontAwesomeIcon icon={faTrash} />
-              </Button>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+        
+      <SelectedCapsBar
+        selectedCaps={selectedCaps}
+        setSelectedCaps={setSelectedCaps}
+        deleteSelectedCaps={deleteSelectedCaps}
+        isDeleting={isDeleting}
+      />
     </div>
   );
 };

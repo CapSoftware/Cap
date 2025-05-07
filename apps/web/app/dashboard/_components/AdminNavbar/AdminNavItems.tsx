@@ -6,6 +6,12 @@ import {
   CommandGroup,
   CommandInput,
   CommandItem,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
   DialogTrigger,
   Popover,
   PopoverContent,
@@ -15,19 +21,13 @@ import { classNames } from "@cap/utils";
 import { Check, ChevronDown, Plus, Search } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
+
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 import { NewOrganization } from "@/components/forms/NewOrganization";
 import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@cap/ui";
+import { buildEnv } from "@cap/env";
 import {
   faBuilding,
   faDownload,
@@ -37,9 +37,9 @@ import {
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { buildEnv } from "@cap/env";
 
 import { updateActiveOrganization, createSpace } from "./server";
+import { useRef, useState } from "react";
 
 export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
   const pathname = usePathname();
@@ -118,6 +118,14 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
       setIsCreatingSpace(false);
     }
   };
+  const {
+    organizationData: orgData,
+    activeOrganization: activeOrg,
+    isSubscribed: userIsSubscribed,
+  } = useSharedContext();
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const [createLoading, setCreateLoading] = useState(false);
+  const [organizationName, setOrganizationName] = useState("");
 
   return (
     <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -125,9 +133,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
         <Tooltip
           disable={open || collapsed === false}
           position="right"
-          content={
-            activeOrganization?.organization.name ?? "No organization found"
-          }
+          content={activeOrg?.organization.name ?? "No organization found"}
         >
           <PopoverTrigger asChild>
             <div
@@ -146,13 +152,11 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                       letterClass="text-gray-1 text-xs"
                       className="relative flex-shrink-0 size-5"
                       name={
-                        activeOrganization?.organization.name ??
-                        "No organization found"
+                        activeOrg?.organization.name ?? "No organization found"
                       }
                     />
                     <p className="ml-2.5 text-sm text-gray-12 font-medium truncate">
-                      {activeOrganization?.organization.name ??
-                        "No organization found"}
+                      {activeOrg?.organization.name ?? "No organization found"}
                     </p>
                   </div>
                   {!collapsed && (
@@ -170,12 +174,18 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                   <CommandInput placeholder="Search organizations..." />
                   <CommandEmpty>No organizations found</CommandEmpty>
                   <CommandGroup>
-                    {organizationData?.map((organization) => {
+                    {orgData?.map((organization) => {
                       const isSelected =
-                        activeOrganization?.organization.id ===
+                        activeOrg?.organization.id ===
                         organization.organization.id;
                       return (
                         <CommandItem
+                          className={clsx(
+                            "transition-colors duration-300",
+                            isSelected
+                              ? "pointer-events-none text-gray-12"
+                              : "!text-gray-10 hover:!text-gray-12"
+                          )}
                           key={organization.organization.name + "-organization"}
                           onSelect={async () => {
                             await updateActiveOrganization(
@@ -185,13 +195,9 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                           }}
                         >
                           {organization.organization.name}
-                          <Check
-                            size={18}
-                            className={classNames(
-                              "ml-auto",
-                              isSelected ? "opacity-100" : "opacity-0"
-                            )}
-                          />
+                          {isSelected && (
+                            <Check size={18} className={"ml-auto"} />
+                          )}
                         </CommandItem>
                       );
                     })}
@@ -359,7 +365,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
         <div className="pb-0 w-full lg:pb-5 text-center">
           <UsageButton
             collapsed={collapsed ?? false}
-            subscribed={isSubscribed}
+            subscribed={userIsSubscribed}
           />
           <Link
             href="/download"
@@ -372,13 +378,38 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
           </p>
         </div>
       </nav>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Create a new Organization</DialogTitle>
+      <DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
+        <DialogHeader
+          icon={<FontAwesomeIcon icon={faBuilding} />}
+          description="A new organization to share caps with your team"
+        >
+          <DialogTitle className="text-lg text-gray-12">
+            Create New Organization
+          </DialogTitle>
         </DialogHeader>
-        <DialogDescription>
-          <NewOrganization onOrganizationCreated={() => setDialogOpen(false)} />
-        </DialogDescription>
+        <div className="p-5">
+          <NewOrganization
+            setCreateLoading={setCreateLoading}
+            onOrganizationCreated={() => setDialogOpen(false)}
+            formRef={formRef}
+            onNameChange={setOrganizationName}
+          />
+        </div>
+        <DialogFooter>
+          <Button variant="gray" size="sm" onClick={() => setDialogOpen(false)}>
+            Cancel
+          </Button>
+          <Button
+            variant="dark"
+            size="sm"
+            disabled={createLoading || !organizationName.trim().length}
+            spinner={createLoading}
+            onClick={() => formRef.current?.requestSubmit()}
+            type="submit"
+          >
+            Create
+          </Button>
+        </DialogFooter>
       </DialogContent>
 
       {/* New Space Dialog */}

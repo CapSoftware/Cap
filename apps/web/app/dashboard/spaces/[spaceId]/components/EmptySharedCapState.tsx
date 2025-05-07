@@ -10,7 +10,7 @@ export const EmptySharedCapState: React.FC<EmptySharedCapStateProps> = ({
 }) => {
   const { theme } = useTheme();
   const { RiveComponent: EmptyCap } = useRive({
-    src: "/rive/empty.riv",
+    src: "/rive/main.riv",
     artboard: theme === "light" ? "emptyshared" : "darkemptyshared",
     autoplay: true,
   });

@@ -13,7 +13,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 // Create a client
 const queryClient = new QueryClient();
 
-export function PostHogProvider({ children }: PropsWithChildren) {
+export function PostHogProvider({
+  children,
+  bootstrapData,
+}: PropsWithChildren<{
+  bootstrapData?: {
+    distinctID: string;
+    featureFlags: Record<string, string | boolean>;
+  };
+}>) {
   useEffect(() => {
     const key = buildEnv.NEXT_PUBLIC_POSTHOG_KEY;
     const host = buildEnv.NEXT_PUBLIC_POSTHOG_HOST;
@@ -23,6 +31,7 @@ export function PostHogProvider({ children }: PropsWithChildren) {
         posthog.init(key, {
           api_host: host,
           capture_pageview: false,
+          bootstrap: bootstrapData,
           loaded: (posthogInstance) => {
             console.log("PostHog loaded and ready to capture events");
           },
@@ -35,7 +44,7 @@ export function PostHogProvider({ children }: PropsWithChildren) {
         "Missing PostHog environment variables. Events will not be tracked."
       );
     }
-  }, []);
+  }, [bootstrapData]);
 
   return (
     <PHProvider client={posthog}>
