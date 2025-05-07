@@ -13,6 +13,7 @@ import { PublicEnvContext } from "@/utils/public-env";
 import { S3_BUCKET_URL } from "@cap/utils";
 import { PropsWithChildren } from "react";
 import crypto from "crypto";
+import { getBootstrapData } from "@/utils/getBootstrapData";
 //@ts-expect-error
 import { script } from "./themeScript";
 
@@ -32,6 +33,7 @@ export const metadata: Metadata = {
 
 export default async function RootLayout({ children }: PropsWithChildren) {
   const user = await getCurrentUser();
+  const bootstrapData = await getBootstrapData();
   const intercomSecret = serverEnv().INTERCOM_SECRET;
   let intercomHash = "";
   if (intercomSecret) {
@@ -72,7 +74,7 @@ export default async function RootLayout({ children }: PropsWithChildren) {
           dangerouslySetInnerHTML={{ __html: `(${script.toString()})()` }}
         />
         <TooltipPrimitive.Provider>
-          <PostHogProvider>
+          <PostHogProvider bootstrapData={bootstrapData}>
             <AuthProvider>
               <PublicEnvContext
                 value={{
