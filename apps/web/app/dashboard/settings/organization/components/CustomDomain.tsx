@@ -227,9 +227,9 @@ export function CustomDomain() {
   };
 
   return (
-    <div className="space-y-6">
-      <div>
-        <div className="flex flex-col justify-between items-start mt-2 h-full">
+    <div className="flex flex-wrap space-y-6">
+      <div className="flex-1">
+        <div className="flex flex-col justify-between items-start">
           <Input
             type="text"
             id="customDomain"
