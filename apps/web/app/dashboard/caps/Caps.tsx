@@ -1,19 +1,16 @@
 "use client";
+import { deleteVideo } from "@/actions/videos/delete";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { useApiClient } from "@/utils/web-api";
 import { VideoMetadata } from "@cap/database/types";
-import { AnimatePresence, motion } from "framer-motion";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { CapCard } from "./components/CapCard";
 import { CapPagination } from "./components/CapPagination";
 import { EmptyCapState } from "./components/EmptyCapState";
-import { Button } from "@cap/ui";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faTrash } from "@fortawesome/free-solid-svg-icons";
-import { deleteVideo } from "@/actions/videos/delete";
-import NumberFlow from "@number-flow/react";
+import { SelectedCapsBar } from "./components/SelectedCapsBar";
+
 
 type VideoData = {
   id: string;
@@ -24,7 +21,7 @@ type VideoData = {
   totalReactions: number;
   sharedOrganizations: { id: string; name: string }[];
   ownerName: string;
-  metadata?: VideoMetadata;
+  metadata?: VideoMetadata
 }[];
 
 export const Caps = ({
@@ -45,7 +42,7 @@ export const Caps = ({
   const totalPages = Math.ceil(count / limit);
   const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
   const previousCountRef = useRef<number>(0);
-  const [animateDirection, setAnimateDirection] = useState<"up" | "down">("up");
+  const [, setAnimateDirection] = useState<"up" | "down">("up");
   const [isDeleting, setIsDeleting] = useState(false);
 
   const anyCapSelected = selectedCaps.length > 0;
@@ -236,55 +233,12 @@ export const Caps = ({
       )}
 
         
-      <AnimatePresence>
-        {selectedCaps.length > 0 && (
-          <motion.div
-            className="flex fixed right-0 left-0 bottom-4 z-50 justify-between items-center px-6 py-3 mx-auto w-full max-w-xl rounded-xl border shadow-lg border-gray-3 bg-gray-2"
-            initial={{ opacity: 0, y: 10, scale: 0.9 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{
-              opacity: 0,
-              y: 10,
-              scale: 0.9,
-              transition: { duration: 0.2 },
-            }}
-            transition={{
-              type: "spring",
-              damping: 15,
-              stiffness: 200,
-            }}
-          >
-            <div className="flex gap-1 text-sm font-medium text-gray-10">
-              <NumberFlow
-                value={selectedCaps.length}
-                className="tabular-nums text-md text-gray-12"
-              />
-              cap{selectedCaps.length !== 1 ? "s" : ""} selected
-            </div>
-            <div className="flex gap-2 ml-4">
-              <Button
-                variant="dark"
-                onClick={() => setSelectedCaps([])}
-                className="text-sm"
-                size="sm"
-              >
-                Cancel
-              </Button>
-              <Button
-                style={{ minWidth: "auto" }}
-                variant="destructive"
-                onClick={deleteSelectedCaps}
-                disabled={isDeleting}
-                className="text-sm w-[40px]"
-                spinner={isDeleting}
-                size="sm"
-              >
-                <FontAwesomeIcon icon={faTrash} />
-              </Button>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <SelectedCapsBar
+        selectedCaps={selectedCaps}
+        setSelectedCaps={setSelectedCaps}
+        deleteSelectedCaps={deleteSelectedCaps}
+        isDeleting={isDeleting}
+      />
     </div>
   );
 };
