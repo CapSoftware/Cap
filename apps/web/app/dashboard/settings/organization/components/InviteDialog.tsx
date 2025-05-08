@@ -9,7 +9,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  Input
+  Input,
 } from "@cap/ui";
 import { faUserGroup } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -22,25 +22,41 @@ interface InviteDialogProps {
   setIsOpen: (isOpen: boolean) => void;
   isOwner: boolean;
   showOwnerToast: () => void;
+  handleManageBilling: () => Promise<void>;
 }
 
 export const InviteDialog = ({
   isOpen,
   setIsOpen,
   isOwner,
-  showOwnerToast
+  showOwnerToast,
+  handleManageBilling,
 }: InviteDialogProps) => {
   const router = useRouter();
   const { activeOrganization } = useSharedContext();
   const [inviteEmails, setInviteEmails] = useState<string[]>([]);
   const [emailInput, setEmailInput] = useState("");
   const [inviteLoading, setInviteLoading] = useState(false);
+  const [upgradeLoading, setUpgradeLoading] = useState(false);
+
+  const inviteQuota = activeOrganization?.inviteQuota ?? 1;
+  const totalInvites = activeOrganization?.totalInvites ?? 0;
+  const adjustedTotalInvites = Math.min(totalInvites, inviteQuota + 1);
+  const remainingSeats = Math.max(0, inviteQuota - adjustedTotalInvites);
 
   const handleAddEmails = () => {
     const newEmails = emailInput
       .split(",")
       .map((email) => email.trim())
       .filter((email) => email !== "");
+
+    if (inviteEmails.length + newEmails.length > remainingSeats) {
+      toast.error(
+        `Not enough seats available. You have ${remainingSeats} seats remaining.`
+      );
+      return;
+    }
+
     setInviteEmails([...new Set([...inviteEmails, ...newEmails])]);
     setEmailInput("");
   };
@@ -49,9 +65,31 @@ export const InviteDialog = ({
     setInviteEmails(inviteEmails.filter((e) => e !== email));
   };
 
+  const handleUpgradePlan = async () => {
+    if (!isOwner) {
+      showOwnerToast();
+      return;
+    }
+
+    setUpgradeLoading(true);
+    setIsOpen(false);
+    try {
+      await handleManageBilling();
+    } catch (error) {
+      setUpgradeLoading(false);
+    }
+  };
+
   const handleSendInvites = async () => {
     if (!isOwner) {
       showOwnerToast();
+      return;
+    }
+
+    if (inviteEmails.length > remainingSeats) {
+      toast.error(
+        `Not enough seats available. You have ${remainingSeats} seats remaining.`
+      );
       return;
     }
 
@@ -88,41 +126,66 @@ export const InviteDialog = ({
           </DialogTitle>
         </DialogHeader>
         <div className="p-5">
-          <Input
-            id="emails"
-            value={emailInput}
-            onChange={(e) => setEmailInput(e.target.value)}
-            placeholder="name@company.com"
-            onBlur={handleAddEmails}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === ",") {
-                e.preventDefault();
-                handleAddEmails();
-              }
-            }}
-          />
-          <div className="flex overflow-y-auto flex-col gap-2.5 mt-4 max-h-60">
-            {inviteEmails.map((email) => (
-              <div
-                key={email}
-                className="flex justify-between items-center p-3 rounded-xl border transition-colors duration-200 cursor-pointer border-gray-3"
-              >
-                <span className="text-sm text-gray-12">{email}</span>
-                <Button
-                  style={{
-                    "--gradient-border-radius": "8px",
-                  } as React.CSSProperties}
-                  type="button"
-                  variant="destructive"
-                  size="xs"
-                  onClick={() => handleRemoveEmail(email)}
-                  disabled={!isOwner}
-                >
-                  Remove
-                </Button>
+          {remainingSeats > 0 ? (
+            <>
+              <Input
+                id="emails"
+                value={emailInput}
+                onChange={(e) => setEmailInput(e.target.value)}
+                placeholder="name@company.com"
+                onBlur={handleAddEmails}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === ",") {
+                    e.preventDefault();
+                    handleAddEmails();
+                  }
+                }}
+              />
+              <div className="flex overflow-y-auto flex-col gap-2.5 mt-4 max-h-60">
+                {inviteEmails.map((email) => (
+                  <div
+                    key={email}
+                    className="flex justify-between items-center p-3 rounded-xl border transition-colors duration-200 cursor-pointer border-gray-3"
+                  >
+                    <span className="text-sm text-gray-12">{email}</span>
+                    <Button
+                      style={
+                        {
+                          "--gradient-border-radius": "8px",
+                        } as React.CSSProperties
+                      }
+                      type="button"
+                      variant="destructive"
+                      size="xs"
+                      onClick={() => handleRemoveEmail(email)}
+                      disabled={!isOwner}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </>
+          ) : (
+            <div className="flex flex-col gap-2 p-4 rounded-xl border bg-amber-50 border-amber-200">
+              <p className="text-amber-800 font-medium">No Seats Available</p>
+              <p className="text-sm text-amber-700">
+                You've reached your seat limit. Please upgrade your plan or
+                remove existing members to invite new ones.
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                variant="dark"
+                className="mt-2 self-start"
+                spinner={upgradeLoading}
+                disabled={upgradeLoading || !isOwner}
+                onClick={handleUpgradePlan}
+              >
+                Upgrade Plan
+              </Button>
+            </div>
+          )}
         </div>
         <DialogFooter className="p-5 border-t border-gray-4">
           <Button
@@ -138,7 +201,9 @@ export const InviteDialog = ({
             size="sm"
             variant="dark"
             spinner={inviteLoading}
-            disabled={inviteLoading || inviteEmails.length === 0}
+            disabled={
+              inviteLoading || inviteEmails.length === 0 || remainingSeats === 0
+            }
             onClick={handleSendInvites}
           >
             Send Invites

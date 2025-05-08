@@ -3,11 +3,7 @@
 import { manageBilling } from "@/actions/organization/manage-billing";
 import { updateOrganizationDetails } from "@/actions/organization/update-details";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import {
-  Card,
-  CardDescription,
-  CardTitle
-} from "@cap/ui";
+import { Card, CardDescription, CardTitle } from "@cap/ui";
 import { useRouter } from "next/navigation";
 import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -38,36 +34,37 @@ export const Organization = () => {
     }
   }, []);
 
-  const handleSubmit = useCallback(async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
+  const handleSubmit = useCallback(
+    async (e: React.FormEvent<HTMLFormElement>) => {
+      e.preventDefault();
 
-    if (!isOwner) {
-      showOwnerToast();
-      return;
-    }
+      if (!isOwner) {
+        showOwnerToast();
+        return;
+      }
 
-    const formData = new FormData(e.currentTarget);
-    const organizationName = formData.get("organizationName") as string;
-    const allowedEmailDomain = formData.get("allowedEmailDomain") as string;
+      const formData = new FormData(e.currentTarget);
+      const organizationName = formData.get("organizationName") as string;
+      const allowedEmailDomain = formData.get("allowedEmailDomain") as string;
 
-    try {
-      setSaveLoading(true);
-      await updateOrganizationDetails(
-        organizationName,
-        allowedEmailDomain,
-        activeOrganization?.organization.id as string
-      );
-      toast.success("Settings updated successfully");
-      router.refresh();
-    } catch (error) {
-      console.error("Error updating settings:", error);
-      toast.error("An error occurred while updating settings");
-    } finally {
-      setSaveLoading(false);
-    }
-  }, [isOwner, showOwnerToast, activeOrganization?.organization.id, router]);
-
-
+      try {
+        setSaveLoading(true);
+        await updateOrganizationDetails(
+          organizationName,
+          allowedEmailDomain,
+          activeOrganization?.organization.id as string
+        );
+        toast.success("Settings updated successfully");
+        router.refresh();
+      } catch (error) {
+        console.error("Error updating settings:", error);
+        toast.error("An error occurred while updating settings");
+      } finally {
+        setSaveLoading(false);
+      }
+    },
+    [isOwner, showOwnerToast, activeOrganization?.organization.id, router]
+  );
 
   const handleManageBilling = useCallback(async () => {
     if (!isOwner) {
@@ -100,19 +97,19 @@ export const Organization = () => {
       <SeatsInfoCards />
 
       <div className="flex flex-col flex-1 gap-6 justify-center items-stretch xl:flex-row">
-        <OrganizationDetailsCard 
+        <OrganizationDetailsCard
           isOwner={isOwner}
           saveLoading={saveLoading}
           showOwnerToast={showOwnerToast}
           organizationName={organizationName}
         />
-        <CustomDomainIconCard 
+        <CustomDomainIconCard
           isOwner={isOwner}
           showOwnerToast={showOwnerToast}
         />
       </div>
 
-      <MembersCard 
+      <MembersCard
         isOwner={isOwner}
         loading={loading}
         handleManageBilling={handleManageBilling}
@@ -120,17 +117,18 @@ export const Organization = () => {
         setIsInviteDialogOpen={setIsInviteDialogOpen}
       />
 
-      <BillingCard 
+      <BillingCard
         isOwner={isOwner}
         loading={loading}
         handleManageBilling={handleManageBilling}
       />
 
-      <InviteDialog 
+      <InviteDialog
         isOpen={isInviteDialogOpen}
         setIsOpen={setIsInviteDialogOpen}
         isOwner={isOwner}
         showOwnerToast={showOwnerToast}
+        handleManageBilling={handleManageBilling}
       />
     </form>
   );

@@ -407,7 +407,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
             onClick={() => formRef.current?.requestSubmit()}
             type="submit"
           >
-            Create
+            {createLoading ? "Creating..." : "Create"}
           </Button>
         </DialogFooter>
       </DialogContent>

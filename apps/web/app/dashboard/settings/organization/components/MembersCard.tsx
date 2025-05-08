@@ -14,7 +14,7 @@ import {
   TableCell,
   TableHead,
   TableHeader,
-  TableRow
+  TableRow,
 } from "@cap/ui";
 import { format } from "date-fns";
 import { useRouter } from "next/navigation";
@@ -34,10 +34,15 @@ export const MembersCard = ({
   loading,
   handleManageBilling,
   showOwnerToast,
-  setIsInviteDialogOpen
+  setIsInviteDialogOpen,
 }: MembersCardProps) => {
   const router = useRouter();
   const { activeOrganization } = useSharedContext();
+
+  const inviteQuota = activeOrganization?.inviteQuota ?? 1;
+  const totalInvites = activeOrganization?.totalInvites ?? 0;
+  const adjustedTotalInvites = Math.min(totalInvites, inviteQuota + 1);
+  const remainingSeats = Math.max(0, inviteQuota - adjustedTotalInvites);
 
   const handleDeleteInvite = async (inviteId: string) => {
     if (!isOwner) {
@@ -87,14 +92,8 @@ export const MembersCard = ({
             onClick={() => {
               if (!isOwner) {
                 showOwnerToast();
-              } else if (
-                activeOrganization &&
-                activeOrganization.inviteQuota <=
-                  activeOrganization.totalInvites
-              ) {
-                toast.error(
-                  "Invite limit reached, please purchase more seats"
-                );
+              } else if (remainingSeats <= 0) {
+                toast.error("Invite limit reached, please purchase more seats");
               } else {
                 setIsInviteDialogOpen(true);
               }
@@ -127,9 +126,7 @@ export const MembersCard = ({
                     ? "Owner"
                     : "Member"}
                 </TableCell>
-                <TableCell>
-                  {format(member.createdAt, "MMM d, yyyy")}
-                </TableCell>
+                <TableCell>{format(member.createdAt, "MMM d, yyyy")}</TableCell>
                 <TableCell>Active</TableCell>
                 <TableCell>-</TableCell>
               </TableRow>
