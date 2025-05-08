@@ -10,17 +10,17 @@ import { VideoMetadata } from "@cap/database/types";
 import { buildEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
 import {
+  faCheck,
   faChevronDown,
   faLink,
   faTrash,
-  faCheck,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import moment from "moment";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState, PropsWithChildren } from "react";
+import { PropsWithChildren, useState } from "react";
 import { toast } from "sonner";
 
 interface Props extends PropsWithChildren {
@@ -64,7 +64,7 @@ export const CapCard = ({
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(cap.name);
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
-  const [sharedOrganizations, setSharedOrganizations] = useState(
+  const [, setSharedOrganizations] = useState(
     cap.sharedOrganizations
   );
   const [isDateEditing, setIsDateEditing] = useState(false);
@@ -77,8 +77,7 @@ export const CapCard = ({
   const { activeOrganization } = useSharedContext();
 
   const handleTitleBlur = async (capName: string) => {
-    if (capName === title) return;
-    if (!title) {
+    if (!title || capName === title) {
       setIsEditing(false);
       return;
     }
@@ -387,30 +386,32 @@ export const CapCard = ({
           )}
         >
           <div>
-            {isEditing && !sharedCapCard ? (
-              <textarea
-                rows={1}
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                onBlur={() => handleTitleBlur(cap.name)}
-                onKeyDown={(e) => handleTitleKeyDown(e, cap.name)}
-                autoFocus
-                className="text-md resize-none bg-transparent truncate w-full border-0 outline-0 leading-[1.25rem] text-gray-12 font-medium mb-1"
-              />
-            ) : (
-              <p
-                className="text-md truncate leading-[1.25rem] text-gray-12 font-medium mb-1"
-                onClick={() => {
-                  if (!sharedCapCard) {
-                    if (userId === cap.ownerId) {
-                      setIsEditing(true);
+            <div className="h-[1.25rem] mb-1">  {/* Fixed height container */}
+              {isEditing && !sharedCapCard ? (
+                <textarea
+                  rows={1}
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  onBlur={() => handleTitleBlur(cap.name)}
+                  onKeyDown={(e) => handleTitleKeyDown(e, cap.name)}
+                  autoFocus
+                  className="text-md resize-none bg-transparent truncate w-full border-0 outline-0 text-gray-12 font-medium p-0 m-0 h-[1.25rem] overflow-hidden leading-[1.25rem] tracking-normal font-[inherit]"
+                />
+              ) : (
+                <p
+                  className="text-md truncate leading-[1.25rem] text-gray-12 font-medium p-0 m-0 h-[1.25rem] tracking-normal"
+                  onClick={() => {
+                    if (!sharedCapCard) {
+                      if (userId === cap.ownerId) {
+                        setIsEditing(true);
+                      }
                     }
-                  }
-                }}
-              >
-                {title}
-              </p>
-            )}
+                  }}
+                >
+                  {title}
+                </p>
+              )}
+            </div>
             {renderSharedStatus()}
             <div className="mb-1">
               {isDateEditing && !sharedCapCard ? (
