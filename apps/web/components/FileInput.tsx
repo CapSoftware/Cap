@@ -130,7 +130,7 @@ export const FileInput: React.FC<FileInputProps> = ({
       // Create a new preview URL for immediate feedback
       const newPreviewUrl = URL.createObjectURL(file);
       setPreviewUrl(newPreviewUrl);
-      setSelectedFile(file);
+      setSelectedFile(null);
       
       // Call the onChange callback
       if (onChange) {
@@ -169,18 +169,8 @@ export const FileInput: React.FC<FileInputProps> = ({
     <div className={`relative ${className}`}>
       <div className="h-[46.5px]"> {/* Fixed height container to prevent resizing */}
         {(selectedFile || previewUrl) ? (
-          <div className="flex gap-2 items-center p-1.5 rounded-xl border border-gray-4 h-full">
+          <div className="flex gap-2 items-center p-1.5 rounded-xl border bg-gray-3 border-gray-4 h-full">
             <div className="flex flex-1 gap-1.5 items-center">
-              <div className="overflow-hidden relative flex-shrink-0 rounded-md size-5">
-                {previewUrl && (
-                  <Image 
-                    src={previewUrl} 
-                    alt="File preview" 
-                    fill 
-                    className="object-contain"
-                  />
-                )}
-              </div>
               <div className="flex flex-1 gap-1 items-center">
                 {selectedFile ? (
                   <>
@@ -188,7 +178,19 @@ export const FileInput: React.FC<FileInputProps> = ({
                     <p className="text-xs text-gray-10 min-w-fit">{(selectedFile.size / 1024).toFixed(1)} KB</p>
                   </>
                 ) : (
-                  <p className="text-xs font-medium text-gray-12">Current file</p>
+                  <div className="flex gap-2 items-center">
+                  <p className="text-xs font-medium text-gray-12">Current icon: </p>
+                  <div className="overflow-hidden relative flex-shrink-0 rounded-md size-5">
+                  {previewUrl && (
+                    <Image 
+                      src={previewUrl} 
+                      alt="File preview" 
+                      fill 
+                      className="object-contain rounded-full"
+                    />
+                  )}
+                </div>
+                </div>
                 )}
               </div>
             </div>
@@ -205,9 +207,7 @@ export const FileInput: React.FC<FileInputProps> = ({
               {isLoading ? (
                 <FontAwesomeIcon icon={faSpinner} className="animate-spin" />
               ) : (
-                <>
-                  Remove
-                </>
+                <>Remove</>
               )}
             </Button>
           </div>

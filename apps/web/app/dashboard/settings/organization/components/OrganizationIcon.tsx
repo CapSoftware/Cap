@@ -3,10 +3,10 @@
 import { removeOrganizationIcon } from "@/actions/organization/remove-icon";
 import { uploadOrganizationIcon } from "@/actions/organization/upload-icon";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
+import { FileInput } from "@/components/FileInput";
 import { CardDescription, Label } from "@cap/ui";
 import { useState } from "react";
 import { toast } from "sonner";
-import { FileInput } from "@/components/FileInput";
 
 interface OrganizationIconProps {
   isOwner: boolean;
@@ -55,7 +55,6 @@ export const OrganizationIcon = ({
     if (!isOwner || !organizationId) return;
     
     try {
-      setIsUploading(true);
       const result = await removeOrganizationIcon(organizationId);
       
       if (result.success) {
@@ -64,8 +63,6 @@ export const OrganizationIcon = ({
     } catch (error) {
       console.error("Error removing organization icon:", error);
       toast.error(error instanceof Error ? error.message : "Failed to remove icon");
-    } finally {
-      setIsUploading(false);
     }
   };
 
@@ -83,7 +80,7 @@ export const OrganizationIcon = ({
           id="icon"
           name="icon"
           onChange={handleFileChange}
-          disabled={!isOwner}
+          disabled={!isOwner || isUploading}
           isLoading={isUploading}
           initialPreviewUrl={existingIconUrl || null}
           onRemove={handleRemoveIcon}
