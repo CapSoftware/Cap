@@ -178,6 +178,11 @@ export const CapCard = ({
       return;
     }
 
+    if (selectedDate.isSame(effectiveDate)) {
+      setIsDateEditing(false);
+      return;
+    }
+
     try {
       await editDate(cap.id, selectedDate.toISOString());
       toast.success("Video date updated");
