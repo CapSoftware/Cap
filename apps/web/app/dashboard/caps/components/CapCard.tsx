@@ -3,7 +3,6 @@ import { editTitle } from "@/actions/videos/edit-title";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { CapCardAnalytics } from "@/app/dashboard/caps/components/CapCardAnalytics";
 import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
-import { SpaceSharingDialog } from "@/app/dashboard/caps/components/SpaceSharingDialog";
 import { Tooltip } from "@/components/Tooltip";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
 import { usePublicEnv } from "@/utils/public-env";
@@ -65,8 +64,6 @@ export const CapCard = ({
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(cap.name);
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
-  const [isSpaceSharingDialogOpen, setIsSpaceSharingDialogOpen] =
-    useState(false);
   const [, setSharedOrganizations] = useState(cap.sharedOrganizations);
   const [isDateEditing, setIsDateEditing] = useState(false);
   const [copyPressed, setCopyPressed] = useState(false);
@@ -123,9 +120,9 @@ export const CapCard = ({
         return (
           <p
             className={baseClassName}
-            onClick={() => setIsSpaceSharingDialogOpen(true)}
+            onClick={() => setIsSharingDialogOpen(true)}
           >
-            Add to space{" "}
+            Not shared{" "}
             <FontAwesomeIcon className="ml-2 size-2.5" icon={faChevronDown} />
           </p>
         );
@@ -259,12 +256,6 @@ export const CapCard = ({
         sharedOrganizations={cap.sharedOrganizations || []}
         userOrganizations={userOrganizations}
         onSharingUpdated={handleSharingUpdated}
-      />
-      <SpaceSharingDialog
-        isOpen={isSpaceSharingDialogOpen}
-        onClose={() => setIsSpaceSharingDialogOpen(false)}
-        capId={cap.id}
-        capName={cap.name}
       />
       <div
         onClick={handleCardClick}
