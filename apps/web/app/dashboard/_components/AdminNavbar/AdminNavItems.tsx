@@ -37,7 +37,6 @@ import {
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import Image from "next/image";
 
 import { useRef, useState } from "react";
 import { updateActiveOrganization } from "./server";
@@ -118,25 +117,14 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
               >
                 <div className="flex justify-between items-center w-full text-left">
                   <div className="flex items-center">
-                    {activeOrg?.organization.iconUrl ? (
-                      <div className="overflow-hidden relative flex-shrink-0 rounded-full size-5">
-                        <Image
-                          src={activeOrg.organization.iconUrl}
-                          alt={activeOrg.organization.name || "Organization icon"}
-                          fill
-                          className="object-cover"
-                        />
-                      </div>
-                    ) : (
-                      <Avatar
-                        letterClass="text-gray-1 text-xs"
-                        className="relative flex-shrink-0 size-5"
-                        name={
-                          activeOrg?.organization.name ??
-                          "No organization found"
-                        }
-                      />
-                    )}
+                    <Avatar
+                      letterClass="text-gray-1 text-xs"
+                      className="relative flex-shrink-0 size-5"
+                      name={
+                        activeOrg?.organization.name ??
+                        "No organization found"
+                      }
+                    />
                     <p className="ml-2.5 text-sm text-gray-12 font-medium truncate">
                       {activeOrg?.organization.name ??
                         "No organization found"}
@@ -164,8 +152,9 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                       return (
                         <CommandItem
                           className={clsx(
-                            "rounded-lg transition-colors duration-300 group",
-                            isSelected ? "pointer-events-none":"text-gray-10 hover:text-gray-12 hover:bg-gray-6"
+                            "transition-colors duration-300",
+                            isSelected ? "pointer-events-none text-gray-12"
+                            : "!text-gray-10 hover:!text-gray-12"
                           )}
                           key={organization.organization.name + "-organization"}
                           onSelect={async () => {
@@ -175,29 +164,11 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                             setOpen(false);
                           }}
                         >
-                          <div className="flex gap-2 items-center w-full">
-                            {organization.organization.iconUrl ? (
-                              <div className="overflow-hidden relative flex-shrink-0 rounded-full size-5">
-                                <Image
-                                  src={organization.organization.iconUrl}
-                                  alt={organization.organization.name || "Organization icon"}
-                                  fill
-                                  className="object-cover"
-                                />
-                              </div>
-                            ) : (
-                              <Avatar
-                                letterClass="text-gray-1 text-xs"
-                                className="relative flex-shrink-0 size-5"
-                                name={organization.organization.name}
-                              />
-                            )}
-                            <p className={clsx("flex-1 text-sm transition-colors duration-200 group-hover:text-gray-12", isSelected ? "text-gray-12":"text-gray-10")}>{organization.organization.name}</p>
-                          </div>
+                          {organization.organization.name}
                           {isSelected && (
                             <Check
                               size={18}
-                              className={"ml-auto text-gray-12"}
+                              className={"ml-auto"}
                             />
                           )}
                         </CommandItem>

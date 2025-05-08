@@ -136,7 +136,6 @@ export const organizations = mysqlTable(
     allowedEmailDomain: varchar("allowedEmailDomain", { length: 255 }),
     customDomain: varchar("customDomain", { length: 255 }),
     domainVerified: timestamp("domainVerified"),
-    iconUrl: varchar("iconUrl", { length: 1024 }),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
     workosOrganizationId: varchar("workosOrganizationId", { length: 255 }),
