@@ -31,14 +31,14 @@ interface Props extends PropsWithChildren {
     createdAt: Date;
     totalComments: number;
     totalReactions: number;
-    sharedOrganizations?: { id: string; name: string }[];
+    sharedOrganizations?: { id: string; name: string; iconUrl: string }[];
     ownerName: string | null;
     metadata?: VideoMetadata;
   };
   analytics: number;
   onDelete?: (videoId: string) => Promise<void>;
   userId?: string;
-  userOrganizations?: { id: string; name: string }[];
+  userOrganizations?: { id: string; name: string; iconUrl: string }[];
   sharedCapCard?: boolean;
   isSelected?: boolean;
   onSelectToggle?: () => void;
@@ -172,6 +172,11 @@ export const CapCard = ({
     if (selectedDate.isAfter(currentDate)) {
       toast.error("Cannot set a date in the future");
       setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss"));
+      setIsDateEditing(false);
+      return;
+    }
+
+    if (selectedDate.isSame(effectiveDate)) {
       setIsDateEditing(false);
       return;
     }
@@ -413,9 +418,9 @@ export const CapCard = ({
               )}
             </div>
             {renderSharedStatus()}
-            <div className="mb-1">
+            <div className="mb-1 h-[1.5rem]"> {/* Fixed height container */}
               {isDateEditing && !sharedCapCard ? (
-                <div className="flex items-center">
+                <div className="flex items-center h-full">
                   <input
                     type="text"
                     value={dateValue}
@@ -423,14 +428,14 @@ export const CapCard = ({
                     onBlur={handleDateBlur}
                     onKeyDown={handleDateKeyDown}
                     autoFocus
-                    className="text-sm truncate mt-2 leading-[1.25rem] text-gray-10 bg-transparent focus:outline-none"
+                    className="text-sm w-full truncate text-gray-10 bg-transparent focus:outline-none h-full leading-[1.5rem]"
                     placeholder="YYYY-MM-DD HH:mm:ss"
                   />
                 </div>
               ) : (
                 <Tooltip content={`Cap created at ${effectiveDate}`}>
                   <p
-                    className="text-sm truncate mt-2 leading-[1.25rem] text-gray-10 cursor-pointer flex items-center"
+                    className="text-sm truncate text-gray-10 cursor-pointer flex items-center h-full leading-[1.5rem]"
                     onClick={handleDateClick}
                   >
                     {showFullDate

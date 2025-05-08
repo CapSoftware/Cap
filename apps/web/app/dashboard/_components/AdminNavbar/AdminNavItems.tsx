@@ -8,19 +8,18 @@ import {
   CommandItem,
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
   Popover,
   PopoverContent,
-  PopoverTrigger,
+  PopoverTrigger
 } from "@cap/ui";
 import { classNames } from "@cap/utils";
-import { Check, ChevronDown, Plus, Search } from "lucide-react";
+import { Check, ChevronDown, Plus } from "lucide-react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
@@ -32,27 +31,22 @@ import {
   faBuilding,
   faDownload,
   faRecordVinyl,
+  faShareNodes,
   IconDefinition,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { motion } from "framer-motion";
+import Image from "next/image";
 
-import { updateActiveOrganization, createSpace } from "./server";
 import { useRef, useState } from "react";
+import { updateActiveOrganization } from "./server";
 
 export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
   const pathname = usePathname();
-  const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [spacesOpen, setSpacesOpen] = useState(false);
-  const {
-    organizationData,
-    activeOrganization,
-    user,
-    isSubscribed,
-    spacesData,
-  } = useSharedContext();
+  const { user } =
+    useSharedContext();
 
   const manageNavigation = [
     {
@@ -62,67 +56,41 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
       subNav: [],
     },
     {
-      name: "Settings",
+      name: "Shared Caps",
+      href: `/dashboard/shared-caps`,
+      icon: faShareNodes,
+      subNav: [],
+    },
+    {
+      name: "Download App",
+      href: `/download`,
+      icon: faDownload,
+      subNav: [],
+    },
+    {
+      name: "Organization",
       href: `/dashboard/settings/organization`,
       icon: faBuilding,
       subNav: [],
     },
+    ...(buildEnv.NEXT_PUBLIC_IS_CAP && user.email.endsWith("@cap.so")
+      ? [
+          {
+            name: "Admin Dev",
+            href: "/dashboard/admin",
+            icon: faBuilding,
+            subNav: [],
+          },
+        ]
+      : []),
   ];
 
-  const navItemClass = `flex items-center justify-start p-2 rounded-2xl outline-none tracking-tight w-full overflow-hidden ${
-    collapsed ? "w-9" : "w-full"
-  }`;
+  const navItemClass =
+    "flex items-center justify-start py-2 px-3 rounded-2xl outline-none tracking-tight w-full overflow-hidden";
 
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [spaceDialogOpen, setSpaceDialogOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [newSpaceName, setNewSpaceName] = useState("");
-  const [newSpaceDescription, setNewSpaceDescription] = useState("");
-  const [isCreatingSpace, setIsCreatingSpace] = useState(false);
-  const [spaceError, setSpaceError] = useState<string | null>(null);
-
-  // Filter spaces based on search query
-  const filteredSpaces =
-    spacesData?.filter(
-      (space) =>
-        space.name.toLowerCase().includes(searchQuery.toLowerCase()) &&
-        space.organizationId === activeOrganization?.organization.id
-    ) || [];
-
-  const handleCreateSpace = async () => {
-    if (!newSpaceName.trim()) {
-      setSpaceError("Space name is required");
-      return;
-    }
-
-    setIsCreatingSpace(true);
-    setSpaceError(null);
-
-    try {
-      const result = await createSpace(
-        newSpaceName.trim(),
-        newSpaceDescription.trim() || null
-      );
-
-      if (result.success) {
-        setSpaceDialogOpen(false);
-        setNewSpaceName("");
-        setNewSpaceDescription("");
-      } else {
-        setSpaceError(result.error || "Failed to create space");
-      }
-    } catch (error) {
-      setSpaceError("An unexpected error occurred");
-      console.error(error);
-    } finally {
-      setIsCreatingSpace(false);
-    }
-  };
-  const {
-    organizationData: orgData,
-    activeOrganization: activeOrg,
-    isSubscribed: userIsSubscribed,
-  } = useSharedContext();
+  const { organizationData: orgData, activeOrganization: activeOrg, isSubscribed: userIsSubscribed } =
+    useSharedContext();
   const formRef = useRef<HTMLFormElement | null>(null);
   const [createLoading, setCreateLoading] = useState(false);
   const [organizationName, setOrganizationName] = useState("");
@@ -133,7 +101,9 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
         <Tooltip
           disable={open || collapsed === false}
           position="right"
-          content={activeOrg?.organization.name ?? "No organization found"}
+          content={
+            activeOrg?.organization.name ?? "No organization found"
+          }
         >
           <PopoverTrigger asChild>
             <div
@@ -148,15 +118,28 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
               >
                 <div className="flex justify-between items-center w-full text-left">
                   <div className="flex items-center">
-                    <Avatar
-                      letterClass="text-gray-1 text-xs"
-                      className="relative flex-shrink-0 size-5"
-                      name={
-                        activeOrg?.organization.name ?? "No organization found"
-                      }
-                    />
+                    {activeOrg?.organization.iconUrl ? (
+                      <div className="overflow-hidden relative flex-shrink-0 rounded-full size-5">
+                        <Image
+                          src={activeOrg.organization.iconUrl}
+                          alt={activeOrg.organization.name || "Organization icon"}
+                          fill
+                          className="object-cover"
+                        />
+                      </div>
+                    ) : (
+                      <Avatar
+                        letterClass="text-gray-1 text-xs"
+                        className="relative flex-shrink-0 size-5"
+                        name={
+                          activeOrg?.organization.name ??
+                          "No organization found"
+                        }
+                      />
+                    )}
                     <p className="ml-2.5 text-sm text-gray-12 font-medium truncate">
-                      {activeOrg?.organization.name ?? "No organization found"}
+                      {activeOrg?.organization.name ??
+                        "No organization found"}
                     </p>
                   </div>
                   {!collapsed && (
@@ -181,10 +164,8 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                       return (
                         <CommandItem
                           className={clsx(
-                            "transition-colors duration-300",
-                            isSelected
-                              ? "pointer-events-none text-gray-12"
-                              : "!text-gray-10 hover:!text-gray-12"
+                            "rounded-lg transition-colors duration-300 group",
+                            isSelected ? "pointer-events-none":"text-gray-10 hover:text-gray-12 hover:bg-gray-6"
                           )}
                           key={organization.organization.name + "-organization"}
                           onSelect={async () => {
@@ -194,9 +175,30 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                             setOpen(false);
                           }}
                         >
-                          {organization.organization.name}
+                          <div className="flex gap-2 items-center w-full">
+                            {organization.organization.iconUrl ? (
+                              <div className="overflow-hidden relative flex-shrink-0 rounded-full size-5">
+                                <Image
+                                  src={organization.organization.iconUrl}
+                                  alt={organization.organization.name || "Organization icon"}
+                                  fill
+                                  className="object-cover"
+                                />
+                              </div>
+                            ) : (
+                              <Avatar
+                                letterClass="text-gray-1 text-xs"
+                                className="relative flex-shrink-0 size-5"
+                                name={organization.organization.name}
+                              />
+                            )}
+                            <p className={clsx("flex-1 text-sm transition-colors duration-200 group-hover:text-gray-12", isSelected ? "text-gray-12":"text-gray-10")}>{organization.organization.name}</p>
+                          </div>
                           {isSelected && (
-                            <Check size={18} className={"ml-auto"} />
+                            <Check
+                              size={18}
+                              className={"ml-auto text-gray-12"}
+                            />
                           )}
                         </CommandItem>
                       );
@@ -222,7 +224,9 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
         className="flex flex-col justify-between w-full h-full"
         aria-label="Sidebar"
       >
-        <div className={clsx("space-y-2.5", collapsed ? "items-center" : "")}>
+        <div
+          className={clsx("mt-8 space-y-2.5", collapsed ? "items-center" : "")}
+        >
           {manageNavigation.map((item) => (
             <div key={item.name} className="flex relative justify-center">
               {pathname.includes(item.href) ? (
@@ -277,118 +281,23 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
               </Tooltip>
             </div>
           ))}
-
-          {/* Spaces Section */}
-          <div className="mt-6 pt-4 border-t border-gray-3">
-            <div className="flex justify-between items-center px-3 py-2">
-              <h3 className="text-sm text-gray-10 font-medium">Spaces</h3>
-              <button
-                onClick={() => setSpaceDialogOpen(true)}
-                className="text-gray-8 hover:text-gray-12"
-              >
-                <Plus className="w-5 h-auto" />
-              </button>
-            </div>
-
-            {/* Search Spaces */}
-            <div className="px-3 mt-2">
-              <div className="relative">
-                <Search className="absolute left-3 top-2.5 text-gray-8 w-4 h-4" />
-                <input
-                  type="text"
-                  placeholder="Search spaces"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full h-9 pl-9 pr-3 rounded-lg bg-gray-3 border border-gray-4 text-sm text-gray-12 focus:outline-none focus:ring-1 focus:ring-blue-10"
-                />
-              </div>
-            </div>
-
-            {/* All Organization Space */}
-            <Tooltip
-              content={`All ${
-                activeOrganization?.organization.name || "Organization"
-              }`}
-              disable={collapsed === false}
-              position="right"
-            >
-              <Link
-                href={`/dashboard/spaces/${activeOrganization?.organization.id}`}
-                className={classNames(
-                  "flex gap-2 items-center px-3 py-2 mt-2 rounded-lg",
-                  pathname.includes("/dashboard/spaces")
-                    ? "bg-gray-4 text-gray-12"
-                    : "text-gray-10 hover:text-gray-12 hover:bg-gray-3"
-                )}
-              >
-                <Avatar
-                  letterClass="text-gray-1 text-xs"
-                  className="relative flex-shrink-0 size-5"
-                  name={activeOrganization?.organization.name || "All"}
-                />
-                <span className="text-sm font-medium truncate">
-                  All {activeOrganization?.organization.name || "Organization"}
-                </span>
-              </Link>
-            </Tooltip>
-
-            {/* Space List */}
-            {filteredSpaces.map((space) => (
-              <Tooltip
-                key={space.id}
-                content={space.name}
-                disable={collapsed === false}
-                position="right"
-              >
-                <Link
-                  href={`/dashboard/spaces/${space.id}`}
-                  className={classNames(
-                    "flex gap-2 items-center px-3 py-2 mt-1 rounded-lg",
-                    pathname.includes(`/dashboard/spaces/${space.id}`)
-                      ? "bg-gray-4 text-gray-12"
-                      : "text-gray-10 hover:text-gray-12 hover:bg-gray-3"
-                  )}
-                >
-                  <Avatar
-                    letterClass="text-gray-1 text-xs"
-                    className="relative flex-shrink-0 size-5"
-                    name={space.name}
-                  />
-                  <span className="text-sm font-medium truncate">
-                    {space.name}
-                  </span>
-                </Link>
-              </Tooltip>
-            ))}
-          </div>
         </div>
-        <div className="pb-0 w-full lg:pb-5 text-center">
+        <div className="pb-0 w-full lg:pb-5">
           <UsageButton
             collapsed={collapsed ?? false}
             subscribed={userIsSubscribed}
           />
-          <Link
-            href="/download"
-            className="inline-flex mt-3 text-xs text-center truncate font-semibold text-gray-10 hover:text-gray-12 hover:underline"
-          >
-            Download App
-          </Link>
-          <p className="mt-1 text-xs text-center truncate text-gray-10">
+          <p className="mt-4 text-xs text-center truncate text-gray-10">
             Cap Software, Inc. {new Date().getFullYear()}.
           </p>
         </div>
       </nav>
       <DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
-        <DialogHeader
-          icon={<FontAwesomeIcon icon={faBuilding} />}
-          description="A new organization to share caps with your team"
-        >
-          <DialogTitle className="text-lg text-gray-12">
-            Create New Organization
-          </DialogTitle>
+        <DialogHeader icon={<FontAwesomeIcon icon={faBuilding} />} description="A new organization to share caps with your team">
+          <DialogTitle className="text-lg text-gray-12">Create New Organization</DialogTitle>
         </DialogHeader>
         <div className="p-5">
-          <NewOrganization
+          <NewOrganization 
             setCreateLoading={setCreateLoading}
             onOrganizationCreated={() => setDialogOpen(false)}
             formRef={formRef}
@@ -396,12 +305,16 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
           />
         </div>
         <DialogFooter>
-          <Button variant="gray" size="sm" onClick={() => setDialogOpen(false)}>
+          <Button 
+            variant="gray" 
+            size="sm" 
+            onClick={() => setDialogOpen(false)}
+          >
             Cancel
           </Button>
-          <Button
-            variant="dark"
-            size="sm"
+          <Button 
+            variant="dark" 
+            size="sm" 
             disabled={createLoading || !organizationName.trim().length}
             spinner={createLoading}
             onClick={() => formRef.current?.requestSubmit()}
@@ -411,64 +324,6 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
           </Button>
         </DialogFooter>
       </DialogContent>
-
-      {/* New Space Dialog */}
-      <Dialog open={spaceDialogOpen} onOpenChange={setSpaceDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Create a new Space</DialogTitle>
-          </DialogHeader>
-          <DialogDescription>
-            <div className="space-y-4 pt-2">
-              <div>
-                <label
-                  htmlFor="spaceName"
-                  className="block text-sm font-medium text-gray-12"
-                >
-                  Space Name
-                </label>
-                <input
-                  type="text"
-                  id="spaceName"
-                  value={newSpaceName}
-                  onChange={(e) => setNewSpaceName(e.target.value)}
-                  className="mt-1 w-full rounded-md border border-gray-4 bg-gray-2 px-3 py-2 text-gray-12 focus:border-blue-10 focus:outline-none focus:ring-1 focus:ring-blue-10"
-                  placeholder="Enter space name"
-                />
-              </div>
-              <div>
-                <label
-                  htmlFor="spaceDescription"
-                  className="block text-sm font-medium text-gray-12"
-                >
-                  Description (optional)
-                </label>
-                <textarea
-                  id="spaceDescription"
-                  rows={3}
-                  value={newSpaceDescription}
-                  onChange={(e) => setNewSpaceDescription(e.target.value)}
-                  className="mt-1 w-full rounded-md border border-gray-4 bg-gray-2 px-3 py-2 text-gray-12 focus:border-blue-10 focus:outline-none focus:ring-1 focus:ring-blue-10"
-                  placeholder="Describe the purpose of this space"
-                />
-              </div>
-              {spaceError && (
-                <p className="text-red-500 text-sm">{spaceError}</p>
-              )}
-              <div className="pt-2">
-                <Button
-                  variant="dark"
-                  className="w-full"
-                  disabled={isCreatingSpace}
-                  onClick={handleCreateSpace}
-                >
-                  {isCreatingSpace ? "Creating..." : "Create Space"}
-                </Button>
-              </div>
-            </div>
-          </DialogDescription>
-        </DialogContent>
-      </Dialog>
     </Dialog>
   );
 };

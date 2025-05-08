@@ -1,3 +1,4 @@
+import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 import {
   Button,
   Dialog,
@@ -12,6 +13,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import { Check, Search } from "lucide-react";
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -20,8 +22,8 @@ interface SharingDialogProps {
   onClose: () => void;
   capId: string;
   capName: string;
-  sharedOrganizations: { id: string; name: string }[];
-  userOrganizations?: { id: string; name: string }[];
+  sharedOrganizations: { id: string; name: string; iconUrl: string }[];
+  userOrganizations?: { id: string; name: string; iconUrl: string }[];
   onSharingUpdated: (updatedSharedOrganizations: string[]) => void;
 }
 
@@ -209,7 +211,7 @@ const SpaceCard = ({
   selectedOrganizations,
   handleToggleOrganization,
 }: {
-  organization: { id: string; name: string };
+  organization: { id: string; name: string; iconUrl: string };
   selectedOrganizations: Set<string>;
   handleToggleOrganization: (organizationId: string) => void;
 }) => {
@@ -223,9 +225,23 @@ const SpaceCard = ({
       )}
       onClick={() => handleToggleOrganization(organization.id)}
     >
-      <div className="flex justify-center items-center text-xs font-semibold rounded-full size-6 text-gray-1 bg-gray-12">
-        {organization.name.charAt(0).toUpperCase()}
-      </div>
+      {organization.iconUrl ? (
+        <div className="overflow-hidden relative flex-shrink-0 rounded-full size-6">
+          <Image
+            src={organization.iconUrl}
+            alt={organization.name}
+            width={24}
+            height={24}
+            className="object-cover w-full h-full"
+          />
+        </div>
+      ) : (
+        <Avatar
+          letterClass="text-gray-1 text-xs"
+          className="relative flex-shrink-0 size-6"
+          name={organization.name}
+        />
+      )}
       <span className="text-xs truncate transition-colors duration-200 text-gray-10">
         {organization.name}
       </span>
