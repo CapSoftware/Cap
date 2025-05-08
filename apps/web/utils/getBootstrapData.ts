@@ -1,6 +1,6 @@
-import { PostHog } from 'posthog-node';
+import { buildEnv } from "@cap/env";
 import { cookies } from 'next/headers';
-import { buildEnv } from '@cap/env';
+import { PostHog } from 'posthog-node';
 import { cache } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -15,8 +15,14 @@ export interface BootstrapData {
 }
 
 export async function getBootstrapData(): Promise<BootstrapData> {
+
+  if (!buildEnv.NEXT_PUBLIC_POSTHOG_KEY) return {
+    distinctID: '',
+    featureFlags: {}
+  };
+  
   let distinct_id = '';
-  const phProjectAPIKey = buildEnv.NEXT_PUBLIC_POSTHOG_KEY || '';
+  const phProjectAPIKey = buildEnv.NEXT_PUBLIC_POSTHOG_KEY;
   const phCookieName = `ph_${phProjectAPIKey}_posthog`;
   const cookieStore = cookies();
   const phCookie = cookieStore.get(phCookieName);
