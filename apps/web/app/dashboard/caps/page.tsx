@@ -2,9 +2,9 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
   comments,
-  sharedVideos,
   organizationMembers,
   organizations,
+  sharedVideos,
   users,
   videos,
 } from "@cap/database/schema";
@@ -55,12 +55,13 @@ export default async function CapsPage({
       metadata: videos.metadata,
       totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
       totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
-      sharedOrganizations: sql<{ id: string; name: string }[]>`
+      sharedOrganizations: sql<{ id: string; name: string; iconUrl: string }[]>`
         COALESCE(
           JSON_ARRAYAGG(
             JSON_OBJECT(
               'id', ${organizations.id},
-              'name', ${organizations.name}
+              'name', ${organizations.name},
+              'iconUrl', ${organizations.iconUrl}
             )
           ),
           JSON_ARRAY()
@@ -101,6 +102,7 @@ export default async function CapsPage({
     .select({
       id: organizations.id,
       name: organizations.name,
+      iconUrl: organizations.iconUrl,
     })
     .from(organizations)
     .leftJoin(

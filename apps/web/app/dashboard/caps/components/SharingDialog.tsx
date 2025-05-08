@@ -1,9 +1,19 @@
-import { Button, Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, Input } from "@cap/ui";
+import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  Input,
+} from "@cap/ui";
 import { faShareNodes } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import { Check, Search } from "lucide-react";
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -12,8 +22,8 @@ interface SharingDialogProps {
   onClose: () => void;
   capId: string;
   capName: string;
-  sharedOrganizations: { id: string; name: string }[];
-  userOrganizations?: { id: string; name: string }[];
+  sharedOrganizations: { id: string; name: string; iconUrl: string }[];
+  userOrganizations?: { id: string; name: string; iconUrl: string }[];
   onSharingUpdated: (updatedSharedOrganizations: string[]) => void;
 }
 
@@ -34,7 +44,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
     useState<Set<string>>(
       new Set(sharedOrganizations.map((organization) => organization.id))
     );
-    const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -138,7 +148,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
-        <DialogHeader 
+        <DialogHeader
           icon={<FontAwesomeIcon icon={faShareNodes} className="size-3.5" />}
           description="Select the organizations you would like to share with"
         >
@@ -181,7 +191,13 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
           <Button size="sm" variant="gray" onClick={onClose}>
             Cancel
           </Button>
-          <Button spinner={loading} disabled={loading} size="sm" variant="dark" onClick={handleSave}>
+          <Button
+            spinner={loading}
+            disabled={loading}
+            size="sm"
+            variant="dark"
+            onClick={handleSave}
+          >
             {loading ? "Saving..." : "Save"}
           </Button>
         </DialogFooter>
@@ -190,35 +206,72 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
   );
 };
 
-const SpaceCard = ({ organization, selectedOrganizations, handleToggleOrganization }: { organization: { id: string; name: string }, selectedOrganizations: Set<string>, handleToggleOrganization: (organizationId: string) => void }) => {
+const SpaceCard = ({
+  organization,
+  selectedOrganizations,
+  handleToggleOrganization,
+}: {
+  organization: { id: string; name: string; iconUrl: string };
+  selectedOrganizations: Set<string>;
+  handleToggleOrganization: (organizationId: string) => void;
+}) => {
   return (
-    <div className={clsx("flex items-center relative flex-col justify-center gap-2 border transition-colors duration-200 border-gray-3 w-full p-3 rounded-xl cursor-pointer", selectedOrganizations.has(organization.id) ? "bg-gray-3 border-gray-4" : "hover:bg-gray-3 hover:border-gray-4")} onClick={() => handleToggleOrganization(organization.id)}>
-      <div className="flex justify-center items-center text-xs font-semibold rounded-full size-6 text-gray-1 bg-gray-12">
-        {organization.name.charAt(0).toUpperCase()}
-      </div>
+    <div
+      className={clsx(
+        "flex items-center relative flex-col justify-center gap-2 border transition-colors duration-200 border-gray-3 w-full p-3 rounded-xl cursor-pointer",
+        selectedOrganizations.has(organization.id)
+          ? "bg-gray-3 border-gray-4"
+          : "hover:bg-gray-3 hover:border-gray-4"
+      )}
+      onClick={() => handleToggleOrganization(organization.id)}
+    >
+      {organization.iconUrl ? (
+        <div className="overflow-hidden relative flex-shrink-0 rounded-full size-6">
+          <Image
+            src={organization.iconUrl}
+            alt={organization.name}
+            width={24}
+            height={24}
+            className="object-cover w-full h-full"
+          />
+        </div>
+      ) : (
+        <Avatar
+          letterClass="text-gray-1 text-xs"
+          className="relative flex-shrink-0 size-6"
+          name={organization.name}
+        />
+      )}
       <span className="text-xs truncate transition-colors duration-200 text-gray-10">
         {organization.name}
       </span>
-      <motion.div 
-      key={organization.id}
-      animate={{
-        scale: selectedOrganizations.has(organization.id) ? 1 : 0
-      }}
-      initial={{
-        scale: 0
-      }}
-      transition={{
-        type: selectedOrganizations.has(organization.id) 
-          ? "spring" 
-          : "tween",
-        stiffness: selectedOrganizations.has(organization.id) ? 300 : undefined,
-        damping: selectedOrganizations.has(organization.id) ? 20 : undefined,
-        duration: !selectedOrganizations.has(organization.id) ? 0.2 : undefined
-      }}
-      className={clsx("absolute top-[-6px] flex items-center justify-center right-[-5px] bg-gray-4 rounded-full border size-4", selectedOrganizations.has(organization.id) ? "bg-green-500 border-transparent" : "bg-gray-4 border-gray-5")}>
+      <motion.div
+        key={organization.id}
+        animate={{
+          scale: selectedOrganizations.has(organization.id) ? 1 : 0,
+        }}
+        initial={{
+          scale: 0,
+        }}
+        transition={{
+          type: selectedOrganizations.has(organization.id) ? "spring" : "tween",
+          stiffness: selectedOrganizations.has(organization.id)
+            ? 300
+            : undefined,
+          damping: selectedOrganizations.has(organization.id) ? 20 : undefined,
+          duration: !selectedOrganizations.has(organization.id)
+            ? 0.2
+            : undefined,
+        }}
+        className={clsx(
+          "absolute top-[-6px] flex items-center justify-center right-[-5px] bg-gray-4 rounded-full border size-4",
+          selectedOrganizations.has(organization.id)
+            ? "bg-green-500 border-transparent"
+            : "bg-gray-4 border-gray-5"
+        )}
+      >
         <Check className="text-white" size={10} />
       </motion.div>
     </div>
   );
 };
-      
