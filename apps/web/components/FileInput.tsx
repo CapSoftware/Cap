@@ -103,9 +103,10 @@ export const FileInput: React.FC<FileInputProps> = ({
   const handleFileChange = () => {
     const file = fileInputRef.current?.files?.[0];
     if (file) {
-      // Validate file type
-      if (!file.type.startsWith('image/')) {
-        toast.error("Please select an image file");
+      // Validate file type - only allow jpg, jpeg, svg, and png
+      const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/svg+xml'];
+      if (!allowedTypes.includes(file.type)) {
+        toast.error("Please select a JPG, JPEG, PNG, or SVG file");
         if (fileInputRef.current) {
           fileInputRef.current.value = '';
         }
@@ -248,7 +249,7 @@ export const FileInput: React.FC<FileInputProps> = ({
         ref={fileInputRef}
         id={id}
         disabled={disabled || isLoading}
-        accept="image/*"
+        accept="image/jpeg, image/jpg, image/png, image/svg+xml"
         onChange={handleFileChange}
         name={name}
       />
