@@ -10,18 +10,18 @@ import { VideoMetadata } from "@cap/database/types";
 import { buildEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
 import {
+  faCheck,
   faChevronDown,
   faLink,
   faTrash,
-  faCheck,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import moment from "moment";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState, PropsWithChildren } from "react";
-import { toast } from "react-hot-toast";
+import { PropsWithChildren, useState } from "react";
+import { toast } from "sonner";
 
 interface Props extends PropsWithChildren {
   cap: {
@@ -31,14 +31,14 @@ interface Props extends PropsWithChildren {
     createdAt: Date;
     totalComments: number;
     totalReactions: number;
-    sharedOrganizations?: { id: string; name: string }[];
+    sharedOrganizations?: { id: string; name: string; iconUrl: string }[];
     ownerName: string | null;
     metadata?: VideoMetadata;
   };
   analytics: number;
   onDelete?: (videoId: string) => Promise<void>;
   userId?: string;
-  userOrganizations?: { id: string; name: string }[];
+  userOrganizations?: { id: string; name: string; iconUrl: string }[];
   sharedCapCard?: boolean;
   isSelected?: boolean;
   onSelectToggle?: () => void;
@@ -64,7 +64,7 @@ export const CapCard = ({
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(cap.name);
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
-  const [sharedOrganizations, setSharedOrganizations] = useState(
+  const [, setSharedOrganizations] = useState(
     cap.sharedOrganizations
   );
   const [isDateEditing, setIsDateEditing] = useState(false);
@@ -77,8 +77,7 @@ export const CapCard = ({
   const { activeOrganization } = useSharedContext();
 
   const handleTitleBlur = async (capName: string) => {
-    if (capName === title) return;
-    if (!title) {
+    if (!title || capName === title) {
       setIsEditing(false);
       return;
     }
@@ -175,6 +174,11 @@ export const CapCard = ({
     if (selectedDate.isAfter(currentDate)) {
       toast.error("Cannot set a date in the future");
       setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss"));
+      setIsDateEditing(false);
+      return;
+    }
+
+    if (selectedDate.isSame(effectiveDate)) {
       setIsDateEditing(false);
       return;
     }
@@ -387,34 +391,36 @@ export const CapCard = ({
           )}
         >
           <div>
-            {isEditing && !sharedCapCard ? (
-              <textarea
-                rows={1}
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                onBlur={() => handleTitleBlur(cap.name)}
-                onKeyDown={(e) => handleTitleKeyDown(e, cap.name)}
-                autoFocus
-                className="text-md resize-none bg-transparent truncate w-full border-0 outline-0 leading-[1.25rem] text-gray-12 font-medium mb-1"
-              />
-            ) : (
-              <p
-                className="text-md truncate leading-[1.25rem] text-gray-12 font-medium mb-1"
-                onClick={() => {
-                  if (!sharedCapCard) {
-                    if (userId === cap.ownerId) {
-                      setIsEditing(true);
+            <div className="h-[1.25rem] mb-1">  {/* Fixed height container */}
+              {isEditing && !sharedCapCard ? (
+                <textarea
+                  rows={1}
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  onBlur={() => handleTitleBlur(cap.name)}
+                  onKeyDown={(e) => handleTitleKeyDown(e, cap.name)}
+                  autoFocus
+                  className="text-md resize-none bg-transparent truncate w-full border-0 outline-0 text-gray-12 font-medium p-0 m-0 h-[1.25rem] overflow-hidden leading-[1.25rem] tracking-normal font-[inherit]"
+                />
+              ) : (
+                <p
+                  className="text-md truncate leading-[1.25rem] text-gray-12 font-medium p-0 m-0 h-[1.25rem] tracking-normal"
+                  onClick={() => {
+                    if (!sharedCapCard) {
+                      if (userId === cap.ownerId) {
+                        setIsEditing(true);
+                      }
                     }
-                  }
-                }}
-              >
-                {title}
-              </p>
-            )}
+                  }}
+                >
+                  {title}
+                </p>
+              )}
+            </div>
             {renderSharedStatus()}
-            <div className="mb-1">
+            <div className="mb-1 h-[1.5rem]"> {/* Fixed height container */}
               {isDateEditing && !sharedCapCard ? (
-                <div className="flex items-center">
+                <div className="flex items-center h-full">
                   <input
                     type="text"
                     value={dateValue}
@@ -422,14 +428,14 @@ export const CapCard = ({
                     onBlur={handleDateBlur}
                     onKeyDown={handleDateKeyDown}
                     autoFocus
-                    className="text-sm truncate mt-2 leading-[1.25rem] text-gray-10 bg-transparent focus:outline-none"
+                    className="text-sm w-full truncate text-gray-10 bg-transparent focus:outline-none h-full leading-[1.5rem]"
                     placeholder="YYYY-MM-DD HH:mm:ss"
                   />
                 </div>
               ) : (
                 <Tooltip content={`Cap created at ${effectiveDate}`}>
                   <p
-                    className="text-sm truncate mt-2 leading-[1.25rem] text-gray-10 cursor-pointer flex items-center"
+                    className="text-sm truncate text-gray-10 cursor-pointer flex items-center h-full leading-[1.5rem]"
                     onClick={handleDateClick}
                   >
                     {showFullDate

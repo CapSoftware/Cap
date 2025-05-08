@@ -2,9 +2,9 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
   comments,
-  sharedVideos,
   organizationMembers,
   organizations,
+  sharedVideos,
   users,
   videos,
 } from "@cap/database/schema";

@@ -24,7 +24,14 @@ import { LogoSection } from "../_components/LogoSection";
 import { FeatureCard } from "../SelfHostingPage";
 import LeftBlueHue from "./LeftBlueHue";
 import PowerfulFeaturesSVG from "./PowerfulFeaturesSVG";
-export const HomePage = () => {
+
+interface HomePageProps {
+  serverHomepageCopyVariant?: string;
+}
+
+export const HomePage: React.FC<HomePageProps> = ({
+  serverHomepageCopyVariant = "",
+}) => {
   const [videoToggled, setVideoToggled] = useState(false);
   const { platform, isIntel } = useDetectPlatform();
   const loading = platform === null;
@@ -57,14 +64,50 @@ export const HomePage = () => {
               Record. Edit. Share.
             </h3>
             <h1 className="fade-in-down text-[2rem] font-bold leading-[2.5rem] md:text-[3.75rem] md:leading-[4rem] relative z-10 text-black mb-4">
-              Beautiful screen recordings,
-              <br />
-              owned by you.
+              {serverHomepageCopyVariant === "1" ? (
+                <>
+                  Beautiful screen recordings,
+                  <br />
+                  owned by you.
+                </>
+              ) : serverHomepageCopyVariant === "2" ? (
+                <>The open source Loom alternative.</>
+              ) : serverHomepageCopyVariant === "3" ? (
+                <>The open source screen recording suite.</>
+              ) : (
+                <>
+                  Beautiful screen recordings,
+                  <br />
+                  owned by you.
+                </>
+              )}
             </h1>
             <p className="mx-auto mb-8 max-w-3xl text-md sm:text-xl text-zinc-500 fade-in-down animate-delay-1">
-              Cap is the open source alternative to Loom. Lightweight, powerful,
-              and cross-platform. Record and share securely in seconds with
-              custom S3 bucket support.
+              {serverHomepageCopyVariant === "1" ? (
+                <>
+                  Cap is the open source alternative to Loom. Lightweight,
+                  powerful, and cross-platform. Record and share securely in
+                  seconds with custom S3 bucket support.
+                </>
+              ) : serverHomepageCopyVariant === "2" ? (
+                <>
+                  Cap is the open source alternative to Loom. Lightweight,
+                  powerful, and cross-platform. Record and share securely in
+                  seconds. Connect your own storage, domain & more.
+                </>
+              ) : serverHomepageCopyVariant === "3" ? (
+                <>
+                  Cap is open source, lightweight, powerful & cross-platform.
+                  With Instant Mode for shareable links and Studio Mode for
+                  high-quality recordings with local editing.
+                </>
+              ) : (
+                <>
+                  Cap is the open source alternative to Loom. Lightweight,
+                  powerful, and cross-platform. Record and share securely in
+                  seconds with custom S3 bucket support.
+                </>
+              )}
             </p>
           </div>
           <div className="flex flex-col justify-center items-center mb-5 space-y-2 fade-in-up animate-delay-2 sm:flex-row sm:space-y-0 sm:space-x-2">

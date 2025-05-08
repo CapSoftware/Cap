@@ -1,6 +1,12 @@
 "use client";
 
 import {
+  useSharedContext,
+  useTheme,
+} from "@/app/dashboard/_components/DynamicSharedLayout";
+import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
+import { UpgradeModal } from "@/components/UpgradeModal";
+import {
   Command,
   CommandGroup,
   CommandItem,
@@ -8,28 +14,22 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@cap/ui";
-import { MoreVertical, Sparkles } from "lucide-react";
-import { useState } from "react";
 import {
-  useSharedContext,
-  useTheme,
-} from "@/app/dashboard/_components/DynamicSharedLayout";
-import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
-import { UpgradeModal } from "@/components/UpgradeModal";
-import {
+  faCrown,
   faGear,
   faHome,
   faMessage,
   faMoon,
   faSignOut,
-  faCrown,
   faSun,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
+import { MoreVertical } from "lucide-react";
 import { signOut } from "next-auth/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useState } from "react";
 
 export default function DashboardInner({
   children,
@@ -72,7 +72,7 @@ export default function DashboardInner({
       {/* Content Area */}
       <div
         className={clsx(
-          "flex overflow-auto flex-col flex-1 p-5 pb-5 border bg-gray-1 border-gray-3 lg:rounded-tl-2xl lg:p-8"
+          "flex overflow-y-auto flex-col flex-1 p-5 pb-5 border border-b-0 bg-gray-1 border-gray-3 lg:rounded-tl-2xl lg:p-8"
         )}
       >
         <div className="flex flex-col flex-1 gap-4 h-full">{children}</div>

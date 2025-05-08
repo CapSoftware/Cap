@@ -139,9 +139,24 @@ function getColorScale(name, alpha = false) {
               opacity: "0",
             },
           },
+          fadeIn: {
+            from: { opacity: 0 },
+            to: { opacity: 1 }
+          },
+          fadeOut: {
+            from: { opacity: 1 },
+            to: { opacity: 0 }
+          },
+          contentShow: {
+            from: { opacity: 0, transform: "translate(-50%, -48%) scale(0.96)" },
+            to: { opacity: 1, transform: "translate(-50%, -50%) scale(1)" }
+          },
         },
         animation: {
           flyEmoji: "flyEmoji 1.5s forwards",
+          fadeIn: "fadeIn 200ms ease-out",
+          fadeOut: "fadeOut 150ms ease-in",
+          contentShow: "contentShow 200ms ease-out",
         },
       },
     },

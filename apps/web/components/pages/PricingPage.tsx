@@ -10,11 +10,12 @@ import {
   Switch,
 } from "@cap/ui";
 import { getProPlanId } from "@cap/utils";
+import NumberFlow from "@number-flow/react";
 import clsx from "clsx";
 import { Check } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 import { SimplePlans } from "../text/SimplePlans";
 import { Testimonials } from "../ui/Testimonials";
 
@@ -46,29 +47,11 @@ export const PricingPage = () => {
   const { push } = useRouter();
   const searchParams = useSearchParams();
 
-  const faqContent = [
-    {
-      title: "Can I self-host Cap for free?",
-      answer:
-        "Yes, you can self-host Cap for free, for personal use. However, if you want to use Cap for commercial purposes, you will need to purchase a self-hosted license.",
-    },
-    {
-      title: "How much does a self-hosted license cost?",
-      answer:
-        "A self-hosted license costs $9/month, per user, with a minimum of 10 users.",
-    },
-    {
-      title: "What happens after the beta period ends?",
-      answer:
-        "Early adopters will keep their special pricing for the lifetime of their subscription, even after we move out of beta and adjust our regular pricing.",
-    },
-  ];
 
   useEffect(() => {
     const init = async () => {
       setInitialRender(false);
       const planFromUrl = searchParams.get("plan");
-      const next = searchParams.get("next");
       const pendingPriceId = localStorage.getItem("pendingPriceId");
       const pendingProQuantity = localStorage.getItem("pendingQuantity");
 
@@ -238,7 +221,7 @@ export const PricingPage = () => {
     <div>
       <div className="py-12 mt-16 space-y-24 wrapper">
         <div>
-          <div className="text-center mb-8">
+          <div className="mb-8 text-center">
             <div
               className={clsx("mb-4", {
                 "fade-in-down animate-delay-1": initialRender,
@@ -263,7 +246,7 @@ export const PricingPage = () => {
               for the lifetime of your subscription.
             </p>
             <a
-              className="mt-3 inline-flex text-gray-10 text-sm font-bold hover:underline fade-in-down animate-delay-1"
+              className="inline-flex mt-3 text-sm font-bold text-gray-10 hover:underline fade-in-down animate-delay-1"
               href="#testimonials"
               onClick={scrollToTestimonials}
             >
@@ -288,24 +271,31 @@ export const PricingPage = () => {
                   </CardDescription>
                   <div>
                     <div className="flex items-center space-x-3">
-                      <h3 className="text-4xl">
-                        {isCommercialAnnual
-                          ? `$${29 * licenseQuantity}`
-                          : `$${58 * licenseQuantity}`}
-                      </h3>
+                      <NumberFlow
+                        value={isCommercialAnnual
+                          ? `${29 * licenseQuantity}`
+                          : `${58 * licenseQuantity}`}
+                        className="text-4xl tabular-nums"
+                        format={{
+                          notation: "compact",
+                          style: "currency",
+                          currency: "USD",                         
+                        }}
+                      />
                       <div>
                         <p className="text-sm font-medium">
                           {isCommercialAnnual
                             ? licenseQuantity === 1
                               ? "billed annually"
-                              : `for ${licenseQuantity} licenses, billed annually`
+                              : <>for <NumberFlow value={licenseQuantity} className="text-sm font-medium tabular-nums" /> licenses, billed annually</>
                             : licenseQuantity === 1
                             ? "one-time payment"
-                            : `for ${licenseQuantity} licenses, one-time payment`}
+                            : <>for <NumberFlow value={licenseQuantity} className="text-sm font-medium tabular-nums" /> licenses, one-time payment</>
+                          }
                         </p>
                         {isCommercialAnnual && (
                           <p className="text-sm">
-                            or, ${58 * licenseQuantity} one-time payment
+                            or, <NumberFlow value={58 * licenseQuantity} className="text-sm tabular-nums" format={{ notation: "compact", style: "currency", currency: "USD" }} /> one-time payment
                           </p>
                         )}
                       </div>
@@ -333,9 +323,7 @@ export const PricingPage = () => {
                           >
                             -
                           </QuantityButton>
-                          <span className="w-4 text-center">
-                            {licenseQuantity}
-                          </span>
+                          <NumberFlow value={licenseQuantity} className="text-sm tabular-nums" />
                           <QuantityButton
                             onClick={() =>
                               setLicenseQuantity(licenseQuantity + 1)
@@ -388,8 +376,7 @@ export const PricingPage = () => {
 
             <Card
               className={`bg-gray-1 rounded-xl min-h-[600px] flex-grow border-blue-500 border-4 ${
-                initialRender ? "fade-in-up animate-delay-2" : ""
-              }`}
+                initialRender ? "fade-in-up animate-delay-2" : ""}`}
             >
               <div className="space-y-3">
                 <CardHeader>
@@ -406,27 +393,35 @@ export const PricingPage = () => {
                   </CardDescription>
                   <div>
                     <div className="flex items-center space-x-3">
-                      <h3 className="text-4xl">
-                        {isAnnual
-                          ? `$${6 * proQuantity}/mo`
-                          : `$${9 * proQuantity}/mo`}
-                      </h3>
+                      <NumberFlow
+                        value={isAnnual
+                          ? `${6 * proQuantity}`
+                          : `${9 * proQuantity}`}
+                        className="text-4xl tabular-nums"
+                        format={{
+                          notation: "compact",
+                          style: "currency",
+                          currency: "USD",
+                        }}
+                        suffix="/mo"
+                     />
                       <div>
                         <p className="text-sm font-medium">
                           {isAnnual
-                            ? proQuantity === 1
+                            ? (proQuantity === 1
                               ? "per user, billed annually."
-                              : `for ${proQuantity} users, billed annually.`
-                            : proQuantity === 1
-                            ? "per user, billed monthly."
-                            : `for ${proQuantity} users, billed monthly.`}
+                              : <>for <NumberFlow value={proQuantity} className="text-sm font-medium tabular-nums" /> users, billed annually.</>)
+                            : (proQuantity === 1
+                              ? "per user, billed monthly."
+                              : <>for <NumberFlow value={proQuantity} className="text-sm font-medium tabular-nums" /> users, billed monthly.</>)
+                          }
                         </p>
                         {isAnnual && (
                           <p className="text-sm">
-                            or, ${9 * proQuantity}/month,{" "}
+                            or, <NumberFlow value={9 * proQuantity} className="text-sm tabular-nums" format={{ notation: "compact", style: "currency", currency: "USD", }} suffix="/mo" />{" "}
                             {proQuantity === 1
                               ? "per user, "
-                              : `for ${proQuantity} users, `}
+                              : <>for <NumberFlow value={proQuantity} className="text-sm tabular-nums" /> users, </>}
                             billed monthly.
                           </p>
                         )}
@@ -452,7 +447,7 @@ export const PricingPage = () => {
                           >
                             -
                           </QuantityButton>
-                          <span className="w-4 text-center">{proQuantity}</span>
+                          <NumberFlow value={proQuantity} className="text-sm tabular-nums" />
                           <QuantityButton
                             onClick={() => setProQuantity(proQuantity + 1)}
                           >
