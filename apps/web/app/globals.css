@@ -446,7 +446,7 @@ ul {
 } */
 
 .dashboard-page {
-  @apply flex overflow-auto flex-col flex-1 items-stretch custom-scroll;
+  @apply flex flex-col flex-1 items-stretch;
 }
 
 .dashboard-header {
