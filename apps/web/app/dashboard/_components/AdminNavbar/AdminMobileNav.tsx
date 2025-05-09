@@ -47,7 +47,7 @@ export const AdminMobileNav = () => {
           </motion.div>
         ) : null}
       </AnimatePresence>
-      <div className="flex fixed z-50 justify-between w-full h-16 border-b border-gray-3 bg-gray-1 lg:border-none lg:hidden">
+      <div className="flex fixed z-[51] justify-between w-full h-16 border-b border-gray-3 bg-gray-1 lg:border-none lg:hidden">
         <div className="flex flex-shrink-0 items-center px-4 h-full lg:hidden">
           <Link className="block" href="/dashboard">
             <LogoBadge className="block w-auto h-8" />
