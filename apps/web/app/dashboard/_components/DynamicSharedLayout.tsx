@@ -50,7 +50,9 @@ export default function DynamicSharedLayout({
   initialSidebarCollapsed: boolean;
 }) {
   const [theme, setTheme] = useState<ITheme>(initialTheme);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    initialSidebarCollapsed
+  );
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const setThemeHandler = (newTheme: ITheme) => {
     setTheme(newTheme);
@@ -88,7 +90,7 @@ export default function DynamicSharedLayout({
           toggleSidebarCollapsed,
           sidebarCollapsed,
           upgradeModalOpen,
-          setUpgradeModalOpen
+          setUpgradeModalOpen,
         }}
       >
         {/* CSS Grid layout for dashboard */}
@@ -103,7 +105,7 @@ export default function DynamicSharedLayout({
             <AdminMobileNav />
             {children}
           </div>
-          
+
           {/* Global upgrade modal that persists regardless of navigation state */}
           <UpgradeModal
             open={upgradeModalOpen}
