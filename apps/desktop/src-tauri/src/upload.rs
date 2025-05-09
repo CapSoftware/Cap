@@ -456,8 +456,6 @@ pub async fn get_s3_config(
     is_screenshot: bool,
     video_id: Option<String>,
 ) -> Result<S3UploadMeta, String> {
-    // Config URL is now handled directly in the authed_api_request call
-
     let s3_config_url = if let Some(id) = video_id {
         format!("/api/desktop/video/create?recordingMode=desktopMP4&videoId={id}")
     } else if is_screenshot {
@@ -465,7 +463,7 @@ pub async fn get_s3_config(
     } else {
         "/api/desktop/video/create?recordingMode=desktopMP4".to_string()
     };
-    
+
     let response = app
         .authed_api_request(s3_config_url, |client, url| client.get(url))
         .await
@@ -497,9 +495,7 @@ async fn presigned_s3_url(
 ) -> Result<(String, Form), String> {
     let response = app
         .authed_api_request("/api/upload/signed", |client, url| {
-            client
-                .post(url)
-                .json(&serde_json::json!(body))
+            client.post(url).json(&serde_json::json!(body))
         })
         .await
         .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
@@ -539,9 +535,7 @@ async fn presigned_s3_url_image(
 ) -> Result<(String, Form), String> {
     let response = app
         .authed_api_request("/api/upload/signed", |client, url| {
-            client
-                .post(url)
-                .json(&serde_json::json!(body))
+            client.post(url).json(&serde_json::json!(body))
         })
         .await
         .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
@@ -577,9 +571,7 @@ async fn presigned_s3_url_audio(
 ) -> Result<(String, Form), String> {
     let response = app
         .authed_api_request("/api/upload/signed", |client, url| {
-            client
-                .post(url)
-                .json(&serde_json::json!(body))
+            client.post(url).json(&serde_json::json!(body))
         })
         .await
         .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
