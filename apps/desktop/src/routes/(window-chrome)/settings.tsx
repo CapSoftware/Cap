@@ -9,10 +9,6 @@ import { SignInButton } from "~/components/SignInButton";
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 
-type MenuItem =
-  | { type?: "link"; href: string; name: string; icon: any }
-  | { type: "button"; name: string; icon: any; onClick: () => void };
-
 let intercomInitialized = false;
 
 export default function Settings(props: RouteSectionProps) {
@@ -52,84 +48,53 @@ export default function Settings(props: RouteSectionProps) {
   };
 
   return (
-    <div class="flex-1 flex flex-row divide-x divide-[--gray-200] text-[0.875rem] leading-[1.25rem] overflow-y-hidden">
-      <div class="flex flex-col h-full bg-gray-100">
-        <ul class="min-w-[12rem] h-full p-[0.625rem] space-y-1 text-[--text-primary]">
+    <div class="flex-1 flex flex-row divide-x divide-slate-5 text-[0.875rem] leading-[1.25rem] overflow-y-hidden">
+      <div class="flex flex-col h-full bg-slate-2">
+        <ul class="min-w-[12rem] h-full p-[0.625rem] space-y-1 text-slate-12">
           <For
-            each={
-              [
-                {
-                  type: "link",
-                  href: "general",
-                  name: "General",
-                  icon: IconCapSettings,
-                },
-                {
-                  type: "link",
-                  href: "hotkeys",
-                  name: "Shortcuts",
-                  icon: IconCapHotkeys,
-                },
-                {
-                  type: "link",
-                  href: "recordings",
-                  name: "Previous Recordings",
-                  icon: IconLucideSquarePlay,
-                },
-                // {
-                //   type: "link",
-                //   href: "screenshots",
-                //   name: "Previous Screenshots",
-                //   icon: IconLucideCamera,
-                // },
-                {
-                  type: "link",
-                  href: "integrations",
-                  name: "Integrations",
-                  icon: IconLucideUnplug,
-                },
-                {
-                  type: "link",
-                  href: "feedback",
-                  name: "Feedback",
-                  icon: IconLucideMessageSquarePlus,
-                },
-                // {
-                //   type: "button",
-                //   name: "Live Chat",
-                //   icon: IconLucideMessageCircle,
-                //   onClick: handleLiveChat,
-                // },
-                {
-                  type: "link",
-                  href: "changelog",
-                  name: "Changelog",
-                  icon: IconLucideBell,
-                },
-              ].filter(Boolean) as MenuItem[]
-            }
+            each={[
+              {
+                href: "general",
+                name: "General",
+                icon: IconCapSettings,
+              },
+              {
+                href: "hotkeys",
+                name: "Shortcuts",
+                icon: IconCapHotkeys,
+              },
+              {
+                href: "recordings",
+                name: "Previous Recordings",
+                icon: IconLucideSquarePlay,
+              },
+              {
+                href: "integrations",
+                name: "Integrations",
+                icon: IconLucideUnplug,
+              },
+              {
+                href: "feedback",
+                name: "Feedback",
+                icon: IconLucideMessageSquarePlus,
+              },
+              {
+                href: "changelog",
+                name: "Changelog",
+                icon: IconLucideBell,
+              },
+            ].filter(Boolean)}
           >
             {(item) => (
               <li>
-                {item.type === "button" ? (
-                  <button
-                    onClick={item.onClick}
-                    class="w-full rounded-lg h-[2rem] px-2 flex flex-row items-center gap-[0.375rem] transition-colors border hover:bg-gray-100 border-transparent"
-                  >
-                    <item.icon class="size-4" />
-                    <span>{item.name}</span>
-                  </button>
-                ) : (
-                  <A
-                    href={item.href}
-                    activeClass="bg-gray-200"
-                    inactiveClass="hover:bg-gray-100 border-transparent"
-                    class="rounded-lg h-[2rem] px-2 flex flex-row items-center gap-[0.375rem] transition-colors border"
-                  >
-                    <item.icon class="size-4" />
-                    <span>{item.name}</span>
-                  </A>
-                )}
+                <A
+                  href={item.href}
+                  activeClass="bg-gray-5"
+                  class="rounded-md h-[2rem] px-2 flex flex-row items-center gap-[0.375rem] transition-colors"
+                >
+                  <item.icon class="size-4" />
+                  <span>{item.name}</span>
+                </A>
               </li>
             )}
           </For>
@@ -147,7 +112,7 @@ export default function Settings(props: RouteSectionProps) {
           )}
         </div>
       </div>
-      <div class="overflow-y-hidden flex-1 bg-gray-50 animate-in">
+      <div class="overflow-y-hidden flex-1 animate-in">
         <Suspense>{props.children}</Suspense>
       </div>
     </div>

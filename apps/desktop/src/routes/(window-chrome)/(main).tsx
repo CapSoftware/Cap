@@ -245,7 +245,7 @@ export default function () {
   });
 
   return (
-    <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-[--gray-50] h-full text-[--text-primary]">
+    <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] h-full text-[--text-primary]">
       {initialize()}
       <div class="flex items-center justify-between pb-[0.25rem]">
         <div class="flex items-center space-x-1">

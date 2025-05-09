@@ -21,9 +21,10 @@ import {
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
-import { CheckMenuItem, Menu, MenuItem } from "@tauri-apps/api/menu";
+import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
 import { TextInput } from "~/routes/editor/TextInput";
 import { confirm } from "@tauri-apps/plugin-dialog";
+import { cx } from "cva";
 
 export default function GeneralSettings() {
   const [store] = createResource(() => generalSettingsStore.get());
@@ -294,7 +295,7 @@ function ServerURLSetting(props: {
     >
       <div class="flex flex-col gap-2 items-end">
         <TextInput
-          class="border border-gray-300 bg-gray-50 rounded-md px-2 py-1 flex flex-row items-center gap-1 max-w-48"
+          class="border border-slate-7 bg-slate-1 outline-none focus:border-blue-10 rounded-md px-2 py-1 flex flex-row items-center gap-1 max-w-48"
           value={value()}
           onInput={(e) => setValue(e.currentTarget.value)}
         />
@@ -321,15 +322,15 @@ function Setting(
     <div class="py-3 flex flex-row gap-2 justify-between items-start text-sm">
       <div class="flex justify-between items-start space-y-2 flex-col">
         {props.pro && (
-          <span class="px-2 py-1 text-xs font-medium text-gray-50 bg-blue-400 rounded-lg">
+          <span class="px-2 py-1 text-xs font-medium text-solid-white bg-blue-9 rounded-lg">
             Cap Pro
           </span>
         )}
         <div class="flex gap-2 items-center">
-          <p class="text-[--text-primary]">{props.label}</p>
+          <p class="text-slate-12">{props.label}</p>
         </div>
         {props.description && (
-          <p class="text-xs text-[--text-tertiary]">{props.description}</p>
+          <p class="text-xs text-slate-11">{props.description}</p>
         )}
       </div>
       {props.children}
@@ -352,18 +353,15 @@ function ToggleSetting(props: {
         aria-checked={props.value}
         data-state={props.value ? "checked" : "unchecked"}
         value={props.value ? "on" : "off"}
-        class={`peer inline-flex h-4 w-8 shrink-0 cursor-pointer items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 ${
-          props.value
-            ? "bg-blue-400 border-blue-400"
-            : "bg-gray-300 border-gray-300"
-        }`}
+        class={cx(
+          "peer inline-flex h-4 w-8 p-0.5 shrink-0 cursor-pointer items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50",
+          props.value ? "bg-blue-10" : "bg-slate-4"
+        )}
         onClick={() => props.onChange(!props.value)}
       >
         <span
           data-state={props.value ? "checked" : "unchecked"}
-          class={`pointer-events-none block h-4 w-4 rounded-full bg-gray-50 shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0 border-2 ${
-            props.value ? "border-blue-400" : "border-gray-300"
-          }`}
+          class="pointer-events-none block size-3 rounded-full bg-slate-1 shadow-lg ring-0 transition-[transform,colors] data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0"
         />
       </button>
     </Setting>

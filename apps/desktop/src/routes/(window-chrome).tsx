@@ -35,7 +35,7 @@ export default function (props: RouteSectionProps) {
 
   return (
     <WindowChromeContext>
-      <div class="bg-gray-100 border-gray-200 w-screen h-screen max-h-screen flex flex-col overflow-hidden transition-[border-radius] duration-200">
+      <div class="w-screen h-screen max-h-screen flex flex-col overflow-hidden divide-y divide-slate-5">
         <Header />
 
         {/* breaks sometimes */}
@@ -81,8 +81,7 @@ function Header() {
   return (
     <header
       class={cx(
-        "flex items-center select-none space-x-1 shrink-0 border-gray-50 bg-gray-100",
-        "border-b border-b-black-transparent-5 h-9",
+        "flex items-center select-none space-x-1 shrink-0 bg-slate-2 h-9",
         isWindows ? "flex-row" : "pl-[5rem] flex-row-reverse"
       )}
       data-tauri-drag-region

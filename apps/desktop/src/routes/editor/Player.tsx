@@ -87,7 +87,7 @@ export function Player() {
   });
 
   return (
-    <div class="flex flex-col flex-1 bg-gray-100 dark:bg-gray-100 rounded-xl shadow-sm">
+    <div class="flex flex-col flex-1 bg-slate-2 rounded-xl shadow-sm">
       <div class="flex gap-3 justify-center p-3">
         <AspectRatioSelect />
         <EditorButton
@@ -140,7 +140,7 @@ export function Player() {
           <button
             type="button"
             onClick={handlePlayPauseClick}
-            class="flex justify-center items-center bg-gray-200 rounded-full border border-gray-300 transition-colors hover:bg-gray-300 hover:text-black size-9"
+            class="flex justify-center items-center bg-slate-3 rounded-full border border-gray-300 transition-colors hover:bg-slate-4 hover:text-black size-9"
           >
             {!editorState.playing || isAtEnd() ? (
               <IconCapPlay class="text-gray-500 size-3" />
@@ -167,7 +167,7 @@ export function Player() {
           ) : (
             <ComingSoonTooltip>{splitButton()}</ComingSoonTooltip>
           )}
-          <div class="w-px h-8 rounded-full bg-gray-200" />
+          <div class="w-px h-8 rounded-full bg-slate-4" />
           <Tooltip content="Zoom out">
             <IconCapZoomOut
               onClick={() => {
