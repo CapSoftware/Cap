@@ -79,6 +79,7 @@ export const MembersCard = ({
               type="button"
               size="sm"
               variant="primary"
+              spinner={loading}
               disabled={!isOwner || loading}
               onClick={handleManageBilling}
             >

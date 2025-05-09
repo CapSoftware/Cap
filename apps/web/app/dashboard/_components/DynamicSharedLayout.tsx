@@ -92,7 +92,7 @@ export default function DynamicSharedLayout({
         }}
       >
         {/* CSS Grid layout for dashboard */}
-        <div className="grid grid-cols-[auto,1fr] bg-gray-2 grid-rows-[auto,1fr] h-screen min-h-screen">
+        <div className="grid grid-cols-[auto,1fr] bg-gray-2 grid-rows-[auto,1fr] h-dvh min-h-dvh">
           {/* Sidebar */}
           <aside className="z-10 col-span-1 row-span-2">
             <AdminDesktopNav />
