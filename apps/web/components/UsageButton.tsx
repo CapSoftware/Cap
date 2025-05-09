@@ -5,17 +5,15 @@ import { faArrowUp, faCheck } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import Link from "next/link";
-import { useState } from "react";
-import { UpgradeModal } from "./UpgradeModal";
 
 export const UsageButton = ({
   subscribed,
+  toggleMobileNav,
 }: {
   subscribed: boolean;
+  toggleMobileNav?: () => void;
 }) => {
-  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
-
-  const { sidebarCollapsed } = useSharedContext();
+  const { sidebarCollapsed, setUpgradeModalOpen } = useSharedContext();
 
   if (subscribed) {
     return (
@@ -69,7 +67,10 @@ export const UsageButton = ({
               sidebarCollapsed ? "p-0 w-10 h-10 rounded-full min-w-10" : "w-full"
             )}
             variant="primary"
-            onClick={() => setUpgradeModalOpen(true)}
+            onClick={() => {
+              setUpgradeModalOpen(true);
+              toggleMobileNav?.();
+            }}
           >
             <img
               src="/illustrations/cloud-1.png"
@@ -94,10 +95,7 @@ export const UsageButton = ({
           </Button>
         </div>
       </Tooltip>
-      <UpgradeModal
-        open={upgradeModalOpen}
-        onOpenChange={setUpgradeModalOpen}
-      />
+      {/* UpgradeModal is now rendered at the root level in DynamicSharedLayout */}
     </>
   );
 };

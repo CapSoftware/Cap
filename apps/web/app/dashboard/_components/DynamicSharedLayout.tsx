@@ -1,6 +1,7 @@
 "use client";
 import AdminMobileNav from "@/app/dashboard/_components/AdminNavbar/AdminMobileNav";
 import { Organization } from "@/app/dashboard/layout";
+import { UpgradeModal } from "@/components/UpgradeModal";
 import { users } from "@cap/database/schema";
 import Cookies from "js-cookie";
 import { createContext, useContext, useEffect, useState } from "react";
@@ -13,6 +14,8 @@ type SharedContext = {
   isSubscribed: boolean;
   toggleSidebarCollapsed: () => void;
   sidebarCollapsed: boolean;
+  upgradeModalOpen: boolean;
+  setUpgradeModalOpen: (open: boolean) => void;
 };
 
 type ITheme = "light" | "dark";
@@ -48,6 +51,7 @@ export default function DynamicSharedLayout({
 }) {
   const [theme, setTheme] = useState<ITheme>(initialTheme);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const setThemeHandler = (newTheme: ITheme) => {
     setTheme(newTheme);
     Cookies.set("theme", newTheme, {
@@ -83,6 +87,8 @@ export default function DynamicSharedLayout({
           isSubscribed,
           toggleSidebarCollapsed,
           sidebarCollapsed,
+          upgradeModalOpen,
+          setUpgradeModalOpen
         }}
       >
         {/* CSS Grid layout for dashboard */}
@@ -97,6 +103,12 @@ export default function DynamicSharedLayout({
             <AdminMobileNav />
             {children}
           </div>
+          
+          {/* Global upgrade modal that persists regardless of navigation state */}
+          <UpgradeModal
+            open={upgradeModalOpen}
+            onOpenChange={setUpgradeModalOpen}
+          />
         </div>
       </Context.Provider>
     </ThemeContext.Provider>

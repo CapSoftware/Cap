@@ -38,7 +38,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import Image from "next/image";
-
+  
 import { useRef, useState } from "react";
 import { updateActiveOrganization } from "./server";
 
@@ -289,6 +289,9 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
         </div>
         <div className="pb-0 w-full lg:pb-5">
           <UsageButton
+            toggleMobileNav={() => 
+              toggleMobileNav?.()
+            }
             subscribed={userIsSubscribed}
           />
           <p className="mt-4 text-xs text-center truncate text-gray-10">
