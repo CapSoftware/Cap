@@ -6,13 +6,16 @@ import {
 } from "@tauri-apps/plugin-notification";
 import { type OsType, type } from "@tauri-apps/plugin-os";
 import "@total-typescript/ts-reset/filter-boolean";
+import { createWritableMemo } from "@solid-primitives/memo";
+import { Button } from "@cap/ui-solid";
 
-import { generalSettingsStore } from "~/store";
-import type {
-  AppTheme,
-  GeneralSettingsStore,
-  MainWindowRecordingStartBehaviour,
-  PostStudioRecordingBehaviour,
+import { authStore, generalSettingsStore } from "~/store";
+import {
+  commands,
+  type AppTheme,
+  type GeneralSettingsStore,
+  type MainWindowRecordingStartBehaviour,
+  type PostStudioRecordingBehaviour,
 } from "~/utils/tauri";
 // import { themeStore } from "~/store/theme";
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
@@ -20,7 +23,7 @@ import themePreviewDark from "~/assets/theme-previews/dark.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
 import { CheckMenuItem, Menu, MenuItem } from "@tauri-apps/api/menu";
 import { TextInput } from "~/routes/editor/TextInput";
-import { Button } from "@cap/ui-solid";
+import { confirm } from "@tauri-apps/plugin-dialog";
 
 export default function GeneralSettings() {
   const [store] = createResource(() => generalSettingsStore.get());
@@ -31,8 +34,6 @@ export default function GeneralSettings() {
     </Show>
   );
 }
-
-const SERVER_URL_DEFAULT = "https://cap.so";
 
 function AppearanceSection(props: {
   currentTheme: AppTheme;
@@ -259,21 +260,53 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
               <IconCapChevronDown class="size-4" />
             </button>
           </Setting>
-          <Setting
-            label="Cap Server URL"
-            description="This setting should only be changed if you are self hosting your own instance of Cap Web."
-          >
-            <div class="flex flex-col gap-2 items-end">
-              <TextInput
-                class="border border-gray-300 bg-gray-50 rounded-md px-2 py-1 flex flex-row items-center gap-1 max-w-48"
-                value={SERVER_URL_DEFAULT}
-              />
-              <Button size="sm">Update</Button>
-            </div>
-          </Setting>
+          <ServerURLSetting
+            value={settings.serverUrl ?? "https://cap.so"}
+            onChange={async (v) => {
+              if (
+                !(await confirm(
+                  `Are you sure you want to change the server URL to '${v}'? You will need to sign in again.`
+                ))
+              )
+                return;
+
+              await authStore.set(undefined);
+              await commands.setServerUrl(v);
+              handleChange("serverUrl", v);
+            }}
+          />
         </div>
       </div>
     </div>
+  );
+}
+
+function ServerURLSetting(props: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [value, setValue] = createWritableMemo(() => props.value);
+
+  return (
+    <Setting
+      label="Cap Server URL"
+      description="This setting should only be changed if you are self hosting your own instance of Cap Web."
+    >
+      <div class="flex flex-col gap-2 items-end">
+        <TextInput
+          class="border border-gray-300 bg-gray-50 rounded-md px-2 py-1 flex flex-row items-center gap-1 max-w-48"
+          value={value()}
+          onInput={(e) => setValue(e.currentTarget.value)}
+        />
+        <Button
+          size="sm"
+          disabled={props.value === value()}
+          onClick={() => props.onChange(value())}
+        >
+          Update
+        </Button>
+      </div>
+    </Setting>
   );
 }
 

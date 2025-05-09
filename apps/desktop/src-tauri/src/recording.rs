@@ -10,7 +10,7 @@ use crate::{
     open_external_link,
     presets::PresetsStore,
     upload::{get_s3_config, prepare_screenshot_upload, upload_video, InstantMultipartUpload},
-    web_api,
+    web_api::{self, ManagerExt},
     windows::{CapWindowId, ShowCapWindow},
     App, CurrentRecordingChanged, DynLoggingLayer, MutableState, NewStudioRecordingAdded,
     RecordingStarted, RecordingStopped, VideoUploadInfo,
@@ -186,6 +186,8 @@ pub async fn start_recording(
     let recording_options = recording_options.unwrap_or(state.recording_options.clone());
     state.recording_options = recording_options.clone();
 
+    drop(state);
+
     if let Some(window) = CapWindowId::Camera.get(&app) {
         let _ =
             window.set_content_protected(matches!(recording_options.mode, RecordingMode::Studio));
@@ -197,7 +199,7 @@ pub async fn start_recording(
                 Some(_) => {
                     // Pre-create the video and get the shareable link
                     if let Ok(s3_config) = get_s3_config(&app, false, None).await {
-                        let link = web_api::make_url(format!("/s/{}", s3_config.id()));
+                        let link = app.make_app_url(format!("/s/{}", s3_config.id())).await;
                         info!("Pre-created shareable link: {}", link);
 
                         Some(VideoUploadInfo {
@@ -258,8 +260,6 @@ pub async fn start_recording(
                 Some(finish_upload_rx),
             )
         });
-
-    drop(state);
 
     println!("spawning actor");
 

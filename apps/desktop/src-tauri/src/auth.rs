@@ -63,7 +63,7 @@ impl AuthStore {
             auth.user_id.as_deref().unwrap_or("unknown")
         );
         let response = app
-            .authed_api_request(|client| client.get(app.make_url("/api/desktop/plan")))
+            .authed_api_request("/api/desktop/plan", |client, url| client.get(url))
             .await
             .map_err(|e| {
                 println!("Failed to fetch plan: {}", e);
