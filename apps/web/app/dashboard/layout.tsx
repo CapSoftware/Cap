@@ -168,9 +168,7 @@ export default async function DashboardLayout({
       initialTheme={theme as "light" | "dark"}
       initialSidebarCollapsed={sidebar === "true"}
     >
-      <div className="full-layout">
-        <DashboardTemplate>{children}</DashboardTemplate>
-      </div>
+      <DashboardTemplate>{children}</DashboardTemplate>
     </DynamicSharedLayout>
   );
 }
