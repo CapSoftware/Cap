@@ -1,20 +1,19 @@
+import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Tooltip } from "@/components/Tooltip";
 import { Button } from "@cap/ui";
 import { faArrowUp, faCheck } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import Link from "next/link";
-import { useState } from "react";
-import { UpgradeModal } from "./UpgradeModal";
 
 export const UsageButton = ({
   subscribed,
-  collapsed,
+  toggleMobileNav,
 }: {
   subscribed: boolean;
-  collapsed: boolean;
+  toggleMobileNav?: () => void;
 }) => {
-  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+  const { sidebarCollapsed, setUpgradeModalOpen } = useSharedContext();
 
   if (subscribed) {
     return (
@@ -27,7 +26,7 @@ export const UsageButton = ({
             size="lg"
             className={clsx(
               "overflow-hidden truncate",
-              collapsed ? "p-0 w-10 h-10 rounded-full min-w-10" : "w-full"
+              sidebarCollapsed ? "p-0 w-10 h-10 rounded-full min-w-10" : "w-full"
             )}
             variant="primary"
           >
@@ -42,11 +41,11 @@ export const UsageButton = ({
             <FontAwesomeIcon
               className={clsx(
                 "text-gray-50 drop-shadow-[0_0_2px_rgba(255,255,255,0.5)]",
-                collapsed ? "mr-0" : "mr-1"
+                sidebarCollapsed ? "mr-0" : "mr-1"
               )}
               icon={faCheck}
             />
-            {collapsed ? null : (
+            {sidebarCollapsed ? null : (
               <p className="text-gray-50 drop-shadow-[0_0_2px_rgba(255,255,255,0.5)]">
                 Cap Pro
               </p>
@@ -65,10 +64,13 @@ export const UsageButton = ({
             size="lg"
             className={clsx(
               "overflow-hidden truncate",
-              collapsed ? "p-0 w-10 h-10 rounded-full min-w-10" : "w-full"
+              sidebarCollapsed ? "p-0 w-10 h-10 rounded-full min-w-10" : "w-full"
             )}
             variant="primary"
-            onClick={() => setUpgradeModalOpen(true)}
+            onClick={() => {
+              setUpgradeModalOpen(true);
+              toggleMobileNav?.();
+            }}
           >
             <img
               src="/illustrations/cloud-1.png"
@@ -81,11 +83,11 @@ export const UsageButton = ({
             <FontAwesomeIcon
               className={clsx(
                 "text-gray-50 drop-shadow-[0_0_2px_rgba(255,255,255,0.5)]",
-                collapsed ? "mr-0" : "mr-1"
+                sidebarCollapsed ? "mr-0" : "mr-1"
               )}
               icon={faArrowUp}
             />
-            {collapsed ? null : (
+            {sidebarCollapsed ? null : (
               <p className="text-gray-50 drop-shadow-[0_0_2px_rgba(255,255,255,0.5)]">
                 Upgrade to Pro
               </p>
@@ -93,10 +95,7 @@ export const UsageButton = ({
           </Button>
         </div>
       </Tooltip>
-      <UpgradeModal
-        open={upgradeModalOpen}
-        onOpenChange={setUpgradeModalOpen}
-      />
+      {/* UpgradeModal is now rendered at the root level in DynamicSharedLayout */}
     </>
   );
 };

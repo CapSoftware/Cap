@@ -1,9 +1,10 @@
 "use client";
 import AdminMobileNav from "@/app/dashboard/_components/AdminNavbar/AdminMobileNav";
 import { Organization } from "@/app/dashboard/layout";
+import { UpgradeModal } from "@/components/UpgradeModal";
 import { users } from "@cap/database/schema";
 import Cookies from "js-cookie";
-import React, { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import AdminDesktopNav from "./AdminNavbar/AdminDesktopNav";
 
 type SharedContext = {
@@ -11,6 +12,10 @@ type SharedContext = {
   activeOrganization: Organization | null;
   user: typeof users.$inferSelect;
   isSubscribed: boolean;
+  toggleSidebarCollapsed: () => void;
+  sidebarCollapsed: boolean;
+  upgradeModalOpen: boolean;
+  setUpgradeModalOpen: (open: boolean) => void;
 };
 
 type ITheme = "light" | "dark";
@@ -34,6 +39,7 @@ export default function DynamicSharedLayout({
   user,
   isSubscribed,
   initialTheme,
+  initialSidebarCollapsed,
 }: {
   children: React.ReactNode;
   organizationData: SharedContext["organizationData"];
@@ -41,8 +47,11 @@ export default function DynamicSharedLayout({
   user: SharedContext["user"];
   isSubscribed: SharedContext["isSubscribed"];
   initialTheme: ITheme;
+  initialSidebarCollapsed: boolean;
 }) {
   const [theme, setTheme] = useState<ITheme>(initialTheme);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const setThemeHandler = (newTheme: ITheme) => {
     setTheme(newTheme);
     Cookies.set("theme", newTheme, {
@@ -54,10 +63,20 @@ export default function DynamicSharedLayout({
     if (Cookies.get("theme")) {
       document.body.className = Cookies.get("theme") as ITheme;
     }
+    if (Cookies.get("sidebarCollapsed")) {
+      setSidebarCollapsed(Cookies.get("sidebarCollapsed") === "true");
+    }
     return () => {
       document.body.className = "light";
     };
   }, [theme]);
+  const toggleSidebarCollapsed = () => {
+    setSidebarCollapsed(!sidebarCollapsed);
+    Cookies.set("sidebarCollapsed", !sidebarCollapsed ? "true" : "false", {
+      expires: 365,
+    });
+  };
+
   return (
     <ThemeContext.Provider value={{ theme, setThemeHandler }}>
       <Context.Provider
@@ -66,6 +85,10 @@ export default function DynamicSharedLayout({
           activeOrganization,
           user,
           isSubscribed,
+          toggleSidebarCollapsed,
+          sidebarCollapsed,
+          upgradeModalOpen,
+          setUpgradeModalOpen
         }}
       >
         {/* CSS Grid layout for dashboard */}
@@ -80,6 +103,12 @@ export default function DynamicSharedLayout({
             <AdminMobileNav />
             {children}
           </div>
+          
+          {/* Global upgrade modal that persists regardless of navigation state */}
+          <UpgradeModal
+            open={upgradeModalOpen}
+            onOpenChange={setUpgradeModalOpen}
+          />
         </div>
       </Context.Provider>
     </ThemeContext.Provider>
