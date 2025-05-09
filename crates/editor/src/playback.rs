@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use cap_media::data::{AudioInfo, FromSampleBytes};
 use cap_media::feeds::{AudioPlaybackBuffer, AudioSegment, AudioSegmentTrack};
 use cap_media::MediaError;
-use cap_project::{AudioConfiguration, ProjectConfiguration, XY};
+use cap_project::{AudioConfiguration, ProjectConfiguration, TimelineSegment, XY};
 use cap_rendering::{ProjectUniforms, RenderVideoConstants};
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -68,46 +68,117 @@ impl Playback {
             }
             .spawn();
 
+            let mut current_segment_index: Option<usize> = None;
+            let mut segment_start_time = 0.0;
+            let mut segment_elapsed = 0.0;
+            let mut segment_timescale = 1.0;
+
             loop {
-                let time =
-                    (self.start_frame_number as f64 / fps as f64) + start.elapsed().as_secs_f64();
-                let frame_number = (time * fps as f64).floor() as u32;
+                let elapsed = start.elapsed().as_secs_f64();
+                let playhead_time = (self.start_frame_number as f64 / fps as f64) + elapsed;
+
+                let project = self.project.borrow().clone();
+                let mut time_in_timeline = 0.0;
+                let mut segment_found = false;
+
+                if let Some(timeline) = &project.timeline {
+                    for (i, segment) in timeline.segments.iter().enumerate() {
+                        let segment_duration = (segment.end - segment.start) / segment.timescale;
+
+                        if playhead_time >= time_in_timeline
+                            && playhead_time < time_in_timeline + segment_duration
+                        {
+                            if current_segment_index != Some(i) {
+                                current_segment_index = Some(i);
+                                segment_start_time = time_in_timeline;
+                                segment_elapsed = playhead_time - time_in_timeline;
+                                segment_timescale = segment.timescale;
+                            } else {
+                                segment_elapsed = playhead_time - segment_start_time;
+                            }
+                            segment_found = true;
+                            break;
+                        }
+
+                        time_in_timeline += segment_duration;
+                    }
+                }
+
+                if !segment_found {
+                    if playhead_time >= duration {
+                        break;
+                    }
+                    current_segment_index = Some(0);
+                    segment_start_time = 0.0;
+                    segment_elapsed = playhead_time;
+                    segment_timescale = 1.0;
+                }
+
+                let frame_number = (playhead_time * fps as f64).floor() as u32;
 
                 if frame_number as f64 >= fps as f64 * duration {
                     break;
                 };
 
-                let project = self.project.borrow().clone();
+                let segment_time = if let Some(segment_idx) = current_segment_index {
+                    if let Some(timeline) = &project.timeline {
+                        if segment_idx < timeline.segments.len() {
+                            let segment = &timeline.segments[segment_idx];
+                            segment.start + segment_elapsed * segment_timescale
+                        } else {
+                            elapsed
+                        }
+                    } else {
+                        elapsed
+                    }
+                } else {
+                    elapsed
+                };
 
-                if let Some((segment_time, segment_i)) = project.get_segment_time(time) {
-                    let segment = &self.segments[segment_i as usize];
+                if let Some(segment_i) = current_segment_index {
+                    if segment_i < self.segments.len() {
+                        let segment = &self.segments[segment_i];
 
-                    let data = tokio::select! {
-                        _ = stop_rx.changed() => { break; },
-                        data = segment.decoders.get_frames(segment_time as f32, !project.camera.hide) => { data }
-                    };
+                        let data = tokio::select! {
+                            _ = stop_rx.changed() => { break; },
+                            data = segment.decoders.get_frames(segment_time as f32, !project.camera.hide) => { data }
+                        };
 
-                    if let Some(segment_frames) = data {
-                        let uniforms = ProjectUniforms::new(
-                            &self.render_constants,
-                            &project,
-                            frame_number,
-                            fps,
-                            resolution_base,
-                        );
+                        if let Some(segment_frames) = data {
+                            let uniforms = ProjectUniforms::new(
+                                &self.render_constants,
+                                &project,
+                                frame_number,
+                                fps,
+                                resolution_base,
+                            );
 
-                        self.renderer
-                            .render_frame(segment_frames, uniforms, segment.cursor.clone())
-                            .await;
+                            self.renderer
+                                .render_frame(segment_frames, uniforms, segment.cursor.clone())
+                                .await;
+                        }
                     }
                 }
 
-                tokio::time::sleep_until(
-                    start
-                        + (frame_number - self.start_frame_number)
-                            * Duration::from_secs_f32(1.0 / fps as f32),
-                )
-                .await;
+                let next_frame = (frame_number + 1) as f64 / fps as f64;
+                let time_to_wait = if let Some(segment_idx) = current_segment_index {
+                    if let Some(timeline) = &project.timeline {
+                        if segment_idx < timeline.segments.len() {
+                            let segment = &timeline.segments[segment_idx];
+                            Duration::from_secs_f64(
+                                (next_frame - playhead_time) * segment.timescale,
+                            )
+                        } else {
+                            Duration::from_secs_f64(next_frame - playhead_time)
+                        }
+                    } else {
+                        Duration::from_secs_f64(next_frame - playhead_time)
+                    }
+                } else {
+                    Duration::from_secs_f64(next_frame - playhead_time)
+                };
+
+                tokio::time::sleep(time_to_wait).await;
 
                 event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
             }
