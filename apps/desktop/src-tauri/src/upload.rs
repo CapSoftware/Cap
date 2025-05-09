@@ -287,7 +287,7 @@ pub async fn upload_video(
         }
 
         return Ok(UploadedVideo {
-            link: web_api::make_url(format!("/s/{}", &s3_config.id)),
+            link: app.make_app_url(format!("/s/{}", &s3_config.id)).await,
             id: s3_config.id.clone(),
             config: s3_config,
         });
@@ -355,7 +355,7 @@ pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
     if response.status().is_success() {
         println!("File uploaded successfully");
         return Ok(UploadedImage {
-            link: web_api::make_url(format!("/s/{}", &s3_config.id)),
+            link: app.make_app_url(format!("/s/{}", &s3_config.id)).await,
             id: s3_config.id,
         });
     }
@@ -429,7 +429,7 @@ pub async fn upload_audio(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
     if response.status().is_success() {
         println!("Audio file uploaded successfully");
         return Ok(UploadedAudio {
-            link: web_api::make_url(format!("/s/{}", &s3_config.id)),
+            link: app.make_app_url(format!("/s/{}", &s3_config.id)).await,
             id: s3_config.id.clone(),
             config: s3_config,
         });
@@ -456,16 +456,16 @@ pub async fn get_s3_config(
     is_screenshot: bool,
     video_id: Option<String>,
 ) -> Result<S3UploadMeta, String> {
-    let config_url = web_api::make_url(if let Some(id) = video_id {
+    let s3_config_url = if let Some(id) = video_id {
         format!("/api/desktop/video/create?recordingMode=desktopMP4&videoId={id}")
     } else if is_screenshot {
         "/api/desktop/video/create?recordingMode=desktopMP4&isScreenshot=true".to_string()
     } else {
         "/api/desktop/video/create?recordingMode=desktopMP4".to_string()
-    });
+    };
 
     let response = app
-        .authed_api_request(|client| client.get(config_url))
+        .authed_api_request(s3_config_url, |client, url| client.get(url))
         .await
         .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
 
@@ -494,10 +494,8 @@ async fn presigned_s3_url(
     body: S3VideoUploadBody,
 ) -> Result<(String, Form), String> {
     let response = app
-        .authed_api_request(|client| {
-            client
-                .post(web_api::make_url("/api/upload/signed"))
-                .json(&serde_json::json!(body))
+        .authed_api_request("/api/upload/signed", |client, url| {
+            client.post(url).json(&serde_json::json!(body))
         })
         .await
         .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
@@ -536,10 +534,8 @@ async fn presigned_s3_url_image(
     body: S3ImageUploadBody,
 ) -> Result<(String, Form), String> {
     let response = app
-        .authed_api_request(|client| {
-            client
-                .post(web_api::make_url("/api/upload/signed"))
-                .json(&serde_json::json!(body))
+        .authed_api_request("/api/upload/signed", |client, url| {
+            client.post(url).json(&serde_json::json!(body))
         })
         .await
         .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
@@ -574,10 +570,8 @@ async fn presigned_s3_url_audio(
     body: S3AudioUploadBody,
 ) -> Result<(String, Form), String> {
     let response = app
-        .authed_api_request(|client| {
-            client
-                .post(web_api::make_url("/api/upload/signed"))
-                .json(&serde_json::json!(body))
+        .authed_api_request("/api/upload/signed", |client, url| {
+            client.post(url).json(&serde_json::json!(body))
         })
         .await
         .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
@@ -860,8 +854,8 @@ impl InstantMultipartUpload {
         // --------------------------------------------
         println!("Initiating multipart upload for {video_id}...");
         let initiate_response = match app
-            .authed_api_request(|c| {
-                c.post(web_api::make_url("/api/upload/multipart/initiate"))
+            .authed_api_request("/api/upload/multipart/initiate", |c, url| {
+                c.post(url)
                     .header("Content-Type", "application/json")
                     .json(&serde_json::json!({
                         "fileKey": file_key,
@@ -1137,8 +1131,8 @@ impl InstantMultipartUpload {
 
         // Request presigned URL for this part
         let presign_response = match app
-            .authed_api_request(|c| {
-                c.post(web_api::make_url("/api/upload/multipart/presign-part"))
+            .authed_api_request("/api/upload/multipart/presign-part", |c, url| {
+                c.post(url)
                     .header("Content-Type", "application/json")
                     .json(&serde_json::json!({
                         "fileKey": file_key,
@@ -1314,8 +1308,8 @@ impl InstantMultipartUpload {
         println!("Proceeding with multipart upload completion...");
 
         let complete_response = match app
-            .authed_api_request(|c| {
-                c.post(web_api::make_url("/api/upload/multipart/complete"))
+            .authed_api_request("/api/upload/multipart/complete", |c, url| {
+                c.post(url)
                     .header("Content-Type", "application/json")
                     .json(&serde_json::json!({
                         "fileKey": file_key,
