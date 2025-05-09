@@ -157,6 +157,7 @@ export default async function DashboardLayout({
     !!user.thirdPartyStripeSubscriptionId;
 
   const theme = cookies().get("theme")?.value ?? "light";
+  const sidebar = cookies().get("sidebarCollapsed")?.value ?? "false";
 
   return (
     <DynamicSharedLayout
@@ -165,6 +166,7 @@ export default async function DashboardLayout({
       user={user}
       isSubscribed={isSubscribed}
       initialTheme={theme as "light" | "dark"}
+      initialSidebarCollapsed={sidebar === "true"}
     >
       <div className="full-layout">
         <DashboardTemplate>{children}</DashboardTemplate>

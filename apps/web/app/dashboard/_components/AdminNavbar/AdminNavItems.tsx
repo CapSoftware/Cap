@@ -42,10 +42,14 @@ import Image from "next/image";
 import { useRef, useState } from "react";
 import { updateActiveOrganization } from "./server";
 
-export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
+interface Props {
+  toggleMobileNav?: () => void;
+}
+
+export const AdminNavItems = ({ toggleMobileNav }: Props) => {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
-  const { user } =
+  const { user, sidebarCollapsed } =
     useSharedContext();
 
   const manageNavigation = [
@@ -99,7 +103,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
     <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
       <Popover open={open} onOpenChange={setOpen}>
         <Tooltip
-          disable={open || collapsed === false}
+          disable={open || sidebarCollapsed === false}
           position="right"
           content={
             activeOrg?.organization.name ?? "No organization found"
@@ -142,15 +146,15 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                         "No organization found"}
                     </p>
                   </div>
-                  {!collapsed && (
+                  {!sidebarCollapsed && (
                     <ChevronDown className="w-5 h-auto text-gray-8" />
                   )}
                 </div>
               </div>
               <PopoverContent
                 className={clsx(
-                  "p-0 w-[calc(100%-12px)] z-[60]",
-                  collapsed ? "ml-3" : "mx-auto"
+                  "p-0 w-full min-w-[287px] md:min-w-fit md:w-[calc(100%-12px)] z-[120]",
+                  sidebarCollapsed ? "ml-3" : "mx-auto"
                 )}
               >
                 <Command>
@@ -203,11 +207,11 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                         </CommandItem>
                       );
                     })}
-                    <DialogTrigger className="mt-3 w-full">
+                    <DialogTrigger asChild>
                       <Button
                         variant="dark"
                         size="sm"
-                        className="flex gap-1 items-center w-full"
+                        className="flex gap-1 items-center mt-3 w-full"
                       >
                         <Plus className="w-4 h-auto" />
                         Add new organization
@@ -225,19 +229,19 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
         aria-label="Sidebar"
       >
         <div
-          className={clsx("mt-8 space-y-2.5", collapsed ? "items-center" : "")}
+          className={clsx("mt-8 space-y-2.5", sidebarCollapsed ? "items-center" : "")}
         >
           {manageNavigation.map((item) => (
             <div key={item.name} className="flex relative justify-center">
               {pathname.includes(item.href) ? (
                 <motion.div
                   initial={{
-                    width: collapsed ? 40 : "100%",
-                    height: collapsed ? 40 : "100%",
+                    width: sidebarCollapsed ? 40 : "100%",
+                    height: sidebarCollapsed ? 40 : "100%",
                   }}
                   animate={{
-                    width: collapsed ? 40 : "100%",
-                    height: collapsed ? 40 : "100%",
+                    width: sidebarCollapsed ? 40 : "100%",
+                    height: sidebarCollapsed ? 40 : "100%",
                   }}
                   transition={{
                     type: "spring",
@@ -254,11 +258,12 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
               ) : null}
               <Tooltip
                 content={item.name}
-                disable={collapsed === false}
+                disable={sidebarCollapsed === false}
                 position="right"
               >
                 <Link
                   passHref
+                  onClick={() => toggleMobileNav?.()}
                   prefetch={false}
                   href={item.href}
                   className={classNames(
@@ -270,7 +275,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                     icon={item.icon as IconDefinition}
                     className={classNames(
                       "flex-shrink-0 w-5 h-5 transition-colors duration-200 stroke-[1.5px]",
-                      collapsed ? "text-gray-12" : "text-gray-10"
+                      sidebarCollapsed ? "text-gray-12" : "text-gray-10"
                     )}
                     aria-hidden="true"
                   />
@@ -284,7 +289,6 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
         </div>
         <div className="pb-0 w-full lg:pb-5">
           <UsageButton
-            collapsed={collapsed ?? false}
             subscribed={userIsSubscribed}
           />
           <p className="mt-4 text-xs text-center truncate text-gray-10">
