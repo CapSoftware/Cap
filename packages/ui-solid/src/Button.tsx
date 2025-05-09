@@ -11,7 +11,7 @@ const styles = cva(
     variants: {
       variant: {
         primary:
-          "bg-blue-300 text-gray-50 disabled:text-gray-200 enabled:hover:opacity-80 dark:text-gray-500 dark:disabled:text-gray-300 disabled:bg-blue-200 outline-blue-300",
+          "bg-blue-300 text-gray-50 disabled:text-gray-200 enabled:hover:opacity-80 dark:text-gray-500 dark:disabled:text-gray-400 dark:disabled:text-gray-300 disabled:bg-blue-200 outline-blue-300",
         secondary:
           "bg-gray-200 enabled:hover:opacity-80 text-gray-500 disabled:bg-gray-200 disabled:text-gray-8 outline-blue-300",
         destructive:
