@@ -99,7 +99,7 @@ export default function DynamicSharedLayout({
           </aside>
           {/* Header/topbar is now expected to be rendered by children if needed */}
           {/* Main content area */}
-          <div className="overflow-y-auto col-span-1 row-span-2 custom-scroll focus:outline-none">
+          <div className="flex col-span-1 row-span-2 h-full custom-scroll focus:outline-none">
             <AdminMobileNav />
             {children}
           </div>

@@ -46,14 +46,16 @@ export default function DashboardInner({
   const title = titles[pathname] || "";
   const { theme, setThemeHandler } = useTheme();
   return (
-    <div className="flex flex-col w-full h-full">
+    <>
       {/* Top Bar - Fixed at top with proper z-index */}
       <header
         className={clsx(
-          "flex sticky z-50 justify-between items-center px-5 mt-10 w-full h-16 border-b bg-gray-1 lg:bg-transparent border-gray-3 lg:border-b-0 lg:pl-0 lg:pr-5 lg:top-0 lg:relative top-[64px] lg:mt-5 lg:h-8"
+          "flex sticky z-50 justify-between items-center px-5 mt-10 w-full border-b min-h-16 md:min-h-10 bg-gray-1 lg:bg-transparent border-gray-3 lg:border-b-0 lg:pl-0 lg:pr-5 lg:top-0 lg:relative top-[64px] lg:mt-5 lg:h-8"
         )}
       >
-        <p className="relative text-xl truncate text-gray-12 lg:text-2xl w-fit max-w-[150px]">{title}</p>
+        <p className="relative text-xl truncate md:max-w-full text-gray-12 lg:text-2xl w-fit max-w-[150px]">
+          {title}
+        </p>
         <div className="flex gap-4 items-center">
           <div
             onClick={() => {
@@ -71,14 +73,13 @@ export default function DashboardInner({
       </header>
       {/* Content Area - Scrollable content with proper spacing */}
       <main
-        className={clsx(
-          "flex overflow-y-auto flex-col flex-1 p-5 pb-5 border border-b-0 bg-gray-1 border-gray-3 lg:rounded-tl-2xl lg:p-8",
-          "mt-5 min-h-screen"
-        )}
+        className={
+          "flex flex-col flex-1 p-5 pb-5 mt-5 border border-b-0 min-h-fit bg-gray-1 border-gray-3 lg:rounded-tl-2xl lg:p-8"
+        }
       >
-        <div className="flex flex-col gap-4">{children}</div>
+        <div className="flex flex-col flex-1 gap-4">{children}</div>
       </main>
-    </div>
+    </>
   );
 }
 
