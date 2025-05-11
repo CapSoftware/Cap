@@ -38,10 +38,10 @@ export const AdminDesktopNav = () => {
     <>
       <motion.div
         initial={{
-          width: sidebarCollapsed ? "70px" : "250px",
+          width: sidebarCollapsed ? "70px" : "230px",
         }}
         animate={{
-          width: sidebarCollapsed ? "70px" : "250px",
+          width: sidebarCollapsed ? "70px" : "230px",
           transition: {
             duration: 0.4,
             type: "spring",
@@ -52,14 +52,12 @@ export const AdminDesktopNav = () => {
       >
         <div className="flex flex-col w-full max-w-[220px] mx-auto">
           <div className="flex overflow-hidden flex-col flex-grow h-full">
-            <div className="flex flex-col flex-shrink-0 items-start px-3 pt-5 w-full h-full justify-top">
+            <div className="flex flex-col items-center px-3 pt-5 w-full h-full justify-top">
               <div className="flex justify-start items-center mb-3.5 w-full truncate min-h-8">
                 <Link href="/dashboard">
                   <Logo
-                    className={clsx(
-                      "flex-shrink-0 mx-auto w-[120px]",
-                      sidebarCollapsed ? "ml-1" : "ml-0"
-                    )}
+                    hideLogoName={sidebarCollapsed}
+                    className="mx-auto w-[120px] h-[40px]"
                   />
                 </Link>
               </div>
