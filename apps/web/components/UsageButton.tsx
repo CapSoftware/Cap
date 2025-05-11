@@ -40,13 +40,13 @@ export const UsageButton = ({
             />
             <FontAwesomeIcon
               className={clsx(
-                "text-gray-50 drop-shadow-[0_0_2px_rgba(255,255,255,0.5)]",
+                "text-gray-50",
                 sidebarCollapsed ? "mr-0" : "mr-1"
               )}
               icon={faCheck}
             />
             {sidebarCollapsed ? null : (
-              <p className="text-gray-50 drop-shadow-[0_0_2px_rgba(255,255,255,0.5)]">
+              <p className="text-gray-50">
                 Cap Pro
               </p>
             )}
@@ -82,13 +82,13 @@ export const UsageButton = ({
             />
             <FontAwesomeIcon
               className={clsx(
-                "text-gray-50 drop-shadow-[0_0_2px_rgba(255,255,255,0.5)]",
+                "text-gray-50",
                 sidebarCollapsed ? "mr-0" : "mr-1"
               )}
               icon={faArrowUp}
             />
             {sidebarCollapsed ? null : (
-              <p className="text-gray-50 drop-shadow-[0_0_2px_rgba(255,255,255,0.5)]">
+              <p className="text-base text-gray-50">
                 Upgrade to Pro
               </p>
             )}
