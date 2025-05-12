@@ -1,6 +1,6 @@
-import type { PresetsStore, ProjectConfiguration } from "~/utils/tauri";
-import { presetsStore } from "~/store";
 import { produce } from "solid-js/store";
+import { presetsStore } from "~/store";
+import type { PresetsStore, ProjectConfiguration } from "~/utils/tauri";
 
 export type CreatePreset = {
   name: string;

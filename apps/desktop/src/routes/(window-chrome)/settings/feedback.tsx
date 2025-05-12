@@ -42,7 +42,7 @@ export default function FeedbackTab() {
               placeholder="Tell us what you think about Cap..."
               required
               minLength={10}
-              class="p-2 w-full h-32 bg-gray-100 rounded-md border transition-shadow duration-200 resize-none placeholder:text-zinc-400 border-zinc-200 text-primary focus:outline-none focus:ring-2 focus:ring-blue-300"
+              class="p-2 w-full h-32 bg-gray-2 rounded-md border transition-shadow duration-200 resize-none placeholder:text-zinc-400 border-zinc-200 text-primary focus:outline-none focus:ring-2 focus:ring-blue-9"
             />
           </div>
 

@@ -1,24 +1,24 @@
 import Tooltip from "@corvu/tooltip";
 import {
-  createMutation,
-  createQuery,
-  queryOptions,
-  useQueryClient,
+    createMutation,
+    createQuery,
+    queryOptions,
+    useQueryClient,
 } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
-  createMemo,
-  createSignal,
-  For,
-  JSX,
-  ParentProps,
-  Show,
+    createMemo,
+    createSignal,
+    For,
+    JSX,
+    ParentProps,
+    Show,
 } from "solid-js";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { ask } from "@tauri-apps/plugin-dialog";
-import * as shell from "@tauri-apps/plugin-shell";
 
 import { trackEvent } from "~/utils/analytics";
 import { commands, events, RecordingMetaWithType } from "~/utils/tauri";
@@ -127,13 +127,13 @@ export default function Recordings() {
                   class={cx(
                     "flex gap-1.5 items-center transition-colors duration-200 p-2 px-3 border rounded-full",
                     activeTab() === tab.id
-                      ? "bg-gray-300 cursor-default border-gray-300"
-                      : "bg-transparent cursor-pointer hover:bg-gray-200 border-gray-200"
+                      ? "bg-gray-5 cursor-default border-gray-300"
+                      : "bg-transparent cursor-pointer hover:bg-gray-3 border-gray-200"
                   )}
                   onClick={() => setActiveTab(tab.id)}
                 >
                   {tab.icon && tab.icon}
-                  <p class="text-xs text-gray-500">{tab.label}</p>
+                  <p class="text-xs text-gray-12">{tab.label}</p>
                 </div>
               )}
             </For>
@@ -176,11 +176,11 @@ function RecordingItem(props: {
   const queryClient = useQueryClient();
 
   return (
-    <li class="flex flex-row justify-between items-center px-4 py-3 w-full rounded-xl transition-colors duration-200 hover:bg-gray-100">
+    <li class="flex flex-row justify-between items-center px-4 py-3 w-full rounded-xl transition-colors duration-200 hover:bg-gray-2">
       <div class="flex gap-5 items-center">
         <Show
           when={imageExists()}
-          fallback={<div class="mr-4 bg-gray-400 rounded size-11" />}
+          fallback={<div class="mr-4 bg-gray-10 rounded size-11" />}
         >
           <img
             class="object-cover rounded size-12"
@@ -195,8 +195,8 @@ function RecordingItem(props: {
           <span>{props.recording.prettyName}</span>
           <div
             class={cx(
-              "px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-500 rounded-full w-fit",
-              type() === "instant" ? "bg-blue-100" : "bg-gray-200"
+              "px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit",
+              type() === "instant" ? "bg-blue-100" : "bg-gray-3"
             )}
           >
             {type() === "instant" ? (
@@ -302,12 +302,12 @@ function TooltipIconButton(
           props.onClick();
         }}
         disabled={props.disabled}
-        class="p-2.5 opacity-70 will-change-transform hover:opacity-100 rounded-full transition-all duration-200 hover:bg-gray-200 dark:hover:bg-gray-300"
+        class="p-2.5 opacity-70 will-change-transform hover:opacity-100 rounded-full transition-all duration-200 hover:bg-gray-3 dark:hover:bg-gray-5"
       >
         {props.children}
       </Tooltip.Trigger>
       <Tooltip.Portal>
-        <Tooltip.Content class="py-2 px-3 font-medium bg-gray-100 text-gray-500 border border-gray-200 text-xs rounded-lg animate-in fade-in slide-in-from-top-0.5">
+        <Tooltip.Content class="py-2 px-3 font-medium bg-gray-2 text-gray-12 border border-gray-200 text-xs rounded-lg animate-in fade-in slide-in-from-top-0.5">
           {props.tooltipText}
         </Tooltip.Content>
       </Tooltip.Portal>

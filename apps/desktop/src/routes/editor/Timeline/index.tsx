@@ -1,15 +1,15 @@
 import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListener } from "@solid-primitives/event-listener";
+import { platform } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import { For, Show, batch, createRoot, createSignal, onMount } from "solid-js";
 import { produce } from "solid-js/store";
-import { platform } from "@tauri-apps/plugin-os";
 
-import { TimelineContextProvider, useTimelineContext } from "./context";
-import { formatTime } from "../utils";
-import { ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
-import { ClipTrack } from "./ClipTrack";
 import { useEditorContext } from "../context";
+import { formatTime } from "../utils";
+import { ClipTrack } from "./ClipTrack";
+import { TimelineContextProvider, useTimelineContext } from "./context";
+import { ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
 
 const TIMELINE_PADDING = 16;
 
@@ -188,7 +188,7 @@ export function Timeline() {
                 }px)`,
               }}
             >
-              <div class="absolute -top-2 bg-gray-400 rounded-full size-3" />
+              <div class="absolute -top-2 bg-gray-10 rounded-full size-3" />
               <Show when={split()}>
                 <div class="absolute size-[2rem] bg-[currentColor] z-20 top-6 rounded-lg flex items-center justify-center">
                   <IconCapScissors class="size-[1.25rem] text-gray-50 z-20" />

@@ -81,7 +81,7 @@ module.exports = {
     extend: {
       colors: {
         gray: getColorScale("gray"),
-        slate: getColorScale("slate"),
+        "gray-a": getColorScale("gray", true),
         blue: getColorScale("blue"),
         red: getColorScale("red"),
         indigo: getColorScale("indigo"),

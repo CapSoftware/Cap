@@ -3,21 +3,20 @@ import { Dialog as KDialog } from "@kobalte/core/dialog";
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Polymorphic, type PolymorphicProps } from "@kobalte/core/polymorphic";
 import { Slider as KSlider } from "@kobalte/core/slider";
-import { Switch as KSwitch } from "@kobalte/core/switch";
 import { Tooltip as KTooltip } from "@kobalte/core/tooltip";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { cva, cx, type VariantProps } from "cva";
 
 import {
-  createRoot,
-  createSignal,
-  mergeProps,
-  splitProps,
-  type ComponentProps,
-  type JSX,
-  type ParentProps,
-  type ValidComponent,
+    createRoot,
+    createSignal,
+    mergeProps,
+    splitProps,
+    type ComponentProps,
+    type JSX,
+    type ParentProps,
+    type ValidComponent
 } from "solid-js";
 import Tooltip from "~/components/Tooltip";
 import { useEditorContext } from "./context";
@@ -33,7 +32,7 @@ export function Field(
 ) {
   return (
     <div class={cx("flex flex-col gap-4", props.class)}>
-      <span class="flex flex-row items-center gap-[0.375rem] text-gray-500 font-medium text-sm">
+      <span class="flex flex-row items-center gap-[0.375rem] text-gray-12 font-medium text-sm">
         {props.icon}
         {props.name}
         {props.value && <div class="ml-auto">{props.value}</div>}
@@ -48,7 +47,7 @@ export function Subfield(
 ) {
   return (
     <div class={cx("flex flex-row justify-between items-center", props.class)}>
-      <span class="font-medium text-gray-500">
+      <span class="font-medium text-gray-12">
         {props.name}
         {props.required && (
           <span class="ml-[2px] text-xs text-blue-500">*</span>
@@ -59,16 +58,8 @@ export function Subfield(
   );
 }
 
-export function Toggle(props: ComponentProps<typeof KSwitch>) {
-  return (
-    <KSwitch {...props}>
-      <KSwitch.Input class="peer" />
-      <KSwitch.Control class="rounded-full bg-gray-300 ui-disabled:bg-gray-200 w-11 h-[1.5rem] p-[0.125rem] ui-checked:bg-blue-300 transition-colors peer-focus-visible:outline outline-2 outline-offset-2 outline-blue-300">
-        <KSwitch.Thumb class="bg-solid-white rounded-full size-[1.25rem] transition-transform ui-checked:translate-x-[calc(100%)]" />
-      </KSwitch.Control>
-    </KSwitch>
-  );
-}
+
+
 
 export function Slider(
   props: ComponentProps<typeof KSlider> & {
@@ -104,7 +95,7 @@ export function Slider(
       }}
     >
       <KSlider.Track
-        class="h-[0.3rem] cursor-pointer transition-[height] relative mx-1 bg-gray-200 rounded-full w-full before:content-[''] before:absolute before:inset-0 before:-top-3 before:-bottom-3"
+        class="h-[0.3rem] cursor-pointer transition-[height] relative mx-1 bg-gray-4 rounded-full w-full before:content-[''] before:absolute before:inset-0 before:-top-3 before:-bottom-3"
         onPointerDown={() => {
           setDragging(true);
           createRoot((dispose) => {
@@ -154,12 +145,13 @@ export function Slider(
   );
 }
 
+
 export function Input(props: ComponentProps<"input">) {
   return (
     <TextInput
       {...props}
       class={cx(
-        "rounded-[0.5rem] bg-gray-50 border-gray-200 hover:ring-1 py-[18px] hover:ring-gray-300 h-[2rem] font-normal placeholder:text-black-transparent-40 text-xs caret-gray-500 transition-shadow duration-200 focus:ring-offset-1 focus:ring-offset-gray-100 focus:ring-1 focus:ring-gray-500 px-[0.5rem] border w-full text-[0.875rem] outline-none text-gray-500",
+        "rounded-[0.5rem] bg-gray-50 border-gray-200 hover:ring-1 py-[18px] hover:ring-gray-300 h-[2rem] font-normal placeholder:text-black-transparent-40 text-xs caret-gray-500 transition-shadow duration-200 focus:ring-offset-1 focus:bg-gray-3 focus:ring-offset-gray-100 focus:ring-1 focus:ring-gray-500 px-[0.5rem] border w-full text-[0.875rem] outline-none text-gray-12",
         props.class
       )}
     />
@@ -259,7 +251,7 @@ export function DialogContent(
   return (
     <>
       <Dialog.Header>
-        <KDialog.Title class="text-gray-500 dark:text-gray-500">
+        <KDialog.Title class="text-gray-12">
           {props.title}
         </KDialog.Title>
       </Dialog.Header>
@@ -285,7 +277,7 @@ export function MenuItem<T extends ValidComponent = "button">(
       class={cx(
         props.class,
         "flex flex-row shrink-0 items-center gap-[0.375rem] px-[0.675rem] py-[0.375rem] rounded-[0.5rem] outline-none text-nowrap overflow-hidden text-ellipsis w-full max-w-full",
-        "text-[0.875rem] text-gray-400 disabled:text-gray-400 ui-highlighted:bg-gray-100 ui-highlighted:text-gray-500"
+        "text-[0.875rem] text-gray-10 disabled:text-gray-10 ui-highlighted:bg-gray-2 ui-highlighted:text-gray-12"
       )}
     />
   );
@@ -325,15 +317,15 @@ const editorButtonStyles = cva(
   [
     "group flex flex-row items-center px-[0.375rem] gap-[0.375rem] h-[2rem] rounded-[0.5rem] text-[0.875rem]",
     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 transition-colors duration-100",
-    "disabled:opacity-50 disabled:text-gray-400",
+    "disabled:opacity-50 disabled:text-gray-11",
   ],
   {
     variants: {
       variant: {
         primary:
-          "text-gray-500 enabled:hover:ui-not-pressed:bg-white-transparent-80 dark:enabled:hover:ui-not-pressed:bg-black-transparent-20 ui-expanded:bg-white-transparent-80 dark:ui-expanded:bg-black-transparent-20 dark:ui-expanded:bg-black-transparent-10 outline-blue-300 focus:bg-white-transparent-80 dark:focus:bg-black-transparent-20",
+          "text-gray-12 enabled:hover:ui-not-pressed:bg-gray-3 ui-expanded:bg-gray-3 outline-blue-300 focus:bg-transparent",
         danger:
-          "text-gray-500 enabled:hover:ui-not-pressed:bg-white-transparent-80 dark:enabled:hover:ui-not-pressed:bg-black-transparent-20 ui-expanded:bg-red-300  ui-pressed:bg-red-300 ui-expanded:text-gray-50 ui-pressed:text-gray-50 outline-red-300",
+          "text-gray-12 enabled:hover:ui-not-pressed:bg-gray-3 ui-expanded:bg-red-300 ui-pressed:bg-red-300 ui-expanded:text-gray-50 ui-pressed:text-gray-50 outline-red-300",
       },
     },
     defaultVariants: { variant: "primary" },
@@ -344,9 +336,9 @@ const editorButtonLeftIconStyles = cva("transition-colors duration-100", {
   variants: {
     variant: {
       primary:
-        "text-gray-500 enabled:group-hover:not-ui-group-disabled:text-gray-500 ui-group-expanded:text-gray-500",
+        "text-gray-12 enabled:group-hover:not-ui-group-disabled:text-gray-12 ui-group-expanded:text-gray-12",
       danger:
-        "text-gray-500 enabled:group-hover:text-gray-500 ui-group-expanded:text-gray-50 ui-group-pressed:text-gray-50",
+        "text-gray-12 enabled:group-hover:text-gray-12 ui-group-expanded:text-gray-50 ui-group-pressed:text-gray-50",
     },
   },
   defaultVariants: { variant: "primary" },
@@ -449,7 +441,7 @@ export function ComingSoonTooltip(
         {trigger.children}
       </KTooltip.Trigger>
       <KTooltip.Portal>
-        <KTooltip.Content class="p-2 font-medium bg-gray-500 dark:bg-gray-700 text-gray-50 ui-expanded:animate-in ui-expanded:slide-in-from-bottom-1 ui-expanded:fade-in ui-closed:animate-out ui-closed:slide-out-to-bottom-1 ui-closed:fade-out rounded-lg text-xs z-[1000]">
+        <KTooltip.Content class="p-2 font-medium bg-gray-12 dark:bg-gray-700 text-gray-50 ui-expanded:animate-in ui-expanded:slide-in-from-bottom-1 ui-expanded:fade-in ui-closed:animate-out ui-closed:slide-out-to-bottom-1 ui-closed:fade-out rounded-lg text-xs z-[1000]">
           Coming Soon
         </KTooltip.Content>
       </KTooltip.Portal>

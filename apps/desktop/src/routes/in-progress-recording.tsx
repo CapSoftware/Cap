@@ -1,22 +1,21 @@
+import { createTimer } from "@solid-primitives/timer";
+import { createMutation } from "@tanstack/solid-query";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import * as dialog from "@tauri-apps/plugin-dialog";
+import { type as ostype } from "@tauri-apps/plugin-os";
+import { cx } from "cva";
 import {
   createEffect,
   createSignal,
-  onMount,
-  type ComponentProps,
+  type ComponentProps
 } from "solid-js";
-import { cx } from "cva";
-import { type as ostype } from "@tauri-apps/plugin-os";
-import { createTimer } from "@solid-primitives/timer";
-import { createMutation } from "@tanstack/solid-query";
 import { createStore, produce } from "solid-js/store";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import * as dialog from "@tauri-apps/plugin-dialog";
 
-import { commands, events } from "~/utils/tauri";
 import {
-  createOptionsQuery,
   createCurrentRecordingQuery,
+  createOptionsQuery,
 } from "~/utils/queries";
+import { commands, events } from "~/utils/tauri";
 
 type State = "recording" | "paused" | "stopped";
 
@@ -102,7 +101,7 @@ export default function () {
   };
 
   return (
-    <div class="flex flex-row items-stretch bg-gray-500 dark:bg-gray-50 w-full h-full animate-in fade-in">
+    <div class="flex flex-row items-stretch w-full h-full bg-gray-12 dark:bg-gray-1 animate-in fade-in">
       <div class="flex flex-row justify-between p-[0.25rem] flex-1">
         <button
           disabled={stopRecording.isPending}
@@ -116,12 +115,12 @@ export default function () {
           </span>
         </button>
 
-        <div class="flex items-center gap-1">
-          <div class="relative h-8 w-8 flex items-center justify-center">
+        <div class="flex gap-1 items-center">
+          <div class="flex relative justify-center items-center w-8 h-8">
             {options.data?.micName != null ? (
               <>
-                <IconCapMicrophone class="size-5 text-gray-400" />
-                <div class="absolute bottom-1 left-1 right-1 h-0.5 bg-gray-400 overflow-hidden rounded-full">
+                <IconCapMicrophone class="size-5 text-gray-11" />
+                <div class="absolute bottom-1 left-1 right-1 h-0.5 bg-gray-10 overflow-hidden rounded-full">
                   <div
                     class="absolute inset-0 bg-blue-400 transition-transform duration-100"
                     style={{
@@ -132,7 +131,7 @@ export default function () {
               </>
             ) : (
               <IconLucideMicOff
-                class="size-5 text-gray-300 opacity-20 dark:text-gray-300 dark:opacity-100"
+                class="text-gray-300 opacity-20 size-5 dark:text-gray-300 dark:opacity-100"
                 data-tauri-drag-region
               />
             )}
@@ -164,7 +163,7 @@ export default function () {
         class="non-styled-move cursor-move flex items-center justify-center p-[0.25rem] border-l border-gray-400 dark:border-gray-200 hover:cursor-move"
         data-tauri-drag-region
       >
-        <IconCapMoreVertical class="pointer-events-none text-gray-400 dark:text-gray-400" />
+        <IconCapMoreVertical class="pointer-events-none text-gray-11 dark:text-gray-11" />
       </div>
     </div>
   );
@@ -176,7 +175,7 @@ function ActionButton(props: ComponentProps<"button">) {
       {...props}
       class={cx(
         "p-[0.25rem] rounded-lg transition-colors",
-        "text-gray-400",
+        "text-gray-11",
         "h-8 w-8 flex items-center justify-center",
         props.class
       )}

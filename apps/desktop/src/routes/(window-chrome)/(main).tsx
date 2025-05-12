@@ -2,44 +2,44 @@ import { Button } from "@cap/ui-solid";
 import { Tooltip } from "@kobalte/core";
 import { useNavigate } from "@solidjs/router";
 import {
-  createMutation,
-  createQuery,
-  useQueryClient,
+    createMutation,
+    createQuery,
+    useQueryClient,
 } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
-  ComponentProps,
-  createEffect,
-  createMemo,
-  createResource,
-  createSignal,
-  ErrorBoundary,
-  onCleanup,
-  onMount,
-  Show,
-  Suspense,
+    ComponentProps,
+    createEffect,
+    createMemo,
+    createResource,
+    createSignal,
+    ErrorBoundary,
+    onCleanup,
+    onMount,
+    Show,
+    Suspense,
 } from "solid-js";
 import { createStore } from "solid-js/store";
 
 import Mode from "~/components/Mode";
 import { identifyUser, trackEvent } from "~/utils/analytics";
 import {
-  createCurrentRecordingQuery,
-  createLicenseQuery,
-  createOptionsQuery,
-  createVideoDevicesQuery,
-  getPermissions,
-  listAudioDevices,
-  listScreens,
-  listWindows,
+    createCurrentRecordingQuery,
+    createLicenseQuery,
+    createOptionsQuery,
+    createVideoDevicesQuery,
+    getPermissions,
+    listAudioDevices,
+    listScreens,
+    listWindows,
 } from "~/utils/queries";
 import {
-  type CaptureScreen,
-  type CaptureWindow,
-  commands,
-  events,
+    type CaptureScreen,
+    type CaptureWindow,
+    commands,
+    events,
 } from "~/utils/tauri";
 
 function getWindowSize(systemAudioRecording: boolean) {
@@ -175,11 +175,11 @@ export default function () {
               }}
               class="flex items-center justify-center w-5 h-5 -ml-[1.5px]"
             >
-              <IconCapSettings class="text-gray-400 size-5 hover:text-gray-500" />
+              <IconCapSettings class="text-gray-11 size-5 hover:text-gray-12" />
             </button>
           </Tooltip.Trigger>
           <Tooltip.Portal>
-            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
+            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-12 rounded shadow-lg duration-100 animate-in fade-in">
               Settings
               <Tooltip.Arrow class="fill-gray-500" />
             </Tooltip.Content>
@@ -195,11 +195,11 @@ export default function () {
               }}
               class="flex justify-center items-center w-5 h-5"
             >
-              <IconLucideSquarePlay class="text-gray-400 size-5 hover:text-gray-500" />
+              <IconLucideSquarePlay class="text-gray-11 size-5 hover:text-gray-12" />
             </button>
           </Tooltip.Trigger>
           <Tooltip.Portal>
-            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
+            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-12 rounded shadow-lg duration-100 animate-in fade-in">
               Previous Recordings
               <Tooltip.Arrow class="fill-gray-500" />
             </Tooltip.Content>
@@ -214,7 +214,7 @@ export default function () {
             onClick={() => commands.showWindow("Upgrade")}
             class="flex relative justify-center items-center w-5 h-5"
           >
-            <IconLucideGift class="text-gray-400 size-5 hover:text-gray-500" />
+            <IconLucideGift class="text-gray-11 size-5 hover:text-gray-12" />
             <div
               style={{ "background-color": "#FF4747" }}
               class="block z-10 absolute top-0 right-0 size-1.5 rounded-full animate-bounce"
@@ -230,7 +230,7 @@ export default function () {
             }}
             class="flex justify-center items-center w-5 h-5"
           >
-            <IconLucideBug class="text-gray-400 size-5 hover:text-gray-500" />
+            <IconLucideBug class="text-gray-11 size-5 hover:text-gray-12" />
           </button>
         )}
       </div>
@@ -271,8 +271,8 @@ export default function () {
                 }}
                 class={`text-[0.6rem] ${
                   license.data?.type === "pro"
-                    ? "bg-[--blue-400] text-gray-50 dark:text-gray-500"
-                    : "bg-gray-200 cursor-pointer hover:bg-gray-300"
+                    ? "bg-[--blue-400] text-gray-50 dark:text-gray-12"
+                    : "bg-gray-3 cursor-pointer hover:bg-gray-5"
                 } rounded-lg px-1.5 py-0.5`}
               >
                 {license.data?.type === "commercial"
@@ -359,18 +359,18 @@ import { makePersisted } from "@solid-primitives/storage";
 import { UnlistenFn } from "@tauri-apps/api/event";
 import { CheckMenuItem, Menu, PredefinedMenuItem } from "@tauri-apps/api/menu";
 import {
-  getCurrentWebviewWindow,
-  WebviewWindow,
+    getCurrentWebviewWindow,
+    WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { type as ostype, platform } from "@tauri-apps/plugin-os";
 import * as updater from "@tauri-apps/plugin-updater";
 import { Transition } from "solid-transition-group";
 
+import { SignInButton } from "~/components/SignInButton";
+import { authStore, generalSettingsStore } from "~/store";
 import { apiClient } from "~/utils/web-api";
 import { useWindowChrome } from "./Context";
-import { authStore, generalSettingsStore } from "~/store";
-import { SignInButton } from "~/components/SignInButton";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -598,17 +598,17 @@ function TargetSelects(props: {
                   onClick={handleAreaSelectButtonClick}
                   class={cx(
                     "flex items-center justify-center flex-shrink-0 w-full h-full rounded-[0.5rem] transition-all duration-200",
-                    "hover:bg-gray-200 disabled:bg-gray-100 disabled:text-gray-400",
+                    "hover:bg-gray-3 disabled:bg-gray-2 disabled:text-gray-11",
                     "focus-visible:outline font-[200] text-[0.875rem]",
                     isTargetCaptureArea()
-                      ? "bg-gray-100 text-blue-400 border border-blue-200"
-                      : "bg-gray-100 text-gray-400"
+                      ? "bg-gray-2 text-blue-9 border border-blue-200"
+                      : "bg-gray-2 text-gray-11"
                   )}
                 >
                   <IconCapCrop
                     class={`w-[1rem] h-[1rem] ${
                       areaSelection.pending
-                        ? "animate-gentle-bounce duration-1000 text-gray-500 mt-1"
+                        ? "animate-gentle-bounce duration-1000 text-gray-12 mt-1"
                         : ""
                     }`}
                   />
@@ -618,7 +618,7 @@ function TargetSelects(props: {
           </Transition>
         </Tooltip.Trigger>
         <Tooltip.Portal>
-          <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
+          <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-12 rounded shadow-lg duration-100 animate-in fade-in">
             {isTargetCaptureArea()
               ? "Remove selection"
               : areaSelection.pending
@@ -647,7 +647,7 @@ function TargetSelects(props: {
                 : undefined,
           }}
         >
-          <div class="flex-1 bg-gray-100" />
+          <div class="flex-1 bg-gray-2" />
         </div>
         <TargetSelect<CaptureScreen>
           options={screens.data ?? []}
@@ -737,7 +737,7 @@ function CameraSelect(props: {
     <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
       <button
         disabled={props.setOptions.isPending || !!currentRecording.data}
-        class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect"
+        class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-11 transition-colors KSelect"
         onClick={() => {
           Promise.all([
             CheckMenuItem.new({
@@ -760,7 +760,7 @@ function CameraSelect(props: {
             });
         }}
       >
-        <IconCapCamera class="text-gray-400 size-[1.25rem]" />
+        <IconCapCamera class="text-gray-11 size-[1.25rem]" />
         <span class="flex-1 text-left truncate">
           {props.options?.cameraLabel ?? NO_CAMERA}
         </span>
@@ -800,10 +800,6 @@ function MicrophoneSelect(props: {
   const [dbs, setDbs] = createSignal<number | undefined>();
   const [isInitialized, setIsInitialized] = createSignal(false);
 
-  const value = createMemo(() => {
-    if (!props.options?.micName) return null;
-    return devices.data?.find((d) => d.name === props.options?.micName) ?? null;
-  });
 
   const requestPermission = useRequestPermission();
 
@@ -866,7 +862,7 @@ function MicrophoneSelect(props: {
     <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
       <button
         disabled={props.setOptions.isPending || !!currentRecording.data}
-        class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10"
+        class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
         onClick={() => {
           Promise.all([
             CheckMenuItem.new({
@@ -899,7 +895,7 @@ function MicrophoneSelect(props: {
             />
           )}
         </Show>
-        <IconCapMicrophone class="text-gray-400 size-[1.25rem]" />
+        <IconCapMicrophone class="text-gray-11 size-[1.25rem]" />
         <span class="flex-1 text-left truncate">
           {props.options?.micName ?? NO_MICROPHONE}
         </span>
@@ -939,10 +935,10 @@ function SystemAudio(props: {
         });
       }}
       disabled={props.setOptions.isPending || !!currentRecording.data}
-      class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10"
+      class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
     >
       <div class="size-[1.25rem] flex items-center justify-center">
-        <IconPhMonitorBold class="text-gray-400 stroke-2 size-[1.2rem]" />
+        <IconPhMonitorBold class="text-gray-11 stroke-2 size-[1.2rem]" />
       </div>
       <span class="flex-1 text-left truncate">
         {props.options?.captureSystemAudio
@@ -983,7 +979,7 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
   return (
     <>
       <button
-        class="group flex-1 text-gray-400 py-1 z-10 data-[selected='true']:text-gray-500 disabled:text-gray-400 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
+        class="group flex-1 text-gray-11 py-1 z-10 data-[selected='true']:text-gray-12 disabled:text-gray-11 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
         data-selected={props.selected}
         onClick={() => {
           if (props.options.length > 1) {
@@ -1129,7 +1125,7 @@ function ChangelogButton() {
           onClick={handleChangelogClick}
           class="flex relative justify-center items-center w-5 h-5"
         >
-          <IconLucideBell class="text-gray-400 size-5 hover:text-gray-500" />
+          <IconLucideBell class="text-gray-11 size-5 hover:text-gray-12" />
           {changelogState.hasUpdate && (
             <div
               style={{ "background-color": "#FF4747" }}
@@ -1139,7 +1135,7 @@ function ChangelogButton() {
         </button>
       </Tooltip.Trigger>
       <Tooltip.Portal>
-        <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
+        <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-12 rounded shadow-lg duration-100 animate-in fade-in">
           Changelog
           <Tooltip.Arrow class="fill-gray-500" />
         </Tooltip.Content>

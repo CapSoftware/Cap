@@ -4,8 +4,7 @@ import { makePersisted } from "@solid-primitives/storage";
 import {
   createMutation,
   createQuery,
-  keepPreviousData,
-  useQueryClient,
+  keepPreviousData
 } from "@tanstack/solid-query";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
@@ -65,17 +64,17 @@ export const EXPORT_TO_OPTIONS = [
   {
     label: "File",
     value: "file",
-    icon: <IconCapFile class="text-gray-500 size-4" />,
+    icon: <IconCapFile class="text-gray-12 size-4" />,
   },
   {
     label: "Clipboard",
     value: "clipboard",
-    icon: <IconCapCopy class="text-gray-500 size-4" />,
+    icon: <IconCapCopy class="text-gray-12 size-4" />,
   },
   {
     label: "Shareable link",
     value: "link",
-    icon: <IconCapLink class="text-gray-500 size-4" />,
+    icon: <IconCapLink class="text-gray-12 size-4" />,
   },
 ] as const;
 
@@ -97,7 +96,6 @@ export function ExportDialog() {
     refetchMeta,
   } = useEditorContext();
 
-  const queryClient = useQueryClient();
 
   const [settings, setSettings] = makePersisted(
     createStore({
@@ -128,7 +126,7 @@ export function ExportDialog() {
   const [outputPath, setOutputPath] = createSignal<string | null>(null);
 
   const selectedStyle =
-    "ring-1 ring-offset-2 ring-offset-gray-200 bg-gray-300 ring-gray-500";
+    "ring-1 ring-offset-2 ring-offset-gray-200 bg-gray-5 ring-gray-500";
 
   const projectPath = editorInstance.path;
 
@@ -425,9 +423,9 @@ export function ExportDialog() {
         >
           <div class="flex flex-wrap gap-3">
             {/* Format */}
-            <div class="p-4 bg-gray-100 rounded-xl">
+            <div class="p-4 rounded-xl bg-gray-2">
               <div class="flex flex-col gap-3">
-                <h3 class="text-gray-500">Format</h3>
+                <h3 class="text-gray-12">Format</h3>
                 <div class="flex flex-row gap-2">
                   <For each={FORMAT_OPTIONS}>
                     {(option) =>
@@ -470,9 +468,9 @@ export function ExportDialog() {
               </div>
             </div>
             {/* Frame rate */}
-            <div class="overflow-hidden relative p-4 bg-gray-100 rounded-xl">
+            <div class="overflow-hidden relative p-4 rounded-xl bg-gray-2">
               <div class="flex flex-col gap-3">
-                <h3 class="text-gray-500">Frame rate</h3>
+                <h3 class="text-gray-12">Frame rate</h3>
                 <KSelect
                   options={FPS_OPTIONS}
                   optionValue="value"
@@ -497,11 +495,15 @@ export function ExportDialog() {
                     </MenuItem>
                   )}
                 >
-                  <KSelect.Trigger class="flex flex-row gap-2 items-center px-3 w-full h-10 bg-gray-200 rounded-xl transition-colors disabled:text-gray-400">
+                  <KSelect.Trigger class="flex flex-row gap-2 items-center px-3 w-full h-10 rounded-xl transition-colors bg-gray-3 disabled:text-gray-11">
                     <KSelect.Value<
                       (typeof FPS_OPTIONS)[number]
-                    > class="flex-1 text-sm text-left truncate text-[--gray-500]">
-                      {(state) => <span>{state.selectedOption()?.label}</span>}
+                    > class="flex-1 text-sm text-left truncate tabular-nums text-[--gray-500]">
+                      {(state) => (
+                        <span>
+                          {state.selectedOption()?.label}
+                        </span>
+                      )}
                     </KSelect.Value>
                     <KSelect.Icon<ValidComponent>
                       as={(props) => (
@@ -527,9 +529,9 @@ export function ExportDialog() {
               </div>
             </div>
             {/* Export to */}
-            <div class="flex-1 p-4 bg-gray-100 rounded-xl">
+            <div class="flex-1 p-4 rounded-xl bg-gray-2">
               <div class="flex flex-col gap-3">
-                <h3 class="text-gray-500">Export to</h3>
+                <h3 class="text-gray-12">Export to</h3>
                 <div class="flex gap-2">
                   <For each={EXPORT_TO_OPTIONS}>
                     {(option) => (
@@ -550,9 +552,9 @@ export function ExportDialog() {
               </div>
             </div>
             {/* Compression */}
-            <div class="p-4 bg-gray-100 rounded-xl">
+            <div class="p-4 rounded-xl bg-gray-2">
               <div class="flex flex-col gap-3">
-                <h3 class="text-gray-500">Compression</h3>
+                <h3 class="text-gray-12">Compression</h3>
                 <div class="flex gap-2">
                   <For each={COMPRESSION_OPTIONS}>
                     {(option) => (
@@ -576,9 +578,9 @@ export function ExportDialog() {
               </div>
             </div>
             {/* Resolution */}
-            <div class="flex-1 p-4 bg-gray-100 rounded-xl">
+            <div class="flex-1 p-4 rounded-xl bg-gray-2">
               <div class="flex flex-col gap-3">
-                <h3 class="text-gray-500">Resolution</h3>
+                <h3 class="text-gray-12">Resolution</h3>
                 <div class="flex gap-2">
                   <For
                     each={[
@@ -627,16 +629,16 @@ export function ExportDialog() {
             <>
               <Dialog.Header>
                 <div class="flex justify-between items-center w-full">
-                  <span class="text-gray-500 dark:text-gray-500">Export</span>
+                  <span class="text-gray-12">Export</span>
                   <div
                     onClick={() => setDialog((d) => ({ ...d, open: false }))}
-                    class="flex justify-center items-center p-1 rounded-full transition-colors cursor-pointer hover:bg-gray-200"
+                    class="flex justify-center items-center p-1 rounded-full transition-colors cursor-pointer hover:bg-gray-3"
                   >
-                    <IconCapCircleX class="text-gray-500 size-4" />
+                    <IconCapCircleX class="text-gray-12 size-4" />
                   </div>
                 </div>
               </Dialog.Header>
-              <Dialog.Content class="text-gray-500 bg-gray-600 dark:text-gray-500">
+              <Dialog.Content class="text-gray-12">
                 <div class="relative z-10 px-5 py-4 mx-auto space-y-6 w-full text-center">
                   <Switch>
                     <Match
@@ -645,7 +647,7 @@ export function ExportDialog() {
                     >
                       {(copyState) => (
                         <div class="flex flex-col gap-4 justify-center items-center h-full">
-                          <h1 class="text-lg font-medium text-gray-500">
+                          <h1 class="text-lg font-medium text-gray-12">
                             {copyState.type === "starting"
                               ? "Preparing..."
                               : copyState.type === "rendering"
@@ -682,7 +684,7 @@ export function ExportDialog() {
                             }
                             fallback={
                               <>
-                                <h1 class="text-lg font-medium text-gray-500">
+                                <h1 class="text-lg font-medium text-gray-12">
                                   {saveState.type === "starting"
                                     ? "Preparing..."
                                     : saveState.type === "rendering"
@@ -708,14 +710,14 @@ export function ExportDialog() {
                           >
                             <div class="flex flex-col gap-6 items-center duration-500 animate-in fade-in">
                               <div class="flex flex-col gap-3 items-center">
-                                <div class="flex justify-center items-center mb-2 bg-gray-500 rounded-full size-10">
+                                <div class="flex justify-center items-center mb-2 rounded-full bg-gray-12 size-10">
                                   <IconLucideCheck class="text-gray-50 size-5" />
                                 </div>
                                 <div class="flex flex-col gap-1 items-center">
                                   <h1 class="text-xl font-medium text-gray-600">
                                     Export Completed
                                   </h1>
-                                  <p class="text-sm text-gray-400">
+                                  <p class="text-sm text-gray-11">
                                     Your video has been successfully exported
                                   </p>
                                 </div>
@@ -737,7 +739,7 @@ export function ExportDialog() {
                           >
                             {(uploadState) => (
                               <div class="flex flex-col gap-4 justify-center items-center">
-                                <h1 class="text-lg font-medium text-center text-gray-500">
+                                <h1 class="text-lg font-medium text-center text-gray-12">
                                   Uploading Cap...
                                 </h1>
                                 <Switch>
@@ -775,10 +777,10 @@ export function ExportDialog() {
                           <Match when={uploadState.type === "done"}>
                             <div class="flex flex-col gap-5 justify-center items-center">
                               <div class="flex flex-col gap-1 items-center">
-                                <h1 class="mx-auto text-lg font-medium text-center text-gray-500">
+                                <h1 class="mx-auto text-lg font-medium text-center text-gray-12">
                                   Upload Complete
                                 </h1>
-                                <p class="text-sm text-gray-400">
+                                <p class="text-sm text-gray-11">
                                   Your Cap has been uploaded successfully
                                 </p>
                               </div>
@@ -816,9 +818,9 @@ export function ExportDialog() {
                         class="flex gap-2 justify-center items-center"
                       >
                         {!copyPressed() ? (
-                          <IconCapCopy class="text-gray-50 transition-colors duration-300 size-4 group-hover:text-gray-500" />
+                          <IconCapCopy class="text-gray-50 transition-colors duration-300 size-4 group-hover:text-gray-12" />
                         ) : (
-                          <IconLucideCheck class="text-gray-50 transition-colors duration-300 size-4 svgpathanimation group-hover:text-gray-500" />
+                          <IconLucideCheck class="text-gray-50 transition-colors duration-300 size-4 svgpathanimation group-hover:text-gray-12" />
                         )}
                         <p>Open Link</p>
                       </Button>
@@ -900,7 +902,7 @@ function RenderProgress(props: { state: RenderState }) {
 function ProgressView(props: { amount: number; label?: string }) {
   return (
     <>
-      <div class="w-full bg-gray-200 rounded-full h-2.5">
+      <div class="w-full bg-gray-3 rounded-full h-2.5">
         <div
           class="bg-blue-300 h-2.5 rounded-full"
           style={{ width: `${props.amount}%` }}

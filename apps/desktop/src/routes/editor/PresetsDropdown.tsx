@@ -5,13 +5,13 @@ import { reconcile } from "solid-js/store";
 
 import { useEditorContext } from "./context";
 import {
-  DropdownItem,
-  EditorButton,
-  MenuItem,
-  MenuItemList,
-  PopperContent,
-  dropdownContainerClasses,
-  topCenterAnimateClasses,
+    DropdownItem,
+    EditorButton,
+    MenuItem,
+    MenuItemList,
+    PopperContent,
+    dropdownContainerClasses,
+    topCenterAnimateClasses,
 } from "./ui";
 
 export function PresetsDropdown() {
@@ -39,7 +39,7 @@ export function PresetsDropdown() {
               <For
                 each={presets.query.data?.presets ?? []}
                 fallback={
-                  <div class="py-1 w-full text-sm text-center text-gray-400">
+                  <div class="py-1 w-full text-sm text-center text-gray-11">
                     No Presets
                   </div>
                 }
@@ -56,13 +56,13 @@ export function PresetsDropdown() {
                       >
                         <span class="mr-auto">{preset.name}</span>
                         <Show when={presets.query.data?.default === i()}>
-                          <span class="px-[0.375rem] h-[1.25rem] rounded-full bg-gray-100 text-gray-400 text-[0.75rem]">
+                          <span class="px-[0.375rem] h-[1.25rem] rounded-full bg-gray-2 text-gray-11 text-[0.75rem]">
                             Default
                           </span>
                         </Show>
                         <button
                           type="button"
-                          class="text-gray-400 hover:text-[currentColor]"
+                          class="text-gray-11 hover:text-[currentColor]"
                           onClick={(e) => {
                             e.stopPropagation();
                             setShowSettings((s) => !s);

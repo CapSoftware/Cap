@@ -1,13 +1,13 @@
-import { createResource, For, ParentProps, Show } from "solid-js";
-import { createStore } from "solid-js/store";
+import { Button } from "@cap/ui-solid";
+import { createWritableMemo } from "@solid-primitives/memo";
 import {
   isPermissionGranted,
   requestPermission,
 } from "@tauri-apps/plugin-notification";
-import { type OsType, type } from "@tauri-apps/plugin-os";
+import { type, type OsType } from "@tauri-apps/plugin-os";
 import "@total-typescript/ts-reset/filter-boolean";
-import { createWritableMemo } from "@solid-primitives/memo";
-import { Button } from "@cap/ui-solid";
+import { createResource, For, ParentProps, Show } from "solid-js";
+import { createStore } from "solid-js/store";
 
 import { authStore, generalSettingsStore } from "~/store";
 import {
@@ -18,13 +18,14 @@ import {
   type PostStudioRecordingBehaviour,
 } from "~/utils/tauri";
 // import { themeStore } from "~/store/theme";
+import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
+import { confirm } from "@tauri-apps/plugin-dialog";
+import { cx } from "cva";
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
-import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
+import { Toggle } from "~/components/Toggle";
 import { TextInput } from "~/routes/editor/TextInput";
-import { confirm } from "@tauri-apps/plugin-dialog";
-import { cx } from "cva";
 
 export default function GeneralSettings() {
   const [store] = createResource(() => generalSettingsStore.get());
@@ -63,11 +64,14 @@ function AppearanceSection(props: {
                 onClick={() => props.onThemeChange(theme.id)}
               >
                 <div
-                  class={`w-24 h-[4.8rem] rounded-md overflow-hidden focus:outline-none ring-offset-gray-50 transition-all duration-200 ${
-                    props.currentTheme === theme.id
-                      ? "ring-2 ring-offset-2"
-                      : "group-hover:ring-2 ring-offset-2 group-hover:ring-gray-300"
-                  }`}
+                  class={cx(
+                    `w-24 h-[4.8rem] rounded-md overflow-hidden focus:outline-none ring-offset-gray-50 transition-all duration-200`,
+                    {
+                      "ring-2 ring-offset-2": props.currentTheme === theme.id,
+                      "group-hover:ring-2 ring-offset-2 group-hover:ring-gray-5":
+                        props.currentTheme !== theme.id,
+                    }
+                  )}
                   aria-label={`Select theme: ${theme.name}`}
                 >
                   <div class="flex justify-center items-center w-full h-full">
@@ -79,9 +83,13 @@ function AppearanceSection(props: {
                   </div>
                 </div>
                 <span
-                  class={`mt-2 text-sm transition-color duration-200 ${
-                    props.currentTheme === theme.id ? "text-blue-400" : ""
-                  }`}
+                  class={cx(
+                    `mt-2 text-sm transition-color duration-200`,
+                    {
+                      "text-blue-9": props.currentTheme === theme.id,
+                      "text-gray-11": props.currentTheme !== theme.id,
+                    }
+                  )}
                 >
                   {theme.name}
                 </span>
@@ -201,7 +209,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
             description="What should happen when a studio recording finishes"
           >
             <button
-              class="border border-gray-300 rounded-md px-2 py-1 flex flex-row items-center gap-1"
+              class="flex flex-row gap-1 items-center px-2 py-1 rounded-md border border-gray-300"
               onClick={async () => {
                 const item = (
                   text: string,
@@ -233,7 +241,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
             description="What should the main window do when starting a recording"
           >
             <button
-              class="border border-gray-300 rounded-md px-2 py-1 flex flex-row items-center gap-1"
+              class="flex flex-row gap-1 items-center px-2 py-1 rounded-md border border-gray-300"
               onClick={async () => {
                 const item = (
                   text: string,
@@ -295,12 +303,13 @@ function ServerURLSetting(props: {
     >
       <div class="flex flex-col gap-2 items-end">
         <TextInput
-          class="border border-slate-7 bg-slate-1 outline-none focus:border-blue-10 rounded-md px-2 py-1 flex flex-row items-center gap-1 max-w-48"
+          class="flex flex-row gap-1 items-center px-2 py-1 rounded-md border outline-none border-gray-7 bg-gray-1 focus:border-blue-10 max-w-48"
           value={value()}
           onInput={(e) => setValue(e.currentTarget.value)}
         />
         <Button
           size="sm"
+          
           disabled={props.value === value()}
           onClick={() => props.onChange(value())}
         >
@@ -319,18 +328,18 @@ function Setting(
   } & ParentProps
 ) {
   return (
-    <div class="py-3 flex flex-row gap-2 justify-between items-start text-sm">
-      <div class="flex justify-between items-start space-y-2 flex-col">
+    <div class="flex flex-row gap-2 justify-between items-start py-3 text-sm">
+      <div class="flex flex-col justify-between items-start space-y-2">
         {props.pro && (
-          <span class="px-2 py-1 text-xs font-medium text-solid-white bg-blue-9 rounded-lg">
+          <span class="px-2 py-1 text-xs font-medium rounded-lg text-solid-white bg-blue-9">
             Cap Pro
           </span>
         )}
         <div class="flex gap-2 items-center">
-          <p class="text-slate-12">{props.label}</p>
+          <p class="text-gray-12">{props.label}</p>
         </div>
         {props.description && (
-          <p class="text-xs text-slate-11">{props.description}</p>
+          <p class="text-xs text-gray-11">{props.description}</p>
         )}
       </div>
       {props.children}
@@ -347,23 +356,11 @@ function ToggleSetting(props: {
 }) {
   return (
     <Setting {...props}>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={props.value}
-        data-state={props.value ? "checked" : "unchecked"}
-        value={props.value ? "on" : "off"}
-        class={cx(
-          "peer inline-flex h-4 w-8 p-0.5 shrink-0 cursor-pointer items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50",
-          props.value ? "bg-blue-10" : "bg-slate-4"
-        )}
-        onClick={() => props.onChange(!props.value)}
-      >
-        <span
-          data-state={props.value ? "checked" : "unchecked"}
-          class="pointer-events-none block size-3 rounded-full bg-slate-1 shadow-lg ring-0 transition-[transform,colors] data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0"
-        />
-      </button>
+      <Toggle
+        size="sm"
+        checked={props.value}
+        onChange={(v) => props.onChange(v)}
+      />
     </Setting>
   );
 }

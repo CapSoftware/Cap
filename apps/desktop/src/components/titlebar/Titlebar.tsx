@@ -19,7 +19,7 @@ export default function Titlebar() {
           ? titlebarState.backgroundColor
           : titlebarState.transparent
           ? "bg-transparent"
-          : "bg-gray-100",
+          : "bg-gray-2",
         titlebarState.border ? "border-b border-b-black-transparent-5" : ""
       )}
       style={{
