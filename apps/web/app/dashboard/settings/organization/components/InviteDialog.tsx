@@ -2,6 +2,7 @@
 
 import { sendOrganizationInvites } from "@/actions/organization/send-invites";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
+import { calculateSeats } from "@/utils/organization";
 import {
   Button,
   Dialog,
@@ -39,10 +40,9 @@ export const InviteDialog = ({
   const [inviteLoading, setInviteLoading] = useState(false);
   const [upgradeLoading, setUpgradeLoading] = useState(false);
 
-  const inviteQuota = activeOrganization?.inviteQuota ?? 1;
-  const totalInvites = activeOrganization?.totalInvites ?? 0;
-  const adjustedTotalInvites = Math.min(totalInvites, inviteQuota + 1);
-  const remainingSeats = Math.max(0, inviteQuota - adjustedTotalInvites);
+  const { inviteQuota, remainingSeats } = calculateSeats(
+    activeOrganization || {}
+  );
 
   const handleAddEmails = () => {
     const newEmails = emailInput

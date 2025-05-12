@@ -96,7 +96,7 @@ export const Organization = () => {
 
       <SeatsInfoCards />
 
-      <div className="flex flex-col flex-1 gap-6 justify-center items-stretch xl:flex-row">
+      <div className="flex flex-col gap-6 justify-center items-stretch xl:flex-row">
         <OrganizationDetailsCard
           isOwner={isOwner}
           saveLoading={saveLoading}

@@ -6,18 +6,13 @@ import { motion } from "framer-motion";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
 import { ChevronRight } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
+import { useSharedContext } from "../DynamicSharedLayout";
 import { AdminNavItems } from "./AdminNavItems";
 
 export const AdminDesktopNav = () => {
+  const { toggleSidebarCollapsed, sidebarCollapsed } = useSharedContext();
   const { platform } = useDetectPlatform();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(
-    JSON.parse(localStorage.getItem("sidebarCollapsed") || "false")
-  );
-  const toggleCollapse = () => {
-    setSidebarCollapsed(!sidebarCollapsed);
-    localStorage.setItem("sidebarCollapsed", JSON.stringify(!sidebarCollapsed));
-  };
   const cmdSymbol = platform === "macos" ? "⌘" : "Ctrl";
 
   useEffect(() => {
@@ -28,7 +23,7 @@ export const AdminDesktopNav = () => {
         event.shiftKey
       ) {
         event.preventDefault();
-        toggleCollapse();
+        toggleSidebarCollapsed();
       }
     };
 
@@ -37,16 +32,16 @@ export const AdminDesktopNav = () => {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [toggleCollapse]);
+  }, [toggleSidebarCollapsed]);
 
   return (
     <>
       <motion.div
         initial={{
-          width: sidebarCollapsed ? "70px" : "250px",
+          width: sidebarCollapsed ? "70px" : "230px",
         }}
         animate={{
-          width: sidebarCollapsed ? "70px" : "250px",
+          width: sidebarCollapsed ? "70px" : "230px",
           transition: {
             duration: 0.4,
             type: "spring",
@@ -57,18 +52,16 @@ export const AdminDesktopNav = () => {
       >
         <div className="flex flex-col w-full max-w-[220px] mx-auto">
           <div className="flex overflow-hidden flex-col flex-grow h-full">
-            <div className="flex flex-col flex-shrink-0 items-start px-3 pt-5 w-full h-full justify-top">
+            <div className="flex flex-col items-center px-3 pt-5 w-full h-full justify-top">
               <div className="flex justify-start items-center mb-3.5 w-full truncate min-h-8">
                 <Link href="/dashboard">
                   <Logo
-                    className={clsx(
-                      "flex-shrink-0 mx-auto w-[120px]",
-                      sidebarCollapsed ? "ml-1" : "ml-0"
-                    )}
+                    hideLogoName={sidebarCollapsed}
+                    className="mx-auto w-[120px] h-[40px]"
                   />
                 </Link>
               </div>
-              <AdminNavItems collapsed={sidebarCollapsed} />
+              <AdminNavItems />
             </div>
           </div>
 
@@ -79,7 +72,7 @@ export const AdminDesktopNav = () => {
             content="Toggle collapse"
           >
             <button
-              onClick={toggleCollapse}
+              onClick={toggleSidebarCollapsed}
               className="absolute right-[-12px] hover:border-gray-5 hover:bg-gray-5 top-[50%] transform -translate-y-1/2 rounded-full p-1 border bg-gray-3 border-gray-4 transition-colors z-10"
             >
               <ChevronRight size={16} className={clsx("transition-transform duration-200 text-gray-12", sidebarCollapsed ? "rotate-180" : "")} />

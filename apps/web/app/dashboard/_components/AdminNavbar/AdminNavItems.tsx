@@ -38,14 +38,19 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import Image from "next/image";
-
+  
 import { useRef, useState } from "react";
 import { updateActiveOrganization } from "./server";
 
-export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
+interface Props {
+  toggleMobileNav?: () => void;
+}
+
+export const AdminNavItems = ({ toggleMobileNav }: Props) => {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
-  const { user } =
+  const [hoveredItem, setHoveredItem] = useState<string | null>(null);
+  const { user, sidebarCollapsed } =
     useSharedContext();
 
   const manageNavigation = [
@@ -86,7 +91,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
   ];
 
   const navItemClass =
-    "flex items-center justify-start py-2 px-3 rounded-2xl outline-none tracking-tight w-full overflow-hidden";
+    "flex items-center justify-start px-3 rounded-xl outline-none tracking-tight overflow-hidden";
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const { organizationData: orgData, activeOrganization: activeOrg, isSubscribed: userIsSubscribed } =
@@ -99,16 +104,29 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
     <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
       <Popover open={open} onOpenChange={setOpen}>
         <Tooltip
-          disable={open || collapsed === false}
+          disable={open || sidebarCollapsed === false}
           position="right"
           content={
             activeOrg?.organization.name ?? "No organization found"
           }
         >
           <PopoverTrigger asChild>
-            <div
+            <motion.div
+              initial={{
+                width: sidebarCollapsed ? "40px" : "100%",
+              }}
+              animate={{
+                width: sidebarCollapsed ? "40px" : "100%",
+              }}
+              transition={{
+                type: "spring",
+                bounce: 0.2,
+                width: { type: "tween", duration: 0.2 },
+              }}
               className={
-                "px-3 py-2.5 w-full rounded-xl border cursor-pointer bg-gray-3 border-gray-4"
+                clsx(
+                  "p-2.5 mt-2.5 rounded-xl border cursor-pointer bg-gray-4 border-gray-5",
+                )
               }
             >
               <div
@@ -119,7 +137,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                 <div className="flex justify-between items-center w-full text-left">
                   <div className="flex items-center">
                     {activeOrg?.organization.iconUrl ? (
-                      <div className="overflow-hidden relative flex-shrink-0 rounded-full size-5">
+                      <div className="overflow-hidden relative flex-shrink-0 rounded-full size-[18px]">
                         <Image
                           src={activeOrg.organization.iconUrl}
                           alt={activeOrg.organization.name || "Organization icon"}
@@ -130,7 +148,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                     ) : (
                       <Avatar
                         letterClass="text-gray-1 text-xs"
-                        className="relative flex-shrink-0 size-5"
+                        className="relative flex-shrink-0 size-[18px]"
                         name={
                           activeOrg?.organization.name ??
                           "No organization found"
@@ -142,15 +160,15 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                         "No organization found"}
                     </p>
                   </div>
-                  {!collapsed && (
-                    <ChevronDown className="w-5 h-auto text-gray-8" />
+                  {!sidebarCollapsed && (
+                    <ChevronDown data-state={open ? "open" : "closed"} className="w-5 h-auto transition-transform duration-200 text-gray-8 data-[state=open]:rotate-180" />
                   )}
                 </div>
               </div>
               <PopoverContent
                 className={clsx(
-                  "p-0 w-[calc(100%-12px)] z-[60]",
-                  collapsed ? "ml-3" : "mx-auto"
+                  "p-0 w-full min-w-[287px] md:min-w-fit z-[120]",
+                  sidebarCollapsed ? "ml-3" : "mx-auto"
                 )}
               >
                 <Command>
@@ -203,11 +221,11 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                         </CommandItem>
                       );
                     })}
-                    <DialogTrigger className="mt-3 w-full">
+                    <DialogTrigger asChild>
                       <Button
                         variant="dark"
                         size="sm"
-                        className="flex gap-1 items-center w-full"
+                        className="flex gap-1 items-center mt-3 w-full"
                       >
                         <Plus className="w-4 h-auto" />
                         Add new organization
@@ -216,7 +234,7 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                   </CommandGroup>
                 </Command>
               </PopoverContent>
-            </div>
+            </motion.div>
           </PopoverTrigger>
         </Tooltip>
       </Popover>
@@ -225,19 +243,20 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
         aria-label="Sidebar"
       >
         <div
-          className={clsx("mt-8 space-y-2.5", collapsed ? "items-center" : "")}
+          className={clsx("mt-8", sidebarCollapsed ? "flex flex-col justify-center items-center" : "")}
         >
           {manageNavigation.map((item) => (
-            <div key={item.name} className="flex relative justify-center">
-              {pathname.includes(item.href) ? (
+            <div key={item.name} className="flex relative justify-center items-center w-full mb-2.5">
+              {/* Active indicator - always visible for active items */}
+              {pathname.includes(item.href) && (
                 <motion.div
                   initial={{
-                    width: collapsed ? 40 : "100%",
-                    height: collapsed ? 40 : "100%",
+                    width: sidebarCollapsed ? 36 : "100%",
+                    height: sidebarCollapsed ? 36 : "100%",
                   }}
                   animate={{
-                    width: collapsed ? 40 : "100%",
-                    height: collapsed ? 40 : "100%",
+                    width: sidebarCollapsed ? 36 : "100%",
+                    height: sidebarCollapsed ? 36 : "100%",
                   }}
                   transition={{
                     type: "spring",
@@ -248,35 +267,59 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
                   layoutId="underline"
                   id="underline"
                   className={clsx(
-                    "absolute inset-0 mx-auto rounded-xl shadow-sm border-gray-5 text-gray-8 border-[1px] shadow-gray-2"
+                    "absolute rounded-xl shadow-sm bg-gray-3 border-gray-4 text-gray-8 border-[1px] shadow-gray-2",
+                    sidebarCollapsed ? "inset-0 right-0 left-0 mx-auto w-9 h-9" : "inset-0 ml-[2px]"
                   )}
                 />
-              ) : null}
+              )}
+              
+              {/* Hover indicator - only visible when hovering non-active items */}
+              {hoveredItem === item.name && !pathname.includes(item.href) && (
+                <motion.div
+                  layoutId="hoverIndicator"
+                  className={clsx(
+                    "absolute rounded-xl border-gray-4 border-[1px] bg-gray-3/20",
+                    sidebarCollapsed ? "inset-0 right-0 left-0 mx-auto w-9 h-9" : "inset-0 ml-[2px]"
+                  )}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{
+                    type: "spring",
+                    bounce: 0.2,
+                    duration: 0.2,
+                  }}
+                />
+              )}
               <Tooltip
                 content={item.name}
-                disable={collapsed === false}
+                disable={sidebarCollapsed === false}
                 position="right"
               >
                 <Link
                   passHref
+                  onClick={() => toggleMobileNav?.()}
+                  onMouseEnter={() => setHoveredItem(item.name)}
+                  onMouseLeave={() => setHoveredItem(null)}
                   prefetch={false}
                   href={item.href}
                   className={classNames(
-                    "relative transition-opacity duration-200 hover:opacity-75 z-3",
+                    "relative border border-transparent transition-opacity duration-200 z-3",
+                    sidebarCollapsed ? "flex justify-center items-center w-full h-9" : "py-2 w-full",
                     navItemClass
                   )}
                 >
                   <FontAwesomeIcon
                     icon={item.icon as IconDefinition}
-                    className={classNames(
-                      "flex-shrink-0 w-5 h-5 transition-colors duration-200 stroke-[1.5px]",
-                      collapsed ? "text-gray-12" : "text-gray-10"
+                    className={clsx(
+                      "flex-shrink-0 size-4 transition-colors duration-200 stroke-[1.5px]",
+                      sidebarCollapsed ? "text-gray-12 mx-auto" : "text-gray-10"
                     )}
                     aria-hidden="true"
                   />
-                  <span className="text-base ml-2.5 text-gray-12 truncate">
+                  <p className={clsx("text-sm text-gray-12 truncate", sidebarCollapsed ? "hidden" : "ml-2.5")}>
                     {item.name}
-                  </span>
+                  </p>
                 </Link>
               </Tooltip>
             </div>
@@ -284,7 +327,9 @@ export const AdminNavItems = ({ collapsed }: { collapsed?: boolean }) => {
         </div>
         <div className="pb-0 w-full lg:pb-5">
           <UsageButton
-            collapsed={collapsed ?? false}
+            toggleMobileNav={() => 
+              toggleMobileNav?.()
+            }
             subscribed={userIsSubscribed}
           />
           <p className="mt-4 text-xs text-center truncate text-gray-10">

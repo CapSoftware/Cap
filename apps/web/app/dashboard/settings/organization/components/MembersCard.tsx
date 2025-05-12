@@ -3,6 +3,7 @@
 import { removeOrganizationInvite } from "@/actions/organization/remove-invite";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Tooltip } from "@/components/Tooltip";
+import { calculateSeats } from "@/utils/organization";
 import {
   Button,
   Card,
@@ -38,11 +39,7 @@ export const MembersCard = ({
 }: MembersCardProps) => {
   const router = useRouter();
   const { activeOrganization } = useSharedContext();
-
-  const inviteQuota = activeOrganization?.inviteQuota ?? 1;
-  const totalInvites = activeOrganization?.totalInvites ?? 0;
-  const adjustedTotalInvites = Math.min(totalInvites, inviteQuota + 1);
-  const remainingSeats = Math.max(0, inviteQuota - adjustedTotalInvites);
+  const { remainingSeats } = calculateSeats(activeOrganization || {});
 
   const handleDeleteInvite = async (inviteId: string) => {
     if (!isOwner) {
@@ -79,6 +76,7 @@ export const MembersCard = ({
               type="button"
               size="sm"
               variant="primary"
+              spinner={loading}
               disabled={!isOwner || loading}
               onClick={handleManageBilling}
             >
