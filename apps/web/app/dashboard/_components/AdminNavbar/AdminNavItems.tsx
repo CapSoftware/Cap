@@ -125,7 +125,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
               }}
               className={
                 clsx(
-                  "p-2.5 mt-2.5 rounded-xl border cursor-pointer bg-gray-4 border-gray-5",
+                  "p-2.5 mt-2.5 rounded-xl border cursor-pointer bg-gradient-to-t from-gray-4 to-gray-2 border-gray-4",
                 )
               }
             >
@@ -147,7 +147,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                       </div>
                     ) : (
                       <Avatar
-                        letterClass="text-gray-1 text-xs"
+                        letterClass="text-gray-1 text-[10px]"
                         className="relative flex-shrink-0 size-[18px]"
                         name={
                           activeOrg?.organization.name ??
@@ -155,7 +155,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                         }
                       />
                     )}
-                    <p className="ml-2.5 text-sm text-gray-12 font-medium truncate">
+                    <p className="ml-2.5 text-sm text-gray-12 truncate">
                       {activeOrg?.organization.name ??
                         "No organization found"}
                     </p>
@@ -267,7 +267,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                   layoutId="underline"
                   id="underline"
                   className={clsx(
-                    "absolute rounded-xl shadow-sm bg-gray-3 border-gray-4 text-gray-8 border-[1px] shadow-gray-2",
+                    "absolute rounded-xl border bg-gray-3 border-gray-4",
                     sidebarCollapsed ? "inset-0 right-0 left-0 mx-auto w-9 h-9" : "inset-0 ml-[2px]"
                   )}
                 />
@@ -278,7 +278,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                 <motion.div
                   layoutId="hoverIndicator"
                   className={clsx(
-                    "absolute rounded-xl border-gray-4 border-[1px] bg-gray-3/20",
+                    "absolute bg-transparent rounded-xl border-gray-4 border-[1px]",
                     sidebarCollapsed ? "inset-0 right-0 left-0 mx-auto w-9 h-9" : "inset-0 ml-[2px]"
                   )}
                   initial={{ opacity: 0 }}
@@ -312,7 +312,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                   <FontAwesomeIcon
                     icon={item.icon as IconDefinition}
                     className={clsx(
-                      "flex-shrink-0 size-4 transition-colors duration-200 stroke-[1.5px]",
+                      "flex-shrink-0 size-3.5 transition-colors duration-200 stroke-[1.5px]",
                       sidebarCollapsed ? "text-gray-12 mx-auto" : "text-gray-10"
                     )}
                     aria-hidden="true"
