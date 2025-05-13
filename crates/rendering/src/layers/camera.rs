@@ -1,20 +1,47 @@
 use cap_project::XY;
+use wgpu::util::DeviceExt;
 
-use crate::{frame_pipeline::FramePipeline, CompositeVideoFrameUniforms, DecodedFrame};
+use crate::{
+    composite_frame::CompositeVideoFramePipeline, frame_pipeline::FramePipeline,
+    CompositeVideoFrameUniforms, DecodedFrame,
+};
 
-pub struct CameraLayer;
+pub struct CameraLayer {
+    uniforms_buffer: wgpu::Buffer,
+    bind_group: Option<(wgpu::BindGroup, wgpu::TextureView)>,
+    pipeline: CompositeVideoFramePipeline,
+}
 
 impl CameraLayer {
-    pub fn render(
+    pub fn new(device: &wgpu::Device) -> Self {
+        Self {
+            uniforms_buffer: device.create_buffer_init(
+                &(wgpu::util::BufferInitDescriptor {
+                    label: Some("CameraLayer Uniforms Buffer"),
+                    contents: bytemuck::cast_slice(&[CompositeVideoFrameUniforms::default()]),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                }),
+            ),
+            bind_group: None,
+            pipeline: CompositeVideoFramePipeline::new(device),
+        }
+    }
+
+    pub fn prepare(
+        &mut self,
         pipeline: &mut FramePipeline,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        uniforms: CompositeVideoFrameUniforms,
         camera_size: XY<u32>,
         camera_frame: &DecodedFrame,
-        uniforms: &CompositeVideoFrameUniforms,
         (texture, texture_view): (&wgpu::Texture, &wgpu::TextureView),
     ) {
-        let constants = pipeline.state.constants;
+        pipeline.state.switch_output();
 
-        constants.queue.write_texture(
+        queue.write_buffer(&self.uniforms_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+
+        queue.write_texture(
             wgpu::ImageCopyTexture {
                 texture: &texture,
                 mip_level: 0,
@@ -34,18 +61,28 @@ impl CameraLayer {
             },
         );
 
-        pipeline.state.switch_output();
-
-        pipeline.encoder.do_render_pass(
-            pipeline.state.get_current_texture_view(),
-            &constants.composite_video_frame_pipeline.render_pipeline,
-            constants.composite_video_frame_pipeline.bind_group(
-                &constants.device,
-                &uniforms.to_buffer(&constants.device),
+        self.bind_group = Some((
+            self.pipeline.bind_group(
+                &device,
+                &self.uniforms_buffer,
                 &texture_view,
                 pipeline.state.get_other_texture_view(),
             ),
-            wgpu::LoadOp::Load,
-        );
+            pipeline
+                .state
+                .get_current_texture()
+                .create_view(&Default::default()),
+        ))
+    }
+
+    pub fn render(&self, pipeline: &mut FramePipeline) {
+        if let Some((bind_group, target_texture)) = &self.bind_group {
+            pipeline.encoder.do_render_pass(
+                target_texture,
+                &self.pipeline.render_pipeline,
+                bind_group,
+                wgpu::LoadOp::Load,
+            );
+        }
     }
 }

@@ -2,13 +2,13 @@ use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
 use cap_project::*;
-use wgpu::{include_wgsl, util::DeviceExt, FilterMode};
+use wgpu::{include_wgsl, util::DeviceExt, BindGroup, FilterMode};
 
 use crate::{
     frame_pipeline::{FramePipeline, FramePipelineState},
     spring_mass_damper::{SpringMassDamperSimulation, SpringMassDamperSimulationConfig},
     zoom::InterpolatedZoom,
-    Coord, DecodedSegmentFrames, ProjectUniforms, RawDisplayUVSpace, STANDARD_CURSOR_HEIGHT,
+    Coord, DecodedSegmentFrames, RawDisplayUVSpace, STANDARD_CURSOR_HEIGHT,
 };
 
 const CURSOR_CLICK_DURATION: f64 = 0.25;
@@ -16,14 +16,19 @@ const CURSOR_CLICK_DURATION_MS: f64 = CURSOR_CLICK_DURATION * 1000.0;
 const CLICK_SHRINK_SIZE: f32 = 0.7;
 
 pub struct CursorLayer {
+    statics: Statics,
+    bind_group: Option<BindGroup>,
+}
+
+struct Statics {
     uniform_buffer: wgpu::Buffer,
     texture_sampler: wgpu::Sampler,
     bind_group_layout: wgpu::BindGroupLayout,
     render_pipeline: wgpu::RenderPipeline,
 }
 
-impl CursorLayer {
-    pub fn new(device: &wgpu::Device) -> Self {
+impl Statics {
+    fn new(device: &wgpu::Device) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Cursor Pipeline Layout"),
             entries: &[
@@ -137,8 +142,46 @@ impl CursorLayer {
         }
     }
 
-    pub fn render(
+    fn create_bind_group(
         &self,
+        device: &wgpu::Device,
+        cursor_texture: &wgpu::Texture,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(
+                        &cursor_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.texture_sampler),
+                },
+            ],
+            label: Some("Cursor Bind Group"),
+        })
+    }
+}
+
+impl CursorLayer {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let statics = Statics::new(device);
+
+        Self {
+            statics,
+            bind_group: None,
+        }
+    }
+
+    pub fn prepare(
+        &mut self,
         pipeline: &mut FramePipeline,
         segment_frames: &DecodedSegmentFrames,
         resolution_base: XY<u32>,
@@ -150,6 +193,12 @@ impl CursorLayer {
             constants,
             ..
         } = &pipeline.state;
+
+        if !uniforms.project.cursor.hide {
+            self.bind_group = None;
+            return;
+        }
+
         let time_s = segment_frames.recording_time;
 
         let cursor_settings = &uniforms.project.cursor;
@@ -229,41 +278,24 @@ impl CursorLayer {
             _alignment: [0.0; 3],
         };
 
-        constants
-            .queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
-
-        let cursor_bind_group = constants
-            .device
-            .create_bind_group(&wgpu::BindGroupDescriptor {
-                layout: &self.bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self.uniform_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(
-                            &cursor_texture
-                                .inner
-                                .create_view(&wgpu::TextureViewDescriptor::default()),
-                        ),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&self.texture_sampler),
-                    },
-                ],
-                label: Some("Cursor Bind Group"),
-            });
-
-        pipeline.encoder.do_render_pass(
-            pipeline.state.get_current_texture_view(),
-            &self.render_pipeline,
-            cursor_bind_group,
-            wgpu::LoadOp::Load,
+        constants.queue.write_buffer(
+            &self.statics.uniform_buffer,
+            0,
+            bytemuck::cast_slice(&[uniforms]),
         );
+
+        self.bind_group = Some(
+            self.statics
+                .create_bind_group(&constants.device, &cursor_texture.inner),
+        );
+    }
+
+    pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
+        if let Some(bind_group) = &self.bind_group {
+            pass.set_pipeline(&self.statics.render_pipeline);
+            pass.set_bind_group(0, bind_group, &[]);
+            pass.draw(0..4, 0..1);
+        }
     }
 }
 

@@ -314,15 +314,10 @@ pub struct RenderVideoConstants {
     pub queue: wgpu::Queue,
     pub device: wgpu::Device,
     pub options: RenderOptions,
-    composite_video_frame_pipeline: CompositeVideoFramePipeline,
     pub cursor_textures: HashMap<String, CursorTexture>,
-    gradient_or_color_pipeline: GradientOrColorPipeline,
-    image_background_pipeline: ImageBackgroundPipeline,
     pub background_blur_pipeline: BackgroundBlurPipeline,
     background_textures: std::sync::Arc<tokio::sync::RwLock<HashMap<String, wgpu::Texture>>>,
-    screen_frame: (wgpu::Texture, wgpu::TextureView),
     camera_frame: Option<(wgpu::Texture, wgpu::TextureView)>,
-    cursor_layer: CursorLayer,
 }
 
 impl RenderVideoConstants {
@@ -409,16 +404,11 @@ impl RenderVideoConstants {
         Ok(Self {
             _instance: instance,
             _adapter: adapter,
-            cursor_layer: CursorLayer::new(&device),
             device,
             queue,
             options,
-            composite_video_frame_pipeline,
-            gradient_or_color_pipeline,
             cursor_textures,
-            image_background_pipeline,
             background_textures,
-            screen_frame,
             camera_frame,
             background_blur_pipeline,
         })
@@ -995,19 +985,34 @@ async fn produce_frame(
             encoder: &mut encoder,
         };
 
-        BackgroundLayer::render(&mut pipeline, background).await?;
+        let mut background_layer = BackgroundLayer::new(&constants.device);
 
-        DisplayLayer::render(&mut pipeline, &segment_frames);
+        background_layer
+            .prepare(&mut pipeline, &constants, &uniforms, background)
+            .await?;
 
-        if !uniforms.project.cursor.hide {
-            constants.cursor_layer.render(
-                &mut pipeline,
-                &segment_frames,
-                uniforms.resolution_base,
-                &cursor,
-                &uniforms.zoom,
-            );
-        }
+        let mut display_layer = DisplayLayer::new(&constants.device, constants.options.screen_size);
+
+        display_layer.prepare(
+            &constants.device,
+            &constants.queue,
+            &mut pipeline,
+            &segment_frames,
+            &constants.options,
+            &uniforms,
+        );
+
+        let mut cursor_layer = CursorLayer::new(&constants.device);
+
+        cursor_layer.prepare(
+            &mut pipeline,
+            &segment_frames,
+            uniforms.resolution_base,
+            cursor,
+            &uniforms.zoom,
+        );
+
+        let mut camera_layer = CameraLayer::new(&constants.device);
 
         if let (
             Some(camera_size),
@@ -1020,14 +1025,29 @@ async fn produce_frame(
             &uniforms.camera,
             &constants.camera_frame,
         ) {
-            CameraLayer::render(
+            camera_layer.prepare(
                 &mut pipeline,
+                &constants.device,
+                &constants.queue,
+                *uniforms,
                 camera_size,
                 camera_frame,
-                uniforms,
                 (texture, texture_view),
             );
         }
+
+        background_layer.render(&mut pipeline);
+
+        display_layer.render(&mut pipeline);
+
+        let mut pass = pipeline.encoder.create_render_pass(
+            pipeline.state.get_current_texture_view(),
+            wgpu::LoadOp::Load,
+        );
+
+        cursor_layer.render(&mut pass);
+
+        camera_layer.render(&mut pipeline);
     }
 
     let padded_bytes_per_row = encoder.padded_bytes_per_row(&state);
@@ -1074,7 +1094,7 @@ pub fn create_shader_render_pipeline(
             entry_point: "fs_main",
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                blend: Some(wgpu::BlendState::REPLACE),
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
             compilation_options: wgpu::PipelineCompilationOptions {
