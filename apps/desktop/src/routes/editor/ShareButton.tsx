@@ -206,12 +206,12 @@ function ShareButton() {
           title={"Reupload Recording"}
           confirm={<></>}
           close={<></>}
-          class="bg-gray-600 text-gray-12 dark:text-gray-12"
+          class="text-gray-12 dark:text-gray-12"
         >
           <div class="w-[80%] text-center mx-auto relative z-10 space-y-6 py-4">
             <div class="w-full bg-gray-3 rounded-full h-2.5 mb-2">
               <div
-                class="bg-blue-300 h-2.5 rounded-full"
+                class="bg-blue-9 h-2.5 rounded-full"
                 style={{
                   width: `${
                     uploadState.type === "uploading"

@@ -172,28 +172,28 @@ function CommercialLicensePurchase() {
 
   return (
     <>
-      <div class="p-3 w-full bg-blue-300 rounded-xl border shadow-sm text-card-foreground md:p-3 border-blue-500/20">
+      <div class="p-3 w-full bg-blue-9 rounded-xl border shadow-sm text-card-foreground md:p-3 border-blue-500/20">
         <div class="space-y-3">
           <div class="flex flex-col space-y-1.5 pt-6 px-6">
-            <h3 class="text-2xl font-medium tracking-tight text-gray-50 dark:text-[--text-primary]">
+            <h3 class="text-2xl font-medium tracking-tight text-gray-1 text-gray-12">
               Commercial License
             </h3>
-            <p class="text-[0.875rem] leading-[1.25rem] text-gray-50 dark:text-[--text-primary]">
+            <p class="text-[0.875rem] leading-[1.25rem] text-gray-1 text-gray-12">
               For professional use without cloud features.
             </p>
             <div>
               <div class="flex items-center space-x-3">
-                <h3 class="text-4xl text-gray-50 dark:text-[--text-primary]">
+                <h3 class="text-4xl text-gray-1 text-gray-12">
                   {type() === "yearly" ? "$29/year" : "$58"}
                 </h3>
                 <div>
                   {type() === "lifetime" && (
-                    <p class="text-sm font-medium text-gray-50 dark:text-[--text-primary]">
+                    <p class="text-sm font-medium text-gray-1 text-gray-12">
                       billed once
                     </p>
                   )}
                   {type() === "lifetime" && (
-                    <p class="text-sm text-gray-50 dark:text-[--text-primary]">
+                    <p class="text-sm text-gray-1 text-gray-12">
                       or, $29/year.
                     </p>
                   )}
@@ -203,7 +203,7 @@ function CommercialLicensePurchase() {
           </div>
           <div class="px-3 md:px-8">
             <div class="flex items-center pt-4 pb-1 border-t-2 border-[--white-transparent-20] dark:border-[--black-transparent-20]">
-              <span class="mr-2 text-xs text-gray-50 dark:text-[--text-primary]">
+              <span class="mr-2 text-xs text-gray-1 text-gray-12">
                 Switch to {type() === "yearly" ? "lifetime" : "yearly"}
               </span>
               <button

@@ -9,14 +9,14 @@ import { createEventListener } from "@solid-primitives/event-listener";
 import { cva, cx, type VariantProps } from "cva";
 
 import {
-    createRoot,
-    createSignal,
-    mergeProps,
-    splitProps,
-    type ComponentProps,
-    type JSX,
-    type ParentProps,
-    type ValidComponent
+  createRoot,
+  createSignal,
+  mergeProps,
+  splitProps,
+  type ComponentProps,
+  type JSX,
+  type ParentProps,
+  type ValidComponent
 } from "solid-js";
 import Tooltip from "~/components/Tooltip";
 import { useEditorContext } from "./context";
@@ -106,7 +106,7 @@ export function Slider(
           });
         }}
       >
-        <KSlider.Fill class="absolute -ml-2 h-full bg-blue-300 rounded-full ui-disabled:bg-gray-300" />
+        <KSlider.Fill class="absolute -ml-2 h-full rounded-full bg-blue-9 ui-disabled:bg-gray-8" />
         <Tooltip
           open={dragging() ? true : undefined}
           getAnchorRect={() => {
@@ -136,7 +136,7 @@ export function Slider(
               setDragging(false);
             }}
             class={cx(
-              "bg-solid-white shadow-xl border border-gray-300 rounded-full outline-none size-4 -top-[6.3px] ui-disabled:bg-gray-400 after:content-[''] after:absolute after:inset-0 after:-m-3 after:cursor-pointer"
+              "bg-gray-1 dark:bg-gray-12 shadow-xl rounded-full outline-none size-4 -top-[6.3px] ui-disabled:bg-gray-9 after:content-[''] after:absolute after:inset-0 after:-m-3 after:cursor-pointer"
             )}
           />
         </Tooltip>
@@ -151,7 +151,7 @@ export function Input(props: ComponentProps<"input">) {
     <TextInput
       {...props}
       class={cx(
-        "rounded-[0.5rem] bg-gray-50 border-gray-200 hover:ring-1 py-[18px] hover:ring-gray-300 h-[2rem] font-normal placeholder:text-black-transparent-40 text-xs caret-gray-500 transition-shadow duration-200 focus:ring-offset-1 focus:bg-gray-3 focus:ring-offset-gray-100 focus:ring-1 focus:ring-gray-500 px-[0.5rem] border w-full text-[0.875rem] outline-none text-gray-12",
+        "rounded-[0.5rem] bg-gray-2 hover:ring-1 py-[18px] hover:ring-gray-3 h-[2rem] font-normal placeholder:text-black-transparent-40 text-xs caret-gray-500 transition-shadow duration-200 focus:ring-offset-1 focus:bg-gray-3 focus:ring-offset-gray-100 focus:ring-1 focus:ring-gray-500 px-[0.5rem] w-full text-[0.875rem] outline-none text-gray-12",
         props.class
       )}
     />
@@ -176,7 +176,7 @@ export const Dialog = {
             <KDialog.Content
               class={cx(
                 props.contentClass,
-                "z-50 text-sm rounded-[1.25rem] overflow-hidden border border-gray-200 bg-gray-50 min-w-[22rem] ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 origin-top ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95",
+                "z-50 text-sm rounded-[1.25rem] overflow-hidden border border-gray-200 bg-gray-1 min-w-[22rem] ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 origin-top ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95",
                 (props.size ?? "sm") === "sm" ? "max-w-96" : "max-w-3xl"
               )}
             >
@@ -277,7 +277,7 @@ export function MenuItem<T extends ValidComponent = "button">(
       class={cx(
         props.class,
         "flex flex-row shrink-0 items-center gap-[0.375rem] px-[0.675rem] py-[0.375rem] rounded-[0.5rem] outline-none text-nowrap overflow-hidden text-ellipsis w-full max-w-full",
-        "text-[0.875rem] text-gray-10 disabled:text-gray-10 ui-highlighted:bg-gray-2 ui-highlighted:text-gray-12"
+        "text-[0.875rem] text-gray-10 disabled:text-gray-10 ui-highlighted:bg-gray-3 ui-highlighted:text-gray-12"
       )}
     />
   );
@@ -325,7 +325,7 @@ const editorButtonStyles = cva(
         primary:
           "text-gray-12 enabled:hover:ui-not-pressed:bg-gray-3 ui-expanded:bg-gray-3 outline-blue-300 focus:bg-transparent",
         danger:
-          "text-gray-12 enabled:hover:ui-not-pressed:bg-gray-3 ui-expanded:bg-red-300 ui-pressed:bg-red-300 ui-expanded:text-gray-50 ui-pressed:text-gray-50 outline-red-300",
+          "text-gray-12 enabled:hover:ui-not-pressed:bg-gray-3 ui-expanded:bg-red-300 ui-pressed:bg-red-300 ui-expanded:text-gray-1 ui-pressed:text-gray-1 outline-red-300",
       },
     },
     defaultVariants: { variant: "primary" },
@@ -338,7 +338,7 @@ const editorButtonLeftIconStyles = cva("transition-colors duration-100", {
       primary:
         "text-gray-12 enabled:group-hover:not-ui-group-disabled:text-gray-12 ui-group-expanded:text-gray-12",
       danger:
-        "text-gray-12 enabled:group-hover:text-gray-12 ui-group-expanded:text-gray-50 ui-group-pressed:text-gray-50",
+        "text-gray-12 enabled:group-hover:text-gray-12 ui-group-expanded:text-gray-1 ui-group-pressed:text-gray-1",
     },
   },
   defaultVariants: { variant: "primary" },
@@ -441,7 +441,7 @@ export function ComingSoonTooltip(
         {trigger.children}
       </KTooltip.Trigger>
       <KTooltip.Portal>
-        <KTooltip.Content class="p-2 font-medium bg-gray-12 dark:bg-gray-700 text-gray-50 ui-expanded:animate-in ui-expanded:slide-in-from-bottom-1 ui-expanded:fade-in ui-closed:animate-out ui-closed:slide-out-to-bottom-1 ui-closed:fade-out rounded-lg text-xs z-[1000]">
+        <KTooltip.Content class="p-2 font-medium bg-gray-12 dark:bg-gray-700 text-gray-1 ui-expanded:animate-in ui-expanded:slide-in-from-bottom-1 ui-expanded:fade-in ui-closed:animate-out ui-closed:slide-out-to-bottom-1 ui-closed:fade-out rounded-lg text-xs z-[1000]">
           Coming Soon
         </KTooltip.Content>
       </KTooltip.Portal>

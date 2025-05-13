@@ -191,7 +191,7 @@ export function Timeline() {
               <div class="absolute -top-2 bg-gray-10 rounded-full size-3" />
               <Show when={split()}>
                 <div class="absolute size-[2rem] bg-[currentColor] z-20 top-6 rounded-lg flex items-center justify-center">
-                  <IconCapScissors class="size-[1.25rem] text-gray-50 z-20" />
+                  <IconCapScissors class="size-[1.25rem] text-gray-1 z-20" />
                 </div>
               </Show>
             </div>

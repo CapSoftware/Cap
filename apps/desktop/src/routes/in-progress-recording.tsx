@@ -122,7 +122,7 @@ export default function () {
                 <IconCapMicrophone class="size-5 text-gray-11" />
                 <div class="absolute bottom-1 left-1 right-1 h-0.5 bg-gray-10 overflow-hidden rounded-full">
                   <div
-                    class="absolute inset-0 bg-blue-400 transition-transform duration-100"
+                    class="absolute inset-0 transition-transform duration-100 bg-blue-9"
                     style={{
                       transform: `translateX(-${(1 - audioLevel()) * 100}%)`,
                     }}
@@ -131,7 +131,7 @@ export default function () {
               </>
             ) : (
               <IconLucideMicOff
-                class="text-gray-300 opacity-20 size-5 dark:text-gray-300 dark:opacity-100"
+                class="opacity-20 text-gray-7 size-5 dark:opacity-100"
                 data-tauri-drag-region
               />
             )}

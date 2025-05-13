@@ -1,3 +1,5 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { cx } from "cva";
 import {
   type ComponentProps,
   createSignal,
@@ -7,10 +9,8 @@ import {
   Show,
   splitProps,
 } from "solid-js";
-import { WindowControlButton as ControlButton } from "./WindowControlButton";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import titlebarState from "~/utils/titlebar-state";
-import { cx } from "cva";
+import { WindowControlButton as ControlButton } from "./WindowControlButton";
 
 export default function (
   props: ComponentProps<"div"> & { maximizable?: boolean }
@@ -82,7 +82,7 @@ export default function (
         onClick={titlebarState.closable ? currentWindow.close : undefined}
         disabled={!titlebarState.closable}
         class={cx(
-          "max-h-20 w-[46px] rounded-none bg-transparent hover:text-gray-50",
+          "max-h-20 w-[46px] rounded-none bg-transparent hover:text-gray-1",
           "hover:bg-[#c42b1c] dark:hover:bg-[#c42b1c active:bg-[#c42b1c]/90 dark:active:bg-[#c42b1c]/90",
           "disabled:hover:bg-transparent dark:disabled:hover:bg-transparent disabled:text-black-transparent-40"
         )}

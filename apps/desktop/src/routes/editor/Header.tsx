@@ -95,7 +95,7 @@ export function Header() {
                 }}
                 class={`text-[0.8rem] ${
                   license.data?.type === "pro"
-                    ? "bg-[--blue-400] text-gray-50 dark:text-gray-12"
+                    ? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
                     : "bg-gray-3 cursor-pointer hover:bg-gray-5"
                 } rounded-[0.55rem] px-2 py-1`}
               >
@@ -158,7 +158,7 @@ export function Header() {
             setDialog({ type: "export", open: true });
           }}
         >
-          <UploadIcon class="text-gray-50 size-5" />
+          <UploadIcon class="text-gray-1 size-5" />
           Export
         </Button>
         {ostype() === "windows" && <CaptionControlsWindows11 />}

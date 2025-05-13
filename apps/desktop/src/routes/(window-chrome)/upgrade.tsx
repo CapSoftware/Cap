@@ -407,10 +407,10 @@ export default function Page() {
   return (
     <div class="flex relative flex-col justify-center items-center p-5 mx-auto w-full h-full">
       {upgradeComplete() && (
-        <div class="flex justify-center items-center h-full bg-gray-800 bg-opacity-75">
+        <div class="flex justify-center items-center h-full bg-opacity-75">
           <div class="relative z-10 p-6 text-center bg-white rounded-lg shadow-lg">
             <h2 class="mb-4 text-2xl font-bold">Upgrade complete</h2>
-            <p class="mb-4 text-sm text-[--text-tertiary]">
+            <p class="mb-4 text-sm text-gray-10">
               You can now close this window - thank you for upgrading!
             </p>
             <Button

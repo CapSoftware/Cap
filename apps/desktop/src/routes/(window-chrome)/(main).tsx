@@ -1,45 +1,45 @@
 import { Button } from "@cap/ui-solid";
-import { Tooltip } from "@kobalte/core";
 import { useNavigate } from "@solidjs/router";
 import {
-    createMutation,
-    createQuery,
-    useQueryClient,
+  createMutation,
+  createQuery,
+  useQueryClient,
 } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
-    ComponentProps,
-    createEffect,
-    createMemo,
-    createResource,
-    createSignal,
-    ErrorBoundary,
-    onCleanup,
-    onMount,
-    Show,
-    Suspense,
+  ComponentProps,
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  ErrorBoundary,
+  onCleanup,
+  onMount,
+  Show,
+  Suspense,
 } from "solid-js";
 import { createStore } from "solid-js/store";
+import Tooltip from "~/components/Tooltip";
 
 import Mode from "~/components/Mode";
 import { identifyUser, trackEvent } from "~/utils/analytics";
 import {
-    createCurrentRecordingQuery,
-    createLicenseQuery,
-    createOptionsQuery,
-    createVideoDevicesQuery,
-    getPermissions,
-    listAudioDevices,
-    listScreens,
-    listWindows,
+  createCurrentRecordingQuery,
+  createLicenseQuery,
+  createOptionsQuery,
+  createVideoDevicesQuery,
+  getPermissions,
+  listAudioDevices,
+  listScreens,
+  listWindows,
 } from "~/utils/queries";
 import {
-    type CaptureScreen,
-    type CaptureWindow,
-    commands,
-    events,
+  type CaptureScreen,
+  type CaptureWindow,
+  commands,
+  events,
 } from "~/utils/tauri";
 
 function getWindowSize(systemAudioRecording: boolean) {
@@ -165,29 +165,32 @@ export default function () {
         dir={ostype() === "windows" ? "rtl" : "rtl"}
         class="flex gap-1 items-center mx-2"
       >
-        <Tooltip.Root openDelay={0}>
-          <Tooltip.Trigger>
-            <button
-              type="button"
-              onClick={async () => {
-                await commands.showWindow({ Settings: { page: "general" } });
+        <Tooltip
+          content={
+            <span>
+              Settings
+            </span>
+          }
+        >
+          <button
+            type="button"
+            onClick={async () => {
+              await commands.showWindow({ Settings: { page: "general" } });
                 getCurrentWindow().hide();
               }}
               class="flex items-center justify-center w-5 h-5 -ml-[1.5px]"
             >
               <IconCapSettings class="text-gray-11 size-5 hover:text-gray-12" />
             </button>
-          </Tooltip.Trigger>
-          <Tooltip.Portal>
-            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-12 rounded shadow-lg duration-100 animate-in fade-in">
-              Settings
-              <Tooltip.Arrow class="fill-gray-500" />
-            </Tooltip.Content>
-          </Tooltip.Portal>
-        </Tooltip.Root>
-        <Tooltip.Root openDelay={0}>
-          <Tooltip.Trigger>
-            <button
+          </Tooltip>
+        <Tooltip
+          content={
+            <span>
+              Previous Recordings
+            </span>
+          }
+        >
+          <button
               type="button"
               onClick={async () => {
                 await commands.showWindow({ Settings: { page: "recordings" } });
@@ -197,14 +200,7 @@ export default function () {
             >
               <IconLucideSquarePlay class="text-gray-11 size-5 hover:text-gray-12" />
             </button>
-          </Tooltip.Trigger>
-          <Tooltip.Portal>
-            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-12 rounded shadow-lg duration-100 animate-in fade-in">
-              Previous Recordings
-              <Tooltip.Arrow class="fill-gray-500" />
-            </Tooltip.Content>
-          </Tooltip.Portal>
-        </Tooltip.Root>
+          </Tooltip>
 
         <ChangelogButton />
 
@@ -271,7 +267,7 @@ export default function () {
                 }}
                 class={`text-[0.6rem] ${
                   license.data?.type === "pro"
-                    ? "bg-[--blue-400] text-gray-50 dark:text-gray-12"
+                    ? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
                     : "bg-gray-3 cursor-pointer hover:bg-gray-5"
                 } rounded-lg px-1.5 py-0.5`}
               >
@@ -359,8 +355,8 @@ import { makePersisted } from "@solid-primitives/storage";
 import { UnlistenFn } from "@tauri-apps/api/event";
 import { CheckMenuItem, Menu, PredefinedMenuItem } from "@tauri-apps/api/menu";
 import {
-    getCurrentWebviewWindow,
-    WebviewWindow,
+  getCurrentWebviewWindow,
+  WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { type as ostype, platform } from "@tauri-apps/plugin-os";
@@ -538,96 +534,94 @@ function TargetSelects(props: {
 
   return (
     <div>
-      <Tooltip.Root openDelay={500}>
-        <Tooltip.Trigger class="flex fixed flex-row items-center w-8 h-8">
-          <Transition
-            onEnter={(el, done) => {
-              if (shouldAnimateAreaSelect)
-                el.animate(
-                  [
-                    {
-                      transform: "scale(0.5)",
-                      opacity: 0,
-                      width: "0.2rem",
-                      height: "0.2rem",
-                    },
-                    {
-                      transform: "scale(1)",
-                      opacity: 1,
-                      width: "2rem",
-                      height: "2rem",
-                    },
-                  ],
+      <Tooltip
+        openDelay={500}
+        content={
+          isTargetCaptureArea()
+            ? "Remove selection"
+            : areaSelection.pending
+            ? "Selecting area..."
+            : "Select area"
+        }
+        childClass="flex fixed flex-row items-center w-8 h-8"
+      >
+        <Transition
+          onEnter={(el, done) => {
+            if (shouldAnimateAreaSelect)
+              el.animate(
+                [
                   {
-                    duration: 450,
-                    easing: "cubic-bezier(0.65, 0, 0.35, 1)",
-                  }
-                ).finished.then(done);
-              shouldAnimateAreaSelect = true;
-            }}
-            onExit={(el, done) =>
-              el
-                .animate(
-                  [
-                    {
-                      transform: "scale(1)",
-                      opacity: 1,
-                      width: "2rem",
-                      height: "2rem",
-                    },
-                    {
-                      transform: "scale(0)",
-                      opacity: 0,
-                      width: "0.2rem",
-                      height: "0.2rem",
-                    },
-                  ],
+                    transform: "scale(0.5)",
+                    opacity: 0,
+                    width: "0.2rem",
+                    height: "0.2rem",
+                  },
                   {
-                    duration: 500,
-                    easing: "ease-in-out",
-                  }
-                )
-                .finished.then(done)
-            }
-          >
-            <Show when={isTargetScreenOrArea()}>
-              {(targetScreenOrArea) => (
-                <button
-                  type="button"
-                  disabled={!targetScreenOrArea}
-                  onClick={handleAreaSelectButtonClick}
-                  class={cx(
-                    "flex items-center justify-center flex-shrink-0 w-full h-full rounded-[0.5rem] transition-all duration-200",
-                    "hover:bg-gray-3 disabled:bg-gray-2 disabled:text-gray-11",
-                    "focus-visible:outline font-[200] text-[0.875rem]",
-                    isTargetCaptureArea()
-                      ? "bg-gray-2 text-blue-9 border border-blue-200"
-                      : "bg-gray-2 text-gray-11"
-                  )}
-                >
-                  <IconCapCrop
-                    class={`w-[1rem] h-[1rem] ${
-                      areaSelection.pending
-                        ? "animate-gentle-bounce duration-1000 text-gray-12 mt-1"
-                        : ""
-                    }`}
-                  />
-                </button>
-              )}
-            </Show>
-          </Transition>
-        </Tooltip.Trigger>
-        <Tooltip.Portal>
-          <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-12 rounded shadow-lg duration-100 animate-in fade-in">
-            {isTargetCaptureArea()
-              ? "Remove selection"
-              : areaSelection.pending
-              ? "Selecting area..."
-              : "Select area"}
-            <Tooltip.Arrow class="fill-gray-500" />
-          </Tooltip.Content>
-        </Tooltip.Portal>
-      </Tooltip.Root>
+                    transform: "scale(1)",
+                    opacity: 1,
+                    width: "2rem",
+                    height: "2rem",
+                  },
+                ],
+                {
+                  duration: 450,
+                  easing: "cubic-bezier(0.65, 0, 0.35, 1)",
+                }
+              ).finished.then(done);
+            shouldAnimateAreaSelect = true;
+          }}
+          onExit={(el, done) =>
+            el
+              .animate(
+                [
+                  {
+                    transform: "scale(1)",
+                    opacity: 1,
+                    width: "2rem",
+                    height: "2rem",
+                  },
+                  {
+                    transform: "scale(0)",
+                    opacity: 0,
+                    width: "0.2rem",
+                    height: "0.2rem",
+                  },
+                ],
+                {
+                  duration: 500,
+                  easing: "ease-in-out",
+                }
+              )
+              .finished.then(done)
+          }
+        >
+          <Show when={isTargetScreenOrArea()}>
+            {(targetScreenOrArea) => (
+              <button
+                type="button"
+                disabled={!targetScreenOrArea}
+                onClick={handleAreaSelectButtonClick}
+                class={cx(
+                  "flex items-center justify-center flex-shrink-0 w-full h-full rounded-[0.5rem] transition-all duration-200",
+                  "hover:bg-gray-3 disabled:bg-gray-2 disabled:text-gray-11",
+                  "focus-visible:outline font-[200] text-[0.875rem]",
+                  isTargetCaptureArea()
+                    ? "bg-gray-2 text-blue-9 border border-blue-200"
+                    : "bg-gray-2 text-gray-11"
+                )}
+              >
+                <IconCapCrop
+                  class={`w-[1rem] h-[1rem] ${
+                    areaSelection.pending
+                      ? "animate-gentle-bounce duration-1000 text-gray-12 mt-1"
+                      : ""
+                  }`}
+                />
+              </button>
+            )}
+          </Show>
+        </Transition>
+      </Tooltip>
 
       <div
         class={`flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500 ${
@@ -1118,28 +1112,23 @@ function ChangelogButton() {
   });
 
   return (
-    <Tooltip.Root openDelay={0}>
-      <Tooltip.Trigger>
-        <button
-          type="button"
-          onClick={handleChangelogClick}
-          class="flex relative justify-center items-center w-5 h-5"
-        >
-          <IconLucideBell class="text-gray-11 size-5 hover:text-gray-12" />
-          {changelogState.hasUpdate && (
-            <div
-              style={{ "background-color": "#FF4747" }}
-              class="block z-10 absolute top-0 right-0 size-1.5 rounded-full animate-bounce"
-            />
-          )}
-        </button>
-      </Tooltip.Trigger>
-      <Tooltip.Portal>
-        <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-12 rounded shadow-lg duration-100 animate-in fade-in">
-          Changelog
-          <Tooltip.Arrow class="fill-gray-500" />
-        </Tooltip.Content>
-      </Tooltip.Portal>
-    </Tooltip.Root>
+    <Tooltip
+      openDelay={0}
+      content="Changelog"
+    >
+      <button
+        type="button"
+        onClick={handleChangelogClick}
+        class="flex relative justify-center items-center w-5 h-5"
+      >
+        <IconLucideBell class="text-gray-11 size-5 hover:text-gray-12" />
+        {changelogState.hasUpdate && (
+          <div
+            style={{ "background-color": "#FF4747" }}
+            class="block z-10 absolute top-0 right-0 size-1.5 rounded-full animate-bounce"
+          />
+        )}
+      </button>
+    </Tooltip>
   );
 }

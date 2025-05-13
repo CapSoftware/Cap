@@ -1,10 +1,10 @@
 import {
-    Collapsible,
-    Collapsible as KCollapsible,
+  Collapsible,
+  Collapsible as KCollapsible,
 } from "@kobalte/core/collapsible";
 import {
-    RadioGroup as KRadioGroup,
-    RadioGroup,
+  RadioGroup as KRadioGroup,
+  RadioGroup,
 } from "@kobalte/core/radio-group";
 import { Select as KSelect } from "@kobalte/core/select";
 import { Tabs as KTabs } from "@kobalte/core/tabs";
@@ -17,17 +17,17 @@ import { BaseDirectory, writeFile } from "@tauri-apps/plugin-fs";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
-    For,
-    Show,
-    ValidComponent,
-    batch,
-    createEffect,
-    createMemo,
-    createResource,
-    createRoot,
-    createSignal,
-    on,
-    onMount,
+  For,
+  Show,
+  ValidComponent,
+  batch,
+  createEffect,
+  createMemo,
+  createResource,
+  createRoot,
+  createSignal,
+  on,
+  onMount,
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { Dynamic } from "solid-js/web";
@@ -40,29 +40,29 @@ import transparentBg from "~/assets/illustrations/transparent.webp";
 import { Toggle } from "~/components/Toggle";
 import { generalSettingsStore } from "~/store";
 import {
-    type BackgroundSource,
-    StereoMode,
-    ZoomSegment,
-    commands
+  type BackgroundSource,
+  StereoMode,
+  ZoomSegment,
+  commands
 } from "~/utils/tauri";
 import { useEditorContext } from "./context";
 import {
-    DEFAULT_GRADIENT_FROM,
-    DEFAULT_GRADIENT_TO,
-    RGBColor,
+  DEFAULT_GRADIENT_FROM,
+  DEFAULT_GRADIENT_TO,
+  RGBColor,
 } from "./projectConfig";
 import ShadowSettings from "./ShadowSettings";
 import { TextInput } from "./TextInput";
 import {
-    ComingSoonTooltip,
-    EditorButton,
-    Field,
-    MenuItem,
-    MenuItemList,
-    PopperContent,
-    Slider,
-    Subfield,
-    topSlideAnimateClasses,
+  ComingSoonTooltip,
+  EditorButton,
+  Field,
+  MenuItem,
+  MenuItemList,
+  PopperContent,
+  Slider,
+  Subfield,
+  topSlideAnimateClasses,
 } from "./ui";
 
 const BACKGROUND_SOURCES = {
@@ -247,7 +247,7 @@ export function ConfigSidebar() {
           {(item) => (
             <KTabs.Trigger
               value={item.id}
-              class="flex relative z-10 flex-1 justify-center items-center px-4 py-2 text-gray-11 transition-colors group ui-selected:text-gray-12 disabled:opacity-50 focus:outline-none"
+              class="flex relative z-10 flex-1 justify-center items-center px-4 py-2 transition-colors text-gray-11 group ui-selected:text-gray-12 disabled:opacity-50 focus:outline-none"
               onClick={() => {
                 setState("selectedTab", item.id);
                 scrollRef.scrollTo({
@@ -271,7 +271,7 @@ export function ConfigSidebar() {
 
         {/** Center the indicator with the icon */}
         <KTabs.Indicator class="absolute top-0 left-0 w-full h-full transition-transform duration-300 ease-in-out pointer-events-none will-change-transform">
-          <div class="absolute top-1/2 left-1/2 rounded-md transform -translate-x-1/2 -translate-y-1/2 bg-gray-3 will-change-transform size-9" />
+          <div class="absolute top-1/2 left-1/2 rounded-lg transform -translate-x-1/2 -translate-y-1/2 bg-gray-3 will-change-transform size-9" />
         </KTabs.Indicator>
       </KTabs.List>
       <div
@@ -282,7 +282,7 @@ export function ConfigSidebar() {
         <CameraConfig scrollRef={scrollRef} />
         <KTabs.Content value="transcript" class="flex flex-col gap-6">
           <Field name="Transcript" icon={<IconCapMessageBubble />}>
-            <div class="p-1 text-gray-11 bg-gray-50 rounded-md border text-wrap">
+            <div class="p-1 bg-gray-50 rounded-md border text-gray-11 text-wrap">
               Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed ac
               purus sit amet nunc ultrices ultricies. Nullam nec scelerisque
               nunc. Nullam nec scelerisque nunc.
@@ -950,7 +950,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                           )
                         }
                         value={key}
-                        class="flex relative z-10 flex-1 justify-center items-center px-4 py-2 text-gray-11 bg-transparent rounded-lg border transition-colors duration-300 ui-not-selected:hover:border-gray-300 ui-selected:bg-gray-3 group ui-selected:text-gray-12 disabled:opacity-50 focus:outline-none"
+                        class="flex relative z-10 flex-1 justify-center items-center px-4 py-2 bg-transparent rounded-lg border transition-colors duration-300 text-gray-11 ui-not-selected:hover:border-gray-300 ui-selected:bg-gray-3 group ui-selected:text-gray-12 disabled:opacity-50 focus:outline-none"
                       >
                         {value}
                       </KTabs.Trigger>
@@ -1189,7 +1189,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                 </div>
                 {/* <Tooltip content="Add custom color">
                       <button
-                        class="flex justify-center items-center w-6 h-6 text-gray-12 rounded-lg border border-gray-400 border-dashed hover:border-gray-500"
+                        class="flex justify-center items-center w-6 h-6 rounded-lg border border-gray-400 border-dashed text-gray-12 hover:border-gray-500"
                         onClick={() => {
                           // Function to add a new color (you can modify this)
                           console.log(
@@ -1287,7 +1287,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                             );
                           }}
                         >
-                          <div class="bg-blue-300 rounded-full size-1.5" />
+                          <div class="bg-blue-9 rounded-full size-1.5" />
                         </div>
                       </div>
                       <div class="flex flex-wrap gap-2">
@@ -1477,7 +1477,7 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
                     <RadioGroup.ItemInput class="peer" />
                     <RadioGroup.ItemControl
                       class={cx(
-                        "cursor-pointer size-6 shink-0 rounded-[0.375rem] bg-gray-5 absolute flex justify-center items-center ui-checked:bg-blue-300 focus-visible:outline peer-focus-visible:outline outline-2 outline-offset-2 outline-blue-300 transition-colors duration-100",
+                        "cursor-pointer size-6 shink-0 rounded-[0.375rem] bg-gray-5 absolute flex justify-center items-center ui-checked:bg-blue-9 focus-visible:outline peer-focus-visible:outline outline-2 outline-offset-2 outline-blue-300 transition-colors duration-100",
                         item.x === "left"
                           ? "left-2"
                           : item.x === "right"
@@ -1903,7 +1903,7 @@ function RgbInput(props: {
         }}
       />
       <TextInput
-        class="w-[4.60rem] p-[0.375rem] text-gray-12 text-[13px] border rounded-[0.5rem] bg-gray-50 outline-none focus:ring-1 transition-shadows duration-200 focus:ring-gray-500 focus:ring-offset-1 focus:ring-offset-gray-200"
+        class="w-[4.60rem] p-[0.375rem] text-gray-12 text-[13px] border rounded-[0.5rem] bg-gray-1 outline-none focus:ring-1 transition-shadows duration-200 focus:ring-gray-500 focus:ring-offset-1 focus:ring-offset-gray-200"
         value={text()}
         onFocus={() => {
           prevHex = rgbToHex(props.value);

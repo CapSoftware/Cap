@@ -711,7 +711,7 @@ export function ExportDialog() {
                             <div class="flex flex-col gap-6 items-center duration-500 animate-in fade-in">
                               <div class="flex flex-col gap-3 items-center">
                                 <div class="flex justify-center items-center mb-2 rounded-full bg-gray-12 size-10">
-                                  <IconLucideCheck class="text-gray-50 size-5" />
+                                  <IconLucideCheck class="text-gray-1 size-5" />
                                 </div>
                                 <div class="flex flex-col gap-1 items-center">
                                   <h1 class="text-xl font-medium text-gray-600">
@@ -818,9 +818,9 @@ export function ExportDialog() {
                         class="flex gap-2 justify-center items-center"
                       >
                         {!copyPressed() ? (
-                          <IconCapCopy class="text-gray-50 transition-colors duration-300 size-4 group-hover:text-gray-12" />
+                          <IconCapCopy class="transition-colors duration-300 text-gray-1 size-4 group-hover:text-gray-12" />
                         ) : (
-                          <IconLucideCheck class="text-gray-50 transition-colors duration-300 size-4 svgpathanimation group-hover:text-gray-12" />
+                          <IconLucideCheck class="transition-colors duration-300 text-gray-1 size-4 svgpathanimation group-hover:text-gray-12" />
                         )}
                         <p>Open Link</p>
                       </Button>
@@ -904,7 +904,7 @@ function ProgressView(props: { amount: number; label?: string }) {
     <>
       <div class="w-full bg-gray-3 rounded-full h-2.5">
         <div
-          class="bg-blue-300 h-2.5 rounded-full"
+          class="bg-blue-9 h-2.5 rounded-full"
           style={{ width: `${props.amount}%` }}
         />
       </div>

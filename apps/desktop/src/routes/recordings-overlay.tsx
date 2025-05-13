@@ -6,20 +6,20 @@ import { createMutation, createQuery } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { cx } from "cva";
 import {
-    type Accessor,
-    type ComponentProps,
-    createEffect,
-    createMemo,
-    createResource,
-    createSignal,
-    For,
-    Match,
-    onCleanup,
-    onMount,
-    Show,
-    startTransition,
-    Suspense,
-    Switch,
+  type Accessor,
+  type ComponentProps,
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  For,
+  Match,
+  onCleanup,
+  onMount,
+  Show,
+  startTransition,
+  Suspense,
+  Switch,
 } from "solid-js";
 import { createStore, produce, SetStoreFunction } from "solid-js/store";
 import { TransitionGroup } from "solid-transition-group";
@@ -156,13 +156,13 @@ export default function () {
                       ref={setRef}
                       style={{ "border-color": "rgba(255, 255, 255, 0.1)" }}
                       class={cx(
-                        "overflow-hidden relative rounded-xl shadow transition-all duration-300 w-[260px] h-[150px] bg-gray-12/40 border-[1px] group"
+                        "overflow-hidden relative rounded-xl shadow transition-all duration-300 w-[260px] h-[150px] bg-gray-12 border-[1px] group"
                       )}
                     >
                       <div
                         class={cx(
                           "w-full h-full flex relative bg-transparent z-10 overflow-hidden transition-all",
-                          isLoading() && "backdrop-blur bg-gray-12/80"
+                          isLoading() && "backdrop-blur bg-gray-12"
                         )}
                         style={{
                           "pointer-events": "auto",
@@ -442,19 +442,19 @@ function ActionProgressOverlay(props: {
       class="absolute inset-0 flex items-center justify-center z-[999999] pointer-events-auto"
     >
       <div class="w-[80%] text-center">
-        <h3 class="mb-3 text-sm font-medium text-gray-50 dark:text-gray-12">
+        <h3 class="mb-3 text-sm font-medium text-gray-1 dark:text-gray-12">
           {props.title}
         </h3>
         <div class="w-full bg-gray-10 rounded-full h-2.5 mb-2">
           <div
-            class="bg-blue-300 text-gray-50 dark:text-gray-12 h-2.5 rounded-full transition-all duration-200"
+            class="bg-blue-9 text-gray-1 dark:text-gray-12 h-2.5 rounded-full transition-all duration-200"
             style={{
               width: `${Math.max(0, Math.min(100, props.progressPercentage))}%`,
             }}
           />
         </div>
 
-        <p class="mt-2 text-xs text-gray-50 dark:text-gray-12">
+        <p class="mt-2 text-xs text-gray-1 dark:text-gray-12">
           {typeof props.progressMessage === "string"
             ? props.progressMessage
             : `${Math.floor(props.progressPercentage)}%`}
@@ -470,7 +470,7 @@ const IconButton = (props: ComponentProps<"button">) => {
       {...props}
       type="button"
       class={cx(
-        "p-[0.325rem] bg-gray-50 dark:bg-gray-12 rounded-full text-[12px] shadow-[0px 2px 4px rgba(18, 22, 31, 0.12)]",
+        "p-[0.325rem] bg-gray-1 dark:bg-gray-12 rounded-full text-[12px] shadow-[0px 2px 4px rgba(18, 22, 31, 0.12)]",
         props.class
       )}
     />

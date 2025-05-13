@@ -73,7 +73,7 @@ export const AdminDesktopNav = () => {
           >
             <button
               onClick={toggleSidebarCollapsed}
-              className="absolute right-[-12px] hover:border-gray-5 hover:bg-gray-5 top-[50%] transform -translate-y-1/2 rounded-full p-1 border bg-gray-3 border-gray-4 transition-colors z-10"
+              className="absolute right-[-12px] hover:border-gray-3 hover:bg-gray-2 top-[50%] transform -translate-y-1/2 rounded-full p-1 border bg-gray-1 border-gray-3 transition-colors z-10"
             >
               <ChevronRight size={16} className={clsx("transition-transform duration-200 text-gray-12", sidebarCollapsed ? "rotate-180" : "")} />
             </button>
