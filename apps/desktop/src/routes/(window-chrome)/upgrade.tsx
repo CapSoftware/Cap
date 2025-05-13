@@ -430,9 +430,9 @@ export default function Page() {
       {!upgradeComplete() && (
         <>
           {license.data?.type === "commercial" ? (
-            <div class="bg-[--gray-50] dark:bg-[--gray-900] rounded-xl shadow-sm border border-gray-200 dark:border-[--gray-700] w-full">
+            <div class="bg-[--gray-50] dark:bg-[--gray-900] rounded-xl shadow-sm border border-gray-3 dark:border-[--gray-700] w-full">
               <div class="space-y-6">
-                <div class="border-b border-gray-200 dark:border-[--gray-700] pb-6">
+                <div class="border-b border-gray-3 dark:border-[--gray-700] pb-6">
                   <h3 class="text-2xl font-semibold tracking-tight text-[--text-primary]">
                     Your Commercial License
                   </h3>
@@ -446,7 +446,7 @@ export default function Page() {
                     <label class="text-sm font-medium text-[--text-primary]">
                       License Key
                     </label>
-                    <pre class="w-full p-3 bg-gray-50 dark:bg-[--gray-800] rounded-lg border border-gray-200 dark:border-[--gray-700] font-mono text-sm text-[--text-secondary] break-all whitespace-pre-wrap">
+                    <pre class="w-full p-3 bg-gray-1 rounded-lg border border-gray-3 dark:border-[--gray-700] font-mono text-sm text-[--text-secondary] break-all whitespace-pre-wrap">
                       {license.data.licenseKey}
                     </pre>
                   </div>
@@ -457,7 +457,7 @@ export default function Page() {
                         <label class="text-sm font-medium text-[--text-primary]">
                           Expiration Date
                         </label>
-                        <div class="w-full p-3 bg-gray-50 dark:bg-[--gray-800] rounded-lg border border-gray-200 dark:border-[--gray-700] text-sm text-[--text-secondary]">
+                        <div class="w-full p-3 bg-gray-1 rounded-lg border border-gray-3 dark:border-[--gray-700] text-sm text-[--text-secondary]">
                           {new Date(expiryDate()).toLocaleDateString(
                             undefined,
                             {
@@ -471,7 +471,7 @@ export default function Page() {
                     )}
                   </Show>
 
-                  <div class="pt-4 border-t border-gray-200 dark:border-[--gray-700]">
+                  <div class="pt-4 border-t border-gray-3 dark:border-[--gray-700]">
                     <Button
                       variant="destructive"
                       class="mx-auto w-fit"
@@ -518,7 +518,7 @@ export default function Page() {
                       riveInstance.play("card-stack");
                     }
                   }}
-                  class="flex flex-col flex-1 justify-between p-3 h-[700px ] bg-gray-3 rounded-2xl border border-gray-200 shadow-sm text-card-foreground md:p-3"
+                  class="flex flex-col flex-1 justify-between p-3 h-[700px ] bg-gray-3 rounded-2xl border border-gray-3 shadow-sm text-card-foreground md:p-3"
                 >
                   <div class="space-y-5">
                     <div class="flex flex-col gap-6 items-center">
@@ -549,7 +549,7 @@ export default function Page() {
                       </div>
                       <div
                         onClick={() => setIsCommercialAnnual((v) => !v)}
-                        class="px-3 py-2 text-center rounded-full border border-transparent transition-all duration-300 cursor-pointer bg-gray-5 hover:border-gray-400"
+                        class="px-3 py-2 text-center rounded-full border border-transparent transition-all duration-200 cursor-pointer bg-gray-5 hover:border-gray-400"
                       >
                         <p class="text-xs text-gray-12">
                           Switch to{" "}
@@ -654,7 +654,7 @@ export default function Page() {
                       </div>
                       <div
                         onClick={() => setIsProAnnual((v) => !v)}
-                        class="px-3 py-2 text-center rounded-full border border-transparent transition-all duration-300 cursor-pointer bg-blue-9 hover:border-blue-400"
+                        class="px-3 py-2 text-center rounded-full border border-transparent transition-all duration-200 cursor-pointer bg-blue-9 hover:border-blue-400"
                       >
                         <p class="text-xs text-solid-white">
                           Switch to {isProAnnual() ? "monthly" : "yearly"}:{" "}

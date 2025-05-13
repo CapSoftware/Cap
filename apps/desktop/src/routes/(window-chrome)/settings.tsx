@@ -62,10 +62,10 @@ export default function Settings(props: RouteSectionProps) {
               <li>
                 <A
                   href={item.href}
-                  activeClass="bg-gray-5"
-                  class="rounded-md h-[2rem] px-2 flex flex-row items-center gap-[0.375rem] transition-colors"
+                  activeClass="bg-gray-5 pointer-events-none"
+                  class="rounded-lg h-[2rem] hover:bg-gray-3 text-[13px] px-2 flex flex-row items-center gap-[0.375rem] transition-colors"
                 >
-                  <item.icon class="size-4" />
+                  <item.icon class="opacity-60 size-4" />
                   <span>{item.name}</span>
                 </A>
               </li>

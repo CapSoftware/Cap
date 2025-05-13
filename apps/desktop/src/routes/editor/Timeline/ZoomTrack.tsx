@@ -1,15 +1,15 @@
 import {
-  createEventListener,
-  createEventListenerMap,
+    createEventListener,
+    createEventListenerMap,
 } from "@solid-primitives/event-listener";
 import { For, Show, batch, createRoot, createSignal } from "solid-js";
 import { produce } from "solid-js/store";
 
 import { useEditorContext } from "../context";
 import {
-  useSegmentContext,
-  useTimelineContext,
-  useTrackContext,
+    useSegmentContext,
+    useTimelineContext,
+    useTrackContext,
 } from "./context";
 import { SegmentContent, SegmentHandle, SegmentRoot, TrackRoot } from "./Track";
 
@@ -202,8 +202,8 @@ export function ZoomTrack(props: {
 
           return (
             <SegmentRoot
-              class="bg-gradient-to-r zoom-gradient-border hover:border duration-300 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]"
-              innerClass="ring-red-300"
+              class="bg-gradient-to-r zoom-gradient-border hover:border duration-200 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]"
+              innerClass="ring-red-5"
               segment={segment}
               onMouseEnter={() => {
                 setHoveringSegment(true);
@@ -355,7 +355,7 @@ export function ZoomTrack(props: {
               end: time() + 1,
             }}
           >
-            <SegmentContent class="bg-gradient-to-r zoom-gradient-border hover:border duration-300 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]">
+            <SegmentContent class="bg-gradient-to-r zoom-gradient-border hover:border duration-200 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]">
               <p class="w-full text-center text-gray-1 dark:text-gray-12 text-md text-primary">
                 +
               </p>

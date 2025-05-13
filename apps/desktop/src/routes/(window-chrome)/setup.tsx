@@ -87,7 +87,7 @@ export default function () {
 
   return (
     <>
-      <div class="flex flex-col px-[2rem] text-[0.875rem] font-[400] flex-1 bg-gray-50 justify-evenly items-center">
+      <div class="flex flex-col px-[2rem] text-[0.875rem] font-[400] flex-1 bg-gray-1 justify-evenly items-center">
         {showStartup() && (
           <Startup
             onClose={() => {

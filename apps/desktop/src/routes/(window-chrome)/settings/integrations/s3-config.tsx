@@ -207,7 +207,7 @@ export default function S3ConfigPage() {
           setter(e.currentTarget.value)
         }
         placeholder={placeholder}
-        class="px-3 py-2 w-full rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        class="px-3 py-2 w-full rounded-lg border border-gray-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
         autocomplete="off"
         autocapitalize="off"
         autocorrect="off"
@@ -247,7 +247,7 @@ export default function S3ConfigPage() {
                   <select
                     value={provider()}
                     onChange={(e) => setProvider(e.currentTarget.value)}
-                    class="px-3 py-2 pr-10 w-full bg-white rounded-lg border border-gray-200 appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    class="px-3 py-2 pr-10 w-full bg-white rounded-lg border border-gray-3 appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
                     <option value="aws">AWS S3</option>
                     <option value="cloudflare">Cloudflare R2</option>

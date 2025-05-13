@@ -1,9 +1,9 @@
 import Tooltip from "@corvu/tooltip";
 import {
-    createMutation,
-    createQuery,
-    queryOptions,
-    useQueryClient,
+  createMutation,
+  createQuery,
+  queryOptions,
+  useQueryClient,
 } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -12,12 +12,12 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
-    createMemo,
-    createSignal,
-    For,
-    JSX,
-    ParentProps,
-    Show,
+  createMemo,
+  createSignal,
+  For,
+  JSX,
+  ParentProps,
+  Show,
 } from "solid-js";
 
 import { trackEvent } from "~/utils/analytics";
@@ -119,7 +119,7 @@ export default function Recordings() {
           </p>
         }
       >
-        <div class="p-4 border-b border-gray-300 border-dashed">
+        <div class="p-4 border-b border-dashed border-gray-5">
           <div class="flex gap-3 items-center w-fit">
             <For each={Tabs}>
               {(tab) => (
@@ -127,8 +127,8 @@ export default function Recordings() {
                   class={cx(
                     "flex gap-1.5 items-center transition-colors duration-200 p-2 px-3 border rounded-full",
                     activeTab() === tab.id
-                      ? "bg-gray-5 cursor-default border-gray-300"
-                      : "bg-transparent cursor-pointer hover:bg-gray-3 border-gray-200"
+                      ? "bg-gray-5 cursor-default border-gray-5"
+                      : "bg-transparent cursor-pointer hover:bg-gray-3 border-gray-5"
                   )}
                   onClick={() => setActiveTab(tab.id)}
                 >
@@ -180,7 +180,7 @@ function RecordingItem(props: {
       <div class="flex gap-5 items-center">
         <Show
           when={imageExists()}
-          fallback={<div class="mr-4 bg-gray-10 rounded size-11" />}
+          fallback={<div class="mr-4 rounded bg-gray-10 size-11" />}
         >
           <img
             class="object-cover rounded size-12"
@@ -208,7 +208,7 @@ function RecordingItem(props: {
           </div>
         </div>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex gap-2 items-center">
         <Show when={type() === "studio"}>
           <Show when={props.recording.meta.sharing}>
             {(sharing) => (
@@ -307,7 +307,7 @@ function TooltipIconButton(
         {props.children}
       </Tooltip.Trigger>
       <Tooltip.Portal>
-        <Tooltip.Content class="py-2 px-3 font-medium bg-gray-2 text-gray-12 border border-gray-200 text-xs rounded-lg animate-in fade-in slide-in-from-top-0.5">
+        <Tooltip.Content class="py-2 px-3 font-medium bg-gray-2 text-gray-12 border border-gray-3 text-xs rounded-lg animate-in fade-in slide-in-from-top-0.5">
           {props.tooltipText}
         </Tooltip.Content>
       </Tooltip.Portal>

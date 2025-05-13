@@ -14,7 +14,7 @@ export default function Titlebar() {
   return (
     <header
       class={cx(
-        "flex flex-row items-center select-none space-x-1 shrink-0 border-gray-50",
+        "flex flex-row items-center select-none space-x-1 shrink-0 border-gray-1",
         titlebarState.backgroundColor
           ? titlebarState.backgroundColor
           : titlebarState.transparent

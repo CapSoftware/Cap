@@ -2,23 +2,23 @@ import { Button } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
 import { makePersisted } from "@solid-primitives/storage";
 import {
-  createMutation,
-  createQuery,
-  keepPreviousData
+    createMutation,
+    createQuery,
+    keepPreviousData
 } from "@tanstack/solid-query";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import {
-  createEffect,
-  createRoot,
-  createSignal,
-  For,
-  JSX,
-  Match,
-  on,
-  Show,
-  Switch,
-  ValidComponent,
+    createEffect,
+    createRoot,
+    createSignal,
+    For,
+    JSX,
+    Match,
+    on,
+    Show,
+    Switch,
+    ValidComponent,
 } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import toast from "solid-toast";
@@ -28,20 +28,20 @@ import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { exportVideo } from "~/utils/export";
 import {
-  commands,
-  events,
-  ExportCompression,
-  FramesRendered,
+    commands,
+    events,
+    ExportCompression,
+    FramesRendered,
 } from "~/utils/tauri";
 import { RenderState, useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
 import {
-  Dialog,
-  DialogContent,
-  MenuItem,
-  MenuItemList,
-  PopperContent,
-  topSlideAnimateClasses,
+    Dialog,
+    DialogContent,
+    MenuItem,
+    MenuItemList,
+    PopperContent,
+    topSlideAnimateClasses,
 } from "./ui";
 
 export const COMPRESSION_OPTIONS: Array<{
@@ -818,9 +818,9 @@ export function ExportDialog() {
                         class="flex gap-2 justify-center items-center"
                       >
                         {!copyPressed() ? (
-                          <IconCapCopy class="transition-colors duration-300 text-gray-1 size-4 group-hover:text-gray-12" />
+                          <IconCapCopy class="transition-colors duration-200 text-gray-1 size-4 group-hover:text-gray-12" />
                         ) : (
-                          <IconLucideCheck class="transition-colors duration-300 text-gray-1 size-4 svgpathanimation group-hover:text-gray-12" />
+                          <IconLucideCheck class="transition-colors duration-200 text-gray-1 size-4 svgpathanimation group-hover:text-gray-12" />
                         )}
                         <p>Open Link</p>
                       </Button>

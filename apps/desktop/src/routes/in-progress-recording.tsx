@@ -101,7 +101,7 @@ export default function () {
   };
 
   return (
-    <div class="flex flex-row items-stretch w-full h-full bg-gray-12 dark:bg-gray-1 animate-in fade-in">
+    <div class="flex flex-row items-stretch w-full h-full bg-gray-1 animate-in fade-in">
       <div class="flex flex-row justify-between p-[0.25rem] flex-1">
         <button
           disabled={stopRecording.isPending}
@@ -119,7 +119,7 @@ export default function () {
           <div class="flex relative justify-center items-center w-8 h-8">
             {options.data?.micName != null ? (
               <>
-                <IconCapMicrophone class="size-5 text-gray-11" />
+                <IconCapMicrophone class="size-5 text-gray-12" />
                 <div class="absolute bottom-1 left-1 right-1 h-0.5 bg-gray-10 overflow-hidden rounded-full">
                   <div
                     class="absolute inset-0 transition-transform duration-100 bg-blue-9"
@@ -131,7 +131,7 @@ export default function () {
               </>
             ) : (
               <IconLucideMicOff
-                class="opacity-20 text-gray-7 size-5 dark:opacity-100"
+                class="text-gray-7 size-5"
                 data-tauri-drag-region
               />
             )}
@@ -160,10 +160,10 @@ export default function () {
         </div>
       </div>
       <div
-        class="non-styled-move cursor-move flex items-center justify-center p-[0.25rem] border-l border-gray-400 dark:border-gray-200 hover:cursor-move"
+        class="non-styled-move cursor-move flex items-center justify-center p-[0.25rem] border-l border-gray-5 hover:cursor-move"
         data-tauri-drag-region
       >
-        <IconCapMoreVertical class="pointer-events-none text-gray-11 dark:text-gray-11" />
+        <IconCapMoreVertical class="pointer-events-none text-gray-10" />
       </div>
     </div>
   );

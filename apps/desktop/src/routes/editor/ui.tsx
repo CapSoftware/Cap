@@ -9,14 +9,14 @@ import { createEventListener } from "@solid-primitives/event-listener";
 import { cva, cx, type VariantProps } from "cva";
 
 import {
-  createRoot,
-  createSignal,
-  mergeProps,
-  splitProps,
-  type ComponentProps,
-  type JSX,
-  type ParentProps,
-  type ValidComponent
+    createRoot,
+    createSignal,
+    mergeProps,
+    splitProps,
+    type ComponentProps,
+    type JSX,
+    type ParentProps,
+    type ValidComponent
 } from "solid-js";
 import Tooltip from "~/components/Tooltip";
 import { useEditorContext } from "./context";
@@ -176,7 +176,7 @@ export const Dialog = {
             <KDialog.Content
               class={cx(
                 props.contentClass,
-                "z-50 text-sm rounded-[1.25rem] overflow-hidden border border-gray-200 bg-gray-1 min-w-[22rem] ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 origin-top ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95",
+                "z-50 text-sm rounded-[1.25rem] overflow-hidden border border-gray-3 bg-gray-1 min-w-[22rem] ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 origin-top ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95",
                 (props.size ?? "sm") === "sm" ? "max-w-96" : "max-w-3xl"
               )}
             >
@@ -231,7 +231,7 @@ export const Dialog = {
       <div
         {...props}
         class={cx(
-          "p-[1rem] flex flex-col border-y border-gray-200",
+          "p-[1rem] flex flex-col border-y border-gray-3",
           props.class
         )}
       />
@@ -417,7 +417,7 @@ export function EditorButton<T extends ValidComponent = "button">(
 }
 
 export const dropdownContainerClasses =
-  "z-10 flex flex-col rounded-[0.75rem] border border-gray-200 bg-gray-50 shadow-s overflow-y-hidden outline-none";
+  "z-10 flex flex-col rounded-[0.75rem] border border-gray-3 bg-gray-1 shadow-s overflow-y-hidden outline-none";
 
 export const topLeftAnimateClasses =
   "ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95 origin-top-left";

@@ -2,8 +2,8 @@ import { Tooltip } from "@kobalte/core";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { makePersisted } from "@solid-primitives/storage";
 import {
-  getCurrentWebviewWindow,
-  WebviewWindow,
+    getCurrentWebviewWindow,
+    WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { createStore } from "solid-js/store";
@@ -95,7 +95,7 @@ export default function CaptureArea() {
           exitActiveClass="fade-out animate-out slide-out-to-top-6"
         >
           <Show when={visible()}>
-            <div class="transition-all ease-out duration-300 absolute w-auto h-10 bg-gray-1 rounded-[12px] drop-shadow-2xl overflow-visible border border-gray-3 outline outline-1 outline-gray-6 flex justify-around p-1 top-11">
+            <div class="transition-all ease-out duration-200 absolute w-auto h-10 bg-gray-1 rounded-[12px] drop-shadow-2xl overflow-visible border border-gray-3 outline outline-1 outline-gray-6 flex justify-around p-1 top-11">
               <button
                 class="py-[0.25rem] px-2 text-gray-11 gap-[0.25rem] flex flex-row items-center rounded-[8px] ml-0 right-auto"
                 type="button"
@@ -148,7 +148,7 @@ export default function CaptureArea() {
       >
         <Show when={visible()}>
           <Cropper
-            class="transition-all duration-300"
+            class="transition-all duration-200"
             value={crop}
             onCropChange={setCrop}
             showGuideLines={state.showGrid}

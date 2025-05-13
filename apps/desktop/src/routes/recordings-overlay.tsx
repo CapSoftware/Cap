@@ -6,20 +6,20 @@ import { createMutation, createQuery } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { cx } from "cva";
 import {
-  type Accessor,
-  type ComponentProps,
-  createEffect,
-  createMemo,
-  createResource,
-  createSignal,
-  For,
-  Match,
-  onCleanup,
-  onMount,
-  Show,
-  startTransition,
-  Suspense,
-  Switch,
+    type Accessor,
+    type ComponentProps,
+    createEffect,
+    createMemo,
+    createResource,
+    createSignal,
+    For,
+    Match,
+    onCleanup,
+    onMount,
+    Show,
+    startTransition,
+    Suspense,
+    Switch,
 } from "solid-js";
 import { createStore, produce, SetStoreFunction } from "solid-js/store";
 import { TransitionGroup } from "solid-transition-group";
@@ -156,7 +156,7 @@ export default function () {
                       ref={setRef}
                       style={{ "border-color": "rgba(255, 255, 255, 0.1)" }}
                       class={cx(
-                        "overflow-hidden relative rounded-xl shadow transition-all duration-300 w-[260px] h-[150px] bg-gray-12 border-[1px] group"
+                        "overflow-hidden relative rounded-xl shadow transition-all duration-200 w-[260px] h-[150px] bg-gray-12 border-[1px] group"
                       )}
                     >
                       <div

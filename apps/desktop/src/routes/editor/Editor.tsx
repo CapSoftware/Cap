@@ -5,40 +5,41 @@ import { makePersisted } from "@solid-primitives/storage";
 import { createMutation } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
-    Match,
-    Show,
-    Switch,
-    createEffect,
-    createMemo,
-    createSignal,
-    on,
-    onMount,
+  Match,
+  Show,
+  Switch,
+  createEffect,
+  createMemo,
+  createSignal,
+  on,
+  onMount,
 } from "solid-js";
 import { createStore } from "solid-js/store";
 
+import { cx } from "cva";
 import Cropper, { cropToFloor } from "~/components/Cropper";
 import { Toggle } from "~/components/Toggle";
 import Tooltip from "~/components/Tooltip";
 import { events, type Crop } from "~/utils/tauri";
 import { ConfigSidebar } from "./ConfigSidebar";
 import {
-    EditorContextProvider,
-    EditorInstanceContextProvider,
-    FPS,
-    OUTPUT_SIZE,
-    useEditorContext,
-    useEditorInstanceContext,
+  EditorContextProvider,
+  EditorInstanceContextProvider,
+  FPS,
+  OUTPUT_SIZE,
+  useEditorContext,
+  useEditorInstanceContext,
 } from "./context";
 import { ExportDialog } from "./ExportDialog";
 import { Header } from "./Header";
 import { Player } from "./Player";
 import { Timeline } from "./Timeline";
 import {
-    Dialog,
-    DialogContent,
-    EditorButton,
-    Input,
-    Subfield,
+  Dialog,
+  DialogContent,
+  EditorButton,
+  Input,
+  Subfield,
 } from "./ui";
 
 export function Editor() {
@@ -393,11 +394,12 @@ function Dialogs() {
                           <Tooltip content="Rule of Thirds">
                             <button
                               type="button"
-                              class={`flex items-center bg-gray-3 justify-center text-center rounded-[0.5rem] h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-300 outline-none transition-colors duration-200 ${
+                              class={cx(
+                                "flex items-center bg-gray-3 justify-center text-center rounded-[0.5rem] h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-9 outline-none transition-colors duration-200",
                                 cropOptions.showGrid
-                                  ? "bg-gray-3 text-blue-300 border-blue-300"
+                                  ? "bg-gray-3 text-blue-9 border-blue-9"
                                   : "text-gray-12"
-                              }`}
+                              )}
                               onClick={() =>
                                 setCropOptions("showGrid", (s) => !s)
                               }

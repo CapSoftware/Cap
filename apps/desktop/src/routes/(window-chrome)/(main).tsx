@@ -731,7 +731,7 @@ function CameraSelect(props: {
     <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
       <button
         disabled={props.setOptions.isPending || !!currentRecording.data}
-        class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-11 transition-colors KSelect"
+        class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect"
         onClick={() => {
           Promise.all([
             CheckMenuItem.new({
@@ -856,7 +856,7 @@ function MicrophoneSelect(props: {
     <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
       <button
         disabled={props.setOptions.isPending || !!currentRecording.data}
-        class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
+        class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
         onClick={() => {
           Promise.all([
             CheckMenuItem.new({
@@ -929,7 +929,7 @@ function SystemAudio(props: {
         });
       }}
       disabled={props.setOptions.isPending || !!currentRecording.data}
-      class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
+      class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
     >
       <div class="size-[1.25rem] flex items-center justify-center">
         <IconPhMonitorBold class="text-gray-11 stroke-2 size-[1.2rem]" />
@@ -1036,7 +1036,7 @@ function TargetSelectInfoPill<T>(props: {
         ? "On"
         : "Off"}
     </InfoPill>
-  );
+);
 }
 
 function InfoPill(
@@ -1049,8 +1049,8 @@ function InfoPill(
       class={cx(
         "px-[0.375rem] rounded-full text-[0.75rem]",
         props.variant === "blue"
-          ? "bg-blue-50 text-blue-300"
-          : "bg-red-50 text-red-300"
+          ? "bg-blue-2 text-blue-9"
+          : "bg-red-2 text-red-9"
       )}
     />
   );

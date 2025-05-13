@@ -5,12 +5,12 @@ import { createMutation } from "@tanstack/solid-query";
 import * as tauriShell from "@tauri-apps/plugin-shell";
 import { ClientInferResponseBody } from "@ts-rest/core";
 import {
-  createResource,
-  createSignal,
-  Match,
-  Show,
-  Suspense,
-  Switch,
+    createResource,
+    createSignal,
+    Match,
+    Show,
+    Suspense,
+    Switch,
 } from "solid-js";
 import { generalSettingsStore } from "~/store";
 import { createLicenseQuery } from "~/utils/queries";
@@ -224,7 +224,7 @@ function CommercialLicensePurchase() {
                 <span
                   data-state={type() === "yearly" ? "unchecked" : "checked"}
                   class={`pointer-events-none block h-4 w-4 rounded-full dark:bg-gray-12
-                         bg-gray-50 shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4
+                         bg-gray-1 shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4
                           data-[state=unchecked]:translate-x-0 border-2 ${
                             type() === "lifetime"
                               ? "border-blue-400 dark:border-[#3F75E0]"
