@@ -30,14 +30,6 @@ export const UsageButton = ({
             )}
             variant="primary"
           >
-            <img
-              src="/illustrations/cloud-1.png"
-              className="absolute w-32 opacity-30 left-[-32px]"
-            />
-            <img
-              src="/illustrations/cloud-2.png"
-              className="absolute w-32 opacity-30 right-[-82px]"
-            />
             <FontAwesomeIcon
               className={clsx(
                 "text-gray-50",
@@ -72,14 +64,6 @@ export const UsageButton = ({
               toggleMobileNav?.();
             }}
           >
-            <img
-              src="/illustrations/cloud-1.png"
-              className="absolute w-32 opacity-30 left-[-32px]"
-            />
-            <img
-              src="/illustrations/cloud-2.png"
-              className="absolute w-32 opacity-30 right-[-82px]"
-            />
             <FontAwesomeIcon
               className={clsx(
                 "text-gray-50",

@@ -31,14 +31,14 @@ interface Props extends PropsWithChildren {
     createdAt: Date;
     totalComments: number;
     totalReactions: number;
-    sharedOrganizations?: { id: string; name: string; iconUrl: string }[];
+    sharedOrganizations?: { id: string; name: string; iconUrl?: string }[];
     ownerName: string | null;
     metadata?: VideoMetadata;
   };
   analytics: number;
   onDelete?: (videoId: string) => Promise<void>;
   userId?: string;
-  userOrganizations?: { id: string; name: string; iconUrl: string }[];
+  userOrganizations?: { id: string; name: string; iconUrl?: string }[];
   sharedCapCard?: boolean;
   isSelected?: boolean;
   onSelectToggle?: () => void;
@@ -267,7 +267,7 @@ export const CapCard = ({
       <div
         onClick={handleCardClick}
         className={clsx(
-          "flex relative flex-col gap-4 w-full h-full rounded-xl cursor-default bg-gray-2 border-gray-3 group border-[1px]",
+          "flex relative flex-col gap-4 w-full h-full rounded-xl cursor-default bg-gray-1 border-gray-3 group border-[1px]",
           isSelected
             ? "!border-blue-10 border-[1px]"
             : anyCapSelected

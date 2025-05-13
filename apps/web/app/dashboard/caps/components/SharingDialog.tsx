@@ -1,4 +1,5 @@
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
+import { Tooltip } from "@/components/Tooltip";
 import {
   Button,
   Dialog,
@@ -22,8 +23,8 @@ interface SharingDialogProps {
   onClose: () => void;
   capId: string;
   capName: string;
-  sharedOrganizations: { id: string; name: string; iconUrl: string }[];
-  userOrganizations?: { id: string; name: string; iconUrl: string }[];
+  sharedOrganizations: { id: string; name: string; iconUrl?: string }[];
+  userOrganizations?: { id: string; name: string; iconUrl?: string }[];
   onSharingUpdated: (updatedSharedOrganizations: string[]) => void;
 }
 
@@ -170,7 +171,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
               size={20}
             />
           </div>
-          <div className="grid grid-cols-5 gap-3 max-h-60">
+          <div className="grid grid-cols-4 gap-3 max-h-60">
             {filteredOrganizations && filteredOrganizations.length > 0 ? (
               filteredOrganizations.map((organization) => (
                 <SpaceCard
@@ -211,14 +212,15 @@ const SpaceCard = ({
   selectedOrganizations,
   handleToggleOrganization,
 }: {
-  organization: { id: string; name: string; iconUrl: string };
+  organization: { id: string; name: string; iconUrl?: string };
   selectedOrganizations: Set<string>;
   handleToggleOrganization: (organizationId: string) => void;
 }) => {
   return (
+    <Tooltip content={organization.name}>
     <div
       className={clsx(
-        "flex items-center relative flex-col justify-center gap-2 border transition-colors duration-200 border-gray-3 w-full p-3 rounded-xl cursor-pointer",
+        "flex items-center relative flex-col justify-center gap-2 border transition-colors bg-gray-1 duration-200 border-gray-3 w-full p-3 rounded-xl cursor-pointer",
         selectedOrganizations.has(organization.id)
           ? "bg-gray-3 border-gray-4"
           : "hover:bg-gray-3 hover:border-gray-4"
@@ -242,9 +244,9 @@ const SpaceCard = ({
           name={organization.name}
         />
       )}
-      <span className="text-xs truncate transition-colors duration-200 text-gray-10">
-        {organization.name}
-      </span>
+        <p className="max-w-full text-xs truncate transition-colors duration-200 text-gray-10">
+          {organization.name}
+        </p>
       <motion.div
         key={organization.id}
         animate={{
@@ -273,5 +275,6 @@ const SpaceCard = ({
         <Check className="text-white" size={10} />
       </motion.div>
     </div>
+    </Tooltip>
   );
 };
