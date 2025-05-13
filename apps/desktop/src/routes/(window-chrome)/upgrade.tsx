@@ -407,10 +407,10 @@ export default function Page() {
   return (
     <div class="flex relative flex-col justify-center items-center p-5 mx-auto w-full h-full">
       {upgradeComplete() && (
-        <div class="flex justify-center items-center h-full bg-gray-800 bg-opacity-75">
+        <div class="flex justify-center items-center h-full bg-opacity-75">
           <div class="relative z-10 p-6 text-center bg-white rounded-lg shadow-lg">
             <h2 class="mb-4 text-2xl font-bold">Upgrade complete</h2>
-            <p class="mb-4 text-sm text-[--text-tertiary]">
+            <p class="mb-4 text-sm text-gray-10">
               You can now close this window - thank you for upgrading!
             </p>
             <Button
@@ -430,9 +430,9 @@ export default function Page() {
       {!upgradeComplete() && (
         <>
           {license.data?.type === "commercial" ? (
-            <div class="bg-[--gray-50] dark:bg-[--gray-900] rounded-xl shadow-sm border border-gray-200 dark:border-[--gray-700] w-full">
+            <div class="bg-[--gray-50] dark:bg-[--gray-900] rounded-xl shadow-sm border border-gray-3 dark:border-[--gray-700] w-full">
               <div class="space-y-6">
-                <div class="border-b border-gray-200 dark:border-[--gray-700] pb-6">
+                <div class="border-b border-gray-3 dark:border-[--gray-700] pb-6">
                   <h3 class="text-2xl font-semibold tracking-tight text-[--text-primary]">
                     Your Commercial License
                   </h3>
@@ -446,7 +446,7 @@ export default function Page() {
                     <label class="text-sm font-medium text-[--text-primary]">
                       License Key
                     </label>
-                    <pre class="w-full p-3 bg-gray-50 dark:bg-[--gray-800] rounded-lg border border-gray-200 dark:border-[--gray-700] font-mono text-sm text-[--text-secondary] break-all whitespace-pre-wrap">
+                    <pre class="w-full p-3 bg-gray-1 rounded-lg border border-gray-3 dark:border-[--gray-700] font-mono text-sm text-[--text-secondary] break-all whitespace-pre-wrap">
                       {license.data.licenseKey}
                     </pre>
                   </div>
@@ -457,7 +457,7 @@ export default function Page() {
                         <label class="text-sm font-medium text-[--text-primary]">
                           Expiration Date
                         </label>
-                        <div class="w-full p-3 bg-gray-50 dark:bg-[--gray-800] rounded-lg border border-gray-200 dark:border-[--gray-700] text-sm text-[--text-secondary]">
+                        <div class="w-full p-3 bg-gray-1 rounded-lg border border-gray-3 dark:border-[--gray-700] text-sm text-[--text-secondary]">
                           {new Date(expiryDate()).toLocaleDateString(
                             undefined,
                             {
@@ -471,7 +471,7 @@ export default function Page() {
                     )}
                   </Show>
 
-                  <div class="pt-4 border-t border-gray-200 dark:border-[--gray-700]">
+                  <div class="pt-4 border-t border-gray-3 dark:border-[--gray-700]">
                     <Button
                       variant="destructive"
                       class="mx-auto w-fit"
@@ -518,40 +518,40 @@ export default function Page() {
                       riveInstance.play("card-stack");
                     }
                   }}
-                  class="flex flex-col flex-1 justify-between p-3 h-[700px ] bg-gray-200 rounded-2xl border border-gray-200 shadow-sm text-card-foreground md:p-3"
+                  class="flex flex-col flex-1 justify-between p-3 h-[700px ] bg-gray-3 rounded-2xl border border-gray-3 shadow-sm text-card-foreground md:p-3"
                 >
                   <div class="space-y-5">
                     <div class="flex flex-col gap-6 items-center">
                       <Commercial class="w-[250px]" />
                       <div class="space-y-1 text-center">
-                        <h3 class="text-2xl font-medium leading-5 tracking-tight text-[--text-primary]">
+                        <h3 class="text-2xl font-medium tracking-tight leading-5">
                           Commercial License
                         </h3>
                         <p class="mt-2 text-sm text-[--text-tertiary]">
-                          License details for Cap commercial use
+                          For commercial use
                         </p>
                       </div>
                       <div class="flex flex-col justify-center items-center">
-                        <h3 class="text-4xl leading-6 text-[--text-primary]">
+                        <h3 class="text-4xl leading-6">
                           {isCommercialAnnual() ? "$29" : "$58"}
-                          <span class="text-gray-400 text-[16px]">.00 /</span>
+                          <span class="text-gray-11 text-[16px]">.00 /</span>
                         </h3>
                         {isCommercialAnnual() && (
-                          <p class="text-[16px] font-medium text-gray-400">
+                          <p class="text-[16px] font-medium text-gray-11">
                             billed annually
                           </p>
                         )}
                         {!isCommercialAnnual() && (
-                          <p class="text-[16px] font-medium text-gray-400">
+                          <p class="text-[16px] font-medium text-gray-11">
                             one-time payment
                           </p>
                         )}
                       </div>
                       <div
                         onClick={() => setIsCommercialAnnual((v) => !v)}
-                        class="px-3 py-2 text-center bg-gray-300 rounded-full border border-transparent transition-all duration-300 cursor-pointer hover:border-gray-400"
+                        class="px-3 py-2 text-center rounded-full border border-transparent transition-all duration-200 cursor-pointer bg-gray-5 hover:border-gray-400"
                       >
-                        <p class="text-xs text-gray-500">
+                        <p class="text-xs text-gray-12">
                           Switch to{" "}
                           {isCommercialAnnual() ? "lifetime" : "yearly"}:{" "}
                           <span class="font-medium">
@@ -583,18 +583,20 @@ export default function Page() {
                     onOpenChange={setOpenLicenseDialog}
                   />
                   <div class="flex flex-col gap-4 items-center">
-                    <button
+                    <Button
                       onClick={() => openCommercialCheckout.mutate()}
                       disabled={openCommercialCheckout.isPending}
-                      class="flex items-center justify-center transition-opacity duration-200 rounded-full bg-[--gray-500] hover:opacity-90 disabled:bg-[--gray-400] font-medium text-lg px-6 h-12 w-full no-underline text-gray-50"
+                      variant="lightdark"
+                      class="w-full !rounded-full !h-[48px] text-lg font-medium"
+                      size="lg"
                     >
                       {openCommercialCheckout.isPending
                         ? "Loading..."
                         : "Purchase License"}
-                    </button>
+                    </Button>
                     <p
                       onClick={() => setOpenLicenseDialog(true)}
-                      class="mb-2 text-sm text-gray-400 transition-colors cursor-pointer hover:text-gray-500"
+                      class="mb-2 text-sm transition-colors cursor-pointer text-gray-11 hover:text-gray-12"
                     >
                       Already have a license key?
                     </p>
@@ -621,38 +623,38 @@ export default function Page() {
                       riveInstance.play("items-coming-in");
                     }
                   }}
-                  class="flex-grow p-3 h-[700px] flex-1 dark:bg-solid-white bg-gray-500 rounded-2xl border shadow-sm text-card-foreground md:p-3 border-gray-200 dark:border-[--gray-700]"
+                  class="flex-grow p-3 h-[700px] flex-1 bg-gray-12 rounded-2xl border shadow-sm text-card-foreground md:p-3"
                 >
                   <div class="flex flex-col justify-between space-y-5 h-full">
                     <div class="flex flex-col gap-6 items-center px-6">
                       <Pro class="w-[250px]" />
                       <div class="space-y-1 text-center">
-                        <h3 class="text-2xl font-medium tracking-tight leading-5 text-gray-50">
+                        <h3 class="text-2xl font-medium tracking-tight leading-5 text-gray-1">
                           Cap Pro
                         </h3>
-                        <p class="text-[0.875rem] text-gray-400">
+                        <p class="text-[0.875rem] text-gray-9">
                           For professional use and teams.
                         </p>
                       </div>
                       <div class="flex flex-col justify-center items-center">
-                        <h3 class="text-4xl leading-6 text-gray-50">
+                        <h3 class="text-4xl leading-6 text-gray-1">
                           {isProAnnual() ? "$6" : "$9"}
-                          <span class="text-gray-400 text-[16px]">.00 /</span>
+                          <span class="text-gray-10 text-[16px]">.00 /</span>
                         </h3>
                         {isProAnnual() && (
-                          <p class="text-[16px] font-medium text-gray-400">
+                          <p class="text-[16px] font-medium text-gray-9">
                             per user, billed annually
                           </p>
                         )}
                         {!isProAnnual() && (
-                          <p class="text-[16px] font-medium text-gray-400">
+                          <p class="text-[16px] font-medium text-gray-9">
                             per user, billed monthly
                           </p>
                         )}
                       </div>
                       <div
                         onClick={() => setIsProAnnual((v) => !v)}
-                        class="px-3 py-2 text-center bg-blue-300 rounded-full border border-transparent transition-all duration-300 cursor-pointer hover:border-blue-400"
+                        class="px-3 py-2 text-center rounded-full border border-transparent transition-all duration-200 cursor-pointer bg-blue-9 hover:border-blue-400"
                       >
                         <p class="text-xs text-solid-white">
                           Switch to {isProAnnual() ? "monthly" : "yearly"}:{" "}
@@ -665,8 +667,8 @@ export default function Page() {
                       </div>
                       <ul class="flex flex-col gap-2 justify-center list-none">
                         {proFeatures.map((feature) => (
-                          <li class="flex justify-start items-center dark:text-gray-50 text-solid-white">
-                            <div class="size-4 m-0 p-0 flex items-center dark:border-[--gray-500] justify-center">
+                          <li class="flex justify-start items-center text-gray-1">
+                            <div class="flex justify-center items-center p-0 m-0 size-4">
                               <IconLucideCheck class="size-4" />
                             </div>
                             <span class="ml-2 text-[0.9rem]">{feature}</span>

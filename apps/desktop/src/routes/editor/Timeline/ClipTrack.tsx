@@ -4,10 +4,10 @@ import { ComponentProps, For, Show, createRoot } from "solid-js";
 import { produce } from "solid-js/store";
 
 import { TimelineSegment } from "~/utils/tauri";
-import { useSegmentContext, useTimelineContext } from "./context";
-import { formatTime } from "../utils";
-import { SegmentContent, SegmentHandle, SegmentRoot, TrackRoot } from "./Track";
 import { useEditorContext } from "../context";
+import { formatTime } from "../utils";
+import { useSegmentContext, useTimelineContext } from "./context";
+import { SegmentContent, SegmentHandle, SegmentRoot, TrackRoot } from "./Track";
 
 export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
   const {
@@ -44,11 +44,11 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
           return (
             <SegmentRoot
               class={cx(
-                "overflow-hidden border border-transparent transition-colors duration-300 group",
+                "overflow-hidden border border-transparent transition-colors duration-200 group",
                 "hover:border-gray-500",
                 "bg-gradient-to-r timeline-gradient-border from-[#2675DB] via-[#4FA0FF] to-[#2675DB] shadow-[inset_0_5px_10px_5px_rgba(255,255,255,0.2)]"
               )}
-              innerClass="ring-blue-300"
+              innerClass="ring-blue-9"
               segment={{
                 ...segment,
                 start: prevDuration(),
@@ -142,7 +142,7 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                   });
                 }}
               />
-              <SegmentContent class="justify-center items-center relative dark:text-black-transparent-60 text-white-transparent-60">
+              <SegmentContent class="relative justify-center items-center dark:text-black-transparent-60 text-white-transparent-60">
                 <Show when={segment.start > 0}>
                   <span class="text-black-transparent-60 text-[0.625rem] absolute top-[18px] left-5">
                     {formatTime(segment.start)}
@@ -153,9 +153,9 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
 
                   return (
                     <Show when={ctx.width() > 100}>
-                      <div class="flex flex-col gap-1 justify-center items-center text-xs text-gray-500 whitespace-nowrap">
+                      <div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-12">
                         <span class="opacity-60 text-solid-white">Clip</span>
-                        <div class="flex gap-1 items-center text-gray-50 dark:text-gray-500 text-md">
+                        <div class="flex gap-1 items-center text-md dark:text-gray-12 text-gray-1">
                           <IconLucideClock class="size-3.5" />{" "}
                           {(segment.end - segment.start).toFixed(1)}s
                         </div>

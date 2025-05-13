@@ -170,14 +170,14 @@ function ShareButton() {
                 </Button>
               </Tooltip>
               <Tooltip content="Open link">
-                <div class="rounded-xl px-3 py-2 flex flex-row items-center gap-[0.375rem] bg-white-transparent-80 hover:bg-gray-200  dark:bg-gray-200 dark:hover:bg-gray-300 transition-colors duration-100">
+                <div class="rounded-xl px-3 py-2 flex flex-row items-center gap-[0.375rem] bg-gray-3 hover:bg-gray-4 transition-colors duration-100">
                   <a
                     href={sharing().link}
                     target="_blank"
                     rel="noreferrer"
                     class="w-full truncate max-w-48"
                   >
-                    <span class="text-xs text-gray-500">
+                    <span class="text-xs text-gray-12">
                       {url().host}
                       {url().pathname}
                     </span>
@@ -185,7 +185,7 @@ function ShareButton() {
                   {/** Copy button */}
                   <Tooltip content="Copy link">
                     <div
-                      class="flex justify-center items-center rounded-lg size-[22px] text-gray-500 !px-0 !py-0 dark:bg-black-transparent-10 dark:hover:bg-black-transparent-40 bg-gray-200 hover:bg-gray-300"
+                      class="flex justify-center items-center rounded-lg size-[22px] text-gray-12 !px-0 !py-0 dark:bg-black-transparent-10 dark:hover:bg-black-transparent-40 bg-gray-3 hover:bg-gray-5"
                       onClick={copyLink}
                     >
                       {!copyPressed() ? (
@@ -206,12 +206,12 @@ function ShareButton() {
           title={"Reupload Recording"}
           confirm={<></>}
           close={<></>}
-          class="text-gray-500 bg-gray-600 dark:text-gray-500"
+          class="text-gray-12 dark:text-gray-12"
         >
           <div class="w-[80%] text-center mx-auto relative z-10 space-y-6 py-4">
-            <div class="w-full bg-gray-200 rounded-full h-2.5 mb-2">
+            <div class="w-full bg-gray-3 rounded-full h-2.5 mb-2">
               <div
-                class="bg-blue-300 h-2.5 rounded-full"
+                class="bg-blue-9 h-2.5 rounded-full"
                 style={{
                   width: `${
                     uploadState.type === "uploading"

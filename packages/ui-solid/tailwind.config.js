@@ -1,3 +1,14 @@
+function getColorScale(name, alpha = false) {
+  let scale = {};
+  for (let i = 1; i <= 12; i++) {
+    scale[i] = `var(--${name}-${i})`;
+    // next line only needed if using alpha values
+    if (alpha) scale[`a${i}`] = `var(--${name}-a${i})`;
+  }
+
+  return scale;
+}
+
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   content: [
@@ -68,6 +79,13 @@ module.exports = {
       },
     },
     extend: {
+      colors: {
+        gray: getColorScale("gray"),
+        "gray-a": getColorScale("gray", true),
+        blue: getColorScale("blue"),
+        red: getColorScale("red"),
+        indigo: getColorScale("indigo"),
+      },
       boxShadow: {
         s: "var(--shadow-s)",
       },

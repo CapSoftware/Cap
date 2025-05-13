@@ -1,9 +1,9 @@
+import { Button } from "@cap/ui-solid";
 import { useNavigate } from "@solidjs/router";
+import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { check } from "@tauri-apps/plugin-updater";
 import { createResource, Match, Show, Switch } from "solid-js";
-import { relaunch } from "@tauri-apps/plugin-process";
-import { Button } from "@cap/ui-solid";
-import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
 
 export default function () {
   const navigate = useNavigate();
@@ -97,9 +97,9 @@ export default function () {
                         Installing Update
                       </h1>
 
-                      <div class="w-full bg-gray-200 rounded-full h-2.5">
+                      <div class="w-full bg-gray-3 rounded-full h-2.5">
                         <div
-                          class="bg-blue-300 h-2.5 rounded-full"
+                          class="bg-blue-9 h-2.5 rounded-full"
                           style={{
                             width: `${Math.min(
                               ((status()?.progress ?? 0) /

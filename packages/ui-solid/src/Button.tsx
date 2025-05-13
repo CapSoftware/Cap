@@ -11,15 +11,15 @@ const styles = cva(
     variants: {
       variant: {
         primary:
-          "bg-blue-300 text-gray-50 disabled:text-gray-200 enabled:hover:opacity-80 dark:text-gray-500 dark:disabled:text-gray-400 dark:disabled:text-gray-300 disabled:bg-blue-200 outline-blue-300",
+          "bg-blue-9 text-gray-1 dark:text-gray-12  enabled:hover:opacity-80 disabled:text-gray-10 outline-blue-300 disabled:bg-gray-4 disabled:dark:text-gray-9",
         secondary:
-          "bg-gray-200 enabled:hover:opacity-80 text-gray-500 disabled:bg-gray-200 disabled:text-gray-8 outline-blue-300",
+          "bg-gray-4 enabled:hover:opacity-80 text-gray-500 disabled:bg-gray-3 disabled:text-gray-10 outline-blue-300",
         destructive:
           "bg-red-300 text-gray-50 dark:text-gray-500 enabled:hover:bg-red-400 disabled:bg-red-200 outline-red-300",
         white:
-          "bg-gray-1 dark:bg-gray-500 enabled:hover:opacity-80 text-gray-500 dark:disabled:bg-gray-300 dark:disabled:text-gray-8 dark:text-gray-50 disabled:bg-gray-400 disabled:text-gray-8 outline-blue-300",
+          "bg-gray-1 dark:bg-gray-12 enabled:hover:opacity-80 text-gray-500 dark:disabled:bg-gray-300 dark:disabled:text-gray-8 dark:text-gray-1 disabled:bg-gray-400 disabled:text-gray-8 outline-blue-300",
         lightdark:
-          "bg-gray-500 enabled:hover:opacity-80 text-gray-100 dark:disabled:bg-gray-300 dark:disabled:text-gray-8 dark:text-gray-50 disabled:bg-gray-400 disabled:text-gray-8 outline-blue-300",
+          "bg-gray-500 enabled:hover:opacity-80 text-gray-100 dark:disabled:bg-gray-300 dark:disabled:text-gray-8 dark:text-gray-1 disabled:bg-gray-400 disabled:text-gray-8 outline-blue-300",
       },
       size: {
         xs: "font-[400] text-[0.75rem] px-[0.5rem] h-[1.25rem] ",

@@ -1,6 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { trackDeep } from "@solid-primitives/deep";
 import { throttle } from "@solid-primitives/scheduled";
+import { makePersisted } from "@solid-primitives/storage";
 import { createMutation } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
@@ -14,10 +15,10 @@ import {
   onMount,
 } from "solid-js";
 import { createStore } from "solid-js/store";
-import { mergeProps } from "solid-js";
-import { makePersisted } from "@solid-primitives/storage";
 
+import { cx } from "cva";
 import Cropper, { cropToFloor } from "~/components/Cropper";
+import { Toggle } from "~/components/Toggle";
 import Tooltip from "~/components/Tooltip";
 import { events, type Crop } from "~/utils/tauri";
 import { ConfigSidebar } from "./ConfigSidebar";
@@ -39,7 +40,6 @@ import {
   EditorButton,
   Input,
   Subfield,
-  Toggle,
 } from "./ui";
 
 export function Editor() {
@@ -285,7 +285,7 @@ function Dialogs() {
                       </Dialog.ConfirmButton>
                     }
                   >
-                    <p class="text-gray-400">
+                    <p class="text-gray-11">
                       Are you sure you want to delete this preset?
                     </p>
                   </DialogContent>
@@ -320,7 +320,7 @@ function Dialogs() {
                   <>
                     <Dialog.Header>
                       <div class="flex flex-row space-x-[2rem]">
-                        <div class="flex flex-row items-center space-x-[0.75rem] text-gray-400">
+                        <div class="flex flex-row items-center space-x-[0.75rem] text-gray-11">
                           <span>Size</span>
                           <div class="w-[3.25rem]">
                             <Input
@@ -354,7 +354,7 @@ function Dialogs() {
                             />
                           </div>
                         </div>
-                        <div class="flex flex-row items-center space-x-[0.75rem] text-gray-400">
+                        <div class="flex flex-row items-center space-x-[0.75rem] text-gray-11">
                           <span>Position</span>
                           <div class="w-[3.25rem]">
                             <Input
@@ -390,15 +390,16 @@ function Dialogs() {
                         </div>
                       </div>
                       <div class="flex flex-row gap-3 justify-end items-center w-full">
-                        <div class="flex flex-row items-center space-x-[0.5rem] text-gray-400">
+                        <div class="flex flex-row items-center space-x-[0.5rem] text-gray-11">
                           <Tooltip content="Rule of Thirds">
                             <button
                               type="button"
-                              class={`flex items-center bg-gray-200 justify-center text-center rounded-[0.5rem] h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-300 outline-none transition-colors duration-200 ${
+                              class={cx(
+                                "flex items-center bg-gray-3 justify-center text-center rounded-[0.5rem] h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-9 outline-none transition-colors duration-200",
                                 cropOptions.showGrid
-                                  ? "bg-gray-200 text-blue-300 border-blue-300"
-                                  : "text-gray-500"
-                              }`}
+                                  ? "bg-gray-3 text-blue-9 border-blue-9"
+                                  : "text-gray-12"
+                              )}
                               onClick={() =>
                                 setCropOptions("showGrid", (s) => !s)
                               }

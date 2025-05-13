@@ -8,11 +8,13 @@ import {
 } from "@kobalte/core/radio-group";
 import { Select as KSelect } from "@kobalte/core/select";
 import { Tabs as KTabs } from "@kobalte/core/tabs";
+import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { createWritableMemo } from "@solid-primitives/memo";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { appDataDir, resolveResource } from "@tauri-apps/api/path";
 import { BaseDirectory, writeFile } from "@tauri-apps/plugin-fs";
+import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
   For,
@@ -29,21 +31,19 @@ import {
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { Dynamic } from "solid-js/web";
-import { createElementBounds } from "@solid-primitives/bounds";
-import { type as ostype } from "@tauri-apps/plugin-os";
 import toast from "solid-toast";
 
 import colorBg from "~/assets/illustrations/color.webp";
 import gradientBg from "~/assets/illustrations/gradient.webp";
 import imageBg from "~/assets/illustrations/image.webp";
 import transparentBg from "~/assets/illustrations/transparent.webp";
+import { Toggle } from "~/components/Toggle";
 import { generalSettingsStore } from "~/store";
 import {
   type BackgroundSource,
-  type CursorAnimationStyle,
   StereoMode,
   ZoomSegment,
-  commands,
+  commands
 } from "~/utils/tauri";
 import { useEditorContext } from "./context";
 import {
@@ -62,7 +62,6 @@ import {
   PopperContent,
   Slider,
   Subfield,
-  Toggle,
   topSlideAnimateClasses,
 } from "./ui";
 
@@ -87,11 +86,6 @@ const BACKGROUND_SOURCES_LIST = [
   "gradient",
 ] satisfies Array<BackgroundSource["type"]>;
 
-const CURSOR_ANIMATION_STYLES: Record<CursorAnimationStyle, string> = {
-  slow: "Slow & Smooth",
-  regular: "Regular",
-  fast: "Fast & Responsive",
-} as const;
 
 const BACKGROUND_COLORS = [
   "#FF0000", // Red
@@ -222,9 +216,9 @@ export function ConfigSidebar() {
   return (
     <KTabs
       value={state.selectedTab}
-      class="flex flex-col shrink-0 flex-1 max-w-[26rem] overflow-hidden rounded-xl z-10 bg-gray-100 relative shadow-sm"
+      class="flex flex-col shrink-0 flex-1 max-w-[26rem] overflow-hidden rounded-xl z-10 bg-gray-50 relative shadow-sm"
     >
-      <KTabs.List class="flex overflow-hidden relative z-40 flex-row items-center h-16 text-lg border-b border-gray-200 shrink-0">
+      <KTabs.List class="flex overflow-hidden relative z-40 flex-row items-center h-16 text-lg border-b border-gray-3 shrink-0">
         <For
           each={[
             { id: TAB_IDS.background, icon: IconCapImage },
@@ -253,7 +247,7 @@ export function ConfigSidebar() {
           {(item) => (
             <KTabs.Trigger
               value={item.id}
-              class="flex relative z-10 flex-1 justify-center items-center px-4 py-2 text-gray-400 transition-colors group ui-selected:text-gray-500 disabled:opacity-50 focus:outline-none"
+              class="flex relative z-10 flex-1 justify-center items-center px-4 py-2 transition-colors text-gray-11 group ui-selected:text-gray-12 disabled:opacity-50 focus:outline-none"
               onClick={() => {
                 setState("selectedTab", item.id);
                 scrollRef.scrollTo({
@@ -276,8 +270,8 @@ export function ConfigSidebar() {
         </For>
 
         {/** Center the indicator with the icon */}
-        <KTabs.Indicator class="absolute top-0 left-0 w-full h-full transition-transform duration-300 ease-in-out pointer-events-none will-change-transform">
-          <div class="absolute top-1/2 left-1/2 bg-gray-200 rounded-md transform -translate-x-1/2 -translate-y-1/2 will-change-transform size-9" />
+        <KTabs.Indicator class="absolute top-0 left-0 w-full h-full transition-transform duration-200 ease-in-out pointer-events-none will-change-transform">
+          <div class="absolute top-1/2 left-1/2 rounded-lg transform -translate-x-1/2 -translate-y-1/2 bg-gray-3 will-change-transform size-9" />
         </KTabs.Indicator>
       </KTabs.List>
       <div
@@ -288,14 +282,14 @@ export function ConfigSidebar() {
         <CameraConfig scrollRef={scrollRef} />
         <KTabs.Content value="transcript" class="flex flex-col gap-6">
           <Field name="Transcript" icon={<IconCapMessageBubble />}>
-            <div class="p-1 text-gray-400 bg-gray-50 rounded-md border text-wrap">
+            <div class="p-1 rounded-md border bg-gray-1 text-gray-11 text-wrap">
               Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed ac
               purus sit amet nunc ultrices ultricies. Nullam nec scelerisque
               nunc. Nullam nec scelerisque nunc.
             </div>
             <button
               type="button"
-              class="w-full bg-gray-400/20 hover:bg-gray-400/30 transition-colors duration-100 rounded-full py-1.5"
+              class="w-full bg-gray-10/20 hover:bg-gray-10/30 transition-colors duration-100 rounded-full py-1.5"
             >
               Edit
             </button>
@@ -336,7 +330,7 @@ export function ConfigSidebar() {
                     </MenuItem>
                   )}
                 >
-                  <KSelect.Trigger class="flex flex-row gap-2 items-center px-2 w-full h-8 bg-gray-200 rounded-lg transition-colors disabled:text-gray-400">
+                  <KSelect.Trigger class="flex flex-row gap-2 items-center px-2 w-full h-8 rounded-lg transition-colors bg-gray-3 disabled:text-gray-11">
                     <KSelect.Value<{
                       name: string;
                       value: StereoMode;
@@ -453,7 +447,7 @@ export function ConfigSidebar() {
                   />
                 }
               />
-              <KCollapsible.Content class="overflow-hidden border-b border-gray-200 opacity-0 transition-opacity animate-collapsible-up ui-expanded:animate-collapsible-down ui-expanded:opacity-100">
+              <KCollapsible.Content class="overflow-hidden border-b opacity-0 transition-opacity border-gray-3 animate-collapsible-up ui-expanded:animate-collapsible-down ui-expanded:opacity-100">
                 {/* if Content has padding or margin the animation doesn't look as good */}
                 <div class="flex flex-col gap-4 pt-4 pb-6">
                   <Field name="Tension">
@@ -531,7 +525,7 @@ export function ConfigSidebar() {
                   />
                   <span
                     class={cx(
-                      "text-gray-500",
+                      "text-gray-12",
                       "peer-checked:text-gray-900",
                       "peer-disabled:opacity-50"
                     )}
@@ -806,7 +800,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
               {(item) => {
                 const el = (props?: object) => (
                   <KTabs.Trigger
-                    class="z-10 flex-1 py-2.5 px-2 text-xs text-gray-400 ui-selected:bg-gray-200 ui-not-selected:hover:border-gray-300 rounded-[10px] transition-colors duration-300 outline-none border ui-selected:text-gray-500 peer"
+                    class="z-10 flex-1 py-2.5 px-2 text-xs text-gray-11  ui-selected:border-gray-3 ui-selected:bg-gray-3 ui-not-selected:hover:border-gray-7 rounded-[10px] transition-colors duration-200 outline-none border ui-selected:text-gray-12 peer"
                     value={item}
                     {...props}
                   >
@@ -919,13 +913,9 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                 return el({});
               }}
             </For>
-
-            {/* <KTabs.Indicator class="flex overflow-hidden absolute inset-0 p-px rounded-xl transition-transform duration-300 peer-focus-visible:outline outline-2 outline-blue-300 outline-offset-2 outline-blue-300/50">
-                  <div class="flex-1 bg-gray-200" />
-                </KTabs.Indicator> */}
           </KTabs.List>
           {/** Dashed divider */}
-          <div class="my-5 w-full border-t border-gray-300 border-dashed" />
+          <div class="my-5 w-full border-t border-dashed border-gray-5" />
           <KTabs.Content value="wallpaper">
             {/** Background Tabs */}
             <KTabs class="overflow-hidden relative" value={backgroundTab()}>
@@ -956,7 +946,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                           )
                         }
                         value={key}
-                        class="flex relative z-10 flex-1 justify-center items-center px-4 py-2 text-gray-400 bg-transparent rounded-lg border transition-colors duration-300 ui-not-selected:hover:border-gray-300 ui-selected:bg-gray-200 group ui-selected:text-gray-500 disabled:opacity-50 focus:outline-none"
+                        class="flex relative z-10 flex-1 justify-center items-center px-4 py-2 bg-transparent rounded-lg border transition-colors duration-200 text-gray-11 ui-not-selected:hover:border-gray-7 ui-selected:bg-gray-3 ui-selected:border-gray-3 group ui-selected:text-gray-12 disabled:opacity-50 focus:outline-none"
                       >
                         {value}
                       </KTabs.Trigger>
@@ -984,9 +974,6 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                   if (!wallpaper) return;
 
                   // Get the raw path without any URL prefixes
-                  const rawPath = decodeURIComponent(
-                    photoUrl.replace("file://", "")
-                  );
 
                   debouncedSetProject(wallpaper.rawPath);
                 } catch (err) {
@@ -998,9 +985,9 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
               <Show
                 when={!wallpapers.loading}
                 fallback={
-                  <div class="flex col-span-7 justify-center items-center h-32 text-gray-400">
+                  <div class="flex col-span-7 justify-center items-center h-32 text-gray-11">
                     <div class="flex flex-col gap-2 items-center">
-                      <div class="w-6 h-6 rounded-full border-2 border-gray-300 animate-spin border-t-blue-400" />
+                      <div class="w-6 h-6 rounded-full border-2 animate-spin border-gray-5 border-t-blue-400" />
                       <span>Loading wallpapers...</span>
                     </div>
                   </div>
@@ -1034,7 +1021,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                             class="relative aspect-square group"
                           >
                             <KRadioGroup.ItemInput class="peer" />
-                            <KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg border border-gray-200 cursor-pointer ui-checked:border-blue-300 ui-checked:ring-2 ui-checked:ring-blue-300 peer-focus-visible:border-2 peer-focus-visible:border-blue-300">
+                            <KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg border cursor-pointer border-gray-5 ui-checked:border-blue-9 ui-checked:ring-2 ui-checked:ring-blue-9 peer-focus-visible:border-2 peer-focus-visible:border-blue-9">
                               <img
                                 src={photo.url!}
                                 alt="Wallpaper option"
@@ -1061,17 +1048,17 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                 <button
                   type="button"
                   onClick={() => fileInput.click()}
-                  class="p-6 bg-gray-100 text-[13px] w-full rounded-[0.5rem] border border-gray-300 border-dashed flex flex-col items-center justify-center gap-[0.5rem] hover:bg-gray-200 transition-colors duration-100"
+                  class="p-6 bg-gray-2 text-[13px] w-full rounded-[0.5rem] border border-gray-5 border-dashed flex flex-col items-center justify-center gap-[0.5rem] hover:bg-gray-3 transition-colors duration-100"
                 >
-                  <IconCapImage class="text-gray-400 size-6" />
-                  <span class="text-gray-500">
+                  <IconCapImage class="text-gray-11 size-6" />
+                  <span class="text-gray-12">
                     Click to select or drag and drop image
                   </span>
                 </button>
               }
             >
               {(source) => (
-                <div class="overflow-hidden relative w-full h-48 rounded-md border border-gray-200 group">
+                <div class="overflow-hidden relative w-full h-48 rounded-md border border-gray-3 group">
                   <img
                     src={convertFileSrc(source())}
                     class="object-cover w-full h-full"
@@ -1150,7 +1137,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
               }
             >
               <div class="flex flex-col flex-wrap gap-3">
-                <div class="w-full h-10 flex flex-row items-center">
+                <div class="flex flex-row items-center w-full h-10">
                   <RgbInput
                     value={
                       project.background.source.type === "color"
@@ -1198,7 +1185,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                 </div>
                 {/* <Tooltip content="Add custom color">
                       <button
-                        class="flex justify-center items-center w-6 h-6 text-gray-500 rounded-lg border border-gray-400 border-dashed hover:border-gray-500"
+                        class="flex justify-center items-center w-6 h-6 rounded-lg border border-gray-400 border-dashed text-gray-12 hover:border-gray-500"
                         onClick={() => {
                           // Function to add a new color (you can modify this)
                           console.log(
@@ -1251,7 +1238,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                           }}
                         />
                         <div
-                          class="ml-auto flex relative flex-col items-center p-1 bg-gray-50 rounded-full border border-gray-200 size-10 cursor-ns-resize shrink-0"
+                          class="flex relative flex-col items-center p-1 ml-auto rounded-full border bg-gray-1 border-gray-3 size-10 cursor-ns-resize shrink-0"
                           style={{ transform: `rotate(${angle()}deg)` }}
                           onMouseDown={(downEvent) => {
                             const start = angle();
@@ -1296,7 +1283,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                             );
                           }}
                         >
-                          <div class="bg-blue-300 rounded-full size-1.5" />
+                          <div class="bg-blue-9 rounded-full size-1.5" />
                         </div>
                       </div>
                       <div class="flex flex-wrap gap-2">
@@ -1469,7 +1456,7 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
                 const [x, y] = v.split(":");
                 setProject("camera", "position", { x, y } as any);
               }}
-              class="mt-[0.75rem] rounded-[0.5rem] border border-gray-200 bg-gray-100 w-full h-[7.5rem] relative"
+              class="mt-[0.75rem] rounded-[0.5rem] border border-gray-3 bg-gray-2 w-full h-[7.5rem] relative"
             >
               <For
                 each={[
@@ -1486,7 +1473,7 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
                     <RadioGroup.ItemInput class="peer" />
                     <RadioGroup.ItemControl
                       class={cx(
-                        "cursor-pointer size-6 shink-0 rounded-[0.375rem] bg-gray-300 absolute flex justify-center items-center ui-checked:bg-blue-300 focus-visible:outline peer-focus-visible:outline outline-2 outline-offset-2 outline-blue-300 transition-colors duration-100",
+                        "cursor-pointer size-6 shink-0 rounded-[0.375rem] bg-gray-5 absolute flex justify-center items-center ui-checked:bg-blue-9 focus-visible:outline peer-focus-visible:outline outline-2 outline-offset-2 outline-blue-9 transition-colors duration-100",
                         item.x === "left"
                           ? "left-2"
                           : item.x === "right"
@@ -1518,7 +1505,7 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
         </div>
       </Field>
       {/** Dashed divider */}
-      <div class="w-full border-t border-gray-300 border-dashed" />
+      <div class="w-full border-t border-dashed border-gray-5" />
       <Field name="Size" icon={<IconCapEnlarge class="size-4" />}>
         <Slider
           value={[project.camera.size]}
@@ -1634,7 +1621,7 @@ function ZoomSegmentConfig(props: {
   return (
     <div
       data-visible={editorState.timeline.selection?.type === "zoom"}
-      class="absolute inset-0 p-[0.75rem] text-[0.875rem] space-y-6 bg-gray-100 z-50 animate-in slide-in-from-bottom-2 fade-in"
+      class="absolute inset-0 p-[0.75rem] text-[0.875rem] space-y-6 bg-gray-2 z-50 animate-in slide-in-from-bottom-2 fade-in"
     >
       <div class="flex flex-row justify-between items-center">
         <div class="flex gap-2 items-center">
@@ -1688,7 +1675,7 @@ function ZoomSegmentConfig(props: {
           <KTabs.List class="flex flex-row items-center rounded-[0.5rem] relative border">
             <KTabs.Trigger
               value="auto"
-              class="z-10 flex-1 py-2.5 text-gray-400 transition-colors duration-100 outline-none ui-selected:text-gray-500 peer"
+              class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
               // onClick={() => setSelectedTab(item.id)}
               disabled
             >
@@ -1696,13 +1683,13 @@ function ZoomSegmentConfig(props: {
             </KTabs.Trigger>
             <KTabs.Trigger
               value="manual"
-              class="z-10 flex-1 py-2.5 text-gray-400 transition-colors duration-100 outline-none ui-selected:text-gray-500 peer"
+              class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
               // onClick={() => setSelectedTab(item.id)}
             >
               Manual
             </KTabs.Trigger>
-            <KTabs.Indicator class="absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-300 outline-offset-2 rounded-[0.6rem] overflow-hidden">
-              <div class="flex-1 bg-gray-100" />
+            <KTabs.Indicator class="absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-9 outline-offset-2 rounded-[0.6rem] overflow-hidden">
+              <div class="flex-1 bg-gray-2" />
             </KTabs.Indicator>
           </KTabs.List>
           <KTabs.Content value="manual" tabIndex="">
@@ -1853,7 +1840,7 @@ function ZoomSegmentConfig(props: {
                     }}
                   >
                     <div
-                      class="absolute z-10 w-6 h-6 bg-gray-50 rounded-full border border-gray-400 -translate-x-1/2 -translate-y-1/2"
+                      class="absolute z-10 w-6 h-6 rounded-full border border-gray-400 -translate-x-1/2 -translate-y-1/2 bg-gray-1"
                       style={{
                         left: `calc(${mode().x * 100}% + ${
                           2 + mode().x * -6
@@ -1863,7 +1850,7 @@ function ZoomSegmentConfig(props: {
                         }px)`,
                       }}
                     />
-                    <div class="overflow-hidden bg-gray-100 rounded-lg border border-gray-200">
+                    <div class="overflow-hidden rounded-lg border border-gray-3 bg-gray-2">
                       <canvas
                         ref={canvasRef}
                         width={croppedSize().x}
@@ -1912,7 +1899,7 @@ function RgbInput(props: {
         }}
       />
       <TextInput
-        class="w-[4.60rem] p-[0.375rem] text-gray-500 text-[13px] border rounded-[0.5rem] bg-gray-50 outline-none focus:ring-1 transition-shadows duration-200 focus:ring-gray-500 focus:ring-offset-1 focus:ring-offset-gray-200"
+        class="w-[4.60rem] p-[0.375rem] text-gray-12 text-[13px] border rounded-[0.5rem] bg-gray-1 outline-none focus:ring-1 transition-shadows duration-200 focus:ring-gray-500 focus:ring-offset-1 focus:ring-offset-gray-200"
         value={text()}
         onFocus={() => {
           prevHex = rgbToHex(props.value);

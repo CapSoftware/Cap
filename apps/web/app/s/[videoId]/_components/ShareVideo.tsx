@@ -1,3 +1,5 @@
+import { UpgradeModal } from "@/components/UpgradeModal";
+import { usePublicEnv } from "@/utils/public-env";
 import { useApiClient } from "@/utils/web-api";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
@@ -21,13 +23,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { toast } from "sonner";
 import { Tooltip } from "react-tooltip";
+import { toast } from "sonner";
 import { fromVtt, Subtitle } from "subtitles-parser-vtt";
 import { MP4VideoPlayer } from "./MP4VideoPlayer";
 import { VideoPlayer } from "./VideoPlayer";
-import { usePublicEnv } from "@/utils/public-env";
-import { UpgradeModal } from "@/components/UpgradeModal";
 
 declare global {
   interface Window {
@@ -91,7 +91,6 @@ export const ShareVideo = forwardRef<
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
 
   const [videoSpeed, setVideoSpeed] = useState(1);
-  const overlayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [isHovering, setIsHovering] = useState(false);
   const hideControlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [forceHideControls, setForceHideControls] = useState(false);
@@ -609,7 +608,7 @@ export const ShareVideo = forwardRef<
           scrubbingVideo.currentTime = time;
 
           // Listen for the seeked event
-          const handleSeeked = (e: Event) => {
+          const handleSeeked = () => {
             try {
               // Draw the current frame onto the canvas
               ctx.drawImage(scrubbingVideo, 0, 0, canvas.width, canvas.height);
@@ -1221,7 +1220,7 @@ export const ShareVideo = forwardRef<
               src={thumbnailUrl}
               alt={`Preview at ${formatTime(previewTime)}`}
               className="object-contain w-full h-full bg-black"
-              onError={(e) => {
+              onError={() => {
                 console.log(
                   "Thumbnail failed to load, using canvas preview instead"
                 );
@@ -1358,7 +1357,7 @@ export const ShareVideo = forwardRef<
             <span className="inline-flex">
               <button
                 aria-label="Play video"
-                className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none text-slate-100 hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 sm:px-2 sm:py-2"
+                className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 sm:px-2 sm:py-2"
                 tabIndex={0}
                 type="button"
                 onClick={() => handlePlayPauseClick()}
@@ -1379,7 +1378,7 @@ export const ShareVideo = forwardRef<
               <span className="inline-flex">
                 <button
                   aria-label={`Change video speed to ${videoSpeed}x`}
-                  className="inline-flex min-w-[35px] sm:min-w-[45px] items-center text-xs sm:text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-slate-100 border-transparent hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 px-1 sm:px-2 py-1 sm:py-2 justify-center rounded-lg"
+                  className="inline-flex min-w-[35px] sm:min-w-[45px] items-center text-xs sm:text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-gray-100 border-transparent hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 px-1 sm:px-2 py-1 sm:py-2 justify-center rounded-lg"
                   tabIndex={0}
                   type="button"
                   onClick={handleSpeedChange}
@@ -1391,7 +1390,7 @@ export const ShareVideo = forwardRef<
                 <span className="inline-flex">
                   <button
                     aria-label={isPlaying ? "Pause video" : "Play video"}
-                    className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none text-slate-100 hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 sm:px-2 sm:py-2"
+                    className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 sm:px-2 sm:py-2"
                     tabIndex={0}
                     type="button"
                     onClick={() => {
@@ -1431,7 +1430,7 @@ export const ShareVideo = forwardRef<
                     aria-label={
                       subtitlesVisible ? "Hide subtitles" : "Show subtitles"
                     }
-                    className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none text-slate-100 hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 sm:px-2 sm:py-2"
+                    className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 sm:px-2 sm:py-2"
                     tabIndex={0}
                     type="button"
                     onClick={() => setSubtitlesVisible(!subtitlesVisible)}
@@ -1477,7 +1476,7 @@ export const ShareVideo = forwardRef<
               <span className="inline-flex">
                 <button
                   aria-label={videoRef?.current?.muted ? "Unmute" : "Mute"}
-                  className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none text-slate-100 hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 sm:px-2 sm:py-2"
+                  className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 sm:px-2 sm:py-2"
                   tabIndex={0}
                   type="button"
                   onClick={() => handleMuteClick()}
@@ -1492,7 +1491,7 @@ export const ShareVideo = forwardRef<
               <span className="inline-flex">
                 <button
                   aria-label="Go fullscreen"
-                  className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none text-slate-100 hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 sm:px-2 sm:py-2"
+                  className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 sm:px-2 sm:py-2"
                   tabIndex={0}
                   type="button"
                   onClick={handleFullscreenClick}

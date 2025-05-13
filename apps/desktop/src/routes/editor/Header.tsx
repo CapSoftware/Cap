@@ -81,9 +81,9 @@ export function Header() {
           leftIcon={<IconLucideFolder class="w-5" />}
         />
 
-        <p class="text-sm text-gray-500">
+        <p class="text-sm text-gray-12">
           {meta().prettyName}
-          <span class="text-sm text-gray-400">.cap</span>
+          <span class="text-sm text-gray-11">.cap</span>
         </p>
         {/* <ErrorBoundary fallback={<></>}>
             <Suspense>
@@ -95,8 +95,8 @@ export function Header() {
                 }}
                 class={`text-[0.8rem] ${
                   license.data?.type === "pro"
-                    ? "bg-[--blue-400] text-gray-50 dark:text-gray-500"
-                    : "bg-gray-200 cursor-pointer hover:bg-gray-300"
+                    ? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
+                    : "bg-gray-3 cursor-pointer hover:bg-gray-5"
                 } rounded-[0.55rem] px-2 py-1`}
               >
                 {license.data?.type === "commercial"
@@ -158,7 +158,7 @@ export function Header() {
             setDialog({ type: "export", open: true });
           }}
         >
-          <UploadIcon class="text-gray-50 size-5" />
+          <UploadIcon class="text-gray-1 size-5" />
           Export
         </Button>
         {ostype() === "windows" && <CaptionControlsWindows11 />}

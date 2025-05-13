@@ -1,3 +1,4 @@
+import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { makePersisted } from "@solid-primitives/storage";
 import {
   LogicalPosition,
@@ -5,6 +6,7 @@ import {
   currentMonitor,
   getCurrentWindow,
 } from "@tauri-apps/api/window";
+import { cx } from "cva";
 import {
   type ComponentProps,
   Show,
@@ -15,8 +17,6 @@ import {
   onCleanup,
 } from "solid-js";
 import { createStore } from "solid-js/store";
-import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
-import { cx } from "cva";
 
 import { createOptionsQuery } from "~/utils/queries";
 import { createImageDataWS, createLazySignal } from "~/utils/socket";
@@ -133,12 +133,12 @@ export default function () {
         {(options) => (
           <div
             data-tauri-drag-region
-            class="cursor-move group w-screen h-screen relative flex flex-col bg-black"
+            class="flex relative flex-col w-screen h-screen bg-black cursor-move group"
             style={{ "border-radius": cameraBorderRadius(state) }}
           >
             <div class="h-14">
-              <div class="flex flex-row items-center justify-center">
-                <div class="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-500 border border-white-transparent-20 text-gray-400">
+              <div class="flex flex-row justify-center items-center">
+                <div class="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-12 border border-white-transparent-20 text-gray-11">
                   <ControlButton
                     onClick={() => {
                       setOptions.mutate({
@@ -186,7 +186,7 @@ export default function () {
               <Show
                 when={!isLoading() && !error()}
                 fallback={
-                  <div class="flex items-center justify-center h-full">
+                  <div class="flex justify-center items-center h-full">
                     {error() ? (
                       <div class="text-red-500">{error()}</div>
                     ) : (
@@ -270,15 +270,15 @@ function CameraLoadingState(props: { shape: CameraWindow.Shape }) {
   });
 
   return (
-    <div class="flex flex-col w-full h-full bg-black">
+    <div class="flex flex-col w-full h-full bg-gray-1 dark:bg-gray-12">
       <div class="h-14" />
       <div
         class={cx(
-          "w-full flex-1 bg-gray-500 flex items-center justify-center",
+          "w-full flex-1 bg-gray-12 flex items-center justify-center",
           props.shape === "round" ? "rounded-full" : "rounded-3xl"
         )}
       >
-        <div class="text-gray-300 text-sm">{loadingText()}</div>
+        <div class="text-sm text-gray-9">{loadingText()}</div>
       </div>
     </div>
   );
@@ -298,7 +298,7 @@ function ControlButton(
   return (
     <KToggleButton
       type="button"
-      class="p-2 ui-pressed:bg-white-transparent-5 ui-pressed:text-gray-50 rounded-lg"
+      class="p-2 rounded-lg ui-pressed:bg-white-transparent-5 ui-pressed:text-gray-1"
       {...props}
     />
   );
