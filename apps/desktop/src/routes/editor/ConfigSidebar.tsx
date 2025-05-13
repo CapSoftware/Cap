@@ -800,7 +800,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
               {(item) => {
                 const el = (props?: object) => (
                   <KTabs.Trigger
-                    class="z-10 flex-1 py-2.5 px-2 text-xs text-gray-11 ui-selected:bg-gray-3 ui-not-selected:hover:border-gray-7 rounded-[10px] transition-colors duration-200 outline-none border ui-selected:text-gray-12 peer"
+                    class="z-10 flex-1 py-2.5 px-2 text-xs text-gray-11  ui-selected:border-gray-3 ui-selected:bg-gray-3 ui-not-selected:hover:border-gray-7 rounded-[10px] transition-colors duration-200 outline-none border ui-selected:text-gray-12 peer"
                     value={item}
                     {...props}
                   >
@@ -946,7 +946,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                           )
                         }
                         value={key}
-                        class="flex relative z-10 flex-1 justify-center items-center px-4 py-2 bg-transparent rounded-lg border transition-colors duration-200 text-gray-11 ui-not-selected:hover:border-gray-300 ui-selected:bg-gray-3 group ui-selected:text-gray-12 disabled:opacity-50 focus:outline-none"
+                        class="flex relative z-10 flex-1 justify-center items-center px-4 py-2 bg-transparent rounded-lg border transition-colors duration-200 text-gray-11 ui-not-selected:hover:border-gray-7 ui-selected:bg-gray-3 ui-selected:border-gray-3 group ui-selected:text-gray-12 disabled:opacity-50 focus:outline-none"
                       >
                         {value}
                       </KTabs.Trigger>

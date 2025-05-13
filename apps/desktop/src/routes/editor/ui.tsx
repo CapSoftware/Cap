@@ -9,14 +9,14 @@ import { createEventListener } from "@solid-primitives/event-listener";
 import { cva, cx, type VariantProps } from "cva";
 
 import {
-    createRoot,
-    createSignal,
-    mergeProps,
-    splitProps,
-    type ComponentProps,
-    type JSX,
-    type ParentProps,
-    type ValidComponent
+  createRoot,
+  createSignal,
+  mergeProps,
+  splitProps,
+  type ComponentProps,
+  type JSX,
+  type ParentProps,
+  type ValidComponent
 } from "solid-js";
 import Tooltip from "~/components/Tooltip";
 import { useEditorContext } from "./context";
@@ -136,7 +136,7 @@ export function Slider(
               setDragging(false);
             }}
             class={cx(
-              "bg-gray-1 dark:bg-gray-12 shadow-xl rounded-full outline-none size-4 -top-[6.3px] ui-disabled:bg-gray-9 after:content-[''] after:absolute after:inset-0 after:-m-3 after:cursor-pointer"
+              "bg-gray-1 dark:bg-gray-12 border border-gray-6 shadow-md rounded-full outline-none size-4 -top-[6.3px] ui-disabled:bg-gray-9 after:content-[''] after:absolute after:inset-0 after:-m-3 after:cursor-pointer"
             )}
           />
         </Tooltip>
