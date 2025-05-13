@@ -93,6 +93,7 @@ relative-path = "1.9.3"
 cap-fail = { version = "0.1.0", path = "../../../crates/fail" }
 tokio-stream = { version = "0.1.17", features = ["sync"] }
 md5 = "0.7.0"
+tokio-util = "0.7.15"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"

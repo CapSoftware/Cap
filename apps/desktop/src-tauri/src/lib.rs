@@ -1186,7 +1186,6 @@ async fn list_audio_devices() -> Result<Vec<String>, ()> {
 #[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
 pub struct UploadProgress {
     progress: f64,
-    message: String,
 }
 
 #[derive(Deserialize, Type)]
@@ -1245,12 +1244,7 @@ async fn upload_exported_video(
     }
 
     // Start upload progress
-    UploadProgress {
-        progress: 0.0,
-        message: "Starting upload...".to_string(),
-    }
-    .emit(&app)
-    .ok();
+    UploadProgress { progress: 0.0 }.emit(&app).ok();
 
     let s3_config = async {
         let video_id = match mode {
@@ -1286,12 +1280,7 @@ async fn upload_exported_video(
     {
         Ok(uploaded_video) => {
             // Emit upload complete
-            UploadProgress {
-                progress: 1.0,
-                message: "Upload complete!".to_string(),
-            }
-            .emit(&app)
-            .ok();
+            UploadProgress { progress: 1.0 }.emit(&app).ok();
 
             meta.sharing = Some(SharingMeta {
                 link: uploaded_video.link.clone(),
