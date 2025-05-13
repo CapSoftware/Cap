@@ -1049,8 +1049,8 @@ function InfoPill(
       class={cx(
         "px-[0.375rem] rounded-full text-[0.75rem]",
         props.variant === "blue"
-          ? "bg-blue-2 text-blue-9"
-          : "bg-red-2 text-red-9"
+          ? "bg-blue-3 text-blue-9"
+          : "bg-red-3 text-red-9"
       )}
     />
   );
