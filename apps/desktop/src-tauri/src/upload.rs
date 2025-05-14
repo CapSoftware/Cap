@@ -2,7 +2,7 @@
 
 use cap_utils::spawn_actor;
 use flume::Receiver;
-use futures::stream;
+use futures::{stream, StreamExt};
 use image::codecs::jpeg::JpegEncoder;
 use image::ImageReader;
 use reqwest::{multipart::Form, StatusCode};
@@ -228,15 +228,39 @@ pub async fn upload_video(
 
     let (upload_url, form) = presigned_s3_url(app, body).await?;
 
-    let file_bytes = tokio::fs::read(&file_path)
+    let file = tokio::fs::File::open(&file_path)
         .await
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+        .map_err(|e| format!("Failed to open file: {}", e))?;
 
-    let total_size = file_bytes.len() as f64;
+    let metadata = file
+        .metadata()
+        .await
+        .map_err(|e| format!("Failed to get file metadata: {}", e))?;
+
+    let total_size = metadata.len();
+
+    let reader_stream = tokio_util::io::ReaderStream::new(file);
+
+    let mut bytes_uploaded = 0;
+    let progress_stream = reader_stream.inspect({
+        let app = app.clone();
+        move |chunk| {
+            if bytes_uploaded > 0 {
+                let _ = UploadProgress {
+                    progress: bytes_uploaded as f64 / total_size as f64,
+                }
+                .emit(&app);
+            }
+
+            if let Ok(chunk) = chunk {
+                bytes_uploaded += chunk.len();
+            }
+        }
+    });
 
     // Create a stream that reports progress
     let file_part = reqwest::multipart::Part::stream_with_length(
-        reqwest::Body::from(file_bytes),
+        reqwest::Body::wrap_stream(progress_stream),
         total_size as u64,
     )
     .file_name(file_name.clone())
