@@ -5,10 +5,11 @@ use cap_project::*;
 use wgpu::{include_wgsl, util::DeviceExt, BindGroup, FilterMode};
 
 use crate::{
-    frame_pipeline::{FramePipeline, FramePipelineState},
+    frame_pipeline::FramePipelineState,
     spring_mass_damper::{SpringMassDamperSimulation, SpringMassDamperSimulationConfig},
     zoom::InterpolatedZoom,
-    Coord, DecodedSegmentFrames, RawDisplayUVSpace, STANDARD_CURSOR_HEIGHT,
+    Coord, DecodedSegmentFrames, ProjectUniforms, RawDisplayUVSpace, RenderVideoConstants,
+    STANDARD_CURSOR_HEIGHT,
 };
 
 const CURSOR_CLICK_DURATION: f64 = 0.25;
@@ -182,19 +183,14 @@ impl CursorLayer {
 
     pub fn prepare(
         &mut self,
-        pipeline: &mut FramePipeline,
         segment_frames: &DecodedSegmentFrames,
         resolution_base: XY<u32>,
         cursor: &CursorEvents,
         zoom: &InterpolatedZoom,
+        uniforms: &ProjectUniforms,
+        constants: &RenderVideoConstants,
     ) {
-        let FramePipelineState {
-            uniforms,
-            constants,
-            ..
-        } = &pipeline.state;
-
-        if !uniforms.project.cursor.hide {
+        if uniforms.project.cursor.hide {
             self.bind_group = None;
             return;
         }

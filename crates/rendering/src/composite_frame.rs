@@ -143,16 +143,6 @@ impl CompositeVideoFramePipeline {
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
@@ -165,7 +155,6 @@ impl CompositeVideoFramePipeline {
         device: &wgpu::Device,
         uniforms: &wgpu::Buffer,
         frame: &wgpu::TextureView,
-        intermediate: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         let sampler = device.create_sampler(
             &(wgpu::SamplerDescriptor {
@@ -193,10 +182,6 @@ impl CompositeVideoFramePipeline {
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: wgpu::BindingResource::TextureView(intermediate),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
                         resource: wgpu::BindingResource::Sampler(&sampler),
                     },
                 ],

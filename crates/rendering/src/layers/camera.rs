@@ -2,13 +2,12 @@ use cap_project::XY;
 use wgpu::util::DeviceExt;
 
 use crate::{
-    composite_frame::CompositeVideoFramePipeline, frame_pipeline::FramePipeline,
-    CompositeVideoFrameUniforms, DecodedFrame,
+    composite_frame::CompositeVideoFramePipeline, CompositeVideoFrameUniforms, DecodedFrame,
 };
 
 pub struct CameraLayer {
     uniforms_buffer: wgpu::Buffer,
-    bind_group: Option<(wgpu::BindGroup, wgpu::TextureView)>,
+    bind_group: Option<wgpu::BindGroup>,
     pipeline: CompositeVideoFramePipeline,
 }
 
@@ -29,7 +28,6 @@ impl CameraLayer {
 
     pub fn prepare(
         &mut self,
-        pipeline: &mut FramePipeline,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         uniforms: CompositeVideoFrameUniforms,
@@ -37,8 +35,6 @@ impl CameraLayer {
         camera_frame: &DecodedFrame,
         (texture, texture_view): (&wgpu::Texture, &wgpu::TextureView),
     ) {
-        pipeline.state.switch_output();
-
         queue.write_buffer(&self.uniforms_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
         queue.write_texture(
@@ -61,28 +57,18 @@ impl CameraLayer {
             },
         );
 
-        self.bind_group = Some((
-            self.pipeline.bind_group(
-                &device,
-                &self.uniforms_buffer,
-                &texture_view,
-                pipeline.state.get_other_texture_view(),
-            ),
-            pipeline
-                .state
-                .get_current_texture()
-                .create_view(&Default::default()),
+        self.bind_group = Some(self.pipeline.bind_group(
+            &device,
+            &self.uniforms_buffer,
+            &texture_view,
         ))
     }
 
-    pub fn render(&self, pipeline: &mut FramePipeline) {
-        if let Some((bind_group, target_texture)) = &self.bind_group {
-            pipeline.encoder.do_render_pass(
-                target_texture,
-                &self.pipeline.render_pipeline,
-                bind_group,
-                wgpu::LoadOp::Load,
-            );
+    pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
+        if let Some(bind_group) = &self.bind_group {
+            pass.set_pipeline(&self.pipeline.render_pipeline);
+            pass.set_bind_group(0, bind_group, &[]);
+            pass.draw(0..4, 0..1);
         }
     }
 }

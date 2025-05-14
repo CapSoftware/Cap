@@ -8,8 +8,8 @@ use specta::Type;
 use wgpu::{include_wgsl, util::DeviceExt};
 
 use crate::{
-    create_shader_render_pipeline, frame_pipeline::FramePipeline, srgb_to_linear, ProjectUniforms,
-    RenderVideoConstants, RenderingError,
+    create_shader_render_pipeline, srgb_to_linear, ProjectUniforms, RenderVideoConstants,
+    RenderingError,
 };
 
 #[derive(PartialEq, Debug, Clone, Copy, Serialize, Deserialize, Type)]
@@ -87,19 +87,10 @@ pub enum Inner {
     },
 }
 
-struct BlurInner {
-    uniform_buffer: wgpu::Buffer,
-    pipeline: BackgroundBlurPipeline,
-    bind_group: wgpu::BindGroup,
-    sampler: wgpu::Sampler,
-    target_texture: wgpu::TextureView,
-}
-
 pub struct BackgroundLayer {
-    inner: Option<(Inner, wgpu::TextureView)>,
+    inner: Option<Inner>,
     image_pipeline: ImageBackgroundPipeline,
     color_pipeline: GradientOrColorPipeline,
-    blur: Option<BlurInner>,
 }
 
 impl BackgroundLayer {
@@ -108,13 +99,11 @@ impl BackgroundLayer {
             inner: None,
             image_pipeline: ImageBackgroundPipeline::new(device),
             color_pipeline: GradientOrColorPipeline::new(device),
-            blur: None,
         }
     }
 
     pub async fn prepare(
         &mut self,
-        pipeline: &mut FramePipeline<'_, '_>,
         constants: &RenderVideoConstants,
         uniforms: &ProjectUniforms,
         background: Background,
@@ -125,12 +114,9 @@ impl BackgroundLayer {
         match background {
             Background::Image { path } => {
                 match &self.inner {
-                    Some((
-                        Inner::Image {
-                            path: current_path, ..
-                        },
-                        _,
-                    )) if current_path == &path => {}
+                    Some(Inner::Image {
+                        path: current_path, ..
+                    }) if current_path == &path => {}
                     _ => {
                         let mut textures = constants.background_textures.write().await;
                         let texture = match textures.entry(path.clone()) {
@@ -221,160 +207,62 @@ impl BackgroundLayer {
                         let texture_view =
                             texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-                        self.inner = Some((
-                            Inner::Image {
-                                path,
-                                bind_group: self.image_pipeline.bind_group(
-                                    &device,
-                                    &uniform_buffer,
-                                    &texture_view,
-                                ),
-                            },
-                            pipeline
-                                .state
-                                .get_current_texture()
-                                .create_view(&Default::default()),
-                        ));
+                        self.inner = Some(Inner::Image {
+                            path,
+                            bind_group: self.image_pipeline.bind_group(
+                                &device,
+                                &uniform_buffer,
+                                &texture_view,
+                            ),
+                        });
                     }
                 };
             }
             Background::Color(color) => match &self.inner {
-                Some((
-                    Inner::ColorOrGradient {
-                        value: ColorOrGradient::Color(current_color),
-                        ..
-                    },
-                    _,
-                )) if &color == current_color => {}
+                Some(Inner::ColorOrGradient {
+                    value: ColorOrGradient::Color(current_color),
+                    ..
+                }) if &color == current_color => {}
                 _ => {
                     let buffer = GradientOrColorUniforms::from(background).to_buffer(device);
-                    self.inner = Some((
-                        Inner::ColorOrGradient {
-                            value: ColorOrGradient::Color(color),
-                            bind_group: self.color_pipeline.bind_group(device, &buffer),
-                            buffer,
-                        },
-                        pipeline
-                            .state
-                            .get_current_texture()
-                            .create_view(&Default::default()),
-                    ));
+                    self.inner = Some(Inner::ColorOrGradient {
+                        value: ColorOrGradient::Color(color),
+                        bind_group: self.color_pipeline.bind_group(device, &buffer),
+                        buffer,
+                    });
                 }
             },
             Background::Gradient(gradient) => match &self.inner {
-                Some((
-                    Inner::ColorOrGradient {
-                        value: ColorOrGradient::Gradient(current_gradient),
-                        ..
-                    },
-                    _,
-                )) if &gradient == current_gradient => {}
+                Some(Inner::ColorOrGradient {
+                    value: ColorOrGradient::Gradient(current_gradient),
+                    ..
+                }) if &gradient == current_gradient => {}
                 _ => {
                     let buffer = GradientOrColorUniforms::from(background).to_buffer(device);
-                    self.inner = Some((
-                        Inner::ColorOrGradient {
-                            value: ColorOrGradient::Gradient(gradient),
-                            bind_group: self.color_pipeline.bind_group(device, &buffer),
-                            buffer,
-                        },
-                        pipeline
-                            .state
-                            .get_current_texture()
-                            .create_view(&Default::default()),
-                    ));
+                    self.inner = Some(Inner::ColorOrGradient {
+                        value: ColorOrGradient::Gradient(gradient),
+                        bind_group: self.color_pipeline.bind_group(device, &buffer),
+                        buffer,
+                    });
                 }
             },
-        }
-
-        if uniforms.project.background.blur > 0.0 {
-            pipeline.state.switch_output();
-
-            let blur_strength = uniforms.project.background.blur as f32 / 100.0;
-            let blur_uniform = BackgroundBlurUniforms {
-                output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
-                blur_strength,
-                _padding: 0.0,
-            };
-
-            if let Some(blur) = &self.blur {
-                queue.write_buffer(
-                    &blur.uniform_buffer,
-                    0,
-                    bytemuck::cast_slice(&[blur_uniform]),
-                );
-            } else {
-                let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("BackgroundBlur Uniform Buffer"),
-                    contents: bytemuck::cast_slice(&[blur_uniform]),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                });
-
-                let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-                    address_mode_u: wgpu::AddressMode::ClampToEdge,
-                    address_mode_v: wgpu::AddressMode::ClampToEdge,
-                    address_mode_w: wgpu::AddressMode::ClampToEdge,
-                    mag_filter: wgpu::FilterMode::Linear,
-                    min_filter: wgpu::FilterMode::Linear,
-                    mipmap_filter: wgpu::FilterMode::Nearest,
-                    ..Default::default()
-                });
-
-                let blur_pipeline = BackgroundBlurPipeline::new(device);
-
-                let bind_group = blur_pipeline.bind_group(
-                    &device,
-                    &uniform_buffer,
-                    pipeline.state.get_other_texture_view(),
-                    &sampler,
-                );
-
-                self.blur = Some(BlurInner {
-                    uniform_buffer,
-                    pipeline: blur_pipeline,
-                    bind_group,
-                    sampler,
-                    target_texture: pipeline
-                        .state
-                        .get_current_texture()
-                        .create_view(&Default::default()),
-                });
-            }
-        } else {
-            self.blur = None
         }
 
         Ok(())
     }
 
-    pub fn render(&self, pipeline: &mut FramePipeline) {
-        match &self.inner {
-            Some((Inner::Image { bind_group, .. }, target_texture)) => {
-                pipeline.encoder.do_render_pass(
-                    target_texture,
-                    &self.image_pipeline.render_pipeline,
-                    &bind_group,
-                    wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                );
-            }
-            Some((Inner::ColorOrGradient { bind_group, .. }, target_texture)) => {
-                pipeline.encoder.do_render_pass(
-                    target_texture,
-                    &self.color_pipeline.render_pipeline,
-                    &bind_group,
-                    wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                );
-            }
-            _ => {}
+    pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
+        if let Some(Inner::Image { bind_group, .. }) = &self.inner {
+            pass.set_pipeline(&self.image_pipeline.render_pipeline);
+            pass.set_bind_group(0, bind_group, &[]);
+        } else if let Some(Inner::ColorOrGradient { bind_group, .. }) = &self.inner {
+            pass.set_pipeline(&self.color_pipeline.render_pipeline);
+            pass.set_bind_group(0, bind_group, &[]);
+        } else {
+            return;
         }
 
-        if let Some(blur) = &self.blur {
-            pipeline.encoder.do_render_pass(
-                &blur.target_texture,
-                &blur.pipeline.render_pipeline,
-                &blur.bind_group,
-                wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-            );
-        }
+        pass.draw(0..4, 0..1);
     }
 }
 
@@ -586,7 +474,7 @@ impl GradientOrColorPipeline {
 
     fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("composite-video-frame.wgsl Bind Group Layout"),
+            label: Some("gradient-or-color.wgsl Bind Group Layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -611,138 +499,5 @@ impl GradientOrColorPipeline {
         });
 
         bind_group
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
-pub struct BackgroundBlurUniforms {
-    output_size: [f32; 2],
-    blur_strength: f32,
-    _padding: f32,
-}
-
-pub struct BackgroundBlurPipeline {
-    pub bind_group_layout: wgpu::BindGroupLayout,
-    pub render_pipeline: wgpu::RenderPipeline,
-}
-
-impl BackgroundBlurPipeline {
-    pub fn new(device: &wgpu::Device) -> Self {
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("background-blur Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Background Blur Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../shaders/background-blur.wgsl").into(),
-            ),
-        });
-        let empty_constants: HashMap<String, f64> = HashMap::new();
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Background Blur Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
-        });
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Background Blur Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: "vs_main",
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &empty_constants,
-                    zero_initialize_workgroup_memory: false,
-                    vertex_pulling_transform: false,
-                },
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: "fs_main",
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &empty_constants,
-                    zero_initialize_workgroup_memory: false,
-                    vertex_pulling_transform: false,
-                },
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-        Self {
-            bind_group_layout,
-            render_pipeline,
-        }
-    }
-
-    pub fn bind_group(
-        &self,
-        device: &wgpu::Device,
-        uniform_buffer: &wgpu::Buffer,
-        texture_view: &wgpu::TextureView,
-        sampler: &wgpu::Sampler,
-    ) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("BackgroundBlur Bind Group"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(texture_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-            ],
-        })
     }
 }
