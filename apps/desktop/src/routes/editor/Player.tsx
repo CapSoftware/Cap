@@ -86,6 +86,31 @@ export function Player() {
     }
   });
 
+  const currentSegment = () => {
+    if (!project.timeline?.segments?.length) return null;
+
+    let currentTime = 0;
+    for (const segment of project.timeline.segments) {
+      const segmentDuration = (segment.end - segment.start) / segment.timescale;
+      if (
+        editorState.playbackTime >= currentTime &&
+        editorState.playbackTime < currentTime + segmentDuration
+      ) {
+        return segment;
+      }
+      currentTime += segmentDuration;
+    }
+
+    return null;
+  };
+
+  const currentSpeed = () => {
+    const segment = currentSegment();
+    return segment && segment.timescale !== 1
+      ? (1 / segment.timescale).toFixed(2) + "x"
+      : null;
+  };
+
   return (
     <div
       class="flex flex-col flex-1 bg-gray-50 bg-opacity-5 rounded-xl shadow-sm"
@@ -113,6 +138,12 @@ export function Player() {
         >
           Crop
         </EditorButton>
+        <Show when={currentSpeed()}>
+          <div class="flex items-center gap-1 px-3 py-1 bg-blue-500/20 rounded-lg text-gray-600 font-medium">
+            <IconLucideClock class="size-4 mr-1" />
+            {currentSpeed()}
+          </div>
+        </Show>
       </div>
       <PreviewCanvas />
       <div class="flex overflow-hidden z-10 flex-row gap-3 justify-between items-center p-5">
@@ -126,6 +157,11 @@ export function Player() {
           />
           <span class="text-gray-11 text-[0.875rem] tabular-nums"> / </span>
           <Time seconds={totalDuration()} />
+          <Show when={currentSpeed()}>
+            <span class="ml-2 text-xs px-2 py-0.5 bg-blue-500/20 rounded-full text-gray-500">
+              {currentSpeed()}
+            </span>
+          </Show>
         </div>
         <div class="flex flex-row items-center justify-center text-gray-11 gap-8 text-[0.875rem]">
           <button

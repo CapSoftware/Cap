@@ -153,6 +153,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       previewTime: null as number | null,
       playbackTime: 0,
       playing: false,
+      selectedClipIndex: null as number | null,
       timeline: {
         interactMode: "seek" as "seek" | "split",
         selection: null as null | { type: "zoom"; index: number },
