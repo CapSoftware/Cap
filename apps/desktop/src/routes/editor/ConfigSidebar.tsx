@@ -1617,6 +1617,13 @@ function ZoomSegmentConfig(props: {
     projectHistory,
   } = useEditorContext();
 
+  const states = {
+    manual:
+      props.segment.mode === "auto"
+        ? { x: 0.5, y: 0.5 }
+        : props.segment.mode.manual,
+  };
+
   return (
     <div
       data-visible={editorState.timeline.selection?.type === "zoom"}
@@ -1670,7 +1677,24 @@ function ZoomSegmentConfig(props: {
         />
       </Field>
       <Field name="Zoom Mode" icon={<IconCapSettings />}>
-        <KTabs class="space-y-6">
+        <KTabs
+          class="space-y-6"
+          onChange={(v) => {
+            if (v === "auto") {
+              setProject(
+                "timeline",
+                "zoomSegments",
+                props.segmentIndex,
+                "mode",
+                "auto"
+              );
+            } else {
+              setProject("timeline", "zoomSegments", props.segmentIndex, {
+                mode: { manual: states.manual },
+              });
+            }
+          }}
+        >
           <KTabs.List class="flex flex-row items-center rounded-[0.5rem] relative border">
             <KTabs.Trigger
               value="auto"
