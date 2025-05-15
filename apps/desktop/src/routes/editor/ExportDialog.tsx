@@ -2,23 +2,23 @@ import { Button } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
 import { makePersisted } from "@solid-primitives/storage";
 import {
-    createMutation,
-    createQuery,
-    keepPreviousData
+  createMutation,
+  createQuery,
+  keepPreviousData,
 } from "@tanstack/solid-query";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import {
-    createEffect,
-    createRoot,
-    createSignal,
-    For,
-    JSX,
-    Match,
-    on,
-    Show,
-    Switch,
-    ValidComponent,
+  createEffect,
+  createRoot,
+  createSignal,
+  For,
+  JSX,
+  Match,
+  on,
+  Show,
+  Switch,
+  ValidComponent,
 } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import toast from "solid-toast";
@@ -28,20 +28,20 @@ import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { exportVideo } from "~/utils/export";
 import {
-    commands,
-    events,
-    ExportCompression,
-    FramesRendered,
+  commands,
+  events,
+  ExportCompression,
+  FramesRendered,
 } from "~/utils/tauri";
 import { RenderState, useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
 import {
-    Dialog,
-    DialogContent,
-    MenuItem,
-    MenuItemList,
-    PopperContent,
-    topSlideAnimateClasses,
+  Dialog,
+  DialogContent,
+  MenuItem,
+  MenuItemList,
+  PopperContent,
+  topSlideAnimateClasses,
 } from "./ui";
 
 export const COMPRESSION_OPTIONS: Array<{
@@ -95,7 +95,6 @@ export function ExportDialog() {
     meta,
     refetchMeta,
   } = useEditorContext();
-
 
   const [settings, setSettings] = makePersisted(
     createStore({
@@ -158,9 +157,10 @@ export function ExportDialog() {
       if (exportState.type !== "idle") return;
       setExportState(reconcile({ action: "copy", type: "starting" }));
 
-      const outputPath = await exportWithSettings((progress) =>
-        setExportState({ type: "rendering", progress })
-      );
+      const outputPath = await exportWithSettings((progress) => {
+        console.log(progress);
+        setExportState({ type: "rendering", progress });
+      });
 
       setExportState({ type: "copying" });
 
@@ -499,11 +499,7 @@ export function ExportDialog() {
                     <KSelect.Value<
                       (typeof FPS_OPTIONS)[number]
                     > class="flex-1 text-sm text-left truncate tabular-nums text-[--gray-500]">
-                      {(state) => (
-                        <span>
-                          {state.selectedOption()?.label}
-                        </span>
-                      )}
+                      {(state) => <span>{state.selectedOption()?.label}</span>}
                     </KSelect.Value>
                     <KSelect.Icon<ValidComponent>
                       as={(props) => (

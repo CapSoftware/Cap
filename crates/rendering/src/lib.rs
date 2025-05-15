@@ -6,7 +6,7 @@ use cap_project::{
 use composite_frame::{CompositeVideoFramePipeline, CompositeVideoFrameUniforms};
 use core::f64;
 use decoder::{spawn_decoder, AsyncVideoDecoderHandle};
-use frame_pipeline::{finish_encoder, FramePipelineEncoder, FramePipelineState};
+use frame_pipeline::finish_encoder;
 use futures::future::OptionFuture;
 use futures::FutureExt;
 use layers::{
