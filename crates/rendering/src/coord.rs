@@ -23,7 +23,7 @@ pub struct ZoomedFrameSpace;
 #[derive(Default, Clone, Copy, Debug)]
 pub struct TransformedDisplaySpace;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Coord<TSpace> {
     pub coord: XY<f64>,
     pub space: TSpace,

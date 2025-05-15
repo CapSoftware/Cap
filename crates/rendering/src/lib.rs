@@ -5,6 +5,7 @@ use cap_project::{
 };
 use composite_frame::{CompositeVideoFramePipeline, CompositeVideoFrameUniforms};
 use core::f64;
+use cursor_interpolation::{interpolate_cursor, InterpolatedCursorPosition};
 use decoder::{spawn_decoder, AsyncVideoDecoderHandle};
 use frame_pipeline::finish_encoder;
 use futures::future::OptionFuture;
@@ -14,6 +15,7 @@ use layers::{
     GradientOrColorPipeline, ImageBackgroundPipeline,
 };
 use specta::Type;
+use spring_mass_damper::SpringMassDamperSimulationConfig;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc;
 use tracing::subscriber::DefaultGuard;
@@ -23,6 +25,7 @@ use std::{path::PathBuf, time::Instant};
 
 mod composite_frame;
 mod coord;
+mod cursor_interpolation;
 pub mod decoder;
 mod frame_pipeline;
 mod layers;
@@ -239,6 +242,7 @@ pub async fn render_video_to_channel(
                 fps,
                 resolution_base,
                 &segment.cursor,
+                &segment_frames,
             );
 
             let frame = frame_renderer
@@ -511,6 +515,7 @@ pub struct ProjectUniforms {
     pub cursor_size: f32,
     display: CompositeVideoFrameUniforms,
     camera: Option<CompositeVideoFrameUniforms>,
+    interpolated_cursor: Option<InterpolatedCursorPosition>,
     pub project: ProjectConfiguration,
     pub zoom: InterpolatedZoom,
     pub resolution_base: XY<u32>,
@@ -681,46 +686,50 @@ impl ProjectUniforms {
         fps: u32,
         resolution_base: XY<u32>,
         cursor_events: &CursorEvents,
+        segment_frames: &DecodedSegmentFrames,
     ) -> Self {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project, resolution_base);
         let frame_time = frame_number as f32 / fps as f32;
 
-        // let zoom_keyframes = ZoomKeyframes::new(project);
-        // let current_zoom = zoom_keyframes.interpolate(time as f64);
-        // let prev_zoom = zoom_keyframes.interpolate((time - 1.0 / 30.0) as f64);
-
         let velocity = [0.0, 0.0];
-        // if current_zoom.amount != prev_zoom.amount {
-        //     let scale_change = (current_zoom.amount - prev_zoom.amount) as f32;
-        //     // Reduce the velocity scale from 0.05 to 0.02
-        //     [
-        //         (scale_change * output_size.0 as f32) * 0.02, // Reduced from 0.05
-        //         (scale_change * output_size.1 as f32) * 0.02,
-        //     ]
-        // } else {
-        //     [0.0, 0.0]
-        // };
 
         let motion_blur_amount = 0.0;
-        // if current_zoom.amount != prev_zoom.amount {
-        //     project.motion_blur.unwrap_or(0.2) // Reduced from 0.5 to 0.2
-        // } else {
-        //     0.0
-        // };
 
         let crop = Self::get_crop(options, project);
 
-        let segment_cursor = SegmentsCursor::new(
-            frame_time as f64,
-            project
-                .timeline
-                .as_ref()
-                .map(|t| t.zoom_segments.as_slice())
-                .unwrap_or(&[]),
+        let interpolated_cursor = interpolate_cursor(
+            cursor_events,
+            segment_frames.recording_time,
+            (!project.cursor.raw).then(|| SpringMassDamperSimulationConfig {
+                tension: project.cursor.tension,
+                mass: project.cursor.mass,
+                friction: project.cursor.friction,
+            }),
         );
 
-        let zoom = InterpolatedZoom::new(segment_cursor, Some(cursor_events));
+        let zoom = InterpolatedZoom::new(
+            SegmentsCursor::new(
+                frame_time as f64,
+                project
+                    .timeline
+                    .as_ref()
+                    .map(|t| t.zoom_segments.as_slice())
+                    .unwrap_or(&[]),
+            ),
+            interpolate_cursor(
+                cursor_events,
+                (segment_frames.recording_time - 0.2).max(0.0),
+                (!project.cursor.raw).then(|| SpringMassDamperSimulationConfig {
+                    tension: project.cursor.tension,
+                    mass: project.cursor.mass,
+                    friction: project.cursor.friction,
+                }),
+            )
+            .as_ref()
+            .map(|i| i.position)
+            .unwrap_or_else(|| Coord::new(XY::new(0.5, 0.5))),
+        );
 
         let display = {
             let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
@@ -882,6 +891,7 @@ impl ProjectUniforms {
             camera,
             project: project.clone(),
             zoom,
+            interpolated_cursor,
         }
     }
 }

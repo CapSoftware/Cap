@@ -1,5 +1,7 @@
 use cap_project::{cursor::CursorEvents, ZoomSegment, XY};
 
+use crate::{Coord, RawDisplayUVSpace};
+
 pub const ZOOM_DURATION: f64 = 1.0;
 // Added constant for cursor smoothing
 pub const CURSOR_SMOOTHING_WINDOW: f64 = 0.15; // 150ms window for smoothing
@@ -52,75 +54,11 @@ pub struct SegmentBounds {
 }
 
 impl SegmentBounds {
-    // Add current_time parameter to from_segment
-    fn from_segment(
-        segment: &ZoomSegment,
-        current_time: f64,
-        cursor_events: Option<&CursorEvents>,
-    ) -> Self {
-        println!(
-            "Zoom mode: {:?}, segment time: {}, current time: {}",
-            segment.mode, segment.start, current_time
-        );
-
-        // Add detailed debug info about cursor_events
-        if let Some(events) = cursor_events {
-            println!(
-                "Cursor events available: {} move events",
-                events.moves.len()
-            );
-            // Print first 3 move events to check timestamps
-            if !events.moves.is_empty() {
-                for i in 0..std::cmp::min(3, events.moves.len()) {
-                    println!(
-                        "Sample move event {}: time={}, pos=({}, {})",
-                        i, events.moves[i].time_ms, events.moves[i].x, events.moves[i].y
-                    );
-                }
-                // Print last event
-                if events.moves.len() > 3 {
-                    let last = &events.moves[events.moves.len() - 1];
-                    println!(
-                        "Last move event: time={}, pos=({}, {})",
-                        last.time_ms, last.x, last.y
-                    );
-                }
-            }
-        } else {
-            println!("No cursor events provided");
-        }
-
+    fn from_segment(segment: &ZoomSegment, interpolated_cursor: Coord<RawDisplayUVSpace>) -> Self {
         let position = match segment.mode {
-            cap_project::ZoomMode::Auto => {
-                // Use current_time instead of segment.start to get continuously changing cursor positions
-                if let Some(events) = cursor_events {
-                    println!("Looking for cursor position at time: {}", current_time);
-
-                    // Get smoothed cursor position instead of exact position
-                    if let Some(pos) =
-                        get_smoothed_cursor_position(events, current_time, CURSOR_SMOOTHING_WINDOW)
-                    {
-                        println!("Found smoothed cursor position: ({}, {})", pos.0, pos.1);
-                        pos
-                    } else {
-                        println!(
-                            "No cursor position found at time: {}, defaulting to center",
-                            current_time
-                        );
-                        (0.5, 0.5) // Fall back to center if no cursor data available
-                    }
-                } else {
-                    println!("No cursor events provided, defaulting to center");
-                    (0.5, 0.5) // Fall back to center if no cursor events provided
-                }
-            }
+            cap_project::ZoomMode::Auto => (interpolated_cursor.x, interpolated_cursor.y),
             cap_project::ZoomMode::Manual { x, y } => (x as f64, y as f64),
         };
-
-        println!("Final position: ({}, {})", position.0, position.1);
-
-        // Fix: Instead of defaulting to (0.0, 0.0), use (0.5, 0.5) as center
-        // The rest of the function remains the same
 
         let scaled_center = [position.0 * segment.amount, position.1 * segment.amount];
         let center_diff = [scaled_center[0] - position.0, scaled_center[1] - position.1];
@@ -146,104 +84,6 @@ impl SegmentBounds {
     }
 }
 
-// New helper function to get smoothed cursor position
-fn get_smoothed_cursor_position(
-    events: &CursorEvents,
-    time: f64,
-    window: f64,
-) -> Option<(f64, f64)> {
-    // First try to get the exact position at the current time
-    if let Some(pos) = events.cursor_position_at(time) {
-        // Try to find positions within the smoothing window
-        let start_time = time - window / 2.0;
-        let end_time = time + window / 2.0;
-
-        // Collect cursor positions within the time window
-        let mut positions = Vec::new();
-        let mut total_weight = 0.0;
-        let mut weighted_x = 0.0;
-        let mut weighted_y = 0.0;
-
-        // Find positions in the time window
-        for event in &events.moves {
-            let event_time = event.time_ms / 1000.0; // Convert to seconds
-
-            if event_time >= start_time && event_time <= end_time {
-                // Calculate weight based on time proximity (closer to current time = higher weight)
-                let time_diff = (time - event_time).abs();
-                let weight = 1.0 - (time_diff / (window / 2.0)).min(1.0);
-
-                positions.push((event.x, event.y, weight));
-                total_weight += weight;
-                weighted_x += event.x * weight;
-                weighted_y += event.y * weight;
-            }
-        }
-
-        // If we found positions in the window, return weighted average
-        if !positions.is_empty() && total_weight > 0.0 {
-            return Some((weighted_x / total_weight, weighted_y / total_weight));
-        }
-
-        // If no positions in window, use the exact position
-        return Some((pos.x, pos.y));
-    }
-
-    // Try to interpolate between closest positions if exact position not found
-    let mut before = None;
-    let mut after = None;
-
-    for event in &events.moves {
-        let event_time = event.time_ms / 1000.0;
-
-        if event_time <= time {
-            // Find the closest event before the target time
-            if let Some((prev_time, _, _)) = before {
-                if event_time > prev_time {
-                    before = Some((event_time, event.x, event.y));
-                }
-            } else {
-                before = Some((event_time, event.x, event.y));
-            }
-        } else {
-            // Find the closest event after the target time
-            if let Some((next_time, _, _)) = after {
-                if event_time < next_time {
-                    after = Some((event_time, event.x, event.y));
-                }
-            } else {
-                after = Some((event_time, event.x, event.y));
-            }
-        }
-    }
-
-    match (before, after) {
-        // Interpolate between two points
-        (Some((t1, x1, y1)), Some((t2, x2, y2))) => {
-            // Calculate interpolation factor
-            let t_diff = t2 - t1;
-            if t_diff > 0.0 {
-                let factor = (time - t1) / t_diff;
-
-                // Linearly interpolate between the two positions
-                let x = x1 + (x2 - x1) * factor;
-                let y = y1 + (y2 - y1) * factor;
-
-                Some((x, y))
-            } else {
-                // If timestamps are identical, just use one of the positions
-                Some((x1, y1))
-            }
-        }
-        // If we only have a position before the time
-        (Some((_, x, y)), None) => Some((x, y)),
-        // If we only have a position after the time
-        (None, Some((_, x, y))) => Some((x, y)),
-        // No positions at all
-        (None, None) => None,
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct InterpolatedZoom {
     // the ratio of current zoom to the maximum amount for the current segment
@@ -252,11 +92,11 @@ pub struct InterpolatedZoom {
 }
 
 impl InterpolatedZoom {
-    pub fn new(cursor: SegmentsCursor, cursor_events: Option<&CursorEvents>) -> Self {
+    pub fn new(cursor: SegmentsCursor, interpolated_cursor: Coord<RawDisplayUVSpace>) -> Self {
         let ease_in = bezier_easing::bezier_easing(0.1, 0.0, 0.3, 1.0).unwrap();
         let ease_out = bezier_easing::bezier_easing(0.5, 0.0, 0.5, 1.0).unwrap();
 
-        Self::new_with_easing(cursor, cursor_events, ease_in, ease_out)
+        Self::new_with_easing(cursor, interpolated_cursor, ease_in, ease_out)
     }
 
     // the multiplier applied to the display width/height
@@ -266,7 +106,7 @@ impl InterpolatedZoom {
 
     pub(self) fn new_with_easing(
         cursor: SegmentsCursor,
-        cursor_events: Option<&CursorEvents>,
+        interpolated_cursor: Coord<RawDisplayUVSpace>,
         ease_in: impl Fn(f32) -> f32,
         ease_out: impl Fn(f32) -> f32,
     ) -> InterpolatedZoom {
@@ -281,7 +121,7 @@ impl InterpolatedZoom {
                     t: 1.0 - zoom_t,
                     bounds: {
                         let prev_segment_bounds =
-                            SegmentBounds::from_segment(prev_segment, cursor.time, cursor_events);
+                            SegmentBounds::from_segment(prev_segment, interpolated_cursor);
 
                         SegmentBounds::new(
                             prev_segment_bounds.top_left * (1.0 - zoom_t)
@@ -300,7 +140,7 @@ impl InterpolatedZoom {
                     t,
                     bounds: {
                         let segment_bounds =
-                            SegmentBounds::from_segment(segment, cursor.time, cursor_events);
+                            SegmentBounds::from_segment(segment, interpolated_cursor);
 
                         SegmentBounds::new(
                             default.top_left * (1.0 - t) + segment_bounds.top_left * t,
@@ -311,9 +151,8 @@ impl InterpolatedZoom {
             }
             (Some(prev_segment), Some(segment)) => {
                 let prev_segment_bounds =
-                    SegmentBounds::from_segment(prev_segment, cursor.time, cursor_events);
-                let segment_bounds =
-                    SegmentBounds::from_segment(segment, cursor.time, cursor_events);
+                    SegmentBounds::from_segment(prev_segment, interpolated_cursor);
+                let segment_bounds = SegmentBounds::from_segment(segment, interpolated_cursor);
 
                 let zoom_t =
                     ease_in(t_clamp((cursor.time - segment.start) / ZOOM_DURATION) as f32) as f64;
@@ -337,7 +176,7 @@ impl InterpolatedZoom {
 
                     let min = InterpolatedZoom::new_with_easing(
                         SegmentsCursor::new(segment.start, cursor.segments),
-                        cursor_events,
+                        interpolated_cursor,
                         ease_in,
                         ease_out,
                     );
@@ -408,7 +247,8 @@ mod test {
     }
 
     fn test_interp((time, segments): (f64, &[ZoomSegment]), expected: InterpolatedZoom) {
-        let actual = InterpolatedZoom::new_with_easing(c(time, segments), None, |t| t, |t| t);
+        let actual =
+            InterpolatedZoom::new_with_easing(c(time, segments), Default::default(), |t| t, |t| t);
 
         assert_f64_near!(actual.t, expected.t, "t");
 
