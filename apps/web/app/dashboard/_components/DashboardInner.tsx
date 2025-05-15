@@ -50,7 +50,7 @@ export default function DashboardInner({
       {/* Top Bar - Fixed at top with proper z-index */}
       <header
         className={clsx(
-          "flex sticky z-50 justify-between items-center px-5 mt-10 w-full border-b min-h-16 md:min-h-10 lg:bg-transparent border-gray-3 lg:border-b-0 lg:pl-0 lg:pr-5 lg:top-0 lg:relative top-[64px] lg:mt-5 lg:h-8"
+          "flex sticky z-50 justify-between items-center px-5 mt-10 w-full border-b bg-gray-1 lg:bg-transparent min-h-16 lg:min-h-10 border-gray-3 lg:border-b-0 lg:pl-0 lg:pr-5 lg:top-0 lg:relative top-[64px] lg:mt-5 lg:h-8"
         )}
       >
         <p className="relative text-xl truncate md:max-w-full text-gray-12 lg:text-2xl w-fit max-w-[150px]">
