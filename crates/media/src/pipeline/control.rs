@@ -84,7 +84,7 @@ impl ControlBroadcast {
         match any_dropped {
             false => Ok(()),
             true => Err(MediaError::Any(
-                "Attempted to broadcast value to a listener that has been dropped. Pipeline execution may be compromised.",
+                "Attempted to broadcast value to a listener that has been dropped. Pipeline execution may be compromised.".into(),
             )),
         }
     }

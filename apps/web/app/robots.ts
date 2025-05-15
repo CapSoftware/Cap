@@ -1,7 +1,6 @@
 import { seoPages } from "@/lib/seo-pages";
 import { MetadataRoute } from "next";
 
-export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export default function robots(): MetadataRoute.Robots {
@@ -20,11 +19,12 @@ export default function robots(): MetadataRoute.Robots {
         // Be more specific about what we're disallowing under /s/
         disallow: [
           "/dashboard",
-          "/s/*", // This will match /s/ and anything under it
+          "/s/*",
           "/login",
           "/invite",
           "/onboarding",
           "/record",
+          "/home",
         ],
       },
     ],

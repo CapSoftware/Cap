@@ -74,7 +74,7 @@ impl SegmentBounds {
                 for i in 0..std::cmp::min(3, events.moves.len()) {
                     println!(
                         "Sample move event {}: time={}, pos=({}, {})",
-                        i, events.moves[i].process_time_ms, events.moves[i].x, events.moves[i].y
+                        i, events.moves[i].time_ms, events.moves[i].x, events.moves[i].y
                     );
                 }
                 // Print last event
@@ -82,7 +82,7 @@ impl SegmentBounds {
                     let last = &events.moves[events.moves.len() - 1];
                     println!(
                         "Last move event: time={}, pos=({}, {})",
-                        last.process_time_ms, last.x, last.y
+                        last.time_ms, last.x, last.y
                     );
                 }
             }
@@ -166,7 +166,7 @@ fn get_smoothed_cursor_position(
 
         // Find positions in the time window
         for event in &events.moves {
-            let event_time = event.process_time_ms / 1000.0; // Convert to seconds
+            let event_time = event.time_ms / 1000.0; // Convert to seconds
 
             if event_time >= start_time && event_time <= end_time {
                 // Calculate weight based on time proximity (closer to current time = higher weight)
@@ -194,7 +194,7 @@ fn get_smoothed_cursor_position(
     let mut after = None;
 
     for event in &events.moves {
-        let event_time = event.process_time_ms / 1000.0;
+        let event_time = event.time_ms / 1000.0;
 
         if event_time <= time {
             // Find the closest event before the target time

@@ -6,6 +6,9 @@ import { clientEnv } from "./env";
 import { authStore } from "~/store";
 
 const api: ApiFetcher = async (args) => {
+  const bypassSecret = import.meta.env.VITE_VERCEL_AUTOMATION_BYPASS_SECRET;
+  if (bypassSecret) args.headers["x-vercel-protection-bypass"] = bypassSecret;
+
   const resp = await fetch(args.path, args);
 
   let body;
@@ -16,6 +19,8 @@ const api: ApiFetcher = async (args) => {
   } else {
     body = await resp.text();
   }
+
+  console.log({ body });
 
   return {
     body,
@@ -41,5 +46,6 @@ export async function maybeProtectedHeaders() {
 export async function protectedHeaders() {
   const { authorization } = await maybeProtectedHeaders();
   if (!authorization) throw new Error("Not authorized");
+  console.log({ authorization });
   return { authorization };
 }

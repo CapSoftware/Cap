@@ -23,6 +23,18 @@ export const seoMetadata = {
     ],
     ogImage: "/og.png",
   },
+  "screen-recorder-windows": {
+    title: "Screen Record on Windows | Cap - Best Screen Recorder for Windows",
+    description:
+      "Cap is a powerful, user-friendly screen recorder for Windows, offering high-quality video capture with seamless functionality. Perfect for creating tutorials, presentations, and educational content on Windows.",
+    keywords: [
+      "windows screen recorder",
+      "screen recording windows",
+      "windows screen capture",
+      "screen recorder for windows",
+    ],
+    ogImage: "/og.png",
+  },
   "free-screen-recorder": {
     title: "Free Screen Recorder | Cap - High-Quality Recording at No Cost",
     description:

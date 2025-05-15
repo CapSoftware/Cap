@@ -1,13 +1,13 @@
-import { notFound } from "next/navigation";
-import Image from "next/image";
-import { format, parseISO } from "date-fns";
-import { MDXRemote } from "next-mdx-remote/rsc";
-import { getBlogPosts } from "@/utils/blog";
-import type { Metadata } from "next";
-import { Share } from "../_components/Share";
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
+import { getBlogPosts } from "@/utils/blog";
 import { calculateReadingTime } from "@/utils/readTime";
-import { clientEnv } from "@cap/env";
+import { buildEnv } from "@cap/env";
+import { format, parseISO } from "date-fns";
+import type { Metadata } from "next";
+import { MDXRemote } from "next-mdx-remote/rsc";
+import Image from "next/image";
+import { notFound } from "next/navigation";
+import { Share } from "../_components/Share";
 
 interface PostProps {
   params: {
@@ -23,8 +23,18 @@ export async function generateMetadata({
     return;
   }
 
-  let { title, publishedAt: publishedTime, description, image } = post.metadata;
-  let ogImage = `${clientEnv.NEXT_PUBLIC_WEB_URL}${image}`;
+  let {
+    title,
+    publishedAt: publishedTime,
+    description,
+    image,
+  } = post.metadata as {
+    title: string;
+    publishedAt: string;
+    description: string;
+    image: string;
+  };
+  let ogImage = `${buildEnv.NEXT_PUBLIC_WEB_URL}${image}`;
 
   return {
     title,
@@ -34,7 +44,7 @@ export async function generateMetadata({
       description,
       type: "article",
       publishedTime,
-      url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/blog/${post.slug}`,
+      url: `${buildEnv.NEXT_PUBLIC_WEB_URL}/blog/${post.slug}`,
       images: [
         {
           url: ogImage,
@@ -61,11 +71,11 @@ export default async function PostPage({ params }: PostProps) {
 
   return (
     <>
-      <article className="py-8 prose mx-auto ">
+      <article className="px-5 py-20 mx-auto sm:py-32 prose">
         {post.metadata.image && (
           <div className="relative mb-12 h-[345px] w-full">
             <Image
-              className="m-0 w-full rounded-lg object-contain sm:object-cover"
+              className="object-contain m-0 w-full rounded-lg sm:object-cover"
               src={post.metadata.image}
               alt={post.metadata.title}
               fill
@@ -76,10 +86,16 @@ export default async function PostPage({ params }: PostProps) {
 
         <div className="wrapper">
           <header>
-            <h1 className="mb-2">{post.metadata.title}</h1>
-            <p className="space-x-1 text-xs text-gray-500">
+            <h1 className="mb-2 font-semibold">{post.metadata.title}</h1>
+            <p className="space-x-1 text-xs text-gray-12">
               <span>
-                {format(parseISO(post.metadata.publishedAt), "MMMM dd, yyyy")}
+                {format(
+                  parseISO(
+                    (post.metadata as any).publishedAt ||
+                      new Date().toISOString()
+                  ),
+                  "MMMM dd, yyyy"
+                )}
               </span>
               <span>—</span>
               <span>{readingTime} min read</span>
@@ -87,10 +103,13 @@ export default async function PostPage({ params }: PostProps) {
           </header>
           <hr className="my-6" />
           <MDXRemote source={post.content} />
-          <Share post={post} />
+          <Share
+            post={post}
+            url={`${buildEnv.NEXT_PUBLIC_WEB_URL}/blog/${post.slug}`}
+          />
         </div>
       </article>
-      <div className="wrapper mb-4">
+      <div className="mb-4 wrapper">
         <ReadyToGetStarted />
       </div>
     </>

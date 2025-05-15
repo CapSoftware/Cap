@@ -3,7 +3,6 @@
 import { Flags } from "./utils/tauri";
 
 declare module "mp4box";
-
 export interface MP4MediaTrack {
   id: number;
   created: Date;

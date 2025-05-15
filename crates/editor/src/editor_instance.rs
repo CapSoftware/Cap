@@ -1,27 +1,25 @@
 use crate::editor;
 use crate::playback::{self, PlaybackHandle};
+use cap_audio::AudioData;
 use cap_media::data::RawVideoFormat;
 use cap_media::data::VideoInfo;
-use cap_media::feeds::AudioData;
+// use cap_media::feeds::AudioData;
 use cap_media::frame_ws::create_frame_ws;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, XY};
 use cap_project::{RecordingConfig, StudioRecordingMeta};
 use cap_rendering::{
-    get_duration, DecodedSegmentFrames, ProjectRecordings, ProjectUniforms,
-    RecordingSegmentDecoders, RenderOptions, RenderVideoConstants, SegmentVideoPaths,
+    get_duration, ProjectRecordings, ProjectUniforms, RecordingSegmentDecoders, RenderOptions,
+    RenderVideoConstants, SegmentVideoPaths,
 };
 use std::ops::Deref;
-use std::path::Path;
 use std::sync::Mutex as StdMutex;
-use std::time::Instant;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, watch, Mutex};
 
 pub struct EditorInstance {
     pub project_path: PathBuf,
-    pub id: String,
     pub ws_port: u16,
-    pub recordings: ProjectRecordings,
+    pub recordings: Arc<ProjectRecordings>,
     pub renderer: Arc<editor::RendererHandle>,
     pub render_constants: Arc<RenderVideoConstants>,
     pub state: Arc<Mutex<EditorState>>,
@@ -37,37 +35,13 @@ pub struct EditorInstance {
 }
 
 impl EditorInstance {
-    pub fn project_path(projects_path: &PathBuf, video_id: &str) -> PathBuf {
-        projects_path.join(format!(
-            "{}{}",
-            video_id,
-            if video_id.ends_with(".cap") {
-                ""
-            } else {
-                ".cap"
-            }
-        ))
-    }
-
     pub async fn new(
-        projects_path: PathBuf,
-        video_id: &str,
+        project_path: PathBuf,
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
-        get_is_upgraded: impl Fn() -> bool + Send + 'static,
     ) -> Result<Arc<Self>, String> {
         sentry::configure_scope(|scope| {
             scope.set_tag("crate", "editor");
         });
-
-        let project_path = projects_path.join(format!(
-            "{}{}",
-            video_id,
-            if video_id.ends_with(".cap") {
-                ""
-            } else {
-                ".cap"
-            }
-        ));
 
         if !project_path.exists() {
             println!("Video path {} not found!", project_path.display());
@@ -79,7 +53,7 @@ impl EditorInstance {
             return Err("Cannot edit non-studio recordings".to_string());
         };
         let project = recording_meta.project_config();
-        let recordings = ProjectRecordings::new(&recording_meta.project_path, meta);
+        let recordings = Arc::new(ProjectRecordings::new(&recording_meta.project_path, meta)?);
 
         let render_options = RenderOptions {
             screen_size: XY::new(
@@ -109,12 +83,11 @@ impl EditorInstance {
             frame_tx,
             &recording_meta,
             meta,
-        ));
+        )?);
 
         let (preview_tx, preview_rx) = watch::channel(None);
 
         let this = Arc::new(Self {
-            id: video_id.to_string(),
             project_path,
             recordings,
             ws_port,
@@ -133,16 +106,14 @@ impl EditorInstance {
             meta: recording_meta,
         });
 
-        this.state.lock().await.preview_task = Some(
-            this.clone()
-                .spawn_preview_renderer(preview_rx, get_is_upgraded),
-        );
+        this.state.lock().await.preview_task =
+            Some(this.clone().spawn_preview_renderer(preview_rx));
 
         Ok(this)
     }
 
-    pub fn meta(&self) -> RecordingMeta {
-        self.meta.clone()
+    pub fn meta(&self) -> &RecordingMeta {
+        &self.meta
     }
 
     pub async fn dispose(&self) {
@@ -193,12 +164,7 @@ impl EditorInstance {
         (self.on_state_change)(&state);
     }
 
-    pub async fn start_playback(
-        self: &Arc<Self>,
-        fps: u32,
-        resolution_base: XY<u32>,
-        is_upgraded: bool,
-    ) {
+    pub async fn start_playback(self: &Arc<Self>, fps: u32, resolution_base: XY<u32>) {
         let (mut handle, prev) = {
             let Ok(mut state) = self.state.try_lock() else {
                 return;
@@ -213,7 +179,7 @@ impl EditorInstance {
                 start_frame_number,
                 project: self.project_config.0.subscribe(),
             }
-            .start(fps, resolution_base, is_upgraded)
+            .start(fps, resolution_base)
             .await;
 
             let prev = state.playback_task.replace(playback_handle.clone());
@@ -250,7 +216,6 @@ impl EditorInstance {
     fn spawn_preview_renderer(
         self: Arc<Self>,
         mut preview_rx: watch::Receiver<Option<(u32, u32, XY<u32>)>>,
-        get_is_upgraded: impl Fn() -> bool + Send + 'static,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {
@@ -278,17 +243,14 @@ impl EditorInstance {
                     self.renderer
                         .render_frame(
                             segment_frames,
-                            project.background.source.clone(),
                             ProjectUniforms::new(
                                 &self.render_constants,
                                 &project,
                                 frame_number,
                                 fps,
                                 resolution_base,
-                                get_is_upgraded(),
                                 &segment.cursor,
                             ),
-                            resolution_base,
                             segment.cursor.clone(),
                         )
                         .await;
@@ -321,7 +283,10 @@ impl Drop for EditorInstance {
     fn drop(&mut self) {
         // TODO: Ensure that *all* resources have been released by this point?
         // For now the `dispose` method is adequate.
-        println!("*** Editor instance {} has been released. ***", self.id);
+        println!(
+            "*** Editor instance has been released: {:?} ***",
+            self.project_path
+        );
     }
 }
 
@@ -334,7 +299,8 @@ pub struct EditorState {
 }
 
 pub struct Segment {
-    pub audio: Arc<Option<AudioData>>,
+    pub audio: Option<Arc<AudioData>>,
+    pub system_audio: Option<Arc<AudioData>>,
     pub cursor: Arc<CursorEvents>,
     pub decoders: RecordingSegmentDecoders,
 }
@@ -345,9 +311,15 @@ pub async fn create_segments(
 ) -> Result<Vec<Segment>, String> {
     match &meta {
         cap_project::StudioRecordingMeta::SingleSegment { segment: s } => {
-            let audio = Arc::new(s.audio.as_ref().map(|audio_meta| {
-                AudioData::from_file(recording_meta.path(&audio_meta.path)).unwrap()
-            }));
+            let audio = s
+                .audio
+                .as_ref()
+                .map(|audio_meta| {
+                    AudioData::from_file(recording_meta.path(&audio_meta.path))
+                        .map_err(|e| format!("SingleSegment Audio / {e}"))
+                })
+                .transpose()?
+                .map(Arc::new);
 
             let decoders = RecordingSegmentDecoders::new(
                 &recording_meta,
@@ -356,23 +328,41 @@ pub async fn create_segments(
                     display: recording_meta.path(&s.display.path),
                     camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                 },
+                0,
             )
             .await
-            .map_err(|e| format!("SingleSegment:{e}"))?;
+            .map_err(|e| format!("SingleSegment / {e}"))?;
 
             Ok(vec![Segment {
                 audio,
+                system_audio: None,
                 cursor: Default::default(),
                 decoders,
             }])
         }
-        cap_project::StudioRecordingMeta::MultipleSegments { inner } => {
+        cap_project::StudioRecordingMeta::MultipleSegments { inner, .. } => {
             let mut segments = vec![];
 
             for (i, s) in inner.segments.iter().enumerate() {
-                let audio = Arc::new(s.audio.as_ref().map(|audio_meta| {
-                    AudioData::from_file(recording_meta.path(&audio_meta.path)).unwrap()
-                }));
+                let audio = s
+                    .mic
+                    .as_ref()
+                    .map(|audio| {
+                        AudioData::from_file(recording_meta.path(&audio.path))
+                            .map_err(|e| format!("MultipleSegments {i} Audio / {e}"))
+                    })
+                    .transpose()?
+                    .map(Arc::new);
+
+                let system_audio = s
+                    .system_audio
+                    .as_ref()
+                    .map(|audio| {
+                        AudioData::from_file(recording_meta.path(&audio.path))
+                            .map_err(|e| format!("MultipleSegments {i} System Audio / {e}"))
+                    })
+                    .transpose()?
+                    .map(Arc::new);
 
                 let cursor = Arc::new(s.cursor_events(&recording_meta));
 
@@ -383,12 +373,14 @@ pub async fn create_segments(
                         display: recording_meta.path(&s.display.path),
                         camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                     },
+                    i,
                 )
                 .await
-                .map_err(|e| format!("MultipleSegments/{i}:{e}"))?;
+                .map_err(|e| format!("MultipleSegments {i} / {e}"))?;
 
                 segments.push(Segment {
                     audio,
+                    system_audio,
                     cursor,
                     decoders,
                 });
@@ -397,17 +389,4 @@ pub async fn create_segments(
             Ok(segments)
         }
     }
-}
-
-fn create_preview_config(recording_config: &RecordingConfig, meta: &RecordingMeta) -> VideoInfo {
-    let (width, height) = if recording_config.resolution.width > 1280 {
-        (1280, 720)
-    } else {
-        (
-            recording_config.resolution.width,
-            recording_config.resolution.height,
-        )
-    };
-
-    VideoInfo::from_raw(RawVideoFormat::Rgba, width, height, 30)
 }

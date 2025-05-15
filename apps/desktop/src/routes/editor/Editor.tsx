@@ -1,7 +1,9 @@
 import { Button } from "@cap/ui-solid";
 import { trackDeep } from "@solid-primitives/deep";
 import { throttle } from "@solid-primitives/scheduled";
-import { useSearchParams } from "@solidjs/router";
+import { makePersisted } from "@solid-primitives/storage";
+import { createMutation } from "@tanstack/solid-query";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   Match,
   Show,
@@ -11,13 +13,15 @@ import {
   createSignal,
   on,
   onMount,
-  untrack,
 } from "solid-js";
 import { createStore } from "solid-js/store";
-import { createMutation } from "@tanstack/solid-query";
-import { convertFileSrc } from "@tauri-apps/api/core";
 
-import { type Crop, events, commands } from "~/utils/tauri";
+import { cx } from "cva";
+import Cropper, { cropToFloor } from "~/components/Cropper";
+import { Toggle } from "~/components/Toggle";
+import Tooltip from "~/components/Tooltip";
+import { events, type Crop } from "~/utils/tauri";
+import { ConfigSidebar } from "./ConfigSidebar";
 import {
   EditorContextProvider,
   EditorInstanceContextProvider,
@@ -26,68 +30,66 @@ import {
   useEditorContext,
   useEditorInstanceContext,
 } from "./context";
+import { ExportDialog } from "./ExportDialog";
+import { Header } from "./Header";
+import { Player } from "./Player";
+import { Timeline } from "./Timeline";
 import {
   Dialog,
   DialogContent,
   EditorButton,
   Input,
   Subfield,
-  Toggle,
 } from "./ui";
-import { Header } from "./Header";
-import { Player } from "./Player";
-import { ConfigSidebar } from "./ConfigSidebar";
-import { Timeline } from "./Timeline";
-import Cropper, { cropToFloor } from "~/components/Cropper";
-import { makePersisted } from "@solid-primitives/storage";
-import { Tooltip } from "@kobalte/core";
 
 export function Editor() {
-  const [params] = useSearchParams<{ id: string }>();
-
   return (
-    <Show when={params.id} fallback="No video id available" keyed>
-      {(videoId) => (
-        <EditorInstanceContextProvider videoId={videoId}>
-          <Show
-            when={(() => {
-              const ctx = useEditorInstanceContext();
-              const editorInstance = ctx.editorInstance();
+    <EditorInstanceContextProvider>
+      <Show
+        when={(() => {
+          const ctx = useEditorInstanceContext();
+          const editorInstance = ctx.editorInstance();
 
-              if (!editorInstance) return;
+          if (!editorInstance || !ctx.metaQuery.data) return;
 
-              return {
-                editorInstance,
-              };
-            })()}
-          >
-            {(values) => (
-              <EditorContextProvider {...values()}>
-                <Inner />
-              </EditorContextProvider>
-            )}
-          </Show>
-        </EditorInstanceContextProvider>
-      )}
-    </Show>
+          return {
+            editorInstance,
+            meta() {
+              const d = ctx.metaQuery.data;
+              if (!d)
+                throw new Error(
+                  "metaQuery.data is undefined - how did this happen?"
+                );
+              return d;
+            },
+            refetchMeta: async () => {
+              await ctx.metaQuery.refetch();
+            },
+          };
+        })()}
+      >
+        {(values) => (
+          <EditorContextProvider {...values()}>
+            <Inner />
+          </EditorContextProvider>
+        )}
+      </Show>
+    </EditorInstanceContextProvider>
   );
 }
 
 function Inner() {
-  const { project, playbackTime, setPlaybackTime, playing, previewTime } =
-    useEditorContext();
+  const { project, editorState, setEditorState } = useEditorContext();
 
-  onMount(() => {
+  onMount(() =>
     events.editorStateChanged.listen((e) => {
       renderFrame.clear();
-      untrack(() => {
-        setPlaybackTime(e.payload.playhead_position / FPS);
-      });
-    });
-  });
+      setEditorState("playbackTime", e.payload.playhead_position / FPS);
+    })
+  );
 
   const renderFrame = throttle((time: number) => {
-    if (!playing()) {
+    if (!editorState.playing) {
       events.renderFrameEvent.emit({
         frame_number: Math.max(Math.floor(time * FPS), 0),
         fps: FPS,
@@ -97,14 +99,14 @@ function Inner() {
   }, 1000 / FPS);
 
   const frameNumberToRender = createMemo(() => {
-    const preview = previewTime();
-    if (preview !== undefined) return preview;
-    return playbackTime();
+    const preview = editorState.previewTime;
+    if (preview !== null) return preview;
+    return editorState.playbackTime;
   });
 
   createEffect(
     on(frameNumberToRender, (number) => {
-      if (playing()) return;
+      if (editorState.playing) return;
       renderFrame(number);
     })
   );
@@ -112,19 +114,19 @@ function Inner() {
   createEffect(
     on(
       () => trackDeep(project),
-      () => renderFrame(playbackTime())
+      () => renderFrame(editorState.playbackTime)
     )
   );
 
   return (
-    <div class="w-screen h-screen flex flex-col">
+    <>
       <Header />
       <div
-        class="p-5 pt-0 flex-1 w-full overflow-y-hidden flex flex-col gap-4 bg-gray-50 leading-5 animate-in fade-in"
+        class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-4 w-full leading-5 animate-in fade-in"
         data-tauri-drag-region
       >
-        <div class="rounded-2xl overflow-hidden shadow border flex-1 flex flex-col divide-y bg-white">
-          <div class="flex flex-row flex-1 divide-x overflow-y-hidden">
+        <div class="flex overflow-hidden flex-col flex-1">
+          <div class="flex overflow-y-hidden flex-row flex-1 gap-2 px-2 pb-0.5">
             <Player />
             <ConfigSidebar />
           </div>
@@ -132,7 +134,7 @@ function Inner() {
         </div>
         <Dialogs />
       </div>
-    </div>
+    </>
   );
 }
 
@@ -145,6 +147,11 @@ function Dialogs() {
         const d = dialog();
         if ("type" in d && d.type === "crop") return "lg";
         return "sm";
+      })()}
+      contentClass={(() => {
+        const d = dialog();
+        if ("type" in d && d.type === "export") return "max-w-[740px]";
+        return "";
       })()}
       open={dialog().open}
       onOpenChange={(o) => {
@@ -159,6 +166,9 @@ function Dialogs() {
       >
         {(dialog) => (
           <Switch>
+            <Match when={dialog().type === "export"}>
+              <ExportDialog />
+            </Match>
             <Match when={dialog().type === "createPreset"}>
               {(_) => {
                 const [form, setForm] = createStore({
@@ -189,11 +199,12 @@ function Dialogs() {
                   >
                     <Subfield name="Name" required />
                     <Input
-                      class="mt-[0.25rem]"
+                      class="mt-2"
                       value={form.name}
+                      placeholder="Enter preset name..."
                       onInput={(e) => setForm("name", e.currentTarget.value)}
                     />
-                    <Subfield name="Set as default" class="mt-[0.75rem]">
+                    <Subfield name="Set as default" class="mt-4">
                       <Toggle
                         checked={form.default}
                         onChange={(checked) => setForm("default", checked)}
@@ -236,6 +247,7 @@ function Dialogs() {
                   >
                     <Subfield name="Name" required />
                     <Input
+                      class="mt-2"
                       value={name()}
                       onInput={(e) => setName(e.currentTarget.value)}
                     />
@@ -251,8 +263,10 @@ function Dialogs() {
             >
               {(dialog) => {
                 const deletePreset = createMutation(() => ({
-                  mutationFn: async () =>
-                    presets.deletePreset(dialog().presetIndex),
+                  mutationFn: async () => {
+                    await presets.deletePreset(dialog().presetIndex);
+                    await presets.query.refetch();
+                  },
                   onSuccess: () => {
                     setDialog((d) => ({ ...d, open: false }));
                   },
@@ -271,7 +285,7 @@ function Dialogs() {
                       </Dialog.ConfirmButton>
                     }
                   >
-                    <p class="text-gray-400">
+                    <p class="text-gray-11">
                       Are you sure you want to delete this preset?
                     </p>
                   </DialogContent>
@@ -305,14 +319,22 @@ function Dialogs() {
                 return (
                   <>
                     <Dialog.Header>
-                      <div class="flex flex-row space-x-[0.75rem]">
-                        <div class="flex flex-row items-center space-x-[0.5rem] text-gray-400">
+                      <div class="flex flex-row space-x-[2rem]">
+                        <div class="flex flex-row items-center space-x-[0.75rem] text-gray-11">
                           <span>Size</span>
                           <div class="w-[3.25rem]">
                             <Input
                               class="bg-transparent dark:!text-[#ababab]"
                               value={adjustedCrop().size.x}
-                              disabled
+                              onChange={(e) =>
+                                setCrop((c) => ({
+                                  ...c,
+                                  size: {
+                                    ...c.size,
+                                    x: Number(e.currentTarget.value),
+                                  },
+                                }))
+                              }
                             />
                           </div>
                           <span>x</span>
@@ -320,17 +342,33 @@ function Dialogs() {
                             <Input
                               class="bg-transparent dark:!text-[#ababab]"
                               value={adjustedCrop().size.y}
-                              disabled
+                              onChange={(e) =>
+                                setCrop((c) => ({
+                                  ...c,
+                                  size: {
+                                    ...c.size,
+                                    y: Number(e.currentTarget.value),
+                                  },
+                                }))
+                              }
                             />
                           </div>
                         </div>
-                        <div class="flex flex-row items-center space-x-[0.5rem] text-gray-400">
+                        <div class="flex flex-row items-center space-x-[0.75rem] text-gray-11">
                           <span>Position</span>
                           <div class="w-[3.25rem]">
                             <Input
                               class="bg-transparent dark:!text-[#ababab]"
                               value={adjustedCrop().position.x}
-                              disabled
+                              onChange={(e) =>
+                                setCrop((c) => ({
+                                  ...c,
+                                  position: {
+                                    ...c.position,
+                                    x: Number(e.currentTarget.value),
+                                  },
+                                }))
+                              }
                             />
                           </div>
                           <span>x</span>
@@ -338,58 +376,57 @@ function Dialogs() {
                             <Input
                               class="w-[3.25rem] bg-transparent dark:!text-[#ababab]"
                               value={adjustedCrop().position.y}
-                              disabled
+                              onChange={(e) =>
+                                setCrop((c) => ({
+                                  ...c,
+                                  position: {
+                                    ...c.position,
+                                    y: Number(e.currentTarget.value),
+                                  },
+                                }))
+                              }
                             />
                           </div>
                         </div>
-                        <div class="flex flex-row items-center space-x-[0.5rem] text-gray-400">
-                          <Tooltip.Root openDelay={500}>
-                            <Tooltip.Trigger
-                              class="fixed flex flex-row items-center w-8 h-8"
-                              tabIndex={-1}
-                            >
-                              <button
-                                type="button"
-                                class={`flex items-center justify-center text-center rounded-[0.5rem] h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-300 outline-none transition-colors duration-200 ${
-                                  cropOptions.showGrid
-                                    ? "bg-gray-200 text-blue-300"
-                                    : "text-gray-500"
-                                }`}
-                                onClick={() =>
-                                  setCropOptions("showGrid", (s) => !s)
-                                }
-                              >
-                                <IconCapPadding class="w-4" />
-                              </button>
-                            </Tooltip.Trigger>
-                            <Tooltip.Portal>
-                              <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
-                                Rule of Thirds
-                                <Tooltip.Arrow class="fill-gray-500" />
-                              </Tooltip.Content>
-                            </Tooltip.Portal>
-                          </Tooltip.Root>
-                        </div>
                       </div>
-                      <EditorButton
-                        leftIcon={<IconCapCircleX />}
-                        class="ml-auto"
-                        onClick={() =>
-                          setCrop({
-                            position: { x: 0, y: 0 },
-                            size: {
-                              x: display.width,
-                              y: display.height,
-                            },
-                          })
-                        }
-                      >
-                        Reset
-                      </EditorButton>
+                      <div class="flex flex-row gap-3 justify-end items-center w-full">
+                        <div class="flex flex-row items-center space-x-[0.5rem] text-gray-11">
+                          <Tooltip content="Rule of Thirds">
+                            <button
+                              type="button"
+                              class={cx(
+                                "flex items-center bg-gray-3 justify-center text-center rounded-[0.5rem] h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-9 outline-none transition-colors duration-200",
+                                cropOptions.showGrid
+                                  ? "bg-gray-3 text-blue-9 border-blue-9"
+                                  : "text-gray-12"
+                              )}
+                              onClick={() =>
+                                setCropOptions("showGrid", (s) => !s)
+                              }
+                            >
+                              <IconCapPadding class="w-4" />
+                            </button>
+                          </Tooltip>
+                        </div>
+                        <EditorButton
+                          leftIcon={<IconCapCircleX />}
+                          onClick={() =>
+                            setCrop({
+                              position: { x: 0, y: 0 },
+                              size: {
+                                x: display.width,
+                                y: display.height,
+                              },
+                            })
+                          }
+                        >
+                          Reset
+                        </EditorButton>
+                      </div>
                     </Dialog.Header>
                     <Dialog.Content>
                       <div class="flex flex-row justify-center">
-                        <div class="divide-black-transparent-10 overflow-hidden rounded">
+                        <div class="overflow-hidden rounded divide-black-transparent-10">
                           <Cropper
                             value={crop}
                             onCropChange={setCrop}

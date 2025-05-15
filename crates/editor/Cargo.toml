@@ -3,11 +3,14 @@ name = "cap-editor"
 version = "0.1.0"
 edition = "2021"
 
-[dependencies]
+[lints]
+workspace = true
 
+[dependencies]
 cap-media = { path = "../media" }
 cap-project = { path = "../project" }
 cap-rendering = { path = "../rendering" }
+cap-audio = { path = "../audio" }
 
 tokio = { workspace = true, features = ["macros", "process", "fs"] }
 cpal.workspace = true
@@ -17,5 +20,5 @@ specta.workspace = true
 serde = { version = "1", features = ["derive"] }
 sentry.workspace = true
 futures = "0.3.31"
-tracing = "0.1.41"
+tracing.workspace = true
 flume.workspace = true

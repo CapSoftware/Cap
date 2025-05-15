@@ -5,6 +5,8 @@ import { count, eq } from "drizzle-orm";
 import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
   const url = new URL(request.url);
@@ -21,7 +23,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const video = await db.select().from(videos).where(eq(videos.id, videoId));
+  const video = await db().select().from(videos).where(eq(videos.id, videoId));
 
   if (video.length === 0 || !video[0]) {
     return Response.json(

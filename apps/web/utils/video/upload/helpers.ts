@@ -1,4 +1,4 @@
-import { clientEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 
 export async function uploadToS3({
   filename,
@@ -21,25 +21,22 @@ export async function uploadToS3({
   awsBucket: string;
   awsRegion: string;
 }) {
-  const response = await fetch(
-    `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/upload/signed`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        userId: userId,
-        fileKey: filename,
-        duration: duration,
-        resolution: resolution,
-        videoCodec: videoCodec,
-        audioCodec: audioCodec,
-        awsBucket: awsBucket,
-        awsRegion: awsRegion,
-      }),
-    }
-  );
+  const response = await fetch(`${serverEnv().WEB_URL}/api/upload/signed`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      userId: userId,
+      fileKey: filename,
+      duration: duration,
+      resolution: resolution,
+      videoCodec: videoCodec,
+      audioCodec: audioCodec,
+      awsBucket: awsBucket,
+      awsRegion: awsRegion,
+    }),
+  });
 
   const { presignedPostData } = await response.json();
 

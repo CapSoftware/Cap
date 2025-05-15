@@ -1,5 +1,6 @@
-import { EyeIcon, MessageSquareIcon, SmileIcon } from "lucide-react";
-import { Tooltip } from "react-tooltip";
+import { Tooltip } from "@/components/Tooltip";
+import { faComment, faEye, faSmile } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 
 interface CapCardAnalyticsProps {
   capId: string;
@@ -15,40 +16,25 @@ export const CapCardAnalytics: React.FC<CapCardAnalyticsProps> = ({
   totalReactions,
 }) => {
   return (
-    <div className="flex items-center space-x-3 text-sm text-gray-60">
-      <div
-        className="flex items-center"
-        data-tooltip-id={capId + "_analytics"}
-        data-tooltip-content={`${displayCount} unique views via your shareable Cap.link.`}
-      >
-        <EyeIcon className="w-4 h-4 mr-1 text-gray-400" />
-        <span className="text-[0.875rem] leading-[1.25rem] text-gray-400">
-          {displayCount ?? "-"}
-        </span>
-        <Tooltip id={capId + "_analytics"} />
-      </div>
-      <div
-        className="flex items-center"
-        data-tooltip-id={capId + "_comments"}
-        data-tooltip-content={`${totalComments} comments`}
-      >
-        <MessageSquareIcon className="w-4 h-4 mr-1 text-gray-400" />
-        <span className="text-[0.875rem] leading-[1.25rem] text-gray-400">
-          {totalComments}
-        </span>
-        <Tooltip id={capId + "_comments"} />
-      </div>
-      <div
-        className="flex items-center"
-        data-tooltip-id={capId + "_reactions"}
-        data-tooltip-content={`${totalReactions} reactions`}
-      >
-        <SmileIcon className="w-4 h-4 mr-1 text-gray-400" />
-        <span className="text-[0.875rem] leading-[1.25rem] text-gray-400">
-          {totalReactions}
-        </span>
-        <Tooltip id={capId + "_reactions"} />
-      </div>
+    <div className="flex flex-wrap gap-4 items-center text-sm text-gray-60">
+      <Tooltip content={`${displayCount} unique views`}>
+        <div className="flex gap-2 items-center">
+          <FontAwesomeIcon className="text-gray-8 size-4" icon={faEye} />
+          <span className="text-sm text-gray-12">{displayCount ?? "-"}</span>
+        </div>
+      </Tooltip>
+      <Tooltip content={`${totalComments} comments`}>
+        <div className="flex gap-2 items-center">
+          <FontAwesomeIcon className="text-gray-8 size-4" icon={faComment} />
+          <span className="text-sm text-gray-12">{totalComments}</span>
+        </div>
+      </Tooltip>
+      <Tooltip content={`${totalReactions} reactions`}>
+        <div className="flex gap-2 items-center">
+          <FontAwesomeIcon className="text-gray-8 size-4" icon={faSmile} />
+          <span className="text-sm text-gray-12">{totalReactions}</span>
+        </div>
+      </Tooltip>
     </div>
   );
 };

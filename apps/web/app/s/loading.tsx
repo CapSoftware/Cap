@@ -91,7 +91,7 @@ export default function Loading() {
 
       {/* Footer placeholder */}
       <div className="mt-auto py-4">
-        <div className="flex items-center justify-center space-x-2 py-2 px-4 bg-gray-100 border border-gray-200 rounded-full mx-auto w-fit">
+        <div className="flex items-center justify-center space-x-2 py-2 px-4 bg-gray-1 border border-gray-200 rounded-full mx-auto w-fit">
           <div className="w-20 h-4 bg-gray-200 rounded animate-pulse"></div>
           <div className="w-14 h-6 bg-gray-200 rounded animate-pulse"></div>
         </div>

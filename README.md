@@ -9,11 +9,8 @@
     <a href="https://cap.so"><strong>Cap.so »</strong></a>
     <br />
     <br />
-    <b>Download for </b>
-		<a href="https://cap.so/download">macOS</a>
-    <br />
-    <br />
-    <i>~ Cap is currently in public beta, and is available for macOS and Web. Windows and Linux builds are in development. Join the <a href="https://discord.gg/y8gdQ3WRN3">Cap Discord</a> to help test future releases and join the community. ~</i>
+    <b>Downloads for </b>
+		<a href="https://cap.so/download">macOS & Windows</a>
     <br />
   </p>
 </p>
@@ -21,15 +18,15 @@
 
 [![Open Bounties](https://img.shields.io/endpoint?url=https%3A%2F%2Fconsole.algora.io%2Fapi%2Fshields%2FCapSoftware%2Fbounties%3Fstatus%3Dopen)](https://console.algora.io/org/CapSoftware/bounties?status=open)
 
-> NOTE: Cap is under active development, and is currently in public beta. This repository is updated regularly with changes and new releases.
-
 Cap is the open source alternative to Loom. It's a video messaging tool that allows you to record, edit and share videos in seconds.
 
 <img src="https://raw.githubusercontent.com/CapSoftware/Cap/refs/heads/main/apps/web/public/landing-cover.png"/>
 
-# Cap Self Hosting
+# Cap Self Hosting *(Updated May 2025)*
 
-We're working on a self-hosting guide for Cap. This will include one-click deployment buttons for Vercel and Render, as well as an option to self host with Docker. Join the <a href="https://discord.gg/y8gdQ3WRN3">Cap Discord</a> if you want to help contribute to this particular project.
+Self-hosting deployment options for Cap are currently being worked on. This includes a [Dockerfile](https://github.com/CapSoftware/Cap/blob/main/Dockerfile) and also [one-click deployment via Railway](https://railway.com/template/PwpGcf). Documentation on how to deploy will be released as soon as we make the Dockerfile and Railway deployment template stable. You will be able to take your self hosted URL and paste directly into the desktop app for direct, instant use.
+
+Join the <a href="https://discord.gg/y8gdQ3WRN3">Cap Discord</a> if you want to help contribute to this particular project.
 
 # Monorepo App Architecture
 

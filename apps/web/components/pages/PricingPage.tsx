@@ -2,22 +2,39 @@
 
 import {
   Button,
-  LogoBadge,
   Card,
   CardDescription,
-  CardTitle,
-  CardHeader,
-  CardContent,
   CardFooter,
+  CardHeader,
+  CardTitle,
   Switch,
 } from "@cap/ui";
-import { Check, Construction } from "lucide-react";
-import { useState, useEffect } from "react";
 import { getProPlanId } from "@cap/utils";
-import toast from "react-hot-toast";
+import NumberFlow from "@number-flow/react";
+import clsx from "clsx";
+import { Check } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { SimplePlans } from "../text/SimplePlans";
-import { LogoSection } from "./_components/LogoSection";
+import { Testimonials } from "../ui/Testimonials";
+
+const QuantityButton = ({
+  onClick,
+  children,
+}: {
+  onClick: () => void;
+  children: React.ReactNode;
+}) => {
+  return (
+    <button
+      onClick={onClick}
+      className="flex justify-center items-center px-2 py-0 w-6 h-6 bg-gray-200 rounded-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400"
+    >
+      {children}
+    </button>
+  );
+};
 
 export const PricingPage = () => {
   const [proLoading, setProLoading] = useState(false);
@@ -30,11 +47,11 @@ export const PricingPage = () => {
   const { push } = useRouter();
   const searchParams = useSearchParams();
 
+
   useEffect(() => {
     const init = async () => {
       setInitialRender(false);
       const planFromUrl = searchParams.get("plan");
-      const next = searchParams.get("next");
       const pendingPriceId = localStorage.getItem("pendingPriceId");
       const pendingProQuantity = localStorage.getItem("pendingQuantity");
 
@@ -64,6 +81,20 @@ export const PricingPage = () => {
 
     init();
   }, []);
+
+  const scrollToTestimonials = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const testimonials = document.getElementById("testimonials");
+    if (testimonials) {
+      const offset = 80;
+      const topPos =
+        testimonials.getBoundingClientRect().top + window.pageYOffset - offset;
+      window.scrollTo({
+        top: topPos,
+        behavior: "smooth",
+      });
+    }
+  };
 
   const planCheckout = async (planId?: string) => {
     setProLoading(true);
@@ -189,33 +220,45 @@ export const PricingPage = () => {
   return (
     <div>
       <div className="py-12 mt-16 space-y-24 wrapper">
-        <div className="space-y-12">
-          <div className="text-center">
-            <div className={`mb-4 ${initialRender ? "fade-in-down" : ""}`}>
+        <div>
+          <div className="mb-8 text-center">
+            <div
+              className={clsx("mb-4", {
+                "fade-in-down animate-delay-1": initialRender,
+              })}
+            >
               <SimplePlans />
             </div>
             <h1
-              className={`text-4xl md:text-5xl ${
-                initialRender ? "fade-in-down" : ""
-              }mb-6 }`}
+              className={clsx("text-4xl md:text-5xl", {
+                "fade-in-down animate-delay-1 text-gray-12": initialRender,
+              })}
             >
               Early Adopter Pricing
             </h1>
             <p
-              className={`max-w-[800px] mx-auto ${
-                initialRender ? "fade-in-down animate-delay-1" : ""
-              }`}
+              className={clsx("mx-auto mt-3 max-w-[800px]", {
+                "mt-4 fade-in-down animate-delay-1 text-gray-10": initialRender,
+              })}
             >
               Cap is currently in public beta, and we're offering special early
               adopter pricing to our first users. This pricing will be locked in
               for the lifetime of your subscription.
             </p>
+            <a
+              className="inline-flex mt-3 text-sm font-bold text-gray-10 hover:underline fade-in-down animate-delay-1"
+              href="#testimonials"
+              onClick={scrollToTestimonials}
+            >
+              Loved by 10k+ users
+            </a>
           </div>
+
           <div className="grid grid-cols-1 gap-3 items-stretch md:grid-cols-2">
             <Card
-              className={`bg-gray-100 rounded-xl min-h-[600px] flex-grow ${
-                initialRender ? "fade-in-down animate-delay-2" : ""
-              }`}
+              className={clsx("flex-grow rounded-xl bg-gray-1 min-h-[600px]", {
+                "fade-in-down animate-delay-2": initialRender,
+              })}
             >
               <div className="space-y-4">
                 <CardHeader>
@@ -228,29 +271,36 @@ export const PricingPage = () => {
                   </CardDescription>
                   <div>
                     <div className="flex items-center space-x-3">
-                      <h3 className="text-4xl">
-                        {isCommercialAnnual
-                          ? `$${29 * licenseQuantity}`
-                          : `$${58 * licenseQuantity}`}
-                      </h3>
+                      <NumberFlow
+                        value={isCommercialAnnual
+                          ? `${29 * licenseQuantity}`
+                          : `${58 * licenseQuantity}`}
+                        className="text-4xl tabular-nums"
+                        format={{
+                          notation: "compact",
+                          style: "currency",
+                          currency: "USD",                         
+                        }}
+                      />
                       <div>
                         <p className="text-sm font-medium">
                           {isCommercialAnnual
                             ? licenseQuantity === 1
                               ? "billed annually"
-                              : `for ${licenseQuantity} licenses, billed annually`
+                              : <>for <NumberFlow value={licenseQuantity} className="text-sm font-medium tabular-nums" /> licenses, billed annually</>
                             : licenseQuantity === 1
                             ? "one-time payment"
-                            : `for ${licenseQuantity} licenses, one-time payment`}
+                            : <>for <NumberFlow value={licenseQuantity} className="text-sm font-medium tabular-nums" /> licenses, one-time payment</>
+                          }
                         </p>
                         {isCommercialAnnual && (
                           <p className="text-sm">
-                            or, ${58 * licenseQuantity} one-time payment
+                            or, <NumberFlow value={58 * licenseQuantity} className="text-sm tabular-nums" format={{ notation: "compact", style: "currency", currency: "USD" }} /> one-time payment
                           </p>
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center justify-between pt-4 mt-2 border-t border-gray-200">
+                    <div className="flex justify-between items-center pt-4 mt-2 border-t border-gray-200">
                       <div className="flex items-center">
                         <span className="mr-2 text-xs">
                           Switch to {isCommercialAnnual ? "lifetime" : "yearly"}
@@ -265,36 +315,28 @@ export const PricingPage = () => {
                       <div className="flex items-center">
                         <span className="mr-2 text-xs">Licenses:</span>
                         <div className="flex gap-2 items-center">
-                          <Button
-                            variant="secondary"
-                            size="sm"
+                          <QuantityButton
                             onClick={() =>
                               licenseQuantity > 1 &&
                               setLicenseQuantity(licenseQuantity - 1)
                             }
-                            className="px-2 py-0 h-6"
                           >
                             -
-                          </Button>
-                          <span className="w-4 text-center">
-                            {licenseQuantity}
-                          </span>
-                          <Button
-                            variant="secondary"
-                            size="sm"
+                          </QuantityButton>
+                          <NumberFlow value={licenseQuantity} className="text-sm tabular-nums" />
+                          <QuantityButton
                             onClick={() =>
                               setLicenseQuantity(licenseQuantity + 1)
                             }
-                            className="px-2 py-0 h-6"
                           >
                             +
-                          </Button>
+                          </QuantityButton>
                         </div>
                       </div>
                     </div>
                   </div>
                 </CardHeader>
-                <CardContent>
+                <Card className="bg-transparent border-0">
                   <Button
                     onClick={openCommercialCheckout}
                     className="w-full"
@@ -307,7 +349,7 @@ export const PricingPage = () => {
                       ? "Purchase Licenses"
                       : "Purchase License"}
                   </Button>
-                </CardContent>
+                </Card>
                 <CardFooter>
                   <div className="space-y-8">
                     <div>
@@ -320,7 +362,7 @@ export const PricingPage = () => {
                             <div className="w-5 h-5 m-0 p-0 flex items-center border-[2px] border-green-500 justify-center rounded-full">
                               <Check className="w-3 h-3 stroke-[4px] stroke-green-500" />
                             </div>
-                            <span className="ml-1.5 font-bold text-gray-500">
+                            <span className="ml-1.5 font-bold text-gray-12">
                               {item.text}
                             </span>
                           </li>
@@ -333,15 +375,14 @@ export const PricingPage = () => {
             </Card>
 
             <Card
-              className={`bg-gray-100 rounded-xl min-h-[600px] flex-grow border-blue-500 border-4 ${
-                initialRender ? "fade-in-up animate-delay-2" : ""
-              }`}
+              className={`bg-gray-1 rounded-xl min-h-[600px] flex-grow border-blue-500 border-4 ${
+                initialRender ? "fade-in-up animate-delay-2" : ""}`}
             >
               <div className="space-y-3">
                 <CardHeader>
-                  <CardTitle className="text-2xl  font-medium">
+                  <CardTitle className="text-2xl font-medium">
                     App + Commercial License +{" "}
-                    <span className="text-blue-500 text-2xl font-bold">
+                    <span className="text-2xl font-bold text-blue-500">
                       Cap Pro
                     </span>
                   </CardTitle>
@@ -352,33 +393,41 @@ export const PricingPage = () => {
                   </CardDescription>
                   <div>
                     <div className="flex items-center space-x-3">
-                      <h3 className="text-4xl">
-                        {isAnnual
-                          ? `$${6 * proQuantity}/mo`
-                          : `$${9 * proQuantity}/mo`}
-                      </h3>
+                      <NumberFlow
+                        value={isAnnual
+                          ? `${6 * proQuantity}`
+                          : `${9 * proQuantity}`}
+                        className="text-4xl tabular-nums"
+                        format={{
+                          notation: "compact",
+                          style: "currency",
+                          currency: "USD",
+                        }}
+                        suffix="/mo"
+                     />
                       <div>
                         <p className="text-sm font-medium">
                           {isAnnual
-                            ? proQuantity === 1
+                            ? (proQuantity === 1
                               ? "per user, billed annually."
-                              : `for ${proQuantity} users, billed annually.`
-                            : proQuantity === 1
-                            ? "per user, billed monthly."
-                            : `for ${proQuantity} users, billed monthly.`}
+                              : <>for <NumberFlow value={proQuantity} className="text-sm font-medium tabular-nums" /> users, billed annually.</>)
+                            : (proQuantity === 1
+                              ? "per user, billed monthly."
+                              : <>for <NumberFlow value={proQuantity} className="text-sm font-medium tabular-nums" /> users, billed monthly.</>)
+                          }
                         </p>
                         {isAnnual && (
                           <p className="text-sm">
-                            or, ${9 * proQuantity}/month,{" "}
+                            or, <NumberFlow value={9 * proQuantity} className="text-sm tabular-nums" format={{ notation: "compact", style: "currency", currency: "USD", }} suffix="/mo" />{" "}
                             {proQuantity === 1
                               ? "per user, "
-                              : `for ${proQuantity} users, `}
+                              : <>for <NumberFlow value={proQuantity} className="text-sm tabular-nums" /> users, </>}
                             billed monthly.
                           </p>
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center justify-between pt-4 mt-2 border-t border-gray-200">
+                    <div className="flex justify-between items-center pt-4 mt-2 border-t border-gray-200">
                       <div className="flex items-center">
                         <span className="mr-2 text-xs">
                           Switch to {isAnnual ? "monthly" : "annually"}
@@ -391,31 +440,25 @@ export const PricingPage = () => {
                       <div className="flex items-center">
                         <span className="mr-2 text-xs">Users:</span>
                         <div className="flex gap-2 items-center">
-                          <Button
-                            variant="secondary"
-                            size="sm"
+                          <QuantityButton
                             onClick={() =>
                               proQuantity > 1 && setProQuantity(proQuantity - 1)
                             }
-                            className="px-2 py-0 h-6"
                           >
                             -
-                          </Button>
-                          <span className="w-4 text-center">{proQuantity}</span>
-                          <Button
-                            variant="secondary"
-                            size="sm"
+                          </QuantityButton>
+                          <NumberFlow value={proQuantity} className="text-sm tabular-nums" />
+                          <QuantityButton
                             onClick={() => setProQuantity(proQuantity + 1)}
-                            className="px-2 py-0 h-6"
                           >
                             +
-                          </Button>
+                          </QuantityButton>
                         </div>
                       </div>
                     </div>
                   </div>
                 </CardHeader>
-                <CardContent>
+                <Card className="bg-transparent border-0">
                   <Button
                     variant="primary"
                     onClick={() => planCheckout()}
@@ -425,7 +468,7 @@ export const PricingPage = () => {
                   >
                     {proLoading ? "Loading..." : "Upgrade to Cap Pro"}
                   </Button>
-                </CardContent>
+                </Card>
                 <CardFooter>
                   <div className="space-y-8">
                     <div>
@@ -438,7 +481,7 @@ export const PricingPage = () => {
                             <div className="w-5 h-5 m-0 p-0 flex items-center border-[2px] border-green-500 justify-center rounded-full">
                               <Check className="w-3 h-3 stroke-[4px] stroke-green-500" />
                             </div>
-                            <span className="ml-1.5 text-gray-500 font-bold">
+                            <span className="ml-1.5 font-bold text-gray-12">
                               {item.text}
                             </span>
                           </li>
@@ -450,6 +493,13 @@ export const PricingPage = () => {
               </div>
             </Card>
           </div>
+        </div>
+        <div className="mb-32 wrapper" id="testimonials">
+          <Testimonials
+            amount={24}
+            title="What our users say about Cap after hitting record"
+            subtitle="Don't just take our word for it. Here's what our users are saying about their experience with Cap."
+          />
         </div>
         <div>
           <img

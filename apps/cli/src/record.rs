@@ -17,8 +17,11 @@ pub struct RecordStart {
     /// ID of the microphone to record
     #[arg(long)]
     mic: Option<u32>,
+    /// Whether to capture system audio
     #[arg(long)]
+    system_audio: bool,
     /// Path to save the '.cap' project to
+    #[arg(long)]
     path: Option<PathBuf>,
     /// Maximum fps to record at (max 60)
     #[arg(long)]
@@ -34,7 +37,7 @@ impl RecordStart {
                 cap_media::sources::list_screens()
                     .into_iter()
                     .find(|s| s.0.id == id)
-                    .map(|(s, t)| (ScreenCaptureTarget::Screen(s), t))
+                    .map(|(s, t)| (ScreenCaptureTarget::Screen { id: s.id }, t))
                     .ok_or(format!("Screen with id '{id}' not found"))
             })
             .or_else(|| {
@@ -42,7 +45,7 @@ impl RecordStart {
                     cap_media::sources::list_windows()
                         .into_iter()
                         .find(|s| s.0.id == id)
-                        .map(|(s, t)| (ScreenCaptureTarget::Window(s), t))
+                        .map(|(s, t)| (ScreenCaptureTarget::Window { id: s.id }, t))
                         .ok_or(format!("Window with id '{id}' not found"))
                 })
             })
@@ -75,11 +78,13 @@ impl RecordStart {
             RecordingOptions {
                 capture_target: target_info,
                 camera_label: camera.as_ref().map(|c| c.camera_info.human_name()),
-                audio_input_name: None,
+                mic_name: None,
                 mode: RecordingMode::Studio,
+                capture_system_audio: self.system_audio,
             },
             camera.map(|c| Arc::new(Mutex::new(c))),
-            None,
+            &None,
+            false,
         )
         .await
         .map_err(|e| e.to_string())?;

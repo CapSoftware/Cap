@@ -1,9 +1,9 @@
-import { notFound } from "next/navigation";
-import Image from "next/image";
-import { MDXRemote } from "next-mdx-remote/rsc";
 import { getDocs } from "@/utils/blog";
+import { buildEnv } from "@cap/env";
 import type { Metadata } from "next";
-import { clientEnv } from "@cap/env";
+import { MDXRemote } from "next-mdx-remote/rsc";
+import Image from "next/image";
+import { notFound } from "next/navigation";
 
 interface DocProps {
   params: {
@@ -20,7 +20,7 @@ export async function generateMetadata({
   }
 
   let { title, summary: description, image } = doc.metadata;
-  let ogImage = image ? `${clientEnv.NEXT_PUBLIC_WEB_URL}${image}` : undefined;
+  let ogImage = image ? `${buildEnv.NEXT_PUBLIC_WEB_URL}${image}` : undefined;
 
   return {
     title,
@@ -29,7 +29,7 @@ export async function generateMetadata({
       title,
       description,
       type: "article",
-      url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/docs/${doc.slug}`,
+      url: `${buildEnv.NEXT_PUBLIC_WEB_URL}/docs/${doc.slug}`,
       ...(ogImage && {
         images: [
           {
@@ -55,11 +55,11 @@ export default async function DocPage({ params }: DocProps) {
   }
 
   return (
-    <article className="py-8 prose mx-auto">
+    <article className="py-32 mx-auto prose">
       {doc.metadata.image && (
         <div className="relative mb-12 h-[345px] w-full">
           <Image
-            className="m-0 w-full rounded-lg object-contain sm:object-cover"
+            className="object-contain m-0 w-full rounded-lg sm:object-cover"
             src={doc.metadata.image}
             alt={doc.metadata.title}
             fill

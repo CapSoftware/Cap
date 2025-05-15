@@ -1,33 +1,24 @@
-import { Tooltip as CapTooltip } from "@kobalte/core";
-import { TooltipRootProps } from "@kobalte/core/tooltip";
+import { Tooltip as KTooltip } from "@kobalte/core";
 import { cx } from "cva";
-import { JSX } from "solid-js";
+import { ComponentProps, JSX } from "solid-js";
 
-interface Props {
-  children: JSX.Element;
+interface Props extends ComponentProps<typeof KTooltip.Root> {
   content: JSX.Element;
-  placement?: TooltipRootProps["placement"];
   childClass?: string;
-  openDelay?: number;
-  closeDelay?: number;
 }
 
 export default function Tooltip(props: Props) {
   return (
-    <CapTooltip.Root
-      placement={props.placement}
-      openDelay={props.openDelay ?? 500}
-      closeDelay={props.closeDelay ?? 0}
-    >
-      <CapTooltip.Trigger class={cx(props.childClass)}>
+    <KTooltip.Root {...props} openDelay={props.openDelay ?? 200}>
+      <KTooltip.Trigger class={cx(props.childClass)}>
         {props.children}
-      </CapTooltip.Trigger>
-      <CapTooltip.Portal>
-        <CapTooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
+      </KTooltip.Trigger>
+      <KTooltip.Portal>
+        <KTooltip.Content class="z-50 px-1.5 py-1 text-xs border border-gray-3 bg-gray-12 text-gray-1 rounded shadow-lg duration-100 animate-in fade-in slide-in-from-top-1 min-w-6 text-center">
           {props.content}
-          <CapTooltip.Arrow class="fill-gray-500" />
-        </CapTooltip.Content>
-      </CapTooltip.Portal>
-    </CapTooltip.Root>
+          <KTooltip.Arrow size={16} />
+        </KTooltip.Content>
+      </KTooltip.Portal>
+    </KTooltip.Root>
   );
 }

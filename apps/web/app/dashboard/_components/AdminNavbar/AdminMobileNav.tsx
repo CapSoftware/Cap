@@ -1,91 +1,76 @@
 "use client";
-import { Fragment, useState } from "react";
-import { X, Menu } from "lucide-react";
+import { useTheme } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { LogoBadge } from "@cap/ui";
+import { faMoon, faSun } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { useClickAway } from "@uidotdev/usehooks";
+import { AnimatePresence, motion } from "framer-motion";
+import { Menu, X } from "lucide-react";
 import Link from "next/link";
-import { Dialog, Transition } from "@headlessui/react";
+import { MutableRefObject, useState } from "react";
 import { AdminNavItems } from "./AdminNavItems";
 
 export const AdminMobileNav = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const sidebarRef: MutableRefObject<HTMLDivElement> = useClickAway(() =>
+    setSidebarOpen(false)
+  );
+  const { theme, setThemeHandler } = useTheme();
   return (
     <>
-      <Transition.Root show={sidebarOpen} as={Fragment}>
-        <Dialog
-          as="div"
-          static
-          className="fixed inset-0 flex z-50 lg:hidden"
-          open={sidebarOpen}
-          onClose={setSidebarOpen}
-        >
-          <Transition.Child
-            as={Fragment}
-            enter="transition-opacity ease-linear duration-300"
-            enterFrom="opacity-0"
-            enterTo="opacity-100"
-            leave="transition-opacity ease-linear duration-300"
-            leaveFrom="opacity-100"
-            leaveTo="opacity-0"
+      <AnimatePresence>
+        {sidebarOpen ? (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0, display: "none" }}
+            className="flex fixed inset-0 z-[60] lg:hidden bg-gray-1/50"
           >
-            <Dialog.Overlay className="fixed inset-0 bg-gray-600 bg-opacity-75" />
-          </Transition.Child>
-          <Transition.Child
-            as={Fragment}
-            enter="transition ease-in-out duration-300 transform"
-            enterFrom="-translate-x-full"
-            enterTo="translate-x-0"
-            leave="transition ease-in-out duration-300 transform"
-            leaveFrom="translate-x-0"
-            leaveTo="-translate-x-full"
-          >
-            <div className="relative flex-1 flex flex-col max-w-xs w-[275px] pt-5 pb-4 px-4 bg-gray-50">
-              <Transition.Child
-                as={Fragment}
-                enter="ease-in-out duration-300"
-                enterFrom="opacity-0"
-                enterTo="opacity-100"
-                leave="ease-in-out duration-300"
-                leaveFrom="opacity-100"
-                leaveTo="opacity-0"
+            <motion.div
+              ref={sidebarRef}
+              initial={{ x: "100%" }}
+              animate={{
+                x: 0,
+                transition: { duration: 0.3, bounce: 0.2, type: "spring" },
+              }}
+              exit={{ x: "100%" }}
+              className="relative flex-1 flex flex-col ml-auto max-w-xs w-[275px] border-l border-gray-3 pt-5 pb-4 px-4 bg-gray-2"
+            >
+              <div
+                className="flex justify-end items-center mb-6 w-full rounded-full"
+                onClick={() => setSidebarOpen(false)}
               >
-                <div className="absolute top-0 right-0 -mr-12 pt-2">
-                  <button
-                    className="ml-1 flex items-center justify-center h-10 w-10 rounded-full focus:outline-none focus:ring-2 focus:ring-inset focus:ring-white"
-                    onClick={() => setSidebarOpen(false)}
-                  >
-                    <span className="sr-only">Close sidebar</span>
-                    <X className="h-6 w-6 text-black" aria-hidden="true" />
-                  </button>
-                </div>
-              </Transition.Child>
-              <div className="flex-shrink-0 flex items-center px-4">
-                <Link href="/dashboard" className="block">
-                  <LogoBadge className="h-8 w-auto block" />
-                </Link>
+                <X className="text-gray-12 size-7" aria-hidden="true" />
               </div>
-              <AdminNavItems />
-            </div>
-          </Transition.Child>
-          <div className="flex-shrink-0 w-14" aria-hidden="true">
-            {/* Dummy element to force sidebar to shrink to fit close icon */}
+              <AdminNavItems toggleMobileNav={() => setSidebarOpen(false)} />
+            </motion.div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+      <div className="flex fixed z-[51] justify-between w-full h-16 border-b border-gray-3 bg-gray-1 lg:border-none lg:hidden">
+        <div className="flex flex-shrink-0 items-center px-4 h-full lg:hidden">
+          <Link className="block" href="/dashboard">
+            <LogoBadge className="block w-auto h-8" />
+          </Link>
+        </div>
+        <div className="flex gap-4 items-center h-full">
+          <div
+            onClick={() => {
+              setThemeHandler(theme === "light" ? "dark" : "light");
+            }}
+            className="flex justify-center items-center rounded-full border transition-colors cursor-pointer lg:hidden bg-gray-4 hover:border-gray-6 hover:bg-gray-5 size-9 border-gray-5"
+          >
+            <FontAwesomeIcon
+              className="text-gray-12 size-3.5"
+              icon={theme === "dark" ? faSun : faMoon}
+            />
           </div>
-        </Dialog>
-      </Transition.Root>
-
-      <div className="relative z-10 flex-shrink-0 flex h-16 bg-gray-50 border-b-2 border-gray-100 lg:border-none lg:hidden">
-        <button
-          className="px-4 border-r-2 focus:outline-none focus:ring-2 text-white focus:ring-inset focus:ring-cyan-500 lg:hidden"
-          onClick={() => setSidebarOpen(true)}
-        >
-          <span className="sr-only">Open sidebar</span>
-          <Menu className="h-6 w-6 text-black" aria-hidden="true" />
-        </button>
-        <div className="flex justify-center lg:justify-end w-full px-6">
-          <div className="flex-shrink-0 flex lg:hidden items-center px-4">
-            <Link className="block" href="/inbox">
-              <LogoBadge className="w-auto h-8 block" />
-            </Link>
-          </div>
+          <button
+            className="flex flex-col gap-2 justify-center items-center px-5 h-full text-white border-l border-gray-3 lg:hidden"
+            onClick={() => setSidebarOpen(true)}
+          >
+            <Menu className="text-gray-12 size-7" aria-hidden="true" />
+          </button>
         </div>
       </div>
     </>

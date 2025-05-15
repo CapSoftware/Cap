@@ -3,11 +3,18 @@
 
 use std::sync::Arc;
 
+use cap_desktop::DynLoggingLayer;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
 fn main() {
+    unsafe {
+        std::env::set_var("RUST_LOG", "trace");
+    }
+
     // We have to hold onto the ClientInitGuard until the very end
-    let _guard = if dotenvy_macro::dotenv!("CAP_DESKTOP_SENTRY_URL") != "" {
-        Some(sentry::init((
-            dotenvy_macro::dotenv!("CAP_DESKTOP_SENTRY_URL"),
+    let _guard = std::option_env!("CAP_DESKTOP_SENTRY_URL").map(|url| {
+        sentry::init((
+            url,
             sentry::ClientOptions {
                 release: sentry::release_name!(),
                 debug: cfg!(debug_assertions),
@@ -32,10 +39,23 @@ fn main() {
                 })),
                 ..Default::default()
             },
-        )))
-    } else {
-        None
-    };
+        ))
+    });
+
+    let (layer, handle) = tracing_subscriber::reload::Layer::new(None::<DynLoggingLayer>);
+
+    let registry = tracing_subscriber::registry().with(tracing_subscriber::filter::filter_fn(
+        (|v| v.target().starts_with("cap_")) as fn(&tracing::Metadata) -> bool,
+    ));
+
+    registry
+        .with(layer)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(true)
+                .with_target(true),
+        )
+        .init();
 
     #[cfg(debug_assertions)]
     sentry::configure_scope(|scope| {
@@ -49,5 +69,5 @@ fn main() {
         .enable_all()
         .build()
         .expect("Failed to build multi threaded tokio runtime")
-        .block_on(desktop_solid_lib::run());
+        .block_on(cap_desktop::run(handle));
 }

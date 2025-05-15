@@ -1,10 +1,25 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
-use std::sync::Mutex;
-use tauri::{AppHandle, Manager, Wry};
+use tauri::{AppHandle, Wry};
 use tauri_plugin_store::StoreExt;
 use uuid::Uuid;
+
+#[derive(Default, Serialize, Deserialize, Type, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum PostStudioRecordingBehaviour {
+    #[default]
+    OpenEditor,
+    ShowOverlay,
+}
+
+#[derive(Default, Serialize, Deserialize, Type, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum MainWindowRecordingStartBehaviour {
+    #[default]
+    Close,
+    Minimise,
+}
 
 #[derive(Serialize, Deserialize, Type, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -13,8 +28,6 @@ pub struct GeneralSettingsStore {
     pub instance_id: Uuid,
     #[serde(default)]
     pub upload_individual_files: bool,
-    #[serde(default)]
-    pub open_editor_after_recording: bool,
     #[serde(default)]
     pub hide_dock_icon: bool,
     #[serde(default = "true_b")]
@@ -34,6 +47,27 @@ pub struct GeneralSettingsStore {
     pub commercial_license: Option<CommercialLicense>,
     #[serde(default)]
     pub last_version: Option<String>,
+    #[serde(default)]
+    pub window_transparency: bool,
+    #[serde(default)]
+    pub post_studio_recording_behaviour: PostStudioRecordingBehaviour,
+    #[serde(default)]
+    pub main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour,
+    #[serde(default)]
+    pub custom_cursor_capture: bool,
+    #[serde(default)]
+    pub system_audio_capture: bool,
+    #[serde(default = "default_server_url")]
+    pub server_url: String,
+    #[serde(default, alias = "open_editor_after_recording")]
+    #[deprecated]
+    _open_editor_after_recording: bool,
+}
+
+fn default_server_url() -> String {
+    std::option_env!("VITE_SERVER_URL")
+        .unwrap_or("https://cap.so")
+        .to_string()
 }
 
 #[derive(Serialize, Deserialize, Type, Debug)]
@@ -50,7 +84,6 @@ impl Default for GeneralSettingsStore {
         Self {
             instance_id: uuid::Uuid::new_v4(),
             upload_individual_files: false,
-            open_editor_after_recording: false,
             hide_dock_icon: false,
             haptics_enabled: true,
             auto_create_shareable_link: false,
@@ -60,6 +93,13 @@ impl Default for GeneralSettingsStore {
             theme: AppTheme::System,
             commercial_license: None,
             last_version: None,
+            window_transparency: false,
+            post_studio_recording_behaviour: PostStudioRecordingBehaviour::OpenEditor,
+            main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour::Close,
+            custom_cursor_capture: false,
+            system_audio_capture: false,
+            server_url: default_server_url(),
+            _open_editor_after_recording: false,
         }
     }
 }

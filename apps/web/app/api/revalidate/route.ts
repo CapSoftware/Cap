@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const [video] = await db
+    const [video] = await db()
       .select()
       .from(videos)
       .where(eq(videos.id, videoId));

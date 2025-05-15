@@ -1,38 +1,33 @@
 use std::{
-    cell::LazyCell,
+    cell::RefCell,
     collections::BTreeMap,
     path::PathBuf,
+    rc::Rc,
     sync::{mpsc, Arc},
 };
 
-use ffmpeg::{
-    codec::{self, Capabilities},
-    format, frame, rescale, software, Codec, Rescale,
-};
-use ffmpeg_hw_device::{CodecContextExt, CodecExt, HwDevice};
+use ffmpeg::{codec, format, frame, software, Codec};
 use ffmpeg_sys_next::{avcodec_find_decoder, AVHWDeviceType};
 use log::debug;
 use tokio::sync::oneshot;
 
-use super::{pts_to_frame, DecodedFrame, VideoDecoderMessage, FRAME_CACHE_SIZE};
+use super::{pts_to_frame, VideoDecoderMessage, FRAME_CACHE_SIZE};
 
 #[derive(Clone)]
-struct CachedFrame {
-    data: CachedFrameData,
+struct ProcessedFrame {
+    number: u32,
+    data: Arc<Vec<u8>>,
 }
 
 impl CachedFrame {
-    fn process(&mut self, decoder: &codec::decoder::Video) -> Arc<Vec<u8>> {
-        match &mut self.data {
-            CachedFrameData::Raw(frame) => {
+    fn process(&mut self, width: u32, height: u32) -> ProcessedFrame {
+        match self {
+            Self::Raw { frame, number } => {
                 let rgb_frame = if frame.format() != format::Pixel::RGBA {
                     // Reinitialize the scaler with the new input format
-                    let mut scaler = software::converter(
-                        (decoder.width(), decoder.height()),
-                        frame.format(),
-                        format::Pixel::RGBA,
-                    )
-                    .unwrap();
+                    let mut scaler =
+                        software::converter((width, height), frame.format(), format::Pixel::RGBA)
+                            .unwrap();
 
                     let mut rgb_frame = frame::Video::empty();
                     scaler.run(&frame, &mut rgb_frame).unwrap();
@@ -55,21 +50,24 @@ impl CachedFrame {
                     frame_buffer.extend_from_slice(&line_data[0..width * 4]);
                 }
 
-                let data = Arc::new(frame_buffer);
+                let data = ProcessedFrame {
+                    data: Arc::new(frame_buffer),
+                    number: *number,
+                };
 
-                self.data = CachedFrameData::Processed(data.clone());
+                *self = Self::Processed(data.clone());
 
                 data
             }
-            CachedFrameData::Processed(data) => data.clone(),
+            Self::Processed(data) => data.clone(),
         }
     }
 }
 
 #[derive(Clone)]
-enum CachedFrameData {
-    Raw(frame::Video),
-    Processed(Arc<Vec<u8>>),
+enum CachedFrame {
+    Raw { frame: frame::Video, number: u32 },
+    Processed(ProcessedFrame),
 }
 
 pub struct FfmpegDecoder;
@@ -81,93 +79,32 @@ impl FfmpegDecoder {
         fps: u32,
         rx: mpsc::Receiver<VideoDecoderMessage>,
         ready_tx: oneshot::Sender<Result<(), String>>,
-    ) {
-        std::thread::spawn(move || {
-            let mut input = ffmpeg::format::input(&path).unwrap();
-
-            let input_stream = input
-                .streams()
-                .best(ffmpeg::media::Type::Video)
-                .ok_or("Could not find a video stream")
-                .unwrap();
-
-            let decoder_codec =
-                find_decoder(&input, &input_stream, input_stream.parameters().id()).unwrap();
-
-            let mut context = codec::context::Context::new_with_codec(decoder_codec);
-            context.set_parameters(input_stream.parameters()).unwrap();
-
-            let input_stream_index = input_stream.index();
-            let time_base = input_stream.time_base();
-            let frame_rate = input_stream.rate();
-
-            // Create a decoder for the video stream
-            let mut decoder = context.decoder().video().unwrap();
-
-            {
-                use codec::threading::{Config, Type};
-
-                let capabilities = decoder_codec.capabilities();
-
-                if capabilities.intersects(Capabilities::FRAME_THREADS) {
-                    decoder.set_threading(Config::kind(Type::Frame));
-                } else if capabilities.intersects(Capabilities::SLICE_THREADS) {
-                    decoder.set_threading(Config::kind(Type::Slice));
-                } else {
-                    decoder.set_threading(Config::count(1));
-                }
-            }
-
-            let width = decoder.width();
-            let height = decoder.height();
-
-            let exceeds_common_hw_limits = width > 4096 || height > 4096;
-
-            let mut hw_device = if exceeds_common_hw_limits {
-                debug!("Video dimensions {width}x{height} exceed common hardware decoder limits (4096x4096), not using hardware acceleration");
-                None
+    ) -> Result<(), String> {
+        let mut this = cap_video_decode::FFmpegDecoder::new(
+            path,
+            Some(if cfg!(target_os = "macos") {
+                AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX
             } else {
-                let hw_device_types = if cfg!(target_os = "macos") {
-                    [AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX].as_slice()
-                } else {
-                    [
-                        AVHWDeviceType::AV_HWDEVICE_TYPE_CUDA,
-                        AVHWDeviceType::AV_HWDEVICE_TYPE_D3D12VA,
-                        AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA,
-                        AVHWDeviceType::AV_HWDEVICE_TYPE_VAAPI,
-                        AVHWDeviceType::AV_HWDEVICE_TYPE_VULKAN,
-                        AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2,
-                    ]
-                    .as_slice()
-                };
+                AVHWDeviceType::AV_HWDEVICE_TYPE_D3D12VA
+            }),
+        )?;
 
-                hw_device_types
-                    .iter()
-                    .find_map(|&typ| decoder.try_use_hw_device(typ).ok())
-            };
-            let hw_device = hw_device.as_ref();
+        let time_base = this.decoder().time_base();
+        let start_time = this.start_time();
+        let width = this.decoder().width();
+        let height = this.decoder().height();
 
-            if hw_device.is_none() && !exceeds_common_hw_limits {
-                debug!("No hardware acceleration available, falling back to software decoding");
-            }
-
-            let mut temp_frame = ffmpeg::frame::Video::empty();
-
-            // let mut packets = input.packets().peekable();
-
-            let black_frame = LazyCell::new(|| Arc::new(vec![0; (width * height * 4) as usize]));
-
+        std::thread::spawn(move || {
             let mut cache = BTreeMap::<u32, CachedFrame>::new();
             // active frame is a frame that triggered decode.
             // frames that are within render_more_margin of this frame won't trigger decode.
             let mut last_active_frame = None::<u32>;
 
-            let mut last_decoded_frame = None::<u32>;
-            let mut last_sent_frame = None::<(u32, DecodedFrame)>;
+            let last_sent_frame = Rc::new(RefCell::new(None::<ProcessedFrame>));
 
             let mut peekable_requests = PeekableReceiver { rx, peeked: None };
 
-            let mut packets = input.packets().peekable();
+            let mut frames = this.frames();
 
             let _ = ready_tx.send(Ok(()));
 
@@ -179,13 +116,17 @@ impl FfmpegDecoder {
                         // continue;
 
                         let mut sender = if let Some(cached) = cache.get_mut(&requested_frame) {
-                            let data = cached.process(&decoder);
+                            let data = cached.process(width, height);
 
-                            sender.send(data.clone()).ok();
-                            last_sent_frame = Some((requested_frame, data));
+                            sender.send(data.data.clone()).ok();
+                            *last_sent_frame.borrow_mut() = Some(data);
                             continue;
                         } else {
-                            Some(sender)
+                            let last_sent_frame = last_sent_frame.clone();
+                            Some(move |data: ProcessedFrame| {
+                                *last_sent_frame.borrow_mut() = Some(data.clone());
+                                let _ = sender.send(data.data);
+                            })
                         };
 
                         let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
@@ -193,149 +134,138 @@ impl FfmpegDecoder {
 
                         if requested_frame == 0
                             || last_sent_frame
+                                .borrow()
                                 .as_ref()
                                 .map(|last| {
-                                    requested_frame < last.0 ||
-                                // seek forward for big jumps. this threshold is arbitrary but should be derived from i-frames in future
-                                requested_frame - last.0 > FRAME_CACHE_SIZE as u32
+                                    requested_frame < last.number
+                                    // seek forward for big jumps. this threshold is arbitrary but should be derived from i-frames in future
+                                    || requested_frame - last.number > FRAME_CACHE_SIZE as u32
                                 })
                                 .unwrap_or(true)
                         {
-                            let timestamp_us =
-                                ((requested_frame as f32 / frame_rate.numerator() as f32)
-                                    * 1_000_000.0) as i64;
-                            let position = timestamp_us.rescale((1, 1_000_000), rescale::TIME_BASE);
+                            debug!("seeking to {}", requested_frame);
 
-                            debug!("seeking to {}", position);
-                            decoder.flush();
-                            input.seek(position, ..position).unwrap();
-                            last_decoded_frame = None;
-
-                            packets = input.packets().peekable();
+                            let _ = this.reset(requested_time);
+                            frames = this.frames();
                         }
 
                         last_active_frame = Some(requested_frame);
 
-                        loop {
-                            if peekable_requests.peek().is_some() {
-                                break;
-                            }
-                            let Some((stream, packet)) = packets.next() else {
-                                // handles the case where the cache doesn't contain a frame so we fallback to the previously sent one
-                                if let Some(last_sent_frame) = &last_sent_frame {
-                                    if last_sent_frame.0 < requested_frame {
-                                        sender.take().map(|s| s.send(last_sent_frame.1.clone()));
-                                    }
-                                }
+                        let mut exit = false;
 
-                                sender.take().map(|s| s.send(black_frame.clone()));
-                                break;
+                        for frame in &mut frames {
+                            let Ok(frame) = frame.map_err(|e| format!("read frame / {e}")) else {
+                                continue;
                             };
 
-                            if stream.index() == input_stream_index {
-                                let start_offset = stream.start_time();
+                            let current_frame =
+                                pts_to_frame(frame.pts().unwrap() - start_time, time_base, fps);
 
-                                let _ = decoder.send_packet(&packet);
+                            let mut cache_frame = CachedFrame::Raw {
+                                frame,
+                                number: current_frame,
+                            };
 
-                                let mut exit = false;
+                            // Handles frame skips.
+                            // We use the cache instead of last_sent_frame as newer non-matching frames could have been decoded.
+                            if let Some(most_recent_prev_frame) =
+                                cache.iter_mut().rev().find(|v| *v.0 < requested_frame)
+                            {
+                                if let Some(sender) = sender.take() {
+                                    (sender)(most_recent_prev_frame.1.process(width, height));
+                                }
+                            }
 
-                                while decoder.receive_frame(&mut temp_frame).is_ok() {
-                                    let current_frame = pts_to_frame(
-                                        temp_frame.pts().unwrap() - start_offset,
-                                        time_base,
-                                        fps,
-                                    );
+                            let exceeds_cache_bounds = current_frame > cache_max;
+                            let too_small_for_cache_bounds = current_frame < cache_min;
 
-                                    // Handles frame skips. requested_frame == last_decoded_frame should be handled by the frame cache.
-                                    if let Some((last_decoded_frame, sender)) = last_decoded_frame
-                                        .filter(|last_decoded_frame| {
-                                            requested_frame > *last_decoded_frame
-                                                && requested_frame < current_frame
-                                        })
-                                        .and_then(|l| Some((l, sender.take()?)))
-                                    {
-                                        let data = cache
-                                            .get_mut(&last_decoded_frame)
-                                            .map(|f| f.process(&decoder))
-                                            .unwrap_or_else(|| black_frame.clone());
+                            let cache_frame = if !too_small_for_cache_bounds {
+                                if current_frame == requested_frame {
+                                    if let Some(sender) = sender.take() {
+                                        let data = cache_frame.process(width, height);
+                                        // info!("sending frame {requested_frame}");
 
-                                        last_sent_frame = Some((last_decoded_frame, data.clone()));
-                                        sender.send(data).ok();
+                                        (sender)(data);
+
+                                        break;
                                     }
+                                }
 
-                                    last_decoded_frame = Some(current_frame);
+                                if cache.len() >= FRAME_CACHE_SIZE {
+                                    if let Some(last_active_frame) = &last_active_frame {
+                                        let frame = if requested_frame > *last_active_frame {
+                                            *cache.keys().next().unwrap()
+                                        } else if requested_frame < *last_active_frame {
+                                            *cache.keys().next_back().unwrap()
+                                        } else {
+                                            let min = *cache.keys().min().unwrap();
+                                            let max = *cache.keys().max().unwrap();
 
-                                    let exceeds_cache_bounds = current_frame > cache_max;
-                                    let too_small_for_cache_bounds = current_frame < cache_min;
-
-                                    let frame = hw_device
-                                        .and_then(|d| d.get_hwframe(&temp_frame))
-                                        .unwrap_or(std::mem::replace(
-                                            &mut temp_frame,
-                                            frame::Video::empty(),
-                                        ));
-
-                                    if !too_small_for_cache_bounds {
-                                        let mut cache_frame = CachedFrame {
-                                            data: CachedFrameData::Raw(frame),
+                                            if current_frame > max {
+                                                min
+                                            } else {
+                                                max
+                                            }
                                         };
 
-                                        if current_frame == requested_frame {
-                                            if let Some(sender) = sender.take() {
-                                                let data = cache_frame.process(&decoder);
-                                                last_sent_frame =
-                                                    Some((current_frame, data.clone()));
-                                                sender.send(data).ok();
-
-                                                break;
-                                            }
-                                        }
-
-                                        if cache.len() >= FRAME_CACHE_SIZE {
-                                            if let Some(last_active_frame) = &last_active_frame {
-                                                let frame = if requested_frame > *last_active_frame
-                                                {
-                                                    *cache.keys().next().unwrap()
-                                                } else if requested_frame < *last_active_frame {
-                                                    *cache.keys().next_back().unwrap()
-                                                } else {
-                                                    let min = *cache.keys().min().unwrap();
-                                                    let max = *cache.keys().max().unwrap();
-
-                                                    if current_frame > max {
-                                                        min
-                                                    } else {
-                                                        max
-                                                    }
-                                                };
-
-                                                cache.remove(&frame);
-                                            } else {
-                                                cache.clear()
-                                            }
-                                        }
-
-                                        cache.insert(current_frame, cache_frame);
+                                        cache.remove(&frame);
+                                    } else {
+                                        cache.clear()
                                     }
-
-                                    exit = exit || exceeds_cache_bounds;
                                 }
 
-                                if exit {
-                                    break;
+                                cache.insert(current_frame, cache_frame);
+                                cache.get_mut(&current_frame).unwrap()
+                            } else {
+                                &mut cache_frame
+                            };
+
+                            if current_frame > requested_frame && sender.is_some() {
+                                // not inlining this is important so that last_sent_frame is dropped before the sender is invoked
+                                let last_sent_frame = last_sent_frame.borrow().clone();
+
+                                if let Some((sender, last_sent_frame)) =
+                                    last_sent_frame.and_then(|l| Some((sender.take()?, l)))
+                                {
+                                    // info!(
+                                    //     "sending previous frame {} for {requested_frame}",
+                                    //     last_sent_frame.0
+                                    // );
+
+                                    (sender)(last_sent_frame);
+                                } else if let Some(sender) = sender.take() {
+                                    // info!(
+                                    //     "sending forward frame {current_frame} for {requested_frame}",
+                                    // );
+
+                                    (sender)(cache_frame.process(width, height));
                                 }
+                            }
+
+                            exit = exit || exceeds_cache_bounds;
+
+                            if exit {
+                                break;
                             }
                         }
 
-                        if let Some((sender, last_sent_frame)) =
-                            sender.take().zip(last_sent_frame.clone())
+                        // not inlining this is important so that last_sent_frame is dropped before the sender is invoked
+                        let last_sent_frame = last_sent_frame.borrow().clone();
+                        if let Some((sender, last_sent_frame)) = sender.take().zip(last_sent_frame)
                         {
-                            sender.send(last_sent_frame.1).ok();
+                            // info!(
+                            //     "sending hail mary frame {} for {requested_frame}",
+                            //     last_sent_frame.0
+                            // );
+
+                            (sender)(last_sent_frame);
                         }
                     }
                 }
             }
         });
+
+        Ok(())
     }
 }
 

@@ -1,5 +1,5 @@
-import { defineConfig } from "@solidjs/start/config";
 import capUIPlugin from "@cap/ui-solid/vite";
+import { defineConfig } from "@solidjs/start/config";
 import tsconfigPaths from "vite-tsconfig-paths";
 
 export default defineConfig({
@@ -20,6 +20,7 @@ export default defineConfig({
     // 3. to make use of `TAURI_DEBUG` and other env variables
     // https://tauri.studio/v1/api/config#buildconfig.beforedevcommand
     envPrefix: ["VITE_", "TAURI_"],
+    assetsInclude: ["**/*.riv"],
     plugins: [
       capUIPlugin,
       tsconfigPaths({

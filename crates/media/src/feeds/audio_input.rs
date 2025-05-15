@@ -17,7 +17,7 @@ pub struct AudioInputSamples {
     pub info: InputCallbackInfo,
 }
 
-enum AudioInputControl {
+pub enum AudioInputControl {
     Switch(String, Sender<Result<SupportedStreamConfig, MediaError>>),
     AttachSender(AudioInputSamplesSender),
     Shutdown,
@@ -47,7 +47,7 @@ pub const MAX_AUDIO_CHANNELS: u16 = 2;
 
 #[derive(Clone)]
 pub struct AudioInputFeed {
-    control_tx: Sender<AudioInputControl>,
+    pub control_tx: Sender<AudioInputControl>,
     audio_info: AudioInfo,
     // rx: Receiver<AudioInputSamples>,
 }
@@ -61,7 +61,10 @@ impl AudioInputFeed {
         trace!("Initializing audio input feed with device");
         debug!(selected_input);
 
-        fail_err!("media::feeds::audio_input::init", MediaError::Any(""));
+        fail_err!(
+            "media::feeds::audio_input::init",
+            MediaError::Any("".into())
+        );
 
         let (device, config) = Self::list_devices()
             .swap_remove_entry(selected_input)
@@ -77,10 +80,7 @@ impl AudioInputFeed {
                 MediaError::DeviceUnreachable(selected_input.to_string())
             })?;
 
-        let audio_info = AudioInfo::from_stream_config(&config).map_err(|e| {
-            error!("Failed to create audio info from stream config: {}", e);
-            e
-        })?;
+        let audio_info = AudioInfo::from_stream_config(&config);
 
         debug!("Created audio info: {:?}", audio_info);
         let (control_tx, control_rx) = flume::bounded(1);
@@ -95,7 +95,6 @@ impl AudioInputFeed {
     }
 
     pub fn list_devices() -> AudioInputDeviceMap {
-        info!("Listing available audio input devices");
         let host = cpal::default_host();
         let mut device_map = IndexMap::new();
 
@@ -112,7 +111,6 @@ impl AudioInputFeed {
                 .ok()
                 .and_then(|configs| {
                     let mut configs = configs.collect::<Vec<_>>();
-                    debug!("Found {} supported configs", configs.len());
                     configs.sort_by(|a, b| {
                         b.sample_format()
                             .sample_size()
@@ -127,17 +125,16 @@ impl AudioInputFeed {
                         .find(|c| ffmpeg_sample_format_for(c.sample_format()).is_some())
                 })
                 .and_then(|config| {
-                    device.name().ok().map(|name| {
-                        debug!("Found usable device: {} with config: {:?}", name, config);
-                        (name, device, config.with_max_sample_rate())
-                    })
+                    device
+                        .name()
+                        .ok()
+                        .map(|name| (name, device, config.with_max_sample_rate()))
                 })
         };
 
         if let Some((name, device, config)) =
             host.default_input_device().and_then(get_usable_device)
         {
-            info!("Found default input device: {}", name);
             device_map.insert(name, (device, config));
         } else {
             warn!("No default input device found or it's not usable");
@@ -146,7 +143,6 @@ impl AudioInputFeed {
         match host.input_devices() {
             Ok(devices) => {
                 for (name, device, config) in devices.filter_map(get_usable_device) {
-                    debug!("Found additional device: {}", name);
                     device_map.entry(name).or_insert((device, config));
                 }
             }
@@ -155,14 +151,13 @@ impl AudioInputFeed {
             }
         }
 
-        info!("Found {} usable audio input devices", device_map.len());
         device_map
     }
 
     pub async fn switch_input(&mut self, name: &str) -> Result<(), MediaError> {
         fail_err!(
             "media::feeds::audio_input::switch_input",
-            MediaError::Any("")
+            MediaError::Any("".into())
         );
 
         let (tx, rx) = flume::bounded(1);
@@ -180,7 +175,7 @@ impl AudioInputFeed {
             MediaError::TaskLaunch("Failed to switch audio input".into())
         })??;
 
-        self.audio_info = AudioInfo::from_stream_config(&config)?;
+        self.audio_info = AudioInfo::from_stream_config(&config);
 
         Ok(())
     }
@@ -213,7 +208,7 @@ fn start_capturing(
     mut config: SupportedStreamConfig,
     control: Receiver<AudioInputControl>,
 ) {
-    info!(
+    debug!(
         "Starting audio capture with device: {:?}, config: {:?}",
         device.name(),
         config
@@ -222,7 +217,7 @@ fn start_capturing(
 
     loop {
         let (tx, rx) = flume::bounded(4);
-        info!("Building input stream with config: {:?}", config);
+        debug!("Building input stream with config: {:?}", config);
 
         let stream_config: StreamConfig = config.clone().into();
         let stream = match device.build_input_stream_raw(
@@ -264,13 +259,18 @@ fn start_capturing(
         loop {
             match control.try_recv() {
                 Ok(AudioInputControl::Switch(name, response)) => {
-                    info!("Switching audio device to: {}", name);
+                    if device.name().unwrap() == name {
+                        response.send(Ok(config.clone())).unwrap();
+                        continue;
+                    }
+
+                    debug!("Switching audio device to: {}", name);
                     // list_devices hangs if the stream isn't dropped
                     drop(stream);
                     let Some(items) = AudioInputFeed::list_devices().swap_remove_entry(&name).map(
                         |(device_name, (device, config))| {
                             info!(
-                                "Switching to audio device: {} with config: {:?}",
+                                "Switched to audio device: {} with config: {:?}",
                                 device_name, config
                             );
                             (device, config)
@@ -290,12 +290,12 @@ fn start_capturing(
                     break;
                 }
                 Ok(AudioInputControl::Shutdown) => {
-                    info!("Received shutdown signal for audio capture");
+                    debug!("Received shutdown signal for audio capture");
                     return;
                 }
                 Ok(AudioInputControl::AttachSender(sender)) => {
-                    info!("New audio sender attached");
                     senders.push(sender);
+                    info!("New audio sender attached");
                 }
                 Err(flume::TryRecvError::Disconnected) => {
                     warn!("Control receiver is unreachable! Shutting down audio capture");

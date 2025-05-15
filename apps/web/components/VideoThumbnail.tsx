@@ -1,11 +1,13 @@
 import { LogoSpinner } from "@cap/ui";
+import clsx from "clsx";
 import Image from "next/image";
-import { useEffect, useState, memo } from "react";
+import { memo, useEffect, useState } from "react";
 
 interface VideoThumbnailProps {
   userId: string;
   videoId: string;
   alt: string;
+  imageClass?: string;
 }
 
 function generateRandomGrayScaleColor() {
@@ -18,7 +20,7 @@ function generateRandomGrayScaleColor() {
 }
 
 export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
-  ({ userId, videoId, alt }) => {
+  ({ userId, videoId, alt, imageClass }) => {
     const [imageUrls, setImageUrls] = useState({ screen: "" });
     const [loading, setLoading] = useState(true);
     const [failed, setFailed] = useState(false);
@@ -47,9 +49,9 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 
     return (
       <div
-        className={`aspect-video relative overflow-hidden rounded-tr-lg rounded-tl-lg bg-black`}
+        className={`overflow-hidden relative mx-auto w-full bg-black rounded-t-xl border-b border-gray-3 max-h-[175px] aspect-video`}
       >
-        <div className="absolute top-0 left-0 flex items-center justify-center w-full h-full z-10">
+        <div className="flex absolute top-0 left-0 z-10 justify-center items-center w-full h-full">
           {failed ? (
             <div
               className="w-full h-full"
@@ -57,17 +59,17 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
             ></div>
           ) : (
             loading === true && (
-              <LogoSpinner className="w-5 md:w-8 h-auto animate-spin" />
+              <LogoSpinner className="w-5 h-auto animate-spin md:w-8" />
             )
           )}
         </div>
         {imageUrls.screen && (
           <Image
             src={imageUrls.screen}
-            alt={alt}
             layout="fill"
+            alt={alt}
             objectFit="cover"
-            className="group-hover:scale-[1.02] transition-all w-full h-full"
+            className={clsx("w-full h-full", imageClass)}
             onLoad={() => setLoading(false)}
             onError={() => {
               setFailed(true);
@@ -75,7 +77,6 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
             }}
           />
         )}
-        <div className="bg-black opacity-0 z-10 absolute top-0 left-0 w-full h-full group-hover:opacity-50 transition-all"></div>
       </div>
     );
   }

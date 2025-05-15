@@ -1,3 +1,10 @@
+@import '@radix-ui/colors/red.css';
+@import '@radix-ui/colors/red-dark.css';
+@import '@radix-ui/colors/gray.css';
+@import '@radix-ui/colors/gray-alpha.css';
+@import '@radix-ui/colors/gray-dark.css';
+@import '@radix-ui/colors/blue.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -23,7 +30,7 @@
   --foreground-rgb: #000000;
   --background-start-rgb: 214, 219, 220;
   --background-end-rgb: 255, 255, 255;
-  --primary-font: "Geist", sans-serif;
+  --gradient-border-radius: 12px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -34,38 +41,30 @@
   }
 }
 
-@font-face {
-  font-family: "Geist";
-  src: url("/fonts/Geist-SemiBold.woff2") format("woff2"),
-    url("/fonts/Geist-SemiBold.woff") format("woff");
-  font-weight: 500;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Geist";
-  src: url("/fonts/Geist-Regular.woff2") format("woff2"),
-    url("/fonts/Geist-Regular.woff") format("woff");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Geist";
-  src: url("/fonts/Geist-Light.woff2") format("woff2"),
-    url("/fonts/Geist-Light.woff") format("woff");
-  font-weight: 300;
-  font-style: normal;
-  font-display: swap;
-}
-
 body,
 html {
   color: #000000;
-  font-family: var(--primary-font) !important;
   background-color: white;
+}
+
+::-webkit-scrollbar {
+  width: 7px;
+}
+
+/* Track */
+::-webkit-scrollbar-track {
+  border-radius: 10px;
+}
+
+/* Handle */
+::-webkit-scrollbar-thumb {
+  background: rgb(116, 116, 116);
+  border-radius: 10px;
+}
+
+::selection {
+  background: black;
+  color: #ffffff;
 }
 
 .wrapper {
@@ -139,6 +138,111 @@ a.bg-primary:hover {
   animation: animatedyaxis 6s ease infinite forwards;
 }
 
+.TooltipContent[data-side="left"] {
+  animation: slideLeft 0.2s ease-out;
+}
+
+.TooltipContent[data-side="right"] {
+  animation: slideRight 0.2s ease-out;
+}
+
+.TooltipContent[data-side="top"] {
+  animation: slideUp 0.2s ease-out;
+}
+
+.TooltipContent[data-side="bottom"] {
+  animation: slideDown 0.2s ease-out;
+}
+
+.TooltipContent {
+	transform-origin: var(--radix-tooltip-content-transform-origin);
+}
+
+@keyframes slideRight {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    transform: translateX(0px);
+    opacity: 1;
+  }
+}
+
+/* SVG path animation */
+
+@keyframes svgpathframes {
+  0% {
+    stroke-dasharray: 100;
+    stroke-dashoffset: 100;
+  }
+  50% {
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+.svgpathanimation {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  animation: svgpathframes 0.5s ease-in-out forwards;
+}
+
+.svgpathanimationrepeat {
+  animation: svgpathframes 0.5s ease-in-out forwards;
+  animation-iteration-count: infinite;
+}
+
+
+@keyframes slideLeft {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  to {
+    transform: translateX(0px);
+    opacity: 1;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    transform: translateY(0px);
+    opacity: 1;
+  }
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    transform: translateY(0px);
+    opacity: 1;
+  }
+}
+
+
+.button-gradient-border::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: var(--gradient-border-radius);
+  background: linear-gradient(to bottom, #ffffff40 70%, #ffffff00 100%);
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
 @media (prefers-color-scheme: dark) {
   body,
   html {
@@ -151,7 +255,7 @@ h2,
 h3,
 h4,
 h5 {
-  @apply font-normal tracking-tighter text-[1.75rem] leading-[2.5rem] md:text-[2.5rem] md:leading-[3.25rem];
+  @apply font-normal tracking-[-0.03em] text-[1.75rem] leading-[2.5rem] md:text-[2.5rem] md:leading-[3.25rem];
 }
 
 a,
@@ -159,7 +263,7 @@ p,
 span,
 input,
 label, button {
-  @apply tracking-tight text-gray-400 font-normal text-[1rem] leading-[1.5rem];
+  @apply tracking-tight text-gray-10 font-normal text-[1rem] leading-[1.5rem];
 }
 
 a,
@@ -332,25 +436,17 @@ label {
 ul {
   @apply pl-5 list-disc;
 }
-
+/* 
 .embossed {
-  @apply bg-white border-2 border-filler-3 relative w-[320px] max-w-full min-h-[60px] rounded-xl z-10;
+  @apply bg-white-a12 border-2 border-filler-3 relative w-[320px] max-w-full min-h-[60px] rounded-xl z-10;
 }
 
 .embossed button {
   width: 100%;
-}
+} */
 
 .dashboard-page {
-  @apply flex flex-col px-2 py-4;
-}
-
-.dashboard-page .inner {
-  @apply bg-white rounded-[20px] p-[12px] border-[1px] border-gray-200;
-}
-
-.dashboard-page .inner {
-  box-shadow: 0px 8px 16px rgba(18, 22, 31, 0.04);
+  @apply flex flex-col flex-1 items-stretch;
 }
 
 .dashboard-header {
@@ -362,7 +458,7 @@ ul {
 }
 
 .dashboard-page h1, .dashboard-page h2, .dashboard-page h3, .dashboard-page h4, .dashboard-page h5 {
-  @apply text-[1rem] font-medium leading-[1.25rem] text-gray-500 !important;
+  @apply text-[1rem] font-medium leading-[1.25rem] text-gray-12 !important;
 }
 
 .dashboard-header p {
@@ -375,7 +471,21 @@ slot:not(.dashboard-layout slot) {
 }
 
 .dashboard-layout {
-  @apply bg-gray-100
+  @apply bg-gray-50
+}
+
+/* Custom scrollbar */
+.custom-scroll {
+  overflow-y: scroll;
+}
+
+.custom-scroll::-webkit-scrollbar {
+  width: 3px;
+  background-color: transparent;
+}
+
+.custom-scroll::-webkit-scrollbar-thumb {
+  @apply bg-gray-7 w-[3px] rounded-full;
 }
 
 #scrolling-section slot {
@@ -446,7 +556,7 @@ footer a {
 }
 
 .prose p, .prose li {
-  @apply text-gray-500/80 !important;
+  @apply text-gray-12 !important;
 }
 
 .new-card-style {
@@ -459,7 +569,7 @@ footer a {
 @keyframes slideUp {
   from {
     opacity: 0;
-    transform: translateY(20px);
+    transform: translateY(5px);
   }
   to {
     opacity: 1;
@@ -470,3 +580,11 @@ footer a {
 .animate-slideUp {
   animation: slideUp 0.3s ease-out forwards;
 }
+
+/* Safari-specific styles using CSS hacks */
+@media screen and (-webkit-min-device-pixel-ratio:0) {
+  _::-webkit-full-page-media, _:future, :root #video-container {
+    height: calc(100% - 1.70rem) !important;
+  }
+}
+

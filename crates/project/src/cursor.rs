@@ -6,26 +6,34 @@ use std::path::{Path, PathBuf};
 
 use crate::XY;
 
-#[derive(Serialize, Deserialize, Clone, Type, Debug)]
+#[derive(Serialize, Deserialize, Clone, Type, Debug, PartialEq)]
 pub struct CursorMoveEvent {
     pub active_modifiers: Vec<String>,
     pub cursor_id: String,
-    pub process_time_ms: f64,
-    pub unix_time_ms: f64,
+    pub time_ms: f64,
     pub x: f64,
     pub y: f64,
 }
 
-#[derive(Serialize, Deserialize, Clone, Type, Debug)]
+impl PartialOrd for CursorMoveEvent {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.time_ms.partial_cmp(&other.time_ms)
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Type, Debug, PartialEq)]
 pub struct CursorClickEvent {
     pub active_modifiers: Vec<String>,
     pub cursor_num: u8,
     pub cursor_id: String,
-    pub process_time_ms: f64,
-    pub unix_time_ms: f64,
+    pub time_ms: f64,
     pub down: bool,
-    pub x: f64,
-    pub y: f64,
+}
+
+impl PartialOrd for CursorClickEvent {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.time_ms.partial_cmp(&other.time_ms)
+    }
 }
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone)]
@@ -79,7 +87,7 @@ impl CursorEvents {
         let filtered_events = self
             .moves
             .iter()
-            .filter(|event| event.process_time_ms <= time * 1000.0)
+            .filter(|event| event.time_ms <= time * 1000.0)
             .collect::<Vec<_>>();
 
         println!(
@@ -93,15 +101,15 @@ impl CursorEvents {
             let closest = filtered_events
                 .iter()
                 .max_by(|a, b| {
-                    a.process_time_ms
-                        .partial_cmp(&b.process_time_ms)
+                    a.time_ms
+                        .partial_cmp(&b.time_ms)
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .unwrap();
 
             println!(
                 "Selected event at time {} with pos ({}, {})",
-                closest.process_time_ms, closest.x, closest.y
+                closest.time_ms, closest.x, closest.y
             );
 
             return Some(XY::new(closest.x, closest.y));
@@ -109,15 +117,15 @@ impl CursorEvents {
 
         // If no events happened before, find the earliest one
         let earliest = self.moves.iter().min_by(|a, b| {
-            a.process_time_ms
-                .partial_cmp(&b.process_time_ms)
+            a.time_ms
+                .partial_cmp(&b.time_ms)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         if let Some(event) = earliest {
             println!(
                 "No events before requested time, using earliest at {} with pos ({}, {})",
-                event.process_time_ms, event.x, event.y
+                event.time_ms, event.x, event.y
             );
             return Some(XY::new(event.x, event.y));
         }

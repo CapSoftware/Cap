@@ -16,7 +16,7 @@ export function makeInvalidated<R>(
   return resource;
 }
 
-export function createQueryInvalidate<T extends CreateQueryResult<any, any>>(
+export function createQueryInvalidate<T extends CreateQueryResult>(
   query: T,
   event: keyof typeof events
 ) {

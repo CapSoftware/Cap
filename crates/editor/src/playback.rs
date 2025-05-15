@@ -1,17 +1,20 @@
 use std::{sync::Arc, time::Duration};
 
-use cap_media::data::{AudioInfo, AudioInfoError, FromSampleBytes};
-use cap_media::feeds::{AudioData, AudioPlaybackBuffer};
-use cap_project::{ProjectConfiguration, XY};
+use cap_media::data::{AudioInfo, FromSampleBytes};
+use cap_media::feeds::{AudioPlaybackBuffer, AudioSegment, AudioSegmentTrack};
+use cap_media::MediaError;
+use cap_project::{AudioConfiguration, ProjectConfiguration, XY};
 use cap_rendering::{ProjectUniforms, RenderVideoConstants};
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     BufferSize, SampleFormat,
 };
 use tokio::{sync::watch, time::Instant};
+use tracing::{error, info};
 
 use crate::editor;
 use crate::editor_instance::Segment;
+use crate::segments::get_audio_segments;
 
 pub struct Playback {
     pub renderer: Arc<editor::RendererHandle>,
@@ -35,12 +38,7 @@ pub struct PlaybackHandle {
 }
 
 impl Playback {
-    pub async fn start(
-        self,
-        fps: u32,
-        resolution_base: XY<u32>,
-        is_upgraded: bool,
-    ) -> PlaybackHandle {
+    pub async fn start(self, fps: u32, resolution_base: XY<u32>) -> PlaybackHandle {
         let (stop_tx, mut stop_rx) = watch::channel(false);
         stop_rx.borrow_and_update();
 
@@ -61,21 +59,14 @@ impl Playback {
                 f64::MAX
             };
 
-            // TODO: make this work with >1 segment
-            if self.segments[0].audio.is_some() {
-                AudioPlayback {
-                    segments: self
-                        .segments
-                        .iter()
-                        .map(|s| s.audio.as_ref().as_ref().unwrap().clone())
-                        .collect(),
-                    stop_rx: stop_rx.clone(),
-                    start_frame_number: self.start_frame_number,
-                    project: self.project.clone(),
-                    fps,
-                }
-                .spawn();
-            };
+            AudioPlayback {
+                segments: get_audio_segments(&self.segments),
+                stop_rx: stop_rx.clone(),
+                start_frame_number: self.start_frame_number,
+                project: self.project.clone(),
+                fps,
+            }
+            .spawn();
 
             loop {
                 let time =
@@ -91,36 +82,24 @@ impl Playback {
                 if let Some((segment_time, segment_i)) = project.get_segment_time(time) {
                     let segment = &self.segments[segment_i as usize];
 
-                    tokio::select! {
-                        _ = stop_rx.changed() => {
-                           break;
-                        },
-                        data = segment.decoders.get_frames(segment_time as f32, !project.camera.hide) => {
-                            if let Some(segment_frames) = data {
-                                let uniforms = ProjectUniforms::new(
-                                    &self.render_constants,
-                                    &project,
-                                    frame_number,
-                                    fps,
-                                    resolution_base,
-                                    is_upgraded,
-                                    &segment.cursor
-                                );
+                    let data = tokio::select! {
+                        _ = stop_rx.changed() => { break; },
+                        data = segment.decoders.get_frames(segment_time as f32, !project.camera.hide) => { data }
+                    };
 
-                                self
-                                    .renderer
-                                    .render_frame(
-                                        segment_frames,
-                                        project.background.source.clone(),
-                                        uniforms,
-                                        resolution_base,
-                                        segment.cursor.clone()
-                                    )
-                                    .await;
-                            }
-                        }
-                        else => {
-                        }
+                    if let Some(segment_frames) = data {
+                        let uniforms = ProjectUniforms::new(
+                            &self.render_constants,
+                            &project,
+                            frame_number,
+                            fps,
+                            resolution_base,
+                            &segment.cursor,
+                        );
+
+                        self.renderer
+                            .render_frame(segment_frames, uniforms, segment.cursor.clone())
+                            .await;
                     }
                 }
 
@@ -155,7 +134,7 @@ impl PlaybackHandle {
 }
 
 struct AudioPlayback {
-    segments: Vec<AudioData>,
+    segments: Vec<AudioSegment>,
     stop_rx: watch::Receiver<bool>,
     start_frame_number: u32,
     project: watch::Receiver<ProjectConfiguration>,
@@ -166,42 +145,79 @@ impl AudioPlayback {
     fn spawn(self) {
         let handle = tokio::runtime::Handle::current();
 
+        if self.segments.is_empty() || self.segments[0].tracks.is_empty() {
+            info!("No audio segments found, skipping audio playback thread.");
+            return;
+        }
+
         std::thread::spawn(move || {
             let host = cpal::default_host();
-            let device = host.default_output_device().unwrap();
-            println!("Output device: {}", device.name().unwrap());
-            let supported_config = device
-                .default_output_config()
-                .expect("Failed to get default output format");
+            let device = match host.default_output_device() {
+                Some(d) => d,
+                None => {
+                    error!("No default output device found. Skipping audio playback.");
+                    return;
+                }
+            };
+            let supported_config = match device.default_output_config() {
+                Ok(sc) => sc,
+                Err(e) => {
+                    error!(
+                        "Failed to get default output config: {}. Skipping audio playback.",
+                        e
+                    );
+                    return;
+                }
+            };
 
-            let (mut stop_rx, stream) = match supported_config.sample_format() {
-                // SampleFormat::I8 => create_stream::<i8>(shared_data),
+            let result = match supported_config.sample_format() {
                 SampleFormat::I16 => self.create_stream::<i16>(device, supported_config),
                 SampleFormat::I32 => self.create_stream::<i32>(device, supported_config),
+                SampleFormat::F32 => self.create_stream::<f32>(device, supported_config),
                 SampleFormat::I64 => self.create_stream::<i64>(device, supported_config),
                 SampleFormat::U8 => self.create_stream::<u8>(device, supported_config),
-                // SampleFormat::U16 => create_stream::<u16>(shared_data),
-                // SampleFormat::U32 => create_stream::<u32>(shared_data),
-                // SampleFormat::U64 => create_stream::<u64>(shared_data),
-                SampleFormat::F32 => self.create_stream::<f32>(device, supported_config),
                 SampleFormat::F64 => self.create_stream::<f64>(device, supported_config),
-                _ => unimplemented!(),
+                format => {
+                    error!(
+                        "Unsupported sample format {:?} for simplified volume adjustment, skipping audio playback.",
+                        format
+                    );
+                    return;
+                }
+            };
+
+            let (mut stop_rx, stream) = match result {
+                Ok(s) => s,
+                Err(e) => {
+                    error!(
+                        "Failed to create audio stream: {}. Skipping audio playback.",
+                        e
+                    );
+                    return;
+                }
+            };
+
+            if let Err(e) = stream.play() {
+                error!(
+                    "Failed to play audio stream: {}. Skipping audio playback.",
+                    e
+                );
+                return;
             }
-            .unwrap();
 
-            stream.play().unwrap();
-
-            handle.block_on(stop_rx.changed()).ok();
-
-            stream.pause().ok();
+            let _ = handle.block_on(stop_rx.changed());
+            info!("Audio playback thread finished.");
         });
     }
 
-    fn create_stream<T: FromSampleBytes>(
+    fn create_stream<T>(
         self,
         device: cpal::Device,
         supported_config: cpal::SupportedStreamConfig,
-    ) -> Result<(watch::Receiver<bool>, cpal::Stream), AudioInfoError> {
+    ) -> Result<(watch::Receiver<bool>, cpal::Stream), MediaError>
+    where
+        T: FromSampleBytes + cpal::Sample,
+    {
         let AudioPlayback {
             stop_rx,
             start_frame_number,
@@ -211,44 +227,44 @@ impl AudioPlayback {
             ..
         } = self;
 
-        let mut output_info = AudioInfo::from_stream_config(&supported_config)?;
+        let mut output_info = AudioInfo::from_stream_config(&supported_config);
         output_info.sample_format = output_info.sample_format.packed();
 
-        // TODO: Get fps and duration from video (once we start supporting other frame rates)
-        // Also, it's a bit weird that self.duration can ever be infinity to begin with, since
-        // pre-recorded videos are obviously a fixed size
         let mut audio_renderer = AudioPlaybackBuffer::new(segments, output_info);
         let playhead = f64::from(start_frame_number) / f64::from(fps);
         audio_renderer.set_playhead(playhead, &project.borrow());
 
-        // Prerender enough for smooth playback
-        // disabled bc it causes weirdness during playback atm
-        // while !audio_renderer.buffer_reaching_limit() {
-        //     audio_renderer.render(project.borrow().timeline());
-        // }
-
         let mut config = supported_config.config();
-        // Low-latency playback
         config.buffer_size = BufferSize::Fixed(AudioPlaybackBuffer::<T>::PLAYBACK_SAMPLES_COUNT);
 
-        let stream = device
-            .build_output_stream(
-                &config,
-                move |buffer: &mut [T], _info| {
-                    let project = project.borrow();
-                    audio_renderer.render(&project);
-                    audio_renderer.fill(buffer);
+        let mut elapsed = 0;
+        let mut prev_audio_config = project.borrow().audio.clone();
 
-                    if project.audio.mute {
-                        for sample in buffer.iter_mut() {
-                            *sample = T::EQUILIBRIUM;
-                        }
-                    }
-                },
-                |_| {},
-                None,
-            )
-            .unwrap();
+        let stream_result = device.build_output_stream(
+            &config,
+            move |buffer: &mut [T], _info| {
+                let project = project.borrow();
+
+                if prev_audio_config != project.audio {
+                    audio_renderer.set_playhead(
+                        playhead + elapsed as f64 / output_info.sample_rate as f64,
+                        &project,
+                    );
+                    prev_audio_config = project.audio.clone();
+                }
+
+                audio_renderer.render(&project);
+                audio_renderer.fill(buffer);
+
+                elapsed += buffer.len() / output_info.channels;
+            },
+            |_err| eprintln!("Audio stream error: {}", _err),
+            None,
+        );
+
+        let stream = stream_result.map_err(|e| {
+            MediaError::TaskLaunch(format!("Failed to build audio output stream: {}", e))
+        })?;
 
         Ok((stop_rx, stream))
     }

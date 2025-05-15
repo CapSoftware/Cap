@@ -21,7 +21,7 @@ export const getProPlanId = (billingCycle: "yearly" | "monthly") => {
 export const isUserOnProPlan = ({
   subscriptionStatus,
 }: {
-  subscriptionStatus: string;
+  subscriptionStatus: string | null;
 }) => {
   if (
     subscriptionStatus === "active" ||

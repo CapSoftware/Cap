@@ -1,10 +1,8 @@
 import { Button } from "@cap/ui-solid";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createSignal, onMount } from "solid-js";
-import { authStore } from "~/store";
-import { clientEnv } from "~/utils/env";
 import { commands } from "~/utils/tauri";
-import { apiClient as apiClient, protectedHeaders } from "~/utils/web-api";
+import { apiClient, protectedHeaders } from "~/utils/web-api";
 
 interface S3Config {
   provider: string;
@@ -201,7 +199,7 @@ export default function S3ConfigPage() {
     type: "text" | "password" = "text"
   ) => (
     <div>
-      <label class="text-gray-500 text-sm">{label}</label>
+      <label class="text-sm text-gray-12">{label}</label>
       <input
         type={type}
         value={value()}
@@ -209,7 +207,7 @@ export default function S3ConfigPage() {
           setter(e.currentTarget.value)
         }
         placeholder={placeholder}
-        class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+        class="px-3 py-2 w-full rounded-lg border border-gray-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
         autocomplete="off"
         autocapitalize="off"
         autocorrect="off"
@@ -219,23 +217,23 @@ export default function S3ConfigPage() {
   );
 
   return (
-    <div class="h-full flex flex-col">
-      <div class="flex-1 overflow-y-auto">
+    <div class="flex flex-col h-full">
+      <div class="overflow-y-auto flex-1">
         <div class="p-4 space-y-4">
           {loading() ? (
-            <div class="flex items-center justify-center h-32">
-              <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
+            <div class="flex justify-center items-center h-32">
+              <div class="w-8 h-8 rounded-full border-b-2 border-gray-900 animate-spin"></div>
             </div>
           ) : (
             <div class="space-y-4">
               <div>
-                <p class="text-gray-400 text-sm">
+                <p class="text-sm text-gray-11">
                   It should take under 10 minutes to set up and connect your
                   storage bucket to Cap. View the{" "}
                   <a
                     href="https://cap.so/docs/s3-config"
                     target="_blank"
-                    class="text-gray-500 font-semibold underline"
+                    class="font-semibold text-gray-12 underline"
                   >
                     Storage Config Guide
                   </a>{" "}
@@ -244,12 +242,12 @@ export default function S3ConfigPage() {
               </div>
 
               <div>
-                <label class="text-gray-500 text-sm">Storage Provider</label>
+                <label class="text-sm text-gray-12">Storage Provider</label>
                 <div class="relative">
                   <select
                     value={provider()}
                     onChange={(e) => setProvider(e.currentTarget.value)}
-                    class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none bg-white pr-10"
+                    class="px-3 py-2 pr-10 w-full bg-white rounded-lg border border-gray-3 appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
                     <option value="aws">AWS S3</option>
                     <option value="cloudflare">Cloudflare R2</option>
@@ -257,9 +255,9 @@ export default function S3ConfigPage() {
                     <option value="minio">MinIO</option>
                     <option value="other">Other S3-Compatible</option>
                   </select>
-                  <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+                  <div class="flex absolute inset-y-0 right-0 items-center px-2 pointer-events-none">
                     <svg
-                      class="w-4 h-4 text-gray-400"
+                      class="w-4 h-4 text-gray-11"
                       xmlns="http://www.w3.org/2000/svg"
                       viewBox="0 0 20 20"
                       fill="currentColor"

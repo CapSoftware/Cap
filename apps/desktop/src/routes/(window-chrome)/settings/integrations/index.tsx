@@ -7,7 +7,15 @@ import { commands } from "~/utils/tauri";
 
 export default function AppsTab() {
   const navigate = useNavigate();
-  const [isUpgraded] = createResource(commands.checkUpgradedAndUpdate);
+  // Add error handling for plan fetching
+  const [isUpgraded] = createResource(async () => {
+    try {
+      return await commands.checkUpgradedAndUpdate();
+    } catch (error) {
+      console.error("Failed to fetch plan:", error);
+      return false; // Default to not upgraded on error
+    }
+  });
 
   const apps = [
     {
@@ -21,21 +29,25 @@ export default function AppsTab() {
   ];
 
   const handleAppClick = async (app: (typeof apps)[number]) => {
-    if (app.pro && !isUpgraded()) {
-      await commands.showWindow("Upgrade");
-      return;
+    try {
+      if (app.pro && !isUpgraded()) {
+        await commands.showWindow("Upgrade");
+        return;
+      }
+      navigate(app.url);
+    } catch (error) {
+      console.error("Error handling app click:", error);
     }
-    navigate(app.url);
   };
 
   return (
     <div class="p-4">
       <For each={apps}>
         {(app) => (
-          <div class="p-1.5 bg-gray-100 rounded-lg border border-gray-200">
-            <div class="flex justify-between items-center pb-2 border-b border-gray-200">
+          <div class="p-1.5 bg-gray-2 rounded-lg border border-gray-3">
+            <div class="flex justify-between items-center pb-2 border-b border-gray-3">
               <div class="flex gap-3 items-center">
-                <div class="p-2 bg-gray-100 rounded-lg">
+                <div class="p-2 bg-gray-2 rounded-lg">
                   <app.icon class="w-4 h-4 text-[--text-tertiary]" />
                 </div>
                 <div class="flex flex-col gap-1">
@@ -47,8 +59,13 @@ export default function AppsTab() {
               <Button
                 variant={app.pro && !isUpgraded() ? "primary" : "secondary"}
                 onClick={() => handleAppClick(app)}
+                disabled={isUpgraded.loading}
               >
-                {app.pro && !isUpgraded() ? "Upgrade to Pro" : "Configure"}
+                {isUpgraded.loading
+                  ? "Loading..."
+                  : app.pro && !isUpgraded()
+                  ? "Upgrade to Pro"
+                  : "Configure"}
               </Button>
             </div>
             <div class="p-2">

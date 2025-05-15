@@ -1,5 +1,4 @@
 import { Button } from "@cap/ui-solid";
-import { Select as KSelect, SelectRootProps } from "@kobalte/core/select";
 import { useNavigate } from "@solidjs/router";
 import {
   createMutation,
@@ -7,119 +6,83 @@ import {
   useQueryClient,
 } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
-import { availableMonitors, getCurrentWindow } from "@tauri-apps/api/window";
-import { LogicalSize } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
-  JSX,
-  Show,
-  type ValidComponent,
+  ComponentProps,
   createEffect,
   createMemo,
   createResource,
   createSignal,
-  onMount,
-  onCleanup,
   ErrorBoundary,
+  onCleanup,
+  onMount,
+  Show,
   Suspense,
 } from "solid-js";
 import { createStore } from "solid-js/store";
-import { Tooltip } from "@kobalte/core";
-import { trackEvent } from "~/utils/analytics";
+import Tooltip from "~/components/Tooltip";
 
+import Mode from "~/components/Mode";
+import { identifyUser, trackEvent } from "~/utils/analytics";
 import {
   createCurrentRecordingQuery,
-  createOptionsQuery,
-  listWindows,
-  listAudioDevices,
-  getPermissions,
-  createVideoDevicesQuery,
-  listScreens,
   createLicenseQuery,
+  createOptionsQuery,
+  createVideoDevicesQuery,
+  getPermissions,
+  listAudioDevices,
+  listScreens,
+  listWindows,
 } from "~/utils/queries";
 import {
-  CaptureScreen,
+  type CaptureScreen,
   type CaptureWindow,
   commands,
   events,
 } from "~/utils/tauri";
-import {
-  MenuItem,
-  MenuItemList,
-  PopperContent,
-  topLeftAnimateClasses,
-  topRightAnimateClasses,
-} from "../editor/ui";
-import Mode, { getModeState, setApplicationMode } from "~/components/Mode";
+
+function getWindowSize(systemAudioRecording: boolean) {
+  return {
+    width: 300,
+    height: 290 + (systemAudioRecording ? 50 : 0),
+  };
+}
 
 export default function () {
   const { options, setOptions } = createOptionsQuery();
   const currentRecording = createCurrentRecordingQuery();
-  const queryClient = useQueryClient();
+  const generalSettings = generalSettingsStore.createQuery();
 
   const isRecording = () => !!currentRecording.data;
 
-  // Initialize application mode from options when available
-  createEffect(() => {
-    if (options.data?.mode) {
-      // Set the global application mode to match the options
-      setApplicationMode(options.data.mode);
-    }
-  });
-
-  // Use getModeState for direct access to the current mode
-  // This will be more reliable than tracking local state
-  const currentMode = createMemo(() => {
-    // Get the mode from our global store
-    return getModeState();
-  });
-
-  // Listen for mode changes via event for components that need to respond
-  onMount(() => {
-    const handleModeChange = (e: CustomEvent) => {
-      // Force re-rendering by notifying the reactive system
-      // This isn't strictly necessary since currentMode() uses getModeState()
-      // But it ensures the UI updates in case there are any reactivity issues
-      console.log(`Mode changed to: ${e.detail}`);
-    };
-
-    window.addEventListener(
-      "cap:mode-change",
-      handleModeChange as EventListener
-    );
-    onCleanup(() =>
-      window.removeEventListener(
-        "cap:mode-change",
-        handleModeChange as EventListener
-      )
-    );
-  });
-
-  // Track if we've already handled camera initialization to prevent reopening on mode changes
-  const [cameraInitialized, setCameraInitialized] = createSignal(false);
-
-  // Handle camera window initialization separately from mode changes
-  createEffect(() => {
-    if (!options.data || cameraInitialized()) return;
-
-    // Only initialize camera if a valid camera is selected
-    if (options.data.cameraLabel && options.data.cameraLabel !== "No Camera") {
-      commands.isCameraWindowOpen().then((cameraWindowActive) => {
-        if (!cameraWindowActive) {
-          console.log("Initializing camera window");
-          setCameraInitialized(true);
-        }
-      });
-    } else {
-      // Mark as initialized even if no camera is selected
-      setCameraInitialized(true);
-    }
-  });
-
+  const screens = createQuery(() => listScreens);
+  const windows = createQuery(() => listWindows);
   const toggleRecording = createMutation(() => ({
     mutationFn: async () => {
       if (!isRecording()) {
-        await commands.startRecording();
+        let captureTarget = options.data?.captureTarget ?? {
+          variant: "screen",
+          id: screens.data?.[0]?.id ?? 1,
+        };
+
+        if (captureTarget.variant === "screen") {
+          const id = captureTarget.id;
+          if (!screens.data?.some((s) => s.id === id))
+            captureTarget = { variant: "screen", id: captureTarget.id };
+        } else if (captureTarget.variant === "window") {
+          const id = captureTarget.id;
+          if (!windows.data?.some((w) => w.id === id))
+            captureTarget = { variant: "window", id: captureTarget.id };
+        }
+
+        await commands.startRecording({
+          captureTarget,
+          mode: options.data?.mode ?? "studio",
+          cameraLabel: options.data?.cameraLabel ?? null,
+          micName: options.data?.micName ?? null,
+          captureSystemAudio: options.data?.captureSystemAudio,
+        });
       } else {
         await commands.stopRecording();
       }
@@ -130,87 +93,114 @@ export default function () {
 
   createUpdateCheck();
 
+  const auth = authStore.createQuery();
+
+  onMount(async () => {
+    if (auth.data?.user_id) {
+      const authSessionId = `${auth.data.user_id}-${auth.data.expires}`;
+      const trackedSession = localStorage.getItem("tracked_signin_session");
+
+      if (trackedSession !== authSessionId) {
+        console.log("New auth session detected, tracking sign in event");
+        identifyUser(auth.data.user_id);
+        trackEvent("user_signed_in", { platform: "desktop" });
+        localStorage.setItem("tracked_signin_session", authSessionId);
+      } else {
+        console.log("Auth session already tracked, skipping sign in event");
+      }
+    }
+  });
+
   let unlistenFn: UnlistenFn;
   onCleanup(() => unlistenFn?.());
   const [initialize] = createResource(async () => {
-    const version = await getVersion();
+    if (options.data?.cameraLabel && options.data.cameraLabel !== "No Camera") {
+      const cameraWindowActive = await commands.isCameraWindowOpen();
+
+      if (!cameraWindowActive) {
+        console.log("cameraWindow not found");
+        setOptions.mutate({
+          ...options.data,
+        });
+      }
+    }
 
     // Enforce window size with multiple safeguards
     const currentWindow = getCurrentWindow();
-    const MAIN_WINDOW_SIZE = { width: 300, height: 360 };
-
-    // Set initial size
-    await currentWindow.setSize(
-      new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height)
-    );
 
     // Check size when app regains focus
     const unlistenFocus = await currentWindow.onFocusChanged(
       ({ payload: focused }) => {
         if (focused) {
-          currentWindow.setSize(
-            new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height)
+          const size = getWindowSize(
+            generalSettings.data?.systemAudioCapture ?? false
           );
+
+          currentWindow.setSize(new LogicalSize(size.width, size.height));
         }
       }
     );
 
     // Listen for resize events
     const unlistenResize = await currentWindow.onResized(() => {
-      currentWindow.setSize(
-        new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height)
+      const size = getWindowSize(
+        generalSettings.data?.systemAudioCapture ?? false
       );
+
+      currentWindow.setSize(new LogicalSize(size.width, size.height));
     });
 
     unlistenFn = () => {
       unlistenFocus();
       unlistenResize();
     };
-    setTitlebar("hideMaximize", true);
-    setTitlebar(
-      "items",
+
+    return null;
+  });
+
+  useWindowChrome({
+    hideMaximize: true,
+    items: (
       <div
         dir={ostype() === "windows" ? "rtl" : "rtl"}
-        class="flex mx-2 items-center gap-1"
+        class="flex gap-1 items-center mx-2"
       >
-        <Tooltip.Root openDelay={0}>
-          <Tooltip.Trigger>
-            <button
-              type="button"
-              onClick={() =>
-                commands.showWindow({ Settings: { page: "general" } })
-              }
+        <Tooltip
+          content={
+            <span>
+              Settings
+            </span>
+          }
+        >
+          <button
+            type="button"
+            onClick={async () => {
+              await commands.showWindow({ Settings: { page: "general" } });
+                getCurrentWindow().hide();
+              }}
               class="flex items-center justify-center w-5 h-5 -ml-[1.5px]"
             >
-              <IconCapSettings class="size-5 text-gray-400 hover:text-gray-500" />
+              <IconCapSettings class="text-gray-11 size-5 hover:text-gray-12" />
             </button>
-          </Tooltip.Trigger>
-          <Tooltip.Portal>
-            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
-              Settings
-              <Tooltip.Arrow class="fill-gray-500" />
-            </Tooltip.Content>
-          </Tooltip.Portal>
-        </Tooltip.Root>
-        <Tooltip.Root openDelay={0}>
-          <Tooltip.Trigger>
-            <button
-              type="button"
-              onClick={() =>
-                commands.showWindow({ Settings: { page: "recordings" } })
-              }
-              class="flex items-center justify-center w-5 h-5"
-            >
-              <IconLucideSquarePlay class="size-5 text-gray-400 hover:text-gray-500" />
-            </button>
-          </Tooltip.Trigger>
-          <Tooltip.Portal>
-            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+          </Tooltip>
+        <Tooltip
+          content={
+            <span>
               Previous Recordings
-              <Tooltip.Arrow class="fill-gray-500" />
-            </Tooltip.Content>
-          </Tooltip.Portal>
-        </Tooltip.Root>
+            </span>
+          }
+        >
+          <button
+              type="button"
+              onClick={async () => {
+                await commands.showWindow({ Settings: { page: "recordings" } });
+                getCurrentWindow().hide();
+              }}
+              class="flex justify-center items-center w-5 h-5"
+            >
+              <IconLucideSquarePlay class="text-gray-11 size-5 hover:text-gray-12" />
+            </button>
+          </Tooltip>
 
         <ChangelogButton />
 
@@ -218,9 +208,9 @@ export default function () {
           <button
             type="button"
             onClick={() => commands.showWindow("Upgrade")}
-            class="relative flex items-center justify-center w-5 h-5"
+            class="flex relative justify-center items-center w-5 h-5"
           >
-            <IconLucideGift class="size-5 text-gray-400 hover:text-gray-500" />
+            <IconLucideGift class="text-gray-11 size-5 hover:text-gray-12" />
             <div
               style={{ "background-color": "#FF4747" }}
               class="block z-10 absolute top-0 right-0 size-1.5 rounded-full animate-bounce"
@@ -234,26 +224,39 @@ export default function () {
             onClick={() => {
               new WebviewWindow("debug", { url: "/debug" });
             }}
-            class="flex items-center justify-center w-5 h-5"
+            class="flex justify-center items-center w-5 h-5"
           >
-            <IconLucideBug class="size-5 text-gray-400 hover:text-gray-500" />
+            <IconLucideBug class="text-gray-11 size-5 hover:text-gray-12" />
           </button>
         )}
       </div>
-    );
+    ),
+  });
 
-    return null;
+  createEffect(() => {
+    const size = getWindowSize(
+      generalSettings.data?.systemAudioCapture ?? false
+    );
+    getCurrentWindow().setSize(new LogicalSize(size.width, size.height));
   });
 
   return (
-    <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-[--gray-50] h-full text-[--text-primary]">
+    <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] h-full text-[--text-primary]">
       {initialize()}
       <div class="flex items-center justify-between pb-[0.25rem]">
         <div class="flex items-center space-x-1">
-          <div class="*:w-[92px] *:h-auto text-[--text-primary] ">
-            <IconCapLogoFullDark class="dark:block hidden" />
-            <IconCapLogoFull class="dark:hidden block" />
-          </div>
+          <a
+            class="*:w-[92px] *:h-auto text-[--text-primary]"
+            target="_blank"
+            href={
+              auth.data
+                ? `${import.meta.env.VITE_SERVER_URL}/dashboard`
+                : import.meta.env.VITE_SERVER_URL
+            }
+          >
+            <IconCapLogoFullDark class="hidden dark:block" />
+            <IconCapLogoFull class="block dark:hidden" />
+          </a>
           <ErrorBoundary fallback={<></>}>
             <Suspense>
               <span
@@ -264,8 +267,8 @@ export default function () {
                 }}
                 class={`text-[0.6rem] ${
                   license.data?.type === "pro"
-                    ? "bg-[--blue-400] text-gray-50 dark:text-gray-500"
-                    : "bg-gray-200 cursor-pointer hover:bg-gray-300"
+                    ? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
+                    : "bg-gray-3 cursor-pointer hover:bg-gray-5"
                 } rounded-lg px-1.5 py-0.5`}
               >
                 {license.data?.type === "commercial"
@@ -282,47 +285,47 @@ export default function () {
       <TargetSelects options={options.data} setOptions={setOptions} />
       <CameraSelect options={options.data} setOptions={setOptions} />
       <MicrophoneSelect options={options.data} setOptions={setOptions} />
-      <div class="w-full flex items-center space-x-1">
-        <Button
-          disabled={toggleRecording.isPending}
-          variant={isRecording() ? "destructive" : "primary"}
-          size="md"
-          onClick={() => toggleRecording.mutate()}
-          class="flex-grow flex items-center justify-center"
-        >
-          {isRecording() ? (
-            "Stop Recording"
-          ) : (
-            <>
-              <Show
-                when={currentMode() === "instant"}
-                fallback={
-                  <IconCapFilmCut class="w-[0.8rem] h-[0.8rem] mr-2 -mt-[1.5px]" />
-                }
-              >
-                <IconCapInstant class="w-[0.8rem] h-[0.8rem] mr-1.5" />
-              </Show>
-              Start Recording
-            </>
-          )}
-        </Button>
-        <Button
+      {generalSettings.data?.systemAudioCapture && (
+        <SystemAudio options={options.data} setOptions={setOptions} />
+      )}
+      <div class="flex items-center space-x-1 w-full">
+        {options.data?.mode === "instant" && !auth.data ? (
+          <SignInButton>
+            Sign In for{" "}
+            <IconCapInstant class="size-[0.8rem] ml-[0.14rem] mr-0.5" />
+            Instant Mode
+          </SignInButton>
+        ) : (
+          <Button
+            disabled={toggleRecording.isPending}
+            variant={isRecording() ? "destructive" : "primary"}
+            size="md"
+            onClick={() => toggleRecording.mutate()}
+            class="flex flex-grow justify-center items-center"
+          >
+            {isRecording() ? (
+              "Stop Recording"
+            ) : (
+              <>
+                {options.data?.mode === "instant" ? (
+                  <IconCapInstant class="size-[0.8rem] mr-1.5" />
+                ) : (
+                  <IconCapFilmCut class="size-[0.8rem] mr-2 -mt-[1.5px]" />
+                )}
+                Start Recording
+              </>
+            )}
+          </Button>
+        )}
+        {/* <Button
           disabled={isRecording()}
           variant="secondary"
           size="md"
           onClick={() => commands.takeScreenshot()}
         >
           <IconLucideCamera class="w-[1rem] h-[1rem]" />
-        </Button>
+        </Button> */}
       </div>
-      <a
-        href={`${import.meta.env.VITE_SERVER_URL}/dashboard`}
-        target="_blank"
-        rel="noreferrer"
-        class="text-[--text-tertiary] text-[0.875rem] mx-auto hover:text-[--text-primary] hover:underline"
-      >
-        Open Cap on Web
-      </a>
     </div>
   );
 }
@@ -348,20 +351,22 @@ function useRequestPermission() {
   return requestPermission;
 }
 
-import * as dialog from "@tauri-apps/plugin-dialog";
-import * as updater from "@tauri-apps/plugin-updater";
 import { makePersisted } from "@solid-primitives/storage";
-import { setTitlebar } from "~/utils/titlebar-state";
-import { type as ostype } from "@tauri-apps/plugin-os";
-import { apiClient, protectedHeaders } from "~/utils/web-api";
-import { Transition } from "solid-transition-group";
+import { UnlistenFn } from "@tauri-apps/api/event";
+import { CheckMenuItem, Menu, PredefinedMenuItem } from "@tauri-apps/api/menu";
 import {
   getCurrentWebviewWindow,
   WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
-import { Webview } from "@tauri-apps/api/webview";
-import { UnlistenFn } from "@tauri-apps/api/event";
-import { isDev } from "solid-js/web";
+import * as dialog from "@tauri-apps/plugin-dialog";
+import { type as ostype, platform } from "@tauri-apps/plugin-os";
+import * as updater from "@tauri-apps/plugin-updater";
+import { Transition } from "solid-transition-group";
+
+import { SignInButton } from "~/components/SignInButton";
+import { authStore, generalSettingsStore } from "~/store";
+import { apiClient } from "~/utils/web-api";
+import { useWindowChrome } from "./Context";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -394,8 +399,9 @@ function TargetSelects(props: {
 }) {
   const screens = createQuery(() => listScreens);
   const windows = createQuery(() => listWindows);
-  const [selectedScreen, setSelectedScreen] =
-    createSignal<CaptureScreen | null>(screens?.data?.[0] ?? null);
+  const [selectedScreen, setSelectedScreen] = createSignal<{
+    id: number;
+  } | null>(screens?.data?.[0] ?? null);
 
   const isTargetScreenOrArea = createMemo(
     () =>
@@ -431,9 +437,8 @@ function TargetSelects(props: {
     if (!target) return;
 
     if (target.variant === "screen") {
-      if (target.id !== areaSelection.screen?.id) {
-        closeAreaSelection();
-      }
+      if (target.id !== areaSelection.screen?.id) closeAreaSelection();
+
       setSelectedScreen(target);
     } else if (target.variant === "window") {
       if (areaSelection.screen) closeAreaSelection();
@@ -455,108 +460,168 @@ function TargetSelects(props: {
       return;
     }
 
+    const screen = screens.data?.find((s) => s.id === targetScreen.id);
+    if (!screen) return;
     trackEvent("crop_area_enabled", {
-      screen_id: targetScreen.id,
-      screen_name: targetScreen.name,
+      screen_id: screen.id,
+      screen_name: screen.name,
     });
-    setAreaSelection({ pending: false, screen: targetScreen });
+    setAreaSelection({ pending: false, screen: { id: screen.id } });
     commands.showWindow({
-      CaptureArea: { screen: targetScreen },
+      CaptureArea: { screen_id: screen.id },
     });
   }
 
+  const screenValue = () => {
+    const captureTarget = props.options?.captureTarget;
+    if (
+      captureTarget?.variant !== "screen" &&
+      captureTarget?.variant !== "area"
+    )
+      return null;
+
+    const screenId =
+      captureTarget.variant === "screen"
+        ? captureTarget.id
+        : captureTarget.screen;
+
+    const value =
+      screens.data?.find((d) => d.id === screenId) ?? screens.data?.[0] ?? null;
+
+    if (
+      value &&
+      screenId !== value.id &&
+      props.options &&
+      !props.setOptions.isPending
+    ) {
+      props.setOptions.mutate({
+        ...props.options,
+        captureTarget: { variant: "screen", id: value.id },
+      });
+    }
+
+    return value;
+  };
+
+  createEffect(() => {
+    screenValue();
+    windowValue();
+  });
+
+  const windowValue = () => {
+    const captureTarget = props.options?.captureTarget;
+    if (captureTarget?.variant !== "window") return null;
+
+    const value =
+      windows.data?.find((d) => d.id === captureTarget.id) ??
+      windows.data?.[0] ??
+      null;
+
+    if (
+      value &&
+      captureTarget.id !== value.id &&
+      props.options &&
+      !props.setOptions.isPending
+    ) {
+      props.setOptions.mutate({
+        ...props.options,
+        captureTarget: { variant: "window", id: value.id },
+      });
+    }
+
+    return value;
+  };
+
   return (
     <div>
-      <Tooltip.Root openDelay={500}>
-        <Tooltip.Trigger class="fixed flex flex-row items-center w-8 h-8">
-          <Transition
-            onEnter={(el, done) => {
-              if (shouldAnimateAreaSelect)
-                el.animate(
-                  [
-                    {
-                      transform: "scale(0.5)",
-                      opacity: 0,
-                      width: "0.2rem",
-                      height: "0.2rem",
-                    },
-                    {
-                      transform: "scale(1)",
-                      opacity: 1,
-                      width: "2rem",
-                      height: "2rem",
-                    },
-                  ],
+      <Tooltip
+        openDelay={500}
+        content={
+          isTargetCaptureArea()
+            ? "Remove selection"
+            : areaSelection.pending
+            ? "Selecting area..."
+            : "Select area"
+        }
+        childClass="flex fixed flex-row items-center w-8 h-8"
+      >
+        <Transition
+          onEnter={(el, done) => {
+            if (shouldAnimateAreaSelect)
+              el.animate(
+                [
                   {
-                    duration: 450,
-                    easing: "cubic-bezier(0.65, 0, 0.35, 1)",
-                  }
-                ).finished.then(done);
-              shouldAnimateAreaSelect = true;
-            }}
-            onExit={(el, done) =>
-              el
-                .animate(
-                  [
-                    {
-                      transform: "scale(1)",
-                      opacity: 1,
-                      width: "2rem",
-                      height: "2rem",
-                    },
-                    {
-                      transform: "scale(0)",
-                      opacity: 0,
-                      width: "0.2rem",
-                      height: "0.2rem",
-                    },
-                  ],
+                    transform: "scale(0.5)",
+                    opacity: 0,
+                    width: "0.2rem",
+                    height: "0.2rem",
+                  },
                   {
-                    duration: 500,
-                    easing: "ease-in-out",
-                  }
-                )
-                .finished.then(done)
-            }
-          >
-            <Show when={isTargetScreenOrArea()}>
-              {(targetScreenOrArea) => (
-                <button
-                  type="button"
-                  disabled={!targetScreenOrArea}
-                  onClick={handleAreaSelectButtonClick}
-                  class={cx(
-                    "flex items-center justify-center flex-shrink-0 w-full h-full rounded-[0.5rem] transition-all duration-200",
-                    "hover:bg-gray-200 disabled:bg-gray-100 disabled:text-gray-400",
-                    "focus-visible:outline font-[200] text-[0.875rem]",
-                    isTargetCaptureArea()
-                      ? "bg-gray-100 text-blue-400 border border-blue-200"
-                      : "bg-gray-100 text-gray-400"
-                  )}
-                >
-                  <IconCapCrop
-                    class={`w-[1rem] h-[1rem] ${
-                      areaSelection.pending
-                        ? "animate-gentle-bounce duration-1000 text-gray-500 mt-1"
-                        : ""
-                    }`}
-                  />
-                </button>
-              )}
-            </Show>
-          </Transition>
-        </Tooltip.Trigger>
-        <Tooltip.Portal>
-          <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
-            {isTargetCaptureArea()
-              ? "Remove selection"
-              : areaSelection.pending
-              ? "Selecting area..."
-              : "Select area"}
-            <Tooltip.Arrow class="fill-gray-500" />
-          </Tooltip.Content>
-        </Tooltip.Portal>
-      </Tooltip.Root>
+                    transform: "scale(1)",
+                    opacity: 1,
+                    width: "2rem",
+                    height: "2rem",
+                  },
+                ],
+                {
+                  duration: 450,
+                  easing: "cubic-bezier(0.65, 0, 0.35, 1)",
+                }
+              ).finished.then(done);
+            shouldAnimateAreaSelect = true;
+          }}
+          onExit={(el, done) =>
+            el
+              .animate(
+                [
+                  {
+                    transform: "scale(1)",
+                    opacity: 1,
+                    width: "2rem",
+                    height: "2rem",
+                  },
+                  {
+                    transform: "scale(0)",
+                    opacity: 0,
+                    width: "0.2rem",
+                    height: "0.2rem",
+                  },
+                ],
+                {
+                  duration: 500,
+                  easing: "ease-in-out",
+                }
+              )
+              .finished.then(done)
+          }
+        >
+          <Show when={isTargetScreenOrArea()}>
+            {(targetScreenOrArea) => (
+              <button
+                type="button"
+                disabled={!targetScreenOrArea}
+                onClick={handleAreaSelectButtonClick}
+                class={cx(
+                  "flex items-center justify-center flex-shrink-0 w-full h-full rounded-[0.5rem] transition-all duration-200",
+                  "hover:bg-gray-3 disabled:bg-gray-2 disabled:text-gray-11",
+                  "focus-visible:outline font-[200] text-[0.875rem]",
+                  isTargetCaptureArea()
+                    ? "bg-gray-2 text-blue-9 border border-blue-200"
+                    : "bg-gray-2 text-gray-11"
+                )}
+              >
+                <IconCapCrop
+                  class={`w-[1rem] h-[1rem] ${
+                    areaSelection.pending
+                      ? "animate-gentle-bounce duration-1000 text-gray-12 mt-1"
+                      : ""
+                  }`}
+                />
+              </button>
+            )}
+          </Show>
+        </Transition>
+      </Tooltip>
 
       <div
         class={`flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500 ${
@@ -576,7 +641,7 @@ function TargetSelects(props: {
                 : undefined,
           }}
         >
-          <div class="bg-gray-100 flex-1" />
+          <div class="flex-1 bg-gray-2" />
         </div>
         <TargetSelect<CaptureScreen>
           options={screens.data ?? []}
@@ -594,11 +659,7 @@ function TargetSelects(props: {
               captureTarget: { ...value, variant: "screen" },
             });
           }}
-          value={
-            props.options?.captureTarget.variant === "screen"
-              ? props.options.captureTarget
-              : null
-          }
+          value={screenValue()}
           placeholder="Screen"
           optionsEmptyText="No screens found"
           selected={isTargetScreenOrArea()}
@@ -622,27 +683,22 @@ function TargetSelects(props: {
               captureTarget: { ...value, variant: "window" },
             });
           }}
-          value={
-            props.options?.captureTarget.variant === "window"
-              ? props.options.captureTarget
-              : null
-          }
+          value={windowValue()}
           placeholder="Window"
           optionsEmptyText="No windows found"
           selected={props.options?.captureTarget.variant === "window"}
-          itemComponent={(props) => (
-            <div class="flex-1 flex flex-col overflow-x-hidden">
-              <div class="w-full truncate">{props.item.rawValue?.name}</div>
-              <div class="w-full text-xs">
-                {props.item.rawValue?.owner_name}
-              </div>
-            </div>
-          )}
+          getName={(value) =>
+            platform() === "windows"
+              ? value.name
+              : `${value.owner_name} | ${value.name}`
+          }
         />
       </div>
     </div>
   );
 }
+
+const NO_CAMERA = "No Camera";
 
 function CameraSelect(props: {
   options: ReturnType<typeof createOptionsQuery>["options"]["data"];
@@ -653,109 +709,76 @@ function CameraSelect(props: {
   const permissions = createQuery(() => getPermissions);
   const requestPermission = useRequestPermission();
 
-  const [open, setOpen] = createSignal(false);
-
   const permissionGranted = () =>
     permissions?.data?.camera === "granted" ||
     permissions?.data?.camera === "notNeeded";
 
-  type Option = { isCamera: boolean; name: string };
-
-  const [loading, setLoading] = createSignal(false);
-  const onChange = async (item: Option | null) => {
-    if (!item && permissions?.data?.camera !== "granted") {
+  const onChange = async (cameraLabel: string | null) => {
+    if (!cameraLabel && permissions?.data?.camera !== "granted") {
       return requestPermission("camera");
     }
     if (!props.options) return;
 
-    let cameraLabel = !item || !item.isCamera ? null : item.name;
-
-    setLoading(true);
-    await props.setOptions
-      .mutateAsync({
-        ...props.options,
-        cameraLabel: cameraLabel === "No Camera" ? null : cameraLabel,
-      })
-      .finally(() => setLoading(false));
+    await props.setOptions.mutateAsync({ ...props.options, cameraLabel });
 
     trackEvent("camera_selected", {
       camera_name: cameraLabel,
-      enabled: !!cameraLabel && cameraLabel !== "No Camera",
+      enabled: !!cameraLabel,
     });
   };
 
-  const selectOptions = createMemo(() => [
-    { name: "No Camera", isCamera: false },
-    ...videoDevices.map((d) => ({ isCamera: true, name: d })),
-  ]);
-
-  const value = () =>
-    selectOptions()?.find((o) => o.name === props.options?.cameraLabel) ?? null;
-
   return (
     <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
-      <label class="text-[--text-tertiary] text-[0.875rem]">Camera</label>
-      <KSelect<Option | null>
-        options={selectOptions()}
-        optionValue="name"
-        optionTextValue="name"
-        placeholder="No Camera"
-        value={value()}
-        disabled={!!currentRecording.data}
-        onChange={onChange}
-        itemComponent={(props) => (
-          <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
-            <KSelect.ItemLabel class="flex-1">
-              {props.item.rawValue?.name}
-            </KSelect.ItemLabel>
-          </MenuItem>
-        )}
-        open={open()}
-        onOpenChange={(isOpen) => {
-          if (!permissionGranted()) {
-            requestPermission("camera");
-            return;
-          }
-
-          setOpen(isOpen);
+      <button
+        disabled={props.setOptions.isPending || !!currentRecording.data}
+        class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect"
+        onClick={() => {
+          Promise.all([
+            CheckMenuItem.new({
+              text: NO_CAMERA,
+              checked: !props.options?.cameraLabel,
+              action: () => onChange(null),
+            }),
+            PredefinedMenuItem.new({ item: "Separator" }),
+            ...videoDevices.map((o) =>
+              CheckMenuItem.new({
+                text: o,
+                checked: o === props.options?.cameraLabel,
+                action: () => onChange(o),
+              })
+            ),
+          ])
+            .then((items) => Menu.new({ items }))
+            .then((m) => {
+              m.popup();
+            });
         }}
       >
-        <KSelect.Trigger
-          disabled={loading()}
-          class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect"
-        >
-          <IconCapCamera class="text-gray-400 size-[1.25rem]" />
-          <KSelect.Value<Option | null> class="flex-1 text-left truncate">
-            {(state) => <span>{state.selectedOption()?.name}</span>}
-          </KSelect.Value>
-          <TargetSelectInfoPill
-            value={props.options?.cameraLabel ?? null}
-            permissionGranted={permissionGranted()}
-            requestPermission={() => requestPermission("camera")}
-            onClear={() => {
-              if (!props.options) return;
+        <IconCapCamera class="text-gray-11 size-[1.25rem]" />
+        <span class="flex-1 text-left truncate">
+          {props.options?.cameraLabel ?? NO_CAMERA}
+        </span>
+        <TargetSelectInfoPill
+          value={props.options?.cameraLabel ?? null}
+          permissionGranted={permissionGranted()}
+          requestPermission={() => requestPermission("camera")}
+          onClick={(e) => {
+            if (!props.options) return;
+            if (props.options.cameraLabel) {
+              e.stopPropagation();
               props.setOptions.mutate({
                 ...props.options,
                 cameraLabel: null,
               });
-            }}
-          />
-        </KSelect.Trigger>
-        <KSelect.Portal>
-          <PopperContent<typeof KSelect.Content>
-            as={KSelect.Content}
-            class={topLeftAnimateClasses}
-          >
-            <MenuItemList<typeof KSelect.Listbox>
-              class="max-h-32 overflow-y-auto"
-              as={KSelect.Listbox}
-            />
-          </PopperContent>
-        </KSelect.Portal>
-      </KSelect>
+            }
+          }}
+        />
+      </button>
     </div>
   );
 }
+
+const NO_MICROPHONE = "No Microphone";
 
 function MicrophoneSelect(props: {
   options: ReturnType<typeof createOptionsQuery>["options"]["data"];
@@ -771,13 +794,6 @@ function MicrophoneSelect(props: {
   const [dbs, setDbs] = createSignal<number | undefined>();
   const [isInitialized, setIsInitialized] = createSignal(false);
 
-  const value = createMemo(() => {
-    if (!props.options?.audioInputName) return null;
-    return (
-      devices.data?.find((d) => d.name === props.options!.audioInputName) ??
-      null
-    );
-  });
 
   const requestPermission = useRequestPermission();
 
@@ -788,20 +804,17 @@ function MicrophoneSelect(props: {
   type Option = { name: string; deviceId: string };
 
   const handleMicrophoneChange = async (item: Option | null) => {
-    if (!item || !props.options) return;
-
-    // If "No Microphone" is selected, set audioInputName to null
-    const audioInputName = item.deviceId !== "" ? item.name : null;
+    if (!props.options) return;
 
     await props.setOptions.mutateAsync({
       ...props.options,
-      audioInputName,
+      micName: item ? item.name : null,
     });
-    if (!audioInputName) setDbs();
+    if (!item) setDbs();
 
     trackEvent("microphone_selected", {
-      microphone_name: audioInputName,
-      enabled: !!audioInputName,
+      microphone_name: item?.name ?? null,
+      enabled: !!item,
     });
   };
 
@@ -809,12 +822,12 @@ function MicrophoneSelect(props: {
   onMount(() => {
     const listener = (event: Event) => {
       const dbs = (event as CustomEvent<number>).detail;
-      if (!props.options?.audioInputName) setDbs();
+      if (!props.options?.micName) setDbs();
       else setDbs(dbs);
     };
 
     events.audioInputLevelChange.listen((dbs) => {
-      if (!props.options?.audioInputName) setDbs();
+      if (!props.options?.micName) setDbs();
       else setDbs(dbs.payload);
     });
 
@@ -829,7 +842,7 @@ function MicrophoneSelect(props: {
 
   // Initialize audio input if needed - only once when component mounts
   onMount(() => {
-    const audioInput = props.options?.audioInputName;
+    const audioInput = props.options?.micName;
     if (!audioInput || !permissionGranted() || isInitialized()) return;
 
     setIsInitialized(true);
@@ -841,88 +854,95 @@ function MicrophoneSelect(props: {
 
   return (
     <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
-      <label class="text-[--text-tertiary]">Microphone</label>
-      <KSelect<Option>
-        options={[
-          { name: "No Microphone", deviceId: "" },
-          ...(devices.data ?? []),
-        ]}
-        optionValue="deviceId"
-        optionTextValue="name"
-        placeholder="No Microphone"
-        value={value()}
-        disabled={!!currentRecording.data}
-        onChange={handleMicrophoneChange}
-        itemComponent={(props) => (
-          <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
-            <KSelect.ItemLabel class="flex-1">
-              {props.item.rawValue.name}
-            </KSelect.ItemLabel>
-          </MenuItem>
-        )}
-        open={open()}
-        onOpenChange={(isOpen) => {
-          if (!permissionGranted()) {
-            requestPermission("microphone");
-            return;
-          }
-
-          setOpen(isOpen);
+      <button
+        disabled={props.setOptions.isPending || !!currentRecording.data}
+        class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
+        onClick={() => {
+          Promise.all([
+            CheckMenuItem.new({
+              text: NO_MICROPHONE,
+              checked: !props.options?.micName,
+              action: () => handleMicrophoneChange(null),
+            }),
+            PredefinedMenuItem.new({ item: "Separator" }),
+            ...(devices.data ?? []).map((o) =>
+              CheckMenuItem.new({
+                text: o.name,
+                checked: o.name === props.options?.micName,
+                action: () => handleMicrophoneChange(o),
+              })
+            ),
+          ])
+            .then((items) => Menu.new({ items }))
+            .then((m) => {
+              m.popup();
+            });
         }}
       >
-        <KSelect.Trigger
-          disabled={props.setOptions.isPending}
-          class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10"
-        >
-          <Show when={dbs()}>
-            {(s) => (
-              <div
-                class="bg-blue-100 opacity-50 left-0 inset-y-0 absolute -z-10 transition-[right] duration-100"
-                style={{
-                  right: `${audioLevel() * 100}%`,
-                }}
-              />
-            )}
-          </Show>
-          <IconCapMicrophone class="text-gray-400 size-[1.25rem]" />
-          <KSelect.Value<Option> class="flex-1 text-left truncate">
-            {(state) => {
-              const selected = state.selectedOption();
-              return (
-                <span>
-                  {selected?.name ??
-                    props.options?.audioInputName ??
-                    "No Audio"}
-                </span>
-              );
-            }}
-          </KSelect.Value>
-          <TargetSelectInfoPill
-            value={props.options?.audioInputName ?? null}
-            permissionGranted={permissionGranted()}
-            requestPermission={() => requestPermission("microphone")}
-            onClear={() => {
-              if (!props.options) return;
+        <Show when={dbs()}>
+          {(_) => (
+            <div
+              class="bg-blue-100 opacity-50 left-0 inset-y-0 absolute -z-10 transition-[right] duration-100"
+              style={{
+                right: `${audioLevel() * 100}%`,
+              }}
+            />
+          )}
+        </Show>
+        <IconCapMicrophone class="text-gray-11 size-[1.25rem]" />
+        <span class="flex-1 text-left truncate">
+          {props.options?.micName ?? NO_MICROPHONE}
+        </span>
+        <TargetSelectInfoPill
+          value={props.options?.micName ?? null}
+          permissionGranted={permissionGranted()}
+          requestPermission={() => requestPermission("microphone")}
+          onClick={(e) => {
+            if (!props.options) return;
+            if (props.options?.micName) {
+              e.stopPropagation();
               props.setOptions.mutate({
                 ...props.options,
-                audioInputName: null,
+                micName: null,
               });
-            }}
-          />
-        </KSelect.Trigger>
-        <KSelect.Portal>
-          <PopperContent<typeof KSelect.Content>
-            as={KSelect.Content}
-            class={topLeftAnimateClasses}
-          >
-            <MenuItemList<typeof KSelect.Listbox>
-              class="max-h-36 overflow-y-auto"
-              as={KSelect.Listbox}
-            />
-          </PopperContent>
-        </KSelect.Portal>
-      </KSelect>
+            }
+          }}
+        />
+      </button>
     </div>
+  );
+}
+
+function SystemAudio(props: {
+  options: ReturnType<typeof createOptionsQuery>["options"]["data"];
+  setOptions: ReturnType<typeof createOptionsQuery>["setOptions"];
+}) {
+  const currentRecording = createCurrentRecordingQuery();
+
+  return (
+    <button
+      onClick={() => {
+        if (!props.options) return;
+        props.setOptions.mutate({
+          ...props.options,
+          captureSystemAudio: !props.options?.captureSystemAudio,
+        });
+      }}
+      disabled={props.setOptions.isPending || !!currentRecording.data}
+      class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
+    >
+      <div class="size-[1.25rem] flex items-center justify-center">
+        <IconPhMonitorBold class="text-gray-11 stroke-2 size-[1.2rem]" />
+      </div>
+      <span class="flex-1 text-left truncate">
+        {props.options?.captureSystemAudio
+          ? "Record System Audio"
+          : "No System Audio"}
+      </span>
+      <InfoPill variant={props.options?.captureSystemAudio ? "blue" : "red"}>
+        {props.options?.captureSystemAudio ? "On" : "Off"}
+      </InfoPill>
+    </button>
   );
 }
 
@@ -933,11 +953,7 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
   selected: boolean;
   optionsEmptyText: string;
   placeholder: string;
-  itemComponent?: (
-    props: Parameters<
-      NonNullable<SelectRootProps<T | null>["itemComponent"]>
-    >[0]
-  ) => JSX.Element;
+  getName?: (value: T) => string;
   disabled?: boolean;
 }) {
   const value = () => {
@@ -946,83 +962,48 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
 
     const o = props.options.find((o) => o.id === v.id);
     if (o) return props.value;
-    else {
-      props.onChange(props.options[0]);
-      return props.options[0];
-    }
+
+    props.onChange(props.options[0]);
+    return props.options[0];
   };
 
+  const getName = (value?: T) =>
+    value ? props.getName?.(value) ?? value.name : props.placeholder;
+
   return (
-    <KSelect<T | null>
-      options={props.options ?? []}
-      optionValue="id"
-      optionTextValue="name"
-      gutter={8}
-      itemComponent={(itemProps) => (
-        <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={itemProps.item}>
-          {props?.itemComponent?.(itemProps) ?? itemProps.item.rawValue?.name}
-        </MenuItem>
-      )}
-      placement="bottom"
-      class="max-w-[50%] w-full z-10 disabled:text-opacity-80"
-      placeholder={props.placeholder}
-      onChange={(value) => {
-        if (!value) return;
-        props.onChange(value);
-      }}
-      value={value()}
-    >
-      <KSelect.Trigger<ValidComponent>
-        as={
-          props.options.length <= 1
-            ? (p) => (
-                <button
-                  onClick={() => {
-                    props.onChange(props.options[0]);
-                  }}
-                  data-selected={props.selected}
-                  class={p.class}
-                >
-                  <span class="truncate">{props.placeholder}</span>
-                </button>
-              )
-            : undefined
-        }
-        class="flex-1 text-gray-400 py-1 z-10 data-[selected='true']:text-gray-500 disabled:text-gray-400 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
-        disabled={props.disabled}
+    <>
+      <button
+        class="group flex-1 text-gray-11 py-1 z-10 data-[selected='true']:text-gray-12 disabled:text-gray-11 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
         data-selected={props.selected}
-        onClick={(e) => {
-          if (props.options.length === 1) {
-            e.preventDefault();
+        onClick={() => {
+          if (props.options.length > 1) {
+            Promise.all(
+              props.options.map((o) =>
+                CheckMenuItem.new({
+                  text: getName(o),
+                  checked: o === props.value,
+                  action: () => props.onChange(o),
+                })
+              )
+            )
+              .then((items) => Menu.new({ items }))
+              .then((m) => {
+                m.popup();
+              });
+          } else if (props.options.length === 1)
             props.onChange(props.options[0]);
-          }
         }}
       >
-        <KSelect.Value<CaptureScreen | undefined> class="truncate">
-          {(value) => value.selectedOption()?.name}
-        </KSelect.Value>
-        {props.options.length > 1 && (
-          <KSelect.Icon class="ui-expanded:-rotate-180 transition-transform">
-            <IconCapChevronDown class="size-4 shrink-0 transform transition-transform" />
-          </KSelect.Icon>
+        {props.options.length <= 1 ? (
+          <span class="truncate">{props.placeholder}</span>
+        ) : (
+          <>
+            <span class="truncate">{value()?.name ?? props.placeholder}</span>
+            <IconCapChevronDown class="shrink-0 size-4" />
+          </>
         )}
-      </KSelect.Trigger>
-      <KSelect.Portal>
-        <PopperContent<typeof KSelect.Content>
-          as={KSelect.Content}
-          class={topRightAnimateClasses}
-        >
-          <Show
-            when={props.options.length > 0}
-            fallback={
-              <div class="p-2 text-gray-500">{props.optionsEmptyText}</div>
-            }
-          >
-            <KSelect.Listbox class="max-h-52 max-w-[17rem]" as={MenuItemList} />
-          </Show>
-        </PopperContent>
-      </KSelect.Portal>
-    </KSelect>
+      </button>
+    </>
   );
 }
 
@@ -1030,31 +1011,23 @@ function TargetSelectInfoPill<T>(props: {
   value: T | null;
   permissionGranted: boolean;
   requestPermission: () => void;
-  onClear: () => void;
+  onClick: (e: MouseEvent) => void;
 }) {
   return (
-    <button
-      type="button"
-      class={cx(
-        "px-[0.375rem] rounded-full text-[0.75rem]",
-        props.value !== null && props.permissionGranted
-          ? "bg-blue-50 text-blue-300"
-          : "bg-red-50 text-red-300"
-      )}
+    <InfoPill
+      variant={props.value !== null && props.permissionGranted ? "blue" : "red"}
       onPointerDown={(e) => {
         if (!props.permissionGranted || props.value === null) return;
 
         e.stopPropagation();
       }}
       onClick={(e) => {
-        e.stopPropagation();
-
         if (!props.permissionGranted) {
           props.requestPermission();
           return;
         }
 
-        props.onClear();
+        props.onClick(e);
       }}
     >
       {!props.permissionGranted
@@ -1062,7 +1035,24 @@ function TargetSelectInfoPill<T>(props: {
         : props.value !== null
         ? "On"
         : "Off"}
-    </button>
+    </InfoPill>
+);
+}
+
+function InfoPill(
+  props: ComponentProps<"button"> & { variant: "blue" | "red" }
+) {
+  return (
+    <button
+      {...props}
+      type="button"
+      class={cx(
+        "px-[0.375rem] rounded-full text-[0.75rem]",
+        props.variant === "blue"
+          ? "bg-blue-3 text-blue-9"
+          : "bg-red-3 text-red-9"
+      )}
+    />
   );
 }
 
@@ -1094,6 +1084,7 @@ function ChangelogButton() {
 
   const handleChangelogClick = () => {
     commands.showWindow({ Settings: { page: "changelog" } });
+    getCurrentWindow().hide();
     const version = currentVersion();
     if (version) {
       setChangelogState({
@@ -1121,28 +1112,23 @@ function ChangelogButton() {
   });
 
   return (
-    <Tooltip.Root openDelay={0}>
-      <Tooltip.Trigger>
-        <button
-          type="button"
-          onClick={handleChangelogClick}
-          class="relative flex items-center justify-center w-5 h-5"
-        >
-          <IconLucideBell class="size-5 text-gray-400 hover:text-gray-500" />
-          {changelogState.hasUpdate && (
-            <div
-              style={{ "background-color": "#FF4747" }}
-              class="block z-10 absolute top-0 right-0 size-1.5 rounded-full animate-bounce"
-            />
-          )}
-        </button>
-      </Tooltip.Trigger>
-      <Tooltip.Portal>
-        <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
-          Changelog
-          <Tooltip.Arrow class="fill-gray-500" />
-        </Tooltip.Content>
-      </Tooltip.Portal>
-    </Tooltip.Root>
+    <Tooltip
+      openDelay={0}
+      content="Changelog"
+    >
+      <button
+        type="button"
+        onClick={handleChangelogClick}
+        class="flex relative justify-center items-center w-5 h-5"
+      >
+        <IconLucideBell class="text-gray-11 size-5 hover:text-gray-12" />
+        {changelogState.hasUpdate && (
+          <div
+            style={{ "background-color": "#FF4747" }}
+            class="block z-10 absolute top-0 right-0 size-1.5 rounded-full animate-bounce"
+          />
+        )}
+      </button>
+    </Tooltip>
   );
 }

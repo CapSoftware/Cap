@@ -1,26 +1,34 @@
+import { useRive } from "@rive-app/react-canvas";
+import { useTheme } from "../../_components/DynamicSharedLayout";
+
 interface EmptySharedCapStateProps {
-  spaceName: string;
+  organizationName: string;
 }
 
 export const EmptySharedCapState: React.FC<EmptySharedCapStateProps> = ({
-  spaceName,
+  organizationName,
 }) => {
+  const { theme } = useTheme();
+  const { RiveComponent: EmptyCap } = useRive({
+    src: "/rive/main.riv",
+    artboard: theme === "light" ? "emptyshared" : "darkemptyshared",
+    autoplay: true,
+  });
   return (
-    <div className="w-full flex flex-col items-center justify-center">
-      <div className="w-full max-w-md mx-auto">
-        <img
-          className="w-full h-auto"
-          src="/illustrations/person-microphone.svg"
-          alt="Person using microphone"
+    <div className="flex flex-col flex-1 justify-center items-center w-full h-full">
+      <div className="mx-auto mb-20 w-full max-w-md">
+        <EmptyCap
+          key={theme + "empty-shared-cap"}
+          className="max-w-[300px] w-full mx-auto md:max-w-[600px] h-[250px]"
         />
       </div>
       <div className="text-center pb-[30px]">
-        <h1 className="text-2xl font-semibold mb-3">
-          <span className="block">No shared Caps yet!</span>
-        </h1>
-        <p className="text-xl max-w-md">
-          There are no Caps shared with {spaceName} yet. Ask your team members
-          to share their Caps with this space.
+        <p className="mb-3 text-xl font-semibold text-gray-12">
+          No shared Caps yet!
+        </p>
+        <p className="max-w-md text-md text-gray-10">
+          There are no Caps shared with {organizationName} yet. Ask your team
+          members to share their Caps with this organization.
         </p>
       </div>
     </div>

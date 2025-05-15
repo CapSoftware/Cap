@@ -8,10 +8,10 @@ import {
   CreateJobCommand,
 } from "@aws-sdk/client-mediaconvert";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
-import { serverEnv, clientEnv } from "@cap/env";
+import { serverEnv, buildEnv } from "@cap/env";
 
 const allowedOrigins = [
-  clientEnv.NEXT_PUBLIC_WEB_URL,
+  buildEnv.NEXT_PUBLIC_WEB_URL,
   "http://localhost:3001",
   "tauri://localhost",
   "http://tauri.localhost",
@@ -66,7 +66,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const query = await db
+  const query = await db()
     .select({
       video: videos,
       bucket: s3Buckets,
@@ -128,7 +128,7 @@ export async function GET(request: NextRequest) {
   const audioPrefix = `${userId}/${videoId}/audio/`;
 
   try {
-    const s3Client = await createS3Client(bucket);
+    const [s3Client] = await createS3Client(bucket);
 
     const videoSegmentCommand = new ListObjectsV2Command({
       Bucket,
@@ -148,7 +148,7 @@ export async function GET(request: NextRequest) {
     );
 
     if (videoSegmentKeys.length > 149) {
-      await db
+      await db()
         .update(videos)
         .set({ skipProcessing: true })
         .where(eq(videos.id, videoId));
@@ -174,17 +174,17 @@ export async function GET(request: NextRequest) {
     );
 
     const mediaConvertClient = new MediaConvertClient({
-      region: clientEnv.NEXT_PUBLIC_CAP_AWS_REGION || "",
+      region: serverEnv().CAP_AWS_REGION || "",
       credentials: {
-        accessKeyId: serverEnv.CAP_AWS_ACCESS_KEY || "",
-        secretAccessKey: serverEnv.CAP_AWS_SECRET_KEY || "",
+        accessKeyId: serverEnv().CAP_AWS_ACCESS_KEY || "",
+        secretAccessKey: serverEnv().CAP_AWS_SECRET_KEY || "",
       },
     });
 
     const outputKey = `${userId}/${videoId}/output/`;
 
     const createJobCommand = new CreateJobCommand({
-      Role: serverEnv.CAP_AWS_MEDIACONVERT_ROLE_ARN || "",
+      Role: serverEnv().CAP_AWS_MEDIACONVERT_ROLE_ARN || "",
       Settings: {
         Inputs: videoSegmentKeys.map((videoSegmentKey, index) => {
           const audioSegmentKey = audioSegmentKeys[index];
@@ -267,7 +267,7 @@ export async function GET(request: NextRequest) {
     const createJobResponse = await mediaConvertClient.send(createJobCommand);
     const jobId = createJobResponse.Job?.Id;
 
-    await db.update(videos).set({ jobId }).where(eq(videos.id, videoId));
+    await db().update(videos).set({ jobId }).where(eq(videos.id, videoId));
 
     return new Response(JSON.stringify({ jobId: jobId }), {
       status: 200,

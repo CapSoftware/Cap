@@ -14,10 +14,8 @@ use tokio::{
 pub enum RendererMessage {
     RenderFrame {
         segment_frames: DecodedSegmentFrames,
-        background: BackgroundSource,
         uniforms: ProjectUniforms,
         finished: oneshot::Sender<()>,
-        resolution_base: XY<u32>,
         cursor: Arc<CursorEvents>,
     },
     Stop {
@@ -42,8 +40,8 @@ impl Renderer {
         frame_tx: flume::Sender<WSFrame>,
         recording_meta: &RecordingMeta,
         meta: &StudioRecordingMeta,
-    ) -> RendererHandle {
-        let recordings = ProjectRecordings::new(&recording_meta.project_path, meta);
+    ) -> Result<RendererHandle, String> {
+        let recordings = Arc::new(ProjectRecordings::new(&recording_meta.project_path, meta)?);
         let mut max_duration = recordings.duration();
 
         // Check camera duration if it exists
@@ -68,7 +66,7 @@ impl Renderer {
 
         tokio::spawn(this.run());
 
-        RendererHandle { tx }
+        Ok(RendererHandle { tx })
     }
 
     async fn run(mut self) {
@@ -81,10 +79,8 @@ impl Renderer {
                 match msg {
                     RendererMessage::RenderFrame {
                         segment_frames,
-                        background,
                         uniforms,
                         finished,
-                        resolution_base,
                         cursor,
                     } => {
                         if let Some(task) = frame_task.as_ref() {
@@ -97,37 +93,28 @@ impl Renderer {
 
                         let frame_tx = self.frame_tx.clone();
 
-                        // frame_task = Some(tokio::spawn(async move {
+                        let output_size = uniforms.output_size;
+
                         let frame = frame_renderer
-                            .render(
-                                segment_frames,
-                                background,
-                                &uniforms,
-                                resolution_base,
-                                &cursor,
-                            )
+                            .render(segment_frames, uniforms, &cursor)
                             .await
                             .unwrap();
 
                         frame_tx
                             .try_send(WSFrame {
                                 data: frame.data,
-                                width: uniforms.output_size.0,
-                                height: uniforms.output_size.1,
+                                width: output_size.0,
+                                height: output_size.1,
                                 stride: frame.padded_bytes_per_row,
                             })
                             .ok();
                         finished.send(()).ok();
-                        // }));
                     }
                     RendererMessage::Stop { finished } => {
-                        // Cancel any ongoing frame task
                         if let Some(task) = frame_task.take() {
                             task.abort();
                         }
-                        // Acknowledge the stop
                         let _ = finished.send(());
-                        // Exit the run loop
                         return;
                     }
                 }
@@ -144,19 +131,15 @@ impl RendererHandle {
     pub async fn render_frame(
         &self,
         segment_frames: DecodedSegmentFrames,
-        background: BackgroundSource,
         uniforms: ProjectUniforms,
-        resolution_base: XY<u32>,
         cursor: Arc<CursorEvents>,
     ) {
         let (finished_tx, finished_rx) = oneshot::channel();
 
         self.send(RendererMessage::RenderFrame {
             segment_frames,
-            background,
             uniforms,
             finished: finished_tx,
-            resolution_base,
             cursor,
         })
         .await;

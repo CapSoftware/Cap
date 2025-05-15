@@ -1,30 +1,30 @@
 import { Router, useCurrentMatches } from "@solidjs/router";
 import { FileRoutes } from "@solidjs/start/router";
-import {
-  createEffect,
-  ErrorBoundary,
-  onCleanup,
-  onMount,
-  Suspense,
-} from "solid-js";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
-import { message } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { message } from "@tauri-apps/plugin-dialog";
+import {
+    createEffect,
+    ErrorBoundary,
+    onCleanup,
+    onMount,
+    Suspense,
+} from "solid-js";
 
 import "@cap/ui-solid/main.css";
 import "unfonts.css";
 import "./styles/theme.css";
 
-import titlebar from "./utils/titlebar-state";
-import { generalSettingsStore } from "./store";
-import { commands, type AppTheme } from "./utils/tauri";
-import {
-  getCurrentWebviewWindow,
-  WebviewWindow,
-} from "@tauri-apps/api/webviewWindow";
 import { Button } from "@cap/ui-solid";
+import {
+    getCurrentWebviewWindow,
+    WebviewWindow,
+} from "@tauri-apps/api/webviewWindow";
 import { Toaster } from "solid-toast";
+import { generalSettingsStore } from "./store";
 import { initAnonymousUser } from "./utils/analytics";
+import { commands, type AppTheme } from "./utils/tauri";
+import titlebar from "./utils/titlebar-state";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -57,7 +57,7 @@ function Inner() {
   return (
     <>
       <Toaster
-        position="top-right"
+        position="bottom-right"
         containerStyle={{
           "margin-top": titlebar.height,
         }}
@@ -66,7 +66,11 @@ function Inner() {
           style: {
             padding: "8px 16px",
             "border-radius": "15px",
+            "border-color": "var(--gray-200)",
+            "border-width": "1px",
             "font-size": "1rem",
+            "background-color": "var(--gray-50)",
+            color: "var(--text-secondary)",
           },
         }}
       />
@@ -74,15 +78,15 @@ function Inner() {
         fallback={(e: Error) => {
           console.error(e);
           return (
-            <div class="w-screen h-screen flex flex-col justify-center items-center bg-gray-100 border-gray-200 max-h-screen overflow-hidden transition-[border-radius] duration-200 text-[--text-secondary] gap-y-4 max-sm:gap-y-2 px-8 text-center">
+            <div class="w-screen h-screen flex flex-col justify-center items-center bg-gray-2 border-gray-3 max-h-screen overflow-hidden transition-[border-radius] duration-200 text-[--text-secondary] gap-y-4 max-sm:gap-y-2 px-8 text-center">
               <IconCapLogo class="max-sm:size-16" />
               <h1 class="text-[--text-primary] text-3xl max-sm:text-xl font-bold">
                 An Error Occured
               </h1>
-              <p class="max-sm:text-sm mb-2">
+              <p class="mb-2 max-sm:text-sm">
                 We're very sorry, but something has gone wrong.
               </p>
-              <div class="flex max-sm:flex-col flex-row max-sm:gap-2 gap-4">
+              <div class="flex flex-row gap-4 max-sm:flex-col max-sm:gap-2">
                 <Button
                   onClick={() => {
                     writeText(`${e.toString()}\n\n${e.stack}`);

@@ -1,29 +1,23 @@
 use either::Either;
-use relative_path::{RelativePath, RelativePathBuf};
+use relative_path::RelativePathBuf;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
     collections::HashMap,
-    fs::File,
     path::{Path, PathBuf},
 };
 
 use crate::{CursorEvents, CursorImage, CursorImages, ProjectConfiguration, XY};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct Display {
+pub struct VideoMeta {
     #[specta(type = String)]
     pub path: RelativePathBuf,
     #[serde(default = "legacy_static_video_fps")]
     pub fps: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct CameraMeta {
-    #[specta(type = String)]
-    pub path: RelativePathBuf,
-    #[serde(default = "legacy_static_video_fps")]
-    pub fps: u32,
+    /// unix time of the first frame
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_time: Option<f64>,
 }
 
 fn legacy_static_video_fps() -> u32 {
@@ -34,6 +28,9 @@ fn legacy_static_video_fps() -> u32 {
 pub struct AudioMeta {
     #[specta(type = String)]
     pub path: RelativePathBuf,
+    /// unix time of the first frame
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_time: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -43,7 +40,24 @@ pub struct SharingMeta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub enum Platform {
+    MacOS,
+    Windows,
+}
+
+impl Default for Platform {
+    fn default() -> Self {
+        #[cfg(windows)]
+        return Self::Windows;
+
+        #[cfg(target_os = "macos")]
+        return Self::MacOS;
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct RecordingMeta {
+    pub platform: Option<Platform>,
     // this field is just for convenience, it shouldn't be persisted
     #[serde(skip_serializing, default)]
     pub project_path: PathBuf,
@@ -114,10 +128,12 @@ impl RecordingMeta {
 pub enum StudioRecordingMeta {
     SingleSegment {
         #[serde(flatten)]
+        #[specta(flatten)]
         segment: SingleSegment,
     },
     MultipleSegments {
         #[serde(flatten)]
+        #[specta(flatten)]
         inner: MultipleSegments,
     },
 }
@@ -128,7 +144,7 @@ impl StudioRecordingMeta {
             StudioRecordingMeta::SingleSegment { segment } => {
                 segment.camera.as_ref().map(|c| c.path.clone())
             }
-            StudioRecordingMeta::MultipleSegments { inner } => inner
+            StudioRecordingMeta::MultipleSegments { inner, .. } => inner
                 .segments
                 .first()
                 .and_then(|s| s.camera.as_ref().map(|c| c.path.clone())),
@@ -138,7 +154,7 @@ impl StudioRecordingMeta {
     pub fn min_fps(&self) -> u32 {
         match self {
             StudioRecordingMeta::SingleSegment { segment } => segment.display.fps,
-            StudioRecordingMeta::MultipleSegments { inner } => {
+            StudioRecordingMeta::MultipleSegments { inner, .. } => {
                 inner.segments.iter().map(|s| s.display.fps).min().unwrap()
             }
         }
@@ -147,7 +163,7 @@ impl StudioRecordingMeta {
     pub fn max_fps(&self) -> u32 {
         match self {
             StudioRecordingMeta::SingleSegment { segment } => segment.display.fps,
-            StudioRecordingMeta::MultipleSegments { inner } => {
+            StudioRecordingMeta::MultipleSegments { inner, .. } => {
                 inner.segments.iter().map(|s| s.display.fps).max().unwrap()
             }
         }
@@ -157,9 +173,9 @@ impl StudioRecordingMeta {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SingleSegment {
-    pub display: Display,
+    pub display: VideoMeta,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub camera: Option<CameraMeta>,
+    pub camera: Option<VideoMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio: Option<AudioMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -232,11 +248,13 @@ impl MultipleSegments {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct MultipleSegment {
-    pub display: Display,
+    pub display: VideoMeta,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub camera: Option<CameraMeta>,
+    pub camera: Option<VideoMeta>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "audio")]
+    pub mic: Option<AudioMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub audio: Option<AudioMeta>,
+    pub system_audio: Option<AudioMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[specta(type = Option<String>)]
     pub cursor: Option<RelativePathBuf>,
@@ -263,6 +281,24 @@ impl MultipleSegment {
                 CursorEvents::default()
             }
         }
+    }
+
+    pub fn latest_start_time(&self) -> Option<f64> {
+        let mut value = self.display.start_time?;
+
+        if let Some(camera) = &self.camera {
+            value = value.max(camera.start_time?);
+        }
+
+        if let Some(mic) = &self.mic {
+            value = value.max(mic.start_time?);
+        }
+
+        if let Some(system_audio) = &self.system_audio {
+            value = value.max(system_audio.start_time?);
+        }
+
+        Some(value)
     }
 }
 

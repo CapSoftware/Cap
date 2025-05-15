@@ -1,4 +1,5 @@
 use flume::Receiver;
+use futures::pin_mut;
 use indexmap::IndexMap;
 use std::{
     thread::{self, JoinHandle},
@@ -10,7 +11,7 @@ use tracing::{info, trace};
 use crate::pipeline::{
     clock::CloneFrom,
     control::ControlBroadcast,
-    task::{PipelinePipeTask, PipelineReadySignal, PipelineSinkTask, PipelineSourceTask},
+    task::{PipelineReadySignal, PipelineSinkTask, PipelineSourceTask},
     MediaError, Pipeline, PipelineClock,
 };
 
@@ -38,7 +39,7 @@ impl<T> PipelineBuilder<T> {
     pub fn source<O: Send + 'static, C: CloneFrom<T> + Send + 'static>(
         mut self,
         name: impl Into<String>,
-        mut task: impl PipelineSourceTask<Output = O, Clock = C> + 'static,
+        mut task: impl PipelineSourceTask<Clock = C> + 'static,
     ) -> PipelinePathBuilder<T, O> {
         let name = name.into();
         let (output, next_input) = flume::bounded(task.queue_size());
@@ -46,7 +47,7 @@ impl<T> PipelineBuilder<T> {
         let control_signal = self.control.add_listener(name.clone());
 
         self.spawn_task(name, move |ready_signal| {
-            task.run(clock, ready_signal, control_signal, output);
+            task.run(clock, ready_signal, control_signal);
         });
 
         PipelinePathBuilder {
@@ -55,11 +56,27 @@ impl<T> PipelineBuilder<T> {
         }
     }
 
-    fn spawn_task(
+    pub fn spawn_source<C: CloneFrom<T> + Send + 'static>(
         &mut self,
-        name: String,
+        name: impl Into<String>,
+        mut task: impl PipelineSourceTask<Clock = C> + 'static,
+    ) {
+        let name = name.into();
+        let clock = C::clone_from(&self.clock);
+        let control_signal = self.control.add_listener(name.clone());
+
+        self.spawn_task(name, move |ready_signal| {
+            task.run(clock, ready_signal, control_signal);
+        });
+    }
+
+    pub fn spawn_task(
+        &mut self,
+        name: impl Into<String>,
         launch: impl FnOnce(PipelineReadySignal) + Send + 'static,
     ) {
+        let name = name.into();
+
         if self.tasks.contains_key(&name) {
             panic!("A task with the name {name} has already been added to the pipeline");
         }
@@ -71,16 +88,21 @@ impl<T> PipelineBuilder<T> {
 
         let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
 
-        let join_handle = thread::spawn(move || {
-            tracing::dispatcher::with_default(&dispatcher, || {
-                span.in_scope(|| {
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        launch(ready_sender);
-                    }))
-                    .ok();
+        let join_handle = thread::spawn({
+            let name = name.clone();
+            move || {
+                tracing::dispatcher::with_default(&dispatcher, || {
+                    span.in_scope(|| {
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            info!("launching task '{name}'");
+                            launch(ready_sender);
+                            info!("task '{name}' done");
+                        }))
+                        .ok();
+                    });
+                    done_tx.send(()).ok();
                 });
-                done_tx.send(()).ok();
-            });
+            }
         });
 
         self.tasks.insert(
@@ -113,10 +135,10 @@ impl<T: PipelineClock> PipelineBuilder<T> {
         // TODO: Shut down tasks if launch failed.
         for (name, task) in tasks.into_iter() {
             // TODO: Wait for these in parallel?
-            task.ready_signal
-                .recv_async()
+            tokio::time::timeout(Duration::from_secs(5), task.ready_signal.recv_async())
                 .await
-                .map_err(|_| MediaError::TaskLaunch(name.clone()))??;
+                .map_err(|_| MediaError::TaskLaunch(format!("task timed out: '{name}'")))?
+                .map_err(|e| MediaError::TaskLaunch(format!("{name} build / {e}")))??;
 
             task_handles.insert(name, task.join_handle);
             stop_rx.push(task.done_rx);
@@ -153,51 +175,4 @@ impl<T: PipelineClock> PipelineBuilder<T> {
 pub struct PipelinePathBuilder<Clock, PreviousOutput: Send> {
     pipeline: PipelineBuilder<Clock>,
     next_input: Receiver<PreviousOutput>,
-}
-
-impl<Clock, PreviousOutput: Send + 'static> PipelinePathBuilder<Clock, PreviousOutput> {
-    pub fn pipe<Output: Send + 'static>(
-        self,
-        name: impl Into<String>,
-        mut task: impl PipelinePipeTask<Input = PreviousOutput, Output = Output> + 'static,
-    ) -> PipelinePathBuilder<Clock, Output> {
-        let Self {
-            mut pipeline,
-            next_input: input,
-        } = self;
-
-        let (output, next_input) = flume::bounded(task.queue_size());
-
-        pipeline.spawn_task(name.into(), move |ready_signal| {
-            trace!("Pipe starting");
-            task.run(ready_signal, input, output);
-            info!("Pipe stopped");
-        });
-
-        PipelinePathBuilder {
-            pipeline,
-            next_input,
-        }
-    }
-
-    pub fn sink(
-        self,
-        name: impl Into<String>,
-        mut task: impl PipelineSinkTask<PreviousOutput> + 'static,
-    ) -> PipelineBuilder<Clock> {
-        let Self {
-            mut pipeline,
-            next_input: input,
-        } = self;
-
-        pipeline.spawn_task(name.into(), move |ready_signal| {
-            trace!("Sink starting");
-            task.run(ready_signal, &input);
-            info!("Sink stopped running");
-            task.finish();
-            info!("Sink stopped");
-        });
-
-        pipeline
-    }
 }

@@ -1,9 +1,9 @@
 "use client";
 
-import * as React from "react";
+import { classNames } from "@cap/utils";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
-import { classNames } from "@cap/utils";
+import * as React from "react";
 
 const Dialog = DialogPrimitive.Root;
 const DialogTrigger = DialogPrimitive.Trigger;
@@ -15,10 +15,7 @@ const DialogOverlay = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Overlay
     ref={ref}
-    className={classNames(
-      "fixed inset-0 z-50 bg-black/80 backdrop-blur-sm",
-      className
-    )}
+    className={classNames("fixed inset-0 z-50 bg-black/60", className)}
     {...props}
   />
 ));
@@ -29,19 +26,25 @@ const DialogContent = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
 >(({ className, children, ...props }, ref) => (
   <DialogPortal>
-    <DialogOverlay />
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <DialogOverlay className="animate-fadeIn" />
+    <div className="flex fixed inset-0 z-50 justify-center items-center">
       <DialogPrimitive.Content
         ref={ref}
         className={classNames(
-          "relative bg-white p-6 shadow-lg sm:rounded-lg w-full max-w-lg",
+          "relative p-0 w-full max-w-md rounded-xl border shadow-lg bg-gray-2 border-gray-4 animate-contentShow",
           className
         )}
+        style={{
+          position: 'fixed',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+        }}
         {...props}
       >
         {children}
         <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
-          <X className="h-5 w-5" />
+          <X className="w-5 h-5 text-gray-9" />
           <span className="sr-only">Close</span>
         </DialogPrimitive.Close>
       </DialogPrimitive.Content>
@@ -50,17 +53,37 @@ const DialogContent = React.forwardRef<
 ));
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
+type DialogHeaderProps = React.HTMLAttributes<HTMLDivElement> & {
+  icon?: React.JSX.Element;
+  description?: string;
+};
+
 const DialogHeader = ({
   className,
+  icon,
+  description,
+  children,
   ...props
-}: React.HTMLAttributes<HTMLDivElement>) => (
+}: DialogHeaderProps) => (
   <div
     className={classNames(
-      "flex flex-col space-y-1.5 text-center sm:text-left pb-4 mb-4 border-b border-subtle",
+      "flex gap-3 items-center p-5 border-b border-gray-4",
       className
     )}
     {...props}
-  />
+  >
+    {icon && (
+      <div className="flex justify-center items-center rounded-full border text-gray-12 border-gray-5 bg-gray-3 size-10">
+        {icon}
+      </div>
+    )}
+    <div className="flex flex-col">
+      {children}
+      {description && (
+        <p className="text-sm text-gray-10">{description}</p>
+      )}
+    </div>
+  </div>
 );
 DialogHeader.displayName = "DialogHeader";
 
@@ -70,7 +93,7 @@ const DialogFooter = ({
 }: React.HTMLAttributes<HTMLDivElement>) => (
   <div
     className={classNames(
-      "flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2 mt-6 pt-4 border-t border-subtle",
+      "flex flex-col-reverse gap-1 p-5 border-t border-gray-4 sm:flex-row sm:justify-end sm:space-x-2",
       className
     )}
     {...props}
@@ -85,7 +108,7 @@ const DialogTitle = React.forwardRef<
   <DialogPrimitive.Title
     ref={ref}
     className={classNames(
-      "text-xl font-bold leading-none tracking-tight",
+      "text-lg font-bold text-gray-12",
       className
     )}
     {...props}
@@ -99,7 +122,7 @@ const DialogDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
-    className={classNames("text-sm text-muted-foreground", className)}
+    className={classNames("p-5 text-sm text-gray-11", className)}
     {...props}
   />
 ));
@@ -107,10 +130,12 @@ DialogDescription.displayName = DialogPrimitive.Description.displayName;
 
 export {
   Dialog,
-  DialogTrigger,
   DialogContent,
-  DialogHeader,
-  DialogFooter,
-  DialogTitle,
   DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger
 };
+
+export type { DialogHeaderProps };

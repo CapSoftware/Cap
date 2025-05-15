@@ -7,7 +7,7 @@ pub use studio_recording::{
     spawn_studio_recording_actor, CompletedStudioRecording, StudioRecordingHandle,
 };
 
-use cap_media::{sources::*, MediaError};
+use cap_media::{platform::Bounds, sources::*, MediaError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -22,33 +22,40 @@ pub enum RecordingMode {
 #[serde(rename_all = "camelCase")]
 pub struct RecordingOptions {
     pub capture_target: ScreenCaptureTarget,
-    pub audio_input_name: Option<String>,
+    #[serde(alias = "audio_input_name")]
+    pub mic_name: Option<String>,
     pub camera_label: Option<String>,
+    #[serde(default)]
+    pub capture_system_audio: bool,
     pub mode: RecordingMode,
 }
 
-impl Default for RecordingOptions {
-    fn default() -> Self {
-        Self {
-            capture_target: ScreenCaptureTarget::Screen(CaptureScreen {
-                id: 0,
-                name: String::new(),
-                refresh_rate: 0,
-            }),
-            camera_label: None,
-            audio_input_name: None,
-            mode: RecordingMode::Studio,
-        }
-    }
+#[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum RecordingOptionCaptureTarget {
+    Window { id: u32 },
+    Screen { id: u32 },
+    Area { screen_id: u32, bounds: Bounds },
 }
+
+// impl Default for RecordingOptions {
+//     fn default() -> Self {
+//         Self {
+//             capture_target: None,
+//             camera_label: None,
+//             audio_input_name: None,
+//             mode: RecordingMode::Studio,
+//         }
+//     }
+// }
 
 impl RecordingOptions {
     pub fn camera_label(&self) -> Option<&str> {
         self.camera_label.as_deref()
     }
 
-    pub fn audio_input_name(&self) -> Option<&str> {
-        self.audio_input_name.as_deref()
+    pub fn mic_name(&self) -> Option<&str> {
+        self.mic_name.as_deref()
     }
 }
 

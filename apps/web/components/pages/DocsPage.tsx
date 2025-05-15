@@ -1,12 +1,12 @@
-import Link from "next/link";
-import Image from "next/image";
 import { getDocs } from "@/utils/blog";
+import Image from "next/image";
+import Link from "next/link";
 
 export const DocsPage = () => {
   const allDocs = getDocs();
 
   return (
-    <div className="py-32 wrapper wrapper-sm">
+    <div className="px-5 py-32 mx-auto sm:py-32 wrapper wrapper-sm">
       <div className="mb-14 text-center page-intro">
         <h1>Documentation</h1>
       </div>
@@ -30,7 +30,7 @@ export const DocsPage = () => {
                 </div>
               )}
               <div className="p-10 space-y-4">
-                <h2 className="text-xl text-gray-500 md:text-4xl">
+                <h2 className="text-xl text-gray-1 md:text-4xl">
                   {doc.metadata.title}
                 </h2>
                 <p className="text-gray-600">{doc.metadata.summary}</p>
@@ -39,7 +39,7 @@ export const DocsPage = () => {
                     doc.metadata.tags.split(", ").map((tag) => (
                       <p
                         key={tag}
-                        className="rounded-md bg-gray-200 font-medium px-2 py-0.5 text-sm text-gray-500"
+                        className="rounded-md bg-gray-200 font-medium px-2 py-0.5 text-sm text-gray-1"
                       >
                         {tag}
                       </p>

@@ -1,22 +1,33 @@
 import { drizzle } from "drizzle-orm/planetscale-serverless";
 import { Client, Config } from "@planetscale/database";
-import { NODE_ENV, serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 
-const URL = serverEnv.DATABASE_URL;
+function createDrizzle() {
+  const URL = serverEnv().DATABASE_URL;
 
-let fetchHandler: Promise<Config["fetch"]> | undefined = undefined;
+  let fetchHandler: Promise<Config["fetch"]> | undefined = undefined;
 
-if (NODE_ENV === "development" && URL.startsWith("mysql://")) {
-  fetchHandler = import("@mattrax/mysql-planetscale").then((m) =>
-    m.createFetchHandler(URL)
-  );
+  if (URL.startsWith("mysql://")) {
+    fetchHandler = import("@mattrax/mysql-planetscale").then((m) =>
+      m.createFetchHandler(URL)
+    );
+  }
+
+  const connection = new Client({
+    url: URL,
+    fetch: async (input, init) => {
+      return await ((await fetchHandler) || fetch)(input, init);
+    },
+  });
+
+  return drizzle(connection);
 }
 
-export const connection = new Client({
-  url: URL,
-  fetch: async (input, init) => {
-    return await ((await fetchHandler) || fetch)(input, init);
-  },
-});
+let _cached: ReturnType<typeof createDrizzle> | undefined = undefined;
 
-export const db = drizzle(connection);
+export const db = () => {
+  if (!_cached) {
+    _cached = createDrizzle();
+  }
+  return _cached;
+};
