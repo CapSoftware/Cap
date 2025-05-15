@@ -1608,6 +1608,7 @@ function ZoomSegmentConfig(props: {
   segmentIndex: number;
   segment: ZoomSegment;
 }) {
+  const generalSettings = generalSettingsStore.createQuery();
   const {
     project,
     setProject,
@@ -1679,6 +1680,7 @@ function ZoomSegmentConfig(props: {
       <Field name="Zoom Mode" icon={<IconCapSettings />}>
         <KTabs
           class="space-y-6"
+          value={props.segment.mode === "auto" ? "auto" : "manual"}
           onChange={(v) => {
             if (v === "auto") {
               setProject(
@@ -1689,9 +1691,13 @@ function ZoomSegmentConfig(props: {
                 "auto"
               );
             } else {
-              setProject("timeline", "zoomSegments", props.segmentIndex, {
-                mode: { manual: states.manual },
-              });
+              setProject(
+                "timeline",
+                "zoomSegments",
+                props.segmentIndex,
+                "mode",
+                { manual: states.manual }
+              );
             }
           }}
         >
@@ -1699,6 +1705,7 @@ function ZoomSegmentConfig(props: {
             <KTabs.Trigger
               value="auto"
               class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
+              disabled={!generalSettings.data?.customCursorCapture}
             >
               Auto
             </KTabs.Trigger>
