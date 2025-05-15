@@ -15,6 +15,7 @@ import {
   PopoverTrigger,
 } from "@cap/ui";
 import {
+  faBell,
   faCrown,
   faGear,
   faHome,
@@ -24,12 +25,15 @@ import {
   faSun,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { useClickAway } from "@uidotdev/usehooks";
 import clsx from "clsx";
+import { AnimatePresence } from "framer-motion";
 import { MoreVertical } from "lucide-react";
 import { signOut } from "next-auth/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { MutableRefObject, useRef, useState } from "react";
+import Notifications from "./Notifications";
 
 export default function DashboardInner({
   children,
@@ -45,6 +49,15 @@ export default function DashboardInner({
   };
   const title = titles[pathname] || "";
   const { theme, setThemeHandler } = useTheme();
+  const [toggleNotifications, setToggleNotifications] = useState(false);
+  const notificationsRef: MutableRefObject<HTMLDivElement> = useClickAway(
+    (e) => {
+      if (bellRef.current && !bellRef.current.contains(e.target as Node)) {
+        setToggleNotifications(false);
+      }
+    }
+  );
+  const bellRef = useRef<HTMLDivElement>(null);
   return (
     <>
       {/* Top Bar - Fixed at top with proper z-index */}
@@ -67,6 +80,23 @@ export default function DashboardInner({
               className="text-gray-12 size-3.5"
               icon={theme === "dark" ? faMoon : faSun}
             />
+          </div>
+          <div
+            data-state={toggleNotifications ? "open" : "closed"}
+            ref={bellRef}
+            onClick={() => {
+              setToggleNotifications(!toggleNotifications);
+            }}
+            className="hidden relative justify-center data-[state=open]:hover:border-gray-8 items-center bg-gradient-to-t 
+            rounded-full border transition-colors cursor-pointer lg:flex from-gray-4 to-gray-2 border-gray-4 
+            hover:border-gray-6 data-[state=open]:border-gray-8 data-[state=open]:from-gray-8 
+            data-[state=open]:to-gray-4 size-9"
+          >
+            <div className="absolute top-0 border border-gray-1 right-0 rounded-full z-[10] size-2 bg-red-400" />
+            <FontAwesomeIcon className="text-gray-12 size-3.5" icon={faBell} />
+            <AnimatePresence>
+              {toggleNotifications && <Notifications ref={notificationsRef} />}
+            </AnimatePresence>
           </div>
           <User />
         </div>
@@ -95,8 +125,10 @@ const User = () => {
       />
       <Popover open={menuOpen} onOpenChange={setMenuOpen}>
         <PopoverTrigger asChild>
-          <div data-state={menuOpen ? "open" : "closed"}
-            className="flex gap-2 justify-between  items-center p-2 rounded-xl border data-[state=open]:border-gray-5 data-[state=open]:bg-gray-3 border-transparent transition-colors cursor-pointer group lg:gap-6 hover:border-gray-4">
+          <div
+            data-state={menuOpen ? "open" : "closed"}
+            className="flex gap-2 justify-between  items-center p-2 rounded-xl border data-[state=open]:border-gray-5 data-[state=open]:bg-gray-3 border-transparent transition-colors cursor-pointer group lg:gap-6 hover:border-gray-4"
+          >
             <div className="flex items-center">
               <Avatar
                 letterClass="text-xs lg:text-md"
@@ -107,7 +139,10 @@ const User = () => {
                 {user.name ?? "User"}
               </span>
             </div>
-            <MoreVertical data-state={menuOpen ? "open" : "closed"} className="w-5 h-5 data-[state=open]:text-gray-12 transition-colors text-gray-10 group-hover:text-gray-12" />
+            <MoreVertical
+              data-state={menuOpen ? "open" : "closed"}
+              className="w-5 h-5 data-[state=open]:text-gray-12 transition-colors text-gray-10 group-hover:text-gray-12"
+            />
           </div>
         </PopoverTrigger>
         <PopoverContent className="p-1 w-48">

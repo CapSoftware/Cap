@@ -3,6 +3,7 @@
 @import '@radix-ui/colors/gray.css';
 @import '@radix-ui/colors/gray-alpha.css';
 @import '@radix-ui/colors/gray-dark.css';
+@import '@radix-ui/colors/white-alpha.css';
 @import '@radix-ui/colors/blue.css';
 
 @tailwind base;
@@ -474,9 +475,14 @@ slot:not(.dashboard-layout slot) {
   @apply bg-gray-50
 }
 
+
+.hide-scroll::-webkit-scrollbar {
+  display: none;
+}
+
 /* Custom scrollbar */
 .custom-scroll {
-  overflow-y: scroll;
+  overflow-y: auto;
 }
 
 .custom-scroll::-webkit-scrollbar {
