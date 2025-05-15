@@ -95,6 +95,7 @@ impl Playback {
                             fps,
                             resolution_base,
                             &segment.cursor,
+                            &segment_frames,
                         );
 
                         self.renderer
