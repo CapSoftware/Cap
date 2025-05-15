@@ -43,7 +43,7 @@ import {
   type BackgroundSource,
   StereoMode,
   ZoomSegment,
-  commands
+  commands,
 } from "~/utils/tauri";
 import { useEditorContext } from "./context";
 import {
@@ -85,7 +85,6 @@ const BACKGROUND_SOURCES_LIST = [
   "color",
   "gradient",
 ] satisfies Array<BackgroundSource["type"]>;
-
 
 const BACKGROUND_COLORS = [
   "#FF0000", // Red
@@ -1676,15 +1675,12 @@ function ZoomSegmentConfig(props: {
             <KTabs.Trigger
               value="auto"
               class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
-              // onClick={() => setSelectedTab(item.id)}
-              disabled
             >
               Auto
             </KTabs.Trigger>
             <KTabs.Trigger
               value="manual"
               class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
-              // onClick={() => setSelectedTab(item.id)}
             >
               Manual
             </KTabs.Trigger>

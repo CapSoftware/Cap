@@ -228,8 +228,14 @@ pub async fn render_video_to_channel(
             .get_frames(segment_time as f32, !project.camera.hide)
             .await
         {
-            let uniforms =
-                ProjectUniforms::new(&constants, &project, frame_number, fps, resolution_base);
+            let uniforms = ProjectUniforms::new(
+                &constants,
+                &project,
+                frame_number,
+                fps,
+                resolution_base,
+                &segment.cursor,
+            );
 
             let frame = frame_renderer
                 .render(segment_frames, uniforms, &segment.cursor)
@@ -684,6 +690,7 @@ impl ProjectUniforms {
         frame_number: u32,
         fps: u32,
         resolution_base: XY<u32>,
+        cursor_events: &CursorEvents,
     ) -> Self {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project, resolution_base);
@@ -723,7 +730,7 @@ impl ProjectUniforms {
                 .unwrap_or(&[]),
         );
 
-        let zoom = InterpolatedZoom::new(segment_cursor);
+        let zoom = InterpolatedZoom::new(segment_cursor, Some(cursor_events));
 
         let display = {
             let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
