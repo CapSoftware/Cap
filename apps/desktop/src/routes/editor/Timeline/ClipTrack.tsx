@@ -251,6 +251,13 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                       availableTimelineDuration
                     );
 
+                    const prevSegment = segments()[i() - 1];
+                    const prevSegmentIsSameClip =
+                      prevSegment?.recordingSegment !== undefined
+                        ? prevSegment.recordingSegment ===
+                          segment.recordingSegment
+                        : false;
+
                     function update(event: MouseEvent) {
                       const newStart =
                         start +
@@ -263,7 +270,8 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                         "start",
                         Math.min(
                           Math.max(
-                            Math.max(newStart, 0),
+                            newStart,
+                            prevSegmentIsSameClip ? prevSegment.end : 0,
                             segment.end - maxDuration
                           ),
                           segment.end - 1
@@ -286,11 +294,6 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                   }}
                 />
                 <SegmentContent class="relative justify-center items-center dark:text-black-transparent-60 text-white-transparent-60">
-                  {/* <Show when={segment.start > 0}>
-                    <span class="text-black-transparent-60 text-[0.625rem] absolute top-[18px] left-5">
-                      {formatTime(segment.start)}
-                    </span>
-                  </Show> */}
                   {(() => {
                     const ctx = useSegmentContext();
 
@@ -310,12 +313,6 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                       </Show>
                     );
                   })()}
-
-                  {/* <Show when={segment.end < editorInstance.recordingDuration}>
-                    <span class="text-[0.625rem] absolute top-[18px] right-5">
-                      {formatTime(segment.end)}
-                    </span>
-                  </Show> */}
                 </SegmentContent>
                 <SegmentHandle
                   position="end"
@@ -339,6 +336,13 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                         0
                       );
 
+                    const nextSegment = segments()[i() + 1];
+                    const nextSegmentIsSameClip =
+                      nextSegment?.recordingSegment !== undefined
+                        ? nextSegment.recordingSegment ===
+                          segment.recordingSegment
+                        : false;
+
                     function update(event: MouseEvent) {
                       const newEnd =
                         end +
@@ -352,8 +356,10 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                         Math.max(
                           Math.min(
                             newEnd,
-                            maxSegmentDuration,
-                            availableTimelineDuration
+                            segment.end + availableTimelineDuration,
+                            nextSegmentIsSameClip
+                              ? nextSegment.start
+                              : maxSegmentDuration
                           ),
                           segment.start + 1
                         )
