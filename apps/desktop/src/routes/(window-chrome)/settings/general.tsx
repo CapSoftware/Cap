@@ -26,7 +26,7 @@ import themePreviewDark from "~/assets/theme-previews/dark.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
 import { Toggle } from "~/components/Toggle";
 import { TextInput } from "~/routes/editor/TextInput";
-import { Setting, ToggleSetting } from "./ToggleSetting";
+import { Setting, ToggleSetting } from "./Setting";
 
 export default function GeneralSettings() {
   const [store] = createResource(() => generalSettingsStore.get());

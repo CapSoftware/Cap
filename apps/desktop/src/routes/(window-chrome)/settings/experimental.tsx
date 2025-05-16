@@ -59,7 +59,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
           <ToggleSetting
             label="System audio capture"
-            description="Provides the option for you to capture audio coming from your system, such as music or video playback."
+            description="Provides the option for capturing audio coming from your system, such as music or video playback."
             value={!!settings.systemAudioCapture}
             onChange={(value) => handleChange("systemAudioCapture", value)}
           />
