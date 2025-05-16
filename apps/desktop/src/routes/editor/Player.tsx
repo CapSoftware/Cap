@@ -22,19 +22,6 @@ export function Player() {
     zoomOutLimit,
   } = useEditorContext();
 
-  const splitButton = () => (
-    <EditorButton<typeof KToggleButton>
-      disabled={!window.FLAGS.split}
-      pressed={editorState.timeline.interactMode === "split"}
-      onChange={(v: boolean) =>
-        setEditorState("timeline", "interactMode", v ? "split" : "seek")
-      }
-      as={KToggleButton}
-      variant="danger"
-      leftIcon={<IconCapScissors class="text-gray-12" />}
-    />
-  );
-
   const isAtEnd = () => {
     const total = totalDuration();
     return total > 0 && total - editorState.playbackTime <= 0.1;
@@ -87,9 +74,7 @@ export function Player() {
   });
 
   return (
-    <div
-      class="flex flex-col flex-1 bg-gray-50 bg-opacity-5 rounded-xl shadow-sm"
-    >
+    <div class="flex flex-col flex-1 bg-gray-50 bg-opacity-5 rounded-xl shadow-sm">
       <div class="flex gap-3 justify-center p-3">
         <AspectRatioSelect />
         <EditorButton
@@ -164,11 +149,16 @@ export function Player() {
         </div>
         <div class="flex flex-row flex-1 gap-4 justify-end items-center">
           <div class="flex-1" />
-          {window.FLAGS.split ? (
-            splitButton()
-          ) : (
-            <ComingSoonTooltip>{splitButton()}</ComingSoonTooltip>
-          )}
+          <EditorButton<typeof KToggleButton>
+            disabled={!window.FLAGS.split}
+            pressed={editorState.timeline.interactMode === "split"}
+            onChange={(v: boolean) =>
+              setEditorState("timeline", "interactMode", v ? "split" : "seek")
+            }
+            as={KToggleButton}
+            variant="danger"
+            leftIcon={<IconCapScissors class="text-gray-12" />}
+          />{" "}
           <div class="w-px h-8 rounded-full bg-gray-4" />
           <Tooltip content="Zoom out">
             <IconCapZoomOut

@@ -26,6 +26,27 @@ export function TrackRoot(props: ComponentProps<"div">) {
   );
 }
 
+export function useSegmentTranslateX(
+  segment: () => { start: number; end: number }
+) {
+  const { editorState: state } = useEditorContext();
+  const { secsPerPixel } = useTrackContext();
+
+  return createMemo(() => {
+    const base = state.timeline.transform.position;
+
+    const delta = segment().start;
+
+    return (delta - base) / secsPerPixel();
+  });
+}
+
+export function useSegmentWidth(segment: () => { start: number; end: number }) {
+  const { secsPerPixel } = useTrackContext();
+
+  return () => (segment().end - segment().start) / secsPerPixel();
+}
+
 export function SegmentRoot(
   props: ComponentProps<"div"> & {
     innerClass: string;
@@ -35,7 +56,6 @@ export function SegmentRoot(
     ) => void;
   }
 ) {
-  const { secsPerPixel } = useTrackContext();
   const { editorState: state, project } = useEditorContext();
 
   const isSelected = createMemo(() => {
@@ -49,24 +69,15 @@ export function SegmentRoot(
     return segmentIndex === selection.index;
   });
 
-  const translateX = createMemo(() => {
-    const base = state.timeline.transform.position;
-
-    const delta = props.segment.start;
-
-    return (delta - base) / secsPerPixel();
-  });
-
-  const width = () => {
-    return (props.segment.end - props.segment.start) / secsPerPixel();
-  };
+  const translateX = useSegmentTranslateX(() => props.segment);
+  const width = useSegmentWidth(() => props.segment);
 
   return (
     <SegmentContextProvider width={width}>
       <div
         {...props}
         class={cx(
-          "absolute border rounded-xl inset-y-0 w-full",
+          "absolute overflow-hidden border rounded-xl inset-y-0",
           props.class,
           isSelected() && "wobble-wrapper border border-gray-500"
         )}

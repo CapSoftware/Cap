@@ -178,8 +178,8 @@ export function Timeline() {
           {(time) => (
             <div
               class={cx(
-                "flex absolute bottom-0 top-4 left-5 z-10 justify-center items-center w-px pointer-events-none bg-gradient-to-b to-[120%] from-gray-400",
-                split() ? "text-red-300" : "text-black-transparent-20"
+                "flex absolute bottom-0 top-4 left-5 z-10 justify-center items-center w-px pointer-events-none bg-gradient-to-b to-[120%]",
+                split() ? "from-red-300" : "from-gray-400"
               )}
               style={{
                 left: `${TIMELINE_PADDING}px`,
@@ -188,12 +188,12 @@ export function Timeline() {
                 }px)`,
               }}
             >
-              <div class="absolute -top-2 bg-gray-10 rounded-full size-3" />
-              <Show when={split()}>
-                <div class="absolute size-[2rem] bg-[currentColor] z-20 top-6 rounded-lg flex items-center justify-center">
-                  <IconCapScissors class="size-[1.25rem] text-gray-1 z-20" />
-                </div>
-              </Show>
+              <div
+                class={cx(
+                  "absolute -top-2 rounded-full size-3",
+                  split() ? "bg-red-300" : "bg-gray-10"
+                )}
+              />
             </div>
           )}
         </Show>
