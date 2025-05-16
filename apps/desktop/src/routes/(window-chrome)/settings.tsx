@@ -47,6 +47,11 @@ export default function Settings(props: RouteSectionProps) {
                 icon: IconLucideUnplug,
               },
               {
+                href: "experimental",
+                name: "Experimental",
+                icon: IconCapSettings,
+              },
+              {
                 href: "feedback",
                 name: "Feedback",
                 icon: IconLucideMessageSquarePlus,
