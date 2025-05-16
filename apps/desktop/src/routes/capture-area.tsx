@@ -2,8 +2,8 @@ import { Tooltip } from "@kobalte/core";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { makePersisted } from "@solid-primitives/storage";
 import {
-    getCurrentWebviewWindow,
-    WebviewWindow,
+  getCurrentWebviewWindow,
+  WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { createStore } from "solid-js/store";
@@ -87,7 +87,7 @@ export default function CaptureArea() {
   }
 
   return (
-    <div class="overflow-hidden w-screen h-screen bg-black-transparent-60">
+    <div class="overflow-hidden w-screen h-screen">
       <div class="flex fixed z-50 justify-center items-center w-full">
         <Transition
           appear

@@ -133,7 +133,7 @@ export default function () {
         {(options) => (
           <div
             data-tauri-drag-region
-            class="flex relative flex-col w-screen h-screen bg-black cursor-move group"
+            class="flex relative flex-col w-screen h-screen cursor-move group"
             style={{ "border-radius": cameraBorderRadius(state) }}
           >
             <div class="h-14">
@@ -270,7 +270,7 @@ function CameraLoadingState(props: { shape: CameraWindow.Shape }) {
   });
 
   return (
-    <div class="flex flex-col w-full h-full bg-gray-1 dark:bg-gray-12">
+    <div class="flex flex-col w-full h-full bg-transparent">
       <div class="h-14" />
       <div
         class={cx(

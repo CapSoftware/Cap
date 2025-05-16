@@ -34,7 +34,7 @@ export default function (props: RouteSectionProps) {
 
   return (
     <WindowChromeContext>
-      <div class="flex overflow-hidden flex-col w-screen h-screen max-h-screen divide-y divide-gray-5">
+      <div class="flex overflow-hidden flex-col w-screen h-screen max-h-screen divide-y divide-gray-5 bg-gray-1">
         <Header />
 
         {/* breaks sometimes */}
