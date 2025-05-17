@@ -35,6 +35,14 @@ type OrganizationData = {
   ownerId: string;
 };
 
+type SpaceMemberData = {
+  id: string;
+  userId: string;
+  role: string;
+  name: string | null;
+  email: string;
+};
+
 export default async function SharedCapsPage({
   params,
   searchParams,
@@ -50,7 +58,6 @@ export default async function SharedCapsPage({
 
   console.log("Debug - Checking access:", { userId, id });
 
-  // Check if the ID belongs to a space
   const spaceData = await db()
     .select({
       id: spaces.id,
@@ -62,7 +69,6 @@ export default async function SharedCapsPage({
     .where(eq(spaces.id, id))
     .limit(1);
 
-  // Check if the ID belongs to an organization if no space was found
   const organizationData =
     spaceData.length === 0
       ? await db()
@@ -76,7 +82,6 @@ export default async function SharedCapsPage({
           .limit(1)
       : [];
 
-  // If neither a space nor an organization was found, return 404
   if (spaceData.length === 0 && organizationData.length === 0) {
     console.log("Debug - Neither space nor organization found with ID:", id);
     notFound();
@@ -86,13 +91,11 @@ export default async function SharedCapsPage({
 
   console.log(`Debug - Found ${isSpace ? "space" : "organization"}`);
 
-  // Check user's access rights
   if (isSpace) {
     const space = spaceData[0] as SpaceData;
     const isSpaceCreator = space.createdById === userId;
 
     if (!isSpaceCreator) {
-      // Check if user is a member of this space
       const spaceMembership = await db()
         .select({ id: spaceMembers.id })
         .from(spaceMembers)
@@ -101,7 +104,6 @@ export default async function SharedCapsPage({
         )
         .limit(1);
 
-      // If not a space member, check if user is a member of the parent organization
       if (spaceMembership.length === 0) {
         const orgMembership = await db()
           .select({ id: organizationMembers.id })
@@ -120,12 +122,37 @@ export default async function SharedCapsPage({
         }
       }
     }
+
+    // Fetch space members data with user details
+    const spaceMembersData = await db()
+      .select({
+        id: spaceMembers.id,
+        userId: spaceMembers.userId,
+        role: spaceMembers.role,
+        name: users.name,
+        email: users.email,
+      })
+      .from(spaceMembers)
+      .innerJoin(users, eq(spaceMembers.userId, users.id))
+      .where(eq(spaceMembers.spaceId, id));
+
+    // Fetch organization members for adding to space
+    const organizationMembersData = await db()
+      .select({
+        id: organizationMembers.id,
+        userId: organizationMembers.userId,
+        role: organizationMembers.role,
+        name: users.name,
+        email: users.email,
+      })
+      .from(organizationMembers)
+      .innerJoin(users, eq(organizationMembers.userId, users.id))
+      .where(eq(organizationMembers.organizationId, space.organizationId));
   } else {
     const organization = organizationData[0] as OrganizationData;
     const isOrgOwner = organization.ownerId === userId;
 
     if (!isOrgOwner) {
-      // Check if user is a member of this organization
       const orgMembership = await db()
         .select({ id: organizationMembers.id })
         .from(organizationMembers)
@@ -146,15 +173,40 @@ export default async function SharedCapsPage({
 
   const offset = (page - 1) * limit;
 
-  // Fetch the appropriate videos based on whether it's a space or an organization
   if (isSpace) {
-    // Fetch videos for space
+    const space = spaceData[0] as SpaceData;
     const totalCountResult = await db()
       .select({ count: count() })
       .from(spaceVideos)
       .where(eq(spaceVideos.spaceId, id));
 
     const totalCount = totalCountResult[0]?.count || 0;
+
+    // Fetch space members data with user details
+    const spaceMembersData = await db()
+      .select({
+        id: spaceMembers.id,
+        userId: spaceMembers.userId,
+        role: spaceMembers.role,
+        name: users.name,
+        email: users.email,
+      })
+      .from(spaceMembers)
+      .innerJoin(users, eq(spaceMembers.userId, users.id))
+      .where(eq(spaceMembers.spaceId, id));
+
+    // Fetch organization members for adding to space
+    const organizationMembersData = await db()
+      .select({
+        id: organizationMembers.id,
+        userId: organizationMembers.userId,
+        role: organizationMembers.role,
+        name: users.name,
+        email: users.email,
+      })
+      .from(organizationMembers)
+      .innerJoin(users, eq(organizationMembers.userId, users.id))
+      .where(eq(organizationMembers.organizationId, space.organizationId));
 
     const spaceVideoData = await db()
       .select({
@@ -195,7 +247,6 @@ export default async function SharedCapsPage({
       .limit(limit)
       .offset(offset);
 
-    // Process the data to clean it up and remove the temporary effectiveDate field
     const processedVideoData = spaceVideoData.map((video) => {
       const { effectiveDate, ...videoWithoutEffectiveDate } = video;
 
@@ -218,10 +269,13 @@ export default async function SharedCapsPage({
         data={processedVideoData}
         count={totalCount}
         activeOrganizationId={id}
+        spaceData={space}
+        spaceMembers={spaceMembersData}
+        organizationMembers={organizationMembersData}
+        currentUserId={userId}
       />
     );
   } else {
-    // Fetch videos for organization
     const totalCountResult = await db()
       .select({ count: count() })
       .from(sharedVideos)
@@ -268,7 +322,6 @@ export default async function SharedCapsPage({
       .limit(limit)
       .offset(offset);
 
-    // Process the data to clean it up and remove the temporary effectiveDate field
     const processedVideoData = sharedVideoData.map((video) => {
       const { effectiveDate, ...videoWithoutEffectiveDate } = video;
 

@@ -23,6 +23,8 @@ export const ShareHeader = ({
   domainVerified,
   sharedOrganizations = [],
   userOrganizations = [],
+  sharedSpaces = [],
+  userSpaces = [],
 }: {
   data: typeof videos.$inferSelect;
   user: typeof userSelectProps | null;
@@ -30,6 +32,18 @@ export const ShareHeader = ({
   domainVerified: boolean;
   sharedOrganizations?: { id: string; name: string }[];
   userOrganizations?: { id: string; name: string }[];
+  sharedSpaces?: {
+    id: string;
+    name: string;
+    iconUrl?: string;
+    organizationId: string;
+  }[];
+  userSpaces?: {
+    id: string;
+    name: string;
+    iconUrl?: string;
+    organizationId: string;
+  }[];
 }) => {
   const { push, refresh } = useRouter();
   const [isEditing, setIsEditing] = useState(false);
@@ -39,6 +53,7 @@ export const ShareHeader = ({
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
   const [currentSharedOrganizations, setCurrentSharedOrganizations] =
     useState(sharedOrganizations);
+  const [currentSharedSpaces, setCurrentSharedSpaces] = useState(sharedSpaces);
 
   const isOwner = user !== null && user.id.toString() === data.ownerId;
 
@@ -88,11 +103,9 @@ export const ShareHeader = ({
       })
     : false;
 
-  const handleSharingUpdated = (updatedSharedOrganizations: string[]) => {
-    setCurrentSharedOrganizations(
-      userOrganizations?.filter((organization) =>
-        updatedSharedOrganizations.includes(organization.id)
-      )
+  const handleSharingUpdated = (updatedSharedSpaces: string[]) => {
+    setCurrentSharedSpaces(
+      userSpaces?.filter((space) => updatedSharedSpaces.includes(space.id))
     );
     refresh();
   };
@@ -102,7 +115,7 @@ export const ShareHeader = ({
       "text-sm text-gray-10 transition-colors duration-200 flex items-center";
 
     if (isOwner) {
-      if (currentSharedOrganizations?.length === 0) {
+      if (currentSharedSpaces?.length === 0) {
         return (
           <p
             className={clsx(baseClassName, "hover:text-gray-12 cursor-pointer")}
@@ -135,8 +148,8 @@ export const ShareHeader = ({
         onClose={() => setIsSharingDialogOpen(false)}
         capId={data.id}
         capName={data.name}
-        sharedOrganizations={currentSharedOrganizations || []}
-        userOrganizations={userOrganizations}
+        sharedSpaces={currentSharedSpaces || []}
+        userSpaces={userSpaces}
         onSharingUpdated={handleSharingUpdated}
       />
       <div>

@@ -11,7 +11,6 @@ import { CapPagination } from "./components/CapPagination";
 import { EmptyCapState } from "./components/EmptyCapState";
 import { SelectedCapsBar } from "./components/SelectedCapsBar";
 
-
 type VideoData = {
   id: string;
   ownerId: string;
@@ -19,9 +18,15 @@ type VideoData = {
   createdAt: Date;
   totalComments: number;
   totalReactions: number;
-  sharedOrganizations: { id: string; name: string }[];
+  sharedOrganizations: { id: string; name: string; iconUrl?: string }[];
+  sharedSpaces: {
+    id: string;
+    name: string;
+    iconUrl?: string;
+    organizationId: string;
+  }[];
   ownerName: string;
-  metadata?: VideoMetadata
+  metadata?: VideoMetadata;
 }[];
 
 export const Caps = ({
@@ -31,13 +36,13 @@ export const Caps = ({
 }: {
   data: VideoData;
   count: number;
-  userOrganizations: { id: string; name: string }[];
+  userOrganizations: { id: string; name: string; iconUrl?: string }[];
 }) => {
   const { refresh } = useRouter();
   const params = useSearchParams();
   const page = Number(params.get("page")) || 1;
   const [analytics, setAnalytics] = useState<Record<string, number>>({});
-  const { user } = useSharedContext();
+  const { user, spacesData } = useSharedContext();
   const limit = 15;
   const totalPages = Math.ceil(count / limit);
   const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
@@ -166,30 +171,41 @@ export const Caps = ({
           const results = await Promise.allSettled(
             selectedCaps.map((capId) => deleteVideo(capId))
           );
-          
+
           const successCount = results.filter(
             (result) => result.status === "fulfilled" && result.value.success
           ).length;
-          
+
           const errorCount = selectedCaps.length - successCount;
-          
+
           if (successCount > 0 && errorCount > 0) {
             return { success: successCount, error: errorCount };
           } else if (successCount > 0) {
             return { success: successCount };
           } else {
-            throw new Error(`Failed to delete ${errorCount} cap${errorCount === 1 ? "" : "s"}`);
+            throw new Error(
+              `Failed to delete ${errorCount} cap${errorCount === 1 ? "" : "s"}`
+            );
           }
         },
         {
-          loading: `Deleting ${selectedCaps.length} cap${selectedCaps.length === 1 ? "" : "s"}...`,
+          loading: `Deleting ${selectedCaps.length} cap${
+            selectedCaps.length === 1 ? "" : "s"
+          }...`,
           success: (data) => {
             if (data.error) {
-              return `Successfully deleted ${data.success} cap${data.success === 1 ? "" : "s"}, but failed to delete ${data.error} cap${data.error === 1 ? "" : "s"}`;
+              return `Successfully deleted ${data.success} cap${
+                data.success === 1 ? "" : "s"
+              }, but failed to delete ${data.error} cap${
+                data.error === 1 ? "" : "s"
+              }`;
             }
-            return `Successfully deleted ${data.success} cap${data.success === 1 ? "" : "s"}`;
+            return `Successfully deleted ${data.success} cap${
+              data.success === 1 ? "" : "s"
+            }`;
           },
-          error: (error) => error.message || "An error occurred while deleting caps"
+          error: (error) =>
+            error.message || "An error occurred while deleting caps",
         }
       );
 
@@ -206,6 +222,15 @@ export const Caps = ({
     return <EmptyCapState />;
   }
 
+  // Map Space objects to the format expected by CapCard
+  const mappedSpaces =
+    spacesData?.map((space) => ({
+      id: space.id,
+      name: space.name,
+      organizationId: space.organizationId,
+      iconUrl: undefined,
+    })) || [];
+
   return (
     <div className="flex relative flex-col w-full">
       <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
@@ -217,6 +242,7 @@ export const Caps = ({
             onDelete={deleteCap}
             userId={user?.id}
             userOrganizations={userOrganizations}
+            userSpaces={mappedSpaces}
             isSelected={selectedCaps.includes(cap.id)}
             onSelectToggle={() => handleCapSelection(cap.id)}
             anyCapSelected={anyCapSelected}
@@ -229,7 +255,6 @@ export const Caps = ({
         </div>
       )}
 
-        
       <SelectedCapsBar
         selectedCaps={selectedCaps}
         setSelectedCaps={setSelectedCaps}

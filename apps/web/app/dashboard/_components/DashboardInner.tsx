@@ -21,7 +21,7 @@ import { MoreVertical } from "lucide-react";
 import { signOut } from "next-auth/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   faMoon,
   faSun,
@@ -39,8 +39,18 @@ export default function DashboardInner({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const { activeOrganization } = useSharedContext();
+  const { activeOrganization, spacesData } = useSharedContext();
   const [membersDialogOpen, setMembersDialogOpen] = useState(false);
+
+  // Extract space ID from pathname if on a space page
+  const spaceIdMatch = pathname.match(/\/dashboard\/spaces\/([^\/]+)/);
+  const spaceId = spaceIdMatch ? spaceIdMatch[1] : null;
+
+  // Find active space from spacesData if available
+  const activeSpace = useMemo(() => {
+    if (!spaceId || !spacesData) return null;
+    return spacesData.find((space) => space.id === spaceId) || null;
+  }, [spaceId, spacesData]);
 
   const titles: Record<string, string> = {
     "/dashboard/caps": "Caps",
@@ -49,19 +59,24 @@ export default function DashboardInner({
     "/dashboard/settings/account": "Account Settings",
     "/dashboard/spaces": "Spaces",
   };
-  const title = titles[pathname] || "";
+
+  // Determine the title: use space name for space page, otherwise use predefined titles
+  const title = activeSpace ? activeSpace.name : titles[pathname] || "";
   const { theme, setThemeHandler } = useTheme();
   const isSharedCapsPage = pathname === "/dashboard/shared-caps";
 
   return (
-    <div className="flex flex-col pt-5 min-h-screen lg:gap-5">
+    <div className="flex flex-col min-h-screen">
       <div
         className={clsx(
           "flex sticky z-50 justify-between items-center px-5 mt-10 w-full border-b bg-gray-1 lg:bg-transparent min-h-16 lg:min-h-10 border-gray-3 lg:border-b-0 lg:pl-0 lg:pr-5 lg:top-0 lg:relative top-[64px] lg:mt-5 lg:h-8"
         )}
       >
         <div className="flex items-center gap-2">
-          <p className="relative text-xl text-gray-12 lg:text-2xl">{title}</p>
+          <div className="flex flex-col">
+            {activeSpace && <span className="text-xs text-gray-11">Space</span>}
+            <p className="relative text-xl text-gray-12 lg:text-2xl">{title}</p>
+          </div>
           {isSharedCapsPage && activeOrganization?.members && (
             <MembersCount
               count={activeOrganization.members.length}

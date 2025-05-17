@@ -32,6 +32,12 @@ interface Props extends PropsWithChildren {
     totalComments: number;
     totalReactions: number;
     sharedOrganizations?: { id: string; name: string; iconUrl?: string }[];
+    sharedSpaces?: {
+      id: string;
+      name: string;
+      iconUrl?: string;
+      organizationId: string;
+    }[];
     ownerName: string | null;
     metadata?: VideoMetadata;
   };
@@ -39,6 +45,12 @@ interface Props extends PropsWithChildren {
   onDelete?: (videoId: string) => Promise<void>;
   userId?: string;
   userOrganizations?: { id: string; name: string; iconUrl?: string }[];
+  userSpaces?: {
+    id: string;
+    name: string;
+    iconUrl?: string;
+    organizationId: string;
+  }[];
   sharedCapCard?: boolean;
   isSelected?: boolean;
   onSelectToggle?: () => void;
@@ -52,6 +64,7 @@ export const CapCard = ({
   onDelete,
   userId,
   userOrganizations,
+  userSpaces,
   sharedCapCard = false,
   isSelected = false,
   onSelectToggle,
@@ -72,7 +85,7 @@ export const CapCard = ({
   );
   const [showFullDate, setShowFullDate] = useState(false);
   const router = useRouter();
-  const { activeOrganization } = useSharedContext();
+  const { activeOrganization, spacesData } = useSharedContext();
 
   const handleTitleBlur = async (capName: string) => {
     if (!title || capName === title) {
@@ -99,10 +112,10 @@ export const CapCard = ({
       ? Math.max(cap.totalComments, cap.totalReactions)
       : analytics;
 
-  const handleSharingUpdated = (updatedSharedOrganizations: string[]) => {
+  const handleSharingUpdated = (updatedSharedSpaces: string[]) => {
     setSharedOrganizations(
       userOrganizations?.filter((organization) =>
-        updatedSharedOrganizations.includes(organization.id)
+        updatedSharedSpaces.includes(organization.id)
       )
     );
     router.refresh();
@@ -258,8 +271,8 @@ export const CapCard = ({
         onClose={() => setIsSharingDialogOpen(false)}
         capId={cap.id}
         capName={cap.name}
-        sharedOrganizations={cap.sharedOrganizations || []}
-        userOrganizations={userOrganizations}
+        sharedSpaces={cap.sharedSpaces || []}
+        userSpaces={spacesData || []}
         onSharingUpdated={handleSharingUpdated}
       />
       <div
@@ -418,7 +431,9 @@ export const CapCard = ({
               )}
             </div>
             {renderSharedStatus()}
-            <div className="mb-1 h-[1.5rem]"> {/* Fixed height container */}
+            <div className="mb-1 h-[1.5rem]">
+              {" "}
+              {/* Fixed height container */}
               {isDateEditing && !sharedCapCard ? (
                 <div className="flex items-center h-full">
                   <input

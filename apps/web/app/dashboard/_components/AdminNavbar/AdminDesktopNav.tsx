@@ -50,22 +50,22 @@ export const AdminDesktopNav = () => {
         }}
         className={clsx("hidden z-50 h-full lg:flex group", "relative")}
       >
-        <div className="flex flex-col w-full max-w-[220px] mx-auto">
-          <div className="flex overflow-hidden flex-col flex-grow h-full">
-            <div className="flex flex-col items-center px-3 pt-5 w-full h-full justify-top">
-              <div className="flex justify-start items-center mb-3.5 w-full truncate min-h-8">
-                <Link href="/dashboard">
-                  <Logo
-                    hideLogoName={sidebarCollapsed}
-                    className="mx-auto w-[120px] h-[40px]"
-                  />
-                </Link>
-              </div>
+        <div className="flex flex-col w-full max-w-[220px] mx-auto h-full">
+          <div className="flex justify-start items-center px-3 pt-5 mb-3.5 w-full truncate min-h-8">
+            <Link href="/dashboard">
+              <Logo
+                hideLogoName={sidebarCollapsed}
+                className="mx-auto w-[120px] h-[40px]"
+              />
+            </Link>
+          </div>
+
+          <div className="flex flex-col flex-grow overflow-y-auto">
+            <div className="flex flex-col px-3 h-full">
               <AdminNavItems />
             </div>
           </div>
 
-          {/* Collapse toggle button - moved outside the overflow container */}
           <Tooltip
             kbd={[cmdSymbol, "Shift", "S"]}
             position="right"
@@ -75,7 +75,13 @@ export const AdminDesktopNav = () => {
               onClick={toggleSidebarCollapsed}
               className="absolute right-[-12px] hover:border-gray-3 hover:bg-gray-2 top-[50%] transform -translate-y-1/2 rounded-full p-1 border bg-gray-1 border-gray-3 transition-colors z-10"
             >
-              <ChevronRight size={16} className={clsx("transition-transform duration-200 text-gray-12", sidebarCollapsed ? "rotate-180" : "")} />
+              <ChevronRight
+                size={16}
+                className={clsx(
+                  "transition-transform duration-200 text-gray-12",
+                  sidebarCollapsed ? "rotate-180" : ""
+                )}
+              />
             </button>
           </Tooltip>
         </div>

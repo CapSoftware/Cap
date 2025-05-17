@@ -7,6 +7,7 @@ import {
   sharedVideos,
   users,
   videos,
+  spaces,
 } from "@cap/database/schema";
 import { count, desc, eq, sql } from "drizzle-orm";
 import { Metadata } from "next";
@@ -67,6 +68,21 @@ export default async function CapsPage({
           JSON_ARRAY()
         )
       `,
+      sharedSpaces: sql<
+        { id: string; name: string; organizationId: string; iconUrl: string }[]
+      >`
+        COALESCE(
+          JSON_ARRAYAGG(
+            JSON_OBJECT(
+              'id', ${spaces.id},
+              'name', ${spaces.name},
+              'organizationId', ${spaces.organizationId},
+              'iconUrl', ${organizations.iconUrl}
+            )
+          ),
+          JSON_ARRAY()
+        )
+      `,
       ownerName: users.name,
       effectiveDate: sql<string>`
         COALESCE(
@@ -79,6 +95,7 @@ export default async function CapsPage({
     .leftJoin(comments, eq(videos.id, comments.videoId))
     .leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
     .leftJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
+    .leftJoin(spaces, eq(spaces.organizationId, organizations.id))
     .leftJoin(users, eq(videos.ownerId, users.id))
     .where(eq(videos.ownerId, userId))
     .groupBy(
@@ -119,6 +136,7 @@ export default async function CapsPage({
       sharedOrganizations: video.sharedOrganizations.filter(
         (organization) => organization.id !== null
       ),
+      sharedSpaces: video.sharedSpaces.filter((space) => space.id !== null),
       ownerName: video.ownerName ?? "",
       metadata: video.metadata as
         | {

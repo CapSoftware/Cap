@@ -4,7 +4,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import * as React from "react";
 
 const buttonVariants = cva(
-  "flex items-center justify-center cursor-pointer ring-offset-transparent relative min-w-[100px]  gap-1 rounded-xl",
+  "flex items-center justify-center cursor-pointer ring-offset-transparent relative gap-1 rounded-xl",
   {
     defaultVariants: {
       variant: "primary",
@@ -29,10 +29,11 @@ const buttonVariants = cva(
           "text-gray-50 border button-gradient-border shadow-[0_0_0_1px] shadow-blue-400 disabled:bg-gray-1 border-0 [background:radial-gradient(90%_100%_at_15%_12%,#9BC4FF_0%,#3588FF_100%)] border-transparent hover:opacity-80",
       },
       size: {
-        xs: "text-xs [var(--gradient-border-radius: 20px)] rounded-lg h-[32px] px-[0.5rem] ",
-        sm: "text-sm h-[40px] px-[0.75rem]",
-        md: "text-sm px-[1rem] h-[48px]",
-        lg: "text-md h-[48px] px-[1.25em]",
+        xs: "text-xs [var(--gradient-border-radius: 20px)] rounded-lg h-[32px] px-[0.5rem] min-w-[100px]",
+        sm: "text-sm h-[40px] px-[0.75rem] min-w-[100px]",
+        md: "text-sm px-[1rem] h-[48px] min-w-[100px]",
+        lg: "text-md h-[48px] px-[1.25em] min-w-[100px]",
+        icon: "p-0 h-8 w-8 rounded-full",
       },
     },
   }

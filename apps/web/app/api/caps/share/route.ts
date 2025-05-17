@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { sharedVideos, videos } from "@cap/database/schema";
-import { eq, and } from "drizzle-orm";
+import { sharedVideos, videos, spaces } from "@cap/database/schema";
+import { eq, and, inArray } from "drizzle-orm";
 import { nanoId } from "@cap/database/helpers";
 
 export async function POST(request: NextRequest) {
@@ -11,7 +11,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { capId, organizationIds } = await request.json();
+  const { capId, spaceIds } = await request.json();
 
   try {
     const [cap] = await db().select().from(videos).where(eq(videos.id, capId));
@@ -19,11 +19,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
     }
 
+    // Get spaces data to find their organizationIds
+    const spacesData = await db()
+      .select()
+      .from(spaces)
+      .where(inArray(spaces.id, spaceIds));
+
+    // Extract organization IDs from spaces
+    const organizationIds = [...new Set(spacesData.map(space => space.organizationId))];
+
     const currentSharedOrganizations = await db()
       .select()
       .from(sharedVideos)
       .where(eq(sharedVideos.videoId, capId));
 
+    // Remove sharing from organizations not in the list
     for (const sharedOrganization of currentSharedOrganizations) {
       if (!organizationIds.includes(sharedOrganization.organizationId)) {
         await db()
@@ -37,6 +47,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Add sharing for new organizations
     for (const organizationId of organizationIds) {
       const existingShare = currentSharedOrganizations.find(
         (share) => share.organizationId === organizationId

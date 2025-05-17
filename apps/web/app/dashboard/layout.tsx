@@ -84,7 +84,6 @@ export default async function DashboardLayout({
       .where(inArray(organizationInvites.organizationId, organizationIds));
   }
 
-  // Fetch spaces for the user's organizations
   let spacesData: Space[] = [];
   if (organizationIds.length > 0) {
     spacesData = await db()
@@ -96,6 +95,28 @@ export default async function DashboardLayout({
       })
       .from(spaces)
       .where(inArray(spaces.organizationId, organizationIds));
+
+    const uniqueOrganizations = organizationsWithMembers.reduce(
+      (acc: { id: string; name: string }[], row) => {
+        if (!acc.some((org) => org.id === row.organization.id)) {
+          acc.push({
+            id: row.organization.id,
+            name: row.organization.name,
+          });
+        }
+        return acc;
+      },
+      []
+    );
+
+    const allSpaces = uniqueOrganizations.map((org) => ({
+      id: org.id,
+      name: `All ${org.name}`,
+      description: `View all content in ${org.name}`,
+      organizationId: org.id,
+    }));
+
+    spacesData = [...allSpaces, ...spacesData];
   }
 
   const organizationSelect: Organization[] = await Promise.all(

@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { CapPagination } from "../../caps/components/CapPagination";
 import { EmptySharedCapState } from "./components/EmptySharedCapState";
 import { SharedCapCard } from "./components/SharedCapCard";
+import { MembersIndicator } from "./components/MembersIndicator";
 
 type SharedVideoData = {
   id: string;
@@ -20,12 +21,37 @@ type SharedVideoData = {
   metadata?: VideoMetadata;
 }[];
 
+type SpaceData = {
+  id: string;
+  name: string;
+  organizationId: string;
+  createdById: string;
+};
+
+type SpaceMemberData = {
+  id: string;
+  userId: string;
+  role: string;
+  name: string | null;
+  email: string;
+};
+
 export const SharedCaps = ({
   data,
   count,
+  activeOrganizationId,
+  spaceData,
+  spaceMembers,
+  organizationMembers,
+  currentUserId,
 }: {
   data: SharedVideoData;
   count: number;
+  activeOrganizationId: string;
+  spaceData?: SpaceData;
+  spaceMembers?: SpaceMemberData[];
+  organizationMembers?: SpaceMemberData[];
+  currentUserId?: string;
 }) => {
   const params = useSearchParams();
   const page = Number(params.get("page")) || 1;
@@ -33,6 +59,8 @@ export const SharedCaps = ({
   const { activeOrganization } = useSharedContext();
   const limit = 15;
   const totalPages = Math.ceil(count / limit);
+
+  const isSpaceOwner = spaceData?.createdById === currentUserId;
 
   useEffect(() => {
     const fetchAnalytics = async () => {
@@ -50,14 +78,34 @@ export const SharedCaps = ({
 
   if (data.length === 0) {
     return (
-      <EmptySharedCapState
-        organizationName={activeOrganization?.organization.name || ""}
-      />
+      <div className="relative flex flex-col w-full h-full">
+        {spaceData && spaceMembers && (
+          <MembersIndicator
+            memberCount={spaceMembers.length}
+            members={spaceMembers}
+            organizationMembers={organizationMembers || []}
+            spaceId={spaceData.id}
+            canManageMembers={isSpaceOwner}
+          />
+        )}
+        <EmptySharedCapState
+          organizationName={activeOrganization?.organization.name || ""}
+        />
+      </div>
     );
   }
 
   return (
-    <div className="flex flex-col w-full h-full">
+    <div className="relative flex flex-col w-full h-full">
+      {spaceData && spaceMembers && (
+        <MembersIndicator
+          memberCount={spaceMembers.length}
+          members={spaceMembers}
+          organizationMembers={organizationMembers || []}
+          spaceId={spaceData.id}
+          canManageMembers={isSpaceOwner}
+        />
+      )}
       <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
         {data.map((cap) => (
           <SharedCapCard

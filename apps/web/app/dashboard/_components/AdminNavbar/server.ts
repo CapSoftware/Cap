@@ -12,6 +12,7 @@ import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { v4 as uuidv4 } from "uuid";
 import { nanoId } from "@cap/database/helpers";
+import { createSpace as createSpaceAction } from "@/actions/organization/create-space";
 
 export async function updateActiveOrganization(organizationId: string) {
   const user = await getCurrentUser();
@@ -39,30 +40,17 @@ export async function updateActiveOrganization(organizationId: string) {
   revalidatePath("/dashboard");
 }
 
-export async function createSpace(name: string, description: string | null = null) {
-  const user = await getCurrentUser();
-
-  if (!user || !user.activeOrganizationId) {
-    return { success: false, error: "User not logged in or no active organization" };
-  }
-
+export async function createSpace(formData: FormData) {
   try {
-    await db()
-      .insert(spaces)
-      .values({
-        id: nanoId(),
-        name,
-        description,
-        organizationId: user.activeOrganizationId,
-        createdById: user.id,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
-
-    revalidatePath("/dashboard");
-    return { success: true };
+    const result = await createSpaceAction(formData);
+    
+    if (!result.success) {
+      throw new Error(result.error || "Failed to create space");
+    }
+    
+    return result;
   } catch (error) {
     console.error("Error creating space:", error);
-    return { success: false, error: "Failed to create space" };
+    throw error;
   }
 }
