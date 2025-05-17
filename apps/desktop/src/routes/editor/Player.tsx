@@ -1,15 +1,15 @@
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListener } from "@solid-primitives/event-listener";
-import { Setter, Show, createEffect, createSignal } from "solid-js";
+import { createEffect, createSignal, Show } from "solid-js";
 
 import { cx } from "cva";
 import Tooltip from "~/components/Tooltip";
 import { commands } from "~/utils/tauri";
+import AspectRatioSelect from "./AspectRatioSelect";
 import { FPS, OUTPUT_SIZE, useEditorContext } from "./context";
 import { ComingSoonTooltip, EditorButton, Slider } from "./ui";
 import { formatTime } from "./utils";
-import AspectRatioSelect from "./AspectRatioSelect";
 
 export function Player() {
   const {
@@ -21,19 +21,6 @@ export function Player() {
     setEditorState,
     zoomOutLimit,
   } = useEditorContext();
-
-  const splitButton = () => (
-    <EditorButton<typeof KToggleButton>
-      disabled={!window.FLAGS.split}
-      pressed={editorState.timeline.interactMode === "split"}
-      onChange={(v: boolean) =>
-        setEditorState("timeline", "interactMode", v ? "split" : "seek")
-      }
-      as={KToggleButton}
-      variant="danger"
-      leftIcon={<IconCapScissors class="text-gray-500" />}
-    />
-  );
 
   const isAtEnd = () => {
     const total = totalDuration();
@@ -87,7 +74,7 @@ export function Player() {
   });
 
   return (
-    <div class="flex flex-col flex-1 bg-gray-100 dark:bg-gray-100 rounded-xl shadow-sm">
+    <div class="flex flex-col flex-1 bg-gray-50 bg-opacity-5 rounded-xl shadow-sm">
       <div class="flex gap-3 justify-center p-3">
         <AspectRatioSelect />
         <EditorButton
@@ -107,25 +94,25 @@ export function Player() {
               },
             });
           }}
-          leftIcon={<IconCapCrop class="w-5 text-gray-500" />}
+          leftIcon={<IconCapCrop class="w-5 text-gray-12" />}
         >
           Crop
         </EditorButton>
       </div>
       <PreviewCanvas />
-      <div class="flex z-10 overflow-hidden flex-row gap-3 justify-between items-center p-5">
+      <div class="flex overflow-hidden z-10 flex-row gap-3 justify-between items-center p-5">
         <div class="flex-1">
           <Time
-            class="text-gray-500"
+            class="text-gray-12"
             seconds={Math.max(
               editorState.previewTime ?? editorState.playbackTime,
               0
             )}
           />
-          <span class="text-gray-400 text-[0.875rem] tabular-nums"> / </span>
+          <span class="text-gray-11 text-[0.875rem] tabular-nums"> / </span>
           <Time seconds={totalDuration()} />
         </div>
-        <div class="flex flex-row items-center justify-center text-gray-400 gap-8 text-[0.875rem]">
+        <div class="flex flex-row items-center justify-center text-gray-11 gap-8 text-[0.875rem]">
           <button
             type="button"
             class="transition-opacity hover:opacity-70 will-change-[opacity]"
@@ -135,17 +122,17 @@ export function Player() {
               setEditorState("playbackTime", 0);
             }}
           >
-            <IconCapPrev class="text-gray-500 size-3" />
+            <IconCapPrev class="text-gray-12 size-3" />
           </button>
           <button
             type="button"
             onClick={handlePlayPauseClick}
-            class="flex justify-center items-center bg-gray-200 rounded-full border border-gray-300 transition-colors hover:bg-gray-300 hover:text-black size-9"
+            class="flex justify-center items-center rounded-full border border-gray-300 transition-colors bg-gray-3 hover:bg-gray-4 hover:text-black size-9"
           >
             {!editorState.playing || isAtEnd() ? (
-              <IconCapPlay class="text-gray-500 size-3" />
+              <IconCapPlay class="text-gray-12 size-3" />
             ) : (
-              <IconCapPause class="text-gray-500 size-3" />
+              <IconCapPause class="text-gray-12 size-3" />
             )}
           </button>
           <button
@@ -157,17 +144,22 @@ export function Player() {
               setEditorState("playbackTime", totalDuration());
             }}
           >
-            <IconCapNext class="text-gray-500 size-3" />
+            <IconCapNext class="text-gray-12 size-3" />
           </button>
         </div>
         <div class="flex flex-row flex-1 gap-4 justify-end items-center">
           <div class="flex-1" />
-          {window.FLAGS.split ? (
-            splitButton()
-          ) : (
-            <ComingSoonTooltip>{splitButton()}</ComingSoonTooltip>
-          )}
-          <div class="w-px h-8 rounded-full bg-gray-200" />
+          <EditorButton<typeof KToggleButton>
+            disabled={!window.FLAGS.split}
+            pressed={editorState.timeline.interactMode === "split"}
+            onChange={(v: boolean) =>
+              setEditorState("timeline", "interactMode", v ? "split" : "seek")
+            }
+            as={KToggleButton}
+            variant="danger"
+            leftIcon={<IconCapScissors class="text-gray-12" />}
+          />{" "}
+          <div class="w-px h-8 rounded-full bg-gray-4" />
           <Tooltip content="Zoom out">
             <IconCapZoomOut
               onClick={() => {
@@ -176,7 +168,7 @@ export function Player() {
                   editorState.playbackTime
                 );
               }}
-              class="text-gray-500 size-5 will-change-[opacity] transition-opacity hover:opacity-70"
+              class="text-gray-12 size-5 will-change-[opacity] transition-opacity hover:opacity-70"
             />
           </Tooltip>
           <Tooltip content="Zoom in">
@@ -187,7 +179,7 @@ export function Player() {
                   editorState.playbackTime
                 );
               }}
-              class="text-gray-500 size-5 will-change-[opacity] transition-opacity hover:opacity-70"
+              class="text-gray-12 size-5 will-change-[opacity] transition-opacity hover:opacity-70"
             />
           </Tooltip>
           <Slider
@@ -281,7 +273,7 @@ function PreviewCanvas() {
           };
 
           return (
-            <div class="absolute inset-0 overflow-hidden flex items-center justify-center h-full">
+            <div class="flex overflow-hidden absolute inset-0 justify-center items-center h-full">
               <canvas
                 style={{
                   width: `${size().width - padding * 2}px`,
@@ -303,7 +295,7 @@ function PreviewCanvas() {
 
 function Time(props: { seconds: number; fps?: number; class?: string }) {
   return (
-    <span class={cx("text-gray-400 text-sm tabular-nums", props.class)}>
+    <span class={cx("text-gray-11 text-sm tabular-nums", props.class)}>
       {formatTime(props.seconds, props.fps ?? FPS)}
     </span>
   );

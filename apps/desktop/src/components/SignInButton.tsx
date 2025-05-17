@@ -7,7 +7,7 @@ import * as shell from "@tauri-apps/plugin-shell";
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ComponentProps } from "solid-js";
-import { authStore } from "~/store";
+import { authStore, generalSettingsStore } from "~/store";
 import { identifyUser, trackEvent } from "~/utils/analytics";
 import { clientEnv } from "~/utils/env";
 import { commands } from "~/utils/tauri";
@@ -54,14 +54,13 @@ export function SignInButton(
   );
 }
 
-function createSessionRequestUrl(
+async function createSessionRequestUrl(
   port: string | null,
   platform: "web" | "desktop"
 ) {
-  const callbackUrl = new URL(
-    `/api/desktop/session/request`,
-    clientEnv.VITE_SERVER_URL
-  );
+  const serverUrl =
+    (await generalSettingsStore.get())?.serverUrl ?? "https://cap.so";
+  const callbackUrl = new URL(`/api/desktop/session/request`, serverUrl);
 
   if (port !== null) callbackUrl.searchParams.set("port", port);
   callbackUrl.searchParams.set("platform", platform);
@@ -105,7 +104,7 @@ async function createLocalServerSession(signal: AbortSignal) {
   );
 
   return {
-    url: createSessionRequestUrl(port, "web"),
+    url: await createSessionRequestUrl(port, "web"),
     complete: async () => {
       const url = await new Promise<URL>((r) => {
         res = r;
@@ -154,7 +153,7 @@ async function createDeepLinkSession(signal: AbortSignal) {
   };
 
   return {
-    url: createSessionRequestUrl(null, "desktop"),
+    url: await createSessionRequestUrl(null, "desktop"),
     complete: () => p,
   };
 }

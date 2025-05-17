@@ -10,7 +10,7 @@ interface AuthOverlayProps {
   onClose: () => void;
 }
 
-const MotionDialogContent = motion(DialogContent);
+const MotionDialogContent = motion.create(DialogContent);
 
 export const AuthOverlay: React.FC<AuthOverlayProps> = ({
   isOpen,
@@ -119,7 +119,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
                       toast.error("Error sending email - try again?");
                     }
                   })
-                  .catch((err) => {
+                  .catch(() => {
                     setEmailSent(false);
                     setLoading(false);
                     toast.error("Error sending email - try again?");

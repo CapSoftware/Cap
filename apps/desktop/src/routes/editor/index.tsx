@@ -22,10 +22,10 @@ export default function () {
   return (
     <div
       class={cx(
-        "flex flex-col w-screen h-screen",
-        ostype() === "windows" || !generalSettings.data?.windowTransparency
-          ? "bg-gray-50"
-          : "bg-transparent-window"
+        "flex flex-col w-screen h-screen bg-gray-1",
+        !(
+          ostype() === "windows" || !generalSettings.data?.windowTransparency
+        ) && "bg-transparent-window"
       )}
     >
       <Suspense fallback={<AbsoluteInsetLoader />}>

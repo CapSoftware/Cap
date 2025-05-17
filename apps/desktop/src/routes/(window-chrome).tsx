@@ -6,13 +6,12 @@ import { cx } from "cva";
 import { onCleanup, onMount, ParentProps, Suspense } from "solid-js";
 
 import { AbsoluteInsetLoader } from "~/components/Loader";
+import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import { initializeTitlebar } from "~/utils/titlebar-state";
 import {
   useWindowChromeContext,
   WindowChromeContext,
 } from "./(window-chrome)/Context";
-import { WindowControls } from "~/components/titlebar/Titlebar";
-import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 
 export const route = {
   info: {
@@ -35,7 +34,7 @@ export default function (props: RouteSectionProps) {
 
   return (
     <WindowChromeContext>
-      <div class="bg-gray-100 border-gray-200 w-screen h-screen max-h-screen flex flex-col overflow-hidden transition-[border-radius] duration-200">
+      <div class="flex overflow-hidden flex-col w-screen h-screen max-h-screen divide-y divide-gray-5 bg-gray-1">
         <Header />
 
         {/* breaks sometimes */}
@@ -81,9 +80,8 @@ function Header() {
   return (
     <header
       class={cx(
-        "flex items-center select-none space-x-1 shrink-0 border-gray-50 bg-gray-100",
-        "border-b border-b-black-transparent-5 h-9",
-        isWindows ? "flex-row" : "pl-[5rem] flex-row-reverse"
+        "flex items-center space-x-1 h-9 select-none shrink-0 bg-gray-2",
+        isWindows ? "flex-row" : "flex-row-reverse pl-[5rem]"
       )}
       data-tauri-drag-region
     >

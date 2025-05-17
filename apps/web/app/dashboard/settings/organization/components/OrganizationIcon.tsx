@@ -67,7 +67,7 @@ export const OrganizationIcon = ({
   };
 
   return (
-    <div className="relative flex-1">
+    <div className="flex-1">
       <div className="space-y-1">
         <Label htmlFor="icon">Organization Icon</Label>
         <CardDescription className="w-full max-w-[400px]">

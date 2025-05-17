@@ -22,24 +22,16 @@ mod windows;
 
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid, Plan};
-use base64::prelude::BASE64_STANDARD;
-use base64::Engine;
 use camera::create_camera_preview_ws;
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
-use cap_fail::fail;
 use cap_media::feeds::RawCameraFrame;
 use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
-use cap_media::frame_ws::WSFrame;
 use cap_media::platform::Bounds;
-use cap_media::sources::CaptureScreen;
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
 use cap_project::RecordingMetaInner;
 use cap_project::XY;
-use cap_project::{
-    ProjectConfiguration, RecordingMeta, Resolution, SharingMeta, StudioRecordingMeta,
-};
-use cap_recording::instant_recording::InstantRecordingHandle;
+use cap_project::{ProjectConfiguration, RecordingMeta, SharingMeta, StudioRecordingMeta};
 use cap_recording::RecordingMode;
 use cap_recording::RecordingOptions;
 use cap_rendering::ProjectRecordings;
@@ -49,7 +41,6 @@ use editor_window::EditorInstances;
 use editor_window::WindowEditorInstance;
 use general_settings::GeneralSettingsStore;
 use mp4::Mp4Reader;
-// use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use notifications::NotificationType;
 use png::{ColorType, Encoder};
 use recording::InProgressRecording;
@@ -61,7 +52,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use std::collections::BTreeMap;
-use std::ffi::OsString;
 use std::time::Duration;
 use std::{
     fs::File,
@@ -82,7 +72,6 @@ use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::sync::{Mutex, RwLock};
 use tracing::debug;
-use tracing::info;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
@@ -111,6 +100,7 @@ pub struct App {
     current_recording: Option<InProgressRecording>,
     #[serde(skip)]
     recording_logging_handle: LoggingHandle,
+    server_url: String,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
@@ -455,7 +445,7 @@ pub struct NewNotification {
 }
 
 type ArcLock<T> = Arc<RwLock<T>>;
-type MutableState<'a, T> = State<'a, Arc<RwLock<T>>>;
+pub type MutableState<'a, T> = State<'a, Arc<RwLock<T>>>;
 
 #[tauri::command]
 #[specta::specta]
@@ -1196,7 +1186,6 @@ async fn list_audio_devices() -> Result<Vec<String>, ()> {
 #[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
 pub struct UploadProgress {
     progress: f64,
-    message: String,
 }
 
 #[derive(Deserialize, Type)]
@@ -1255,12 +1244,7 @@ async fn upload_exported_video(
     }
 
     // Start upload progress
-    UploadProgress {
-        progress: 0.0,
-        message: "Starting upload...".to_string(),
-    }
-    .emit(&app)
-    .ok();
+    UploadProgress { progress: 0.0 }.emit(&app).ok();
 
     let s3_config = async {
         let video_id = match mode {
@@ -1296,12 +1280,7 @@ async fn upload_exported_video(
     {
         Ok(uploaded_video) => {
             // Emit upload complete
-            UploadProgress {
-                progress: 1.0,
-                message: "Upload complete!".to_string(),
-            }
-            .emit(&app)
-            .ok();
+            UploadProgress { progress: 1.0 }.emit(&app).ok();
 
             meta.sharing = Some(SharingMeta {
                 link: uploaded_video.link.clone(),
@@ -1753,9 +1732,9 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
         "Fetching plan for user {}",
         auth.user_id.as_deref().unwrap_or("unknown")
     );
-    let plan_url = web_api::make_url("/api/desktop/plan");
+    let plan_url = app.make_app_url("/api/desktop/plan");
     let response = app
-        .authed_api_request(|client| client.get(plan_url))
+        .authed_api_request("/api/desktop/plan", |client, url| client.get(url))
         .await
         .map_err(|e| {
             println!("Failed to fetch plan: {}", e);
@@ -1951,6 +1930,13 @@ fn configure_logging(folder: &PathBuf) -> tracing_appender::non_blocking::Worker
 
 #[tauri::command]
 #[specta::specta]
+async fn set_server_url(app: MutableState<'_, App>, server_url: String) -> Result<(), ()> {
+    app.write().await.server_url = server_url;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 async fn update_auth_plan(app: AppHandle) {
     AuthStore::update_auth_plan(&app).await.ok();
 }
@@ -2023,7 +2009,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             set_fail,
             update_auth_plan,
             set_window_transparent,
-            get_editor_meta
+            get_editor_meta,
+            set_server_url
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2164,6 +2151,15 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     },
                     current_recording: None,
                     recording_logging_handle,
+                    server_url: GeneralSettingsStore::get(&app)
+                        .ok()
+                        .flatten()
+                        .map(|v| v.server_url.clone())
+                        .unwrap_or_else(|| {
+                            std::option_env!("VITE_SERVER_URL")
+                                .unwrap_or("https://cap.so")
+                                .to_string()
+                        }),
                 })));
 
                 app.manage(Arc::new(RwLock::new(

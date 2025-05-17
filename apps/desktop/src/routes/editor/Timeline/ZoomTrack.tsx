@@ -1,17 +1,17 @@
 import {
-  createEventListener,
-  createEventListenerMap,
+    createEventListener,
+    createEventListenerMap,
 } from "@solid-primitives/event-listener";
 import { For, Show, batch, createRoot, createSignal } from "solid-js";
 import { produce } from "solid-js/store";
 
+import { useEditorContext } from "../context";
 import {
-  useSegmentContext,
-  useTimelineContext,
-  useTrackContext,
+    useSegmentContext,
+    useTimelineContext,
+    useTrackContext,
 } from "./context";
 import { SegmentContent, SegmentHandle, SegmentRoot, TrackRoot } from "./Track";
-import { useEditorContext } from "../context";
 
 export type ZoomSegmentDragState =
   | { type: "idle" }
@@ -202,8 +202,8 @@ export function ZoomTrack(props: {
 
           return (
             <SegmentRoot
-              class="bg-gradient-to-r zoom-gradient-border hover:border duration-300 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]"
-              innerClass="ring-red-300"
+              class="bg-gradient-to-r zoom-gradient-border hover:border duration-200 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]"
+              innerClass="ring-red-5"
               segment={segment}
               onMouseEnter={() => {
                 setHoveringSegment(true);
@@ -294,7 +294,7 @@ export function ZoomTrack(props: {
 
                   return (
                     <Show when={ctx.width() > 100}>
-                      <div class="flex flex-col gap-1 justify-center items-center text-xs text-gray-50 whitespace-nowrap dark:text-gray-500 animate-in fade-in">
+                      <div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12 animate-in fade-in">
                         <span class="opacity-70">Zoom</span>
                         <div class="flex gap-1 items-center text-md">
                           <IconLucideSearch class="size-3.5" />{" "}
@@ -355,8 +355,8 @@ export function ZoomTrack(props: {
               end: time() + 1,
             }}
           >
-            <SegmentContent class="bg-gradient-to-r zoom-gradient-border hover:border duration-300 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]">
-              <p class="w-full text-center text-gray-50 dark:text-gray-500 text-md text-primary">
+            <SegmentContent class="bg-gradient-to-r zoom-gradient-border hover:border duration-200 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]">
+              <p class="w-full text-center text-gray-1 dark:text-gray-12 text-md text-primary">
                 +
               </p>
             </SegmentContent>

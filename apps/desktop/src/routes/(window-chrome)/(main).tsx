@@ -1,5 +1,4 @@
 import { Button } from "@cap/ui-solid";
-import { Tooltip } from "@kobalte/core";
 import { useNavigate } from "@solidjs/router";
 import {
   createMutation,
@@ -22,6 +21,7 @@ import {
   Suspense,
 } from "solid-js";
 import { createStore } from "solid-js/store";
+import Tooltip from "~/components/Tooltip";
 
 import Mode from "~/components/Mode";
 import { identifyUser, trackEvent } from "~/utils/analytics";
@@ -165,29 +165,32 @@ export default function () {
         dir={ostype() === "windows" ? "rtl" : "rtl"}
         class="flex gap-1 items-center mx-2"
       >
-        <Tooltip.Root openDelay={0}>
-          <Tooltip.Trigger>
-            <button
-              type="button"
-              onClick={async () => {
-                await commands.showWindow({ Settings: { page: "general" } });
+        <Tooltip
+          content={
+            <span>
+              Settings
+            </span>
+          }
+        >
+          <button
+            type="button"
+            onClick={async () => {
+              await commands.showWindow({ Settings: { page: "general" } });
                 getCurrentWindow().hide();
               }}
               class="flex items-center justify-center w-5 h-5 -ml-[1.5px]"
             >
-              <IconCapSettings class="text-gray-400 size-5 hover:text-gray-500" />
+              <IconCapSettings class="text-gray-11 size-5 hover:text-gray-12" />
             </button>
-          </Tooltip.Trigger>
-          <Tooltip.Portal>
-            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
-              Settings
-              <Tooltip.Arrow class="fill-gray-500" />
-            </Tooltip.Content>
-          </Tooltip.Portal>
-        </Tooltip.Root>
-        <Tooltip.Root openDelay={0}>
-          <Tooltip.Trigger>
-            <button
+          </Tooltip>
+        <Tooltip
+          content={
+            <span>
+              Previous Recordings
+            </span>
+          }
+        >
+          <button
               type="button"
               onClick={async () => {
                 await commands.showWindow({ Settings: { page: "recordings" } });
@@ -195,16 +198,9 @@ export default function () {
               }}
               class="flex justify-center items-center w-5 h-5"
             >
-              <IconLucideSquarePlay class="text-gray-400 size-5 hover:text-gray-500" />
+              <IconLucideSquarePlay class="text-gray-11 size-5 hover:text-gray-12" />
             </button>
-          </Tooltip.Trigger>
-          <Tooltip.Portal>
-            <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
-              Previous Recordings
-              <Tooltip.Arrow class="fill-gray-500" />
-            </Tooltip.Content>
-          </Tooltip.Portal>
-        </Tooltip.Root>
+          </Tooltip>
 
         <ChangelogButton />
 
@@ -214,7 +210,7 @@ export default function () {
             onClick={() => commands.showWindow("Upgrade")}
             class="flex relative justify-center items-center w-5 h-5"
           >
-            <IconLucideGift class="text-gray-400 size-5 hover:text-gray-500" />
+            <IconLucideGift class="text-gray-11 size-5 hover:text-gray-12" />
             <div
               style={{ "background-color": "#FF4747" }}
               class="block z-10 absolute top-0 right-0 size-1.5 rounded-full animate-bounce"
@@ -230,7 +226,7 @@ export default function () {
             }}
             class="flex justify-center items-center w-5 h-5"
           >
-            <IconLucideBug class="text-gray-400 size-5 hover:text-gray-500" />
+            <IconLucideBug class="text-gray-11 size-5 hover:text-gray-12" />
           </button>
         )}
       </div>
@@ -245,7 +241,7 @@ export default function () {
   });
 
   return (
-    <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-[--gray-50] h-full text-[--text-primary]">
+    <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] h-full text-[--text-primary]">
       {initialize()}
       <div class="flex items-center justify-between pb-[0.25rem]">
         <div class="flex items-center space-x-1">
@@ -271,8 +267,8 @@ export default function () {
                 }}
                 class={`text-[0.6rem] ${
                   license.data?.type === "pro"
-                    ? "bg-[--blue-400] text-gray-50 dark:text-gray-500"
-                    : "bg-gray-200 cursor-pointer hover:bg-gray-300"
+                    ? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
+                    : "bg-gray-3 cursor-pointer hover:bg-gray-5"
                 } rounded-lg px-1.5 py-0.5`}
               >
                 {license.data?.type === "commercial"
@@ -367,10 +363,10 @@ import { type as ostype, platform } from "@tauri-apps/plugin-os";
 import * as updater from "@tauri-apps/plugin-updater";
 import { Transition } from "solid-transition-group";
 
+import { SignInButton } from "~/components/SignInButton";
+import { authStore, generalSettingsStore } from "~/store";
 import { apiClient } from "~/utils/web-api";
 import { useWindowChrome } from "./Context";
-import { authStore, generalSettingsStore } from "~/store";
-import { SignInButton } from "~/components/SignInButton";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -538,96 +534,94 @@ function TargetSelects(props: {
 
   return (
     <div>
-      <Tooltip.Root openDelay={500}>
-        <Tooltip.Trigger class="flex fixed flex-row items-center w-8 h-8">
-          <Transition
-            onEnter={(el, done) => {
-              if (shouldAnimateAreaSelect)
-                el.animate(
-                  [
-                    {
-                      transform: "scale(0.5)",
-                      opacity: 0,
-                      width: "0.2rem",
-                      height: "0.2rem",
-                    },
-                    {
-                      transform: "scale(1)",
-                      opacity: 1,
-                      width: "2rem",
-                      height: "2rem",
-                    },
-                  ],
+      <Tooltip
+        openDelay={500}
+        content={
+          isTargetCaptureArea()
+            ? "Remove selection"
+            : areaSelection.pending
+            ? "Selecting area..."
+            : "Select area"
+        }
+        childClass="flex fixed flex-row items-center w-8 h-8"
+      >
+        <Transition
+          onEnter={(el, done) => {
+            if (shouldAnimateAreaSelect)
+              el.animate(
+                [
                   {
-                    duration: 450,
-                    easing: "cubic-bezier(0.65, 0, 0.35, 1)",
-                  }
-                ).finished.then(done);
-              shouldAnimateAreaSelect = true;
-            }}
-            onExit={(el, done) =>
-              el
-                .animate(
-                  [
-                    {
-                      transform: "scale(1)",
-                      opacity: 1,
-                      width: "2rem",
-                      height: "2rem",
-                    },
-                    {
-                      transform: "scale(0)",
-                      opacity: 0,
-                      width: "0.2rem",
-                      height: "0.2rem",
-                    },
-                  ],
+                    transform: "scale(0.5)",
+                    opacity: 0,
+                    width: "0.2rem",
+                    height: "0.2rem",
+                  },
                   {
-                    duration: 500,
-                    easing: "ease-in-out",
-                  }
-                )
-                .finished.then(done)
-            }
-          >
-            <Show when={isTargetScreenOrArea()}>
-              {(targetScreenOrArea) => (
-                <button
-                  type="button"
-                  disabled={!targetScreenOrArea}
-                  onClick={handleAreaSelectButtonClick}
-                  class={cx(
-                    "flex items-center justify-center flex-shrink-0 w-full h-full rounded-[0.5rem] transition-all duration-200",
-                    "hover:bg-gray-200 disabled:bg-gray-100 disabled:text-gray-400",
-                    "focus-visible:outline font-[200] text-[0.875rem]",
-                    isTargetCaptureArea()
-                      ? "bg-gray-100 text-blue-400 border border-blue-200"
-                      : "bg-gray-100 text-gray-400"
-                  )}
-                >
-                  <IconCapCrop
-                    class={`w-[1rem] h-[1rem] ${
-                      areaSelection.pending
-                        ? "animate-gentle-bounce duration-1000 text-gray-500 mt-1"
-                        : ""
-                    }`}
-                  />
-                </button>
-              )}
-            </Show>
-          </Transition>
-        </Tooltip.Trigger>
-        <Tooltip.Portal>
-          <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
-            {isTargetCaptureArea()
-              ? "Remove selection"
-              : areaSelection.pending
-              ? "Selecting area..."
-              : "Select area"}
-            <Tooltip.Arrow class="fill-gray-500" />
-          </Tooltip.Content>
-        </Tooltip.Portal>
-      </Tooltip.Root>
+                    transform: "scale(1)",
+                    opacity: 1,
+                    width: "2rem",
+                    height: "2rem",
+                  },
+                ],
+                {
+                  duration: 450,
+                  easing: "cubic-bezier(0.65, 0, 0.35, 1)",
+                }
+              ).finished.then(done);
+            shouldAnimateAreaSelect = true;
+          }}
+          onExit={(el, done) =>
+            el
+              .animate(
+                [
+                  {
+                    transform: "scale(1)",
+                    opacity: 1,
+                    width: "2rem",
+                    height: "2rem",
+                  },
+                  {
+                    transform: "scale(0)",
+                    opacity: 0,
+                    width: "0.2rem",
+                    height: "0.2rem",
+                  },
+                ],
+                {
+                  duration: 500,
+                  easing: "ease-in-out",
+                }
+              )
+              .finished.then(done)
+          }
+        >
+          <Show when={isTargetScreenOrArea()}>
+            {(targetScreenOrArea) => (
+              <button
+                type="button"
+                disabled={!targetScreenOrArea}
+                onClick={handleAreaSelectButtonClick}
+                class={cx(
+                  "flex items-center justify-center flex-shrink-0 w-full h-full rounded-[0.5rem] transition-all duration-200",
+                  "hover:bg-gray-3 disabled:bg-gray-2 disabled:text-gray-11",
+                  "focus-visible:outline font-[200] text-[0.875rem]",
+                  isTargetCaptureArea()
+                    ? "bg-gray-2 text-blue-9 border border-blue-200"
+                    : "bg-gray-2 text-gray-11"
+                )}
+              >
+                <IconCapCrop
+                  class={`w-[1rem] h-[1rem] ${
+                    areaSelection.pending
+                      ? "animate-gentle-bounce duration-1000 text-gray-12 mt-1"
+                      : ""
+                  }`}
+                />
+              </button>
+            )}
+          </Show>
+        </Transition>
+      </Tooltip>
 
       <div
         class={`flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500 ${
@@ -647,7 +641,7 @@ function TargetSelects(props: {
                 : undefined,
           }}
         >
-          <div class="flex-1 bg-gray-100" />
+          <div class="flex-1 bg-gray-2" />
         </div>
         <TargetSelect<CaptureScreen>
           options={screens.data ?? []}
@@ -737,7 +731,7 @@ function CameraSelect(props: {
     <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
       <button
         disabled={props.setOptions.isPending || !!currentRecording.data}
-        class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect"
+        class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect"
         onClick={() => {
           Promise.all([
             CheckMenuItem.new({
@@ -760,7 +754,7 @@ function CameraSelect(props: {
             });
         }}
       >
-        <IconCapCamera class="text-gray-400 size-[1.25rem]" />
+        <IconCapCamera class="text-gray-11 size-[1.25rem]" />
         <span class="flex-1 text-left truncate">
           {props.options?.cameraLabel ?? NO_CAMERA}
         </span>
@@ -800,10 +794,6 @@ function MicrophoneSelect(props: {
   const [dbs, setDbs] = createSignal<number | undefined>();
   const [isInitialized, setIsInitialized] = createSignal(false);
 
-  const value = createMemo(() => {
-    if (!props.options?.micName) return null;
-    return devices.data?.find((d) => d.name === props.options?.micName) ?? null;
-  });
 
   const requestPermission = useRequestPermission();
 
@@ -866,7 +856,7 @@ function MicrophoneSelect(props: {
     <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
       <button
         disabled={props.setOptions.isPending || !!currentRecording.data}
-        class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10"
+        class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
         onClick={() => {
           Promise.all([
             CheckMenuItem.new({
@@ -899,7 +889,7 @@ function MicrophoneSelect(props: {
             />
           )}
         </Show>
-        <IconCapMicrophone class="text-gray-400 size-[1.25rem]" />
+        <IconCapMicrophone class="text-gray-11 size-[1.25rem]" />
         <span class="flex-1 text-left truncate">
           {props.options?.micName ?? NO_MICROPHONE}
         </span>
@@ -939,10 +929,10 @@ function SystemAudio(props: {
         });
       }}
       disabled={props.setOptions.isPending || !!currentRecording.data}
-      class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10"
+      class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
     >
       <div class="size-[1.25rem] flex items-center justify-center">
-        <IconPhMonitorBold class="text-gray-400 stroke-2 size-[1.2rem]" />
+        <IconPhMonitorBold class="text-gray-11 stroke-2 size-[1.2rem]" />
       </div>
       <span class="flex-1 text-left truncate">
         {props.options?.captureSystemAudio
@@ -983,7 +973,7 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
   return (
     <>
       <button
-        class="group flex-1 text-gray-400 py-1 z-10 data-[selected='true']:text-gray-500 disabled:text-gray-400 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
+        class="group flex-1 text-gray-11 py-1 z-10 data-[selected='true']:text-gray-12 disabled:text-gray-11 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
         data-selected={props.selected}
         onClick={() => {
           if (props.options.length > 1) {
@@ -1046,7 +1036,7 @@ function TargetSelectInfoPill<T>(props: {
         ? "On"
         : "Off"}
     </InfoPill>
-  );
+);
 }
 
 function InfoPill(
@@ -1059,8 +1049,8 @@ function InfoPill(
       class={cx(
         "px-[0.375rem] rounded-full text-[0.75rem]",
         props.variant === "blue"
-          ? "bg-blue-50 text-blue-300"
-          : "bg-red-50 text-red-300"
+          ? "bg-blue-3 text-blue-9"
+          : "bg-red-3 text-red-9"
       )}
     />
   );
@@ -1122,28 +1112,23 @@ function ChangelogButton() {
   });
 
   return (
-    <Tooltip.Root openDelay={0}>
-      <Tooltip.Trigger>
-        <button
-          type="button"
-          onClick={handleChangelogClick}
-          class="flex relative justify-center items-center w-5 h-5"
-        >
-          <IconLucideBell class="text-gray-400 size-5 hover:text-gray-500" />
-          {changelogState.hasUpdate && (
-            <div
-              style={{ "background-color": "#FF4747" }}
-              class="block z-10 absolute top-0 right-0 size-1.5 rounded-full animate-bounce"
-            />
-          )}
-        </button>
-      </Tooltip.Trigger>
-      <Tooltip.Portal>
-        <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg duration-100 animate-in fade-in">
-          Changelog
-          <Tooltip.Arrow class="fill-gray-500" />
-        </Tooltip.Content>
-      </Tooltip.Portal>
-    </Tooltip.Root>
+    <Tooltip
+      openDelay={0}
+      content="Changelog"
+    >
+      <button
+        type="button"
+        onClick={handleChangelogClick}
+        class="flex relative justify-center items-center w-5 h-5"
+      >
+        <IconLucideBell class="text-gray-11 size-5 hover:text-gray-12" />
+        {changelogState.hasUpdate && (
+          <div
+            style={{ "background-color": "#FF4747" }}
+            class="block z-10 absolute top-0 right-0 size-1.5 rounded-full animate-bounce"
+          />
+        )}
+      </button>
+    </Tooltip>
   );
 }

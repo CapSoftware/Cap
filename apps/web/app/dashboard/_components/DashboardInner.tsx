@@ -57,7 +57,7 @@ export default function DashboardInner({
     <div className="flex flex-col pt-5 min-h-screen lg:gap-5">
       <div
         className={clsx(
-          "flex sticky z-50 justify-between items-center px-5 mt-10 w-full h-16 border-b bg-gray-1 lg:bg-transparent border-gray-3 lg:border-b-0 lg:pl-0 lg:pr-5 lg:top-0 lg:relative top-[64px] lg:mt-0 lg:h-8"
+          "flex sticky z-50 justify-between items-center px-5 mt-10 w-full border-b bg-gray-1 lg:bg-transparent min-h-16 lg:min-h-10 border-gray-3 lg:border-b-0 lg:pl-0 lg:pr-5 lg:top-0 lg:relative top-[64px] lg:mt-5 lg:h-8"
         )}
       >
         <div className="flex items-center gap-2">
@@ -74,7 +74,7 @@ export default function DashboardInner({
             onClick={() => {
               setThemeHandler(theme === "light" ? "dark" : "light");
             }}
-            className="hidden justify-center items-center rounded-full border transition-colors cursor-pointer lg:flex bg-gray-4 hover:border-gray-6 hover:bg-gray-5 size-9 border-gray-5"
+            className="hidden justify-center items-center bg-gradient-to-t rounded-full border transition-colors cursor-pointer lg:flex from-gray-4 to-gray-2 border-gray-4 hover:border-gray-6 hover:bg-gray-5 size-9"
           >
             <FontAwesomeIcon
               className="text-gray-12 size-3.5"
@@ -84,14 +84,13 @@ export default function DashboardInner({
           <User />
         </div>
       </div>
-      <div
-        className={clsx(
-          "flex overflow-y-auto flex-col flex-1 p-5 pb-5 border border-b-0 bg-gray-1 border-gray-3 lg:rounded-tl-2xl lg:p-8"
-        )}
+      <main
+        className={
+          "flex flex-col flex-1 p-5 pb-5 mt-5 border border-b-0 min-h-fit bg-gray-2 border-gray-3 lg:rounded-tl-2xl lg:p-8"
+        }
       >
-        <div className="flex flex-col flex-1 gap-4 h-full">{children}</div>
-      </div>
-
+        <div className="flex flex-col flex-1 gap-4">{children}</div>
+      </main>
       {isSharedCapsPage && activeOrganization?.members && (
         <MembersDialog
           open={membersDialogOpen}
@@ -135,18 +134,24 @@ const User = () => {
       />
       <Popover open={menuOpen} onOpenChange={setMenuOpen}>
         <PopoverTrigger asChild>
-          <div className="flex gap-2 justify-between items-center p-2 rounded-lg transition-colors cursor-pointer group lg:gap-6 hover:bg-gray-5">
+          <div
+            data-state={menuOpen ? "open" : "closed"}
+            className="flex gap-2 justify-between  items-center p-2 rounded-xl border data-[state=open]:border-gray-5 data-[state=open]:bg-gray-3 border-transparent transition-colors cursor-pointer group lg:gap-6 hover:border-gray-4"
+          >
             <div className="flex items-center">
               <Avatar
                 letterClass="text-xs lg:text-md"
                 name={user.name ?? "User"}
                 className="size-[24px] text-gray-12"
               />
-              <span className="ml-2 text-sm lg:ml-3 lg:text-md text-gray-12">
+              <span className="ml-2 text-sm lg:ml-2 lg:text-md text-gray-12">
                 {user.name ?? "User"}
               </span>
             </div>
-            <MoreVertical className="w-5 h-5 transition-colors text-gray-10 group-hover:text-gray-12" />
+            <MoreVertical
+              data-state={menuOpen ? "open" : "closed"}
+              className="w-5 h-5 data-[state=open]:text-gray-12 transition-colors text-gray-10 group-hover:text-gray-12"
+            />
           </div>
         </PopoverTrigger>
         <PopoverContent className="p-1 w-48">

@@ -18,13 +18,13 @@ export const AdminMobileNav = () => {
   const { theme, setThemeHandler } = useTheme();
   return (
     <>
-      <AnimatePresence mode="wait">
-        {sidebarOpen && (
+      <AnimatePresence>
+        {sidebarOpen ? (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="flex fixed inset-0 z-[1000000] lg:hidden bg-gray-1/50"
+            exit={{ opacity: 0, display: "none" }}
+            className="flex fixed inset-0 z-[60] lg:hidden bg-gray-1/50"
           >
             <motion.div
               ref={sidebarRef}
@@ -42,12 +42,12 @@ export const AdminMobileNav = () => {
               >
                 <X className="text-gray-12 size-7" aria-hidden="true" />
               </div>
-              <AdminNavItems />
+              <AdminNavItems toggleMobileNav={() => setSidebarOpen(false)} />
             </motion.div>
           </motion.div>
-        )}
+        ) : null}
       </AnimatePresence>
-      <div className="flex fixed z-50 justify-between w-full h-16 border-b border-gray-3 bg-gray-1 lg:border-none lg:hidden">
+      <div className="flex fixed z-[51] justify-between w-full h-16 border-b border-gray-3 bg-gray-1 lg:border-none lg:hidden">
         <div className="flex flex-shrink-0 items-center px-4 h-full lg:hidden">
           <Link className="block" href="/dashboard">
             <LogoBadge className="block w-auto h-8" />

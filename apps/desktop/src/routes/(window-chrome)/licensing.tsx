@@ -1,21 +1,21 @@
 import { Button } from "@cap/ui-solid";
+import { licenseContract } from "@cap/web-api-contract";
 import { useNavigate } from "@solidjs/router";
-import { Input } from "../editor/ui";
 import { createMutation } from "@tanstack/solid-query";
-import { licenseApiClient } from "~/utils/web-api";
-import { generalSettingsStore } from "~/store";
-import {
-  createResource,
-  createSignal,
-  Match,
-  Show,
-  Suspense,
-  Switch,
-} from "solid-js";
-import { createLicenseQuery } from "~/utils/queries";
 import * as tauriShell from "@tauri-apps/plugin-shell";
 import { ClientInferResponseBody } from "@ts-rest/core";
-import { licenseContract } from "@cap/web-api-contract";
+import {
+    createResource,
+    createSignal,
+    Match,
+    Show,
+    Suspense,
+    Switch,
+} from "solid-js";
+import { generalSettingsStore } from "~/store";
+import { createLicenseQuery } from "~/utils/queries";
+import { licenseApiClient } from "~/utils/web-api";
+import { Input } from "../editor/ui";
 
 export default function Page() {
   const license = createLicenseQuery();
@@ -27,7 +27,7 @@ export default function Page() {
         <h1 class="text-4xl md:text-4xl mb-3 tracking-[-.05em] font-medium text-[--text-primary]">
           Commercial License
         </h1>
-        <p class="text-base font-normal leading-6 text-gray-400 dark:text-[--black-transparent-60]">
+        <p class="text-base font-normal leading-6 text-gray-11 dark:text-[--black-transparent-60]">
           Permits using Cap for commercial purposes, but without paying for
           cloud features.
         </p>
@@ -41,7 +41,7 @@ export default function Page() {
       </Button>
       <Switch fallback={<CommercialLicensePurchase />}>
         <Match when={license.data?.type === "pro" && license.data}>
-          <div class="p-4 w-full space-y-4 rounded-xl bg-gray-200 mt-4">
+          <div class="p-4 mt-4 space-y-4 w-full rounded-xl bg-gray-3">
             <p class="text-[--text-primary]">
               Your account is upgraded to Cap Pro and already includes a
               commercial license.
@@ -50,13 +50,13 @@ export default function Page() {
         </Match>
         <Match when={license.data?.type === "commercial" && license.data}>
           {(license) => (
-            <div class="p-6 w-full space-y-4 rounded-xl bg-gray-200">
+            <div class="p-6 space-y-4 w-full rounded-xl bg-gray-3">
               <h3 class="text-2xl font-medium tracking-tight text-[--text-primary]">
                 Your License
               </h3>
               <div class="flex flex-col">
                 <label class="text-[--text-tertiary] text-sm">Key</label>
-                <pre class="text-[--text-secondary] font-mono bg-gray-100 rounded-lg p-1 px-2">
+                <pre class="text-[--text-secondary] font-mono bg-gray-2 rounded-lg p-1 px-2">
                   {license().licenseKey}
                 </pre>
               </div>
@@ -127,7 +127,7 @@ function LicenseKeyActivate(props: {
           }));
 
           return (
-            <div class="p-6 w-full space-y-2 rounded-xl bg-gray-200 mt-4">
+            <div class="p-6 mt-4 space-y-2 w-full rounded-xl bg-gray-3">
               <p class="text-[--text-primary]">
                 Got a license key? Enter it below
               </p>
@@ -172,28 +172,28 @@ function CommercialLicensePurchase() {
 
   return (
     <>
-      <div class="p-3 bg-blue-300 rounded-xl border shadow-sm text-card-foreground md:p-3 border-blue-500/20 w-full">
+      <div class="p-3 w-full bg-blue-9 rounded-xl border shadow-sm text-card-foreground md:p-3 border-blue-500/20">
         <div class="space-y-3">
           <div class="flex flex-col space-y-1.5 pt-6 px-6">
-            <h3 class="text-2xl font-medium tracking-tight text-gray-50 dark:text-[--text-primary]">
+            <h3 class="text-2xl font-medium tracking-tight text-gray-1 text-gray-12">
               Commercial License
             </h3>
-            <p class="text-[0.875rem] leading-[1.25rem] text-gray-50 dark:text-[--text-primary]">
+            <p class="text-[0.875rem] leading-[1.25rem] text-gray-1 text-gray-12">
               For professional use without cloud features.
             </p>
             <div>
               <div class="flex items-center space-x-3">
-                <h3 class="text-4xl text-gray-50 dark:text-[--text-primary]">
+                <h3 class="text-4xl text-gray-1 text-gray-12">
                   {type() === "yearly" ? "$29/year" : "$58"}
                 </h3>
                 <div>
                   {type() === "lifetime" && (
-                    <p class="text-sm font-medium text-gray-50 dark:text-[--text-primary]">
+                    <p class="text-sm font-medium text-gray-1 text-gray-12">
                       billed once
                     </p>
                   )}
                   {type() === "lifetime" && (
-                    <p class="text-sm text-gray-50 dark:text-[--text-primary]">
+                    <p class="text-sm text-gray-1 text-gray-12">
                       or, $29/year.
                     </p>
                   )}
@@ -203,7 +203,7 @@ function CommercialLicensePurchase() {
           </div>
           <div class="px-3 md:px-8">
             <div class="flex items-center pt-4 pb-1 border-t-2 border-[--white-transparent-20] dark:border-[--black-transparent-20]">
-              <span class="mr-2 text-xs text-gray-50 dark:text-[--text-primary]">
+              <span class="mr-2 text-xs text-gray-1 text-gray-12">
                 Switch to {type() === "yearly" ? "lifetime" : "yearly"}
               </span>
               <button
@@ -223,8 +223,8 @@ function CommercialLicensePurchase() {
               >
                 <span
                   data-state={type() === "yearly" ? "unchecked" : "checked"}
-                  class={`pointer-events-none block h-4 w-4 rounded-full dark:bg-gray-500
-                         bg-gray-50 shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4
+                  class={`pointer-events-none block h-4 w-4 rounded-full dark:bg-gray-12
+                         bg-gray-1 shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4
                           data-[state=unchecked]:translate-x-0 border-2 ${
                             type() === "lifetime"
                               ? "border-blue-400 dark:border-[#3F75E0]"
@@ -241,7 +241,7 @@ function CommercialLicensePurchase() {
               }}
               disabled={openCheckoutInExternalBrowser.isPending}
               class="flex items-center justify-center hover:opacity-90 transition-opacity duration-200 rounded-full bg-[--gray-50] dark:bg-[--gray-500] hover:bg-[--gray-200] disabled:bg-[--gray-100]
-                                   font-medium text-lg px-6 h-12 w-full no-underline text-gray-500 dark:text-gray-50"
+                                   font-medium text-lg px-6 h-12 w-full no-underline text-gray-12 dark:text-gray-1"
             >
               Buy Commercial Licenses
             </button>
@@ -256,9 +256,9 @@ function CommercialLicensePurchase() {
                   ].map((feature) => (
                     <li class="flex justify-start items-center">
                       <div class="w-6 h-6 m-0 p-0 flex items-center border-[2px] border-[--gray-50] dark:border-[--gray-500] justify-center rounded-full">
-                        <IconLucideCheck class="w-4 h-4  text-gray-50 dark:text-[--text-primary]" />
+                        <IconLucideCheck class="w-4 h-4 text-gray-1" />
                       </div>
-                      <span class="ml-2 text-[0.9rem] text-gray-50 dark:text-[--text-primary]">
+                      <span class="ml-2 text-[0.9rem] text-gray-1">
                         {feature}
                       </span>
                     </li>

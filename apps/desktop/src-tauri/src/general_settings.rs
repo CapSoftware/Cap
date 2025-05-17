@@ -57,9 +57,17 @@ pub struct GeneralSettingsStore {
     pub custom_cursor_capture: bool,
     #[serde(default)]
     pub system_audio_capture: bool,
+    #[serde(default = "default_server_url")]
+    pub server_url: String,
     #[serde(default, alias = "open_editor_after_recording")]
     #[deprecated]
     _open_editor_after_recording: bool,
+}
+
+fn default_server_url() -> String {
+    std::option_env!("VITE_SERVER_URL")
+        .unwrap_or("https://cap.so")
+        .to_string()
 }
 
 #[derive(Serialize, Deserialize, Type, Debug)]
@@ -90,6 +98,7 @@ impl Default for GeneralSettingsStore {
             main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour::Close,
             custom_cursor_capture: false,
             system_audio_capture: false,
+            server_url: default_server_url(),
             _open_editor_after_recording: false,
         }
     }

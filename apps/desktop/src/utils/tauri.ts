@@ -169,6 +169,9 @@ async setWindowTransparent(value: boolean) : Promise<void> {
 },
 async getEditorMeta() : Promise<RecordingMeta> {
     return await TAURI_INVOKE("get_editor_meta");
+},
+async setServerUrl(serverUrl: string) : Promise<null> {
+    return await TAURI_INVOKE("set_server_url", { serverUrl });
 }
 }
 
@@ -254,9 +257,9 @@ export type EditorStateChanged = { playhead_position: number }
 export type ExportCompression = "Minimal" | "Social" | "Web" | "Potato"
 export type ExportEstimates = { duration_seconds: number; estimated_time_seconds: number; estimated_size_mb: number }
 export type ExportSettings = { fps: number; resolution_base: XY<number>; compression: ExportCompression }
-export type Flags = { systemAudioRecording: boolean; split: boolean }
+export type Flags = { split: boolean }
 export type FramesRendered = { renderedCount: number; totalFrames: number; type: "FramesRendered" }
-export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; hapticsEnabled?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; customCursorCapture?: boolean; systemAudioCapture?: boolean; 
+export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; hapticsEnabled?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; customCursorCapture?: boolean; systemAudioCapture?: boolean; serverUrl?: string; 
 /**
  * @deprecated
  */
@@ -312,7 +315,7 @@ export type StudioRecordingMeta = { segment: SingleSegment } | { inner: Multiple
 export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments: ZoomSegment[] }
 export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number }
 export type UploadMode = { Initial: { pre_created_video: VideoUploadInfo | null } } | "Reupload"
-export type UploadProgress = { progress: number; message: string }
+export type UploadProgress = { progress: number }
 export type UploadResult = { Success: string } | "NotAuthenticated" | "PlanCheckFailed" | "UpgradeRequired"
 export type Video = { duration: number; width: number; height: number; fps: number; start_time: number }
 export type VideoMeta = { path: string; fps?: number; 

@@ -7,7 +7,7 @@ export const SkeletonRows = () => {
   return (
     <div className="flex flex-col min-h-screen lg:gap-5">
       {/* Content Area */}
-      <div className="flex overflow-auto flex-col flex-1 bg-gray-1 lg:rounded-tl-2xl">
+      <div className="flex overflow-auto flex-col flex-1 bg-gray-2 lg:rounded-tl-2xl">
         <div className="flex flex-col w-full">
           <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
             {Array(15)

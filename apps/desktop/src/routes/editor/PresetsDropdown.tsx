@@ -2,7 +2,6 @@ import { DropdownMenu as KDropdownMenu } from "@kobalte/core/dropdown-menu";
 import { cx } from "cva";
 import { For, Show, Suspense, createSignal } from "solid-js";
 import { reconcile } from "solid-js/store";
-
 import { useEditorContext } from "./context";
 import {
   DropdownItem,
@@ -16,7 +15,7 @@ import {
 
 export function PresetsDropdown() {
   const { setDialog, presets, setProject } = useEditorContext();
-
+  const [activePreset, setActivePreset] = createSignal<number | null>(presets.query.data?.default ?? null);
   return (
     <KDropdownMenu gutter={8} placement="bottom">
       <EditorButton<typeof KDropdownMenu.Trigger>
@@ -39,7 +38,7 @@ export function PresetsDropdown() {
               <For
                 each={presets.query.data?.presets ?? []}
                 fallback={
-                  <div class="py-1 w-full text-sm text-center text-gray-400">
+                  <div class="py-1 w-full text-sm text-center text-gray-11">
                     No Presets
                   </div>
                 }
@@ -51,18 +50,28 @@ export function PresetsDropdown() {
                     <KDropdownMenu.Sub gutter={16}>
                       <MenuItem<typeof KDropdownMenu.SubTrigger>
                         as={KDropdownMenu.SubTrigger}
+                        class="h-[2.5rem]"
                         onFocusIn={() => setShowSettings(false)}
-                        onClick={() => setShowSettings(false)}
+                        onClick={() => {
+                          setShowSettings(false);
+                          setProject(reconcile(preset.config));
+                          setActivePreset(i());
+                        }}
                       >
                         <span class="mr-auto">{preset.name}</span>
+                        <Show when={Object.is(activePreset(), i())}>
+                          <span class="px-2 py-1 text-[11px] rounded-full bg-blue-8 text-gray-1 dark:text-gray-12">
+                            Current
+                          </span>
+                        </Show>
                         <Show when={presets.query.data?.default === i()}>
-                          <span class="px-[0.375rem] h-[1.25rem] rounded-full bg-gray-100 text-gray-400 text-[0.75rem]">
+                          <span class="px-2 py-1 text-[11px] rounded-full bg-gray-2 text-gray-11">
                             Default
                           </span>
                         </Show>
                         <button
                           type="button"
-                          class="text-gray-400 hover:text-[currentColor]"
+                          class="text-gray-11 hover:text-[currentColor]"
                           onClick={(e) => {
                             e.stopPropagation();
                             setShowSettings((s) => !s);
@@ -85,9 +94,10 @@ export function PresetsDropdown() {
                             )}
                           >
                             <DropdownItem
-                              onSelect={() =>
-                                setProject(reconcile(preset.config))
-                              }
+                              onSelect={() => {
+                                setShowSettings(false);
+                                setProject(reconcile(preset.config));
+                              }}
                             >
                               Apply
                             </DropdownItem>

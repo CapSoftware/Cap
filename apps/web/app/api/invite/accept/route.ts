@@ -49,11 +49,11 @@ export async function POST(request: NextRequest) {
       role: invite.role,
     });
 
-    // Update the user's thirdPartyStripeSubscriptionId
     await db()
       .update(users)
       .set({
         thirdPartyStripeSubscriptionId: organizationOwner.stripeSubscriptionId,
+        activeOrganizationId: invite.organizationId,
       })
       .where(eq(users.id, user.id));
 

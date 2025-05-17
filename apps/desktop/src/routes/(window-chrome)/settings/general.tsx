@@ -1,24 +1,32 @@
-import { createResource, For, ParentProps, Show } from "solid-js";
-import { createStore } from "solid-js/store";
+import { Button } from "@cap/ui-solid";
+import { createWritableMemo } from "@solid-primitives/memo";
 import {
   isPermissionGranted,
   requestPermission,
 } from "@tauri-apps/plugin-notification";
-import { type OsType, type } from "@tauri-apps/plugin-os";
+import { type, type OsType } from "@tauri-apps/plugin-os";
 import "@total-typescript/ts-reset/filter-boolean";
+import { createResource, For, ParentProps, Show } from "solid-js";
+import { createStore } from "solid-js/store";
 
-import { generalSettingsStore } from "~/store";
-import type {
-  AppTheme,
-  GeneralSettingsStore,
-  MainWindowRecordingStartBehaviour,
-  PostStudioRecordingBehaviour,
+import { authStore, generalSettingsStore } from "~/store";
+import {
+  commands,
+  type AppTheme,
+  type GeneralSettingsStore,
+  type MainWindowRecordingStartBehaviour,
+  type PostStudioRecordingBehaviour,
 } from "~/utils/tauri";
 // import { themeStore } from "~/store/theme";
+import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
+import { confirm } from "@tauri-apps/plugin-dialog";
+import { cx } from "cva";
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
-import { CheckMenuItem, Menu, MenuItem } from "@tauri-apps/api/menu";
+import { Toggle } from "~/components/Toggle";
+import { TextInput } from "~/routes/editor/TextInput";
+import { Setting, ToggleSetting } from "./Setting";
 
 export default function GeneralSettings() {
   const [store] = createResource(() => generalSettingsStore.get());
@@ -57,11 +65,14 @@ function AppearanceSection(props: {
                 onClick={() => props.onThemeChange(theme.id)}
               >
                 <div
-                  class={`w-24 h-[4.8rem] rounded-md overflow-hidden focus:outline-none ring-offset-gray-50 transition-all duration-200 ${
-                    props.currentTheme === theme.id
-                      ? "ring-2 ring-offset-2"
-                      : "group-hover:ring-2 ring-offset-2 group-hover:ring-gray-300"
-                  }`}
+                  class={cx(
+                    `w-24 h-[4.8rem] rounded-md overflow-hidden focus:outline-none ring-offset-gray-50 transition-all duration-200`,
+                    {
+                      "ring-2 ring-offset-2": props.currentTheme === theme.id,
+                      "group-hover:ring-2 ring-offset-2 group-hover:ring-gray-5":
+                        props.currentTheme !== theme.id,
+                    }
+                  )}
                   aria-label={`Select theme: ${theme.name}`}
                 >
                   <div class="flex justify-center items-center w-full h-full">
@@ -73,9 +84,10 @@ function AppearanceSection(props: {
                   </div>
                 </div>
                 <span
-                  class={`mt-2 text-sm transition-color duration-200 ${
-                    props.currentTheme === theme.id ? "text-blue-400" : ""
-                  }`}
+                  class={cx(`mt-2 text-sm transition-color duration-200`, {
+                    "text-blue-9": props.currentTheme === theme.id,
+                    "text-gray-11": props.currentTheme !== theme.id,
+                  })}
                 >
                   {theme.name}
                 </span>
@@ -129,18 +141,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
             value={!!settings.disableAutoOpenLinks}
             onChange={(value) => handleChange("disableAutoOpenLinks", value)}
           />
-          <ToggleSetting
-            label="Enable custom cursor capture in Studio Mode (Experimental)"
-            description="Whether Studio Mode recordings should capture cursor state separately, for customisation (size, smoothing) in the editor. Currently experimental as cursor events may not be captured accurately."
-            value={!!settings.customCursorCapture}
-            onChange={(value) => handleChange("customCursorCapture", value)}
-          />
-          <ToggleSetting
-            label="System audio capture (Experimental)"
-            description="Provides the option for you to capture audio coming from your system, such as music or video playback."
-            value={!!settings.systemAudioCapture}
-            onChange={(value) => handleChange("systemAudioCapture", value)}
-          />
+
           {ostype === "macos" && (
             <>
               <ToggleSetting
@@ -195,7 +196,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
             description="What should happen when a studio recording finishes"
           >
             <button
-              class="border border-gray-300 rounded-md px-2 py-1 flex flex-row items-center gap-1"
+              class="flex flex-row gap-1 items-center px-2 py-1 rounded-md border border-gray-300"
               onClick={async () => {
                 const item = (
                   text: string,
@@ -227,7 +228,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
             description="What should the main window do when starting a recording"
           >
             <button
-              class="border border-gray-300 rounded-md px-2 py-1 flex flex-row items-center gap-1"
+              class="flex flex-row gap-1 items-center px-2 py-1 rounded-md border border-gray-300"
               onClick={async () => {
                 const item = (
                   text: string,
@@ -255,68 +256,52 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
               <IconCapChevronDown class="size-4" />
             </button>
           </Setting>
+          <ServerURLSetting
+            value={settings.serverUrl ?? "https://cap.so"}
+            onChange={async (v) => {
+              if (
+                !(await confirm(
+                  `Are you sure you want to change the server URL to '${v}'? You will need to sign in again.`
+                ))
+              )
+                return;
+
+              await authStore.set(undefined);
+              await commands.setServerUrl(v);
+              handleChange("serverUrl", v);
+            }}
+          />
         </div>
       </div>
     </div>
   );
 }
 
-function Setting(
-  props: {
-    pro?: boolean;
-    label: string;
-    description?: string;
-  } & ParentProps
-) {
-  return (
-    <div class="py-3 flex flex-row justify-between items-start text-sm">
-      <div class="flex justify-between items-start space-y-2 flex-col">
-        {props.pro && (
-          <span class="px-2 py-1 text-xs font-medium text-gray-50 bg-blue-400 rounded-lg">
-            Cap Pro
-          </span>
-        )}
-        <div class="flex gap-2 items-center">
-          <p class="text-[--text-primary]">{props.label}</p>
-        </div>
-        {props.description && (
-          <p class="text-xs text-[--text-tertiary]">{props.description}</p>
-        )}
-      </div>
-      {props.children}
-    </div>
-  );
-}
-
-function ToggleSetting(props: {
-  pro?: boolean;
-  label: string;
-  description?: string;
-  value: boolean;
-  onChange(v: boolean): void;
+function ServerURLSetting(props: {
+  value: string;
+  onChange: (v: string) => void;
 }) {
+  const [value, setValue] = createWritableMemo(() => props.value);
+
   return (
-    <Setting {...props}>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={props.value}
-        data-state={props.value ? "checked" : "unchecked"}
-        value={props.value ? "on" : "off"}
-        class={`peer inline-flex h-4 w-8 shrink-0 cursor-pointer items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 ${
-          props.value
-            ? "bg-blue-400 border-blue-400"
-            : "bg-gray-300 border-gray-300"
-        }`}
-        onClick={() => props.onChange(!props.value)}
-      >
-        <span
-          data-state={props.value ? "checked" : "unchecked"}
-          class={`pointer-events-none block h-4 w-4 rounded-full bg-gray-50 shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0 border-2 ${
-            props.value ? "border-blue-400" : "border-gray-300"
-          }`}
+    <Setting
+      label="Cap Server URL"
+      description="This setting should only be changed if you are self hosting your own instance of Cap Web."
+    >
+      <div class="flex flex-col gap-2 items-end">
+        <TextInput
+          class="flex flex-row gap-1 items-center px-2 py-1 rounded-md border outline-none border-gray-7 bg-gray-1 focus:border-blue-10 max-w-48"
+          value={value()}
+          onInput={(e) => setValue(e.currentTarget.value)}
         />
-      </button>
+        <Button
+          size="sm"
+          disabled={props.value === value()}
+          onClick={() => props.onChange(value())}
+        >
+          Update
+        </Button>
+      </div>
     </Setting>
   );
 }

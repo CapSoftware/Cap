@@ -1,17 +1,16 @@
 "use client";
 
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
+import { calculateSeats } from "@/utils/organization";
 import { Card } from "@cap/ui";
 import { faChair, faUserGroup } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 
 export const SeatsInfoCards = () => {
   const { activeOrganization } = useSharedContext();
-
-  const inviteQuota = activeOrganization?.inviteQuota ?? 1;
-  const totalInvites = activeOrganization?.totalInvites ?? 0;
-  const adjustedTotalInvites = Math.min(totalInvites, inviteQuota + 1);
-  const remainingSeats = Math.max(0, inviteQuota - adjustedTotalInvites);
+  const { inviteQuota, remainingSeats } = calculateSeats(
+    activeOrganization || {}
+  );
 
   return (
     <div className="flex flex-col flex-1 gap-6 justify-center lg:flex-row">
