@@ -7,6 +7,7 @@ import { useState } from "react";
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 import clsx from "clsx";
 import { SpaceDialog } from "./SpaceDialog";
+import { Input } from "@cap/ui";
 
 export const SpacesList = () => {
   const { spacesData, sidebarCollapsed } = useSharedContext();
@@ -29,10 +30,10 @@ export const SpacesList = () => {
 
   return (
     <div className="mt-4 flex flex-col">
-      <div className="flex items-center mb-2">
+      <div className="flex items-center mb-1">
         <h2
           className={clsx(
-            "text-gray-12 font-medium",
+            "text-gray-12 font-medium text-sm",
             sidebarCollapsed ? "hidden" : "text-base"
           )}
         >
@@ -64,11 +65,11 @@ export const SpacesList = () => {
         )}
       </div>
 
-      <div className={clsx("relative mb-3", sidebarCollapsed ? "hidden" : "")}>
+      <div className={clsx("relative mb-2", sidebarCollapsed ? "hidden" : "")}>
         <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
           <Search className="h-4 w-4 text-gray-9" />
         </div>
-        <input
+        <Input
           type="text"
           placeholder="Search spaces"
           className="w-full h-9 pl-10 pr-3 py-2 bg-gray-3 border border-gray-4 rounded-lg text-sm text-gray-11 placeholder-gray-8 focus:outline-none focus:ring-1 focus:ring-gray-7"

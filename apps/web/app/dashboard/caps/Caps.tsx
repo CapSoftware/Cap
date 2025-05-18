@@ -29,20 +29,12 @@ type VideoData = {
   metadata?: VideoMetadata;
 }[];
 
-export const Caps = ({
-  data,
-  count,
-  userOrganizations,
-}: {
-  data: VideoData;
-  count: number;
-  userOrganizations: { id: string; name: string; iconUrl?: string }[];
-}) => {
+export const Caps = ({ data, count }: { data: VideoData; count: number }) => {
   const { refresh } = useRouter();
   const params = useSearchParams();
   const page = Number(params.get("page")) || 1;
   const [analytics, setAnalytics] = useState<Record<string, number>>({});
-  const { user, spacesData } = useSharedContext();
+  const { user, spacesData, organizationData } = useSharedContext();
   const limit = 15;
   const totalPages = Math.ceil(count / limit);
   const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
@@ -241,8 +233,6 @@ export const Caps = ({
             analytics={analytics[cap.id] || 0}
             onDelete={deleteCap}
             userId={user?.id}
-            userOrganizations={userOrganizations}
-            userSpaces={mappedSpaces}
             isSelected={selectedCaps.includes(cap.id)}
             onSelectToggle={() => handleCapSelection(cap.id)}
             anyCapSelected={anyCapSelected}

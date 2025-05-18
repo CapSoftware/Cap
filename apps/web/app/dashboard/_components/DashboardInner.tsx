@@ -21,7 +21,7 @@ import { MoreVertical } from "lucide-react";
 import { signOut } from "next-auth/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import {
   faMoon,
   faSun,
@@ -39,18 +39,8 @@ export default function DashboardInner({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const { activeOrganization, spacesData } = useSharedContext();
+  const { activeOrganization, activeSpace } = useSharedContext();
   const [membersDialogOpen, setMembersDialogOpen] = useState(false);
-
-  // Extract space ID from pathname if on a space page
-  const spaceIdMatch = pathname.match(/\/dashboard\/spaces\/([^\/]+)/);
-  const spaceId = spaceIdMatch ? spaceIdMatch[1] : null;
-
-  // Find active space from spacesData if available
-  const activeSpace = useMemo(() => {
-    if (!spaceId || !spacesData) return null;
-    return spacesData.find((space) => space.id === spaceId) || null;
-  }, [spaceId, spacesData]);
 
   const titles: Record<string, string> = {
     "/dashboard/caps": "Caps",
@@ -60,7 +50,6 @@ export default function DashboardInner({
     "/dashboard/spaces": "Spaces",
   };
 
-  // Determine the title: use space name for space page, otherwise use predefined titles
   const title = activeSpace ? activeSpace.name : titles[pathname] || "";
   const { theme, setThemeHandler } = useTheme();
   const isSharedCapsPage = pathname === "/dashboard/shared-caps";

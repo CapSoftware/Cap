@@ -1,4 +1,5 @@
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
+import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Tooltip } from "@/components/Tooltip";
 import {
   Button,
@@ -17,6 +18,7 @@ import { Check, Search } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { shareCap } from "@/actions/caps/share";
 
 interface SharingDialogProps {
   isOpen: boolean;
@@ -26,13 +28,13 @@ interface SharingDialogProps {
   sharedSpaces?: {
     id: string;
     name: string;
-    iconUrl?: string;
+    iconUrl?: string | null;
     organizationId: string;
   }[];
   userSpaces?: {
     id: string;
     name: string;
-    iconUrl?: string;
+    iconUrl?: string | null;
     organizationId: string;
   }[];
   onSharingUpdated: (updatedSharedSpaces: string[]) => void;
@@ -43,10 +45,10 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
   onClose,
   capId,
   capName,
-  sharedSpaces = [],
-  userSpaces = [],
   onSharingUpdated,
 }) => {
+  const { spacesData, sharedSpaces } = useSharedContext();
+
   const [selectedSpaces, setSelectedSpaces] = useState<Set<string>>(
     new Set(sharedSpaces?.map((space) => space.id) || [])
   );
@@ -58,9 +60,6 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      console.log("User Spaces:", userSpaces);
-      console.log("Shared Spaces:", sharedSpaces);
-
       const currentSpaceIds = new Set(
         sharedSpaces?.map((space) => space.id) || []
       );
@@ -68,14 +67,17 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
       setInitialSelectedSpaces(currentSpaceIds);
       setSearchTerm("");
     }
-  }, [isOpen]);
+  }, [isOpen, sharedSpaces]);
 
   const handleToggleSpace = (spaceId: string) => {
+    console.log(`Toggling space: ${spaceId}`);
     setSelectedSpaces((prev) => {
       const newSet = new Set(prev);
       if (newSet.has(spaceId)) {
+        console.log(`Removing space ${spaceId} from selection`);
         newSet.delete(spaceId);
       } else {
+        console.log(`Adding space ${spaceId} to selection`);
         newSet.add(spaceId);
       }
       return newSet;
@@ -84,18 +86,17 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 
   const handleSave = async () => {
     try {
+      console.log("Starting save operation for cap:", capId);
+      console.log("Selected spaces:", Array.from(selectedSpaces));
       setLoading(true);
-      const response = await fetch("/api/caps/share", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          capId,
-          spaceIds: Array.from(selectedSpaces),
-        }),
+      const result = await shareCap({
+        capId,
+        spaceIds: Array.from(selectedSpaces),
       });
 
-      if (!response.ok) {
-        throw new Error("Failed to update sharing settings");
+      if (!result.success) {
+        console.error("Share operation failed:", result.error);
+        throw new Error(result.error || "Failed to update sharing settings");
       }
 
       const newSelectedSpaces = Array.from(selectedSpaces);
@@ -108,23 +109,32 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
         (id) => !newSelectedSpaces.includes(id)
       );
 
+      console.log("Added spaces:", addedSpaceIds);
+      console.log("Removed spaces:", removedSpaceIds);
+
       if (addedSpaceIds.length === 1 && removedSpaceIds.length === 0) {
-        const addedSpaceName = userSpaces?.find(
+        const addedSpaceName = sharedSpaces?.find(
           (space) => space.id === addedSpaceIds[0]
         )?.name;
+        console.log(`Sharing to single space: ${addedSpaceName}`);
         toast.success(`Shared to ${addedSpaceName}`);
       } else if (removedSpaceIds.length === 1 && addedSpaceIds.length === 0) {
         const removedSpaceName = sharedSpaces?.find(
           (space) => space.id === removedSpaceIds[0]
         )?.name;
+        console.log(`Unsharing from single space: ${removedSpaceName}`);
         toast.success(`Unshared from ${removedSpaceName}`);
       } else if (addedSpaceIds.length > 0 && removedSpaceIds.length === 0) {
+        console.log(`Sharing to ${addedSpaceIds.length} spaces`);
         toast.success(`Shared to ${addedSpaceIds.length} spaces`);
       } else if (removedSpaceIds.length > 0 && addedSpaceIds.length === 0) {
+        console.log(`Unsharing from ${removedSpaceIds.length} spaces`);
         toast.success(`Unshared from ${removedSpaceIds.length} spaces`);
       } else if (addedSpaceIds.length > 0 && removedSpaceIds.length > 0) {
+        console.log("Updating sharing settings with multiple changes");
         toast.success(`Sharing settings updated`);
       } else {
+        console.log("No changes to sharing settings");
         toast.success("No changes to sharing settings");
       }
       onSharingUpdated(newSelectedSpaces);
@@ -138,10 +148,12 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
   };
 
   const filteredSpaces = searchTerm
-    ? userSpaces?.filter((space) =>
+    ? spacesData?.filter((space) =>
         space.name.toLowerCase().includes(searchTerm.toLowerCase())
       )
-    : userSpaces;
+    : spacesData;
+
+  console.log(filteredSpaces);
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -181,7 +193,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
             ) : (
               <div className="flex gap-2 justify-center items-center pt-2 text-sm col-span-4">
                 <p className="text-gray-12">
-                  {userSpaces && userSpaces.length > 0
+                  {spacesData && spacesData.length > 0
                     ? "No spaces match your search"
                     : "No spaces available"}
                 </p>
@@ -213,7 +225,12 @@ const SpaceCard = ({
   selectedSpaces,
   handleToggleSpace,
 }: {
-  space: { id: string; name: string; iconUrl?: string; organizationId: string };
+  space: {
+    id: string;
+    name: string;
+    iconUrl?: string | null;
+    organizationId: string;
+  };
   selectedSpaces: Set<string>;
   handleToggleSpace: (spaceId: string) => void;
 }) => {

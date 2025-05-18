@@ -15,6 +15,7 @@ import { isUserOnProPlan } from "@cap/utils";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
 import clsx from "clsx";
+import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 
 export const ShareHeader = ({
   data,
@@ -51,9 +52,11 @@ export const ShareHeader = ({
   const [isDownloading, setIsDownloading] = useState(false);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
-  const [currentSharedOrganizations, setCurrentSharedOrganizations] =
-    useState(sharedOrganizations);
-  const [currentSharedSpaces, setCurrentSharedSpaces] = useState(sharedSpaces);
+
+  const contextData = useSharedContext();
+  const contextSpaces = contextData?.spacesData || null;
+  const contextSharedSpaces = contextData?.sharedSpaces || null;
+  const effectiveSharedSpaces = contextSharedSpaces || sharedSpaces;
 
   const isOwner = user !== null && user.id.toString() === data.ownerId;
 
@@ -103,10 +106,7 @@ export const ShareHeader = ({
       })
     : false;
 
-  const handleSharingUpdated = (updatedSharedSpaces: string[]) => {
-    setCurrentSharedSpaces(
-      userSpaces?.filter((space) => updatedSharedSpaces.includes(space.id))
-    );
+  const handleSharingUpdated = () => {
     refresh();
   };
 
@@ -115,7 +115,7 @@ export const ShareHeader = ({
       "text-sm text-gray-10 transition-colors duration-200 flex items-center";
 
     if (isOwner) {
-      if (currentSharedSpaces?.length === 0) {
+      if (effectiveSharedSpaces?.length === 0) {
         return (
           <p
             className={clsx(baseClassName, "hover:text-gray-12 cursor-pointer")}
@@ -148,8 +148,7 @@ export const ShareHeader = ({
         onClose={() => setIsSharingDialogOpen(false)}
         capId={data.id}
         capName={data.name}
-        sharedSpaces={currentSharedSpaces || []}
-        userSpaces={userSpaces}
+        userSpaces={contextSpaces || userSpaces}
         onSharingUpdated={handleSharingUpdated}
       />
       <div>

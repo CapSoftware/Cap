@@ -31,11 +31,15 @@ interface Props extends PropsWithChildren {
     createdAt: Date;
     totalComments: number;
     totalReactions: number;
-    sharedOrganizations?: { id: string; name: string; iconUrl?: string }[];
+    sharedOrganizations?: {
+      id: string;
+      name: string;
+      iconUrl?: string | null;
+    }[];
     sharedSpaces?: {
       id: string;
       name: string;
-      iconUrl?: string;
+      iconUrl?: string | null;
       organizationId: string;
     }[];
     ownerName: string | null;
@@ -44,13 +48,6 @@ interface Props extends PropsWithChildren {
   analytics: number;
   onDelete?: (videoId: string) => Promise<void>;
   userId?: string;
-  userOrganizations?: { id: string; name: string; iconUrl?: string }[];
-  userSpaces?: {
-    id: string;
-    name: string;
-    iconUrl?: string;
-    organizationId: string;
-  }[];
   sharedCapCard?: boolean;
   isSelected?: boolean;
   onSelectToggle?: () => void;
@@ -63,8 +60,6 @@ export const CapCard = ({
   children,
   onDelete,
   userId,
-  userOrganizations,
-  userSpaces,
   sharedCapCard = false,
   isSelected = false,
   onSelectToggle,
@@ -77,7 +72,6 @@ export const CapCard = ({
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(cap.name);
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
-  const [, setSharedOrganizations] = useState(cap.sharedOrganizations);
   const [isDateEditing, setIsDateEditing] = useState(false);
   const [copyPressed, setCopyPressed] = useState(false);
   const [dateValue, setDateValue] = useState(
@@ -85,7 +79,7 @@ export const CapCard = ({
   );
   const [showFullDate, setShowFullDate] = useState(false);
   const router = useRouter();
-  const { activeOrganization, spacesData } = useSharedContext();
+  const { activeOrganization, spacesData, sharedSpaces } = useSharedContext();
 
   const handleTitleBlur = async (capName: string) => {
     if (!title || capName === title) {
@@ -113,11 +107,6 @@ export const CapCard = ({
       : analytics;
 
   const handleSharingUpdated = (updatedSharedSpaces: string[]) => {
-    setSharedOrganizations(
-      userOrganizations?.filter((organization) =>
-        updatedSharedSpaces.includes(organization.id)
-      )
-    );
     router.refresh();
   };
 

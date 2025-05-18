@@ -115,19 +115,6 @@ export default async function CapsPage({
     .limit(limit)
     .offset(offset);
 
-  const userOrganizations = await db()
-    .select({
-      id: organizations.id,
-      name: organizations.name,
-      iconUrl: organizations.iconUrl,
-    })
-    .from(organizations)
-    .leftJoin(
-      organizationMembers,
-      eq(organizations.id, organizationMembers.organizationId)
-    )
-    .where(eq(organizationMembers.userId, userId));
-
   const processedVideoData = videoData.map((video) => {
     const { effectiveDate, ...videoWithoutEffectiveDate } = video;
 
@@ -147,11 +134,5 @@ export default async function CapsPage({
     };
   });
 
-  return (
-    <Caps
-      data={processedVideoData}
-      count={totalCount}
-      userOrganizations={userOrganizations}
-    />
-  );
+  return <Caps data={processedVideoData} count={totalCount} />;
 }
