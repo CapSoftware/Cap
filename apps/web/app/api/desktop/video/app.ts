@@ -1,6 +1,7 @@
 import { dub } from "@/utils/dub";
 import { getS3Bucket, getS3Config } from "@/utils/s3";
 import { db } from "@cap/database";
+import { VideoMetadata } from "@cap/database/types";
 import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
@@ -21,6 +22,7 @@ app.get(
     "query",
     z.object({
       duration: z.number().optional(),
+      sourceName: z.string().optional(),
       recordingMode: z
         .union([z.literal("hls"), z.literal("desktopMP4")])
         .optional(),
@@ -29,7 +31,7 @@ app.get(
     })
   ),
   async (c) => {
-    const { duration, recordingMode, isScreenshot, videoId } =
+    const { duration, recordingMode, isScreenshot, videoId, sourceName } =
       c.req.valid("query");
     const user = c.get("user");
 
@@ -59,6 +61,20 @@ app.get(
         .where(eq(videos.id, videoId));
 
       if (video) {
+        const currentMetadata = (video.metadata as VideoMetadata) || {};
+        const updatedMetadata: VideoMetadata = {
+          ...currentMetadata,
+          ...(sourceName ? { sourceName } : {}),
+          ...(duration ? { duration } : {}),
+        };
+
+        if (sourceName || duration) {
+          await db()
+            .update(videos)
+            .set({ metadata: updatedMetadata })
+            .where(eq(videos.id, videoId));
+        }
+
         return c.json({
           id: video.id,
           user_id: user.id,
@@ -86,6 +102,10 @@ app.get(
           : undefined,
       isScreenshot,
       bucket: bucket?.id,
+      metadata: {
+        ...(sourceName ? { sourceName } : {}),
+        ...(duration ? { duration } : {}),
+      } as VideoMetadata,
     };
 
     await db().insert(videos).values(videoData);

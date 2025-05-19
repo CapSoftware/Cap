@@ -18,6 +18,7 @@ use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio::task;
 use tokio::time::sleep;
+use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use tracing::{info, trace, warn};
 
 use crate::web_api::{self, ManagerExt};
@@ -205,7 +206,7 @@ pub async fn upload_video(
     let client = reqwest::Client::new();
     let s3_config = match existing_config {
         Some(config) => config,
-        None => get_s3_config(app, false, Some(video_id)).await?,
+        None => get_s3_config(app, false, Some(video_id), None, None).await?,
     };
 
     let file_key = format!(
@@ -341,7 +342,7 @@ pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
         .to_string();
 
     let client = reqwest::Client::new();
-    let s3_config = get_s3_config(app, true, None).await?;
+    let s3_config = get_s3_config(app, true, None, None, None).await?;
 
     let file_key = format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name);
 
@@ -408,7 +409,7 @@ pub async fn upload_audio(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
         .to_string();
 
     let client = reqwest::Client::new();
-    let s3_config = get_s3_config(app, false, None).await?;
+    let s3_config = get_s3_config(app, false, None, None, None).await?;
 
     let file_key = format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name);
 
@@ -479,14 +480,25 @@ pub async fn get_s3_config(
     app: &AppHandle,
     is_screenshot: bool,
     video_id: Option<String>,
+    duration: Option<f64>,
+    source_name: Option<String>,
 ) -> Result<S3UploadMeta, String> {
-    let s3_config_url = if let Some(id) = video_id {
+    let mut s3_config_url = if let Some(id) = &video_id {
         format!("/api/desktop/video/create?recordingMode=desktopMP4&videoId={id}")
     } else if is_screenshot {
         "/api/desktop/video/create?recordingMode=desktopMP4&isScreenshot=true".to_string()
     } else {
         "/api/desktop/video/create?recordingMode=desktopMP4".to_string()
     };
+
+    if let Some(d) = duration {
+        s3_config_url.push_str(&format!("&duration={}", d));
+    }
+
+    if let Some(name) = source_name {
+        let encoded = utf8_percent_encode(&name, NON_ALPHANUMERIC).to_string();
+        s3_config_url.push_str(&format!("&sourceName={}", encoded));
+    }
 
     let response = app
         .authed_api_request(s3_config_url, |client, url| client.get(url))

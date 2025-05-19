@@ -193,12 +193,16 @@ pub async fn start_recording(
             window.set_content_protected(matches!(recording_options.mode, RecordingMode::Studio));
     }
 
+    let source_name = recording_options.capture_target.get_title();
+
     let video_upload_info = match recording_options.mode {
         RecordingMode::Instant => {
             match AuthStore::get(&app).ok().flatten() {
                 Some(_) => {
                     // Pre-create the video and get the shareable link
-                    if let Ok(s3_config) = get_s3_config(&app, false, None).await {
+                    if let Ok(s3_config) =
+                        get_s3_config(&app, false, None, None, source_name.clone()).await
+                    {
                         let link = app.make_app_url(format!("/s/{}", s3_config.id())).await;
                         info!("Pre-created shareable link: {}", link);
 
