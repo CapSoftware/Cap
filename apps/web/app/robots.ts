@@ -9,9 +9,18 @@ export default function robots(): MetadataRoute.Robots {
   const headersList = headers();
   
   const referrer = headersList.get("x-referrer") || "";
-  const userAgent = headersList.get("x-user-agent") || "";
+  const userAgentHeader = headersList.get("x-user-agent") || "";
   
-  console.log('ROBOTS.TXT - User Agent:', userAgent);
+  let ua;
+  let userAgentString = "";
+  
+  try {
+    ua = JSON.parse(userAgentHeader);
+    userAgentString = ua.ua || "";
+  } catch (error) {
+    console.error('Error parsing user agent JSON:', error);
+    userAgentString = userAgentHeader;
+  }
   
   const allowedReferrers = [
     "x.com",
@@ -34,7 +43,7 @@ export default function robots(): MetadataRoute.Robots {
     referrer.includes(domain)
   );
   
-  const userAgentLower = userAgent.toLowerCase();
+  const userAgentLower = userAgentString.toLowerCase();
   const isAllowedBot = allowedBots.some(bot => 
     userAgentLower.includes(bot.toLowerCase())
   );
@@ -53,7 +62,6 @@ export default function robots(): MetadataRoute.Robots {
   ];
 
   if (isTwitterBot) {
-    console.log('ROBOTS.TXT - Twitter bot detected, allowing /s/*');
     return {
       rules: [
         {
