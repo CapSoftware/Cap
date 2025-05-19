@@ -80,6 +80,31 @@ export async function generateMetadata(
             height: 630,
           },
         ],
+        videos: [
+          {
+            url: new URL(
+              `/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
+              buildEnv.NEXT_PUBLIC_WEB_URL
+            ).toString(),
+            width: 1280,
+            height: 720,
+            type: "video/mp4",
+          },
+        ],
+      },
+      twitter: {
+        card: "player",
+        player: new URL(
+          `/s/${videoId}`,
+          buildEnv.NEXT_PUBLIC_WEB_URL
+        ).toString(),
+        playerWidth: 1280,
+        playerHeight: 720,
+        playerStream: new URL(
+          `/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
+          buildEnv.NEXT_PUBLIC_WEB_URL
+        ).toString(),
+        playerStreamContentType: "video/mp4",
       },
     };
   }
@@ -97,6 +122,39 @@ export async function generateMetadata(
           width: 1200,
           height: 630,
         },
+      ],
+      videos: [
+        {
+          url: new URL(
+            `/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
+            buildEnv.NEXT_PUBLIC_WEB_URL
+          ).toString(),
+          width: 1280,
+          height: 720,
+          type: "video/mp4",
+        },
+      ],
+    },
+    twitter: {
+      card: "player",
+      player: new URL(
+        `/s/${videoId}`,
+        buildEnv.NEXT_PUBLIC_WEB_URL
+      ).toString(),
+      playerWidth: 1280,
+      playerHeight: 720,
+      playerStream: new URL(
+        `/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
+        buildEnv.NEXT_PUBLIC_WEB_URL
+      ).toString(),
+      playerStreamContentType: "video/mp4",
+      title: video.name + " | Cap Recording",
+      description: "Watch this video on Cap",
+      images: [
+        new URL(
+          `/api/video/og?videoId=${videoId}`,
+          buildEnv.NEXT_PUBLIC_WEB_URL
+        ).toString(),
       ],
     },
   };
