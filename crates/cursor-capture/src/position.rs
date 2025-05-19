@@ -134,14 +134,19 @@ impl NormalizedCursorPosition {
     }
 
     pub fn with_crop(&self, position: (f32, f32), size: (f32, f32)) -> Self {
+        // Translate the current normalized coordinates back to the "raw" space
+        // before applying the new crop. The existing implementation divided by
+        // the crop size and subtracted the position which resulted in invalid
+        // values. We actually need to scale by the current crop size and add
+        // the crop position to undo the previous crop transformation.
         let raw_normalized = (
-            self.x / self.crop_size.0 - self.crop_position.0,
-            self.y / self.crop_size.1 - self.crop_position.1,
+            self.x * self.crop_size.0 + self.crop_position.0,
+            self.y * self.crop_size.1 + self.crop_position.1,
         );
 
         Self {
-            x: raw_normalized.0 / size.0 - position.0,
-            y: raw_normalized.1 / size.1 - position.1,
+            x: (raw_normalized.0 - position.0) / size.0,
+            y: (raw_normalized.1 - position.1) / size.1,
             crop_position: position,
             crop_size: size,
             display: self.display,
