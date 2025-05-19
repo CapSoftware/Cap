@@ -94,14 +94,12 @@ export const MembersIndicator = ({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button
-          variant="gray"
-          size="sm"
-          className="absolute top-0 left-0 z-10 hover:bg-accent"
-        >
-          <Avatar className="h-5 w-5 mr-1" name="Members" />
-          <span className="text-sm">{memberCount} members</span>
-        </Button>
+        <div className="relative mb-4">
+          <Button variant="gray" size="sm" className=" z-10 hover:bg-accent">
+            <Avatar className="h-5 w-5 mr-1" name="Members" />
+            <span className="text-sm">{memberCount} members</span>
+          </Button>
+        </div>
       </DialogTrigger>
       <DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
         <DialogHeader

@@ -1,5 +1,3 @@
-// million-ignore
-
 "use client";
 
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
@@ -137,10 +135,8 @@ export const HomePage: React.FC<HomePageProps> = ({
             Free version available. No credit card required.
           </p>
 
-          {/* Platform icons */}
           <PlatformIcons />
 
-          {/* See other options button */}
           <div className="flex justify-center mt-2">
             <Link
               href="/download"
@@ -193,7 +189,6 @@ export const HomePage: React.FC<HomePageProps> = ({
             alt="Landing Page Screenshot Banner"
           />
         </Parallax>
-        {/** Header BG */}
         <div className="w-full mx-auto overflow-hidden h-[830px] absolute top-0 left-0">
           <motion.div
             animate={{
@@ -235,7 +230,6 @@ export const HomePage: React.FC<HomePageProps> = ({
       blur-[60px] rounded-full bg-gradient-to-r from-transparent via-white to-white"
           />
           <LeftBlueHue />
-          {/** Clouds */}
           <motion.img
             style={{
               mixBlendMode: "plus-lighter",
@@ -364,7 +358,6 @@ export const HomePage: React.FC<HomePageProps> = ({
             alt="bottomcloudtwo"
           />
         </div>
-        {/** Right Blue Hue */}
         <div
           className="w-[868px] h-[502px] bg-gradient-to-l rounded-full blur-[100px]
       absolute top-20 z-[0] right-0 from-[#A6D7FF] to-transparent"
@@ -416,7 +409,6 @@ export const HomePage: React.FC<HomePageProps> = ({
       </div>
       <div className="pb-32 wrapper" id="features">
         <div className="space-y-3">
-          {/* Section 1: 35% / 65% split */}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
             <div className="md:col-span-5">
               <FeatureCard
@@ -440,7 +432,6 @@ export const HomePage: React.FC<HomePageProps> = ({
             </div>
           </div>
 
-          {/* Section 2: 65% / 35% split */}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
             <div className="md:col-span-8">
               <FeatureCard
@@ -464,7 +455,6 @@ export const HomePage: React.FC<HomePageProps> = ({
             </div>
           </div>
 
-          {/* Section 3: Full width */}
           <div className="grid grid-cols-1">
             <FeatureCard
               title="Seamless Team Collaboration"

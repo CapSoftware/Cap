@@ -81,6 +81,15 @@ export async function middleware(request: NextRequest) {
       sameSite: "strict",
       maxAge: 3600, // Cache for 1 hour
     });
+
+    // Get the pathname and referrer
+    const { pathname } = request.nextUrl;
+    const referrer = request.headers.get('referer') || '';
+
+    // Add custom headers to check in generateMetadata
+    response.headers.set('x-pathname', pathname);
+    response.headers.set('x-referrer', referrer);
+
     return response;
   } catch (error) {
     console.error("Error in middleware:", error);
@@ -89,5 +98,14 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: [
+    /*
+     * Match all request paths except for the ones starting with:
+     * - api (API routes)
+     * - _next/static (static files)
+     * - _next/image (image optimization files)
+     * - favicon.ico, robots.txt, sitemap.xml (static files)
+     */
+    '/((?!api|_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml).*)',
+  ],
 };

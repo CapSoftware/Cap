@@ -69,16 +69,52 @@ export default async function CapsPage({
         )
       `,
       sharedSpaces: sql<
-        { id: string; name: string; organizationId: string; iconUrl: string }[]
+        {
+          id: string;
+          name: string;
+          organizationId: string;
+          iconUrl: string;
+          isOrg: boolean;
+        }[]
       >`
         COALESCE(
-          JSON_ARRAYAGG(
-            JSON_OBJECT(
-              'id', ${spaces.id},
-              'name', ${spaces.name},
-              'organizationId', ${spaces.organizationId},
-              'iconUrl', ${organizations.iconUrl}
+          (
+            SELECT JSON_ARRAYAGG(
+              JSON_OBJECT(
+                'id', s.id,
+                'name', s.name,
+                'organizationId', s.organizationId,
+                'iconUrl', s.iconUrl,
+                'isOrg', s.isOrg
+              )
             )
+            FROM (
+              -- Include spaces where the video is directly added via space_videos
+              SELECT DISTINCT 
+                s.id, 
+                s.name, 
+                s.organizationId, 
+                o.iconUrl as iconUrl,
+                FALSE as isOrg
+              FROM space_videos sv
+              JOIN spaces s ON sv.spaceId = s.id
+              JOIN organizations o ON s.organizationId = o.id
+              WHERE sv.videoId = ${videos.id}
+              
+              UNION
+              
+              -- For organization-level sharing, include the organization details
+              -- and mark it as an organization with isOrg=TRUE
+              SELECT DISTINCT 
+                o.id as id, 
+                o.name as name, 
+                o.id as organizationId, 
+                o.iconUrl as iconUrl,
+                TRUE as isOrg
+              FROM shared_videos sv
+              JOIN organizations o ON sv.organizationId = o.id
+              WHERE sv.videoId = ${videos.id}
+            ) AS s
           ),
           JSON_ARRAY()
         )
@@ -95,7 +131,6 @@ export default async function CapsPage({
     .leftJoin(comments, eq(videos.id, comments.videoId))
     .leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
     .leftJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
-    .leftJoin(spaces, eq(spaces.organizationId, organizations.id))
     .leftJoin(users, eq(videos.ownerId, users.id))
     .where(eq(videos.ownerId, userId))
     .groupBy(

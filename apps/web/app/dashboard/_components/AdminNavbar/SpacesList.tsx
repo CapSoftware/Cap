@@ -8,12 +8,17 @@ import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 import clsx from "clsx";
 import { SpaceDialog } from "./SpaceDialog";
 import { Input } from "@cap/ui";
+import { shareCap } from "@/actions/caps/share";
+import { toast } from "sonner";
+import { useRouter } from "next/navigation";
 
 export const SpacesList = () => {
   const { spacesData, sidebarCollapsed } = useSharedContext();
   const [showSpaceDialog, setShowSpaceDialog] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [showAllSpaces, setShowAllSpaces] = useState(false);
+  const [activeDropTarget, setActiveDropTarget] = useState<string | null>(null);
+  const router = useRouter();
 
   if (!spacesData) return null;
 
@@ -27,6 +32,44 @@ export const SpacesList = () => {
 
   const hasMoreSpaces = filteredSpaces.length > 3;
   const hiddenSpacesCount = filteredSpaces.length - 3;
+
+  const handleDragOver = (e: React.DragEvent, spaceId: string) => {
+    e.preventDefault();
+    setActiveDropTarget(spaceId);
+  };
+
+  const handleDragLeave = () => {
+    setActiveDropTarget(null);
+  };
+
+  const handleDrop = async (e: React.DragEvent, spaceId: string) => {
+    e.preventDefault();
+    setActiveDropTarget(null);
+
+    try {
+      const capData = e.dataTransfer.getData("application/cap");
+      if (!capData) return;
+
+      const cap = JSON.parse(capData);
+
+      // Call the share action with just this space ID
+      const result = await shareCap({
+        capId: cap.id,
+        spaceIds: [spaceId],
+      });
+
+      if (result.success) {
+        const space = spacesData.find((s) => s.id === spaceId);
+        toast.success(`Shared "${cap.name}" to ${space?.name || "space"}`);
+        router.refresh();
+      } else {
+        toast.error(result.error || "Failed to share cap");
+      }
+    } catch (error) {
+      console.error("Error sharing cap:", error);
+      toast.error("Failed to share cap");
+    }
+  };
 
   return (
     <div className="mt-4 flex flex-col">
@@ -87,25 +130,38 @@ export const SpacesList = () => {
         )}
       >
         {displayedSpaces.map((space) => (
-          <Link
+          <div
             key={space.id}
-            href={`/dashboard/spaces/${space.id}`}
             className={clsx(
-              "flex items-center group py-1 px-3 rounded-xl transition-colors hover:bg-gray-3",
-              sidebarCollapsed ? "justify-center" : ""
+              "relative transition-colors duration-150 rounded-xl",
+              activeDropTarget === space.id && "ring-2 ring-blue-500"
             )}
+            onDragOver={(e) => handleDragOver(e, space.id)}
+            onDragLeave={handleDragLeave}
+            onDrop={(e) => handleDrop(e, space.id)}
           >
-            <Avatar
-              letterClass="text-gray-1 text-xs"
-              className="relative flex-shrink-0 size-[25px]"
-              name={space.name}
-            />
-            {!sidebarCollapsed && (
-              <span className="ml-3 text-sm text-gray-11 group-hover:text-gray-12">
-                {space.name}
-              </span>
+            {activeDropTarget === space.id && (
+              <div className="absolute inset-0 bg-blue-500/10 rounded-xl z-10 pointer-events-none" />
             )}
-          </Link>
+            <Link
+              href={`/dashboard/spaces/${space.id}`}
+              className={clsx(
+                "flex items-center group py-1 px-3 rounded-xl transition-colors hover:bg-gray-3",
+                sidebarCollapsed ? "justify-center" : ""
+              )}
+            >
+              <Avatar
+                letterClass="text-gray-1 text-xs"
+                className="relative flex-shrink-0 size-[25px]"
+                name={space.name}
+              />
+              {!sidebarCollapsed && (
+                <span className="ml-3 text-sm text-gray-11 group-hover:text-gray-12">
+                  {space.name}
+                </span>
+              )}
+            </Link>
+          </div>
         ))}
 
         {!showAllSpaces && hasMoreSpaces && !sidebarCollapsed && (

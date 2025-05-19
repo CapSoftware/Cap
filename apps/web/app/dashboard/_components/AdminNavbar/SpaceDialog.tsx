@@ -105,11 +105,9 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
             setIsUploading(true);
             props.setCreateLoading?.(true);
 
-            // Create FormData to send both the space name and icon file
             const formData = new FormData();
             formData.append("name", values.name);
 
-            // Add the icon file if one was selected
             if (selectedFile) {
               formData.append("icon", selectedFile);
             }

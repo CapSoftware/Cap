@@ -25,13 +25,7 @@ interface SharingDialogProps {
   onClose: () => void;
   capId: string;
   capName: string;
-  sharedSpaces?: {
-    id: string;
-    name: string;
-    iconUrl?: string | null;
-    organizationId: string;
-  }[];
-  userSpaces?: {
+  sharedSpaces: {
     id: string;
     name: string;
     iconUrl?: string | null;
@@ -45,29 +39,36 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
   onClose,
   capId,
   capName,
+  sharedSpaces,
   onSharingUpdated,
 }) => {
-  const { spacesData, sharedSpaces } = useSharedContext();
+  console.log("sharedSpaces:", sharedSpaces);
 
-  const [selectedSpaces, setSelectedSpaces] = useState<Set<string>>(
-    new Set(sharedSpaces?.map((space) => space.id) || [])
-  );
+  const { spacesData, activeOrganization } = useSharedContext();
+  const [selectedSpaces, setSelectedSpaces] = useState<Set<string>>(new Set());
   const [searchTerm, setSearchTerm] = useState("");
   const [initialSelectedSpaces, setInitialSelectedSpaces] = useState<
     Set<string>
-  >(new Set(sharedSpaces?.map((space) => space.id) || []));
+  >(new Set());
   const [loading, setLoading] = useState(false);
 
+  const sharedOrganizationIds = new Set(
+    sharedSpaces?.map((space) => space.organizationId) || []
+  );
+
   useEffect(() => {
-    if (isOpen) {
-      const currentSpaceIds = new Set(
-        sharedSpaces?.map((space) => space.id) || []
-      );
-      setSelectedSpaces(currentSpaceIds);
-      setInitialSelectedSpaces(currentSpaceIds);
+    if (isOpen && sharedSpaces) {
+      const spaceIds = new Set(sharedSpaces.map((space) => space.id));
+      setSelectedSpaces(spaceIds);
+      setInitialSelectedSpaces(spaceIds);
       setSearchTerm("");
     }
   }, [isOpen, sharedSpaces]);
+
+  const isSpaceSharedViaOrganization = (spaceId: string) => {
+    const space = spacesData?.find((s) => s.id === spaceId);
+    return space && sharedOrganizationIds.has(space.organizationId);
+  };
 
   const handleToggleSpace = (spaceId: string) => {
     console.log(`Toggling space: ${spaceId}`);
@@ -112,29 +113,24 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
       console.log("Added spaces:", addedSpaceIds);
       console.log("Removed spaces:", removedSpaceIds);
 
+      const getSpaceName = (id: string) => {
+        const space = spacesData?.find((space) => space.id === id);
+        return space?.name || `Space ${id}`;
+      };
+
       if (addedSpaceIds.length === 1 && removedSpaceIds.length === 0) {
-        const addedSpaceName = sharedSpaces?.find(
-          (space) => space.id === addedSpaceIds[0]
-        )?.name;
-        console.log(`Sharing to single space: ${addedSpaceName}`);
-        toast.success(`Shared to ${addedSpaceName}`);
+        toast.success(`Shared to ${getSpaceName(addedSpaceIds[0] as string)}`);
       } else if (removedSpaceIds.length === 1 && addedSpaceIds.length === 0) {
-        const removedSpaceName = sharedSpaces?.find(
-          (space) => space.id === removedSpaceIds[0]
-        )?.name;
-        console.log(`Unsharing from single space: ${removedSpaceName}`);
-        toast.success(`Unshared from ${removedSpaceName}`);
+        toast.success(
+          `Unshared from ${getSpaceName(removedSpaceIds[0] as string)}`
+        );
       } else if (addedSpaceIds.length > 0 && removedSpaceIds.length === 0) {
-        console.log(`Sharing to ${addedSpaceIds.length} spaces`);
         toast.success(`Shared to ${addedSpaceIds.length} spaces`);
       } else if (removedSpaceIds.length > 0 && addedSpaceIds.length === 0) {
-        console.log(`Unsharing from ${removedSpaceIds.length} spaces`);
         toast.success(`Unshared from ${removedSpaceIds.length} spaces`);
       } else if (addedSpaceIds.length > 0 && removedSpaceIds.length > 0) {
-        console.log("Updating sharing settings with multiple changes");
         toast.success(`Sharing settings updated`);
       } else {
-        console.log("No changes to sharing settings");
         toast.success("No changes to sharing settings");
       }
       onSharingUpdated(newSelectedSpaces);
@@ -152,8 +148,6 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
         space.name.toLowerCase().includes(searchTerm.toLowerCase())
       )
     : spacesData;
-
-  console.log(filteredSpaces);
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -188,6 +182,9 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
                   space={space}
                   selectedSpaces={selectedSpaces}
                   handleToggleSpace={handleToggleSpace}
+                  isSharedViaOrganization={isSpaceSharedViaOrganization(
+                    space.id
+                  )}
                 />
               ))
             ) : (
@@ -224,6 +221,7 @@ const SpaceCard = ({
   space,
   selectedSpaces,
   handleToggleSpace,
+  isSharedViaOrganization,
 }: {
   space: {
     id: string;
@@ -233,15 +231,25 @@ const SpaceCard = ({
   };
   selectedSpaces: Set<string>;
   handleToggleSpace: (spaceId: string) => void;
+  isSharedViaOrganization?: boolean;
 }) => {
+  const isSelected = selectedSpaces.has(space.id);
+
   return (
-    <Tooltip content={space.name}>
+    <Tooltip
+      content={
+        isSharedViaOrganization
+          ? `${space.name} (shared via organization)`
+          : space.name
+      }
+    >
       <div
         className={clsx(
           "flex items-center relative flex-col justify-center gap-2 border transition-colors bg-gray-1 duration-200 border-gray-3 w-full p-3 rounded-xl cursor-pointer",
-          selectedSpaces.has(space.id)
+          isSelected
             ? "bg-gray-3 border-gray-4"
-            : "hover:bg-gray-3 hover:border-gray-4"
+            : "hover:bg-gray-3 hover:border-gray-4",
+          isSharedViaOrganization && "ring-1 ring-inset ring-green-500/20"
         )}
         onClick={() => handleToggleSpace(space.id)}
       >
@@ -268,20 +276,20 @@ const SpaceCard = ({
         <motion.div
           key={space.id}
           animate={{
-            scale: selectedSpaces.has(space.id) ? 1 : 0,
+            scale: isSelected ? 1 : 0,
           }}
           initial={{
             scale: 0,
           }}
           transition={{
-            type: selectedSpaces.has(space.id) ? "spring" : "tween",
-            stiffness: selectedSpaces.has(space.id) ? 300 : undefined,
-            damping: selectedSpaces.has(space.id) ? 20 : undefined,
-            duration: !selectedSpaces.has(space.id) ? 0.2 : undefined,
+            type: isSelected ? "spring" : "tween",
+            stiffness: isSelected ? 300 : undefined,
+            damping: isSelected ? 20 : undefined,
+            duration: !isSelected ? 0.2 : undefined,
           }}
           className={clsx(
             "absolute top-0 right-0 flex items-center justify-center bg-gray-4 rounded-full border size-5",
-            selectedSpaces.has(space.id)
+            isSelected
               ? "bg-green-500 border-transparent"
               : "bg-gray-4 border-gray-5"
           )}

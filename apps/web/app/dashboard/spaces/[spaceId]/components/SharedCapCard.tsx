@@ -16,12 +16,14 @@ interface SharedCapCardProps {
   };
   analytics: number;
   organizationName: string;
+  userId?: string;
 }
 
 export const SharedCapCard: React.FC<SharedCapCardProps> = ({
   cap,
   analytics,
   organizationName,
+  userId,
 }) => {
   const displayCount =
     analytics === 0
@@ -29,7 +31,7 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
       : analytics;
 
   return (
-    <CapCard cap={cap} analytics={displayCount} sharedCapCard>
+    <CapCard cap={cap} analytics={displayCount} sharedCapCard userId={userId}>
       <div className="mb-2 space-y-1">
         {cap.ownerName && (
           <div className="flex gap-2 items-center">

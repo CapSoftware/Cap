@@ -30,7 +30,6 @@ export async function addSpaceMember(data: z.infer<typeof addSpaceMemberSchema>)
   
   const { spaceId, userId, role } = validation.data;
   
-  // Insert the new space member
   await db().insert(spaceMembers).values({
     id: uuidv4().substring(0, nanoIdLength),
     spaceId,
@@ -64,7 +63,6 @@ export async function removeSpaceMember(data: z.infer<typeof removeSpaceMemberSc
   
   const { memberId } = validation.data;
   
-  // First, get the member to know the spaceId
   const member = await db()
     .select({ spaceId: spaceMembers.spaceId })
     .from(spaceMembers)
@@ -81,7 +79,6 @@ export async function removeSpaceMember(data: z.infer<typeof removeSpaceMemberSc
     throw new Error("Space ID not found");
   }
   
-  // Delete the space member
   await db()
     .delete(spaceMembers)
     .where(eq(spaceMembers.id, memberId));

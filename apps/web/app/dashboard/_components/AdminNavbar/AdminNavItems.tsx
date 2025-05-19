@@ -256,7 +256,6 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
               key={item.name}
               className="flex relative justify-center items-center w-full mb-2.5"
             >
-              {/* Active indicator - always visible for active items */}
               {pathname.includes(item.href) && (
                 <motion.div
                   initial={{
@@ -284,7 +283,6 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                 />
               )}
 
-              {/* Hover indicator - only visible when hovering non-active items */}
               {hoveredItem === item.name && !pathname.includes(item.href) && (
                 <motion.div
                   layoutId="hoverIndicator"

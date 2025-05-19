@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { db } from "@cap/database"
 import { getCurrentUser } from "@cap/database/auth/session"
-import { sharedVideos, videos, spaces, organizationMembers, organizations } from "@cap/database/schema"
+import { sharedVideos, videos, spaces, organizationMembers, organizations, spaceVideos } from "@cap/database/schema"
 import { eq, and, inArray, or } from "drizzle-orm"
 import { nanoId } from "@cap/database/helpers"
 
@@ -14,21 +14,16 @@ interface ShareCapParams {
 
 export async function shareCap({ capId, spaceIds }: ShareCapParams) {
   try {
-    console.log(`Starting share operation for cap ${capId} with spaces:`, spaceIds)
     
     const user = await getCurrentUser()
     if (!user) {
-      console.log('Unauthorized: No user found')
       return { success: false, error: "Unauthorized" }
     }
-    console.log(`User authenticated: ${user.id}`)
 
     const [cap] = await db().select().from(videos).where(eq(videos.id, capId))
     if (!cap || cap.ownerId !== user.id) {
-      console.log(`Unauthorized: Cap ${capId} not found or user ${user.id} is not owner`)
       return { success: false, error: "Unauthorized" }
     }
-    console.log(`Cap found and user is owner: ${capId}`)
 
     const userOrganizations = await db()
       .select({
@@ -38,9 +33,7 @@ export async function shareCap({ capId, spaceIds }: ShareCapParams) {
       .where(eq(organizationMembers.userId, user.id))
     
     const userOrganizationIds = userOrganizations.map(org => org.organizationId)
-    console.log(`User has access to ${userOrganizationIds.length} organizations`)
 
-    // Check if any of the spaceIds are actually organization IDs (for "All [Organization]" spaces)
     const directOrgIds = await db()
       .select()
       .from(organizations)
@@ -51,10 +44,7 @@ export async function shareCap({ capId, spaceIds }: ShareCapParams) {
         )
       )
       .then(orgs => orgs.map(org => org.id))
-    
-    console.log(`Found ${directOrgIds.length} organization IDs in the space IDs`)
 
-    // Find valid spaces from the spaceIds
     const spacesData = await db()
       .select()
       .from(spaces)
@@ -64,22 +54,16 @@ export async function shareCap({ capId, spaceIds }: ShareCapParams) {
           inArray(spaces.organizationId, userOrganizationIds)
         )
       )
-    console.log(`Found ${spacesData.length} valid spaces`)
 
-    // Combine organization IDs from both sources
-    const orgIdsFromSpaces = [...new Set(spacesData.map(space => space.organizationId))]
-    const organizationIds = [...new Set([...directOrgIds, ...orgIdsFromSpaces])]
-    console.log(`Unique organization IDs for sharing:`, organizationIds)
+    const organizationIds = directOrgIds
 
     const currentSharedOrganizations = await db()
       .select()
       .from(sharedVideos)
       .where(eq(sharedVideos.videoId, capId))
-    console.log(`Current shared organizations:`, currentSharedOrganizations)
 
     for (const sharedOrganization of currentSharedOrganizations) {
       if (!organizationIds.includes(sharedOrganization.organizationId)) {
-        console.log(`Removing share from organization ${sharedOrganization.organizationId}`)
         await db()
           .delete(sharedVideos)
           .where(
@@ -96,7 +80,6 @@ export async function shareCap({ capId, spaceIds }: ShareCapParams) {
         (share) => share.organizationId === organizationId
       )
       if (!existingShare) {
-        console.log(`Adding new share for organization ${organizationId}`)
         await db().insert(sharedVideos).values({
           id: nanoId(),
           videoId: capId,
@@ -106,11 +89,41 @@ export async function shareCap({ capId, spaceIds }: ShareCapParams) {
       }
     }
     
-    console.log('Revalidating paths')
+    const spacesIds = spacesData.map(space => space.id)
+    
+    const currentSpaceVideos = await db()
+      .select()
+      .from(spaceVideos)
+      .where(eq(spaceVideos.videoId, capId))
+    
+    for (const spaceVideo of currentSpaceVideos) {
+      if (!spacesIds.includes(spaceVideo.spaceId)) {
+        await db()
+          .delete(spaceVideos)
+          .where(
+            and(
+              eq(spaceVideos.videoId, capId),
+              eq(spaceVideos.spaceId, spaceVideo.spaceId)
+            )
+          )
+      }
+    }
+    
+    for (const spaceId of spacesIds) {
+      const existingSpaceShare = currentSpaceVideos.find(
+        (share) => share.spaceId === spaceId
+      )
+      if (!existingSpaceShare) {
+        await db().insert(spaceVideos).values({
+          id: nanoId(),
+          videoId: capId,
+          spaceId: spaceId,
+          addedById: user.id,
+        })
+      }
+    }
     revalidatePath('/dashboard/caps')
     revalidatePath(`/dashboard/caps/${capId}`)
-    
-    console.log('Share operation completed successfully')
     return { success: true }
   } catch (error) {
     console.error('Error sharing cap:', error)

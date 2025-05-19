@@ -40,6 +40,7 @@ export const Caps = ({ data, count }: { data: VideoData; count: number }) => {
   const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
   const previousCountRef = useRef<number>(0);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isDraggingCap, setIsDraggingCap] = useState(false);
 
   const anyCapSelected = selectedCaps.length > 0;
 
@@ -108,6 +109,19 @@ export const Caps = ({ data, count }: { data: VideoData; count: number }) => {
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [selectedCaps.length, data]);
+
+  useEffect(() => {
+    const handleDragStart = () => setIsDraggingCap(true);
+    const handleDragEnd = () => setIsDraggingCap(false);
+
+    window.addEventListener("dragstart", handleDragStart);
+    window.addEventListener("dragend", handleDragEnd);
+
+    return () => {
+      window.removeEventListener("dragstart", handleDragStart);
+      window.removeEventListener("dragend", handleDragEnd);
+    };
+  }, []);
 
   const deleteCap = async (videoId: string) => {
     if (
@@ -204,7 +218,6 @@ export const Caps = ({ data, count }: { data: VideoData; count: number }) => {
       setSelectedCaps([]);
       refresh();
     } catch (error) {
-      // Error is handled by toast.promise
     } finally {
       setIsDeleting(false);
     }
@@ -214,17 +227,17 @@ export const Caps = ({ data, count }: { data: VideoData; count: number }) => {
     return <EmptyCapState />;
   }
 
-  // Map Space objects to the format expected by CapCard
-  const mappedSpaces =
-    spacesData?.map((space) => ({
-      id: space.id,
-      name: space.name,
-      organizationId: space.organizationId,
-      iconUrl: undefined,
-    })) || [];
-
   return (
     <div className="flex relative flex-col w-full">
+      {isDraggingCap && (
+        <div className="fixed inset-0 z-50 pointer-events-none">
+          <div className="flex justify-center items-center w-full h-full">
+            <div className="px-5 py-3 text-sm font-medium rounded-lg bg-gray-1/80 border border-gray-4 backdrop-blur-md text-gray-12">
+              Drag to a space to share
+            </div>
+          </div>
+        </div>
+      )}
       <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
         {data.map((cap) => (
           <CapCard

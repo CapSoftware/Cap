@@ -115,7 +115,10 @@ export const ShareHeader = ({
       "text-sm text-gray-10 transition-colors duration-200 flex items-center";
 
     if (isOwner) {
-      if (effectiveSharedSpaces?.length === 0) {
+      if (
+        (sharedOrganizations?.length === 0 || !sharedOrganizations) &&
+        (effectiveSharedSpaces?.length === 0 || !effectiveSharedSpaces)
+      ) {
         return (
           <p
             className={clsx(baseClassName, "hover:text-gray-12 cursor-pointer")}
@@ -148,7 +151,7 @@ export const ShareHeader = ({
         onClose={() => setIsSharingDialogOpen(false)}
         capId={data.id}
         capName={data.name}
-        userSpaces={contextSpaces || userSpaces}
+        sharedSpaces={effectiveSharedSpaces || []}
         onSharingUpdated={handleSharingUpdated}
       />
       <div>

@@ -78,8 +78,9 @@ export const CapCard = ({
     moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss")
   );
   const [showFullDate, setShowFullDate] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const router = useRouter();
-  const { activeOrganization, spacesData, sharedSpaces } = useSharedContext();
+  const { activeOrganization, spacesData } = useSharedContext();
 
   const handleTitleBlur = async (capName: string) => {
     if (!title || capName === title) {
@@ -112,13 +113,51 @@ export const CapCard = ({
 
   const isOwner = userId === cap.ownerId;
 
+  const handleDragStart = (e: React.DragEvent<HTMLDivElement>) => {
+    if (anyCapSelected || !isOwner) return;
+
+    e.dataTransfer.setData(
+      "application/cap",
+      JSON.stringify({
+        id: cap.id,
+        name: cap.name,
+      })
+    );
+
+    setIsDragging(true);
+
+    // Create a smaller drag image
+    const dragImage = new Image();
+    dragImage.src = `https://cap-api-thumbnails.s3.us-west-2.amazonaws.com/${cap.id}/thumbnail.png`;
+    dragImage.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 100;
+      canvas.height = 60;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.drawImage(dragImage, 0, 0, 100, 60);
+        const dataURL = canvas.toDataURL();
+        const img = new Image();
+        img.src = dataURL;
+        e.dataTransfer.setDragImage(img, 50, 30);
+      }
+    };
+  };
+
+  const handleDragEnd = () => {
+    setIsDragging(false);
+  };
+
   const renderSharedStatus = () => {
     const baseClassName = clsx(
       "text-sm text-gray-10 transition-colors duration-200 flex items-center mb-1",
       sharedCapCard ? "cursor-default" : "hover:text-gray-12 cursor-pointer"
     );
     if (isOwner) {
-      if (cap.sharedOrganizations?.length === 0) {
+      if (
+        (cap.sharedOrganizations?.length === 0 || !cap.sharedOrganizations) &&
+        (cap.sharedSpaces?.length === 0 || !cap.sharedSpaces)
+      ) {
         return (
           <p
             className={baseClassName}
@@ -261,18 +300,22 @@ export const CapCard = ({
         capId={cap.id}
         capName={cap.name}
         sharedSpaces={cap.sharedSpaces || []}
-        userSpaces={spacesData || []}
         onSharingUpdated={handleSharingUpdated}
       />
       <div
         onClick={handleCardClick}
+        draggable={isOwner && !anyCapSelected}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
         className={clsx(
           "flex relative flex-col gap-4 w-full h-full rounded-xl cursor-default bg-gray-1 border-gray-3 group border-[1px]",
           isSelected
             ? "!border-blue-10 border-[1px]"
             : anyCapSelected
             ? "border-blue-10 border-[1px] hover:border-blue-10"
-            : "hover:border-blue-10"
+            : "hover:border-blue-10",
+          isDragging && "opacity-50",
+          isOwner && !anyCapSelected && "cursor-grab active:cursor-grabbing"
         )}
       >
         {anyCapSelected && !sharedCapCard && (
@@ -393,7 +436,6 @@ export const CapCard = ({
           <div>
             <div className="h-[1.25rem] mb-1">
               {" "}
-              {/* Fixed height container */}
               {isEditing && !sharedCapCard ? (
                 <textarea
                   rows={1}
@@ -422,7 +464,6 @@ export const CapCard = ({
             {renderSharedStatus()}
             <div className="mb-1 h-[1.5rem]">
               {" "}
-              {/* Fixed height container */}
               {isDateEditing && !sharedCapCard ? (
                 <div className="flex items-center h-full">
                   <input

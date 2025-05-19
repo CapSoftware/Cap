@@ -58,7 +58,7 @@ export default function DashboardInner({
     <div className="flex flex-col min-h-screen">
       <div
         className={clsx(
-          "flex sticky z-50 justify-between items-center px-5 mt-10 w-full border-b bg-gray-1 lg:bg-transparent min-h-16 lg:min-h-10 border-gray-3 lg:border-b-0 lg:pl-0 lg:pr-5 lg:top-0 lg:relative top-[64px] lg:mt-5 lg:h-8"
+          "flex sticky z-50 justify-between items-center px-5 mt-5 w-full border-b bg-gray-1 lg:bg-transparent min-h-16 lg:min-h-10 border-gray-3 lg:border-b-0 lg:pl-0 lg:pr-5 lg:top-0 lg:relative top-[64px] lg:mt-5 lg:h-8"
         )}
       >
         <div className="flex items-center gap-2">
@@ -66,12 +66,6 @@ export default function DashboardInner({
             {activeSpace && <span className="text-xs text-gray-11">Space</span>}
             <p className="relative text-xl text-gray-12 lg:text-2xl">{title}</p>
           </div>
-          {isSharedCapsPage && activeOrganization?.members && (
-            <MembersCount
-              count={activeOrganization.members.length}
-              onClick={() => setMembersDialogOpen(true)}
-            />
-          )}
         </div>
         <div className="flex gap-4 items-center">
           <div
@@ -106,25 +100,6 @@ export default function DashboardInner({
     </div>
   );
 }
-
-const MembersCount = ({
-  count,
-  onClick,
-}: {
-  count: number;
-  onClick: () => void;
-}) => {
-  return (
-    <button
-      onClick={onClick}
-      className="flex items-center gap-1 px-2 py-1 rounded-full bg-gray-4 hover:bg-gray-5 text-gray-11 transition-colors"
-    >
-      <span className="text-gray-11 text-sm">
-        {count} {count === 1 ? "member" : "members"}
-      </span>
-    </button>
-  );
-};
 
 const User = () => {
   const [menuOpen, setMenuOpen] = useState(false);

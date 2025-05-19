@@ -59,6 +59,7 @@ export const SharedCaps = ({
   const { activeOrganization } = useSharedContext();
   const limit = 15;
   const totalPages = Math.ceil(count / limit);
+  const [isDraggingCap, setIsDraggingCap] = useState(false);
 
   const isSpaceOwner = spaceData?.createdById === currentUserId;
 
@@ -75,6 +76,19 @@ export const SharedCaps = ({
 
     fetchAnalytics();
   }, [data]);
+
+  useEffect(() => {
+    const handleDragStart = () => setIsDraggingCap(true);
+    const handleDragEnd = () => setIsDraggingCap(false);
+
+    window.addEventListener("dragstart", handleDragStart);
+    window.addEventListener("dragend", handleDragEnd);
+
+    return () => {
+      window.removeEventListener("dragstart", handleDragStart);
+      window.removeEventListener("dragend", handleDragEnd);
+    };
+  }, []);
 
   if (data.length === 0) {
     return (
@@ -97,6 +111,15 @@ export const SharedCaps = ({
 
   return (
     <div className="relative flex flex-col w-full h-full">
+      {isDraggingCap && (
+        <div className="fixed inset-0 z-50 pointer-events-none">
+          <div className="flex justify-center items-center w-full h-full">
+            <div className="px-5 py-3 text-sm font-medium rounded-lg bg-gray-1/80 border border-gray-4 backdrop-blur-md text-gray-12">
+              Drag to a space to share
+            </div>
+          </div>
+        </div>
+      )}
       {spaceData && spaceMembers && (
         <MembersIndicator
           memberCount={spaceMembers.length}
@@ -113,6 +136,7 @@ export const SharedCaps = ({
             cap={cap}
             analytics={analytics[cap.id] || 0}
             organizationName={activeOrganization?.organization.name || ""}
+            userId={currentUserId}
           />
         ))}
       </div>

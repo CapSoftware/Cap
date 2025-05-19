@@ -17,6 +17,7 @@ import { buildEnv, serverEnv } from "@cap/env";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { transcribeVideo } from "@/actions/videos/transcribe";
 import { getScreenshot } from "@/actions/screenshots/get-screenshot";
+import { headers } from "next/headers";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -65,6 +66,30 @@ export async function generateMetadata(
     return notFound();
   }
 
+  // Get the headers from the middleware
+  const headersList = headers();
+  const referrer = headersList.get("x-referrer") || "";
+
+  // Check if referrer is from allowed platforms
+  const allowedReferrers = [
+    "x.com",
+    "twitter.com",
+    "facebook.com",
+    "fb.com",
+    "slack.com",
+    "notion.so",
+    "linkedin.com",
+  ];
+
+  const isAllowedReferrer = allowedReferrers.some((domain) =>
+    referrer.includes(domain)
+  );
+
+  // Set robots metadata based on referrer and video publicity
+  const robotsDirective = isAllowedReferrer
+    ? "index, follow"
+    : "noindex, nofollow";
+
   if (video.public === false) {
     return {
       title: "Cap: This video is private",
@@ -81,6 +106,7 @@ export async function generateMetadata(
           },
         ],
       },
+      robots: "noindex, nofollow",
     };
   }
 
@@ -99,6 +125,7 @@ export async function generateMetadata(
         },
       ],
     },
+    robots: robotsDirective,
   };
 }
 
