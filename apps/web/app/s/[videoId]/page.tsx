@@ -17,6 +17,7 @@ import { buildEnv, serverEnv } from "@cap/env";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { transcribeVideo } from "@/actions/videos/transcribe";
 import { getScreenshot } from "@/actions/screenshots/get-screenshot";
+import { headers } from "next/headers";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -65,6 +66,49 @@ export async function generateMetadata(
     return notFound();
   }
 
+  // Get the headers from the middleware
+  const headersList = headers();
+  const referrer = headersList.get("x-referrer") || "";
+  const userAgent = headersList.get("x-user-agent") || "";
+
+  // Check if referrer is from allowed platforms
+  const allowedReferrers = [
+    "x.com",
+    "facebook.com",
+    "fb.com",
+    "slack.com",
+    "notion.so",
+    "linkedin.com",
+    "reddit.com",
+    "youtube.com",
+    "quora.com",
+    "t.co",
+  ];
+
+  // Check if user agent is from an allowed bot
+  const allowedBots = [
+    "Twitterbot",
+    "facebookexternalhit",
+    "LinkedInBot",
+    "Slackbot",
+    "redditbot",
+    "Googlebot",
+  ];
+
+  const isAllowedReferrer = allowedReferrers.some((domain) =>
+    referrer.includes(domain)
+  );
+
+  const isAllowedBot = allowedBots.some((bot) => userAgent.includes(bot));
+
+  // Allow indexing if either the referrer or user agent is allowed
+  const shouldAllowIndexing = isAllowedReferrer || isAllowedBot;
+
+  // Set robots metadata based on whether we should allow indexing
+  const robotsDirective = shouldAllowIndexing
+    ? "index, follow"
+    : "noindex, nofollow";
+
   if (video.public === false) {
     return {
       title: "Cap: This video is private",
@@ -93,19 +137,17 @@ export async function generateMetadata(
         ],
       },
       twitter: {
-        card: "player",
-        player: new URL(
-          `/s/${videoId}`,
-          buildEnv.NEXT_PUBLIC_WEB_URL
-        ).toString(),
-        playerWidth: 1280,
-        playerHeight: 720,
-        playerStream: new URL(
-          `/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
-          buildEnv.NEXT_PUBLIC_WEB_URL
-        ).toString(),
-        playerStreamContentType: "video/mp4",
+        card: "summary_large_image",
+        title: "Cap: This video is private",
+        description: "This video is private and cannot be shared.",
+        images: [
+          new URL(
+            `/api/video/og?videoId=${videoId}`,
+            buildEnv.NEXT_PUBLIC_WEB_URL
+          ).toString(),
+        ],
       },
+      robots: "noindex, nofollow",
     };
   }
 
@@ -136,18 +178,7 @@ export async function generateMetadata(
       ],
     },
     twitter: {
-      card: "player",
-      player: new URL(
-        `/s/${videoId}`,
-        buildEnv.NEXT_PUBLIC_WEB_URL
-      ).toString(),
-      playerWidth: 1280,
-      playerHeight: 720,
-      playerStream: new URL(
-        `/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
-        buildEnv.NEXT_PUBLIC_WEB_URL
-      ).toString(),
-      playerStreamContentType: "video/mp4",
+      card: "summary_large_image",
       title: video.name + " | Cap Recording",
       description: "Watch this video on Cap",
       images: [
@@ -157,6 +188,7 @@ export async function generateMetadata(
         ).toString(),
       ],
     },
+    robots: robotsDirective,
   };
 }
 

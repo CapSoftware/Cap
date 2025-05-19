@@ -7,7 +7,9 @@ export const revalidate = 0;
 export default function robots(): MetadataRoute.Robots {
   const seoPageSlugs = Object.keys(seoPages);
   const headersList = headers();
+  
   const referrer = headersList.get("x-referrer") || "";
+  const userAgent = headersList.get("x-user-agent") || "";
   
   const allowedReferrers = [
     "x.com",
@@ -22,9 +24,19 @@ export default function robots(): MetadataRoute.Robots {
     "t.co"
   ];
   
+  const allowedBots = [
+    "Twitterbot"
+  ];
+  
   const isAllowedReferrer = allowedReferrers.some(domain => 
     referrer.includes(domain)
   );
+  
+  const isAllowedBot = allowedBots.some(bot => 
+    userAgent.includes(bot)
+  );
+  
+  const shouldAllowCrawling = isAllowedReferrer || isAllowedBot;
   
   const disallowPaths = [
     "/dashboard",
@@ -35,7 +47,7 @@ export default function robots(): MetadataRoute.Robots {
     "/home",
   ];
 
-  if (!isAllowedReferrer) {
+  if (!shouldAllowCrawling) {
     disallowPaths.push("/s/*");
   }
 
@@ -47,7 +59,7 @@ export default function robots(): MetadataRoute.Robots {
           "/",
           "/blog/",
           ...seoPageSlugs.map((slug) => `/${slug}`),
-          ...(isAllowedReferrer ? ["/s/*"] : []),
+          ...(shouldAllowCrawling ? ["/s/*"] : []),
         ],
         disallow: disallowPaths,
       },
