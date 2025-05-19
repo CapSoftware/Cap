@@ -11,6 +11,8 @@ export default function robots(): MetadataRoute.Robots {
   const referrer = headersList.get("x-referrer") || "";
   const userAgent = headersList.get("x-user-agent") || "";
   
+  console.log('ROBOTS.TXT - User Agent:', userAgent);
+  
   const allowedReferrers = [
     "x.com",
     "facebook.com",
@@ -25,18 +27,21 @@ export default function robots(): MetadataRoute.Robots {
   ];
   
   const allowedBots = [
-    "Twitterbot"
+    "twitterbot"
   ];
   
   const isAllowedReferrer = allowedReferrers.some(domain => 
     referrer.includes(domain)
   );
   
+  const userAgentLower = userAgent.toLowerCase();
   const isAllowedBot = allowedBots.some(bot => 
-    userAgent.includes(bot)
+    userAgentLower.includes(bot.toLowerCase())
   );
   
   const shouldAllowCrawling = isAllowedReferrer || isAllowedBot;
+  
+  const isTwitterBot = userAgentLower.includes('twitterbot');
   
   const disallowPaths = [
     "/dashboard",
@@ -46,6 +51,25 @@ export default function robots(): MetadataRoute.Robots {
     "/record",
     "/home",
   ];
+
+  if (isTwitterBot) {
+    console.log('ROBOTS.TXT - Twitter bot detected, allowing /s/*');
+    return {
+      rules: [
+        {
+          userAgent: "*",
+          allow: [
+            "/",
+            "/blog/",
+            ...seoPageSlugs.map((slug) => `/${slug}`),
+            "/s/*",
+          ],
+          disallow: disallowPaths,
+        },
+      ],
+      sitemap: "https://cap.so/sitemap.xml",
+    };
+  }
 
   if (!shouldAllowCrawling) {
     disallowPaths.push("/s/*");

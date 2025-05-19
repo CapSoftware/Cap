@@ -66,12 +66,12 @@ export async function generateMetadata(
     return notFound();
   }
 
-  // Get the headers from the middleware
   const headersList = headers();
   const referrer = headersList.get("x-referrer") || "";
   const userAgent = headersList.get("x-user-agent") || "";
 
-  // Check if referrer is from allowed platforms
+  console.log("[generateMetadata] User Agent:", userAgent);
+
   const allowedReferrers = [
     "x.com",
     "facebook.com",
@@ -85,29 +85,28 @@ export async function generateMetadata(
     "t.co",
   ];
 
-  // Check if user agent is from an allowed bot
-  const allowedBots = [
-    "Twitterbot",
-    "facebookexternalhit",
-    "LinkedInBot",
-    "Slackbot",
-    "redditbot",
-    "Googlebot",
-  ];
+  const allowedBots = ["twitterbot"];
 
   const isAllowedReferrer = allowedReferrers.some((domain) =>
     referrer.includes(domain)
   );
 
-  const isAllowedBot = allowedBots.some((bot) => userAgent.includes(bot));
+  const userAgentLower = userAgent.toLowerCase();
+  const isAllowedBot = allowedBots.some((bot) =>
+    userAgentLower.includes(bot.toLowerCase())
+  );
 
-  // Allow indexing if either the referrer or user agent is allowed
-  const shouldAllowIndexing = isAllowedReferrer || isAllowedBot;
+  const isTwitterBot = userAgentLower.includes("twitterbot");
 
-  // Set robots metadata based on whether we should allow indexing
+  const shouldAllowIndexing = isAllowedReferrer || isAllowedBot || isTwitterBot;
+
   const robotsDirective = shouldAllowIndexing
     ? "index, follow"
     : "noindex, nofollow";
+
+  if (isTwitterBot) {
+    console.log("[generateMetadata] Twitter bot detected, allowing indexing");
+  }
 
   if (video.public === false) {
     return {
@@ -147,7 +146,7 @@ export async function generateMetadata(
           ).toString(),
         ],
       },
-      robots: "noindex, nofollow",
+      robots: isTwitterBot ? "index, follow" : "noindex, nofollow",
     };
   }
 
