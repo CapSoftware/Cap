@@ -1,7 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { licenseContract } from "@cap/web-api-contract";
 import { useNavigate } from "@solidjs/router";
-import { createMutation } from "@tanstack/solid-query";
+import { createMutation, useQueryClient } from "@tanstack/solid-query";
 import * as tauriShell from "@tauri-apps/plugin-shell";
 import { ClientInferResponseBody } from "@ts-rest/core";
 import {
@@ -20,6 +20,7 @@ import { Input } from "../editor/ui";
 export default function Page() {
   const license = createLicenseQuery();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   return (
     <div class="py-5 w-full max-w-[700px] mx-auto relative flex flex-col justify-start items-center h-full">
@@ -96,6 +97,7 @@ function LicenseKeyActivate(props: {
   ) => void;
 }) {
   const [store] = createResource(() => generalSettingsStore.get());
+  const queryClient = useQueryClient();
 
   return (
     <Suspense>
@@ -122,8 +124,10 @@ function LicenseKeyActivate(props: {
                 throw resp.body.message;
               throw new Error((resp.body as any).toString());
             },
-            onSuccess: (value, { licenseKey }) =>
-              props.onActivated({ ...value, licenseKey }),
+            onSuccess: (value, { licenseKey }) => {
+              props.onActivated({ ...value, licenseKey });
+              queryClient.refetchQueries({ queryKey: ["bruh"] });
+            },
           }));
 
           return (
@@ -279,6 +283,7 @@ function CommercialLicensePurchase() {
               licenseKey: value.licenseKey,
             },
           });
+          await queryClient.refetchQueries({ queryKey: ["bruh"] });
         }}
       />
     </>

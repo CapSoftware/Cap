@@ -1,7 +1,7 @@
 import { createRive } from "@aerofoil/rive-solid-canvas";
 import { Button } from "@cap/ui-solid";
 import { action, useAction } from "@solidjs/router";
-import { createMutation } from "@tanstack/solid-query";
+import { createMutation, useQueryClient } from "@tanstack/solid-query";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, Window } from "@tauri-apps/api/window";
@@ -701,6 +701,7 @@ interface Props {
 
 const ActivateLicenseDialog = ({ open, onOpenChange }: Props) => {
   const [licenseKey, setLicenseKey] = createSignal("");
+  const queryClient = useQueryClient();
 
   const activateLicenseKey = createMutation(() => ({
     mutationFn: async (vars: { licenseKey: string }) => {
@@ -731,6 +732,7 @@ const ActivateLicenseDialog = ({ open, onOpenChange }: Props) => {
           licenseKey: value.licenseKey,
         },
       });
+      await queryClient.refetchQueries({ queryKey: ["bruh"] });
     },
   }));
   return (
