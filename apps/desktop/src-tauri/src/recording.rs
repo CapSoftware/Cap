@@ -23,16 +23,8 @@ use cap_media::{
     sources::{CaptureScreen, CaptureWindow},
 };
 use cap_project::{
-    cursor::CursorEvents,
-    Platform,
-    ProjectConfiguration,
-    RecordingMeta,
-    RecordingMetaInner,
-    SharingMeta,
-    StudioRecordingMeta,
-    TimelineConfiguration,
-    TimelineSegment,
-    ZoomMode,
+    cursor::CursorEvents, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
+    SharingMeta, StudioRecordingMeta, TimelineConfiguration, TimelineSegment, ZoomMode,
     ZoomSegment,
 };
 use cap_recording::{
@@ -689,7 +681,8 @@ fn generate_zoom_segments_from_clicks(
     match &recording.meta {
         StudioRecordingMeta::SingleSegment { segment } => {
             if let Some(cursor_path) = &segment.cursor {
-                if let Ok(mut ev) = CursorEvents::load_from_file(&recording_meta.path(cursor_path)) {
+                if let Ok(mut ev) = CursorEvents::load_from_file(&recording_meta.path(cursor_path))
+                {
                     all_events.clicks.append(&mut ev.clicks);
                 }
             }
@@ -702,9 +695,11 @@ fn generate_zoom_segments_from_clicks(
         }
     }
 
-    all_events
-        .clicks
-        .sort_by(|a, b| a.time_ms.partial_cmp(&b.time_ms).unwrap_or(std::cmp::Ordering::Equal));
+    all_events.clicks.sort_by(|a, b| {
+        a.time_ms
+            .partial_cmp(&b.time_ms)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut segments = Vec::<ZoomSegment>::new();
 
@@ -725,14 +720,13 @@ fn generate_zoom_segments_from_clicks(
 
         if time < max_duration - ZOOM_DURATION {
             segments.push(ZoomSegment {
-                start: (time - 0.2).max(0.0),
+                start: (time - 0.8).max(0.0),
                 end: (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(max_duration),
                 amount: 2.0,
                 mode: ZoomMode::Auto,
             });
         }
     }
-
 
     segments
 }
