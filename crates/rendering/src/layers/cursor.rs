@@ -198,14 +198,14 @@ impl CursorLayer {
             return;
         };
 
-        let velocity: [f32; 2] = [0.0, 0.0];
-        // let velocity: [f32; 2] = [
-        //     interpolated_cursor.velocity.x * 75.0,
-        //     interpolated_cursor.velocity.y * 75.0,
-        // ];
+        // Calculate cursor velocity in pixels/second
+        let velocity: [f32; 2] = [
+            interpolated_cursor.velocity.x * 75.0,
+            interpolated_cursor.velocity.y * 75.0,
+        ];
 
         let speed = (velocity[0] * velocity[0] + velocity[1] * velocity[1]).sqrt();
-        let motion_blur_amount = (speed * 0.3).min(1.0) * 0.0; // uniforms.project.cursor.motion_blur;
+        let motion_blur_amount = (speed * 0.3).min(1.0) * uniforms.project.cursor.motion_blur;
 
         let Some(cursor_texture) = constants
             .cursor_textures

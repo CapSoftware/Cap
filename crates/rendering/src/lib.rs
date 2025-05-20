@@ -694,7 +694,8 @@ impl ProjectUniforms {
 
         let velocity = [0.0, 0.0];
 
-        let motion_blur_amount = 0.0;
+        // Base motion blur amount set by project settings
+        let motion_blur_amount = project.cursor.motion_blur;
 
         let crop = Self::get_crop(options, project);
 
@@ -730,6 +731,34 @@ impl ProjectUniforms {
             .map(|i| i.position)
             .unwrap_or_else(|| Coord::new(XY::new(0.5, 0.5))),
         );
+
+        // Previous frame zoom state for motion blur calculation
+        let prev_zoom = InterpolatedZoom::new(
+            SegmentsCursor::new(
+                (frame_time - 1.0 / fps as f32) as f64,
+                project
+                    .timeline
+                    .as_ref()
+                    .map(|t| t.zoom_segments.as_slice())
+                    .unwrap_or(&[]),
+            ),
+            interpolate_cursor(
+                cursor_events,
+                (segment_frames.recording_time - 0.2 - 1.0 / fps as f32).max(0.0),
+                (!project.cursor.raw).then(|| SpringMassDamperSimulationConfig {
+                    tension: project.cursor.tension,
+                    mass: project.cursor.mass,
+                    friction: project.cursor.friction,
+                }),
+            )
+            .as_ref()
+            .map(|i| i.position)
+            .unwrap_or_else(|| Coord::new(XY::new(0.5, 0.5))),
+        );
+
+        let zoom_speed = ((zoom.display_amount() - prev_zoom.display_amount()).abs()
+            / (1.0 / fps as f64)) as f32;
+        let camera_motion_blur = (zoom_speed * motion_blur_amount).min(1.0);
 
         let display = {
             let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
@@ -775,7 +804,7 @@ impl ProjectUniforms {
                 mirror_x: 0.0,
                 velocity_uv: velocity,
                 motion_blur_amount,
-                camera_motion_blur_amount: 0.0,
+                camera_motion_blur_amount: camera_motion_blur,
                 shadow: project.background.shadow,
                 shadow_size: project
                     .background
@@ -841,8 +870,7 @@ impl ProjectUniforms {
                     position[1] + size[1],
                 ];
 
-                // Calculate camera motion blur based on zoom transition
-                let camera_motion_blur = 0.0;
+                // Camera motion blur based on zoom transition
 
                 CompositeVideoFrameUniforms {
                     output_size,

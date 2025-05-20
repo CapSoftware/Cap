@@ -483,15 +483,15 @@ export function ConfigSidebar() {
             </KCollapsible>
           </Show>
 
-          {/* <Field name="Motion Blur">
-                <Slider
-                  value={[project.cursor.motionBlur]}
-                  onChange={(v) => setProject("cursor", "motionBlur", v[0])}
-                  minValue={0}
-                  maxValue={1}
-                  step={0.001}
-                />
-              </Field> */}
+          <Field name="Motion Blur">
+            <Slider
+              value={[project.cursor.motionBlur]}
+              onChange={(v) => setProject("cursor", "motionBlur", v[0])}
+              minValue={0}
+              maxValue={1}
+              step={0.001}
+            />
+          </Field>
           {/* <Field name="Animation Style" icon={<IconLucideRabbit />}>
             <RadioGroup
               defaultValue="regular"
