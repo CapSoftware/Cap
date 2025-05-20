@@ -540,7 +540,7 @@ function useSectionMarker(
   return () => {
     const { segments, i, position } = props();
 
-    if (i === 0) {
+    if (i === 0 && position === "left") {
       return segments[0].start === 0
         ? null
         : {
