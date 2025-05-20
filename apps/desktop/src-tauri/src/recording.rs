@@ -23,8 +23,17 @@ use cap_media::{
     sources::{CaptureScreen, CaptureWindow},
 };
 use cap_project::{
-    Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta,
-    StudioRecordingMeta, TimelineConfiguration, TimelineSegment, ZoomSegment,
+    cursor::CursorEvents,
+    Platform,
+    ProjectConfiguration,
+    RecordingMeta,
+    RecordingMetaInner,
+    SharingMeta,
+    StudioRecordingMeta,
+    TimelineConfiguration,
+    TimelineSegment,
+    ZoomMode,
+    ZoomSegment,
 };
 use cap_recording::{
     instant_recording::{CompletedInstantRecording, InstantRecordingHandle},
@@ -660,42 +669,115 @@ fn generate_zoom_segments_from_clicks(
     recording: &CompletedStudioRecording,
     recordings: &ProjectRecordings,
 ) -> Vec<ZoomSegment> {
-    let mut segments = vec![];
+    const ZOOM_SEGMENT_AFTER_CLICK_PADDING: f64 = 1.5;
+    const ZOOM_DURATION: f64 = 1.0;
+    const HOVER_DISTANCE_THRESHOLD: f64 = 0.02;
+    const HOVER_DURATION_THRESHOLD: f64 = 1.0;
 
     let max_duration = recordings.duration();
 
-    const ZOOM_SEGMENT_AFTER_CLICK_PADDING: f64 = 1.5;
+    // Build a temporary RecordingMeta so we can load cursor events from disk
+    let recording_meta = RecordingMeta {
+        platform: None,
+        project_path: recording.project_path.clone(),
+        pretty_name: String::new(),
+        sharing: None,
+        inner: RecordingMetaInner::Studio(recording.meta.clone()),
+    };
 
-    // single-segment only
-    // for click in &recording.cursor_data.clicks {
-    //     let time = click.process_time_ms / 1000.0;
+    let mut all_events = CursorEvents::default();
 
-    //     if segments.last().is_none() {
-    //         segments.push(ZoomSegment {
-    //             start: (click.process_time_ms / 1000.0 - (ZOOM_DURATION + 0.2)).max(0.0),
-    //             end: click.process_time_ms / 1000.0 + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
-    //             amount: 2.0,
-    //         });
-    //     } else {
-    //         let last_segment = segments.last_mut().unwrap();
+    match &recording.meta {
+        StudioRecordingMeta::SingleSegment { segment } => {
+            if let Some(cursor_path) = &segment.cursor {
+                if let Ok(mut ev) = CursorEvents::load_from_file(&recording_meta.path(cursor_path)) {
+                    all_events.clicks.append(&mut ev.clicks);
+                    all_events.moves.append(&mut ev.moves);
+                }
+            }
+        }
+        StudioRecordingMeta::MultipleSegments { inner, .. } => {
+            for seg in &inner.segments {
+                let mut ev = seg.cursor_events(&recording_meta);
+                all_events.clicks.append(&mut ev.clicks);
+                all_events.moves.append(&mut ev.moves);
+            }
+        }
+    }
 
-    //         if click.down {
-    //             if last_segment.end > time {
-    //                 last_segment.end =
-    //                     (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(recordings.duration());
-    //             } else if time < max_duration - ZOOM_DURATION {
-    //                 segments.push(ZoomSegment {
-    //                     start: (time - ZOOM_DURATION).max(0.0),
-    //                     end: time + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
-    //                     amount: 2.0,
-    //                 });
-    //             }
-    //         } else {
-    //             last_segment.end =
-    //                 (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(recordings.duration());
-    //         }
-    //     }
-    // }
+    all_events.clicks.sort_by(|a, b| a.time_ms.partial_cmp(&b.time_ms).unwrap_or(std::cmp::Ordering::Equal));
+    all_events.moves.sort_by(|a, b| a.time_ms.partial_cmp(&b.time_ms).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut segments = Vec::<ZoomSegment>::new();
+
+    // Generate segments around mouse clicks
+    for click in &all_events.clicks {
+        if !click.down {
+            continue;
+        }
+        let time = click.time_ms / 1000.0;
+
+        if let Some(last) = segments.last_mut() {
+            if time <= last.end {
+                last.end = (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(max_duration);
+                continue;
+            }
+        }
+
+        if time < max_duration - ZOOM_DURATION {
+            segments.push(ZoomSegment {
+                start: (time - 0.2).max(0.0),
+                end: (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(max_duration),
+                amount: 2.0,
+                mode: ZoomMode::Auto,
+            });
+        }
+    }
+
+    // Generate segments for long hovers
+    let mut i = 0;
+    while i + 1 < all_events.moves.len() {
+        let start = &all_events.moves[i];
+        let mut end_index = i + 1;
+        while end_index < all_events.moves.len() {
+            let e = &all_events.moves[end_index];
+            let dist = ((e.x - start.x).powi(2) + (e.y - start.y).powi(2)).sqrt();
+            if dist > HOVER_DISTANCE_THRESHOLD {
+                break;
+            }
+            end_index += 1;
+        }
+
+        if end_index > i + 1 {
+            let end_time = all_events.moves[end_index - 1].time_ms;
+            let duration = (end_time - start.time_ms) / 1000.0;
+            if duration >= HOVER_DURATION_THRESHOLD {
+                let start_t = start.time_ms / 1000.0;
+                let end_t = (start_t + duration + 0.5).min(max_duration);
+                if let Some(last) = segments.last_mut() {
+                    if start_t <= last.end {
+                        last.end = last.end.max(end_t);
+                    } else {
+                        segments.push(ZoomSegment {
+                            start: start_t,
+                            end: end_t,
+                            amount: 2.0,
+                            mode: ZoomMode::Auto,
+                        });
+                    }
+                } else {
+                    segments.push(ZoomSegment {
+                        start: start_t,
+                        end: end_t,
+                        amount: 2.0,
+                        mode: ZoomMode::Auto,
+                    });
+                }
+            }
+        }
+
+        i = end_index;
+    }
 
     segments
 }
