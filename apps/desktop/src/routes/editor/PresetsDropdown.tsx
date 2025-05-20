@@ -15,7 +15,6 @@ import {
 
 export function PresetsDropdown() {
   const { setDialog, presets, setProject } = useEditorContext();
-  const [activePreset, setActivePreset] = createSignal<number | null>(presets.query.data?.default ?? null);
   return (
     <KDropdownMenu gutter={8} placement="bottom">
       <EditorButton<typeof KDropdownMenu.Trigger>
@@ -55,15 +54,9 @@ export function PresetsDropdown() {
                         onClick={() => {
                           setShowSettings(false);
                           setProject(reconcile(preset.config));
-                          setActivePreset(i());
                         }}
                       >
                         <span class="mr-auto">{preset.name}</span>
-                        <Show when={Object.is(activePreset(), i())}>
-                          <span class="px-2 py-1 text-[11px] rounded-full bg-blue-8 text-gray-1 dark:text-gray-12">
-                            Current
-                          </span>
-                        </Show>
                         <Show when={presets.query.data?.default === i()}>
                           <span class="px-2 py-1 text-[11px] rounded-full bg-gray-2 text-gray-11">
                             Default

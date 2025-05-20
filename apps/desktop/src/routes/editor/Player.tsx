@@ -74,7 +74,7 @@ export function Player() {
   });
 
   return (
-    <div class="flex flex-col flex-1 bg-gray-50 bg-opacity-5 rounded-xl shadow-sm">
+    <div class="flex flex-col flex-1 rounded-xl bg-gray-1 dark:bg-gray-2 border border-gray-3">
       <div class="flex gap-3 justify-center p-3">
         <AspectRatioSelect />
         <EditorButton
@@ -157,8 +157,16 @@ export function Player() {
             }
             as={KToggleButton}
             variant="danger"
-            leftIcon={<IconCapScissors class="text-gray-12" />}
-          />{" "}
+            leftIcon={
+              <IconCapScissors
+                class={cx(
+                  editorState.timeline.interactMode === "split"
+                    ? "text-white"
+                    : "text-gray-12"
+                )}
+              />
+            }
+          />
           <div class="w-px h-8 rounded-full bg-gray-4" />
           <Tooltip content="Zoom out">
             <IconCapZoomOut
