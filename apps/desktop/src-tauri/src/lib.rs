@@ -1263,7 +1263,7 @@ async fn upload_exported_video(
             }
         };
 
-        get_s3_config(&app, false, video_id).await
+        get_s3_config(&app, false, video_id, Some(duration), None).await
     }
     .await?;
 

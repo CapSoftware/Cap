@@ -9,7 +9,14 @@ use crate::{
     },
     open_external_link,
     presets::PresetsStore,
-    upload::{get_s3_config, prepare_screenshot_upload, upload_video, InstantMultipartUpload},
+    upload::{
+        get_s3_config,
+        prepare_screenshot_upload,
+        upload_video,
+        InstantMultipartUpload,
+        update_video_metadata,
+        get_video_details,
+    },
     web_api::{self, ManagerExt},
     windows::{CapWindowId, ShowCapWindow},
     App, CurrentRecordingChanged, DynLoggingLayer, MutableState, NewStudioRecordingAdded,
@@ -193,12 +200,16 @@ pub async fn start_recording(
             window.set_content_protected(matches!(recording_options.mode, RecordingMode::Studio));
     }
 
+    let source_name = recording_options.capture_target.get_title();
+
     let video_upload_info = match recording_options.mode {
         RecordingMode::Instant => {
             match AuthStore::get(&app).ok().flatten() {
                 Some(_) => {
                     // Pre-create the video and get the shareable link
-                    if let Ok(s3_config) = get_s3_config(&app, false, None).await {
+                    if let Ok(s3_config) =
+                        get_s3_config(&app, false, None, None, source_name.clone()).await
+                    {
                         let link = app.make_app_url(format!("/s/{}", s3_config.id())).await;
                         info!("Pre-created shareable link: {}", link);
 
@@ -588,6 +599,25 @@ async fn handle_recording_finish(
                                 Err(e) => {
                                     error!("Error in final upload with screenshot: {}", e)
                                 }
+                            }
+                        }
+
+                        match get_video_details(&output_path) {
+                            Ok((duration, resolution, fps)) => {
+                                if let Err(e) = update_video_metadata(
+                                    &app,
+                                    &video_upload_info.id,
+                                    Some(duration),
+                                    Some(resolution),
+                                    Some(fps),
+                                )
+                                .await
+                                {
+                                    error!("Failed to update video metadata: {}", e);
+                                }
+                            }
+                            Err(e) => {
+                                error!("Failed to get video details: {}", e);
                             }
                         }
                     }

@@ -11,6 +11,22 @@ export interface VideoMetadata {
    * This overrides the display of the actual createdAt timestamp
    */
   customCreatedAt?: string;
+  /**
+   * Title of the captured monitor or window
+   */
+  sourceName?: string;
+  /**
+   * Duration of the video in seconds
+   */
+  duration?: number;
+  /**
+   * Resolution of the recording (e.g. 1920x1080)
+   */
+  resolution?: string;
+  /**
+   * Frames per second of the recording
+   */
+  fps?: number;
   [key: string]: any;
 }
 
