@@ -23,8 +23,17 @@ use cap_media::{
     sources::{CaptureScreen, CaptureWindow},
 };
 use cap_project::{
-    Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta,
-    StudioRecordingMeta, TimelineConfiguration, TimelineSegment, ZoomSegment,
+    cursor::CursorEvents,
+    Platform,
+    ProjectConfiguration,
+    RecordingMeta,
+    RecordingMetaInner,
+    SharingMeta,
+    StudioRecordingMeta,
+    TimelineConfiguration,
+    TimelineSegment,
+    ZoomMode,
+    ZoomSegment,
 };
 use cap_recording::{
     instant_recording::{CompletedInstantRecording, InstantRecordingHandle},
@@ -660,42 +669,70 @@ fn generate_zoom_segments_from_clicks(
     recording: &CompletedStudioRecording,
     recordings: &ProjectRecordings,
 ) -> Vec<ZoomSegment> {
-    let mut segments = vec![];
+    const ZOOM_SEGMENT_AFTER_CLICK_PADDING: f64 = 1.5;
+    const ZOOM_DURATION: f64 = 1.0;
+    const CLICK_GROUP_THRESHOLD: f64 = 0.6; // seconds
 
     let max_duration = recordings.duration();
 
-    const ZOOM_SEGMENT_AFTER_CLICK_PADDING: f64 = 1.5;
+    // Build a temporary RecordingMeta so we can load cursor events from disk
+    let recording_meta = RecordingMeta {
+        platform: None,
+        project_path: recording.project_path.clone(),
+        pretty_name: String::new(),
+        sharing: None,
+        inner: RecordingMetaInner::Studio(recording.meta.clone()),
+    };
 
-    // single-segment only
-    // for click in &recording.cursor_data.clicks {
-    //     let time = click.process_time_ms / 1000.0;
+    let mut all_events = CursorEvents::default();
 
-    //     if segments.last().is_none() {
-    //         segments.push(ZoomSegment {
-    //             start: (click.process_time_ms / 1000.0 - (ZOOM_DURATION + 0.2)).max(0.0),
-    //             end: click.process_time_ms / 1000.0 + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
-    //             amount: 2.0,
-    //         });
-    //     } else {
-    //         let last_segment = segments.last_mut().unwrap();
+    match &recording.meta {
+        StudioRecordingMeta::SingleSegment { segment } => {
+            if let Some(cursor_path) = &segment.cursor {
+                if let Ok(mut ev) = CursorEvents::load_from_file(&recording_meta.path(cursor_path)) {
+                    all_events.clicks.append(&mut ev.clicks);
+                }
+            }
+        }
+        StudioRecordingMeta::MultipleSegments { inner, .. } => {
+            for seg in &inner.segments {
+                let mut ev = seg.cursor_events(&recording_meta);
+                all_events.clicks.append(&mut ev.clicks);
+            }
+        }
+    }
 
-    //         if click.down {
-    //             if last_segment.end > time {
-    //                 last_segment.end =
-    //                     (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(recordings.duration());
-    //             } else if time < max_duration - ZOOM_DURATION {
-    //                 segments.push(ZoomSegment {
-    //                     start: (time - ZOOM_DURATION).max(0.0),
-    //                     end: time + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
-    //                     amount: 2.0,
-    //                 });
-    //             }
-    //         } else {
-    //             last_segment.end =
-    //                 (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(recordings.duration());
-    //         }
-    //     }
-    // }
+    all_events
+        .clicks
+        .sort_by(|a, b| a.time_ms.partial_cmp(&b.time_ms).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut segments = Vec::<ZoomSegment>::new();
+
+    // Generate segments around mouse clicks
+    for click in &all_events.clicks {
+        if !click.down {
+            continue;
+        }
+
+        let time = click.time_ms / 1000.0;
+
+        if let Some(last) = segments.last_mut() {
+            if time <= last.end + CLICK_GROUP_THRESHOLD {
+                last.end = (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(max_duration);
+                continue;
+            }
+        }
+
+        if time < max_duration - ZOOM_DURATION {
+            segments.push(ZoomSegment {
+                start: (time - 0.2).max(0.0),
+                end: (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(max_duration),
+                amount: 2.0,
+                mode: ZoomMode::Auto,
+            });
+        }
+    }
+
 
     segments
 }
