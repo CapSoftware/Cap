@@ -21,7 +21,7 @@ app.get(
   zValidator(
     "query",
     z.object({
-      duration: z.number().optional(),
+      duration: z.coerce.number().optional(),
       sourceName: z.string().optional(),
       recordingMode: z
         .union([z.literal("hls"), z.literal("desktopMP4")])
@@ -35,11 +35,11 @@ app.get(
       c.req.valid("query");
     const user = c.get("user");
 
-    // Check if user is on free plan and video is over 5 minutes
     const isUpgraded = user.stripeSubscriptionStatus === "active";
 
-    if (!isUpgraded && duration && duration > 300)
+    if (!isUpgraded && duration && duration > 300) {
       return c.json({ error: "upgrade_required" }, { status: 403 });
+    }
 
     const [bucket] = await db()
       .select()
@@ -110,14 +110,14 @@ app.get(
 
     await db().insert(videos).values(videoData);
 
-    if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
+    if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {
       await dub().links.create({
         url: `${serverEnv().WEB_URL}/s/${idToUse}`,
         domain: "cap.link",
         key: idToUse,
       });
+    }
 
-    // Check if this is the user's first video and send the first shareable link email
     try {
       const videoCount = await db()
         .select({ count: count() })
@@ -130,15 +130,10 @@ app.get(
         videoCount[0].count === 1 &&
         user.email
       ) {
-        console.log(
-          "[SendFirstShareableLinkEmail] Sending first shareable link email with 5-minute delay"
-        );
-
         const videoUrl = buildEnv.NEXT_PUBLIC_IS_CAP
           ? `https://cap.link/${idToUse}`
           : `${serverEnv().WEB_URL}/s/${idToUse}`;
 
-        // Send email with 5-minute delay using Resend's scheduling feature
         await sendEmail({
           email: user.email,
           subject: "You created your first Cap! 🥳",
@@ -150,14 +145,8 @@ app.get(
           marketing: true,
           scheduledAt: "in 5 min",
         });
-
-        console.log(
-          "[SendFirstShareableLinkEmail] First shareable link email scheduled to be sent in 5 minutes"
-        );
       }
-    } catch (error) {
-      console.error("Error checking for first video or sending email:", error);
-    }
+    } catch (error) {}
 
     return c.json({
       id: idToUse,
@@ -174,10 +163,10 @@ app.post(
     "json",
     z.object({
       videoId: z.string(),
-      duration: z.number().optional(),
+      duration: z.coerce.number().optional(),
       sourceName: z.string().optional(),
       resolution: z.string().optional(),
-      fps: z.number().optional(),
+      fps: z.coerce.number().optional(),
     })
   ),
   async (c) => {

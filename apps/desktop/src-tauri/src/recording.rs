@@ -10,12 +10,8 @@ use crate::{
     open_external_link,
     presets::PresetsStore,
     upload::{
-        get_s3_config,
-        prepare_screenshot_upload,
-        upload_video,
-        InstantMultipartUpload,
-        update_video_metadata,
-        get_video_details,
+        get_s3_config, get_video_details, prepare_screenshot_upload, update_video_metadata,
+        upload_video, InstantMultipartUpload,
     },
     web_api::{self, ManagerExt},
     windows::{CapWindowId, ShowCapWindow},
@@ -585,7 +581,7 @@ async fn handle_recording_finish(
                             match upload_video(
                                 &app,
                                 video_upload_info.id.clone(),
-                                output_path,
+                                output_path.clone(),
                                 Some(video_upload_info.config.clone()),
                                 Some(display_screenshot.clone()),
                             )

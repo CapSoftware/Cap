@@ -5,6 +5,7 @@ use flume::Receiver;
 use futures::{stream, StreamExt};
 use image::codecs::jpeg::JpegEncoder;
 use image::ImageReader;
+use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::{multipart::Form, StatusCode};
 use std::io::SeekFrom;
 use std::path::PathBuf;
@@ -18,7 +19,6 @@ use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio::task;
 use tokio::time::sleep;
-use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use tracing::{info, trace, warn};
 
 use crate::web_api::{self, ManagerExt};
@@ -1436,8 +1436,8 @@ pub async fn update_video_metadata(
 }
 
 pub fn get_video_details(path: &PathBuf) -> Result<(f64, String, f64), String> {
-    let input = ffmpeg::format::input(path)
-        .map_err(|e| format!("Failed to read input file: {e}"))?;
+    let input =
+        ffmpeg::format::input(path).map_err(|e| format!("Failed to read input file: {e}"))?;
     let stream = input
         .streams()
         .best(ffmpeg::media::Type::Video)
