@@ -9,34 +9,36 @@ const toggleControlStyles = cva(
       size: {
         sm: "w-9 h-[1.25rem] p-[0.125rem]",
         md: "w-11 h-[1.5rem] p-[0.125rem]",
-        lg: "w-14 h-[1.75rem] p-[0.1875rem]"
-      }
+        lg: "w-14 h-[1.75rem] p-[0.1875rem]",
+      },
     },
     defaultVariants: {
-      size: "md"
-    }
+      size: "md",
+    },
   }
 );
 
 const toggleThumbStyles = cva(
-  "ui-checked:bg-solid-white bg-gray-10 rounded-full transition-transform ui-checked:translate-x-[calc(100%)]",
+  "bg-white rounded-full transition-transform ui-checked:translate-x-[calc(100%)]",
   {
     variants: {
       size: {
         sm: "size-[1rem]",
         md: "size-[1.25rem]",
-        lg: "size-[1.5rem]"
-      }
+        lg: "size-[1.5rem]",
+      },
     },
     defaultVariants: {
-      size: "md"
-    }
+      size: "md",
+    },
   }
 );
 
-export function Toggle(props: ComponentProps<typeof KSwitch> & { size?: 'sm' | 'md' | 'lg' }) {
-  const [local, others] = splitProps(props, ['size']);
-  
+export function Toggle(
+  props: ComponentProps<typeof KSwitch> & { size?: "sm" | "md" | "lg" }
+) {
+  const [local, others] = splitProps(props, ["size"]);
+
   return (
     <KSwitch {...others}>
       <KSwitch.Input class="peer" />

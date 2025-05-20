@@ -155,7 +155,10 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       playing: false,
       timeline: {
         interactMode: "seek" as "seek" | "split",
-        selection: null as null | { type: "zoom"; index: number },
+        selection: null as
+          | null
+          | { type: "zoom"; index: number }
+          | { type: "clip"; index: number },
         transform: {
           // visible seconds
           zoom: zoomOutLimit(),

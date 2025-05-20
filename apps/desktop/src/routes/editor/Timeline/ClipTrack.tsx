@@ -1,4 +1,7 @@
-import { createEventListenerMap } from "@solid-primitives/event-listener";
+import {
+  createEventListener,
+  createEventListenerMap,
+} from "@solid-primitives/event-listener";
 import { cx } from "cva";
 import {
   Accessor,
@@ -8,6 +11,7 @@ import {
   Show,
   Switch,
   createEffect,
+  createMemo,
   createRoot,
   mergeProps,
 } from "solid-js";
@@ -25,13 +29,18 @@ import {
   useSegmentWidth,
 } from "./Track";
 
-export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
+export function ClipTrack(
+  props: Pick<ComponentProps<"div">, "ref"> & {
+    handleUpdatePlayhead: (e: MouseEvent) => void;
+  }
+) {
   const {
     project,
     setProject,
     editorInstance,
     projectHistory,
     editorState,
+    setEditorState,
     totalDuration,
   } = useEditorContext();
 
@@ -84,6 +93,17 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
             i: i(),
             position: "right",
           }));
+
+          const isSelected = createMemo(() => {
+            const selection = editorState.timeline.selection;
+            if (!selection || selection.type !== "clip") return false;
+
+            const segmentIndex = project.timeline?.segments?.findIndex(
+              (s) => s.start === segment.start && s.end === segment.end
+            );
+
+            return segmentIndex === selection.index;
+          });
 
           return (
             <>
@@ -191,35 +211,50 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
               </Show>
               <SegmentRoot
                 class={cx(
-                  "border border-transparent transition-colors duration-200 group",
-                  "hover:border-gray-500",
-                  "bg-gradient-to-r timeline-gradient-border from-[#2675DB] via-[#4FA0FF] to-[#2675DB] shadow-[inset_0_5px_10px_5px_rgba(255,255,255,0.2)]"
+                  "border transition-colors duration-200 group hover:border-gray-12",
+                  "bg-gradient-to-r from-[#2675DB] via-[#4FA0FF] to-[#2675DB] shadow-[inset_0_5px_10px_5px_rgba(255,255,255,0.2)]",
+                  isSelected()
+                    ? "wobble-wrapper border-gray-12"
+                    : "border-transparent"
                 )}
                 innerClass="ring-blue-9"
                 segment={relativeSegment}
                 onMouseDown={(e) => {
-                  if (editorState.timeline.interactMode !== "split") return;
                   e.stopPropagation();
 
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const fraction = (e.clientX - rect.left) / rect.width;
+                  if (editorState.timeline.interactMode === "split") {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const fraction = (e.clientX - rect.left) / rect.width;
 
-                  const splitTime =
-                    segment.start + fraction * (segment.end - segment.start);
+                    const splitTime =
+                      segment.start + fraction * (segment.end - segment.start);
 
-                  setProject(
-                    "timeline",
-                    "segments",
-                    produce((segments) => {
-                      segments.splice(i() + 1, 0, {
-                        start: splitTime,
-                        end: segment.end,
-                        timescale: 1,
-                        recordingSegment: segment.recordingSegment,
+                    setProject(
+                      "timeline",
+                      "segments",
+                      produce((segments) => {
+                        segments.splice(i() + 1, 0, {
+                          start: splitTime,
+                          end: segment.end,
+                          timescale: 1,
+                          recordingSegment: segment.recordingSegment,
+                        });
+                        segments[i()].end = splitTime;
+                      })
+                    );
+                  } else {
+                    createRoot((dispose) => {
+                      createEventListener(e.currentTarget, "mouseup", (e) => {
+                        dispose();
+
+                        setEditorState("timeline", "selection", {
+                          type: "clip",
+                          index: i(),
+                        });
+                        props.handleUpdatePlayhead(e);
                       });
-                      segments[i()].end = splitTime;
-                    })
-                  );
+                    });
+                  }
                 }}
               >
                 <Markings segment={segment} prevDuration={prevDuration()} />
@@ -293,14 +328,14 @@ export function ClipTrack(props: Pick<ComponentProps<"div">, "ref">) {
                     });
                   }}
                 />
-                <SegmentContent class="relative justify-center items-center dark:text-black-transparent-60 text-white-transparent-60">
+                <SegmentContent class="relative justify-center items-center">
                   {(() => {
                     const ctx = useSegmentContext();
 
                     return (
                       <Show when={ctx.width() > 100}>
                         <div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-12">
-                          <span class="opacity-60 text-solid-white">
+                          <span class="text-white/70">
                             {hasMultipleRecordingSegments()
                               ? `Clip ${segment.recordingSegment}`
                               : "Clip"}
