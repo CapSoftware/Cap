@@ -181,6 +181,8 @@ pub struct BackgroundConfiguration {
     pub shadow: f32,
     #[serde(default)]
     pub advanced_shadow: Option<ShadowConfiguration>,
+    #[serde(default)]
+    pub motion_blur: f32,
 }
 
 impl Default for BackgroundConfiguration {
@@ -194,6 +196,7 @@ impl Default for BackgroundConfiguration {
             crop: None,
             shadow: 73.6,
             advanced_shadow: Some(ShadowConfiguration::default()),
+            motion_blur: 0.5,
         }
     }
 }
@@ -341,8 +344,6 @@ pub struct CursorConfiguration {
     pub friction: f32,
     #[serde(default = "CursorConfiguration::default_raw")]
     pub raw: bool,
-    #[serde(default)]
-    pub motion_blur: f32,
 }
 
 impl Default for CursorConfiguration {
@@ -357,7 +358,6 @@ impl Default for CursorConfiguration {
             mass: 1.0,
             friction: 20.0,
             raw: false,
-            motion_blur: 0.5,
         }
     }
 }

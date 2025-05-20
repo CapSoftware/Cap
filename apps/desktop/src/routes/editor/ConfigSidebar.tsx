@@ -482,61 +482,6 @@ export function ConfigSidebar() {
               </KCollapsible.Content>
             </KCollapsible>
           </Show>
-
-          <Field name="Motion Blur">
-            <Slider
-              value={[project.cursor.motionBlur]}
-              onChange={(v) => setProject("cursor", "motionBlur", v[0])}
-              minValue={0}
-              maxValue={1}
-              step={0.001}
-            />
-          </Field>
-          {/* <Field name="Animation Style" icon={<IconLucideRabbit />}>
-            <RadioGroup
-              defaultValue="regular"
-              value={project.cursor.animationStyle}
-              onChange={(value) => {
-                setProject(
-                  "cursor",
-                  "animationStyle",
-                  value as CursorAnimationStyle
-                );
-              }}
-              class="flex flex-col gap-2"
-              disabled
-            >
-              {(
-                Object.entries(CURSOR_ANIMATION_STYLES) as [
-                  CursorAnimationStyle,
-                  string
-                ][]
-              ).map(([value, label]) => (
-                <RadioGroup.Item value={value} class="flex items-center">
-                  <RadioGroup.ItemInput class="sr-only peer" />
-                  <RadioGroup.ItemControl
-                    class={cx(
-                      "mr-2 w-4 h-4 rounded-full border border-gray-300",
-                      "relative after:absolute after:inset-0 after:m-auto after:block after:w-2 after:h-2 after:rounded-full",
-                      "after:transition-colors after:duration-200",
-                      "peer-checked:border-blue-500 peer-checked:after:bg-blue-400",
-                      "peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/50",
-                      "peer-disabled:opacity-50"
-                    )}
-                  />
-                  <span
-                    class={cx(
-                      "text-gray-12",
-                      "peer-checked:text-gray-900",
-                      "peer-disabled:opacity-50"
-                    )}
-                  >
-                    {label}
-                  </span>
-                </RadioGroup.Item>
-              ))}
-            </RadioGroup>
-          </Field> */}
         </KTabs.Content>
         <KTabs.Content value="hotkeys">
           <Field name="Hotkeys" icon={<IconCapHotkeys />}>
@@ -1387,6 +1332,15 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
           maxValue={100}
           step={0.1}
           formatTooltip="%"
+        />
+      </Field>
+      <Field name="Motion Blur" icon={<IconCapBgBlur class="size-4" />}>
+        <Slider
+          value={[project.background.motionBlur ?? 0.5]}
+          onChange={(v) => setProject("background", "motionBlur", v[0])}
+          minValue={0}
+          maxValue={1}
+          step={0.001}
         />
       </Field>
       <Field name="Shadow" icon={<IconCapShadow class="size-4" />}>

@@ -205,7 +205,15 @@ impl CursorLayer {
         ];
 
         let speed = (velocity[0] * velocity[0] + velocity[1] * velocity[1]).sqrt();
-        let motion_blur_amount = (speed * 0.3).min(1.0) * uniforms.project.cursor.motion_blur;
+
+        fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+            let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        }
+
+        let base_amount = uniforms.project.background.motion_blur;
+        let speed_factor = smoothstep(0.0, 300.0, speed);
+        let motion_blur_amount = base_amount * speed_factor;
 
         let Some(cursor_texture) = constants
             .cursor_textures

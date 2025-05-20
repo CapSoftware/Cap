@@ -97,9 +97,12 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     var base_color = sample_texture(target_uv, crop_bounds_uv);
     base_color = apply_rounded_corners(base_color, target_uv);
 
+    // Use either the screen or camera blur value directly without the additional checks
+    // that were preventing blur from being applied correctly
     let blur_amount = select(uniforms.motion_blur_amount, uniforms.camera_motion_blur_amount, uniforms.camera_motion_blur_amount > 0.0);
 
-    if blur_amount < 0.01 {
+    // Skip blur processing if the blur amount is minimal
+    if blur_amount <= 0.0 {
         // First blend shadow with intermediate, then blend result with base color
         return mix(shadow_color, base_color, base_color.a);
     }
@@ -107,8 +110,9 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let center_uv = vec2<f32>(0.5, 0.5);
     let dir = normalize(target_uv - center_uv);
 
-    let base_samples = 16.0;
-    let num_samples = i32(base_samples * smoothstep(0.0, 1.0, blur_amount));
+    // Responsive sample count that scales with blur amount
+    let base_samples = 8.0 + 12.0 * blur_amount; // 8-20 samples depending on blur amount
+    let num_samples = i32(base_samples);
 
     var accum = base_color;
     var weight_sum = 1.0;
@@ -119,9 +123,10 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
         let random_offset = (rand(target_uv + vec2<f32>(t)) - 0.5) * 0.1 * smoothstep(0.0, 0.2, blur_amount);
 
+        // Apply a reduced blur scale to make it less intense overall
         let base_scale = select(
-            0.08,  // Regular content scale
-            0.16,  // Camera scale
+            0.06,  // Regular content scale (reduced from 0.08)
+            0.12,  // Camera scale (reduced from 0.16)
             uniforms.camera_motion_blur_amount > 0.0
         );
         let scale = dist_from_center * blur_amount * (base_scale + random_offset) * smoothstep(0.0, 0.1, blur_amount);

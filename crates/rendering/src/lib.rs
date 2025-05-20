@@ -695,7 +695,7 @@ impl ProjectUniforms {
         let velocity = [0.0, 0.0];
 
         // Base motion blur amount set by project settings
-        let motion_blur_amount = project.cursor.motion_blur;
+        let motion_blur_amount = project.background.motion_blur;
 
         let crop = Self::get_crop(options, project);
 
@@ -756,9 +756,13 @@ impl ProjectUniforms {
             .unwrap_or_else(|| Coord::new(XY::new(0.5, 0.5))),
         );
 
-        let zoom_speed = ((zoom.display_amount() - prev_zoom.display_amount()).abs()
-            / (1.0 / fps as f64)) as f32;
-        let camera_motion_blur = (zoom_speed * motion_blur_amount).min(1.0);
+        let zoom_progress = zoom.t as f32; // 0 to 1 across zoom
+        let blur_factor = (5.0 * zoom_progress * (1.0 - zoom_progress)).clamp(0.0, 1.0);
+
+        let screen_blur_scale = 0.3;
+
+        let motion_blur_amount_for_display = motion_blur_amount * blur_factor * screen_blur_scale;
+        let camera_motion_blur = motion_blur_amount * blur_factor * screen_blur_scale;
 
         let display = {
             let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
@@ -803,7 +807,7 @@ impl ProjectUniforms {
                 rounding_px: (project.background.rounding / 100.0 * 0.5 * min_target_axis) as f32,
                 mirror_x: 0.0,
                 velocity_uv: velocity,
-                motion_blur_amount,
+                motion_blur_amount: motion_blur_amount_for_display,
                 camera_motion_blur_amount: camera_motion_blur,
                 shadow: project.background.shadow,
                 shadow_size: project
@@ -889,7 +893,7 @@ impl ProjectUniforms {
                     rounding_px: project.camera.rounding / 100.0 * 0.5 * size[0],
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
                     velocity_uv: [0.0, 0.0],
-                    motion_blur_amount,
+                    motion_blur_amount: motion_blur_amount_for_display,
                     camera_motion_blur_amount: camera_motion_blur,
                     shadow: project.camera.shadow,
                     shadow_size: project
