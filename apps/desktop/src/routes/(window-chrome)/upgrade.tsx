@@ -430,34 +430,32 @@ export default function Page() {
       {!upgradeComplete() && (
         <>
           {license.data?.type === "commercial" ? (
-            <div class="bg-[--gray-50] dark:bg-[--gray-900] rounded-xl shadow-sm border border-gray-3 dark:border-[--gray-700] w-full">
+            <div class="p-8 mx-auto w-full max-w-[700px] rounded-xl border shadow-sm bg-gray-2 border-gray-3">
               <div class="space-y-6">
-                <div class="border-b border-gray-3 dark:border-[--gray-700] pb-6">
-                  <h3 class="text-2xl font-semibold tracking-tight text-[--text-primary]">
-                    Your Commercial License
-                  </h3>
-                  <p class="mt-2 text-sm text-[--text-tertiary]">
-                    License details for Cap commercial use
+                <div class="flex flex-col items-center mb-6 text-center">
+                  <h3 class="text-2xl font-medium">Commercial License</h3>
+                  <p class="text-sm text-gray-11">
+                    Your license details for Cap commercial use
                   </p>
                 </div>
 
                 <div class="space-y-6">
-                  <div class="space-y-2">
-                    <label class="text-sm font-medium text-[--text-primary]">
+                  <div>
+                    <label class="block mb-2 text-sm text-gray-12">
                       License Key
                     </label>
-                    <pre class="w-full p-3 bg-gray-1 rounded-lg border border-gray-3 dark:border-[--gray-700] font-mono text-sm text-[--text-secondary] break-all whitespace-pre-wrap">
+                    <p class="overflow-x-auto p-3 font-mono text-xs whitespace-pre-wrap break-all rounded-lg border border-gray-4 text-gray-9 bg-gray-3">
                       {license.data.licenseKey}
-                    </pre>
+                    </p>
                   </div>
 
                   <Show when={license.data.expiryDate}>
                     {(expiryDate) => (
-                      <div class="space-y-2">
-                        <label class="text-sm font-medium text-[--text-primary]">
-                          Expiration Date
+                      <div class="space-y-1">
+                        <label class="text-sm text-gray-12">
+                          Expires
                         </label>
-                        <div class="w-full p-3 bg-gray-1 rounded-lg border border-gray-3 dark:border-[--gray-700] text-sm text-[--text-secondary]">
+                        <p class="text-gray-10">
                           {new Date(expiryDate()).toLocaleDateString(
                             undefined,
                             {
@@ -466,27 +464,23 @@ export default function Page() {
                               day: "numeric",
                             }
                           )}
-                        </div>
+                        </p>
                       </div>
                     )}
                   </Show>
 
-                  <div class="pt-4 border-t border-gray-3 dark:border-[--gray-700]">
+                  <div class="flex flex-col items-center pt-6 border-t border-gray-3">
                     <Button
                       variant="destructive"
-                      class="mx-auto w-fit"
                       disabled={resetLicense.isPending}
                       onClick={() => {
                         resetLicense.mutate();
                       }}
                     >
                       {resetLicense.isPending
-                        ? "Detaching..."
-                        : "Detach License"}
+                        ? "Deactivating..."
+                        : "Deactivate License"}
                     </Button>
-                    <p class="mt-2 text-xs text-[--text-tertiary]">
-                      This will remove the license key from this device.
-                    </p>
                   </div>
                 </div>
               </div>

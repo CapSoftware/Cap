@@ -96,7 +96,8 @@ export default function Page() {
                     </div>
                   )}
                 </Show>
-                <div class="flex justify-center mt-6">
+                <div class="my-6 h-px bg-gray-4" />
+                <div class="flex flex-col items-center">
                   <Button
                     variant="destructive"
                     onClick={() => {
