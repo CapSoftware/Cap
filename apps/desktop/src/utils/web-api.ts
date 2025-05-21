@@ -20,7 +20,7 @@ const api: ApiFetcher = async (args) => {
     body = await resp.text();
   }
 
-  console.log({ body });
+  console.log({ resp, body });
 
   return {
     body,
