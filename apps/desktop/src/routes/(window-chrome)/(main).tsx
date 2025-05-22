@@ -97,7 +97,7 @@ export default function () {
 
   onMount(async () => {
     if (auth.data?.user_id) {
-      const authSessionId = `${auth.data.user_id}-${auth.data.expires}`;
+      const authSessionId = auth.data.user_id;
       const trackedSession = localStorage.getItem("tracked_signin_session");
 
       if (trackedSession !== authSessionId) {
@@ -165,42 +165,30 @@ export default function () {
         dir={ostype() === "windows" ? "rtl" : "rtl"}
         class="flex gap-1 items-center mx-2"
       >
-        <Tooltip
-          content={
-            <span>
-              Settings
-            </span>
-          }
-        >
+        <Tooltip content={<span>Settings</span>}>
           <button
             type="button"
             onClick={async () => {
               await commands.showWindow({ Settings: { page: "general" } });
-                getCurrentWindow().hide();
-              }}
-              class="flex items-center justify-center w-5 h-5 -ml-[1.5px]"
-            >
-              <IconCapSettings class="text-gray-11 size-5 hover:text-gray-12" />
-            </button>
-          </Tooltip>
-        <Tooltip
-          content={
-            <span>
-              Previous Recordings
-            </span>
-          }
-        >
+              getCurrentWindow().hide();
+            }}
+            class="flex items-center justify-center w-5 h-5 -ml-[1.5px]"
+          >
+            <IconCapSettings class="text-gray-11 size-5 hover:text-gray-12" />
+          </button>
+        </Tooltip>
+        <Tooltip content={<span>Previous Recordings</span>}>
           <button
-              type="button"
-              onClick={async () => {
-                await commands.showWindow({ Settings: { page: "recordings" } });
-                getCurrentWindow().hide();
-              }}
-              class="flex justify-center items-center w-5 h-5"
-            >
-              <IconLucideSquarePlay class="text-gray-11 size-5 hover:text-gray-12" />
-            </button>
-          </Tooltip>
+            type="button"
+            onClick={async () => {
+              await commands.showWindow({ Settings: { page: "recordings" } });
+              getCurrentWindow().hide();
+            }}
+            class="flex justify-center items-center w-5 h-5"
+          >
+            <IconLucideSquarePlay class="text-gray-11 size-5 hover:text-gray-12" />
+          </button>
+        </Tooltip>
 
         <ChangelogButton />
 
@@ -794,7 +782,6 @@ function MicrophoneSelect(props: {
   const [dbs, setDbs] = createSignal<number | undefined>();
   const [isInitialized, setIsInitialized] = createSignal(false);
 
-
   const requestPermission = useRequestPermission();
 
   const permissionGranted = () =>
@@ -1036,7 +1023,7 @@ function TargetSelectInfoPill<T>(props: {
         ? "On"
         : "Off"}
     </InfoPill>
-);
+  );
 }
 
 function InfoPill(
@@ -1112,10 +1099,7 @@ function ChangelogButton() {
   });
 
   return (
-    <Tooltip
-      openDelay={0}
-      content="Changelog"
-    >
+    <Tooltip openDelay={0} content="Changelog">
       <button
         type="button"
         onClick={handleChangelogClick}

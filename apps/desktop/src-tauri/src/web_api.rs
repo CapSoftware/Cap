@@ -3,8 +3,8 @@ use tauri::{Emitter, Manager, Runtime};
 use tauri_specta::Event;
 
 use crate::{
-    auth::{AuthStore, AuthenticationInvalid},
-    ArcLock, MutableState,
+    auth::{AuthSecret, AuthStore, AuthenticationInvalid},
+    ArcLock,
 };
 
 async fn do_authed_request(
@@ -14,7 +14,16 @@ async fn do_authed_request(
 ) -> Result<reqwest::Response, reqwest::Error> {
     let client = reqwest::Client::new();
 
-    let mut req = build(client, url).header("Authorization", format!("Bearer {}", auth.token));
+    let mut req = build(client, url).header(
+        "Authorization",
+        format!(
+            "Bearer {}",
+            match &auth.secret {
+                AuthSecret::ApiKey { api_key } => api_key,
+                AuthSecret::Session { token, .. } => token,
+            }
+        ),
+    );
 
     if let Some(s) = std::option_env!("VITE_VERCEL_AUTOMATION_BYPASS_SECRET") {
         req = req.header("x-vercel-protection-bypass", s);
