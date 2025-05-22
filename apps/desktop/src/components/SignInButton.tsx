@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import * as shell from "@tauri-apps/plugin-shell";
+import { z } from "zod";
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ComponentProps } from "solid-js";
@@ -60,15 +61,16 @@ async function createSessionRequestUrl(
 ) {
   const serverUrl =
     (await generalSettingsStore.get())?.serverUrl ?? "https://cap.so";
-  const callbackUrl = new URL(`/api/desktop/session/request`, serverUrl);
+  const callbackUrl = new URL(
+    `/api/desktop/session/request?type=api_key`,
+    serverUrl
+  );
 
   if (port !== null) callbackUrl.searchParams.set("port", port);
   callbackUrl.searchParams.set("platform", platform);
 
   return callbackUrl;
 }
-
-type AuthData = { token: string; user_id: string; expires: number };
 
 async function createLocalServerSession(signal: AbortSignal) {
   await invoke("plugin:oauth|stop").catch(() => {});
@@ -94,7 +96,10 @@ async function createLocalServerSession(signal: AbortSignal) {
   const stopListening = await listen(
     "oauth://url",
     (data: { payload: string }) => {
-      if (!data.payload.includes("token")) {
+      console.log(data);
+      if (
+        !(data.payload.includes("token") || data.payload.includes("api_key"))
+      ) {
         return;
       }
 
@@ -110,41 +115,45 @@ async function createLocalServerSession(signal: AbortSignal) {
         res = r;
       });
 
+      console.log(url);
       stopListening();
 
       if (signal.aborted) throw new Error("Sign in aborted");
 
-      const token = url.searchParams.get("token");
-      const user_id = url.searchParams.get("user_id");
-      const expires = Number(url.searchParams.get("expires"));
-      if (!token || !expires || !user_id)
-        throw new Error("Invalid token or expires");
-
-      return { token, user_id, expires };
+      return paramsValidator.parse({
+        type: url.searchParams.get("type"),
+        api_key: url.searchParams.get("api_key"),
+        user_id: url.searchParams.get("user_id"),
+      });
     },
   };
 }
 
+const paramsValidator = z.object({
+  type: z.literal("api_key"),
+  api_key: z.string(),
+  user_id: z.string(),
+});
+
 async function createDeepLinkSession(signal: AbortSignal) {
-  let res: (data: AuthData) => void;
-  const p = new Promise<AuthData>((r) => {
+  let res: (data: z.infer<typeof paramsValidator>) => void;
+  const p = new Promise<z.infer<typeof paramsValidator>>((r) => {
     res = r;
   });
   const stopListening = await onOpenUrl(async (urls) => {
-    for (const url of urls) {
-      if (!url.includes("token=")) return;
+    for (const urlString of urls) {
+      if (!urlString.includes("token=")) return;
       if (signal.aborted) return;
 
-      const urlObject = new URL(url);
-      const token = urlObject.searchParams.get("token");
-      const user_id = urlObject.searchParams.get("user_id");
-      const expires = Number(urlObject.searchParams.get("expires"));
+      const url = new URL(urlString);
 
-      if (!token || !expires || !user_id) {
-        throw new Error("Invalid signin params");
-      }
-
-      res({ token, user_id, expires });
+      res(
+        paramsValidator.parse({
+          type: url.searchParams.get("type"),
+          api_key: url.searchParams.get("api_key"),
+          user_id: url.searchParams.get("user_id"),
+        })
+      );
     }
   });
 
@@ -158,16 +167,16 @@ async function createDeepLinkSession(signal: AbortSignal) {
   };
 }
 
-async function processAuthData({ token, user_id, expires }: AuthData) {
-  identifyUser(user_id);
+async function processAuthData(data: z.infer<typeof paramsValidator>) {
+  console.log({ data });
+  identifyUser(data.user_id);
   trackEvent("user_signed_in", { platform: "desktop" });
 
   const existingAuth = await authStore.get();
   await authStore.set({
-    token,
-    user_id,
+    secret: { api_key: data.api_key },
+    user_id: data.user_id,
     intercom_hash: existingAuth?.intercom_hash ?? "",
-    expires,
     plan: null,
   });
 

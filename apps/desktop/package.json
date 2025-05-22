@@ -64,7 +64,8 @@
     "unplugin-icons": "^0.19.2",
     "uuid": "^9.0.1",
     "vinxi": "^0.5.6",
-    "webcodecs": "^0.1.0"
+    "webcodecs": "^0.1.0",
+    "zod": "^3.24.2"
   },
   "devDependencies": {
     "@fontsource/geist-sans": "^5.0.3",

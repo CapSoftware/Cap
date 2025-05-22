@@ -1,5 +1,7 @@
+import { db } from "@cap/database";
 import { authOptions } from "@cap/database/auth/auth-options";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { authApiKeys } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
@@ -19,10 +21,13 @@ app.get(
       platform: z
         .union([z.literal("web"), z.literal("desktop")])
         .default("web"),
+      type: z
+        .union([z.literal("session"), z.literal("api_key")])
+        .default("session"),
     })
   ),
   async (c) => {
-    const { port, platform } = c.req.valid("query");
+    const { port, platform, type } = c.req.valid("query");
 
     const secret = serverEnv().NEXTAUTH_SECRET;
 
@@ -34,20 +39,32 @@ app.get(
     const session = await getServerSession(authOptions());
     if (!session) return c.redirect(loginRedirectUrl);
 
-    const token = getCookie(c, "next-auth.session-token");
     const user = await getCurrentUser(session);
+    if (!user) return c.redirect(loginRedirectUrl);
 
-    if (token === undefined || !user) return c.redirect(loginRedirectUrl);
+    let data;
 
-    const decodedToken = await decode({ token, secret });
+    if (type === "session") {
+      const token = getCookie(c, "next-auth.session-token");
+      if (token === undefined) return c.redirect(loginRedirectUrl);
 
-    if (!decodedToken) return Response.redirect(loginRedirectUrl);
+      const decodedToken = await decode({ token, secret });
 
-    const params = new URLSearchParams({
-      token,
-      expires: decodedToken.exp as string,
-      user_id: user.id,
-    });
+      if (!decodedToken) return c.redirect(loginRedirectUrl);
+
+      data = {
+        type: "token",
+        token,
+        expires: decodedToken.exp as string,
+      };
+    } else {
+      const id = crypto.randomUUID();
+      await db().insert(authApiKeys).values({ id, userId: user.id });
+
+      data = { type: "api_key", api_key: id };
+    }
+
+    const params = new URLSearchParams({ ...data, user_id: user.id });
 
     const returnUrl = new URL(
       platform === "web"
