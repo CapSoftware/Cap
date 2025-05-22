@@ -67,7 +67,9 @@ export default function Page() {
               <div class="space-y-6">
                 <div class="flex flex-col gap-2 items-center mb-4 text-center">
                   <span class="text-2xl text-green-400 fa fa-briefcase" />
-                  <h3 class="text-2xl font-medium">Commercial License</h3>
+                  <h3 class="text-2xl text-gray-12 font-medium">
+                    Commercial License
+                  </h3>
                 </div>
                 <div>
                   <label class="block mb-2 text-sm text-gray-12">
