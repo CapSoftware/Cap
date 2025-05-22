@@ -58,15 +58,6 @@ export default function Page() {
                 <span class="font-semibold text-blue-400">Cap Pro</span> and
                 already includes a commercial license.
               </p>
-              <div class="flex justify-center mt-6">
-                <Button
-                  variant="secondary"
-                  class="!rounded-full !text-base !py-3 px-6 bg-gray-800 text-white hover:bg-gray-700 border border-gray-700"
-                  onClick={() => tauriShell.open("https://cap.so/account")}
-                >
-                  Manage Subscription
-                </Button>
-              </div>
             </div>
           </div>
         </Match>
