@@ -46,12 +46,12 @@ type OrganizationMember = {
 
 export async function generateMetadata(
   { params }: Props,
-  parent: ResolvingMetadata
+  parent: ResolvingMetadata,
 ): Promise<Metadata> {
   const videoId = params.videoId as string;
   console.log(
     "[generateMetadata] Fetching video metadata for videoId:",
-    videoId
+    videoId,
   );
   const query = await db().select().from(videos).where(eq(videos.id, videoId));
 
@@ -88,12 +88,12 @@ export async function generateMetadata(
   const allowedBots = ["twitterbot"];
 
   const isAllowedReferrer = allowedReferrers.some((domain) =>
-    referrer.includes(domain)
+    referrer.includes(domain),
   );
 
   const userAgentLower = userAgent.toLowerCase();
   const isAllowedBot = allowedBots.some((bot) =>
-    userAgentLower.includes(bot.toLowerCase())
+    userAgentLower.includes(bot.toLowerCase()),
   );
 
   const isTwitterBot = userAgentLower.includes("twitterbot");
@@ -117,7 +117,7 @@ export async function generateMetadata(
           {
             url: new URL(
               `/api/video/og?videoId=${videoId}`,
-              buildEnv.NEXT_PUBLIC_WEB_URL
+              buildEnv.NEXT_PUBLIC_WEB_URL,
             ).toString(),
             width: 1200,
             height: 630,
@@ -127,7 +127,7 @@ export async function generateMetadata(
           {
             url: new URL(
               `/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
-              buildEnv.NEXT_PUBLIC_WEB_URL
+              buildEnv.NEXT_PUBLIC_WEB_URL,
             ).toString(),
             width: 1280,
             height: 720,
@@ -142,7 +142,7 @@ export async function generateMetadata(
         images: [
           new URL(
             `/api/video/og?videoId=${videoId}`,
-            buildEnv.NEXT_PUBLIC_WEB_URL
+            buildEnv.NEXT_PUBLIC_WEB_URL,
           ).toString(),
         ],
       },
@@ -158,7 +158,7 @@ export async function generateMetadata(
         {
           url: new URL(
             `/api/video/og?videoId=${videoId}`,
-            buildEnv.NEXT_PUBLIC_WEB_URL
+            buildEnv.NEXT_PUBLIC_WEB_URL,
           ).toString(),
           width: 1200,
           height: 630,
@@ -168,7 +168,7 @@ export async function generateMetadata(
         {
           url: new URL(
             `/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
-            buildEnv.NEXT_PUBLIC_WEB_URL
+            buildEnv.NEXT_PUBLIC_WEB_URL,
           ).toString(),
           width: 1280,
           height: 720,
@@ -183,7 +183,7 @@ export async function generateMetadata(
       images: [
         new URL(
           `/api/video/og?videoId=${videoId}`,
-          buildEnv.NEXT_PUBLIC_WEB_URL
+          buildEnv.NEXT_PUBLIC_WEB_URL,
         ).toString(),
       ],
     },
@@ -251,7 +251,7 @@ export default async function ShareVideoPage(props: Props) {
       ) {
         console.log(
           "[ShareVideoPage] Access denied - domain restriction:",
-          organization[0].allowedEmailDomain
+          organization[0].allowedEmailDomain,
         );
         return (
           <div className="flex flex-col items-center justify-center min-h-screen p-4 text-center">
@@ -329,25 +329,28 @@ export default async function ShareVideoPage(props: Props) {
 
   let customDomain: string | null = null;
   let domainVerified = false;
+  let organizationLogoUrl: string | null = null;
 
   if (video.sharedOrganization?.organizationId) {
     const organizationData = await db()
       .select({
         customDomain: organizations.customDomain,
         domainVerified: organizations.domainVerified,
+        iconUrl: organizations.iconUrl,
       })
       .from(organizations)
       .where(eq(organizations.id, video.sharedOrganization.organizationId))
       .limit(1);
 
-    if (
-      organizationData.length > 0 &&
-      organizationData[0] &&
-      organizationData[0].customDomain
-    ) {
-      customDomain = organizationData[0].customDomain;
-      if (organizationData[0].domainVerified !== null) {
-        domainVerified = true;
+    if (organizationData.length > 0 && organizationData[0]) {
+      if (organizationData[0].customDomain) {
+        customDomain = organizationData[0].customDomain;
+        if (organizationData[0].domainVerified !== null) {
+          domainVerified = true;
+        }
+      }
+      if (organizationData[0].iconUrl) {
+        organizationLogoUrl = organizationData[0].iconUrl;
       }
     }
   }
@@ -357,19 +360,21 @@ export default async function ShareVideoPage(props: Props) {
       .select({
         customDomain: organizations.customDomain,
         domainVerified: organizations.domainVerified,
+        iconUrl: organizations.iconUrl,
       })
       .from(organizations)
       .where(eq(organizations.ownerId, video.ownerId))
       .limit(1);
 
-    if (
-      ownerOrganizations.length > 0 &&
-      ownerOrganizations[0] &&
-      ownerOrganizations[0].customDomain
-    ) {
-      customDomain = ownerOrganizations[0].customDomain;
-      if (ownerOrganizations[0].domainVerified !== null) {
-        domainVerified = true;
+    if (ownerOrganizations.length > 0 && ownerOrganizations[0]) {
+      if (ownerOrganizations[0].customDomain) {
+        customDomain = ownerOrganizations[0].customDomain;
+        if (ownerOrganizations[0].domainVerified !== null) {
+          domainVerified = true;
+        }
+      }
+      if (ownerOrganizations[0].iconUrl) {
+        organizationLogoUrl = ownerOrganizations[0].iconUrl;
       }
     }
   }
@@ -401,7 +406,7 @@ export default async function ShareVideoPage(props: Props) {
       .from(organizations)
       .innerJoin(
         organizationMembers,
-        eq(organizations.id, organizationMembers.organizationId)
+        eq(organizations.id, organizationMembers.organizationId),
       )
       .where(eq(organizationMembers.userId, userId));
 
@@ -423,8 +428,8 @@ export default async function ShareVideoPage(props: Props) {
         .where(
           eq(
             organizationMembers.organizationId,
-            video.sharedOrganization.organizationId
-          )
+            video.sharedOrganization.organizationId,
+          ),
         )
     : [];
 
@@ -444,6 +449,7 @@ export default async function ShareVideoPage(props: Props) {
       customDomain={customDomain}
       domainVerified={domainVerified}
       userOrganizations={userOrganizations}
+      organizationLogoUrl={organizationLogoUrl}
     />
   );
 }

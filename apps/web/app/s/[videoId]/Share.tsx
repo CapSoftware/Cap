@@ -38,6 +38,7 @@ interface ShareProps {
   customDomain: string | null;
   domainVerified: boolean;
   userOrganizations?: { id: string; name: string }[];
+  organizationLogoUrl?: string | null;
 }
 
 export const Share: React.FC<ShareProps> = ({
@@ -48,6 +49,7 @@ export const Share: React.FC<ShareProps> = ({
   customDomain,
   domainVerified,
   userOrganizations = [],
+  organizationLogoUrl,
 }) => {
   const [analytics, setAnalytics] = useState(initialAnalytics);
   const effectiveDate = data.metadata?.customCreatedAt
@@ -140,7 +142,23 @@ export const Share: React.FC<ShareProps> = ({
           className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 bg-gray-1 rounded-full new-card-style w-fit"
         >
           <span className="text-sm">Recorded with</span>
-          <Logo className="w-14 h-auto" />
+          {(() => {
+            const logoSrc = data.metadata?.customLogo?.useOrganization
+              ? organizationLogoUrl
+              : data.metadata?.customLogo?.url;
+            const width = data.metadata?.customLogo?.width || 56;
+            return logoSrc ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={logoSrc}
+                style={{ width }}
+                className="h-auto"
+                alt="logo"
+              />
+            ) : (
+              <Logo className="w-14 h-auto" />
+            );
+          })()}
         </a>
       </div>
     </div>
