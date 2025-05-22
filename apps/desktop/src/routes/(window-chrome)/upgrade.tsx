@@ -91,6 +91,7 @@ export default function Page() {
     try {
       const auth = await authStore.get();
 
+      console.log({ auth });
       if (!auth) {
         console.log("No auth found, starting sign in flow");
         await signIn.mutateAsync(new AbortController());

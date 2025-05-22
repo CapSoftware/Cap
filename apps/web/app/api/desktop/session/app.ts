@@ -32,9 +32,11 @@ app.get(
     const secret = serverEnv().NEXTAUTH_SECRET;
 
     const url = new URL(c.req.url);
-    const loginRedirectUrl = `${serverEnv().WEB_URL}/login?next=${
-      serverEnv().WEB_URL
-    }${url.pathname}${url.search}`;
+    const loginRedirectUrl = `${
+      serverEnv().VERCEL_BRANCH_URL ?? serverEnv().WEB_URL
+    }/login?next=${serverEnv().VERCEL_BRANCH_URL ?? serverEnv().WEB_URL}${
+      url.pathname
+    }${url.search}`;
 
     const session = await getServerSession(authOptions());
     if (!session) return c.redirect(loginRedirectUrl);

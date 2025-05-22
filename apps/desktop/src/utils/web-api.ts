@@ -20,8 +20,6 @@ const api: ApiFetcher = async (args) => {
     body = await resp.text();
   }
 
-  console.log({ body });
-
   return {
     body,
     status: resp.status,
