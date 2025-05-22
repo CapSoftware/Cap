@@ -39,7 +39,15 @@ export const licenseApiClient = initClient(licenseContract, {
 });
 
 export async function maybeProtectedHeaders() {
-  const token = (await authStore.get())?.token;
+  const store = await authStore.get();
+
+  let token: string | undefined;
+  if (store?.secret && "api_key" in store.secret) {
+    token = store.secret.api_key;
+  } else if (store?.secret && "token" in store.secret) {
+    token = store.secret.token;
+  }
+
   return { authorization: token ? `Bearer ${token}` : undefined };
 }
 

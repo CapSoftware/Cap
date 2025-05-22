@@ -29,6 +29,13 @@
       "when": 1747912232644,
       "tag": "0003_small_chamber",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1747923172570,
+      "tag": "0004_good_microbe",
+      "breakpoints": true
     }
   ]
 }
