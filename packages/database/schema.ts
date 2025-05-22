@@ -283,7 +283,7 @@ export const s3Buckets = mysqlTable("s3_buckets", {
 });
 
 export const authApiKeys = mysqlTable("auth_api_keys", {
-  id: varchar("id", { length: 36 }).notNull(),
+  id: varchar("id", { length: 36 }).notNull().primaryKey().unique(),
   userId: nanoId("userId").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
