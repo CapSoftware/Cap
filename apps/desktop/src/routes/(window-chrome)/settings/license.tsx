@@ -26,32 +26,34 @@ export default function Page() {
   const queryClient = useQueryClient();
 
   return (
-    <div class="flex overflow-y-auto relative flex-col items-center p-5 mx-auto w-full h-full custom-scroll">
-      <div class="text-left w-full max-w-[700px]">
-        <h1 class="text-2xl tracking-[-.05em] font-medium">
-          Commercial License
-        </h1>
-        <p class="text-base font-normal leading-6 text-gray-11">
+    <div class="flex overflow-y-auto gap-3 relative flex-col items-center p-4 mx-auto w-full h-full custom-scroll">
+      <div class="text-left w-full py-2">
+        <h2 class="text-gray-12 text-lg font-medium">Commercial License</h2>
+        <p class="text-gray-11 text-sm">
           Permits using Cap for commercial purposes, but without paying for
           cloud features.
+          <Show when={license.data?.type !== "pro"}>
+            <br />
+            Need cloud features?{" "}
+            <button
+              class="underline cursor-pointer"
+              onClick={() => commands.showWindow("Upgrade")}
+            >
+              Upgrade to Cap Pro.
+            </button>
+          </Show>
         </p>
-      <Button
-        variant="secondary"
-        class="my-5 mr-auto"
-        onClick={() => navigate("/upgrade")}
-      >
-        Looking for Cap Pro?
-      </Button>
       </div>
       <Switch fallback={<CommercialLicensePurchase />}>
         <Match when={license.data?.type === "pro" && license.data}>
-          <div class="p-8 mx-auto mt-6 w-full max-w-md text-white bg-gray-900 rounded-3xl border border-gray-800">
+          <div class="p-6 mx-auto mt-6 w-full max-w-md text-white bg-gray-2 rounded-3xl border border-gray-4">
             <div class="space-y-4 text-center">
               <div class="flex flex-col gap-2 items-center mb-4">
-                <span class="text-2xl text-yellow-500 fa fa-crown" />
-                <h3 class="text-2xl font-medium">Cap Pro License</h3>
+                <h3 class="text-2xl font-medium text-gray-12">
+                  Cap Pro License
+                </h3>
               </div>
-              <p class="text-gray-300">
+              <p class="text-gray-11">
                 Your account is upgraded to{" "}
                 <span class="font-semibold text-blue-400">Cap Pro</span> and
                 already includes a commercial license.
@@ -87,9 +89,7 @@ export default function Page() {
                 <Show when={license().expiryDate}>
                   {(expiry) => (
                     <div class="space-y-1">
-                      <label class="text-sm text-gray-12">
-                        Expires
-                      </label>
+                      <label class="text-sm text-gray-12">Expires</label>
                       <p class="text-gray-10">
                         {new Date(expiry()).toLocaleDateString()}
                       </p>
@@ -162,11 +162,9 @@ function LicenseKeyActivate(props: {
           }));
 
           return (
-            <div class="p-8 mx-auto mt-6 w-full max-w-[700px] text-white rounded-xl border bg-gray-2 border-gray-3">
-              <div class="space-y-4">
-                <h3 class="mb-2 text-xl text-center">
-                  Have a license key?
-                </h3>
+            <div class="p-6 mx-auto w-full text-gray-12 rounded-xl border bg-gray-2 border-gray-3">
+              <div class="space-y-3">
+                <h3 class="mb-2 text-xl text-center">Have a license key?</h3>
                 <Input
                   placeholder="License key"
                   value={licenseKey()}
@@ -210,12 +208,14 @@ function CommercialLicensePurchase() {
 
   const [isCommercialAnnual, setIsCommercialAnnual] = createSignal(true);
 
-  const { rive: CommercialRive, RiveComponent: Commercial } = createRive(() => ({
-    src: PricingRive,
-    autoplay: true,
-    artboard: "commercial",
-    animations: ["card-stack"],
-  }));
+  const { rive: CommercialRive, RiveComponent: Commercial } = createRive(
+    () => ({
+      src: PricingRive,
+      autoplay: true,
+      artboard: "commercial",
+      animations: ["card-stack"],
+    })
+  );
 
   const openCommercialCheckout = createMutation(() => ({
     mutationFn: async () => {
@@ -234,26 +234,27 @@ function CommercialLicensePurchase() {
       <div class="w-full max-w-[700px] rounded-xl shadow-sm bg-gray-2">
         <div class="flex flex-col md:flex-row">
           {/* Left Column */}
-          <div 
-          onMouseEnter={() => {
-            const riveInstance = CommercialRive();
-            if (riveInstance) {
-              // Stop any current animations first
-              riveInstance.stop();
-              // Play the enter animation
-              riveInstance.play("cards");
-            }
-          }}
-          onMouseLeave={() => {
-            const riveInstance = CommercialRive();
-            if (riveInstance) {
-              // Stop any current animations first
-              riveInstance.stop();
-              // Play the leave animation
-              riveInstance.play("card-stack");
-            }
-          }}
-          class="flex flex-col gap-4 items-center p-5 rounded-t-xl border md:rounded-tr-none md:rounded-tl-xl md:rounded-bl-xl border-gray-4 md:w-1/2 bg-gray-3">
+          <div
+            onMouseEnter={() => {
+              const riveInstance = CommercialRive();
+              if (riveInstance) {
+                // Stop any current animations first
+                riveInstance.stop();
+                // Play the enter animation
+                riveInstance.play("cards");
+              }
+            }}
+            onMouseLeave={() => {
+              const riveInstance = CommercialRive();
+              if (riveInstance) {
+                // Stop any current animations first
+                riveInstance.stop();
+                // Play the leave animation
+                riveInstance.play("card-stack");
+              }
+            }}
+            class="flex flex-col gap-4 items-center p-5 rounded-t-xl border md:rounded-tr-none md:rounded-tl-xl md:rounded-bl-xl border-gray-4 md:w-1/2 bg-gray-3"
+          >
             <Commercial class="w-[200px]" />
             <div class="space-y-1 text-center">
               <h3 class="text-2xl font-medium tracking-tight leading-5">
@@ -295,7 +296,7 @@ function CommercialLicensePurchase() {
                 : "Purchase License"}
             </Button>
           </div>
-          
+
           {/* Right Column */}
           <div class="flex flex-col gap-4 justify-center items-center p-5 rounded-t-none rounded-b-xl border border-t-0 md:border-t md:border-l-0 md:rounded-bl-none md:rounded-tr-xl md:rounded-br-xl md:w-1/2 border-gray-3">
             <ul class="flex flex-col gap-2 list-none">
