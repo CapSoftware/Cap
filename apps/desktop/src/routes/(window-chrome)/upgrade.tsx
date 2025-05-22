@@ -109,9 +109,7 @@ export default function Page() {
         commands.openExternalLink(response.body.url);
         console.log("Minimizing upgrade window");
         const window = await Window.getByLabel("upgrade");
-        if (window) {
-          await window.minimize();
-        }
+        if (window) await window.minimize();
       } else {
         console.error("Failed to get checkout URL, status:", response.status);
       }
