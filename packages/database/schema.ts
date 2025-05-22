@@ -282,6 +282,12 @@ export const s3Buckets = mysqlTable("s3_buckets", {
   provider: text("provider").notNull().default("aws"),
 });
 
+export const authApiKeys = mysqlTable("auth_api_keys", {
+  id: varchar("id", { length: 36 }).notNull().primaryKey().unique(),
+  userId: nanoId("userId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
 export const commentsRelations = relations(comments, ({ one }) => ({
   author: one(users, {
     fields: [comments.authorId],
@@ -321,15 +327,18 @@ export const s3BucketsRelations = relations(s3Buckets, ({ one }) => ({
   }),
 }));
 
-export const organizationsRelations = relations(organizations, ({ one, many }) => ({
-  owner: one(users, {
-    fields: [organizations.ownerId],
-    references: [users.id],
-  }),
-  organizationMembers: many(organizationMembers),
-  sharedVideos: many(sharedVideos),
-  organizationInvites: many(organizationInvites),
-}));
+export const organizationsRelations = relations(
+  organizations,
+  ({ one, many }) => ({
+    owner: one(users, {
+      fields: [organizations.ownerId],
+      references: [users.id],
+    }),
+    organizationMembers: many(organizationMembers),
+    sharedVideos: many(sharedVideos),
+    organizationInvites: many(organizationInvites),
+  })
+);
 
 export const sessionsRelations = relations(sessions, ({ one }) => ({
   user: one(users, {
@@ -345,16 +354,19 @@ export const verificationTokensRelations = relations(
   })
 );
 
-export const organizationMembersRelations = relations(organizationMembers, ({ one }) => ({
-  user: one(users, {
-    fields: [organizationMembers.userId],
-    references: [users.id],
-  }),
-  organization: one(organizations, {
-    fields: [organizationMembers.organizationId],
-    references: [organizations.id],
-  }),
-}));
+export const organizationMembersRelations = relations(
+  organizationMembers,
+  ({ one }) => ({
+    user: one(users, {
+      fields: [organizationMembers.userId],
+      references: [users.id],
+    }),
+    organization: one(organizations, {
+      fields: [organizationMembers.organizationId],
+      references: [organizations.id],
+    }),
+  })
+);
 
 export const organizationInvitesRelations = relations(
   organizationInvites,
@@ -362,12 +374,13 @@ export const organizationInvitesRelations = relations(
     organization: one(organizations, {
       fields: [organizationInvites.organizationId],
       references: [organizations.id],
-  }),
-  invitedByUser: one(users, {
-    fields: [organizationInvites.invitedByUserId],
-    references: [users.id],
-  }),
-}));
+    }),
+    invitedByUser: one(users, {
+      fields: [organizationInvites.invitedByUserId],
+      references: [users.id],
+    }),
+  })
+);
 
 export const videosRelations = relations(videos, ({ one, many }) => ({
   owner: one(users, {
