@@ -56,8 +56,9 @@ export const ShareVideo = forwardRef<
     data: typeof videos.$inferSelect;
     user: typeof userSelectProps | null;
     comments: CommentWithAuthor[];
+    chapters?: { title: string; start: number }[];
   }
->(({ data, user, comments }, ref) => {
+>(({ data, user, comments, chapters = [] }, ref) => {
   // Forward the ref to the video element
   useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
 
@@ -1331,6 +1332,25 @@ export const ShareVideo = forwardRef<
                       )}
                     </span>
                     <Tooltip id={comment.id} />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {chapters.length > 0 && (
+            <div className="-mt-7 w-full md:-mt-6">
+              {chapters.map((ch) => {
+                const pos = (ch.start / longestDuration) * 100;
+                return (
+                  <div
+                    key={ch.start}
+                    className="absolute z-10"
+                    style={{ left: `${pos}%` }}
+                    data-tooltip-id={`chapter-${ch.start}`}
+                    data-tooltip-content={ch.title}
+                  >
+                    <div className="w-px h-3 bg-blue-500" />
+                    <Tooltip id={`chapter-${ch.start}`} />
                   </div>
                 );
               })}

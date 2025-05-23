@@ -56,6 +56,38 @@ export const Share: React.FC<ShareProps> = ({
 
   const videoRef = useRef<HTMLVideoElement>(null);
 
+  const [aiData, setAiData] = useState<{
+    title?: string | null;
+    summary?: string | null;
+    chapters?: { title: string; start: number }[] | null;
+    processing?: boolean;
+  } | null>(null);
+  const [aiLoading, setAiLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    const fetchAi = async () => {
+      try {
+        const res = await fetch(`/api/video/ai?videoId=${data.id}`);
+        const json = await res.json();
+        if (!active) return;
+        setAiData(json);
+        if (json.processing) {
+          setTimeout(fetchAi, 1000);
+        } else {
+          setAiLoading(false);
+        }
+      } catch (err) {
+        console.error("Error fetching AI data:", err);
+        setAiLoading(false);
+      }
+    };
+    fetchAi();
+    return () => {
+      active = false;
+    };
+  }, [data.id]);
+
   const handleSeek = (time: number) => {
     if (videoRef.current) {
       videoRef.current.currentTime = time;
@@ -87,11 +119,16 @@ export const Share: React.FC<ShareProps> = ({
     }));
   }, [comments]);
 
+  const headerData =
+    aiData && aiData.title && !aiData.processing
+      ? { ...data, name: aiData.title, createdAt: effectiveDate }
+      : { ...data, createdAt: effectiveDate };
+
   return (
     <div className="min-h-screen flex flex-col bg-[#F7F8FA]">
       <div className="container flex-1 px-4 py-4 mx-auto">
         <ShareHeader
-          data={{ ...data, createdAt: effectiveDate }}
+          data={headerData}
           user={user}
           customDomain={customDomain}
           domainVerified={domainVerified}
@@ -107,12 +144,21 @@ export const Share: React.FC<ShareProps> = ({
                   data={data}
                   user={user}
                   comments={comments}
+                  chapters={aiData?.chapters || []}
                   ref={videoRef}
                 />
               </div>
               <div className="mt-4 lg:hidden">
                 <Toolbar data={data} user={user} />
               </div>
+              {!aiLoading && aiData?.summary && (
+                <div className="mt-4 p-4 new-card-style">
+                  {aiData.title && (
+                    <h3 className="mb-2 text-lg font-semibold">{aiData.title}</h3>
+                  )}
+                  <p className="text-sm whitespace-pre-wrap">{aiData.summary}</p>
+                </div>
+              )}
             </div>
 
             <div className="flex flex-col lg:w-80">

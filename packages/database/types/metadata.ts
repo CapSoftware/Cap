@@ -27,6 +27,18 @@ export interface VideoMetadata {
    * Frames per second of the recording
    */
   fps?: number;
+  /**
+   * AI generated title for the video
+   */
+  aiTitle?: string;
+  /**
+   * AI generated summary of the content
+   */
+  summary?: string;
+  /**
+   * Chapter markers generated from the transcript
+   */
+  chapters?: { title: string; start: number }[];
   [key: string]: any;
 }
 
