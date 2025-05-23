@@ -54,8 +54,9 @@ export const ShareVideo = forwardRef<
     user: typeof userSelectProps | null;
     comments: CommentWithAuthor[];
     chapters?: { title: string; start: number }[];
+    aiProcessing?: boolean;
   }
->(({ data, user, comments, chapters = [] }, ref) => {
+>(({ data, user, comments, chapters = [], aiProcessing = false }, ref) => {
   useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -1285,6 +1286,44 @@ export const ShareVideo = forwardRef<
                     type="button"
                     onClick={() => {
                       toast.error("Transcription is processing");
+                    }}
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="w-5 h-5 sm:w-6 sm:h-6"
+                      viewBox="0 0 24 24"
+                    >
+                      <style>
+                        {
+                          "@keyframes spinner_AtaB{to{transform:rotate(360deg)}}"
+                        }
+                      </style>
+                      <path
+                        fill="#FFF"
+                        d="M12 1a11 11 0 1 0 11 11A11 11 0 0 0 12 1Zm0 19a8 8 0 1 1 8-8 8 8 0 0 1-8 8Z"
+                        opacity={0.25}
+                      />
+                      <path
+                        fill="#FFF"
+                        d="M10.14 1.16a11 11 0 0 0-9 8.92A1.59 1.59 0 0 0 2.46 12a1.52 1.52 0 0 0 1.65-1.3 8 8 0 0 1 6.66-6.61A1.42 1.42 0 0 0 12 2.69a1.57 1.57 0 0 0-1.86-1.53Z"
+                        style={{
+                          transformOrigin: "center",
+                          animation: "spinner_AtaB .75s infinite linear",
+                        }}
+                      />
+                    </svg>
+                  </button>
+                </span>
+              )}
+              {aiProcessing && (
+                <span className="inline-flex">
+                  <button
+                    aria-label="AI summary is processing"
+                    className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 sm:px-2 sm:py-2"
+                    tabIndex={0}
+                    type="button"
+                    onClick={() => {
+                      toast.info("AI summary is being generated");
                     }}
                   >
                     <svg

@@ -65,12 +65,17 @@ export const Summary: React.FC<SummaryProps> = ({
     chapters?: Chapter[] | null;
     processing?: boolean;
   } | null>(initialAiData || null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(
+    !initialAiData || initialAiData.processing === true
+  );
 
   useEffect(() => {
+    console.log("[Summary] Received initialAiData update:", initialAiData);
     if (initialAiData) {
       setAiData(initialAiData);
-      setIsLoading(initialAiData.processing || false);
+      setIsLoading(initialAiData.processing === true);
+    } else {
+      setIsLoading(true);
     }
   }, [initialAiData]);
 
@@ -79,6 +84,8 @@ export const Summary: React.FC<SummaryProps> = ({
       onSeek(time);
     }
   };
+
+  console.log("[Summary] Current state:", { isLoading, aiData, initialAiData });
 
   if (isLoading || aiData?.processing) {
     return (
