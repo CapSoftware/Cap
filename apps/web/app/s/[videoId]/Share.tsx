@@ -46,6 +46,8 @@ interface ShareProps {
     chapters?: { title: string; start: number }[] | null;
     processing?: boolean;
   } | null;
+  aiGenerationEnabled: boolean;
+  aiUiEnabled: boolean;
 }
 
 export const Share: React.FC<ShareProps> = ({
@@ -57,6 +59,8 @@ export const Share: React.FC<ShareProps> = ({
   domainVerified,
   userOrganizations = [],
   initialAiData,
+  aiGenerationEnabled,
+  aiUiEnabled,
 }) => {
   const [analytics, setAnalytics] = useState(initialAnalytics);
   const effectiveDate: Date = data.metadata?.customCreatedAt
@@ -70,14 +74,7 @@ export const Share: React.FC<ShareProps> = ({
 
   useEffect(() => {
     if (initialAiData) {
-      console.log("[Share] Received initial AI data:", {
-        hasTitle: !!initialAiData.title,
-        hasSummary: !!initialAiData.summary,
-        hasChapters: !!initialAiData.chapters,
-        chaptersCount: initialAiData.chapters?.length || 0,
-      });
     } else {
-      console.log("[Share] No initial AI data provided");
     }
   }, [initialAiData]);
 
@@ -89,7 +86,15 @@ export const Share: React.FC<ShareProps> = ({
   } | null>(initialAiData || null);
 
   const shouldShowLoading = () => {
-    if (!transcriptionStatus || transcriptionStatus === "PROCESSING") {
+    if (!aiGenerationEnabled) {
+      return false;
+    }
+
+    if (
+      !transcriptionStatus ||
+      transcriptionStatus === "PROCESSING" ||
+      transcriptionStatus === "ERROR"
+    ) {
       return true;
     }
 
@@ -121,7 +126,6 @@ export const Share: React.FC<ShareProps> = ({
 
     const shouldPoll = () => {
       if (pollCount >= MAX_POLLS) {
-        console.log("[Share] Max polling count reached, stopping");
         return false;
       }
 
@@ -130,10 +134,14 @@ export const Share: React.FC<ShareProps> = ({
       }
 
       if (transcriptionStatus === "ERROR") {
-        return false;
+        return true;
       }
 
       if (transcriptionStatus === "COMPLETE") {
+        if (!aiGenerationEnabled) {
+          return false;
+        }
+
         const currentAiData = aiDataRef.current;
 
         if (!currentAiData || currentAiData.processing) {
@@ -154,13 +162,6 @@ export const Share: React.FC<ShareProps> = ({
       if (!active) return;
 
       pollCount++;
-      console.log(
-        `[Share] Polling attempt ${pollCount}/${MAX_POLLS} for video ${data.id}`,
-        {
-          transcriptionStatus,
-          currentAiData: aiDataRef.current,
-        }
-      );
 
       try {
         const res = await fetch(`/api/video/status?videoId=${data.id}`);
@@ -172,21 +173,15 @@ export const Share: React.FC<ShareProps> = ({
 
         if (!active) return;
 
-        console.log(`[Share] Poll response:`, json);
-
         if (
           json.transcriptionStatus &&
           json.transcriptionStatus !== transcriptionStatus
         ) {
-          console.log(
-            `[Share] Transcription status changed: ${transcriptionStatus} -> ${json.transcriptionStatus}`
-          );
           setTranscriptionStatus(json.transcriptionStatus);
         }
 
         const hasAiData = json.summary || json.chapters || json.aiTitle;
         if (hasAiData) {
-          console.log(`[Share] Received AI data, updating state`);
           const newAiData = {
             title: json.aiTitle || null,
             summary: json.summary || null,
@@ -196,21 +191,16 @@ export const Share: React.FC<ShareProps> = ({
           setAiData(newAiData);
           setAiLoading(json.aiProcessing || false);
         } else if (json.aiProcessing) {
-          console.log(`[Share] AI processing in progress`);
           setAiData((prev) => ({ ...prev, processing: true }));
           setAiLoading(true);
         } else if (
           json.transcriptionStatus === "COMPLETE" &&
           !json.aiProcessing
         ) {
-          console.log(
-            `[Share] Transcription complete but no AI processing yet`
-          );
           setAiData((prev) => ({ ...prev, processing: false }));
         }
 
         if (!shouldPoll()) {
-          console.log("[Share] Stopping polling - conditions met");
           if (pollInterval) {
             clearInterval(pollInterval);
             pollInterval = null;
@@ -222,25 +212,15 @@ export const Share: React.FC<ShareProps> = ({
       }
     };
 
-    console.log("[Share] Evaluating whether to start polling:", {
-      transcriptionStatus,
-      aiData: aiDataRef.current,
-      shouldPoll: shouldPoll(),
-    });
-
     if (shouldPoll()) {
-      console.log("[Share] Starting polling for video status");
-
       pollStatus();
 
       pollInterval = setInterval(pollStatus, POLL_INTERVAL);
     } else {
-      console.log("[Share] Not starting polling, conditions already met");
       setAiLoading(false);
     }
 
     return () => {
-      console.log("[Share] Cleaning up polling");
       active = false;
       if (pollInterval) {
         clearInterval(pollInterval);
@@ -327,6 +307,8 @@ export const Share: React.FC<ShareProps> = ({
                 onSeek={handleSeek}
                 videoId={data.id}
                 aiData={aiData}
+                aiGenerationEnabled={aiGenerationEnabled}
+                aiUiEnabled={aiUiEnabled}
               />
             </div>
           </div>
@@ -338,7 +320,8 @@ export const Share: React.FC<ShareProps> = ({
           <div className="mt-4 hidden lg:block">
             {aiLoading &&
               (transcriptionStatus === "PROCESSING" ||
-                transcriptionStatus === "COMPLETE") && (
+                transcriptionStatus === "COMPLETE" ||
+                transcriptionStatus === "ERROR") && (
                 <div className="p-4 new-card-style animate-pulse">
                   <div className="space-y-6">
                     <div>

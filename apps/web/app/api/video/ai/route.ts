@@ -1,10 +1,11 @@
 import { NextRequest } from "next/server";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { db } from "@cap/database";
-import { videos } from "@cap/database/schema";
+import { videos, users } from "@cap/database/schema";
 import { VideoMetadata } from "@cap/database/types";
 import { eq } from "drizzle-orm";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
+import { isAiGenerationEnabled } from "@/utils/flags";
 
 export const dynamic = "force-dynamic";
 
@@ -44,7 +45,6 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // If AI is already processing, return processing status
     if (metadata.aiProcessing) {
       console.log(`[AI API] AI processing already in progress for video ${videoId}`);
       return Response.json({
@@ -53,18 +53,31 @@ export async function GET(request: NextRequest) {
       }, { status: 200 });
     }
 
-    // Don't start AI generation if transcription isn't complete
     if (video.transcriptionStatus !== "COMPLETE") {
       return Response.json({ 
         processing: false,
         message: `Cannot generate AI metadata - transcription status: ${video.transcriptionStatus || "unknown"}`
       }, { status: 200 });
     }
+    
+    const videoOwnerQuery = await db()
+      .select({ 
+        email: users.email, 
+        stripeSubscriptionStatus: users.stripeSubscriptionStatus 
+      })
+      .from(users)
+      .where(eq(users.id, video.ownerId))
+      .limit(1);
 
-    // Start AI generation
-    console.log(`[AI API] Starting AI generation for video ${videoId}`);
+    if (videoOwnerQuery.length === 0 || !videoOwnerQuery[0] || !isAiGenerationEnabled(videoOwnerQuery[0])) {
+      const videoOwner = videoOwnerQuery[0];
+      return Response.json({ 
+        processing: false,
+        message: "AI generation feature is not available for this user"
+      }, { status: 403 });
+    }
+
     try {
-      // Run AI generation in the background
       generateAiMetadata(videoId, video.ownerId).catch(error => {
         console.error("[AI API] Error generating AI metadata:", error);
       });

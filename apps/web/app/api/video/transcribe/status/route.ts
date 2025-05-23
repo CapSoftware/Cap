@@ -5,6 +5,7 @@ import { count, eq } from "drizzle-orm";
 import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
+import { isAiGenerationEnabled } from "@/utils/flags";
 
 export const dynamic = "force-dynamic";
 
@@ -34,11 +35,15 @@ export async function GET(request: NextRequest) {
   }
 
   if (video[0].transcriptionStatus === "COMPLETE") {
-    Promise.resolve().then(() => {
-      generateAiMetadata(videoId, user.id).catch(error => {
-        console.error("Error generating AI metadata:", error);
+    if (isAiGenerationEnabled(user)) {
+      Promise.resolve().then(() => {
+        generateAiMetadata(videoId, user.id).catch(error => {
+          console.error("Error generating AI metadata:", error);
+        });
       });
-    });
+    } else {
+      console.log(`[transcribe-status] AI generation feature disabled for user ${user.id} (email: ${user.email}, pro: ${user.stripeSubscriptionStatus})`);
+    }
   }
 
   return Response.json(

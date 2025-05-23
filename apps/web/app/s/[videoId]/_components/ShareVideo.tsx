@@ -1185,7 +1185,7 @@ export const ShareVideo = forwardRef<
             />
             <div
               style={{
-                boxShadow: "0 0 20px rgba(0,0,0,0.6)",
+                boxShadow: "0 0 20px rgba(0,0,0,0.1)",
                 left: `${watchedPercentage}%`,
               }}
               className={clsx(

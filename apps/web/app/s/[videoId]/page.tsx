@@ -20,6 +20,7 @@ import { transcribeVideo } from "@/actions/videos/transcribe";
 import { getScreenshot } from "@/actions/screenshots/get-screenshot";
 import { headers } from "next/headers";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
+import { isAiGenerationEnabled, isAiUiEnabled } from "@/utils/flags";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -40,10 +41,6 @@ type VideoWithOrganization = typeof videos.$inferSelect & {
   organizationMembers?: string[];
   organizationId?: string;
   sharedOrganizations?: { id: string; name: string }[];
-};
-
-type OrganizationMember = {
-  userId: string;
 };
 
 export async function generateMetadata(
@@ -318,21 +315,50 @@ export default async function ShareVideoPage(props: Props) {
     }
   }
 
-  // Check if we need to trigger AI metadata generation
   const currentMetadata = (video.metadata as VideoMetadata) || {};
+  const metadata = currentMetadata; // Keep existing reference for compatibility
+  let initialAiData = null;
+  let aiGenerationEnabled = false;
+
+  const videoOwnerQuery = await db()
+    .select({
+      email: users.email,
+      stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+    })
+    .from(users)
+    .where(eq(users.id, video.ownerId))
+    .limit(1);
+
+  if (videoOwnerQuery.length > 0 && videoOwnerQuery[0]) {
+    const videoOwner = videoOwnerQuery[0];
+    aiGenerationEnabled = isAiGenerationEnabled(videoOwner);
+  }
+
+  if (metadata.summary || metadata.chapters || metadata.aiTitle) {
+    initialAiData = {
+      title: metadata.aiTitle || null,
+      summary: metadata.summary || null,
+      chapters: metadata.chapters || null,
+      processing: metadata.aiProcessing || false,
+    };
+  } else if (metadata.aiProcessing) {
+    initialAiData = {
+      title: null,
+      summary: null,
+      chapters: null,
+      processing: true,
+    };
+  }
+
   if (
     video.transcriptionStatus === "COMPLETE" &&
     !currentMetadata.aiProcessing &&
     !currentMetadata.summary &&
     !currentMetadata.chapters &&
-    !currentMetadata.generationError
+    !currentMetadata.generationError &&
+    aiGenerationEnabled
   ) {
-    console.log(
-      "[ShareVideoPage] Transcription complete but no AI data, triggering AI metadata generation for video:",
-      videoId
-    );
     try {
-      // Run AI generation in the background without waiting for it
       generateAiMetadata(videoId, video.ownerId).catch((error) => {
         console.error(
           `[ShareVideoPage] Error generating AI metadata for video ${videoId}:`,
@@ -348,11 +374,9 @@ export default async function ShareVideoPage(props: Props) {
   }
 
   if (video.public === false && userId !== video.ownerId) {
-    console.log("[ShareVideoPage] Access denied - private video:", videoId);
     return <p>This video is private</p>;
   }
 
-  console.log("[ShareVideoPage] Fetching comments for video:", videoId);
   const commentsQuery: CommentWithAuthor[] = await db()
     .select({
       id: comments.id,
@@ -372,7 +396,6 @@ export default async function ShareVideoPage(props: Props) {
 
   let screenshotUrl;
   if (video.isScreenshot === true) {
-    console.log("[ShareVideoPage] Fetching screenshot for video:", videoId);
     try {
       const data = await getScreenshot(video.ownerId, videoId);
       screenshotUrl = data.url;
@@ -391,7 +414,6 @@ export default async function ShareVideoPage(props: Props) {
     }
   }
 
-  console.log("[ShareVideoPage] Fetching analytics for video:", videoId);
   const analyticsData = await getVideoAnalytics(videoId);
 
   const initialAnalytics = {
@@ -508,34 +530,16 @@ export default async function ShareVideoPage(props: Props) {
     sharedOrganizations: sharedOrganizationsData,
   };
 
-  const metadata = (video.metadata as VideoMetadata) || {};
-  let initialAiData = null;
-
-  if (metadata.summary || metadata.chapters || metadata.aiTitle) {
-    initialAiData = {
-      title: metadata.aiTitle || null,
-      summary: metadata.summary || null,
-      chapters: metadata.chapters || null,
-      processing: metadata.aiProcessing || false,
-    };
-    console.log("[ShareVideoPage] Using existing AI metadata:", {
-      hasTitle: !!metadata.aiTitle,
-      hasSummary: !!metadata.summary,
-      hasChapters: !!metadata.chapters,
-      chaptersCount: metadata.chapters?.length || 0,
-      aiProcessing: metadata.aiProcessing || false,
+  // Check if AI UI should be shown for the current viewer
+  let aiUiEnabled = false;
+  if (user?.email) {
+    aiUiEnabled = isAiUiEnabled({
+      email: user.email,
+      stripeSubscriptionStatus: user.stripeSubscriptionStatus,
     });
-  } else if (metadata.aiProcessing) {
-    // If AI processing is in progress but no data yet
-    initialAiData = {
-      title: null,
-      summary: null,
-      chapters: null,
-      processing: true,
-    };
-    console.log("[ShareVideoPage] AI processing in progress");
-  } else {
-    console.log("[ShareVideoPage] No AI metadata found in video metadata");
+    console.log(
+      `[ShareVideoPage] AI UI feature flag check for viewer ${user.id}: ${aiUiEnabled} (email: ${user.email})`
+    );
   }
 
   return (
@@ -548,6 +552,8 @@ export default async function ShareVideoPage(props: Props) {
       domainVerified={domainVerified}
       userOrganizations={userOrganizations}
       initialAiData={initialAiData}
+      aiGenerationEnabled={aiGenerationEnabled}
+      aiUiEnabled={aiUiEnabled}
     />
   );
 }

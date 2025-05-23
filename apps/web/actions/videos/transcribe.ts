@@ -2,11 +2,12 @@ import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createClient } from "@deepgram/sdk";
 import { db } from "@cap/database";
-import { s3Buckets, videos } from "@cap/database/schema";
+import { s3Buckets, videos, users } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { createS3Client } from "@/utils/s3";
 import { serverEnv } from "@cap/env";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
+import { isAiGenerationEnabled } from "@/utils/flags";
 
 type TranscribeResult = {
   success: boolean;
@@ -113,15 +114,29 @@ export async function transcribeVideo(
       .set({ transcriptionStatus: "COMPLETE" })
       .where(eq(videos.id, videoId));
 
-    // Trigger AI metadata generation immediately after transcription completes
-    console.log(`[transcribeVideo] Transcription completed for video ${videoId}, triggering AI metadata generation`);
-    try {
-      // Run AI generation in the background without waiting for it
-      generateAiMetadata(videoId, userId).catch(error => {
-        console.error(`[transcribeVideo] Error generating AI metadata for video ${videoId}:`, error);
-      });
-    } catch (error) {
-      console.error(`[transcribeVideo] Error starting AI metadata generation for video ${videoId}:`, error);
+    console.log(`[transcribeVideo] Transcription completed for video ${videoId}, checking AI generation feature flag`);
+    
+    const userQuery = await db()
+      .select({ 
+        email: users.email, 
+        stripeSubscriptionStatus: users.stripeSubscriptionStatus 
+      })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+
+    if (userQuery.length > 0 && userQuery[0] && isAiGenerationEnabled(userQuery[0])) {
+      console.log(`[transcribeVideo] AI generation feature enabled, triggering AI metadata generation for video ${videoId}`);
+      try {
+        generateAiMetadata(videoId, userId).catch(error => {
+          console.error(`[transcribeVideo] Error generating AI metadata for video ${videoId}:`, error);
+        });
+      } catch (error) {
+        console.error(`[transcribeVideo] Error starting AI metadata generation for video ${videoId}:`, error);
+      }
+    } else {
+      const user = userQuery[0];
+      console.log(`[transcribeVideo] AI generation feature disabled for user ${userId} (email: ${user?.email}, pro: ${user?.stripeSubscriptionStatus})`);
     }
 
     return {
