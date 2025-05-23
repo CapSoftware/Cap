@@ -172,6 +172,7 @@ pub enum RenderingError {
     ImageLoadError(String),
 }
 
+#[derive(Clone)]
 pub struct RenderSegment {
     pub cursor: Arc<CursorEvents>,
     pub decoders: RecordingSegmentDecoders,
@@ -188,8 +189,10 @@ pub async fn render_video_to_channel(
     resolution_base: XY<u32>,
     recordings: &ProjectRecordings,
 ) -> Result<(), RenderingError> {
-    let constants = RenderVideoConstants::new(options, recording_meta, meta).await?;
-    // let recordings = ProjectRecordings::new(&recording_meta.project_path, meta);
+    use futures::stream::{FuturesUnordered, StreamExt};
+    use std::sync::Arc;
+
+    let constants = Arc::new(RenderVideoConstants::new(options, recording_meta, meta).await?);
 
     ffmpeg::init().unwrap();
 
@@ -204,62 +207,71 @@ pub async fn render_video_to_channel(
         duration, total_frames, fps
     );
 
-    let mut frame_number = 0;
-    let background = project.background.source.clone();
+    let segments = Arc::new(segments);
+    let project = Arc::new(project);
 
-    let mut frame_renderer = FrameRenderer::new(&constants);
+    let concurrency = num_cpus::get();
+    let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
+    let mut next_frame = 0;
 
-    let mut layers = RendererLayers::new(&constants.device);
+    while next_frame < total_frames || !in_flight.is_empty() {
+        while next_frame < total_frames && in_flight.len() < concurrency {
+            let frame_no = next_frame;
+            next_frame += 1;
 
-    loop {
-        if frame_number >= total_frames {
-            break;
+            let constants = constants.clone();
+            let project = project.clone();
+            let segments = segments.clone();
+            let sender = sender.clone();
+
+            in_flight.push(tokio::spawn(async move {
+                if let Some((segment_time, segment_i)) =
+                    project.get_segment_time(frame_no as f64 / fps as f64)
+                {
+                    let segment = &segments[segment_i as usize];
+                    if let Some(segment_frames) = segment
+                        .decoders
+                        .get_frames(segment_time as f32, !project.camera.hide)
+                        .await
+                    {
+                        let uniforms = ProjectUniforms::new(
+                            &constants,
+                            &project,
+                            frame_no,
+                            fps,
+                            resolution_base,
+                            &segment.cursor,
+                            &segment_frames,
+                        );
+
+                        let mut frame_renderer = FrameRenderer::new(&constants);
+                        let mut layers = RendererLayers::new(&constants.device);
+
+                        let frame = frame_renderer
+                            .render(segment_frames, uniforms, &segment.cursor, &mut layers)
+                            .await?;
+
+                        if frame.width != 0 && frame.height != 0 {
+                            sender
+                                .send((frame, frame_no))
+                                .await
+                                .map_err(RenderingError::ChannelSendFrameFailed)?;
+                        }
+                    }
+                }
+
+                Ok::<(), RenderingError>(())
+            }));
         }
 
-        let Some((segment_time, segment_i)) =
-            project.get_segment_time(frame_number as f64 / fps as f64)
-        else {
-            break;
-        };
-
-        let segment = &segments[segment_i as usize];
-
-        // do this after all usages but before any 'continue' to handle frame skip
-        let frame_number = {
-            let prev = frame_number;
-            std::mem::replace(&mut frame_number, prev + 1)
-        };
-
-        if let Some(segment_frames) = segment
-            .decoders
-            .get_frames(segment_time as f32, !project.camera.hide)
-            .await
-        {
-            let uniforms = ProjectUniforms::new(
-                &constants,
-                &project,
-                frame_number,
-                fps,
-                resolution_base,
-                &segment.cursor,
-                &segment_frames,
-            );
-
-            let frame = frame_renderer
-                .render(segment_frames, uniforms, &segment.cursor, &mut layers)
-                .await?;
-
-            if frame.width == 0 || frame.height == 0 {
-                continue;
-            }
-
-            sender.send((frame, frame_number)).await?;
+        if let Some(res) = in_flight.next().await {
+            res??;
         }
     }
 
     let total_time = start_time.elapsed();
     println!(
-        "Render complete. Processed {frame_number} frames in {:?} seconds",
+        "Render complete. Processed {total_frames} frames in {:?} seconds",
         total_time.as_secs_f32()
     );
 
