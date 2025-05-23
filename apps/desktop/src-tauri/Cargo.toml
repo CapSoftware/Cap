@@ -76,6 +76,7 @@ cpal.workspace = true
 keyed_priority_queue = "0.4.2"
 sentry.workspace = true
 clipboard-rs = "0.2.2"
+percent-encoding = { workspace = true }
 
 cap-utils = { path = "../../../crates/utils" }
 cap-project = { path = "../../../crates/project" }
