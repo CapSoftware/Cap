@@ -1,7 +1,6 @@
 import { dub } from "@/utils/dub";
 import { getS3Bucket, getS3Config } from "@/utils/s3";
 import { db } from "@cap/database";
-import { VideoMetadata } from "@cap/database/types";
 import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
@@ -22,7 +21,6 @@ app.get(
     "query",
     z.object({
       duration: z.number().optional(),
-      sourceName: z.string().optional(),
       recordingMode: z
         .union([z.literal("hls"), z.literal("desktopMP4")])
         .optional(),
@@ -31,7 +29,7 @@ app.get(
     })
   ),
   async (c) => {
-    const { duration, recordingMode, isScreenshot, videoId, sourceName } =
+    const { duration, recordingMode, isScreenshot, videoId } =
       c.req.valid("query");
     const user = c.get("user");
 
@@ -61,20 +59,6 @@ app.get(
         .where(eq(videos.id, videoId));
 
       if (video) {
-        const currentMetadata = (video.metadata as VideoMetadata) || {};
-        const updatedMetadata: VideoMetadata = {
-          ...currentMetadata,
-          ...(sourceName ? { sourceName } : {}),
-          ...(duration ? { duration } : {}),
-        };
-
-        if (sourceName || duration) {
-          await db()
-            .update(videos)
-            .set({ metadata: updatedMetadata })
-            .where(eq(videos.id, videoId));
-        }
-
         return c.json({
           id: video.id,
           user_id: user.id,
@@ -102,10 +86,6 @@ app.get(
           : undefined,
       isScreenshot,
       bucket: bucket?.id,
-      metadata: {
-        ...(sourceName ? { sourceName } : {}),
-        ...(duration ? { duration } : {}),
-      } as VideoMetadata,
     };
 
     await db().insert(videos).values(videoData);
@@ -165,45 +145,5 @@ app.get(
       aws_region: s3Config.region,
       aws_bucket: bucketName,
     });
-  }
-);
-
-app.post(
-  "/metadata",
-  zValidator(
-    "json",
-    z.object({
-      videoId: z.string(),
-      duration: z.number().optional(),
-      sourceName: z.string().optional(),
-      resolution: z.string().optional(),
-      fps: z.number().optional(),
-    })
-  ),
-  async (c) => {
-    const { videoId, duration, sourceName, resolution, fps } = c.req.valid("json");
-    const user = c.get("user");
-
-    const [video] = await db().select().from(videos).where(eq(videos.id, videoId));
-
-    if (!video || video.ownerId !== user.id) {
-      return c.json({ error: "not_found" }, { status: 404 });
-    }
-
-    const currentMetadata = (video.metadata as VideoMetadata) || {};
-    const updatedMetadata: VideoMetadata = {
-      ...currentMetadata,
-      ...(sourceName ? { sourceName } : {}),
-      ...(duration ? { duration } : {}),
-      ...(resolution ? { resolution } : {}),
-      ...(fps ? { fps } : {}),
-    };
-
-    await db()
-      .update(videos)
-      .set({ metadata: updatedMetadata })
-      .where(eq(videos.id, videoId));
-
-    return c.json({ success: true });
   }
 );

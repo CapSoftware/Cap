@@ -18,7 +18,6 @@ use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio::task;
 use tokio::time::sleep;
-use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use tracing::{info, trace, warn};
 
 use crate::web_api::{self, ManagerExt};
@@ -206,7 +205,7 @@ pub async fn upload_video(
     let client = reqwest::Client::new();
     let s3_config = match existing_config {
         Some(config) => config,
-        None => get_s3_config(app, false, Some(video_id), None, None).await?,
+        None => get_s3_config(app, false, Some(video_id)).await?,
     };
 
     let file_key = format!(
@@ -342,7 +341,7 @@ pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
         .to_string();
 
     let client = reqwest::Client::new();
-    let s3_config = get_s3_config(app, true, None, None, None).await?;
+    let s3_config = get_s3_config(app, true, None).await?;
 
     let file_key = format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name);
 
@@ -409,7 +408,7 @@ pub async fn upload_audio(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
         .to_string();
 
     let client = reqwest::Client::new();
-    let s3_config = get_s3_config(app, false, None, None, None).await?;
+    let s3_config = get_s3_config(app, false, None).await?;
 
     let file_key = format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name);
 
@@ -480,25 +479,14 @@ pub async fn get_s3_config(
     app: &AppHandle,
     is_screenshot: bool,
     video_id: Option<String>,
-    duration: Option<f64>,
-    source_name: Option<String>,
 ) -> Result<S3UploadMeta, String> {
-    let mut s3_config_url = if let Some(id) = &video_id {
+    let s3_config_url = if let Some(id) = video_id {
         format!("/api/desktop/video/create?recordingMode=desktopMP4&videoId={id}")
     } else if is_screenshot {
         "/api/desktop/video/create?recordingMode=desktopMP4&isScreenshot=true".to_string()
     } else {
         "/api/desktop/video/create?recordingMode=desktopMP4".to_string()
     };
-
-    if let Some(d) = duration {
-        s3_config_url.push_str(&format!("&duration={}", d));
-    }
-
-    if let Some(name) = source_name {
-        let encoded = utf8_percent_encode(&name, NON_ALPHANUMERIC).to_string();
-        s3_config_url.push_str(&format!("&sourceName={}", encoded));
-    }
 
     let response = app
         .authed_api_request(s3_config_url, |client, url| client.get(url))
@@ -1397,63 +1385,4 @@ struct UploadedPart {
     part_number: i32,
     etag: String,
     size: usize,
-}
-
-pub async fn update_video_metadata(
-    app: &AppHandle,
-    video_id: &str,
-    duration: Option<f64>,
-    resolution: Option<String>,
-    fps: Option<f64>,
-) -> Result<(), String> {
-    let body = serde_json::json!({
-        "videoId": video_id,
-        "duration": duration,
-        "resolution": resolution,
-        "fps": fps,
-    });
-
-    let response = app
-        .authed_api_request("/api/desktop/video/metadata", |client, url| {
-            client.post(url).json(&body)
-        })
-        .await
-        .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "<no response body>".to_string());
-        return Err(format!(
-            "Failed to update metadata. Status: {}. Body: {}",
-            status, error_body
-        ));
-    }
-
-    Ok(())
-}
-
-pub fn get_video_details(path: &PathBuf) -> Result<(f64, String, f64), String> {
-    let input = ffmpeg::format::input(path)
-        .map_err(|e| format!("Failed to read input file: {e}"))?;
-    let stream = input
-        .streams()
-        .best(ffmpeg::media::Type::Video)
-        .ok_or_else(|| "Failed to find appropriate video stream in file".to_string())?;
-
-    let duration = input.duration() as f64 / 1000.0;
-
-    let codec = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
-        .map_err(|e| format!("Unable to read video codec information: {e}"))?;
-    let video = codec.decoder().video().unwrap();
-    let width = video.width();
-    let height = video.height();
-    let fps = video
-        .frame_rate()
-        .map(|f| f.0 as f64 / f.1 as f64)
-        .unwrap_or(0.0);
-
-    Ok((duration, format!("{}x{}", width, height), fps))
 }
