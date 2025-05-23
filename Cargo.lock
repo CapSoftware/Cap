@@ -964,7 +964,6 @@ dependencies = [
  "nix 0.29.0",
  "objc",
  "objc2-app-kit 0.3.0",
- "percent-encoding",
  "png",
  "rand 0.8.5",
  "relative-path",
