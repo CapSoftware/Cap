@@ -1182,6 +1182,7 @@ dependencies = [
  "futures-intrusive",
  "image 0.25.5",
  "log",
+ "num_cpus",
  "pretty_assertions",
  "reactive_graph",
  "serde",

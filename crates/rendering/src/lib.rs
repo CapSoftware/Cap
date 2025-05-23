@@ -170,6 +170,8 @@ pub enum RenderingError {
     ChannelSendFrameFailed(#[from] mpsc::error::SendError<(RenderedFrame, u32)>),
     #[error("Failed to load image: {0}")]
     ImageLoadError(String),
+    #[error("Join error: {0}")]
+    JoinError(#[from] tokio::task::JoinError),
 }
 
 #[derive(Clone)]
@@ -265,7 +267,7 @@ pub async fn render_video_to_channel(
         }
 
         if let Some(res) = in_flight.next().await {
-            res??;
+            res.map_err(RenderingError::JoinError)??;
         }
     }
 
