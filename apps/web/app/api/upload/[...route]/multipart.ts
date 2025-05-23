@@ -17,10 +17,7 @@ import { serverEnv } from "@cap/env";
 import { handle } from "hono/vercel";
 import { withAuth, corsMiddleware } from "@/app/api/utils";
 
-const app = new Hono()
-  .basePath("/api/upload/multipart")
-  .use(corsMiddleware)
-  .use(withAuth);
+export const app = new Hono().use(withAuth);
 
 app.post(
   "/initiate",
@@ -354,7 +351,3 @@ async function getUserBucketWithClient(userId: string) {
 
   return { s3Client, s3Config, bucketName };
 }
-
-export const GET = handle(app);
-export const POST = handle(app);
-export const OPTIONS = handle(app);

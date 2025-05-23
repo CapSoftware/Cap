@@ -41,6 +41,7 @@ function createServerEnv() {
       STRIPE_SECRET_KEY_LIVE: z.string().optional(),
       STRIPE_WEBHOOK_SECRET: z.string().optional(),
       DISCORD_FEEDBACK_WEBHOOK_URL: z.string().optional(),
+      OPENAI_API_KEY: z.string().optional(),
       INTERCOM_SECRET: z.string().optional(),
       VERCEL_TEAM_ID: z.string().optional(),
       VERCEL_PROJECT_ID: z.string().optional(),
@@ -60,6 +61,5 @@ let _cached: ReturnType<typeof createServerEnv> | undefined;
 export const serverEnv = () => {
   if (_cached) return _cached;
   _cached = createServerEnv();
-  console.log({ S3_PATH_STYLE: _cached.S3_PATH_STYLE });
   return _cached;
 };

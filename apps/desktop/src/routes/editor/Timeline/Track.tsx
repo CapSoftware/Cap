@@ -18,7 +18,7 @@ export function TrackRoot(props: ComponentProps<"div">) {
       <div
         {...props}
         ref={mergeRefs(setRef, props.ref)}
-        class={cx("flex flex-row relative h-14", props.class)}
+        class={cx("flex flex-row relative h-[3.25rem]", props.class)}
       >
         {props.children}
       </div>
@@ -56,19 +56,6 @@ export function SegmentRoot(
     ) => void;
   }
 ) {
-  const { editorState: state, project } = useEditorContext();
-
-  const isSelected = createMemo(() => {
-    const selection = state.timeline.selection;
-    if (!selection || selection.type !== "zoom") return false;
-
-    const segmentIndex = project.timeline?.zoomSegments?.findIndex(
-      (s) => s.start === props.segment.start && s.end === props.segment.end
-    );
-
-    return segmentIndex === selection.index;
-  });
-
   const translateX = useSegmentTranslateX(() => props.segment);
   const width = useSegmentWidth(() => props.segment);
 
@@ -78,8 +65,7 @@ export function SegmentRoot(
         {...props}
         class={cx(
           "absolute overflow-hidden border rounded-xl inset-y-0",
-          props.class,
-          isSelected() && "wobble-wrapper border border-gray-500"
+          props.class
         )}
         style={{
           "--segment-x": `${translateX()}px`,

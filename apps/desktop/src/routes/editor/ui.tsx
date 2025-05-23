@@ -16,7 +16,7 @@ import {
   type ComponentProps,
   type JSX,
   type ParentProps,
-  type ValidComponent
+  type ValidComponent,
 } from "solid-js";
 import Tooltip from "~/components/Tooltip";
 import { useEditorContext } from "./context";
@@ -28,11 +28,15 @@ export function Field(
     icon?: JSX.Element;
     value?: JSX.Element;
     class?: string;
+    disabled?: boolean;
   }>
 ) {
   return (
     <div class={cx("flex flex-col gap-4", props.class)}>
-      <span class="flex flex-row items-center gap-[0.375rem] text-gray-12 font-medium text-sm">
+      <span
+        data-disabled={props.disabled}
+        class="flex flex-row items-center gap-[0.375rem] text-gray-12 data-[disabled='true']:text-gray-10 font-medium text-sm"
+      >
         {props.icon}
         {props.name}
         {props.value && <div class="ml-auto">{props.value}</div>}
@@ -57,9 +61,6 @@ export function Subfield(
     </div>
   );
 }
-
-
-
 
 export function Slider(
   props: ComponentProps<typeof KSlider> & {
@@ -145,13 +146,12 @@ export function Slider(
   );
 }
 
-
 export function Input(props: ComponentProps<"input">) {
   return (
     <TextInput
       {...props}
       class={cx(
-        "rounded-[0.5rem] bg-gray-2 hover:ring-1 py-[18px] hover:ring-gray-3 h-[2rem] font-normal placeholder:text-black-transparent-40 text-xs caret-gray-500 transition-shadow duration-200 focus:ring-offset-1 focus:bg-gray-3 focus:ring-offset-gray-100 focus:ring-1 focus:ring-gray-500 px-[0.5rem] w-full text-[0.875rem] outline-none text-gray-12",
+        "rounded-[0.5rem] bg-gray-2 hover:ring-1 py-[18px] hover:ring-gray-5 h-[2rem] font-normal placeholder:text-black-transparent-40 text-xs caret-gray-500 transition-shadow duration-200 focus:ring-offset-1 focus:bg-gray-3 focus:ring-offset-gray-100 focus:ring-1 focus:ring-gray-10 px-[0.5rem] w-full text-[0.875rem] outline-none text-gray-12",
         props.class
       )}
     />
@@ -230,10 +230,7 @@ export const Dialog = {
     return (
       <div
         {...props}
-        class={cx(
-          "p-[1rem] flex flex-col border-y border-gray-3",
-          props.class
-        )}
+        class={cx("p-[1rem] flex flex-col border-y border-gray-3", props.class)}
       />
     );
   },
@@ -251,9 +248,7 @@ export function DialogContent(
   return (
     <>
       <Dialog.Header>
-        <KDialog.Title class="text-gray-12">
-          {props.title}
-        </KDialog.Title>
+        <KDialog.Title class="text-gray-12">{props.title}</KDialog.Title>
       </Dialog.Header>
       <Dialog.Content class={props.class}>{props.children}</Dialog.Content>
       <Dialog.Footer
@@ -441,7 +436,7 @@ export function ComingSoonTooltip(
         {trigger.children}
       </KTooltip.Trigger>
       <KTooltip.Portal>
-        <KTooltip.Content class="p-2 font-medium bg-gray-12 dark:bg-gray-700 text-gray-1 ui-expanded:animate-in ui-expanded:slide-in-from-bottom-1 ui-expanded:fade-in ui-closed:animate-out ui-closed:slide-out-to-bottom-1 ui-closed:fade-out rounded-lg text-xs z-[1000]">
+        <KTooltip.Content class="p-2 font-medium bg-gray-12 text-gray-1 ui-expanded:animate-in ui-expanded:slide-in-from-bottom-1 ui-expanded:fade-in ui-closed:animate-out ui-closed:slide-out-to-bottom-1 ui-closed:fade-out rounded-lg text-xs z-[1000]">
           Coming Soon
         </KTooltip.Content>
       </KTooltip.Portal>
