@@ -3,7 +3,7 @@ import { organizations } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { buildEnv, serverEnv } from "@cap/env";
 import { notFound } from "next/navigation";
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, userAgent } from "next/server";
 
 const addHttps = (s?: string) => {
   if (!s) return s;
@@ -81,6 +81,19 @@ export async function middleware(request: NextRequest) {
       sameSite: "strict",
       maxAge: 3600, // Cache for 1 hour
     });
+
+    // Get the pathname and referrer
+    const { pathname } = request.nextUrl;
+    const referrer = request.headers.get('referer') || '';
+    
+    // Parse user agent with the userAgent utility
+    const ua = userAgent(request);
+    
+    // Add custom headers to check in generateMetadata
+    response.headers.set('x-pathname', pathname);
+    response.headers.set('x-referrer', referrer);
+    response.headers.set('x-user-agent', JSON.stringify(ua));
+
     return response;
   } catch (error) {
     console.error("Error in middleware:", error);
@@ -89,5 +102,14 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: [
+    /*
+     * Match all request paths except for the ones starting with:
+     * - api (API routes)
+     * - _next/static (static files)
+     * - _next/image (image optimization files)
+     * - favicon.ico, robots.txt, sitemap.xml (static files)
+     */
+    '/((?!api|_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml).*)',
+  ],
 };

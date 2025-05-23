@@ -1715,7 +1715,7 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
         }
     }
 
-    let Ok(Some(mut auth)) = AuthStore::get(&app) else {
+    let Ok(Some(auth)) = AuthStore::get(&app) else {
         println!("No auth found, clearing auth store");
         AuthStore::set(&app, None).map_err(|e| e.to_string())?;
         return Ok(false);
@@ -1732,7 +1732,6 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
         "Fetching plan for user {}",
         auth.user_id.as_deref().unwrap_or("unknown")
     );
-    let plan_url = app.make_app_url("/api/desktop/plan");
     let response = app
         .authed_api_request("/api/desktop/plan", |client, url| client.get(url))
         .await
@@ -1759,9 +1758,8 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
         .unwrap_or(false);
     println!("Pro status: {}", is_pro);
     let updated_auth = AuthStore {
-        token: auth.token,
+        secret: auth.secret,
         user_id: auth.user_id,
-        expires: auth.expires,
         intercom_hash: auth.intercom_hash,
         plan: Some(Plan {
             upgraded: is_pro,

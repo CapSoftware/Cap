@@ -5,6 +5,8 @@ import { cx } from "cva";
 import { For, Show, batch, createRoot, createSignal, onMount } from "solid-js";
 import { produce } from "solid-js/store";
 
+import "../../../styles/timeline.css";
+
 import { useEditorContext } from "../context";
 import { formatTime } from "../utils";
 import { ClipTrack } from "./ClipTrack";
@@ -85,16 +87,42 @@ export function Timeline() {
 
   createEventListener(window, "keydown", (e) => {
     if (e.code === "Backspace" || e.code === "Delete") {
-      if (editorState.timeline.selection?.type !== "zoom") return;
       const selection = editorState.timeline.selection;
+      if (!selection) return;
 
-      batch(() => {
-        setProject(
-          produce((project) => {
-            project.timeline?.zoomSegments.splice(selection.index, 1);
-          })
+      if (selection.type === "zoom") {
+        batch(() => {
+          setProject(
+            produce((project) => {
+              project.timeline?.zoomSegments.splice(selection.index, 1);
+            })
+          );
+        });
+      } else if (selection.type === "clip") {
+        const selectedSegment = project.timeline?.segments.find(
+          (_, i) => i === selection.index
         );
-      });
+        if (!selectedSegment || selectedSegment.recordingSegment === undefined)
+          return;
+
+        const timeline = project.timeline;
+        if (!timeline) return;
+
+        if (
+          timeline.segments.filter(
+            (s) => s.recordingSegment === selectedSegment.recordingSegment
+          ).length < 2
+        )
+          return;
+
+        batch(() => {
+          setProject(
+            produce((project) => {
+              project.timeline?.segments.splice(selection.index, 1);
+            })
+          );
+        });
+      }
     }
   });
 
@@ -212,7 +240,10 @@ export function Timeline() {
             <div class="size-3 bg-[rgb(226,64,64)] rounded-full -mt-2 -ml-[calc(0.37rem-0.5px)]" />
           </div>
         </Show>
-        <ClipTrack ref={setTimelineRef} />
+        <ClipTrack
+          ref={setTimelineRef}
+          handleUpdatePlayhead={handleUpdatePlayhead}
+        />
         <ZoomTrack
           onDragStateChanged={(v) => {
             zoomSegmentDragState = v;
@@ -239,12 +270,12 @@ function TimelineMarkings() {
   };
 
   return (
-    <div class="relative mb-1 h-4 text-xs">
+    <div class="relative h-4 text-xs text-gray-9">
       <For each={timelineMarkings()}>
         {(second) => (
           <Show when={second > 0}>
             <div
-              class="absolute bottom-1 left-0 text-center rounded-full w-1 h-1 bg-[--text-tertiary] text-[--text-tertiary]"
+              class="absolute bottom-1 left-0 text-center rounded-full w-1 h-1 bg-current"
               style={{
                 transform: `translateX(${
                   (second - transform().position) / secsPerPixel() - 1
@@ -252,7 +283,7 @@ function TimelineMarkings() {
               }}
             >
               <Show when={second % 1 === 0}>
-                <div class="absolute -top-5 -translate-x-1/2">
+                <div class="absolute -top-[1.125rem] -translate-x-1/2">
                   {formatTime(second)}
                 </div>
               </Show>

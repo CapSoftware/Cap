@@ -61,6 +61,5 @@ let _cached: ReturnType<typeof createServerEnv> | undefined;
 export const serverEnv = () => {
   if (_cached) return _cached;
   _cached = createServerEnv();
-  console.log({ S3_PATH_STYLE: _cached.S3_PATH_STYLE });
   return _cached;
 };

@@ -17,6 +17,7 @@ import { buildEnv, serverEnv } from "@cap/env";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { transcribeVideo } from "@/actions/videos/transcribe";
 import { getScreenshot } from "@/actions/screenshots/get-screenshot";
+import { headers } from "next/headers";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -65,6 +66,48 @@ export async function generateMetadata(
     return notFound();
   }
 
+  const headersList = headers();
+  const referrer = headersList.get("x-referrer") || "";
+  const userAgent = headersList.get("x-user-agent") || "";
+
+  console.log("[generateMetadata] User Agent:", userAgent);
+
+  const allowedReferrers = [
+    "x.com",
+    "facebook.com",
+    "fb.com",
+    "slack.com",
+    "notion.so",
+    "linkedin.com",
+    "reddit.com",
+    "youtube.com",
+    "quora.com",
+    "t.co",
+  ];
+
+  const allowedBots = ["twitterbot"];
+
+  const isAllowedReferrer = allowedReferrers.some((domain) =>
+    referrer.includes(domain)
+  );
+
+  const userAgentLower = userAgent.toLowerCase();
+  const isAllowedBot = allowedBots.some((bot) =>
+    userAgentLower.includes(bot.toLowerCase())
+  );
+
+  const isTwitterBot = userAgentLower.includes("twitterbot");
+
+  const shouldAllowIndexing = isAllowedReferrer || isAllowedBot || isTwitterBot;
+
+  const robotsDirective = shouldAllowIndexing
+    ? "index, follow"
+    : "noindex, nofollow";
+
+  if (isTwitterBot) {
+    console.log("[generateMetadata] Twitter bot detected, allowing indexing");
+  }
+
   if (video.public === false) {
     return {
       title: "Cap: This video is private",
@@ -80,7 +123,30 @@ export async function generateMetadata(
             height: 630,
           },
         ],
+        videos: [
+          {
+            url: new URL(
+              `/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
+              buildEnv.NEXT_PUBLIC_WEB_URL
+            ).toString(),
+            width: 1280,
+            height: 720,
+            type: "video/mp4",
+          },
+        ],
       },
+      twitter: {
+        card: "summary_large_image",
+        title: "Cap: This video is private",
+        description: "This video is private and cannot be shared.",
+        images: [
+          new URL(
+            `/api/video/og?videoId=${videoId}`,
+            buildEnv.NEXT_PUBLIC_WEB_URL
+          ).toString(),
+        ],
+      },
+      robots: isTwitterBot ? "index, follow" : "noindex, nofollow",
     };
   }
 
@@ -98,7 +164,30 @@ export async function generateMetadata(
           height: 630,
         },
       ],
+      videos: [
+        {
+          url: new URL(
+            `/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
+            buildEnv.NEXT_PUBLIC_WEB_URL
+          ).toString(),
+          width: 1280,
+          height: 720,
+          type: "video/mp4",
+        },
+      ],
     },
+    twitter: {
+      card: "summary_large_image",
+      title: video.name + " | Cap Recording",
+      description: "Watch this video on Cap",
+      images: [
+        new URL(
+          `/api/video/og?videoId=${videoId}`,
+          buildEnv.NEXT_PUBLIC_WEB_URL
+        ).toString(),
+      ],
+    },
+    robots: robotsDirective,
   };
 }
 

@@ -929,7 +929,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop"
-version = "0.3.46"
+version = "0.3.48"
 dependencies = [
  "anyhow",
  "axum",
@@ -7585,9 +7585,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-http"
-version = "2.2.0"
+version = "2.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e62a9bde54d6a0218b63f5a248f02056ad4316ba6ad81dfb9e4f73715df5deb1"
+checksum = "696ef548befeee6c6c17b80ef73e7c41205b6c2204e87ef78ccc231212389a5c"
 dependencies = [
  "data-url",
  "http",

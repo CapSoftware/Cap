@@ -14,8 +14,7 @@ import {
 } from "./ui";
 
 export function PresetsDropdown() {
-  const { setDialog, presets, setProject } = useEditorContext();
-  const [activePreset, setActivePreset] = createSignal<number | null>(presets.query.data?.default ?? null);
+  const { setDialog, presets, setProject, project } = useEditorContext();
   return (
     <KDropdownMenu gutter={8} placement="bottom">
       <EditorButton<typeof KDropdownMenu.Trigger>
@@ -46,6 +45,16 @@ export function PresetsDropdown() {
                 {(preset, i) => {
                   const [showSettings, setShowSettings] = createSignal(false);
 
+                  function applyPreset() {
+                    setShowSettings(false);
+                    setProject(
+                      reconcile({
+                        ...preset.config,
+                        timeline: project.timeline,
+                      })
+                    );
+                  }
+
                   return (
                     <KDropdownMenu.Sub gutter={16}>
                       <MenuItem<typeof KDropdownMenu.SubTrigger>
@@ -53,17 +62,10 @@ export function PresetsDropdown() {
                         class="h-[2.5rem]"
                         onFocusIn={() => setShowSettings(false)}
                         onClick={() => {
-                          setShowSettings(false);
-                          setProject(reconcile(preset.config));
-                          setActivePreset(i());
+                          applyPreset();
                         }}
                       >
                         <span class="mr-auto">{preset.name}</span>
-                        <Show when={Object.is(activePreset(), i())}>
-                          <span class="px-2 py-1 text-[11px] rounded-full bg-blue-8 text-gray-1 dark:text-gray-12">
-                            Current
-                          </span>
-                        </Show>
                         <Show when={presets.query.data?.default === i()}>
                           <span class="px-2 py-1 text-[11px] rounded-full bg-gray-2 text-gray-11">
                             Default
@@ -95,8 +97,7 @@ export function PresetsDropdown() {
                           >
                             <DropdownItem
                               onSelect={() => {
-                                setShowSettings(false);
-                                setProject(reconcile(preset.config));
+                                applyPreset();
                               }}
                             >
                               Apply
