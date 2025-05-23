@@ -117,7 +117,6 @@ async function createDeepLinkSession(signal: AbortSignal) {
   });
   const stopListening = await onOpenUrl(async (urls) => {
     for (const urlString of urls) {
-      if (!urlString.includes("token=")) return;
       if (signal.aborted) return;
 
       const url = new URL(urlString);
