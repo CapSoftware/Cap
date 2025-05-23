@@ -7,13 +7,14 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
-import { Copy, Globe2 } from "lucide-react";
+import { Copy, Globe2, Image } from "lucide-react";
 import { buildEnv, NODE_ENV } from "@cap/env";
 import { editTitle } from "@/actions/videos/edit-title";
 import { usePublicEnv } from "@/utils/public-env";
 import { isUserOnProPlan } from "@cap/utils";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
+import { AddLogoDialog } from "./AddLogoDialog";
 import clsx from "clsx";
 
 export const ShareHeader = ({
@@ -23,6 +24,7 @@ export const ShareHeader = ({
   domainVerified,
   sharedOrganizations = [],
   userOrganizations = [],
+  organizationLogoUrl,
 }: {
   data: typeof videos.$inferSelect;
   user: typeof userSelectProps | null;
@@ -30,6 +32,7 @@ export const ShareHeader = ({
   domainVerified: boolean;
   sharedOrganizations?: { id: string; name: string }[];
   userOrganizations?: { id: string; name: string }[];
+  organizationLogoUrl?: string | null;
 }) => {
   const { push, refresh } = useRouter();
   const [isEditing, setIsEditing] = useState(false);
@@ -37,6 +40,7 @@ export const ShareHeader = ({
   const [isDownloading, setIsDownloading] = useState(false);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
+  const [logoDialogOpen, setLogoDialogOpen] = useState(false);
   const [currentSharedOrganizations, setCurrentSharedOrganizations] =
     useState(sharedOrganizations);
 
@@ -70,16 +74,16 @@ export const ShareHeader = ({
     return customDomain && domainVerified
       ? `https://${customDomain}/s/${data.id}`
       : buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-      ? `https://cap.link/${data.id}`
-      : `${webUrl}/s/${data.id}`;
+        ? `https://cap.link/${data.id}`
+        : `${webUrl}/s/${data.id}`;
   };
 
   const getDisplayLink = () => {
     return customDomain && domainVerified
       ? `${customDomain}/s/${data.id}`
       : buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-      ? `cap.link/${data.id}`
-      : `${webUrl}/s/${data.id}`;
+        ? `cap.link/${data.id}`
+        : `${webUrl}/s/${data.id}`;
   };
 
   const isUserPro = user
@@ -91,8 +95,8 @@ export const ShareHeader = ({
   const handleSharingUpdated = (updatedSharedOrganizations: string[]) => {
     setCurrentSharedOrganizations(
       userOrganizations?.filter((organization) =>
-        updatedSharedOrganizations.includes(organization.id)
-      )
+        updatedSharedOrganizations.includes(organization.id),
+      ),
     );
     refresh();
   };
@@ -168,6 +172,14 @@ export const ShareHeader = ({
                     {title}
                   </h1>
                 )}
+                {isOwner && isUserPro && (
+                  <button
+                    onClick={() => setLogoDialogOpen(true)}
+                    className="p-1 text-gray-11 hover:text-gray-12"
+                  >
+                    <Image className="w-5 h-5" />
+                  </button>
+                )}
               </div>
               {user && renderSharedStatus()}
               <p className="text-sm text-gray-10 mt-1">
@@ -219,6 +231,13 @@ export const ShareHeader = ({
       <UpgradeModal
         open={upgradeModalOpen}
         onOpenChange={setUpgradeModalOpen}
+      />
+      <AddLogoDialog
+        open={logoDialogOpen}
+        onOpenChange={setLogoDialogOpen}
+        videoId={data.id}
+        organizationLogoUrl={organizationLogoUrl}
+        initialLogo={data.metadata?.customLogo || null}
       />
     </>
   );
