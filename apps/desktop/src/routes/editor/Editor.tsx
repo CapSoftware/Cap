@@ -20,7 +20,7 @@ import { cx } from "cva";
 import Cropper, { cropToFloor } from "~/components/Cropper";
 import { Toggle } from "~/components/Toggle";
 import Tooltip from "~/components/Tooltip";
-import { events, type Crop } from "~/utils/tauri";
+import { events, commands, type Crop } from "~/utils/tauri";
 import { ConfigSidebar } from "./ConfigSidebar";
 import {
   EditorContextProvider,
@@ -34,13 +34,7 @@ import { ExportDialog } from "./ExportDialog";
 import { Header } from "./Header";
 import { Player } from "./Player";
 import { Timeline } from "./Timeline";
-import {
-  Dialog,
-  DialogContent,
-  EditorButton,
-  Input,
-  Subfield,
-} from "./ui";
+import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
 
 export function Editor() {
   return (
@@ -58,7 +52,7 @@ export function Editor() {
               const d = ctx.metaQuery.data;
               if (!d)
                 throw new Error(
-                  "metaQuery.data is undefined - how did this happen?"
+                  "metaQuery.data is undefined - how did this happen?",
                 );
               return d;
             },
@@ -85,7 +79,7 @@ function Inner() {
     events.editorStateChanged.listen((e) => {
       renderFrame.clear();
       setEditorState("playbackTime", e.payload.playhead_position / FPS);
-    })
+    }),
   );
 
   const renderFrame = throttle((time: number) => {
@@ -108,14 +102,14 @@ function Inner() {
     on(frameNumberToRender, (number) => {
       if (editorState.playing) return;
       renderFrame(number);
-    })
+    }),
   );
 
   createEffect(
     on(
       () => trackDeep(project),
-      () => renderFrame(editorState.playbackTime)
-    )
+      () => renderFrame(editorState.playbackTime),
+    ),
   );
 
   return (
@@ -222,7 +216,7 @@ function Dialogs() {
             >
               {(dialog) => {
                 const [name, setName] = createSignal(
-                  presets.query.data?.presets[dialog().presetIndex].name!
+                  presets.query.data?.presets[dialog().presetIndex].name!,
                 );
 
                 const renamePreset = createMutation(() => ({
@@ -240,6 +234,48 @@ function Dialogs() {
                       <Dialog.ConfirmButton
                         disabled={renamePreset.isPending}
                         onClick={() => renamePreset.mutate()}
+                      >
+                        Rename
+                      </Dialog.ConfirmButton>
+                    }
+                  >
+                    <Subfield name="Name" required />
+                    <Input
+                      class="mt-2"
+                      value={name()}
+                      onInput={(e) => setName(e.currentTarget.value)}
+                    />
+                  </DialogContent>
+                );
+              }}
+            </Match>
+            <Match
+              when={(() => {
+                const d = dialog();
+                if (d.type === "renameProject") return d;
+              })()}
+            >
+              {() => {
+                const { meta, refetchMeta } = useEditorContext();
+                const [name, setName] = createSignal(meta().prettyName);
+
+                const renameProject = createMutation(() => ({
+                  mutationFn: async () => {
+                    await commands.renameProject(name());
+                    await refetchMeta();
+                  },
+                  onSuccess: () => {
+                    setDialog((d) => ({ ...d, open: false }));
+                  },
+                }));
+
+                return (
+                  <DialogContent
+                    title="Rename Project"
+                    confirm={
+                      <Dialog.ConfirmButton
+                        disabled={renameProject.isPending}
+                        onClick={() => renameProject.mutate()}
                       >
                         Rename
                       </Dialog.ConfirmButton>
@@ -309,7 +345,7 @@ function Dialogs() {
                   createStore({
                     showGrid: false,
                   }),
-                  { name: "cropOptionsState" }
+                  { name: "cropOptionsState" },
                 );
 
                 const display = editorInstance.recordings.segments[0].display;
@@ -398,7 +434,7 @@ function Dialogs() {
                                 "flex items-center bg-gray-3 justify-center text-center rounded-[0.5rem] h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-9 outline-none transition-colors duration-200",
                                 cropOptions.showGrid
                                   ? "bg-gray-3 text-blue-9 border-blue-9"
-                                  : "text-gray-12"
+                                  : "text-gray-12",
                               )}
                               onClick={() =>
                                 setCropOptions("showGrid", (s) => !s)
@@ -440,7 +476,7 @@ function Dialogs() {
                               class="shadow pointer-events-none max-h-[70vh]"
                               alt="screenshot"
                               src={convertFileSrc(
-                                `${editorInstance.path}/screenshots/display.jpg`
+                                `${editorInstance.path}/screenshots/display.jpg`,
                               )}
                             />
                           </Cropper>

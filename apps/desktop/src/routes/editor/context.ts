@@ -34,6 +34,7 @@ export type CurrentDialog =
   | { type: "createPreset" }
   | { type: "renamePreset"; presetIndex: number }
   | { type: "deletePreset"; presetIndex: number }
+  | { type: "renameProject" }
   | { type: "crop"; position: XY<number>; size: XY<number> }
   | { type: "export" };
 
@@ -60,7 +61,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
   }) => {
     const editorInstanceContext = useEditorInstanceContext();
     const [project, setProject] = createStore<ProjectConfiguration>(
-      props.editorInstance.savedProjectConfig
+      props.editorInstance.savedProjectConfig,
     );
 
     createEffect(
@@ -71,8 +72,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
         debounce(() => {
           commands.setProjectConfig(project);
         }),
-        { defer: true }
-      )
+        { defer: true },
+      ),
     );
 
     const [dialog, setDialog] = createSignal<DialogState>({
@@ -105,7 +106,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
         ? (exportState.progress.renderedCount /
             exportState.progress.totalFrames) *
           100
-        : undefined
+        : undefined,
     );
 
     createEffect(
@@ -114,16 +115,16 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
         (active) => {
           if (!active)
             commands.setPlayheadPosition(
-              Math.floor(editorState.playbackTime * FPS)
+              Math.floor(editorState.playbackTime * FPS),
             );
-        }
-      )
+        },
+      ),
     );
 
     const totalDuration = () =>
       project.timeline?.segments.reduce(
         (acc, s) => acc + (s.end - s.start) / s.timescale,
-        0
+        0,
       ) ?? props.editorInstance.recordingDuration;
 
     type State = {
@@ -169,7 +170,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
                 position: editorState.timeline.transform.position,
               },
               z,
-              origin
+              origin,
             );
 
             const transform = editorState.timeline.transform;
@@ -190,8 +191,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
                 Math.max(p, 0),
                 Math.max(zoomOutLimit(), totalDuration()) +
                   4 -
-                  editorState.timeline.transform.zoom
-              )
+                  editorState.timeline.transform.zoom,
+              ),
             );
           },
         },
@@ -219,7 +220,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
     };
   },
   // biome-ignore lint/style/noNonNullAssertion: it's ok
-  null!
+  null!,
 );
 
 export type FrameData = { width: number; height: number; data: ImageData };
@@ -276,7 +277,7 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 
       const [_ws, isConnected] = createImageDataWS(
         instance.framesSocketUrl,
-        setLatestFrame
+        setLatestFrame,
       );
 
       createEffect(() => {
@@ -380,7 +381,7 @@ export const [TimelineContextProvider, useTimelineContext] =
         timelineBounds: props.timelineBounds,
       };
     },
-    null!
+    null!,
   );
 
 export const [TrackContextProvider, useTrackContext] = createContextProvider(
@@ -402,7 +403,7 @@ export const [TrackContextProvider, useTrackContext] = createContextProvider(
       setTrackState,
     };
   },
-  null!
+  null!,
 );
 
 export const [SegmentContextProvider, useSegmentContext] =

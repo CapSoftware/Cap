@@ -81,6 +81,12 @@ export function Header() {
           leftIcon={<IconLucideFolder class="w-5" />}
         />
 
+        <EditorButton
+          onClick={() => setDialog({ type: "renameProject", open: true })}
+          tooltipText="Rename project"
+          leftIcon={<IconLucideEdit class="w-5" />}
+        />
+
         <p class="text-sm text-gray-12">
           {meta().prettyName}
           <span class="text-sm text-gray-11">.cap</span>
@@ -131,7 +137,7 @@ export function Header() {
         data-tauri-drag-region
         class={cx(
           "flex-1 h-full flex flex-row items-center gap-2 pl-2",
-          ostype() !== "windows" && "pr-2"
+          ostype() !== "windows" && "pr-2",
         )}
       >
         <EditorButton
@@ -196,7 +202,9 @@ const UploadIcon = (props: ComponentProps<"svg">) => {
         stroke-linecap="round"
         stroke-linejoin="round"
         class={cx(
-          exportState.type !== "idle" && exportState.type !== "done" && "bounce"
+          exportState.type !== "idle" &&
+            exportState.type !== "done" &&
+            "bounce",
         )}
       />
     </svg>

@@ -51,6 +51,7 @@ use scap::frame::VideoFrame;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
+use either::Either;
 use std::collections::BTreeMap;
 use std::time::Duration;
 use std::{
@@ -1172,6 +1173,22 @@ async fn set_project_config(
 
 #[tauri::command]
 #[specta::specta]
+async fn rename_project(
+    editor_instance: WindowEditorInstance,
+    name: String,
+) -> Result<(), String> {
+    let mut meta =
+        RecordingMeta::load_for_project(&editor_instance.project_path).map_err(|e| e.to_string())?;
+    meta.pretty_name = name;
+    meta.save_for_project()
+        .map_err(|e| match e {
+            Either::Left(e) => e.to_string(),
+            Either::Right(e) => e.to_string(),
+        })
+}
+
+#[tauri::command]
+#[specta::specta]
 async fn list_audio_devices() -> Result<Vec<String>, ()> {
     if !permissions::do_permissions_check(false)
         .microphone
@@ -1981,6 +1998,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             stop_playback,
             set_playhead_position,
             set_project_config,
+            rename_project,
             permissions::open_permission_settings,
             permissions::do_permissions_check,
             permissions::request_permission,
