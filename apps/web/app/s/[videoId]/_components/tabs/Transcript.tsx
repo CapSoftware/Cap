@@ -122,10 +122,8 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
       let transcriptionUrl;
 
       if (data.bucket && data.awsBucket !== publicEnv.awsBucket) {
-        // For custom S3 buckets, fetch through the API
         transcriptionUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&fileType=transcription`;
       } else {
-        // For default Cap storage
         transcriptionUrl = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/transcription.vtt`;
       }
 

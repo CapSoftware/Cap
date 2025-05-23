@@ -43,13 +43,10 @@ const formatTime = (time: number) => {
     .padStart(2, "0")}`;
 };
 
-// million-ignore
-// Add this type definition at the top of the file
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
   authorName: string | null;
 };
 
-// Update the component props type
 export const ShareVideo = forwardRef<
   HTMLVideoElement,
   {
@@ -59,7 +56,6 @@ export const ShareVideo = forwardRef<
     chapters?: { title: string; start: number }[];
   }
 >(({ data, user, comments, chapters = [] }, ref) => {
-  // Forward the ref to the video element
   useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -74,41 +70,34 @@ export const ShareVideo = forwardRef<
   const [overlayVisible, setOverlayVisible] = useState(true);
   const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
   const [subtitlesVisible, setSubtitlesVisible] = useState(true);
-  const [isTranscriptionProcessing, setIsTranscriptionProcessing] =
-    useState(false);
+  const [isTranscriptionProcessing, setIsTranscriptionProcessing] = useState(
+    data.transcriptionStatus === "PROCESSING"
+  );
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [tempOverlayVisible, setTempOverlayVisible] = useState(false);
 
-  // Scrubbing preview states
   const [showPreview, setShowPreview] = useState(false);
   const [previewTime, setPreviewTime] = useState(0);
   const [previewPosition, setPreviewPosition] = useState(0);
   const [previewLoaded, setPreviewLoaded] = useState(false);
   const [previewWidth, setPreviewWidth] = useState(160);
   const [previewHeight, setPreviewHeight] = useState(90);
-  // Track if we're actually showing MP4 content that supports thumbnails
   const [isMP4Source, setIsMP4Source] = useState(false);
-  // Store the current preview image URL
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
 
   const [videoSpeed, setVideoSpeed] = useState(1);
-  const [isHovering, setIsHovering] = useState(false);
-  const hideControlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const [forceHideControls, setForceHideControls] = useState(false);
+  const [isHoveringVideo, setIsHoveringVideo] = useState(false);
   const [isHoveringControls, setIsHoveringControls] = useState(false);
-  const enterControlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const hideControlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Add to the state variables section
   const [scrubbingVideo, setScrubbingVideo] = useState<HTMLVideoElement | null>(
     null
   );
 
-  // Simplify state variables and refs - remove the throttling mechanism that's causing issues
   const [isPreviewSeeking, setIsPreviewSeeking] = useState(false);
   const lastUpdateTimeRef = useRef<number>(0);
   const lastMousePosRef = useRef<number>(0);
 
-  // Add a state to track if we're on a large screen
   const [isLargeScreen, setIsLargeScreen] = useState(false);
 
   useEffect(() => {
@@ -121,25 +110,19 @@ export const ShareVideo = forwardRef<
     }
   }, [ref]);
 
-  // Initialize thumbnail preview capability
   useEffect(() => {
     if (!videoMetadataLoaded) return;
 
-    // Only enable preview for desktopMP4 sources
     setIsMP4Source(data.source.type === "desktopMP4");
 
-    // Pre-fetch the first thumbnail to check if it exists
     if (data.source.type === "desktopMP4") {
       const thumbUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&thumbnailTime=0`;
 
-      // Check if the thumbnail exists
       fetch(thumbUrl, { method: "HEAD" })
         .then((response) => {
           if (response.ok) {
-            console.log("Thumbnails available for this video");
             setIsMP4Source(true);
           } else {
-            console.log("No thumbnails available for this video");
             setIsMP4Source(false);
           }
         })
@@ -152,78 +135,84 @@ export const ShareVideo = forwardRef<
 
   const showControls = () => {
     setOverlayVisible(true);
-    setIsHovering(true);
-    setForceHideControls(false);
     if (hideControlsTimeoutRef.current) {
       clearTimeout(hideControlsTimeoutRef.current);
+      hideControlsTimeoutRef.current = null;
     }
   };
 
-  const hideControls = () => {
-    if (!isHoveringControls) {
+  const scheduleHideControls = () => {
+    if (hideControlsTimeoutRef.current) {
+      clearTimeout(hideControlsTimeoutRef.current);
+    }
+
+    if (isPlaying && !isHoveringControls) {
       hideControlsTimeoutRef.current = setTimeout(() => {
         setOverlayVisible(false);
-        setIsHovering(false);
-        setForceHideControls(true);
-      }, 250);
+      }, 1000);
     }
   };
 
   useEffect(() => {
     const handleMouseMove = () => {
-      if (forceHideControls) {
-        setForceHideControls(false);
-      }
       showControls();
-      if (!isHoveringControls) {
-        hideControls();
-      }
+      scheduleHideControls();
+    };
+
+    const handleMouseEnter = () => {
+      setIsHoveringVideo(true);
+      showControls();
     };
 
     const handleMouseLeave = () => {
-      setIsHovering(false);
-      setIsHoveringControls(false);
-      hideControls();
+      setIsHoveringVideo(false);
+      if (!isHoveringControls) {
+        scheduleHideControls();
+      }
     };
 
     const videoContainer = document.getElementById("video-container");
     if (videoContainer) {
       videoContainer.addEventListener("mousemove", handleMouseMove);
+      videoContainer.addEventListener("mouseenter", handleMouseEnter);
       videoContainer.addEventListener("mouseleave", handleMouseLeave);
     }
 
     return () => {
       if (videoContainer) {
         videoContainer.removeEventListener("mousemove", handleMouseMove);
+        videoContainer.removeEventListener("mouseenter", handleMouseEnter);
         videoContainer.removeEventListener("mouseleave", handleMouseLeave);
       }
       if (hideControlsTimeoutRef.current) {
         clearTimeout(hideControlsTimeoutRef.current);
       }
-      if (enterControlsTimeoutRef.current) {
-        clearTimeout(enterControlsTimeoutRef.current);
-      }
     };
-  }, [forceHideControls, isHoveringControls]);
+  }, [isPlaying, isHoveringControls]);
 
   useEffect(() => {
     if (isPlaying) {
-      hideControls();
+      scheduleHideControls();
     } else {
       showControls();
     }
-  }, [isPlaying]);
+  }, [isPlaying, isHoveringControls]);
+
+  useEffect(() => {
+    if (isHoveringControls) {
+      showControls();
+    } else if (isPlaying && !isHoveringVideo) {
+      scheduleHideControls();
+    }
+  }, [isHoveringControls, isPlaying, isHoveringVideo]);
 
   useEffect(() => {
     if (videoMetadataLoaded) {
-      // Don't immediately set isLoading to false when metadata loads
-      // We'll wait for canplay event to ensure video is ready
     }
   }, [videoMetadataLoaded]);
 
   useEffect(() => {
     const handleShortcuts = (e: KeyboardEvent) => {
-      // Skip handling if user is typing in form controls
       const target = e.target as HTMLElement;
       const isFormElement =
         target.tagName === "INPUT" ||
@@ -232,10 +221,9 @@ export const ShareVideo = forwardRef<
         target.isContentEditable ||
         target.getAttribute("role") === "textbox";
 
-      // Only handle shortcuts if not typing in a form control
       if (!isFormElement && videoRef.current) {
         if (e.code === "Space") {
-          e.preventDefault(); // Prevent page scrolling
+          e.preventDefault();
           if (isPlaying) {
             videoRef.current.pause();
             setIsPlaying(false);
@@ -259,7 +247,6 @@ export const ShareVideo = forwardRef<
       if (videoRef.current) {
         setLongestDuration(videoRef.current.duration);
         setVideoMetadataLoaded(true);
-        // Don't set isLoading to false here
       }
     };
 
@@ -267,33 +254,26 @@ export const ShareVideo = forwardRef<
       setVideoMetadataLoaded(true);
       setVideoReadyToPlay(true);
 
-      // Autoplay the video when it's ready on initial render
       setIsPlaying(true);
       if (videoRef.current) {
         videoRef.current.play().catch((error) => {
           console.error("Error auto-playing video:", error);
-          // If autoplay fails (common on mobile), don't set isPlaying
           setIsPlaying(false);
         });
       }
 
-      // If the video is already playing (user clicked play before it was ready),
-      // ensure it actually starts playing now
       if (isPlaying && videoRef.current) {
-        // Store the current position before playing
         const currentPosition = videoRef.current.currentTime;
 
         videoRef.current.play().catch((error) => {
           console.error("Error playing video in onCanPlay:", error);
         });
 
-        // If the video was reset to the beginning, restore the position
         if (videoRef.current.currentTime === 0 && currentPosition > 0) {
           videoRef.current.currentTime = currentPosition;
         }
       }
 
-      // Set a small delay before removing the loading state to ensure smooth transition
       setTimeout(() => {
         setIsLoading(false);
       }, 100);
@@ -326,31 +306,20 @@ export const ShareVideo = forwardRef<
       setIsPlaying(false);
     } else {
       try {
-        // Make sure video is ready to play
         if (!videoReadyToPlay) {
-          // If video is not ready yet, wait for it
-          console.log("Video not ready to play yet, waiting...");
-          // Show the controls to indicate we received the click
-          showControls();
-          // We'll attempt to play once the video is ready in the onCanPlay handler
           setIsPlaying(true);
         } else {
-          // Ensure video is not muted before playing
           videoElement.muted = false;
 
-          // Store the current position before playing
           const currentPosition = videoElement.currentTime;
 
-          // Use a promise to ensure play() completes
           const playPromise = videoElement.play();
 
           if (playPromise !== undefined) {
             playPromise
               .then(() => {
                 setIsPlaying(true);
-                console.log("Video playback started successfully");
 
-                // If the video was reset to the beginning, restore the position
                 if (videoElement.currentTime === 0 && currentPosition > 0) {
                   videoElement.currentTime = currentPosition;
                 }
@@ -358,20 +327,16 @@ export const ShareVideo = forwardRef<
               .catch((error) => {
                 console.error("Error with playing:", error);
 
-                // If autoplay is prevented by browser policy, try again with muted
                 if (error.name === "NotAllowedError") {
-                  console.log("Autoplay prevented, trying with muted...");
                   videoElement.muted = true;
                   videoElement
                     .play()
                     .then(() => {
                       setIsPlaying(true);
-                      // After successful play, unmute if possible
                       setTimeout(() => {
                         videoElement.muted = false;
                       }, 100);
 
-                      // If the video was reset to the beginning, restore the position
                       if (
                         videoElement.currentTime === 0 &&
                         currentPosition > 0
@@ -388,10 +353,8 @@ export const ShareVideo = forwardRef<
                 }
               });
           } else {
-            // For older browsers that don't return a promise
             setIsPlaying(true);
 
-            // If the video was reset to the beginning, restore the position
             if (videoElement.currentTime === 0 && currentPosition > 0) {
               videoElement.currentTime = currentPosition;
             }
@@ -404,12 +367,10 @@ export const ShareVideo = forwardRef<
   };
 
   const applyTimeToVideos = (time: number) => {
-    // Validate time to ensure it's a finite number
     if (!Number.isFinite(time)) {
       console.warn("Attempted to set non-finite time:", time);
       return;
     }
-    // Clamp time between 0 and video duration
     const validTime = Math.max(0, Math.min(time, longestDuration));
     if (videoRef.current) videoRef.current.currentTime = validTime;
     setCurrentTime(validTime);
@@ -419,27 +380,22 @@ export const ShareVideo = forwardRef<
     const videoElement = videoRef.current;
     if (!videoElement || !videoReadyToPlay) return;
 
-    // Set up the time update handler only once
     const handleTimeUpdate = () => {
       setCurrentTime(videoElement.currentTime);
     };
 
-    // Add the event listener
     videoElement.addEventListener("timeupdate", handleTimeUpdate);
 
-    // Clean up
     return () => {
       videoElement.removeEventListener("timeupdate", handleTimeUpdate);
     };
-  }, [videoReadyToPlay]); // Only re-run when video becomes ready
+  }, [videoReadyToPlay]);
 
-  // Separate effect for handling play state changes
   useEffect(() => {
     const videoElement = videoRef.current;
     if (!videoElement || !videoReadyToPlay) return;
 
     if (isPlaying) {
-      // Don't reset the currentTime when playing
       const currentPosition = videoElement.currentTime;
 
       videoElement.play().catch((error) => {
@@ -447,7 +403,6 @@ export const ShareVideo = forwardRef<
         setIsPlaying(false);
       });
 
-      // If the video was reset to the beginning, restore the position
       if (videoElement.currentTime === 0 && currentPosition > 0) {
         videoElement.currentTime = currentPosition;
       }
@@ -482,28 +437,20 @@ export const ShareVideo = forwardRef<
     };
   }, [seeking]);
 
-  // Show overlay temporarily when play state changes
   useEffect(() => {
-    // When video play state changes, show overlay temporarily
     setTempOverlayVisible(true);
 
-    // Hide temporary overlay after 500ms
     const timer = setTimeout(() => {
       setTempOverlayVisible(false);
     }, 500);
 
-    // Clean up timer on unmount or when isPlaying changes again
     return () => clearTimeout(timer);
   }, [isPlaying]);
 
-  // Set up a hidden video element for scrubbing previews
   useEffect(() => {
-    // Only set up scrubbing video on large screens
     if (isMP4Source && data && isLargeScreen) {
-      console.log("Setting up scrubbing video");
       const scrubVideo = document.createElement("video");
 
-      // Use the same MP4 source construction as the main video
       const mp4Source = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
 
       scrubVideo.src = mp4Source;
@@ -512,25 +459,18 @@ export const ShareVideo = forwardRef<
       scrubVideo.muted = true;
       scrubVideo.style.display = "none";
 
-      // Add event listener for when metadata is loaded
       scrubVideo.addEventListener("loadedmetadata", () => {
-        console.log("Scrubbing video metadata loaded");
-        // Preload the first frame to ensure we have something to show on first hover
         scrubVideo.currentTime = 0;
       });
 
-      // Wait for the video to be ready to use
       scrubVideo.addEventListener("canplay", () => {
-        console.log("Scrubbing video ready for preview");
         setScrubbingVideo(scrubVideo);
 
-        // Preload the first frame after the video is ready
         if (previewCanvasRef.current) {
           const canvas = previewCanvasRef.current;
           const ctx = canvas.getContext("2d");
 
           if (ctx) {
-            // Set canvas dimensions
             if (
               canvas.width !== previewWidth ||
               canvas.height !== previewHeight
@@ -539,11 +479,9 @@ export const ShareVideo = forwardRef<
               canvas.height = previewHeight;
             }
 
-            // Draw the initial frame (at time 0)
             try {
               ctx.drawImage(scrubVideo, 0, 0, canvas.width, canvas.height);
               setPreviewLoaded(true);
-              console.log("Preloaded initial frame for preview");
             } catch (err) {
               console.error("Error preloading initial frame:", err);
             }
@@ -551,49 +489,37 @@ export const ShareVideo = forwardRef<
         }
       });
 
-      // Handle errors
       scrubVideo.addEventListener("error", (e) => {
         console.error("Error loading scrubbing video:", e);
       });
 
-      // Append to document body (invisible)
       document.body.appendChild(scrubVideo);
 
-      // Clean up on component unmount
       return () => {
         scrubVideo.remove();
         setScrubbingVideo(null);
       };
     } else if (!isLargeScreen) {
-      // Clean up any existing scrubbing video on small screens
       setScrubbingVideo(null);
     }
   }, [isMP4Source, data, previewWidth, previewHeight, isLargeScreen]);
 
-  // Function to update the preview thumbnail
   const updatePreviewFrame = (time: number) => {
-    // Skip preview operations on small screens
     if (!isLargeScreen) return;
 
     if (!isMP4Source) return;
-
-    console.log("Updating preview frame to time:", time);
     setPreviewTime(time);
 
-    // Don't attempt to seek again if already seeking to a position
     if (isPreviewSeeking) {
-      console.log("Already seeking, skipping update");
       return;
     }
 
-    // Try to capture frames from the scrubbing video
     try {
       if (scrubbingVideo && previewCanvasRef.current) {
         const canvas = previewCanvasRef.current;
         const ctx = canvas.getContext("2d");
 
         if (ctx) {
-          // Set canvas dimensions only if they haven't been set yet
           if (
             canvas.width !== previewWidth ||
             canvas.height !== previewHeight
@@ -602,19 +528,14 @@ export const ShareVideo = forwardRef<
             canvas.height = previewHeight;
           }
 
-          // Set a flag that we're seeking to avoid multiple seeks
           setIsPreviewSeeking(true);
 
-          // Seek to the specific time
           scrubbingVideo.currentTime = time;
 
-          // Listen for the seeked event
           const handleSeeked = () => {
             try {
-              // Draw the current frame onto the canvas
               ctx.drawImage(scrubbingVideo, 0, 0, canvas.width, canvas.height);
 
-              // Add timestamp overlay
               ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
               ctx.fillRect(0, canvas.height - 20, canvas.width, 20);
               ctx.fillStyle = "white";
@@ -628,24 +549,19 @@ export const ShareVideo = forwardRef<
 
               setPreviewLoaded(true);
               setIsPreviewSeeking(false);
-              console.log(`Drew frame at time ${time}`);
             } catch (err) {
               console.error("Error drawing frame:", err);
               setIsPreviewSeeking(false);
             }
 
-            // Remove the event listener after use
             scrubbingVideo.removeEventListener("seeked", handleSeeked);
           };
 
-          // Add the seeked event listener
           scrubbingVideo.addEventListener("seeked", handleSeeked);
 
-          // Set a timeout to ensure we don't get stuck waiting for the seeked event
           const timeoutId = setTimeout(() => {
             if (isPreviewSeeking) {
               try {
-                // If we're still seeking after 250ms, draw the frame anyway
                 ctx.drawImage(
                   scrubbingVideo,
                   0,
@@ -654,7 +570,6 @@ export const ShareVideo = forwardRef<
                   canvas.height
                 );
 
-                // Add timestamp overlay
                 ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
                 ctx.fillRect(0, canvas.height - 20, canvas.width, 20);
                 ctx.fillStyle = "white";
@@ -667,36 +582,29 @@ export const ShareVideo = forwardRef<
                 );
 
                 setPreviewLoaded(true);
-                console.log(`Drew frame at time ${time} after timeout`);
               } catch (err) {
                 console.error("Error drawing frame after timeout:", err);
               } finally {
-                // Always reset the seeking state after timeout
                 setIsPreviewSeeking(false);
                 scrubbingVideo.removeEventListener("seeked", handleSeeked);
               }
             }
           }, 250);
 
-          // Clean up the timeout if the component unmounts
           return () => clearTimeout(timeoutId);
         }
       } else if (videoRef.current && previewCanvasRef.current) {
-        // Fallback to main video if scrubbing video isn't ready
         const canvas = previewCanvasRef.current;
         const video = videoRef.current;
         const ctx = canvas.getContext("2d");
 
         if (ctx) {
           try {
-            // Set canvas dimensions
             canvas.width = previewWidth;
             canvas.height = previewHeight;
 
-            // Draw the current frame from the main video
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-            // Add timestamp overlay
             ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
             ctx.fillRect(0, canvas.height - 20, canvas.width, 20);
             ctx.fillStyle = "white";
@@ -716,22 +624,18 @@ export const ShareVideo = forwardRef<
     }
   };
 
-  // Handle hovering over the timeline
   const handleTimelineHover = (
     event: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>
   ) => {
     if (isLoading) return;
 
-    // Skip preview operations on small screens
     if (!isLargeScreen) return;
 
     const seekBar = event.currentTarget;
     const time = calculateNewTime(event, seekBar);
 
-    // Set the preview position based on mouse/touch position
     const rect = seekBar.getBoundingClientRect();
 
-    // Get clientX from either mouse or touch event
     let clientX = 0;
     if ("touches" in event && event.touches && event.touches[0]) {
       clientX = event.touches[0].clientX;
@@ -741,30 +645,22 @@ export const ShareVideo = forwardRef<
 
     const previewPos = clientX - rect.left - previewWidth / 2;
 
-    // Ensure preview stays within bounds of the video player
     const maxLeft = rect.width - previewWidth;
     const boundedPos = Math.max(0, Math.min(previewPos, maxLeft));
 
     setPreviewPosition(boundedPos);
 
-    // Always show the preview when hovering
     if (!showPreview) {
       setShowPreview(true);
-      // Force an update on the first hover
       updatePreviewFrame(time);
       lastUpdateTimeRef.current = Date.now();
       return;
     }
 
-    // Store the current mouse position
     const currentMousePos = clientX;
     const lastMousePos = lastMousePosRef.current;
     lastMousePosRef.current = currentMousePos;
 
-    // Only update the frame if:
-    // 1. It's been more than 500ms since the last update
-    // 2. The mouse has moved significantly (more than 10px) since the last update
-    // 3. We're not currently in the middle of seeking
     const now = Date.now();
     const timeSinceLastUpdate = now - lastUpdateTimeRef.current;
     const significantMouseMove = Math.abs(currentMousePos - lastMousePos) > 10;
@@ -781,7 +677,6 @@ export const ShareVideo = forwardRef<
   const calculateNewTime = (event: any, seekBar: any) => {
     const rect = seekBar.getBoundingClientRect();
 
-    // Handle both mouse and touch events
     let clientX = 0;
     if (event.touches && event.touches.length > 0) {
       clientX = event.touches[0].clientX;
@@ -807,8 +702,6 @@ export const ShareVideo = forwardRef<
     setSeeking(false);
     const seekBar = event.currentTarget;
     const seekTo = calculateNewTime(event, seekBar);
-    // we don't want to apply time to videos if it's a touch event (mobile)
-    // as it's already being handled by handleSeekMouseMove
     if (!isTouch) {
       applyTimeToVideos(seekTo);
     }
@@ -826,14 +719,10 @@ export const ShareVideo = forwardRef<
     applyTimeToVideos(seekTo);
   };
 
-  // Clean up any pending timeout when timeline hover ends
   const handleTimelineLeave = () => {
-    // Skip preview operations on small screens
     if (!isLargeScreen) return;
 
     setShowPreview(false);
-    // Reset the last update time when leaving the timeline
-    // This ensures the preview will update immediately on the next hover
     lastUpdateTimeRef.current = 0;
   };
 
@@ -854,7 +743,6 @@ export const ShareVideo = forwardRef<
     const isAndroid = /Android/.test(navigator.userAgent);
 
     if (isIOS || isAndroid) {
-      // For mobile devices, use the video element's fullscreen API
       if (video.requestFullscreen) {
         video
           .requestFullscreen()
@@ -929,8 +817,6 @@ export const ShareVideo = forwardRef<
       if (playPromise !== undefined) {
         playPromise.catch((error) => {
           console.error("Error in useEffect play:", error);
-          // If autoplay is prevented, don't change the isPlaying state
-          // as it will be handled by the click handler
         });
       }
     } else {
@@ -939,11 +825,9 @@ export const ShareVideo = forwardRef<
   }, [isPlaying, videoReadyToPlay]);
 
   const parseSubTime = (timeString: number) => {
-    // Convert number to string and ensure it's in the format HH:MM:SS
     const timeStr = timeString.toString();
     const timeParts = timeStr.split(":");
 
-    // Map parts to numbers with proper fallbacks
     const hoursValue = timeParts.length > 2 ? Number(timeParts[0]) || 0 : 0;
     const minutesValue =
       timeParts.length > 1 ? Number(timeParts[timeParts.length - 2]) || 0 : 0;
@@ -960,10 +844,8 @@ export const ShareVideo = forwardRef<
       let transcriptionUrl;
 
       if (data.bucket && data.awsBucket !== publicEnv.awsBucket) {
-        // For custom S3 buckets, fetch through the API
         transcriptionUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&fileType=transcription`;
       } else {
-        // For default Cap storage
         transcriptionUrl = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/transcription.vtt`;
       }
 
@@ -972,43 +854,29 @@ export const ShareVideo = forwardRef<
         const text = await response.text();
         const parsedSubtitles = fromVtt(text);
         setSubtitles(parsedSubtitles);
+        setIsTranscriptionProcessing(false);
       } catch (error) {
         console.error("Error fetching subtitles:", error);
+        setIsTranscriptionProcessing(false);
       }
     };
 
-    if (data.transcriptionStatus === "COMPLETE") {
+    if (data.transcriptionStatus === "PROCESSING") {
+      setIsTranscriptionProcessing(true);
+    } else if (data.transcriptionStatus === "COMPLETE") {
       fetchSubtitles();
-    } else {
-      const startTime = Date.now();
-      const maxDuration = 2 * 60 * 1000;
-
-      const intervalId = setInterval(() => {
-        if (Date.now() - startTime > maxDuration) {
-          clearInterval(intervalId);
-          return;
-        }
-
-        apiClient.video
-          .getTranscribeStatus({ query: { videoId: data.id } })
-          .then((data) => {
-            if (data.status !== 200) return;
-
-            const { transcriptionStatus } = data.body;
-            if (transcriptionStatus === "PROCESSING") {
-              setIsTranscriptionProcessing(true);
-            } else if (transcriptionStatus === "COMPLETE") {
-              fetchSubtitles();
-              clearInterval(intervalId);
-            } else if (transcriptionStatus === "ERROR") {
-              clearInterval(intervalId);
-            }
-          });
-      }, 1000);
-
-      return () => clearInterval(intervalId);
+    } else if (data.transcriptionStatus === "ERROR") {
+      setIsTranscriptionProcessing(false);
     }
-  }, [data]);
+  }, [
+    data.transcriptionStatus,
+    data.bucket,
+    data.awsBucket,
+    data.ownerId,
+    data.id,
+    publicEnv.awsBucket,
+    publicEnv.s3BucketUrl,
+  ]);
 
   const currentSubtitle = subtitles.find(
     (subtitle) =>
@@ -1016,40 +884,30 @@ export const ShareVideo = forwardRef<
       parseSubTime(subtitle.endTime) >= currentTime
   );
 
-  // Check screen size on mount and when window resizes
   useEffect(() => {
     const checkScreenSize = () => {
-      // lg breakpoint in Tailwind is typically 1024px
       setIsLargeScreen(window.innerWidth >= 1024);
     };
 
-    // Check on mount
     checkScreenSize();
 
-    // Add resize listener
     window.addEventListener("resize", checkScreenSize);
 
-    // Clean up
     return () => window.removeEventListener("resize", checkScreenSize);
   }, []);
 
-  // Initialize the preview canvas
   useEffect(() => {
-    // Only initialize preview canvas on large screens
     if (previewCanvasRef.current && isLargeScreen) {
       const canvas = previewCanvasRef.current;
       const ctx = canvas.getContext("2d");
 
       if (ctx) {
-        // Set canvas dimensions
         canvas.width = previewWidth;
         canvas.height = previewHeight;
 
-        // Draw a black background initially
         ctx.fillStyle = "#000000";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        // Add a "hover to preview" text
         ctx.fillStyle = "white";
         ctx.font = "12px Arial";
         ctx.textAlign = "center";
@@ -1059,7 +917,6 @@ export const ShareVideo = forwardRef<
   }, [previewCanvasRef, previewWidth, previewHeight, isLargeScreen]);
 
   useEffect(() => {
-    // Safari detection for applying specific styles
     const detectSafari = () => {
       const isSafari =
         /^((?!chrome|android).)*safari/i.test(navigator.userAgent) ||
@@ -1074,6 +931,14 @@ export const ShareVideo = forwardRef<
 
     detectSafari();
   }, []);
+
+  useEffect(() => {
+    if (data.transcriptionStatus === "PROCESSING") {
+      setIsTranscriptionProcessing(true);
+    } else if (data.transcriptionStatus === "ERROR") {
+      setIsTranscriptionProcessing(false);
+    }
+  }, [data.transcriptionStatus]);
 
   if (data.jobStatus === "ERROR") {
     return (
@@ -1096,7 +961,6 @@ export const ShareVideo = forwardRef<
   if (data.source.type === "desktopMP4") {
     videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
   } else if (
-    // v.cap.so is only available in prod
     NODE_ENV === "development" ||
     ((data.skipProcessing === true || data.jobStatus !== "COMPLETE") &&
       data.source.type === "MediaConvert")
@@ -1130,11 +994,8 @@ export const ShareVideo = forwardRef<
         </div>
         {!isLoading && (
           <div
-            className={`absolute inset-0 z-20 flex items-center justify-center bg-black bg-opacity-50 transition-opacity duration-300 ${
-              ((overlayVisible || isHovering) &&
-                !forceHideControls &&
-                isPlaying) ||
-              tempOverlayVisible
+            className={`absolute inset-0 z-20 flex items-center justify-center transition-opacity duration-300 ${
+              (overlayVisible && isPlaying) || tempOverlayVisible || !isPlaying
                 ? "opacity-100"
                 : "opacity-0"
             }`}
@@ -1144,17 +1005,9 @@ export const ShareVideo = forwardRef<
               className="flex justify-center items-center w-full h-full"
               onClick={() => {
                 if (!videoReadyToPlay) {
-                  // If video is not ready, set a visual indicator but don't try to play yet
-                  console.log("Video not ready to play yet, waiting...");
-                  // Show the controls to indicate we received the click
-                  showControls();
-                  // We'll attempt to play once the video is ready in the onCanPlay handler
                   setIsPlaying(true);
                 } else {
-                  // Normal play/pause behavior when video is ready
                   handlePlayPauseClick();
-                  showControls();
-                  hideControls();
                 }
               }}
             >
@@ -1162,21 +1015,21 @@ export const ShareVideo = forwardRef<
                 {isPlaying ? (
                   <motion.div
                     key="pause-button"
-                    className="flex relative z-30 justify-center items-center size-20"
+                    className="flex relative z-30 justify-center items-center size-20 bg-black bg-opacity-60 rounded-full"
                     initial={{ opacity: 0, scale: 0 }}
                     animate={{
                       scale: 1,
-                      opacity: 1,
+                      opacity: overlayVisible || tempOverlayVisible ? 1 : 0,
                     }}
                     style={{ transformOrigin: "center center" }}
                     transition={{ duration: 0.4, ease: "easeOut" }}
                   >
-                    <Pause className="w-auto h-10 text-white sm:h-12 md:h-14 hover:opacity-50" />
+                    <Pause className="w-auto h-8 text-white sm:h-10 md:h-12" />
                   </motion.div>
                 ) : (
                   <motion.div
                     key="play-button"
-                    className="flex relative z-30 justify-center items-center size-20"
+                    className="flex relative z-30 justify-center items-center size-20 bg-black bg-opacity-60 rounded-full"
                     initial={{ opacity: 0, scale: 0 }}
                     animate={{
                       scale: 1,
@@ -1185,7 +1038,7 @@ export const ShareVideo = forwardRef<
                     style={{ transformOrigin: "center center" }}
                     transition={{ duration: 0.4, ease: "easeOut" }}
                   >
-                    <Play className="w-auto h-10 text-white sm:h-12 md:h-14 hover:opacity-50" />
+                    <Play className="w-auto h-8 text-white sm:h-10 md:h-12 ml-0.5" />
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -1193,7 +1046,11 @@ export const ShareVideo = forwardRef<
           </div>
         )}
         {currentSubtitle && currentSubtitle.text && subtitlesVisible && (
-          <div className="absolute bottom-12 z-10 p-2 w-full text-center sm:bottom-16">
+          <div
+            className={`absolute z-10 p-2 w-full text-center transition-all duration-300 ease-in-out ${
+              overlayVisible ? "bottom-16 sm:bottom-20" : "bottom-6 sm:bottom-8"
+            }`}
+          >
             <div className="inline px-2 py-1 text-sm text-white bg-black bg-opacity-75 rounded-xl sm:text-lg md:text-2xl">
               {currentSubtitle.text
                 .replace("- ", "")
@@ -1204,7 +1061,6 @@ export const ShareVideo = forwardRef<
         )}
       </div>
 
-      {/* Thumbnail preview - MP4 only, visible only on screens larger than lg */}
       {showPreview && !isLoading && isMP4Source && isLargeScreen && (
         <div
           className="hidden overflow-hidden absolute z-30 bg-black rounded-md border border-gray-700 shadow-lg transition-opacity duration-150 xl:block"
@@ -1222,9 +1078,6 @@ export const ShareVideo = forwardRef<
               alt={`Preview at ${formatTime(previewTime)}`}
               className="object-contain w-full h-full bg-black"
               onError={() => {
-                console.log(
-                  "Thumbnail failed to load, using canvas preview instead"
-                );
                 setThumbnailUrl(null);
               }}
             />
@@ -1243,49 +1096,27 @@ export const ShareVideo = forwardRef<
       )}
 
       <div
-        className={`absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 z-20 transition-opacity duration-300 ${
-          (overlayVisible || isHovering || isHoveringControls) &&
-          !forceHideControls
-            ? "opacity-100"
-            : "opacity-0"
+        className={`absolute left-0 right-0 z-30 transition-all duration-300 ease-in-out ${
+          overlayVisible ? "bottom-[60px]" : "bottom-1"
         }`}
-        onMouseEnter={() => {
-          if (enterControlsTimeoutRef.current) {
-            clearTimeout(enterControlsTimeoutRef.current);
-          }
-          enterControlsTimeoutRef.current = setTimeout(() => {
-            setIsHoveringControls(true);
-          }, 100);
-        }}
-        onMouseLeave={() => {
-          if (enterControlsTimeoutRef.current) {
-            clearTimeout(enterControlsTimeoutRef.current);
-          }
-          setIsHoveringControls(false);
-        }}
       >
         <div
           id="seek"
-          className="absolute right-0 left-0 -top-2 mx-2 h-6 cursor-pointer sm:mx-4"
+          className="h-6 cursor-pointer"
           onMouseDown={handleSeekMouseDown}
           onMouseMove={(e) => {
             if (seeking) {
               handleSeekMouseMove(e);
-            } else {
-              handleTimelineHover(e);
             }
           }}
           onMouseUp={handleSeekMouseUp}
           onMouseLeave={() => {
             setSeeking(false);
-            handleTimelineLeave();
           }}
           onTouchStart={handleSeekMouseDown}
           onTouchMove={(e) => {
             if (seeking) {
               handleSeekMouseMove(e);
-            } else {
-              handleTimelineHover(e);
             }
           }}
           onTouchEnd={(e) => handleSeekMouseUp(e, true)}
@@ -1337,41 +1168,80 @@ export const ShareVideo = forwardRef<
               })}
             </div>
           )}
-          {chapters.length > 0 && (
-            <div className="-mt-7 w-full md:-mt-6">
+
+          <div
+            className="relative w-full h-full"
+            onMouseMove={handleTimelineHover}
+            onMouseLeave={handleTimelineLeave}
+          >
+            <div
+              style={{ boxShadow: "0 0 20px rgba(0,0,0,0.6)" }}
+              className="absolute top-2.5 w-full h-1 sm:h-1.5 bg-gray-400 bg-opacity-50 z-10"
+            />
+            <div
+              className="absolute top-2.5 h-1 sm:h-1.5 bg-white cursor-pointer z-10"
+              style={{ width: `${watchedPercentage}%` }}
+            />
+            <div
+              style={{
+                boxShadow: "0 0 20px rgba(0,0,0,0.6)",
+                left: `${watchedPercentage}%`,
+              }}
+              className={clsx(
+                "drag-button absolute top-2 z-20 -mt-1.5 -ml-2 w-5 h-5 bg-white rounded-full cursor-pointer focus:outline-none border-2 border-gray-5",
+                seeking
+                  ? "scale-125 transition-transform ring-blue-300 ring-offset-2 ring-2"
+                  : ""
+              )}
+              tabIndex={0}
+            />
+          </div>
+
+          {chapters.length > 0 && longestDuration > 0 && (
+            <div
+              className={`-mt-10 w-full md:-mt-10 pointer-events-none transition-opacity duration-300 ${
+                overlayVisible ? "opacity-100" : "opacity-0"
+              }`}
+            >
               {chapters.map((ch) => {
                 const pos = (ch.start / longestDuration) * 100;
                 return (
                   <div
                     key={ch.start}
-                    className="absolute z-10"
+                    className="absolute z-50 -translate-x-1/2 cursor-pointer pointer-events-auto"
                     style={{ left: `${pos}%` }}
                     data-tooltip-id={`chapter-${ch.start}`}
                     data-tooltip-content={ch.title}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      applyTimeToVideos(ch.start);
+                    }}
                   >
-                    <div className="w-px h-3 bg-blue-500" />
-                    <Tooltip id={`chapter-${ch.start}`} />
+                    <div className="w-4 h-4 bg-white bg-opacity-70 rounded-full hover:bg-opacity-100 hover:scale-125 transition-all duration-200 border-2 border-gray-10" />
+                    <Tooltip
+                      id={`chapter-${ch.start}`}
+                      place="top"
+                      className="z-50"
+                    />
                   </div>
                 );
               })}
             </div>
           )}
-          <div className="absolute top-2.5 w-full h-1 sm:h-1.5 bg-gray-1 bg-opacity-50 rounded-full z-10" />
-          <div
-            className="absolute top-2.5 h-1 sm:h-1.5 bg-gray-1 rounded-full cursor-pointer z-10"
-            style={{ width: `${watchedPercentage}%` }}
-          />
-          <div
-            className={clsx(
-              "drag-button absolute top-2.5 z-20 -mt-1.5 -ml-2 w-4 h-4 bg-gray-1 rounded-full  cursor-pointer focus:outline-none",
-              seeking
-                ? "scale-125 transition-transform ring-blue-300 ring-offset-2 ring-2"
-                : ""
-            )}
-            tabIndex={0}
-            style={{ left: `${watchedPercentage}%` }}
-          />
         </div>
+      </div>
+
+      <div
+        className={`absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 z-20 transition-transform duration-300 ease-in-out ${
+          overlayVisible ? "translate-y-0" : "translate-y-full"
+        }`}
+        onMouseEnter={() => {
+          setIsHoveringControls(true);
+        }}
+        onMouseLeave={() => {
+          setIsHoveringControls(false);
+        }}
+      >
         <div className="flex justify-between items-center px-4 py-2">
           <div className="flex items-center mt-2 space-x-2 sm:space-x-3">
             <span className="inline-flex">
@@ -1398,7 +1268,7 @@ export const ShareVideo = forwardRef<
               <span className="inline-flex">
                 <button
                   aria-label={`Change video speed to ${videoSpeed}x`}
-                  className="inline-flex min-w-[35px] sm:min-w-[45px] items-center text-xs sm:text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-gray-100 border-transparent hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 px-1 sm:px-2 py-1 sm:py-2 justify-center rounded-lg"
+                  className="inline-flex min-w-[35px] sm:min-w-[45px] items-center text-xs sm:text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-gray-100 border-transparent hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-gray-100 active:bg-opacity-10 px-1 sm:px-2 py-1 sm:py-2 justify-center rounded-lg"
                   tabIndex={0}
                   type="button"
                   onClick={handleSpeedChange}

@@ -7,9 +7,10 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
 import { Activity } from "./tabs/Activity";
 import { Settings } from "./tabs/Settings";
+import { Summary } from "./tabs/Summary";
 import { Transcript } from "./tabs/Transcript";
 
-type TabType = "activity" | "transcript" | "settings";
+type TabType = "activity" | "transcript" | "summary" | "settings";
 
 type CommentType = typeof commentsSchema.$inferSelect & {
   authorName?: string | null;
@@ -33,6 +34,12 @@ interface SidebarProps {
   analytics: Analytics;
   onSeek?: (time: number) => void;
   videoId: string;
+  aiData?: {
+    title?: string | null;
+    summary?: string | null;
+    chapters?: { title: string; start: number }[] | null;
+    processing?: boolean;
+  } | null;
 }
 
 const TabContent = motion.div;
@@ -66,6 +73,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   analytics,
   onSeek,
   videoId,
+  aiData,
 }) => {
   const isOwnerOrMember: boolean = Boolean(
     user?.id === data.ownerId ||
@@ -78,6 +86,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const tabs = [
     { id: "activity", label: "Comments" },
+    { id: "summary", label: "Summary" },
     { id: "transcript", label: "Transcript" },
   ];
 
@@ -103,6 +112,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             isOwnerOrMember={isOwnerOrMember}
           />
         );
+      case "summary":
+        return (
+          <Summary
+            videoId={videoId}
+            onSeek={onSeek}
+            initialAiData={aiData || undefined}
+          />
+        );
       case "transcript":
         return <Transcript data={data} onSeek={onSeek} />;
       case "settings":
@@ -123,14 +140,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 paginate(tab.id === activeTab ? 0 : 1, tab.id as TabType)
               }
               className={classNames(
-                "flex-1 px-6 py-3 text-sm font-medium relative transition-colors duration-200",
+                "flex-1 px-5 py-3 text-sm font-medium relative transition-colors duration-200",
                 "hover:bg-gray-1",
                 activeTab === tab.id ? "bg-gray-3" : ""
               )}
             >
               <span
                 className={classNames(
-                  "relative z-10",
+                  "relative z-10 text-sm",
                   activeTab === tab.id ? "text-gray-12" : "text-gray-9"
                 )}
               >

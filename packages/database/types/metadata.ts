@@ -39,6 +39,7 @@ export interface VideoMetadata {
    * Chapter markers generated from the transcript
    */
   chapters?: { title: string; start: number }[];
+  aiProcessing?: boolean;
   [key: string]: any;
 }
 

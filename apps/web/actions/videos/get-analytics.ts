@@ -22,10 +22,8 @@ export async function getVideoAnalytics(videoId: string) {
     return { count: analytics };
   } catch (error: any) {
     if (error.code === "not_found") {
-      // Return 0 views if link not found instead of throwing an error
       return { count: 0 };
     }
-    console.error("Error fetching video analytics:", error);
     return { count: 0 };
   }
 }

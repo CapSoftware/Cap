@@ -9,6 +9,7 @@ import {
   organizationMembers,
   organizations,
 } from "@cap/database/schema";
+import { VideoMetadata } from "@cap/database/types";
 import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
 import type { Metadata, ResolvingMetadata } from "next";
 import { notFound } from "next/navigation";
@@ -18,6 +19,7 @@ import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { transcribeVideo } from "@/actions/videos/transcribe";
 import { getScreenshot } from "@/actions/screenshots/get-screenshot";
 import { headers } from "next/headers";
+import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -269,9 +271,80 @@ export default async function ShareVideoPage(props: Props) {
     }
   }
 
-  if (video.transcriptionStatus !== "COMPLETE") {
+  if (
+    video.transcriptionStatus !== "COMPLETE" &&
+    video.transcriptionStatus !== "PROCESSING"
+  ) {
     console.log("[ShareVideoPage] Starting transcription for video:", videoId);
     await transcribeVideo(videoId, video.ownerId);
+
+    // Re-fetch video data to get updated transcription status
+    const updatedVideoQuery = await db()
+      .select({
+        id: videos.id,
+        name: videos.name,
+        ownerId: videos.ownerId,
+        createdAt: videos.createdAt,
+        updatedAt: videos.updatedAt,
+        awsRegion: videos.awsRegion,
+        awsBucket: videos.awsBucket,
+        bucket: videos.bucket,
+        metadata: videos.metadata,
+        public: videos.public,
+        videoStartTime: videos.videoStartTime,
+        audioStartTime: videos.audioStartTime,
+        xStreamInfo: videos.xStreamInfo,
+        jobId: videos.jobId,
+        jobStatus: videos.jobStatus,
+        isScreenshot: videos.isScreenshot,
+        skipProcessing: videos.skipProcessing,
+        transcriptionStatus: videos.transcriptionStatus,
+        source: videos.source,
+        sharedOrganization: {
+          organizationId: sharedVideos.organizationId,
+        },
+      })
+      .from(videos)
+      .leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
+      .where(eq(videos.id, videoId))
+      .execute();
+
+    if (updatedVideoQuery[0]) {
+      Object.assign(video, updatedVideoQuery[0]);
+      console.log(
+        "[ShareVideoPage] Updated transcription status:",
+        video.transcriptionStatus
+      );
+    }
+  }
+
+  // Check if we need to trigger AI metadata generation
+  const currentMetadata = (video.metadata as VideoMetadata) || {};
+  if (
+    video.transcriptionStatus === "COMPLETE" &&
+    !currentMetadata.aiProcessing &&
+    !currentMetadata.summary &&
+    !currentMetadata.chapters &&
+    !currentMetadata.generationError
+  ) {
+    console.log(
+      "[ShareVideoPage] Transcription complete but no AI data, triggering AI metadata generation for video:",
+      videoId
+    );
+    try {
+      // Run AI generation in the background without waiting for it
+      generateAiMetadata(videoId, video.ownerId).catch((error) => {
+        console.error(
+          `[ShareVideoPage] Error generating AI metadata for video ${videoId}:`,
+          error
+        );
+      });
+    } catch (error) {
+      console.error(
+        `[ShareVideoPage] Error starting AI metadata generation for video ${videoId}:`,
+        error
+      );
+    }
   }
 
   if (video.public === false && userId !== video.ownerId) {
@@ -435,6 +508,36 @@ export default async function ShareVideoPage(props: Props) {
     sharedOrganizations: sharedOrganizationsData,
   };
 
+  const metadata = (video.metadata as VideoMetadata) || {};
+  let initialAiData = null;
+
+  if (metadata.summary || metadata.chapters || metadata.aiTitle) {
+    initialAiData = {
+      title: metadata.aiTitle || null,
+      summary: metadata.summary || null,
+      chapters: metadata.chapters || null,
+      processing: metadata.aiProcessing || false,
+    };
+    console.log("[ShareVideoPage] Using existing AI metadata:", {
+      hasTitle: !!metadata.aiTitle,
+      hasSummary: !!metadata.summary,
+      hasChapters: !!metadata.chapters,
+      chaptersCount: metadata.chapters?.length || 0,
+      aiProcessing: metadata.aiProcessing || false,
+    });
+  } else if (metadata.aiProcessing) {
+    // If AI processing is in progress but no data yet
+    initialAiData = {
+      title: null,
+      summary: null,
+      chapters: null,
+      processing: true,
+    };
+    console.log("[ShareVideoPage] AI processing in progress");
+  } else {
+    console.log("[ShareVideoPage] No AI metadata found in video metadata");
+  }
+
   return (
     <Share
       data={videoWithOrganizationInfo}
@@ -444,6 +547,7 @@ export default async function ShareVideoPage(props: Props) {
       customDomain={customDomain}
       domainVerified={domainVerified}
       userOrganizations={userOrganizations}
+      initialAiData={initialAiData}
     />
   );
 }

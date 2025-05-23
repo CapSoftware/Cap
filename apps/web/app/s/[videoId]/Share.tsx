@@ -10,15 +10,17 @@ import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import { Toolbar } from "./_components/Toolbar";
 
+const formatTime = (time: number) => {
+  const minutes = Math.floor(time / 60);
+  const seconds = Math.floor(time % 60);
+  return `${minutes.toString().padStart(2, "0")}:${seconds
+    .toString()
+    .padStart(2, "0")}`;
+};
+
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
   authorName: string | null;
 };
-
-interface Analytics {
-  views: number;
-  comments: number;
-  reactions: number;
-}
 
 type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
   organizationMembers?: string[];
@@ -38,6 +40,12 @@ interface ShareProps {
   customDomain: string | null;
   domainVerified: boolean;
   userOrganizations?: { id: string; name: string }[];
+  initialAiData?: {
+    title?: string | null;
+    summary?: string | null;
+    chapters?: { title: string; start: number }[] | null;
+    processing?: boolean;
+  } | null;
 }
 
 export const Share: React.FC<ShareProps> = ({
@@ -48,45 +56,151 @@ export const Share: React.FC<ShareProps> = ({
   customDomain,
   domainVerified,
   userOrganizations = [],
+  initialAiData,
 }) => {
   const [analytics, setAnalytics] = useState(initialAnalytics);
-  const effectiveDate = data.metadata?.customCreatedAt
+  const effectiveDate: Date = data.metadata?.customCreatedAt
     ? new Date(data.metadata.customCreatedAt)
     : data.createdAt;
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [transcriptionStatus, setTranscriptionStatus] = useState<string | null>(
+    data.transcriptionStatus || null
+  );
+
+  useEffect(() => {
+    if (initialAiData) {
+      console.log("[Share] Received initial AI data:", {
+        hasTitle: !!initialAiData.title,
+        hasSummary: !!initialAiData.summary,
+        hasChapters: !!initialAiData.chapters,
+        chaptersCount: initialAiData.chapters?.length || 0,
+      });
+    } else {
+      console.log("[Share] No initial AI data provided");
+    }
+  }, [initialAiData]);
 
   const [aiData, setAiData] = useState<{
     title?: string | null;
     summary?: string | null;
     chapters?: { title: string; start: number }[] | null;
     processing?: boolean;
-  } | null>(null);
-  const [aiLoading, setAiLoading] = useState(true);
+  } | null>(initialAiData || null);
+  const [aiLoading, setAiLoading] = useState(
+    !initialAiData || initialAiData.processing === true
+  );
+
+  // Use a ref to track the latest AI data without causing re-renders
+  const aiDataRef = useRef(aiData);
+  useEffect(() => {
+    aiDataRef.current = aiData;
+  }, [aiData]);
 
   useEffect(() => {
     let active = true;
-    const fetchAi = async () => {
+    let pollInterval: NodeJS.Timeout | null = null;
+    let pollCount = 0;
+    const MAX_POLLS = 300; // Max 10 minutes of polling (300 * 2 seconds)
+    const POLL_INTERVAL = 2000; // 2 seconds
+
+    const shouldPoll = () => {
+      const currentAiData = aiDataRef.current;
+
+      // Stop polling if we've reached max count
+      if (pollCount >= MAX_POLLS) {
+        console.log("[Share] Max polling count reached, stopping");
+        return false;
+      }
+
+      // If we have complete AI data, no need to poll
+      if (
+        currentAiData &&
+        !currentAiData.processing &&
+        (currentAiData.summary || currentAiData.chapters)
+      ) {
+        return false;
+      }
+
+      // If transcription failed, no need to poll
+      if (transcriptionStatus === "ERROR") {
+        return false;
+      }
+
+      // Poll if transcription is processing or if we're waiting for AI data
+      return (
+        transcriptionStatus === "PROCESSING" ||
+        (transcriptionStatus === "COMPLETE" &&
+          (!currentAiData || !currentAiData.summary))
+      );
+    };
+
+    const pollStatus = async () => {
+      if (!active) return;
+
+      pollCount++;
+
       try {
-        const res = await fetch(`/api/video/ai?videoId=${data.id}`);
+        const res = await fetch(`/api/video/status?videoId=${data.id}`);
         const json = await res.json();
+
         if (!active) return;
-        setAiData(json);
-        if (json.processing) {
-          setTimeout(fetchAi, 1000);
-        } else {
+
+        // Update transcription status
+        if (json.transcriptionStatus) {
+          setTranscriptionStatus(json.transcriptionStatus);
+        }
+
+        // Update AI data
+        if (json.summary || json.chapters) {
+          setAiData({
+            title: json.aiTitle,
+            summary: json.summary,
+            chapters: json.chapters,
+            processing: false,
+          });
+          setAiLoading(false);
+        } else if (json.aiProcessing) {
+          setAiData((prev) => ({ ...prev, processing: true }));
+          setAiLoading(true);
+        }
+
+        // Check if we should stop polling after updating state
+        if (!shouldPoll()) {
+          console.log(
+            "[Share] Stopping polling - condition met or max polls reached"
+          );
+          if (pollInterval) {
+            clearInterval(pollInterval);
+            pollInterval = null;
+          }
           setAiLoading(false);
         }
       } catch (err) {
-        console.error("Error fetching AI data:", err);
-        setAiLoading(false);
+        console.error("[Share] Error polling video status:", err);
+        pollCount = MAX_POLLS; // Stop polling on error
       }
     };
-    fetchAi();
+
+    if (shouldPoll()) {
+      console.log("[Share] Starting polling for video status");
+      // Initial poll
+      pollStatus();
+      // Set up interval for subsequent polls
+      pollInterval = setInterval(pollStatus, POLL_INTERVAL);
+    } else {
+      setAiLoading(false);
+    }
+
+    // Cleanup function
     return () => {
+      console.log("[Share] Cleaning up polling");
       active = false;
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
     };
-  }, [data.id]);
+  }, [data.id, transcriptionStatus]); // Remove aiData from dependencies
 
   const handleSeek = (time: number) => {
     if (videoRef.current) {
@@ -141,7 +255,7 @@ export const Share: React.FC<ShareProps> = ({
             <div className="flex-1">
               <div className="overflow-hidden relative p-3 aspect-video new-card-style">
                 <ShareVideo
-                  data={data}
+                  data={{ ...data, transcriptionStatus }}
                   user={user}
                   comments={comments}
                   chapters={aiData?.chapters || []}
@@ -151,30 +265,103 @@ export const Share: React.FC<ShareProps> = ({
               <div className="mt-4 lg:hidden">
                 <Toolbar data={data} user={user} />
               </div>
-              {!aiLoading && aiData?.summary && (
-                <div className="mt-4 p-4 new-card-style">
-                  {aiData.title && (
-                    <h3 className="mb-2 text-lg font-semibold">{aiData.title}</h3>
-                  )}
-                  <p className="text-sm whitespace-pre-wrap">{aiData.summary}</p>
-                </div>
-              )}
             </div>
 
             <div className="flex flex-col lg:w-80">
               <Sidebar
-                data={{ ...data, createdAt: effectiveDate }}
+                data={{
+                  ...data,
+                  createdAt: effectiveDate,
+                  transcriptionStatus,
+                }}
                 user={user}
                 comments={comments}
                 analytics={analytics}
                 onSeek={handleSeek}
                 videoId={data.id}
+                aiData={aiData}
               />
             </div>
           </div>
 
           <div className="hidden mt-4 lg:block">
             <Toolbar data={data} user={user} />
+          </div>
+
+          <div className="mt-4 hidden lg:block">
+            {aiLoading &&
+              (transcriptionStatus === "PROCESSING" ||
+                transcriptionStatus === "COMPLETE") && (
+                <div className="p-4 new-card-style animate-pulse">
+                  <div className="space-y-6">
+                    <div>
+                      <div className="h-6 w-24 bg-gray-200 rounded mb-3"></div>
+                      <div className="h-3 w-32 bg-gray-100 rounded mb-4"></div>
+                      <div className="space-y-3">
+                        <div className="h-4 bg-gray-200 rounded w-full"></div>
+                        <div className="h-4 bg-gray-200 rounded w-5/6"></div>
+                        <div className="h-4 bg-gray-200 rounded w-4/5"></div>
+                        <div className="h-4 bg-gray-200 rounded w-full"></div>
+                        <div className="h-4 bg-gray-200 rounded w-3/4"></div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="h-6 w-24 bg-gray-200 rounded mb-4"></div>
+                      <div className="space-y-2">
+                        {[1, 2, 3, 4].map((i) => (
+                          <div key={i} className="flex items-center p-2">
+                            <div className="h-4 w-12 bg-gray-200 rounded mr-3"></div>
+                            <div className="h-4 bg-gray-200 rounded flex-1"></div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+            {!aiLoading &&
+              (aiData?.summary ||
+                (aiData?.chapters && aiData.chapters.length > 0)) && (
+                <div className="p-4 new-card-style">
+                  {aiData?.summary && (
+                    <>
+                      <h3 className="text-lg font-medium">Summary</h3>
+                      <div className="mb-2">
+                        <span className="text-xs font-semibold text-gray-8">
+                          Generated by Cap AI
+                        </span>
+                      </div>
+                      <p className="text-sm whitespace-pre-wrap">
+                        {aiData.summary}
+                      </p>
+                    </>
+                  )}
+
+                  {aiData?.chapters && aiData.chapters.length > 0 && (
+                    <div className={aiData?.summary ? "mt-6" : ""}>
+                      <h3 className="mb-2 text-lg font-medium">Chapters</h3>
+                      <div className="divide-y">
+                        {aiData.chapters.map((chapter) => (
+                          <div
+                            key={chapter.start}
+                            className="p-2 cursor-pointer hover:bg-gray-100 rounded transition-colors flex items-center"
+                            onClick={() => handleSeek(chapter.start)}
+                          >
+                            <span className="text-xs text-gray-500 w-16">
+                              {formatTime(chapter.start)}
+                            </span>
+                            <span className="ml-2 text-sm">
+                              {chapter.title}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
           </div>
         </div>
       </div>
