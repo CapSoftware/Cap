@@ -4,7 +4,7 @@ use cap_media::{feeds::RawCameraFrame, frame_ws::WSFrame};
 use cap_project::{BackgroundSource, CursorEvents, RecordingMeta, StudioRecordingMeta, XY};
 use cap_rendering::{
     decoder::DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectRecordings, ProjectUniforms,
-    RenderVideoConstants,
+    RenderVideoConstants, RendererLayers,
 };
 use tokio::{
     sync::{mpsc, oneshot},
@@ -40,8 +40,8 @@ impl Renderer {
         frame_tx: flume::Sender<WSFrame>,
         recording_meta: &RecordingMeta,
         meta: &StudioRecordingMeta,
-    ) -> RendererHandle {
-        let recordings = ProjectRecordings::new(&recording_meta.project_path, meta);
+    ) -> Result<RendererHandle, String> {
+        let recordings = Arc::new(ProjectRecordings::new(&recording_meta.project_path, meta)?);
         let mut max_duration = recordings.duration();
 
         // Check camera duration if it exists
@@ -66,13 +66,16 @@ impl Renderer {
 
         tokio::spawn(this.run());
 
-        RendererHandle { tx }
+        Ok(RendererHandle { tx })
     }
 
     async fn run(mut self) {
         let mut frame_task: Option<JoinHandle<()>> = None;
 
         let mut frame_renderer = FrameRenderer::new(&self.render_constants);
+
+        let mut layers =
+            RendererLayers::new(&self.render_constants.device, &self.render_constants.queue);
 
         loop {
             while let Some(msg) = self.rx.recv().await {
@@ -96,7 +99,7 @@ impl Renderer {
                         let output_size = uniforms.output_size;
 
                         let frame = frame_renderer
-                            .render(segment_frames, uniforms, &cursor)
+                            .render(segment_frames, uniforms, &cursor, &mut layers)
                             .await
                             .unwrap();
 

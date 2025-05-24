@@ -276,11 +276,38 @@ impl Default for ShadowConfiguration {
     }
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum StereoMode {
+    #[default]
+    Stereo,
+    MonoL,
+    MonoR,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioConfiguration {
     pub mute: bool,
     pub improve: bool,
+    #[serde(default)]
+    pub mic_volume_db: f32,
+    #[serde(default)]
+    pub mic_stereo_mode: StereoMode,
+    #[serde(default)]
+    pub system_volume_db: f32,
+}
+
+impl Default for AudioConfiguration {
+    fn default() -> Self {
+        Self {
+            mute: false,
+            improve: false,
+            mic_volume_db: 0.0,
+            mic_stereo_mode: StereoMode::default(),
+            system_volume_db: 0.0,
+        }
+    }
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
@@ -303,6 +330,8 @@ pub enum CursorAnimationStyle {
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct CursorConfiguration {
+    #[serde(default)]
+    pub hide: bool,
     hide_when_idle: bool,
     pub size: u32,
     r#type: CursorType,
@@ -319,6 +348,7 @@ pub struct CursorConfiguration {
 impl Default for CursorConfiguration {
     fn default() -> Self {
         Self {
+            hide: false,
             hide_when_idle: false,
             size: 100,
             r#type: CursorType::default(),

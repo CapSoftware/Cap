@@ -11,7 +11,7 @@ export default createHandler(() => (
           <link rel="icon" type="image/svg+xml" href="/assets/logo.svg" />
           {assets}
         </head>
-        <body class="w-screen h-screen select-none cursor-default">
+        <body class="w-screen h-screen cursor-default select-none">
           <div id="app" class="h-full text-[--text-primary]">
             {children}
           </div>

@@ -5,11 +5,11 @@ import { type AspectRatio } from "~/utils/tauri";
 import { useEditorContext } from "./context";
 import { ASPECT_RATIOS } from "./projectConfig";
 import {
-  EditorButton,
-  MenuItem,
-  MenuItemList,
-  PopperContent,
-  topLeftAnimateClasses,
+    EditorButton,
+    MenuItem,
+    MenuItemList,
+    PopperContent,
+    topLeftAnimateClasses,
 } from "./ui";
 
 function AspectRatioSelect() {
@@ -40,7 +40,7 @@ function AspectRatioSelect() {
                 : ASPECT_RATIOS[props.item.rawValue].name}
               <Show when={item()}>
                 {(item) => (
-                  <span class="text-gray-400">
+                  <span class="text-gray-11">
                     {"⋅"}
                     {item().ratio[0]}:{item().ratio[1]}
                   </span>

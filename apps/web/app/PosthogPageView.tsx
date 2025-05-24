@@ -12,13 +12,19 @@ function PostHogPageView(): null {
 
   // Track pageviews
   useEffect(() => {
-    if (pathname && posthog) {
+    if (!pathname || !posthog) {
+      return;
+    }
+
+    try {
       let url = window.origin + pathname;
-      if (searchParams.toString()) {
+      if (searchParams?.toString()) {
         url = url + `?${searchParams.toString()}`;
       }
 
       posthog.capture("$pageview", { $current_url: url });
+    } catch (error) {
+      console.error("Error capturing pageview:", error);
     }
   }, [pathname, searchParams, posthog]);
 

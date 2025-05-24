@@ -42,20 +42,20 @@ app.post(
       };
 
       // Check if user already has a bucket config
-      const [existingBucket] = await db
+      const [existingBucket] = await db()
         .select()
         .from(s3Buckets)
         .where(eq(s3Buckets.ownerId, user.id));
 
       if (existingBucket) {
         // Update existing config
-        await db
+        await db()
           .update(s3Buckets)
           .set(encryptedConfig)
           .where(eq(s3Buckets.id, existingBucket.id));
       } else {
         // Insert new config
-        await db.insert(s3Buckets).values(encryptedConfig);
+        await db().insert(s3Buckets).values(encryptedConfig);
       }
 
       return c.json({ success: true });
@@ -77,7 +77,7 @@ app.delete("/delete", async (c) => {
 
   try {
     // Delete the S3 configuration for the user
-    await db.delete(s3Buckets).where(eq(s3Buckets.ownerId, user.id));
+    await db().delete(s3Buckets).where(eq(s3Buckets.ownerId, user.id));
 
     return c.json({ success: true });
   } catch (error) {
@@ -96,7 +96,7 @@ app.get("/get", async (c) => {
   const user = c.get("user");
 
   try {
-    const [bucket] = await db
+    const [bucket] = await db()
       .select()
       .from(s3Buckets)
       .where(eq(s3Buckets.ownerId, user.id));
@@ -176,6 +176,7 @@ app.post(
 
         clearTimeout(timeoutId);
       } catch (error) {
+        console.log(error);
         clearTimeout(timeoutId);
         let errorMessage = "Failed to connect to S3";
 

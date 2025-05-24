@@ -44,10 +44,10 @@ export default function AppsTab() {
     <div class="p-4">
       <For each={apps}>
         {(app) => (
-          <div class="p-1.5 bg-gray-100 rounded-lg border border-gray-200">
-            <div class="flex justify-between items-center pb-2 border-b border-gray-200">
+          <div class="p-1.5 bg-gray-2 rounded-lg border border-gray-3">
+            <div class="flex justify-between items-center pb-2 border-b border-gray-3">
               <div class="flex gap-3 items-center">
-                <div class="p-2 bg-gray-100 rounded-lg">
+                <div class="p-2 bg-gray-2 rounded-lg">
                   <app.icon class="w-4 h-4 text-[--text-tertiary]" />
                 </div>
                 <div class="flex flex-col gap-1">
@@ -61,11 +61,11 @@ export default function AppsTab() {
                 onClick={() => handleAppClick(app)}
                 disabled={isUpgraded.loading}
               >
-                {isUpgraded.loading 
-                  ? "Loading..." 
-                  : app.pro && !isUpgraded() 
-                    ? "Upgrade to Pro" 
-                    : "Configure"}
+                {isUpgraded.loading
+                  ? "Loading..."
+                  : app.pro && !isUpgraded()
+                  ? "Upgrade to Pro"
+                  : "Configure"}
               </Button>
             </div>
             <div class="p-2">

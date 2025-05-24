@@ -42,6 +42,8 @@ impl FFmpegDecoder {
                 .video()
                 .map_err(|e| format!("video decoder / {e}"))?;
 
+            decoder.set_time_base(input_stream.time_base());
+
             let width = decoder.width();
             let height = decoder.height();
 

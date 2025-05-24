@@ -14,6 +14,7 @@ import {
 } from "drizzle-orm/mysql-core";
 import { relations } from "drizzle-orm/relations";
 import { nanoIdLength } from "./helpers";
+import { VideoMetadata } from "./types";
 
 const nanoId = customType<{ data: string; notNull: true }>({
   dataType() {
@@ -62,7 +63,7 @@ export const users = mysqlTable(
     stripeSubscriptionPriceId: varchar("stripeSubscriptionPriceId", {
       length: 255,
     }),
-    activeSpaceId: nanoId("activeSpaceId"),
+    activeOrganizationId: nanoId("activeOrganizationId"),
     created_at: timestamp("created_at").notNull().defaultNow(),
     updated_at: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
     onboarding_completed_at: timestamp("onboarding_completed_at"),
@@ -125,8 +126,8 @@ export const verificationTokens = mysqlTable("verification_tokens", {
   updated_at: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
 });
 
-export const spaces = mysqlTable(
-  "spaces",
+export const organizations = mysqlTable(
+  "organizations",
   {
     id: nanoId("id").notNull().primaryKey().unique(),
     name: varchar("name", { length: 255 }).notNull(),
@@ -135,6 +136,7 @@ export const spaces = mysqlTable(
     allowedEmailDomain: varchar("allowedEmailDomain", { length: 255 }),
     customDomain: varchar("customDomain", { length: 255 }),
     domainVerified: timestamp("domainVerified"),
+    iconUrl: varchar("iconUrl", { length: 1024 }),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
     workosOrganizationId: varchar("workosOrganizationId", { length: 255 }),
@@ -146,31 +148,31 @@ export const spaces = mysqlTable(
   })
 );
 
-export const spaceMembers = mysqlTable(
-  "space_members",
+export const organizationMembers = mysqlTable(
+  "organization_members",
   {
     id: nanoId("id").notNull().primaryKey().unique(),
     userId: nanoId("userId").notNull(),
-    spaceId: nanoId("spaceId").notNull(),
+    organizationId: nanoId("organizationId").notNull(),
     role: varchar("role", { length: 255 }).notNull(),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
   },
   (table) => ({
     userIdIndex: index("user_id_idx").on(table.userId),
-    spaceIdIndex: index("space_id_idx").on(table.spaceId),
-    userIdSpaceIdIndex: index("user_id_space_id_idx").on(
+    organizationIdIndex: index("organization_id_idx").on(table.organizationId),
+    userIdOrganizationIdIndex: index("user_id_organization_id_idx").on(
       table.userId,
-      table.spaceId
+      table.organizationId
     ),
   })
 );
 
-export const spaceInvites = mysqlTable(
-  "space_invites",
+export const organizationInvites = mysqlTable(
+  "organization_invites",
   {
     id: nanoId("id").notNull().primaryKey().unique(),
-    spaceId: nanoId("spaceId").notNull(),
+    organizationId: nanoId("organizationId").notNull(),
     invitedEmail: varchar("invitedEmail", { length: 255 }).notNull(),
     invitedByUserId: nanoId("invitedByUserId").notNull(),
     role: varchar("role", { length: 255 }).notNull(),
@@ -180,7 +182,7 @@ export const spaceInvites = mysqlTable(
     expiresAt: timestamp("expiresAt"),
   },
   (table) => ({
-    spaceIdIndex: index("space_id_idx").on(table.spaceId),
+    organizationIdIndex: index("organization_id_idx").on(table.organizationId),
     invitedEmailIndex: index("invited_email_idx").on(table.invitedEmail),
     invitedByUserIdIndex: index("invited_by_user_id_idx").on(
       table.invitedByUserId
@@ -198,7 +200,7 @@ export const videos = mysqlTable(
     awsRegion: varchar("awsRegion", { length: 255 }),
     awsBucket: varchar("awsBucket", { length: 255 }),
     bucket: nanoIdNullable("bucket"),
-    metadata: json("metadata"),
+    metadata: json("metadata").$type<VideoMetadata>(),
     public: boolean("public").notNull().default(true),
     videoStartTime: varchar("videoStartTime", { length: 255 }),
     audioStartTime: varchar("audioStartTime", { length: 255 }),
@@ -229,19 +231,19 @@ export const sharedVideos = mysqlTable(
   {
     id: nanoId("id").notNull().primaryKey().unique(),
     videoId: nanoId("videoId").notNull(),
-    spaceId: nanoId("spaceId").notNull(),
+    organizationId: nanoId("organizationId").notNull(),
     sharedByUserId: nanoId("sharedByUserId").notNull(),
     sharedAt: timestamp("sharedAt").notNull().defaultNow(),
   },
   (table) => ({
     videoIdIndex: index("video_id_idx").on(table.videoId),
-    spaceIdIndex: index("space_id_idx").on(table.spaceId),
+    organizationIdIndex: index("organization_id_idx").on(table.organizationId),
     sharedByUserIdIndex: index("shared_by_user_id_idx").on(
       table.sharedByUserId
     ),
-    videoIdSpaceIdIndex: index("video_id_space_id_idx").on(
+    videoIdOrganizationIdIndex: index("video_id_organization_id_idx").on(
       table.videoId,
-      table.spaceId
+      table.organizationId
     ),
   })
 );
@@ -280,6 +282,12 @@ export const s3Buckets = mysqlTable("s3_buckets", {
   provider: text("provider").notNull().default("aws"),
 });
 
+export const authApiKeys = mysqlTable("auth_api_keys", {
+  id: varchar("id", { length: 36 }).notNull().primaryKey().unique(),
+  userId: nanoId("userId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
 export const commentsRelations = relations(comments, ({ one }) => ({
   author: one(users, {
     fields: [comments.authorId],
@@ -299,7 +307,7 @@ export const commentsRelations = relations(comments, ({ one }) => ({
 export const usersRelations = relations(users, ({ many, one }) => ({
   accounts: many(accounts),
   sessions: many(sessions),
-  spaceMembers: many(spaceMembers),
+  organizationMembers: many(organizationMembers),
   videos: many(videos),
   sharedVideos: many(sharedVideos),
   customBucket: one(s3Buckets),
@@ -312,15 +320,25 @@ export const accountsRelations = relations(accounts, ({ one }) => ({
   }),
 }));
 
-export const spacesRelations = relations(spaces, ({ one, many }) => ({
+export const s3BucketsRelations = relations(s3Buckets, ({ one }) => ({
   owner: one(users, {
-    fields: [spaces.ownerId],
+    fields: [s3Buckets.ownerId],
     references: [users.id],
   }),
-  spaceMembers: many(spaceMembers),
-  sharedVideos: many(sharedVideos),
-  spaceInvites: many(spaceInvites),
 }));
+
+export const organizationsRelations = relations(
+  organizations,
+  ({ one, many }) => ({
+    owner: one(users, {
+      fields: [organizations.ownerId],
+      references: [users.id],
+    }),
+    organizationMembers: many(organizationMembers),
+    sharedVideos: many(sharedVideos),
+    organizationInvites: many(organizationInvites),
+  })
+);
 
 export const sessionsRelations = relations(sessions, ({ one }) => ({
   user: one(users, {
@@ -336,27 +354,33 @@ export const verificationTokensRelations = relations(
   })
 );
 
-export const spaceMembersRelations = relations(spaceMembers, ({ one }) => ({
-  user: one(users, {
-    fields: [spaceMembers.userId],
-    references: [users.id],
-  }),
-  space: one(spaces, {
-    fields: [spaceMembers.spaceId],
-    references: [spaces.id],
-  }),
-}));
+export const organizationMembersRelations = relations(
+  organizationMembers,
+  ({ one }) => ({
+    user: one(users, {
+      fields: [organizationMembers.userId],
+      references: [users.id],
+    }),
+    organization: one(organizations, {
+      fields: [organizationMembers.organizationId],
+      references: [organizations.id],
+    }),
+  })
+);
 
-export const spaceInvitesRelations = relations(spaceInvites, ({ one }) => ({
-  space: one(spaces, {
-    fields: [spaceInvites.spaceId],
-    references: [spaces.id],
-  }),
-  invitedByUser: one(users, {
-    fields: [spaceInvites.invitedByUserId],
-    references: [users.id],
-  }),
-}));
+export const organizationInvitesRelations = relations(
+  organizationInvites,
+  ({ one }) => ({
+    organization: one(organizations, {
+      fields: [organizationInvites.organizationId],
+      references: [organizations.id],
+    }),
+    invitedByUser: one(users, {
+      fields: [organizationInvites.invitedByUserId],
+      references: [users.id],
+    }),
+  })
+);
 
 export const videosRelations = relations(videos, ({ one, many }) => ({
   owner: one(users, {
@@ -371,9 +395,9 @@ export const sharedVideosRelations = relations(sharedVideos, ({ one }) => ({
     fields: [sharedVideos.videoId],
     references: [videos.id],
   }),
-  space: one(spaces, {
-    fields: [sharedVideos.spaceId],
-    references: [spaces.id],
+  organization: one(organizations, {
+    fields: [sharedVideos.organizationId],
+    references: [organizations.id],
   }),
   sharedByUser: one(users, {
     fields: [sharedVideos.sharedByUserId],

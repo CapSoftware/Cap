@@ -7,23 +7,24 @@ use crate::{
     general_settings::{
         GeneralSettingsStore, MainWindowRecordingStartBehaviour, PostStudioRecordingBehaviour,
     },
-    open_editor, open_external_link,
+    open_external_link,
     presets::PresetsStore,
     upload::{get_s3_config, prepare_screenshot_upload, upload_video, InstantMultipartUpload},
-    web_api,
+    web_api::{self, ManagerExt},
     windows::{CapWindowId, ShowCapWindow},
     App, CurrentRecordingChanged, DynLoggingLayer, MutableState, NewStudioRecordingAdded,
     RecordingStarted, RecordingStopped, VideoUploadInfo,
 };
+use base64::{prelude::BASE64_STANDARD, Engine};
 use cap_fail::fail;
-use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
+use cap_media::{feeds::CameraFeed, platform::display_for_window, sources::ScreenCaptureTarget};
 use cap_media::{
     platform::Bounds,
     sources::{CaptureScreen, CaptureWindow},
 };
 use cap_project::{
-    ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta, StudioRecordingMeta,
-    TimelineConfiguration, TimelineSegment, ZoomSegment,
+    Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta,
+    StudioRecordingMeta, TimelineConfiguration, TimelineSegment, ZoomSegment,
 };
 use cap_recording::{
     instant_recording::{CompletedInstantRecording, InstantRecordingHandle},
@@ -32,10 +33,10 @@ use cap_recording::{
 };
 use cap_rendering::ProjectRecordings;
 use cap_utils::{ensure_dir, spawn_actor};
+use scap::Target;
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
 use tracing::{error, info};
-use tracing_subscriber::Layer;
 
 pub enum InProgressRecording {
     Instant {
@@ -83,6 +84,13 @@ impl InProgressRecording {
             },
             Self::Studio { handle } => CompletedRecording::Studio(handle.stop().await?),
         })
+    }
+
+    pub async fn cancel(self) -> Result<(), RecordingError> {
+        match self {
+            Self::Instant { handle, .. } => handle.cancel().await,
+            Self::Studio { handle } => handle.cancel().await,
+        }
     }
 
     pub fn bounds(&self) -> &Bounds {
@@ -178,6 +186,8 @@ pub async fn start_recording(
     let recording_options = recording_options.unwrap_or(state.recording_options.clone());
     state.recording_options = recording_options.clone();
 
+    drop(state);
+
     if let Some(window) = CapWindowId::Camera.get(&app) {
         let _ =
             window.set_content_protected(matches!(recording_options.mode, RecordingMode::Studio));
@@ -189,7 +199,7 @@ pub async fn start_recording(
                 Some(_) => {
                     // Pre-create the video and get the shareable link
                     if let Ok(s3_config) = get_s3_config(&app, false, None).await {
-                        let link = web_api::make_url(format!("/s/{}", s3_config.id()));
+                        let link = app.make_app_url(format!("/s/{}", s3_config.id())).await;
                         info!("Pre-created shareable link: {}", link);
 
                         Some(VideoUploadInfo {
@@ -204,7 +214,6 @@ pub async fn start_recording(
                 // Allow the recording to proceed without error for any signed-in user
                 _ => {
                     // User is not signed in
-                    let _ = ShowCapWindow::SignIn.show(&app).await;
                     return Err("Please sign in to use instant recording".to_string());
                 }
             }
@@ -212,11 +221,30 @@ pub async fn start_recording(
         RecordingMode::Studio => None,
     };
 
-    if matches!(
-        recording_options.capture_target,
-        ScreenCaptureTarget::Window { .. } | ScreenCaptureTarget::Area { .. }
-    ) {
-        let _ = ShowCapWindow::WindowCaptureOccluder.show(&app);
+    match &recording_options.capture_target {
+        ScreenCaptureTarget::Window { id } => {
+            #[cfg(target_os = "macos")]
+            let display = display_for_window(*id).unwrap().id;
+
+            #[cfg(windows)]
+            let display = {
+                let Target::Window(target) = recording_options.capture_target.get_target().unwrap()
+                else {
+                    unreachable!();
+                };
+                display_for_window(target.raw_handle).unwrap().0 as u32
+            };
+
+            let _ = ShowCapWindow::WindowCaptureOccluder { screen_id: display }
+                .show(&app)
+                .await;
+        }
+        ScreenCaptureTarget::Area { screen, .. } => {
+            let _ = ShowCapWindow::WindowCaptureOccluder { screen_id: *screen }
+                .show(&app)
+                .await;
+        }
+        _ => {}
     }
 
     let (finish_upload_tx, finish_upload_rx) = flume::bounded(1);
@@ -233,13 +261,12 @@ pub async fn start_recording(
             )
         });
 
-    drop(state);
-
     println!("spawning actor");
 
     // done in spawn to catch panics just in case
     let actor_done_rx = spawn_actor({
         let state_mtx = Arc::clone(&state_mtx);
+        let app = app.clone();
         async move {
             fail!("recording::spawn_actor");
             let mut state = state_mtx.write().await;
@@ -251,7 +278,12 @@ pub async fn start_recording(
                         recording_dir.clone(),
                         recording_options.clone(),
                         state.camera_feed.clone(),
-                        state.mic_feed.clone(),
+                        &state.mic_feed,
+                        GeneralSettingsStore::get(&app)
+                            .ok()
+                            .flatten()
+                            .map(|s| s.custom_cursor_capture)
+                            .unwrap_or_default(),
                     )
                     .await
                     .map_err(|e| {
@@ -303,7 +335,9 @@ pub async fn start_recording(
         let state_mtx = Arc::clone(&state_mtx);
         async move {
             fail!("recording::wait_actor_done");
-            actor_done_rx.await.ok();
+            let Ok(_) = actor_done_rx.await else {
+                return;
+            };
 
             let _ = finish_upload_tx.send(());
 
@@ -437,7 +471,7 @@ async fn handle_recording_finish(
             StudioRecordingMeta::SingleSegment { segment } => {
                 segment.display.path.to_path(&recording_dir)
             }
-            StudioRecordingMeta::MultipleSegments { inner } => {
+            StudioRecordingMeta::MultipleSegments { inner, .. } => {
                 inner.segments[0].display.path.to_path(&recording_dir)
             }
         },
@@ -447,11 +481,15 @@ async fn handle_recording_finish(
     };
 
     let display_screenshot = screenshots_dir.join("display.jpg");
-    create_screenshot(display_output_path, display_screenshot.clone(), None).await?;
+    let screenshot_task = tokio::spawn(create_screenshot(
+        display_output_path,
+        display_screenshot.clone(),
+        None,
+    ));
 
     let (meta_inner, sharing) = match completed_recording {
         CompletedRecording::Studio(recording) => {
-            let recordings = ProjectRecordings::new(&recording_dir, &recording.meta);
+            let recordings = ProjectRecordings::new(&recording_dir, &recording.meta)?;
 
             let config = project_config_from_recording(
                 &recording,
@@ -495,6 +533,8 @@ async fn handle_recording_finish(
                             }
                         };
 
+                        let _ = screenshot_task.await;
+
                         if video_upload_succeeded {
                             let (screenshot_url, screenshot_form) = match prepare_screenshot_upload(
                                 &app,
@@ -517,7 +557,9 @@ async fn handle_recording_finish(
                                 .await;
 
                             match resp {
-                                Ok(r) if r.status() == 200 => {
+                                Ok(r)
+                                    if r.status().as_u16() >= 200 && r.status().as_u16() < 300 =>
+                                {
                                     info!("Screenshot uploaded successfully");
                                 }
                                 Ok(r) => {
@@ -568,6 +610,7 @@ async fn handle_recording_finish(
     .emit(app);
 
     let meta = RecordingMeta {
+        platform: Some(Platform::default()),
         project_path: recording_dir.clone(),
         sharing,
         pretty_name: format!(
@@ -589,7 +632,7 @@ async fn handle_recording_finish(
         {
             PostStudioRecordingBehaviour::OpenEditor => {
                 let _ = ShowCapWindow::Editor {
-                    project_id: id.clone(),
+                    project_path: recording_dir,
                 }
                 .show(&app)
                 .await;

@@ -1,6 +1,6 @@
 import type { DocMetadata } from "@/utils/blog";
 import { getDocs } from "@/utils/blog";
-import { clientEnv } from "@cap/env";
+import { buildEnv } from "@cap/env";
 import type { Metadata } from "next";
 import { MDXRemote } from "next-mdx-remote/rsc";
 import Image from "next/image";
@@ -49,9 +49,7 @@ export async function generateMetadata(
   if (!doc) return;
 
   const { title, summary, image } = doc.metadata;
-  const ogImage = image
-    ? `${clientEnv.NEXT_PUBLIC_WEB_URL}${image}`
-    : undefined;
+  const ogImage = image ? `${buildEnv.NEXT_PUBLIC_WEB_URL}${image}` : undefined;
   const description = summary || title;
 
   return {
@@ -61,7 +59,7 @@ export async function generateMetadata(
       title,
       description,
       type: "article",
-      url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/docs/${fullSlug}`,
+      url: `${buildEnv.NEXT_PUBLIC_WEB_URL}/docs/${fullSlug}`,
       ...(ogImage && {
         images: [{ url: ogImage }],
       }),
@@ -145,7 +143,7 @@ export default async function DocPage(props: DocProps) {
                     <div className="p-4 rounded-lg border transition-colors hover:border-blue-500">
                       <h3 className="m-0">{doc.metadata.title}</h3>
                       {doc.metadata.summary && (
-                        <p className="m-0 mt-2 text-gray-600 dark:text-gray-400">
+                        <p className="m-0 mt-2 text-gray-600 dark:text-gray-8">
                           {doc.metadata.summary}
                         </p>
                       )}
@@ -154,7 +152,7 @@ export default async function DocPage(props: DocProps) {
                           {doc.metadata.tags.split(", ").map((tag) => (
                             <span
                               key={tag}
-                              className="px-2 py-1 text-xs text-gray-600 bg-gray-100 rounded-full dark:bg-gray-800 dark:text-gray-400"
+                              className="px-2 py-1 text-xs text-gray-600 bg-gray-1 rounded-full dark:bg-gray-800 dark:text-gray-8"
                             >
                               {tag}
                             </span>

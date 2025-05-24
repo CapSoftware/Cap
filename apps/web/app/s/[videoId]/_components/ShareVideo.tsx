@@ -1,10 +1,13 @@
-import { apiClient } from "@/utils/web-api";
+import { UpgradeModal } from "@/components/UpgradeModal";
+import { usePublicEnv } from "@/utils/public-env";
+import { useApiClient } from "@/utils/web-api";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
-import { clientEnv, NODE_ENV } from "@cap/env";
+import { NODE_ENV } from "@cap/env";
 import { Logo, LogoSpinner } from "@cap/ui";
-import { isUserOnProPlan, S3_BUCKET_URL } from "@cap/utils";
+import { isUserOnProPlan } from "@cap/utils";
 import clsx from "clsx";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   Maximize,
   MessageSquare,
@@ -20,8 +23,8 @@ import {
   useRef,
   useState,
 } from "react";
-import toast from "react-hot-toast";
 import { Tooltip } from "react-tooltip";
+import { toast } from "sonner";
 import { fromVtt, Subtitle } from "subtitles-parser-vtt";
 import { MP4VideoPlayer } from "./MP4VideoPlayer";
 import { VideoPlayer } from "./VideoPlayer";
@@ -72,6 +75,8 @@ export const ShareVideo = forwardRef<
   const [subtitlesVisible, setSubtitlesVisible] = useState(true);
   const [isTranscriptionProcessing, setIsTranscriptionProcessing] =
     useState(false);
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+  const [tempOverlayVisible, setTempOverlayVisible] = useState(false);
 
   // Scrubbing preview states
   const [showPreview, setShowPreview] = useState(false);
@@ -86,7 +91,6 @@ export const ShareVideo = forwardRef<
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
 
   const [videoSpeed, setVideoSpeed] = useState(1);
-  const overlayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [isHovering, setIsHovering] = useState(false);
   const hideControlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [forceHideControls, setForceHideControls] = useState(false);
@@ -125,7 +129,7 @@ export const ShareVideo = forwardRef<
 
     // Pre-fetch the first thumbnail to check if it exists
     if (data.source.type === "desktopMP4") {
-      const thumbUrl = `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&thumbnailTime=0`;
+      const thumbUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&thumbnailTime=0`;
 
       // Check if the thumbnail exists
       fetch(thumbUrl, { method: "HEAD" })
@@ -217,6 +221,39 @@ export const ShareVideo = forwardRef<
   }, [videoMetadataLoaded]);
 
   useEffect(() => {
+    const handleShortcuts = (e: KeyboardEvent) => {
+      // Skip handling if user is typing in form controls
+      const target = e.target as HTMLElement;
+      const isFormElement =
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.tagName === "SELECT" ||
+        target.isContentEditable ||
+        target.getAttribute("role") === "textbox";
+
+      // Only handle shortcuts if not typing in a form control
+      if (!isFormElement && videoRef.current) {
+        if (e.code === "Space") {
+          e.preventDefault(); // Prevent page scrolling
+          if (isPlaying) {
+            videoRef.current.pause();
+            setIsPlaying(false);
+          } else {
+            videoRef.current.play();
+            setIsPlaying(true);
+          }
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleShortcuts);
+
+    return () => {
+      window.removeEventListener("keydown", handleShortcuts);
+    };
+  }, [isPlaying, videoRef]);
+
+  useEffect(() => {
     const onVideoLoadedMetadata = () => {
       if (videoRef.current) {
         setLongestDuration(videoRef.current.duration);
@@ -228,6 +265,16 @@ export const ShareVideo = forwardRef<
     const onCanPlay = () => {
       setVideoMetadataLoaded(true);
       setVideoReadyToPlay(true);
+
+      // Autoplay the video when it's ready on initial render
+      setIsPlaying(true);
+      if (videoRef.current) {
+        videoRef.current.play().catch((error) => {
+          console.error("Error auto-playing video:", error);
+          // If autoplay fails (common on mobile), don't set isPlaying
+          setIsPlaying(false);
+        });
+      }
 
       // If the video is already playing (user clicked play before it was ready),
       // ensure it actually starts playing now
@@ -434,6 +481,20 @@ export const ShareVideo = forwardRef<
     };
   }, [seeking]);
 
+  // Show overlay temporarily when play state changes
+  useEffect(() => {
+    // When video play state changes, show overlay temporarily
+    setTempOverlayVisible(true);
+
+    // Hide temporary overlay after 500ms
+    const timer = setTimeout(() => {
+      setTempOverlayVisible(false);
+    }, 500);
+
+    // Clean up timer on unmount or when isPlaying changes again
+    return () => clearTimeout(timer);
+  }, [isPlaying]);
+
   // Set up a hidden video element for scrubbing previews
   useEffect(() => {
     // Only set up scrubbing video on large screens
@@ -442,7 +503,7 @@ export const ShareVideo = forwardRef<
       const scrubVideo = document.createElement("video");
 
       // Use the same MP4 source construction as the main video
-      const mp4Source = `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
+      const mp4Source = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
 
       scrubVideo.src = mp4Source;
       scrubVideo.crossOrigin = "anonymous";
@@ -547,7 +608,7 @@ export const ShareVideo = forwardRef<
           scrubbingVideo.currentTime = time;
 
           // Listen for the seeked event
-          const handleSeeked = (e: Event) => {
+          const handleSeeked = () => {
             try {
               // Draw the current frame onto the canvas
               ctx.drawImage(scrubbingVideo, 0, 0, canvas.width, canvas.height);
@@ -737,7 +798,10 @@ export const ShareVideo = forwardRef<
     setSeeking(true);
   };
 
-  const handleSeekMouseUp = (event: React.MouseEvent | React.TouchEvent, isTouch = false) => {
+  const handleSeekMouseUp = (
+    event: React.MouseEvent | React.TouchEvent,
+    isTouch = false
+  ) => {
     if (!seeking) return;
     setSeeking(false);
     const seekBar = event.currentTarget;
@@ -887,19 +951,19 @@ export const ShareVideo = forwardRef<
     return hoursValue * 3600 + minutesValue * 60 + secondsValue;
   };
 
+  const publicEnv = usePublicEnv();
+  const apiClient = useApiClient();
+
   useEffect(() => {
     const fetchSubtitles = async () => {
       let transcriptionUrl;
 
-      if (
-        data.bucket &&
-        data.awsBucket !== clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET
-      ) {
+      if (data.bucket && data.awsBucket !== publicEnv.awsBucket) {
         // For custom S3 buckets, fetch through the API
         transcriptionUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&fileType=transcription`;
       } else {
         // For default Cap storage
-        transcriptionUrl = `${S3_BUCKET_URL}/${data.ownerId}/${data.id}/transcription.vtt`;
+        transcriptionUrl = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/transcription.vtt`;
       }
 
       try {
@@ -1029,18 +1093,18 @@ export const ShareVideo = forwardRef<
   let videoSrc: string;
 
   if (data.source.type === "desktopMP4") {
-    videoSrc = `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
+    videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
   } else if (
     // v.cap.so is only available in prod
     NODE_ENV === "development" ||
     ((data.skipProcessing === true || data.jobStatus !== "COMPLETE") &&
       data.source.type === "MediaConvert")
   ) {
-    videoSrc = `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
+    videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
   } else if (data.source.type === "MediaConvert") {
-    videoSrc = `${S3_BUCKET_URL}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`;
+    videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`;
   } else {
-    videoSrc = `${S3_BUCKET_URL}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
+    videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
   }
 
   return (
@@ -1066,7 +1130,10 @@ export const ShareVideo = forwardRef<
         {!isLoading && (
           <div
             className={`absolute inset-0 z-20 flex items-center justify-center bg-black bg-opacity-50 transition-opacity duration-300 ${
-              (overlayVisible || isHovering) && !forceHideControls
+              ((overlayVisible || isHovering) &&
+                !forceHideControls &&
+                isPlaying) ||
+              tempOverlayVisible
                 ? "opacity-100"
                 : "opacity-0"
             }`}
@@ -1090,11 +1157,37 @@ export const ShareVideo = forwardRef<
                 }
               }}
             >
-              {isPlaying ? (
-                <Pause className="w-auto h-10 text-white sm:h-12 md:h-14 hover:opacity-50" />
-              ) : (
-                <Play className="w-auto h-10 text-white sm:h-12 md:h-14 hover:opacity-50" />
-              )}
+              <AnimatePresence initial={false} mode="popLayout">
+                {isPlaying ? (
+                  <motion.div
+                    key="pause-button"
+                    className="flex relative z-30 justify-center items-center size-20"
+                    initial={{ opacity: 0, scale: 0 }}
+                    animate={{
+                      scale: 1,
+                      opacity: 1,
+                    }}
+                    style={{ transformOrigin: "center center" }}
+                    transition={{ duration: 0.4, ease: "easeOut" }}
+                  >
+                    <Pause className="w-auto h-10 text-white sm:h-12 md:h-14 hover:opacity-50" />
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="play-button"
+                    className="flex relative z-30 justify-center items-center size-20"
+                    initial={{ opacity: 0, scale: 0 }}
+                    animate={{
+                      scale: 1,
+                      opacity: 1,
+                    }}
+                    style={{ transformOrigin: "center center" }}
+                    transition={{ duration: 0.4, ease: "easeOut" }}
+                  >
+                    <Play className="w-auto h-10 text-white sm:h-12 md:h-14 hover:opacity-50" />
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </button>
           </div>
         )}
@@ -1127,7 +1220,7 @@ export const ShareVideo = forwardRef<
               src={thumbnailUrl}
               alt={`Preview at ${formatTime(previewTime)}`}
               className="object-contain w-full h-full bg-black"
-              onError={(e) => {
+              onError={() => {
                 console.log(
                   "Thumbnail failed to load, using canvas preview instead"
                 );
@@ -1243,14 +1336,17 @@ export const ShareVideo = forwardRef<
               })}
             </div>
           )}
-          <div className="absolute top-2.5 w-full h-1 sm:h-1.5 bg-white bg-opacity-50 rounded-full z-10" />
+          <div className="absolute top-2.5 w-full h-1 sm:h-1.5 bg-gray-1 bg-opacity-50 rounded-full z-10" />
           <div
-            className="absolute top-2.5 h-1 sm:h-1.5 bg-white rounded-full cursor-pointer z-10"
+            className="absolute top-2.5 h-1 sm:h-1.5 bg-gray-1 rounded-full cursor-pointer z-10"
             style={{ width: `${watchedPercentage}%` }}
           />
           <div
-            className={clsx("drag-button absolute top-2.5 z-20 -mt-1.5 -ml-2 w-4 h-4 bg-white rounded-full  cursor-pointer focus:outline-none", 
-              seeking ? "scale-125 transition-transform ring-blue-300 ring-offset-2 ring-2" : ""
+            className={clsx(
+              "drag-button absolute top-2.5 z-20 -mt-1.5 -ml-2 w-4 h-4 bg-gray-1 rounded-full  cursor-pointer focus:outline-none",
+              seeking
+                ? "scale-125 transition-transform ring-blue-300 ring-offset-2 ring-2"
+                : ""
             )}
             tabIndex={0}
             style={{ left: `${watchedPercentage}%` }}
@@ -1261,7 +1357,7 @@ export const ShareVideo = forwardRef<
             <span className="inline-flex">
               <button
                 aria-label="Play video"
-                className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none text-slate-100 hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 sm:px-2 sm:py-2"
+                className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 sm:px-2 sm:py-2"
                 tabIndex={0}
                 type="button"
                 onClick={() => handlePlayPauseClick()}
@@ -1282,7 +1378,7 @@ export const ShareVideo = forwardRef<
               <span className="inline-flex">
                 <button
                   aria-label={`Change video speed to ${videoSpeed}x`}
-                  className="inline-flex min-w-[35px] sm:min-w-[45px] items-center text-xs sm:text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-slate-100 border-transparent hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 px-1 sm:px-2 py-1 sm:py-2 justify-center rounded-lg"
+                  className="inline-flex min-w-[35px] sm:min-w-[45px] items-center text-xs sm:text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-gray-100 border-transparent hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 px-1 sm:px-2 py-1 sm:py-2 justify-center rounded-lg"
                   tabIndex={0}
                   type="button"
                   onClick={handleSpeedChange}
@@ -1294,7 +1390,7 @@ export const ShareVideo = forwardRef<
                 <span className="inline-flex">
                   <button
                     aria-label={isPlaying ? "Pause video" : "Play video"}
-                    className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none text-slate-100 hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 sm:px-2 sm:py-2"
+                    className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 sm:px-2 sm:py-2"
                     tabIndex={0}
                     type="button"
                     onClick={() => {
@@ -1334,7 +1430,7 @@ export const ShareVideo = forwardRef<
                     aria-label={
                       subtitlesVisible ? "Hide subtitles" : "Show subtitles"
                     }
-                    className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none text-slate-100 hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 sm:px-2 sm:py-2"
+                    className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 sm:px-2 sm:py-2"
                     tabIndex={0}
                     type="button"
                     onClick={() => setSubtitlesVisible(!subtitlesVisible)}
@@ -1380,7 +1476,7 @@ export const ShareVideo = forwardRef<
               <span className="inline-flex">
                 <button
                   aria-label={videoRef?.current?.muted ? "Unmute" : "Mute"}
-                  className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none text-slate-100 hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 sm:px-2 sm:py-2"
+                  className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 sm:px-2 sm:py-2"
                   tabIndex={0}
                   type="button"
                   onClick={() => handleMuteClick()}
@@ -1395,7 +1491,7 @@ export const ShareVideo = forwardRef<
               <span className="inline-flex">
                 <button
                   aria-label="Go fullscreen"
-                  className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none text-slate-100 hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 sm:px-2 sm:py-2"
+                  className="inline-flex justify-center items-center px-1 py-1 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 sm:px-2 sm:py-2"
                   tabIndex={0}
                   type="button"
                   onClick={handleFullscreenClick}
@@ -1412,27 +1508,31 @@ export const ShareVideo = forwardRef<
           subscriptionStatus: user.stripeSubscriptionStatus,
         }) && (
           <div className="absolute top-4 left-4 z-30">
-            <a
-              href="/pricing"
-              target="_blank"
+            <div
               className="block cursor-pointer"
-              onClick={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                setUpgradeModalOpen(true);
+              }}
             >
               <div className="relative">
                 <div className="opacity-50 transition-opacity hover:opacity-100 peer">
-                  <Logo className="w-auto h-4 sm:h-6" white={true} />
+                  <Logo className="w-auto h-4 sm:h-8" white={true} />
                 </div>
 
-                {/* Text only appears when hovering the exact logo element */}
-                <div className="absolute left-0 top-6 transition-transform duration-300 ease-in-out origin-top scale-y-0 peer-hover:scale-y-100">
+                <div className="absolute left-0 top-8 transition-transform duration-300 ease-in-out origin-top scale-y-0 peer-hover:scale-y-100">
                   <p className="text-white text-xs font-medium whitespace-nowrap bg-black bg-opacity-50 px-2 py-0.5 rounded">
-                    Upgrade to Cap Pro and remove the watermark
+                    Remove watermark
                   </p>
                 </div>
               </div>
-            </a>
+            </div>
           </div>
         )}
+      <UpgradeModal
+        open={upgradeModalOpen}
+        onOpenChange={setUpgradeModalOpen}
+      />
     </div>
   );
 });

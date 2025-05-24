@@ -5,7 +5,7 @@ import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
 import { s3Buckets, videos } from "@cap/database/schema";
-import { clientEnv, NODE_ENV } from "@cap/env";
+import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { zValidator } from "@hono/zod-validator";
 import { count, eq } from "drizzle-orm";
 import { Hono } from "hono";
@@ -39,7 +39,7 @@ app.get(
     if (!isUpgraded && duration && duration > 300)
       return c.json({ error: "upgrade_required" }, { status: 403 });
 
-    const [bucket] = await db
+    const [bucket] = await db()
       .select()
       .from(s3Buckets)
       .where(eq(s3Buckets.ownerId, user.id));
@@ -47,30 +47,31 @@ app.get(
     const s3Config = await getS3Config(bucket);
     const bucketName = await getS3Bucket(bucket);
 
-    const id = nanoId();
     const date = new Date();
     const formattedDate = `${date.getDate()} ${date.toLocaleString("default", {
       month: "long",
     })} ${date.getFullYear()}`;
 
     if (videoId !== undefined) {
-      const [video] = await db
+      const [video] = await db()
         .select()
         .from(videos)
         .where(eq(videos.id, videoId));
 
-      if (!video) return c.json({ error: "video_not_found" }, { status: 404 });
-
-      return c.json({
-        id: video.id,
-        user_id: user.id,
-        aws_region: video.awsRegion,
-        aws_bucket: video.awsBucket,
-      });
+      if (video) {
+        return c.json({
+          id: video.id,
+          user_id: user.id,
+          aws_region: video.awsRegion,
+          aws_bucket: video.awsBucket,
+        });
+      }
     }
 
+    const idToUse = videoId !== undefined ? videoId : nanoId();
+
     const videoData = {
-      id: id,
+      id: idToUse,
       name: `Cap ${
         isScreenshot ? "Screenshot" : "Recording"
       } - ${formattedDate}`,
@@ -87,18 +88,18 @@ app.get(
       bucket: bucket?.id,
     };
 
-    await db.insert(videos).values(videoData);
+    await db().insert(videos).values(videoData);
 
-    if (clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
-      await dub.links.create({
-        url: `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${id}`,
+    if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
+      await dub().links.create({
+        url: `${serverEnv().WEB_URL}/s/${idToUse}`,
         domain: "cap.link",
-        key: id,
+        key: idToUse,
       });
 
     // Check if this is the user's first video and send the first shareable link email
     try {
-      const videoCount = await db
+      const videoCount = await db()
         .select({ count: count() })
         .from(videos)
         .where(eq(videos.ownerId, user.id));
@@ -113,9 +114,9 @@ app.get(
           "[SendFirstShareableLinkEmail] Sending first shareable link email with 5-minute delay"
         );
 
-        const videoUrl = clientEnv.NEXT_PUBLIC_IS_CAP
-          ? `https://cap.link/${id}`
-          : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${id}`;
+        const videoUrl = buildEnv.NEXT_PUBLIC_IS_CAP
+          ? `https://cap.link/${idToUse}`
+          : `${serverEnv().WEB_URL}/s/${idToUse}`;
 
         // Send email with 5-minute delay using Resend's scheduling feature
         await sendEmail({
@@ -139,7 +140,7 @@ app.get(
     }
 
     return c.json({
-      id,
+      id: idToUse,
       user_id: user.id,
       aws_region: s3Config.region,
       aws_bucket: bucketName,

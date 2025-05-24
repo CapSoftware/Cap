@@ -3,7 +3,7 @@ use std::ffi::{c_void, OsString};
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 
-use super::{Bounds, CursorShape, Window};
+use super::{Bounds, CursorShape, LogicalBounds, LogicalPosition, LogicalSize, Window};
 
 use tracing::debug;
 use windows::core::{PCWSTR, PWSTR};
@@ -193,8 +193,6 @@ pub fn get_on_screen_windows() -> Vec<Window> {
             dpi => dpi,
         } as i32;
 
-        let scale_factor = dpi as f64 / BASE_DPI as f64;
-
         let mut rect = RECT::default();
         DwmGetWindowAttribute(
             hwnd,
@@ -204,10 +202,10 @@ pub fn get_on_screen_windows() -> Vec<Window> {
         )
         .ok();
 
-        let rect_left = rect.left as f64 / scale_factor;
-        let rect_top = rect.top as f64 / scale_factor;
-        let rect_right = rect.right as f64 / scale_factor;
-        let rect_bottom = rect.bottom as f64 / scale_factor;
+        let rect_left = rect.left as f64;
+        let rect_top = rect.top as f64;
+        let rect_right = rect.right as f64;
+        let rect_bottom = rect.bottom as f64;
 
         let window = Window {
             window_id: hwnd.0 as u32,
@@ -266,7 +264,7 @@ pub fn monitor_bounds(id: u32) -> Bounds {
             return TRUE;
         }
 
-        let id = display_device.StateFlags as u32;
+        let id = hmonitor.0 as u32;
 
         if id == *target_id {
             let rect = minfo.monitorInfo.rcMonitor;
@@ -305,6 +303,20 @@ pub fn monitor_bounds(id: u32) -> Bounds {
     lparams.1.unwrap()
 }
 
+pub fn logical_monitor_bounds(id: u32) -> Option<LogicalBounds> {
+    let bounds = monitor_bounds(id);
+    Some(LogicalBounds {
+        position: LogicalPosition {
+            x: bounds.x,
+            y: bounds.y,
+        },
+        size: LogicalSize {
+            width: bounds.width,
+            height: bounds.height,
+        },
+    })
+}
+
 pub fn display_names() -> HashMap<u32, String> {
     let mut names = HashMap::new();
 
@@ -319,23 +331,20 @@ pub fn display_names() -> HashMap<u32, String> {
     names
 }
 
-pub fn get_display_refresh_rate(monitor: HMONITOR) -> Option<u32> {
+pub fn get_display_refresh_rate(monitor: HMONITOR) -> Result<u32, String> {
     let mut monitorinfoexw: MONITORINFOEXW = unsafe { std::mem::zeroed() };
     monitorinfoexw.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
 
-    if let Err(_) =
-        unsafe { GetMonitorInfoW(monitor, &mut monitorinfoexw.monitorInfo as *mut MONITORINFO) }
-            .ok()
-    {
-        return None;
-    }
+    unsafe { GetMonitorInfoW(monitor, &mut monitorinfoexw.monitorInfo as *mut MONITORINFO) }
+        .ok()
+        .map_err(|e| e.to_string())?;
 
     let mut dev_mode: DEVMODEW = unsafe { std::mem::zeroed() };
     dev_mode.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
 
     let device_name = PCWSTR::from_raw(monitorinfoexw.szDevice.as_ptr());
 
-    if let Err(_) = unsafe {
+    unsafe {
         EnumDisplaySettingsW(
             device_name,
             windows::Win32::Graphics::Gdi::ENUM_CURRENT_SETTINGS,
@@ -343,11 +352,9 @@ pub fn get_display_refresh_rate(monitor: HMONITOR) -> Option<u32> {
         )
     }
     .ok()
-    {
-        return None;
-    }
+    .map_err(|e| e.to_string())?;
 
-    Some(dev_mode.dmDisplayFrequency)
+    Ok(dev_mode.dmDisplayFrequency)
 }
 
 pub fn display_for_window(window: HWND) -> Option<HMONITOR> {

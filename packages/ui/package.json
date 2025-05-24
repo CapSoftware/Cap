@@ -11,8 +11,7 @@
   },
   "scripts": {
     "lint": "eslint src --cache",
-    "typecheck": "tsc -b",
-    "build": "tsc"
+    "typecheck": "tsc -b"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^1.5.11",
@@ -33,7 +32,7 @@
     "tauri-plugin-positioner-api": "^0.2.7",
     "tsconfig": "workspace:*",
     "typescript": "^5.7.2",
-    "vite": "^6.0.0",
+    "vite": "^6.3.5",
     "vite-tsconfig-paths": "^4.2.1"
   },
   "dependencies": {

@@ -1,22 +1,24 @@
 use anyhow::Result;
 use cap_project::{
-    AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Crop, CursorEvents,
-    ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY,
+    AspectRatio, CameraXPosition, CameraYPosition, Crop, CursorEvents, ProjectConfiguration,
+    RecordingMeta, StudioRecordingMeta, XY,
 };
 use composite_frame::{CompositeVideoFramePipeline, CompositeVideoFrameUniforms};
 use core::f64;
+use cursor_interpolation::{interpolate_cursor, InterpolatedCursorPosition};
 use decoder::{spawn_decoder, AsyncVideoDecoderHandle};
-use frame_pipeline::{FramePipeline, FramePipelineEncoder, FramePipelineState};
+use frame_pipeline::finish_encoder;
 use futures::future::OptionFuture;
 use futures::FutureExt;
 use layers::{
-    find_caption_at_time, find_caption_at_time_project, Background, BackgroundBlurPipeline,
-    BackgroundLayer, CameraLayer, CaptionSettings, CaptionsLayer, CursorLayer, DisplayLayer,
+    Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,
     GradientOrColorPipeline, ImageBackgroundPipeline,
 };
 use specta::Type;
+use spring_mass_damper::SpringMassDamperSimulationConfig;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc;
+use tracing::subscriber::DefaultGuard;
 
 use image::GenericImageView;
 use log::{debug, info, warn};
@@ -24,6 +26,7 @@ use std::{path::PathBuf, time::Instant};
 
 mod composite_frame;
 mod coord;
+mod cursor_interpolation;
 pub mod decoder;
 mod frame_pipeline;
 mod layers;
@@ -33,6 +36,7 @@ mod zoom;
 
 pub use coord::*;
 pub use decoder::DecodedFrame;
+pub use frame_pipeline::RenderedFrame;
 pub use project_recordings::{ProjectRecordings, SegmentRecordings, Video};
 
 use zoom::*;
@@ -49,6 +53,7 @@ pub struct RenderOptions {
 pub struct RecordingSegmentDecoders {
     screen: AsyncVideoDecoderHandle,
     camera: Option<AsyncVideoDecoderHandle>,
+    pub segment_offset: f64,
 }
 
 pub struct SegmentVideoPaths {
@@ -61,13 +66,34 @@ impl RecordingSegmentDecoders {
         recording_meta: &RecordingMeta,
         meta: &StudioRecordingMeta,
         segment: SegmentVideoPaths,
+        segment_i: usize,
     ) -> Result<Self, String> {
+        let latest_start_time = match &meta {
+            StudioRecordingMeta::SingleSegment { .. } => None,
+            StudioRecordingMeta::MultipleSegments { inner, .. } => {
+                inner.segments[segment_i].latest_start_time()
+            }
+        };
+
         let screen = spawn_decoder(
             "screen",
             recording_meta.project_path.join(segment.display),
             match &meta {
                 StudioRecordingMeta::SingleSegment { segment } => segment.display.fps,
-                StudioRecordingMeta::MultipleSegments { inner } => inner.segments[0].display.fps,
+                StudioRecordingMeta::MultipleSegments { inner, .. } => {
+                    inner.segments[segment_i].display.fps
+                }
+            },
+            match &meta {
+                StudioRecordingMeta::SingleSegment { .. } => 0.0,
+                StudioRecordingMeta::MultipleSegments { inner, .. } => {
+                    let segment = &inner.segments[segment_i];
+
+                    latest_start_time
+                        .zip(segment.display.start_time)
+                        .map(|(latest_start_time, display_time)| latest_start_time - display_time)
+                        .unwrap_or(0.0)
+                }
             },
         )
         .await
@@ -80,8 +106,19 @@ impl RecordingSegmentDecoders {
                     StudioRecordingMeta::SingleSegment { segment } => {
                         segment.camera.as_ref().unwrap().fps
                     }
-                    StudioRecordingMeta::MultipleSegments { inner } => {
+                    StudioRecordingMeta::MultipleSegments { inner, .. } => {
                         inner.segments[0].camera.as_ref().unwrap().fps
+                    }
+                },
+                match &meta {
+                    StudioRecordingMeta::SingleSegment { .. } => 0.0,
+                    StudioRecordingMeta::MultipleSegments { inner, .. } => {
+                        let segment = &inner.segments[segment_i];
+
+                        latest_start_time
+                            .zip(segment.camera.as_ref().and_then(|c| c.start_time))
+                            .map(|(latest_start_time, start_time)| latest_start_time - start_time)
+                            .unwrap_or(0.0)
                     }
                 },
             )
@@ -90,7 +127,11 @@ impl RecordingSegmentDecoders {
         .await
         .transpose()?;
 
-        Ok(Self { screen, camera })
+        Ok(Self {
+            screen,
+            camera,
+            segment_offset: latest_start_time.unwrap_or(0.0),
+        })
     }
 
     pub async fn get_frames(
@@ -111,6 +152,7 @@ impl RecordingSegmentDecoders {
             screen_frame: screen?,
             camera_frame: camera.flatten(),
             segment_time,
+            recording_time: segment_time + self.segment_offset as f32,
         })
     }
 }
@@ -145,16 +187,17 @@ pub async fn render_video_to_channel(
     segments: Vec<RenderSegment>,
     fps: u32,
     resolution_base: XY<u32>,
+    recordings: &ProjectRecordings,
 ) -> Result<(), RenderingError> {
     let constants = RenderVideoConstants::new(options, recording_meta, meta).await?;
-    let recordings = ProjectRecordings::new(&recording_meta.project_path, meta);
+    // let recordings = ProjectRecordings::new(&recording_meta.project_path, meta);
 
     ffmpeg::init().unwrap();
 
     let start_time = Instant::now();
 
     // Get the duration from the timeline if it exists, otherwise use the longest source duration
-    let duration = get_duration(&recordings, recording_meta, meta, &project);
+    let duration = get_duration(recordings, recording_meta, meta, &project);
 
     let total_frames = (fps as f64 * duration).ceil() as u32;
     println!(
@@ -163,9 +206,10 @@ pub async fn render_video_to_channel(
     );
 
     let mut frame_number = 0;
-    let background = project.background.source.clone();
 
     let mut frame_renderer = FrameRenderer::new(&constants);
+
+    let mut layers = RendererLayers::new(&constants.device, &constants.queue);
 
     loop {
         if frame_number >= total_frames {
@@ -191,10 +235,18 @@ pub async fn render_video_to_channel(
             .get_frames(segment_time as f32, !project.camera.hide)
             .await
         {
-            let uniforms =
-                ProjectUniforms::new(&constants, &project, frame_number, fps, resolution_base);
+            let uniforms = ProjectUniforms::new(
+                &constants,
+                &project,
+                frame_number,
+                fps,
+                resolution_base,
+                &segment.cursor,
+                &segment_frames,
+            );
+
             let frame = frame_renderer
-                .render(segment_frames, uniforms, &segment.cursor)
+                .render(segment_frames, uniforms, &segment.cursor, &mut layers)
                 .await?;
 
             if frame.width == 0 || frame.height == 0 {
@@ -261,7 +313,7 @@ pub fn get_duration(
 
 pub struct CursorTexture {
     inner: wgpu::Texture,
-    hotspot: XY<f64>,
+    hotspot: XY<f32>,
 }
 
 pub struct RenderVideoConstants {
@@ -270,16 +322,9 @@ pub struct RenderVideoConstants {
     pub queue: wgpu::Queue,
     pub device: wgpu::Device,
     pub options: RenderOptions,
-    composite_video_frame_pipeline: CompositeVideoFramePipeline,
     pub cursor_textures: HashMap<String, CursorTexture>,
-    gradient_or_color_pipeline: GradientOrColorPipeline,
-    image_background_pipeline: ImageBackgroundPipeline,
-    pub background_blur_pipeline: BackgroundBlurPipeline,
     background_textures: std::sync::Arc<tokio::sync::RwLock<HashMap<String, wgpu::Texture>>>,
-    screen_frame: (wgpu::Texture, wgpu::TextureView),
     camera_frame: Option<(wgpu::Texture, wgpu::TextureView)>,
-    cursor_layer: CursorLayer,
-    pub captions_layer: CaptionsLayer,
 }
 
 impl RenderVideoConstants {
@@ -310,8 +355,6 @@ impl RenderVideoConstants {
 
         let image_background_pipeline = ImageBackgroundPipeline::new(&device);
         let background_textures = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-
-        let background_blur_pipeline = BackgroundBlurPipeline::new(&device);
 
         let screen_frame = {
             let texture = device.create_texture(
@@ -363,27 +406,15 @@ impl RenderVideoConstants {
             (texture, texture_view)
         });
 
-        let cursor_layer = CursorLayer::new(&device);
-
-        // Initialize the captions layer
-        let captions_layer = CaptionsLayer::new(&device, &queue);
-
         Ok(Self {
             _instance: instance,
             _adapter: adapter,
             device,
             queue,
             options,
-            composite_video_frame_pipeline,
             cursor_textures,
-            gradient_or_color_pipeline,
-            image_background_pipeline,
-            background_blur_pipeline,
             background_textures,
-            screen_frame,
             camera_frame,
-            cursor_layer,
-            captions_layer,
         })
     }
 
@@ -393,44 +424,23 @@ impl RenderVideoConstants {
         recording_meta: &RecordingMeta,
         meta: &StudioRecordingMeta,
     ) -> HashMap<String, CursorTexture> {
-        println!("Starting to load cursor textures");
-        println!("Project path: {:?}", recording_meta.project_path);
-        // println!("Cursor images to load: {:?}", cursor.cursor_images);
-
         let mut textures = HashMap::new();
-
-        // Create the full path to the cursors directory
-        let cursors_dir = recording_meta.project_path.join("content").join("cursors");
-        println!("Cursors directory: {:?}", cursors_dir);
 
         let cursor_images = match &meta {
             StudioRecordingMeta::SingleSegment { .. } => Default::default(),
-            StudioRecordingMeta::MultipleSegments { inner } => {
+            StudioRecordingMeta::MultipleSegments { inner, .. } => {
                 inner.cursor_images(recording_meta).unwrap_or_default()
             }
         };
 
         for (cursor_id, cursor) in &cursor_images.0 {
-            println!(
-                "Loading cursor image: {} -> {}",
-                cursor_id,
-                cursor.path.display()
-            );
-
-            println!("Full cursor path: {:?}", cursor);
-
             if !cursor.path.exists() {
-                println!("Cursor image file does not exist: {:?}", cursor);
                 continue;
             }
 
             match image::open(&cursor.path) {
                 Ok(img) => {
                     let dimensions = img.dimensions();
-                    println!(
-                        "Loaded cursor image dimensions: {}x{}",
-                        dimensions.0, dimensions.1
-                    );
 
                     let rgba = img.into_rgba8();
 
@@ -474,7 +484,7 @@ impl RenderVideoConstants {
                         cursor_id.clone(),
                         CursorTexture {
                             inner: texture,
-                            hotspot: cursor.hotspot,
+                            hotspot: cursor.hotspot.map(|v| v as f32),
                         },
                     );
                     println!("Successfully loaded cursor texture: {}", cursor_id);
@@ -505,6 +515,7 @@ pub struct ProjectUniforms {
     pub cursor_size: f32,
     display: CompositeVideoFrameUniforms,
     camera: Option<CompositeVideoFrameUniforms>,
+    interpolated_cursor: Option<InterpolatedCursorPosition>,
     pub project: ProjectConfiguration,
     pub zoom: InterpolatedZoom,
     pub resolution_base: XY<u32>,
@@ -674,46 +685,51 @@ impl ProjectUniforms {
         frame_number: u32,
         fps: u32,
         resolution_base: XY<u32>,
+        cursor_events: &CursorEvents,
+        segment_frames: &DecodedSegmentFrames,
     ) -> Self {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project, resolution_base);
         let frame_time = frame_number as f32 / fps as f32;
 
-        // let zoom_keyframes = ZoomKeyframes::new(project);
-        // let current_zoom = zoom_keyframes.interpolate(time as f64);
-        // let prev_zoom = zoom_keyframes.interpolate((time - 1.0 / 30.0) as f64);
-
         let velocity = [0.0, 0.0];
-        // if current_zoom.amount != prev_zoom.amount {
-        //     let scale_change = (current_zoom.amount - prev_zoom.amount) as f32;
-        //     // Reduce the velocity scale from 0.05 to 0.02
-        //     [
-        //         (scale_change * output_size.0 as f32) * 0.02, // Reduced from 0.05
-        //         (scale_change * output_size.1 as f32) * 0.02,
-        //     ]
-        // } else {
-        //     [0.0, 0.0]
-        // };
 
         let motion_blur_amount = 0.0;
-        // if current_zoom.amount != prev_zoom.amount {
-        //     project.motion_blur.unwrap_or(0.2) // Reduced from 0.5 to 0.2
-        // } else {
-        //     0.0
-        // };
 
         let crop = Self::get_crop(options, project);
 
-        let segment_cursor = SegmentsCursor::new(
-            frame_time as f64,
-            project
-                .timeline
-                .as_ref()
-                .map(|t| t.zoom_segments.as_slice())
-                .unwrap_or(&[]),
+        let interpolated_cursor = interpolate_cursor(
+            cursor_events,
+            segment_frames.recording_time,
+            (!project.cursor.raw).then(|| SpringMassDamperSimulationConfig {
+                tension: project.cursor.tension,
+                mass: project.cursor.mass,
+                friction: project.cursor.friction,
+            }),
         );
 
-        let zoom = InterpolatedZoom::new(segment_cursor);
+        let zoom = InterpolatedZoom::new(
+            SegmentsCursor::new(
+                frame_time as f64,
+                project
+                    .timeline
+                    .as_ref()
+                    .map(|t| t.zoom_segments.as_slice())
+                    .unwrap_or(&[]),
+            ),
+            interpolate_cursor(
+                cursor_events,
+                (segment_frames.recording_time - 0.2).max(0.0),
+                (!project.cursor.raw).then(|| SpringMassDamperSimulationConfig {
+                    tension: project.cursor.tension,
+                    mass: project.cursor.mass,
+                    friction: project.cursor.friction,
+                }),
+            )
+            .as_ref()
+            .map(|i| i.position)
+            .unwrap_or_else(|| Coord::new(XY::new(0.5, 0.5))),
+        );
 
         let display = {
             let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
@@ -875,67 +891,29 @@ impl ProjectUniforms {
             camera,
             project: project.clone(),
             zoom,
+            interpolated_cursor,
         }
     }
-}
-
-#[derive(Clone)]
-pub struct RenderedFrame {
-    pub data: Vec<u8>,
-    pub width: u32,
-    pub height: u32,
-    pub padded_bytes_per_row: u32,
 }
 
 pub struct DecodedSegmentFrames {
     pub screen_frame: DecodedFrame,
     pub camera_frame: Option<DecodedFrame>,
     pub segment_time: f32,
+    pub recording_time: f32,
 }
 
 pub struct FrameRenderer<'a> {
     constants: &'a RenderVideoConstants,
-    output_texture_desc: Option<wgpu::TextureDescriptor<'static>>,
-    output_textures: Option<(wgpu::Texture, wgpu::Texture)>,
+    session: Option<RenderSession>,
 }
 
 impl<'a> FrameRenderer<'a> {
     pub fn new(constants: &'a RenderVideoConstants) -> Self {
         Self {
             constants,
-            output_texture_desc: None,
-            output_textures: None,
+            session: None,
         }
-    }
-
-    fn update_output_textures(&mut self, width: u32, height: u32) {
-        if let Some(desc) = &self.output_texture_desc {
-            if desc.size.width == width && desc.size.height == height {
-                return;
-            }
-        }
-
-        let output_texture_desc = self.output_texture_desc.insert(wgpu::TextureDescriptor {
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::COPY_SRC,
-            label: Some("Intermediate Texture"),
-            view_formats: &[],
-        });
-
-        self.output_textures = Some((
-            self.constants.device.create_texture(output_texture_desc),
-            self.constants.device.create_texture(output_texture_desc),
-        ));
     }
 
     pub async fn render(
@@ -943,49 +921,89 @@ impl<'a> FrameRenderer<'a> {
         segment_frames: DecodedSegmentFrames,
         uniforms: ProjectUniforms,
         cursor: &CursorEvents,
+        layers: &mut RendererLayers,
     ) -> Result<RenderedFrame, RenderingError> {
-        self.update_output_textures(uniforms.output_size.0, uniforms.output_size.1);
+        let session = self.session.get_or_insert_with(|| {
+            RenderSession::new(
+                &self.constants.device,
+                uniforms.output_size.0,
+                uniforms.output_size.1,
+            )
+        });
+
+        session.update_texture_size(
+            &self.constants.device,
+            uniforms.output_size.0,
+            uniforms.output_size.1,
+        );
 
         produce_frame(
             self.constants,
             segment_frames,
             uniforms,
-            self.output_textures.as_ref().unwrap(),
             cursor,
+            layers,
+            session,
         )
         .await
     }
 }
 
-// https://github.com/gfx-rs/wgpu/wiki/Encapsulating-Graphics-Work
-async fn produce_frame(
-    constants: &RenderVideoConstants,
-    segment_frames: DecodedSegmentFrames,
-    uniforms: ProjectUniforms,
-    textures: &(wgpu::Texture, wgpu::Texture),
-    cursor: &CursorEvents,
-) -> Result<RenderedFrame, RenderingError> {
-    let background = Background::from(uniforms.project.background.source.clone());
+pub struct RendererLayers {
+    background: BackgroundLayer,
+    background_blur: BlurLayer,
+    display: DisplayLayer,
+    cursor: CursorLayer,
+    camera: CameraLayer,
+    captions: CaptionsLayer,
+}
 
-    let mut state = FramePipelineState::new(constants, &uniforms, textures);
-    let mut encoder = FramePipelineEncoder::new(&state);
+impl RendererLayers {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        Self {
+            background: BackgroundLayer::new(device),
+            background_blur: BlurLayer::new(device),
+            display: DisplayLayer::new(device),
+            cursor: CursorLayer::new(device),
+            camera: CameraLayer::new(device),
+            captions: CaptionsLayer::new(device, queue),
+        }
+    }
 
-    {
-        let mut pipeline = FramePipeline {
-            state: &mut state,
-            encoder: &mut encoder,
-        };
+    pub async fn prepare(
+        &mut self,
+        constants: &RenderVideoConstants,
+        uniforms: &ProjectUniforms,
+        segment_frames: &DecodedSegmentFrames,
+        cursor: &CursorEvents,
+    ) -> Result<(), RenderingError> {
+        self.background
+            .prepare(
+                &constants,
+                uniforms,
+                Background::from(uniforms.project.background.source.clone()),
+            )
+            .await?;
 
-        BackgroundLayer::render(&mut pipeline, background).await?;
+        if uniforms.project.background.blur > 0.0 {
+            self.background_blur.prepare(&constants.queue, uniforms);
+        }
 
-        DisplayLayer::render(&mut pipeline, &segment_frames);
+        self.display.prepare(
+            &constants.device,
+            &constants.queue,
+            segment_frames,
+            constants.options.screen_size,
+            &uniforms,
+        );
 
-        constants.cursor_layer.render(
-            &mut pipeline,
-            &segment_frames,
+        self.cursor.prepare(
+            segment_frames,
             uniforms.resolution_base,
-            &cursor,
+            cursor,
             &uniforms.zoom,
+            uniforms,
+            constants,
         );
 
         if let (
@@ -999,127 +1017,216 @@ async fn produce_frame(
             &uniforms.camera,
             &constants.camera_frame,
         ) {
-            CameraLayer::render(
-                &mut pipeline,
+            self.camera.prepare(
+                &constants.device,
+                &constants.queue,
+                *uniforms,
                 camera_size,
                 camera_frame,
-                uniforms,
                 (texture, texture_view),
             );
         }
 
-        // Render captions if there are any caption segments to display
-        if let Some(caption_data) = &uniforms.project.captions {
-            debug!(
-                "Found caption data in project - Enabled: {}",
-                caption_data.settings.enabled
+        if let Some(captions) = &uniforms.project.captions {
+            self.captions.prepare(
+                uniforms,
+                segment_frames,
+                uniforms.resolution_base,
+                constants,
             );
-            if caption_data.settings.enabled {
-                // Find the current caption for this time
-                let current_time = segment_frames.segment_time;
-                debug!("Looking for caption at time: {}", current_time);
+        }
 
-                if let Some(current_caption) =
-                    find_caption_at_time_project(current_time, &caption_data.segments)
-                {
-                    info!(
-                        "Found caption to render: '{}' ({} - {})",
-                        current_caption.text, current_caption.start, current_caption.end
-                    );
+        Ok(())
+    }
 
-                    // Get caption text and time for use in rendering
-                    let caption_text = current_caption.text.clone();
-
-                    // Create settings for the caption
-                    let caption_settings = CaptionSettings {
-                        enabled: 1,
-                        font_size: caption_data.settings.size as f32,
-                        color: [
-                            parse_color_component(&caption_data.settings.color, 0),
-                            parse_color_component(&caption_data.settings.color, 1),
-                            parse_color_component(&caption_data.settings.color, 2),
-                            1.0,
-                        ],
-                        background_color: [
-                            parse_color_component(&caption_data.settings.background_color, 0),
-                            parse_color_component(&caption_data.settings.background_color, 1),
-                            parse_color_component(&caption_data.settings.background_color, 2),
-                            caption_data.settings.background_opacity as f32 / 100.0,
-                        ],
-                        position: match caption_data.settings.position.as_str() {
-                            "top" => 0,
-                            "middle" => 1,
-                            _ => 2, // default to bottom
+    pub fn render(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        session: &mut RenderSession,
+    ) {
+        macro_rules! render_pass {
+            ($view:expr, $load:expr) => {
+                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Render Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: $view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: $load,
+                            store: wgpu::StoreOp::Store,
                         },
-                        outline: if caption_data.settings.outline { 1 } else { 0 },
-                        outline_color: [
-                            parse_color_component(&caption_data.settings.outline_color, 0),
-                            parse_color_component(&caption_data.settings.outline_color, 1),
-                            parse_color_component(&caption_data.settings.outline_color, 2),
-                            1.0,
-                        ],
-                        font: match caption_data.settings.font.as_str() {
-                            "System Serif" => 1,
-                            "System Monospace" => 2,
-                            _ => 0, // Default to SansSerif for "System Sans-Serif" and any other value
-                        },
-                        _padding: [0.0],
-                    };
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                })
+            };
+        }
 
-                    info!("Applying caption settings - Font size: {}, Position: {}, Background opacity: {}", 
-                          caption_settings.font_size,
-                          caption_settings.position,
-                          caption_settings.background_color[3]);
+        {
+            let mut pass = render_pass!(
+                session.current_texture_view(),
+                wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+            );
+            self.background.render(&mut pass);
+        }
 
-                    // Convert caption segments to the internal CaptionSegment type
-                    let converted_segments: Vec<layers::CaptionSegment> = caption_data
-                        .segments
-                        .iter()
-                        .map(|seg| layers::convert_project_caption(seg))
-                        .collect();
+        if self.background_blur.blur_amount > 0.0 {
+            let mut pass = render_pass!(session.other_texture_view(), wgpu::LoadOp::Load);
+            self.background_blur
+                .render(&mut pass, device, session.current_texture_view());
 
-                    // Instead of using unsafe code that creates undefined behavior,
-                    // create a properly structured temporary CaptionsLayer and use it for rendering
-                    let mut temp_captions_layer =
-                        layers::CaptionsLayer::new(&constants.device, &constants.queue);
+            session.swap_textures();
+        }
 
-                    // Set current caption text
-                    temp_captions_layer.update_caption(Some(caption_text), current_time);
+        {
+            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            self.display.render(&mut pass);
+        }
 
-                    // Render the caption with converted segments
-                    temp_captions_layer.render(
-                        &mut pipeline,
-                        uniforms.resolution_base,
-                        current_time,
-                        &converted_segments,
-                        &caption_settings,
-                    );
+        {
+            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            self.cursor.render(&mut pass);
+        }
 
-                    // Make sure we don't lose the caption by switching output
-                    // Comment this out if captions are disappearing
-                    // pipeline.state.switch_output();
+        {
+            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            self.camera.render(&mut pass);
+        }
 
-                    info!("Caption rendering completed");
-                } else {
-                    debug!("No caption found for time {}", current_time);
-                }
-            } else {
-                debug!("Captions are disabled in project settings");
-            }
-        } else {
-            debug!("No caption data found in project");
+        {
+            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            self.captions.render(&mut pass);
+        }
+    }
+}
+
+pub struct RenderSession {
+    textures: (wgpu::Texture, wgpu::Texture),
+    texture_views: (wgpu::TextureView, wgpu::TextureView),
+    current_is_left: bool,
+}
+
+impl RenderSession {
+    pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
+        let make_texture = || {
+            device.create_texture(&wgpu::TextureDescriptor {
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_SRC,
+                label: Some("Intermediate Texture"),
+                view_formats: &[],
+            })
+        };
+
+        let textures = (make_texture(), make_texture());
+
+        Self {
+            current_is_left: true,
+            texture_views: (
+                textures.0.create_view(&Default::default()),
+                textures.1.create_view(&Default::default()),
+            ),
+            textures,
         }
     }
 
-    let padded_bytes_per_row = encoder.padded_bytes_per_row(&state);
-    let image_data = encoder.copy_output(state).await?;
+    pub fn update_texture_size(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        let make_texture = || {
+            device.create_texture(&wgpu::TextureDescriptor {
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_SRC,
+                label: Some("Intermediate Texture"),
+                view_formats: &[],
+            })
+        };
 
-    Ok(RenderedFrame {
-        data: image_data,
-        padded_bytes_per_row,
-        width: uniforms.output_size.0,
-        height: uniforms.output_size.1,
-    })
+        self.textures = (make_texture(), make_texture());
+        self.texture_views = (
+            self.textures.0.create_view(&Default::default()),
+            self.textures.1.create_view(&Default::default()),
+        );
+    }
+
+    pub fn current_texture(&self) -> &wgpu::Texture {
+        if self.current_is_left {
+            &self.textures.0
+        } else {
+            &self.textures.1
+        }
+    }
+
+    pub fn current_texture_view(&self) -> &wgpu::TextureView {
+        if self.current_is_left {
+            &self.texture_views.0
+        } else {
+            &self.texture_views.1
+        }
+    }
+
+    pub fn other_texture_view(&self) -> &wgpu::TextureView {
+        if self.current_is_left {
+            &self.texture_views.1
+        } else {
+            &self.texture_views.0
+        }
+    }
+
+    pub fn swap_textures(&mut self) {
+        self.current_is_left = !self.current_is_left;
+    }
+}
+
+// TODO: reuse as many resources as possible
+// https://github.com/gfx-rs/wgpu/wiki/Encapsulating-Graphics-Work
+async fn produce_frame(
+    constants: &RenderVideoConstants,
+    segment_frames: DecodedSegmentFrames,
+    uniforms: ProjectUniforms,
+    cursor: &CursorEvents,
+    layers: &mut RendererLayers,
+    session: &mut RenderSession,
+) -> Result<RenderedFrame, RenderingError> {
+    layers
+        .prepare(constants, &uniforms, &segment_frames, cursor)
+        .await?;
+
+    let mut encoder = constants.device.create_command_encoder(
+        &(wgpu::CommandEncoderDescriptor {
+            label: Some("Render Encoder"),
+        }),
+    );
+
+    layers.render(&constants.device, &mut encoder, session);
+
+    Ok(finish_encoder(
+        session,
+        &constants.device,
+        &constants.queue,
+        &uniforms,
+        encoder,
+    )
+    .await?)
 }
 
 // Helper function to parse color components from hex strings
@@ -1178,7 +1285,7 @@ pub fn create_shader_render_pipeline(
             entry_point: "fs_main",
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                blend: Some(wgpu::BlendState::REPLACE),
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
             compilation_options: wgpu::PipelineCompilationOptions {

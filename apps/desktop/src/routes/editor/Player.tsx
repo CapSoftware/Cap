@@ -1,5 +1,8 @@
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { createElementBounds } from "@solid-primitives/bounds";
+import { createEventListener } from "@solid-primitives/event-listener";
+import { createEffect, createSignal, Show } from "solid-js";
+
 import { cx } from "cva";
 import {
   For,
@@ -15,10 +18,9 @@ import {
 import { reconcile, createStore } from "solid-js/store";
 import { createEventListener } from "@solid-primitives/event-listener";
 
-
-
 import Tooltip from "~/components/Tooltip";
 import { commands } from "~/utils/tauri";
+import AspectRatioSelect from "./AspectRatioSelect";
 import { FPS, OUTPUT_SIZE, useEditorContext } from "./context";
 import { ComingSoonTooltip, EditorButton, Slider } from "./ui";
 import { formatTime } from "./utils";
@@ -28,21 +30,11 @@ import AspectRatioSelect from "./AspectRatioSelect";
 export function Player() {
   const {
     project,
-    videoId,
     editorInstance,
-    history,
-    latestFrame,
     setDialog,
-    playbackTime,
-    setPlaybackTime,
-    previewTime,
-    setPreviewTime,
-    playing,
-    setPlaying,
-    split,
-    setSplit,
     totalDuration,
-    state,
+    editorState,
+    setEditorState,
     zoomOutLimit,
     setProject,
   } = useEditorContext();
@@ -52,20 +44,23 @@ export function Player() {
     if (editorInstance && editorInstance.path) {
       // Still load captions into the store since they will be used by the GPU renderer
       await captionsStore.loadCaptions(editorInstance.path);
-      
+
       // Synchronize captions settings with project configuration
       // This ensures the GPU renderer will receive the caption settings
       if (editorInstance && project) {
-        const updatedProject = {...project};
-        
+        const updatedProject = { ...project };
+
         // Add captions data to project configuration if it doesn't exist
-        if (!updatedProject.captions && captionsStore.state.segments.length > 0) {
+        if (
+          !updatedProject.captions &&
+          captionsStore.state.segments.length > 0
+        ) {
           updatedProject.captions = {
-            segments: captionsStore.state.segments.map(segment => ({
+            segments: captionsStore.state.segments.map((segment) => ({
               id: segment.id,
               start: segment.start,
               end: segment.end,
-              text: segment.text
+              text: segment.text,
             })),
             settings: {
               enabled: captionsStore.state.settings.enabled,
@@ -79,13 +74,14 @@ export function Player() {
               italic: captionsStore.state.settings.italic,
               outline: captionsStore.state.settings.outline,
               outlineColor: captionsStore.state.settings.outlineColor,
-              exportWithSubtitles: captionsStore.state.settings.exportWithSubtitles
-            }
+              exportWithSubtitles:
+                captionsStore.state.settings.exportWithSubtitles,
+            },
           };
-          
+
           // Update the project with captions data
           setProject(updatedProject);
-          
+
           // Save the updated project configuration
           await commands.setProjectConfig(updatedProject);
         }
@@ -98,7 +94,11 @@ export function Player() {
   createEffect(() => {
     const time = playbackTime();
     // Only update captions if we have a valid time and segments exist
-    if (time !== undefined && time >= 0 && captionsStore.state.segments.length > 0) {
+    if (
+      time !== undefined &&
+      time >= 0 &&
+      captionsStore.state.segments.length > 0
+    ) {
       captionsStore.updateCurrentCaption(time);
     }
   });
@@ -106,7 +106,6 @@ export function Player() {
   const [canvasContainerRef, setCanvasContainerRef] =
     createSignal<HTMLDivElement>();
   const containerBounds = createElementBounds(canvasContainerRef);
-
 
   const splitButton = () => (
     <EditorButton<typeof KToggleButton>
@@ -121,13 +120,13 @@ export function Player() {
 
   const isAtEnd = () => {
     const total = totalDuration();
-    return total > 0 && total - playbackTime() <= 0.1;
+    return total > 0 && total - editorState.playbackTime <= 0.1;
   };
 
   createEffect(() => {
-    if (isAtEnd() && playing()) {
+    if (isAtEnd() && editorState.playing) {
       commands.stopPlayback();
-      setPlaying(false);
+      setEditorState("playing", false);
     }
   });
 
@@ -135,35 +134,35 @@ export function Player() {
     try {
       if (isAtEnd()) {
         await commands.stopPlayback();
-        setPlaybackTime(0);
+        setEditorState("playbackTime", 0);
         await commands.seekTo(0);
         await commands.startPlayback(FPS, OUTPUT_SIZE);
-        setPlaying(true);
-      } else if (playing()) {
+        setEditorState("playing", true);
+      } else if (editorState.playing) {
         await commands.stopPlayback();
-        setPlaying(false);
+        setEditorState("playing", false);
       } else {
         // Ensure we seek to the current playback time before starting playback
-        await commands.seekTo(Math.floor(playbackTime() * FPS));
+        await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
         await commands.startPlayback(FPS, OUTPUT_SIZE);
-        setPlaying(true);
+        setEditorState("playing", true);
       }
-      if (playing()) setPreviewTime();
+      if (editorState.playing) setEditorState("previewTime", null);
     } catch (error) {
       console.error("Error handling play/pause:", error);
-      setPlaying(false);
+      setEditorState("playing", false);
     }
   };
 
   createEventListener(document, "keydown", async (e: KeyboardEvent) => {
     if (e.code === "Space" && e.target === document.body) {
       e.preventDefault();
-      const prevTime = previewTime();
+      const prevTime = editorState.previewTime;
 
-      if (!playing()) {
-        if (prevTime !== undefined) setPlaybackTime(prevTime);
+      if (!editorState.playing) {
+        if (prevTime !== null) setEditorState("playbackTime", prevTime);
 
-        await commands.seekTo(Math.floor(playbackTime() * FPS));
+        await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
       }
 
       await handlePlayPauseClick();
@@ -171,104 +170,120 @@ export function Player() {
   });
 
   return (
-    <div class="flex flex-col flex-1 bg-gray-100 dark:bg-gray-100 rounded-xl shadow-sm">
+    <div class="flex flex-col flex-1 rounded-xl bg-gray-1 dark:bg-gray-2 border border-gray-3">
       <div class="flex gap-3 justify-center p-3">
         <AspectRatioSelect />
-  <EditorButton
-            onClick={() => {
-              const display = editorInstance.recordings.segments[0].display;
-              setDialog({
-                open: true,
-                type: "crop",
-                position: {
-                  ...(project.background.crop?.position ?? { x: 0, y: 0 }),
-                },
-                size: {
-                  ...(project.background.crop?.size ?? {
-                    x: display.width,
-                    y: display.height,
-                  }),
-                },
-              });
-            }}
-            leftIcon={<IconCapCrop class="w-5 text-gray-500" />}
-          >
-            Crop
-          </EditorButton>
-        </div>
+        <EditorButton
+          onClick={() => {
+            const display = editorInstance.recordings.segments[0].display;
+            setDialog({
+              open: true,
+              type: "crop",
+              position: {
+                ...(project.background.crop?.position ?? { x: 0, y: 0 }),
+              },
+              size: {
+                ...(project.background.crop?.size ?? {
+                  x: display.width,
+                  y: display.height,
+                }),
+              },
+            });
+          }}
+          leftIcon={<IconCapCrop class="w-5 text-gray-12" />}
+        >
+          Crop
+        </EditorButton>
+      </div>
       <PreviewCanvas />
-      <div class="flex z-10 overflow-hidden flex-row gap-3 justify-between items-center p-5">
+      <div class="flex overflow-hidden z-10 flex-row gap-3 justify-between items-center p-5">
         <div class="flex-1">
           <Time
-            class="text-gray-500"
-            seconds={Math.max(previewTime() ?? playbackTime(), 0)}
+            class="text-gray-12"
+            seconds={Math.max(
+              editorState.previewTime ?? editorState.playbackTime,
+              0
+            )}
           />
-          <span class="text-gray-400 text-[0.875rem] tabular-nums"> / </span>
+          <span class="text-gray-11 text-[0.875rem] tabular-nums"> / </span>
           <Time seconds={totalDuration()} />
         </div>
-        <div class="flex flex-row items-center justify-center text-gray-400 gap-8 text-[0.875rem]">
+        <div class="flex flex-row items-center justify-center text-gray-11 gap-8 text-[0.875rem]">
           <button
             type="button"
             class="transition-opacity hover:opacity-70 will-change-[opacity]"
             onClick={async () => {
-              setPlaying(false);
               await commands.stopPlayback();
-              setPlaybackTime(0);
+              setEditorState("playing", false);
+              setEditorState("playbackTime", 0);
             }}
           >
-            <IconCapPrev class="text-gray-500 size-3" />
+            <IconCapPrev class="text-gray-12 size-3" />
           </button>
           <button
             type="button"
             onClick={handlePlayPauseClick}
-            class="flex justify-center items-center bg-gray-200 rounded-full border border-gray-300 transition-colors hover:bg-gray-300 hover:text-black size-9"
+            class="flex justify-center items-center rounded-full border border-gray-300 transition-colors bg-gray-3 hover:bg-gray-4 hover:text-black size-9"
           >
-            {!playing() || isAtEnd() ? (
-              <IconCapPlay class="text-gray-500 size-3" />
+            {!editorState.playing || isAtEnd() ? (
+              <IconCapPlay class="text-gray-12 size-3" />
             ) : (
-              <IconCapPause class="text-gray-500 size-3" />
+              <IconCapPause class="text-gray-12 size-3" />
             )}
           </button>
           <button
             type="button"
             class="transition-opacity hover:opacity-70 will-change-[opacity]"
             onClick={async () => {
-              setPlaying(false);
               await commands.stopPlayback();
-              setPlaybackTime(totalDuration());
+              setEditorState("playing", false);
+              setEditorState("playbackTime", totalDuration());
             }}
           >
-            <IconCapNext class="text-gray-500 size-3" />
+            <IconCapNext class="text-gray-12 size-3" />
           </button>
         </div>
         <div class="flex flex-row flex-1 gap-4 justify-end items-center">
           <div class="flex-1" />
-          {window.FLAGS.split ? (
-            splitButton()
-          ) : (
-            <ComingSoonTooltip>{splitButton()}</ComingSoonTooltip>
-          )}
-          <div class="w-px h-8 rounded-full bg-gray-200" />
+          <EditorButton<typeof KToggleButton>
+            disabled={!window.FLAGS.split}
+            pressed={editorState.timeline.interactMode === "split"}
+            onChange={(v: boolean) =>
+              setEditorState("timeline", "interactMode", v ? "split" : "seek")
+            }
+            as={KToggleButton}
+            variant="danger"
+            leftIcon={
+              <IconCapScissors
+                class={cx(
+                  editorState.timeline.interactMode === "split"
+                    ? "text-white"
+                    : "text-gray-12"
+                )}
+              />
+            }
+          />
+          <div class="w-px h-8 rounded-full bg-gray-4" />
           <Tooltip content="Zoom out">
             <IconCapZoomOut
               onClick={() => {
-                state.timelineTransform.updateZoom(
-                  state.timelineTransform.zoom * 1.1,
-                  playbackTime()
+                editorState.timeline.transform.updateZoom(
+                  editorState.timeline.transform.zoom * 1.1,
+                  editorState.playbackTime
                 );
               }}
-              class="text-gray-500 size-5 will-change-[opacity] transition-opacity hover:opacity-70"
+              class="text-gray-12 size-5 will-change-[opacity] transition-opacity hover:opacity-70"
             />
           </Tooltip>
           <Tooltip content="Zoom in">
             <IconCapZoomIn
               onClick={() => {
-                state.timelineTransform.updateZoom(
-                  state.timelineTransform.zoom / 1.1,
-                  playbackTime()
+                editorState.timeline.transform.updateZoom(
+                  editorState.timeline.transform.zoom / 1.1,
+                  editorState.playbackTime
                 );
               }}
-              class="text-gray-500 size-5 will-change-[opacity] transition-opacity hover:opacity-70"
+              class="text-gray-12 size-5 will-change-[opacity] transition-opacity hover:opacity-70"
             />
           </Tooltip>
           <Slider
@@ -278,18 +293,23 @@ export function Player() {
             step={0.001}
             value={[
               Math.min(
-                Math.max(1 - state.timelineTransform.zoom / zoomOutLimit(), 0),
+                Math.max(
+                  1 - editorState.timeline.transform.zoom / zoomOutLimit(),
+                  0
+                ),
                 1
               ),
             ]}
             onChange={([v]) => {
-              state.timelineTransform.updateZoom(
+              editorState.timeline.transform.updateZoom(
                 (1 - v) * zoomOutLimit(),
-                playbackTime()
+                editorState.playbackTime
               );
             }}
             formatTooltip={() =>
-              `${state.timelineTransform.zoom.toFixed(0)} seconds visible`
+              `${editorState.timeline.transform.zoom.toFixed(
+                0
+              )} seconds visible`
             }
           />
         </div>
@@ -357,7 +377,7 @@ function PreviewCanvas() {
           };
 
           return (
-            <div class="absolute inset-0 overflow-hidden flex items-center justify-center h-full">
+            <div class="flex overflow-hidden absolute inset-0 justify-center items-center h-full">
               <canvas
                 style={{
                   width: `${size().width - padding * 2}px`,
@@ -379,7 +399,7 @@ function PreviewCanvas() {
 
 function Time(props: { seconds: number; fps?: number; class?: string }) {
   return (
-    <span class={cx("text-gray-400 text-sm tabular-nums", props.class)}>
+    <span class={cx("text-gray-11 text-sm tabular-nums", props.class)}>
       {formatTime(props.seconds, props.fps ?? FPS)}
     </span>
   );

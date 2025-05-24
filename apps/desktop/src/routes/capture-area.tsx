@@ -1,16 +1,16 @@
-import { createSignal, onCleanup, onMount, Show } from "solid-js";
-import { createOptionsQuery } from "~/utils/queries";
+import { Tooltip } from "@kobalte/core";
+import { createEventListenerMap } from "@solid-primitives/event-listener";
+import { makePersisted } from "@solid-primitives/storage";
 import {
   getCurrentWebviewWindow,
   WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
-import Cropper from "~/components/Cropper";
+import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { createStore } from "solid-js/store";
-import { type Crop } from "~/utils/tauri";
-import { makePersisted } from "@solid-primitives/storage";
-import { Tooltip } from "@kobalte/core";
-import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { Transition } from "solid-transition-group";
+import Cropper from "~/components/Cropper";
+import { createOptionsQuery } from "~/utils/queries";
+import { type Crop } from "~/utils/tauri";
 
 export default function CaptureArea() {
   const { options, setOptions } = createOptionsQuery();
@@ -87,17 +87,17 @@ export default function CaptureArea() {
   }
 
   return (
-    <div class="w-screen h-screen overflow-hidden bg-black bg-opacity-25">
-      <div class="fixed w-full z-50 flex items-center justify-center">
+    <div class="overflow-hidden w-screen h-screen">
+      <div class="flex fixed z-50 justify-center items-center w-full">
         <Transition
           appear
           enterActiveClass="fade-in animate-in slide-in-from-top-6"
           exitActiveClass="fade-out animate-out slide-out-to-top-6"
         >
           <Show when={visible()}>
-            <div class="transition-all ease-out duration-300 absolute w-auto h-10 bg-gray-50 rounded-[12px] drop-shadow-2xl overflow-visible border border-gray-50 dark:border-gray-300 outline outline-1 outline-[#dedede] dark:outline-[#000] flex justify-around p-1 top-11">
+            <div class="transition-all ease-out duration-200 absolute w-auto h-10 bg-gray-1 rounded-[12px] drop-shadow-2xl overflow-visible border border-gray-3 outline outline-1 outline-gray-6 flex justify-around p-1 top-11">
               <button
-                class="py-[0.25rem] px-2 text-gray-400 gap-[0.25rem] flex flex-row items-center rounded-[8px] ml-0 right-auto"
+                class="py-[0.25rem] px-2 text-gray-11 gap-[0.25rem] flex flex-row items-center rounded-[8px] ml-0 right-auto"
                 type="button"
                 onClick={close}
               >
@@ -106,10 +106,10 @@ export default function CaptureArea() {
               <Tooltip.Root openDelay={500}>
                 <Tooltip.Trigger tabIndex={-1}>
                   <button
-                    class={`py-[0.25rem] px-2 gap-[0.25rem] mr-2 hover:bg-gray-200 flex flex-row items-center rounded-[8px] transition-colors duration-200 ${
+                    class={`py-[0.25rem] px-2 gap-[0.25rem] mr-2 hover:bg-gray-3 flex flex-row items-center rounded-[8px] transition-colors duration-200 ${
                       state.showGrid
-                        ? "bg-gray-200 text-blue-300"
-                        : "text-gray-500 opacity-50"
+                        ? "bg-gray-3 text-blue-9"
+                        : "text-gray-12 opacity-50"
                     }`}
                     type="button"
                     onClick={() => setState("showGrid", (v) => !v)}
@@ -118,15 +118,15 @@ export default function CaptureArea() {
                   </button>
                 </Tooltip.Trigger>
                 <Tooltip.Portal>
-                  <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in delay-1000 duration-500">
+                  <Tooltip.Content class="z-50 px-2 py-1 text-xs rounded shadow-lg duration-500 delay-1000 text-gray-1 bg-gray-12 animate-in fade-in">
                     Rule of Thirds
-                    <Tooltip.Arrow class="fill-gray-500" />
+                    <Tooltip.Arrow class="fill-gray-12" />
                   </Tooltip.Content>
                 </Tooltip.Portal>
               </Tooltip.Root>
-              <div class="flex flex-row flex-grow justify-center gap-2">
+              <div class="flex flex-row flex-grow gap-2 justify-center">
                 <button
-                  class="text-blue-300 px-2 dark:text-blue-300 gap-[0.25rem] hover:bg-blue-50 flex flex-row items-center rounded-[8px] grow justify-center transition-colors duration-200"
+                  class="text-blue-9 px-2 gap-[0.25rem] hover:bg-blue-3 flex flex-row items-center rounded-[8px] grow justify-center transition-colors duration-200"
                   type="button"
                   onClick={handleConfirm}
                 >
@@ -148,7 +148,7 @@ export default function CaptureArea() {
       >
         <Show when={visible()}>
           <Cropper
-            class="transition-all duration-300"
+            class="transition-all duration-200"
             value={crop}
             onCropChange={setCrop}
             showGuideLines={state.showGrid}

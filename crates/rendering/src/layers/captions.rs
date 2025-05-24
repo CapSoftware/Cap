@@ -7,7 +7,9 @@ use glyphon::{
 use log::{debug, info, warn};
 use wgpu::{util::DeviceExt, Device, Queue};
 
-use crate::frame_pipeline::FramePipeline;
+use crate::{
+    layers, parse_color_component, DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants,
+};
 
 /// Represents a caption segment with timing and text
 #[derive(Debug, Clone)]
@@ -131,226 +133,243 @@ impl CaptionsLayer {
         self.current_segment_time = time;
     }
 
-    /// Render the current caption to the frame
-    pub fn render(
+    pub fn prepare(
         &mut self,
-        pipeline: &mut FramePipeline,
+        uniforms: &ProjectUniforms,
+        segment_frames: &DecodedSegmentFrames,
         output_size: XY<u32>,
-        time: f32,
-        segments: &[CaptionSegment],
-        settings: &CaptionSettings,
+        constants: &RenderVideoConstants,
     ) {
-        info!(
-            "Starting caption render - Enabled: {}, Segments: {}",
-            settings.enabled,
-            segments.len()
-        );
+        // Render captions if there are any caption segments to display
+        if let Some(caption_data) = &uniforms.project.captions {
+            if caption_data.settings.enabled {
+                // Find the current caption for this time
+                let current_time = segment_frames.segment_time;
 
-        // Don't render if captions are disabled or no text
-        if settings.enabled == 0 {
-            debug!("Captions disabled, skipping render");
-            return;
-        }
+                if let Some(current_caption) =
+                    find_caption_at_time_project(current_time, &caption_data.segments)
+                {
+                    // Get caption text and time for use in rendering
+                    let caption_text = current_caption.text.clone();
 
-        if self.current_text.is_none() {
-            debug!("No caption text to render");
-            return;
-        }
+                    // Create settings for the caption
+                    let settings = CaptionSettings {
+                        enabled: 1,
+                        font_size: caption_data.settings.size as f32,
+                        color: [
+                            parse_color_component(&caption_data.settings.color, 0),
+                            parse_color_component(&caption_data.settings.color, 1),
+                            parse_color_component(&caption_data.settings.color, 2),
+                            1.0,
+                        ],
+                        background_color: [
+                            parse_color_component(&caption_data.settings.background_color, 0),
+                            parse_color_component(&caption_data.settings.background_color, 1),
+                            parse_color_component(&caption_data.settings.background_color, 2),
+                            caption_data.settings.background_opacity as f32 / 100.0,
+                        ],
+                        position: match caption_data.settings.position.as_str() {
+                            "top" => 0,
+                            "middle" => 1,
+                            _ => 2, // default to bottom
+                        },
+                        outline: if caption_data.settings.outline { 1 } else { 0 },
+                        outline_color: [
+                            parse_color_component(&caption_data.settings.outline_color, 0),
+                            parse_color_component(&caption_data.settings.outline_color, 1),
+                            parse_color_component(&caption_data.settings.outline_color, 2),
+                            1.0,
+                        ],
+                        font: match caption_data.settings.font.as_str() {
+                            "System Serif" => 1,
+                            "System Monospace" => 2,
+                            _ => 0, // Default to SansSerif for "System Sans-Serif" and any other value
+                        },
+                        _padding: [0.0],
+                    };
 
-        if let Some(text) = &self.current_text {
-            let (width, height) = (output_size.x, output_size.y);
-            info!(
-                "Rendering caption '{}' at time {} on {}x{}",
-                text, time, width, height
-            );
+                    self.update_caption(Some(caption_text), current_time);
 
-            // Access device and queue from the pipeline's constants
-            let device = &pipeline.state.constants.device;
-            let queue = &pipeline.state.constants.queue;
+                    if settings.enabled == 0 {
+                        return;
+                    }
 
-            // Find caption position based on settings
-            let y_position = match settings.position {
-                0 => height as f32 * 0.1,  // top
-                1 => height as f32 * 0.5,  // middle
-                _ => height as f32 * 0.85, // bottom (default)
-            };
-            info!("Caption Y position: {}", y_position);
+                    if self.current_text.is_none() {
+                        return;
+                    }
 
-            // Set up caption appearance
-            let color = Color::rgb(
-                (settings.color[0] * 255.0) as u8,
-                (settings.color[1] * 255.0) as u8,
-                (settings.color[2] * 255.0) as u8,
-            );
+                    if let Some(text) = &self.current_text {
+                        let (width, height) = (output_size.x, output_size.y);
 
-            // Get outline color if needed
-            let outline_color = Color::rgb(
-                (settings.outline_color[0] * 255.0) as u8,
-                (settings.outline_color[1] * 255.0) as u8,
-                (settings.outline_color[2] * 255.0) as u8,
-            );
+                        // Access device and queue from the pipeline's constants
+                        let device = &constants.device;
+                        let queue = &constants.queue;
 
-            // Calculate text bounds
-            let font_size = settings.font_size * (height as f32 / 1080.0); // Scale font size based on resolution
-            let metrics = Metrics::new(font_size, font_size * 1.2); // 1.2 line height
-            info!(
-                "Font size: {} (scaled from {})",
-                font_size, settings.font_size
-            );
+                        // Find caption position based on settings
+                        let y_position = match settings.position {
+                            0 => height as f32 * 0.1,  // top
+                            1 => height as f32 * 0.5,  // middle
+                            _ => height as f32 * 0.85, // bottom (default)
+                        };
 
-            // Create a new buffer with explicit size for this frame
-            let mut updated_buffer = Buffer::new(&mut self.font_system, metrics);
+                        // Set up caption appearance
+                        let color = Color::rgb(
+                            (settings.color[0] * 255.0) as u8,
+                            (settings.color[1] * 255.0) as u8,
+                            (settings.color[2] * 255.0) as u8,
+                        );
 
-            // Set explicit width to enable proper text wrapping and centering
-            // Set width to 90% of screen width for better appearance
-            let text_width = width as f32 * 0.9;
-            updated_buffer.set_size(&mut self.font_system, Some(text_width), None);
-            updated_buffer.set_wrap(&mut self.font_system, glyphon::Wrap::Word);
+                        // Get outline color if needed
+                        let outline_color = Color::rgb(
+                            (settings.outline_color[0] * 255.0) as u8,
+                            (settings.outline_color[1] * 255.0) as u8,
+                            (settings.outline_color[2] * 255.0) as u8,
+                        );
 
-            // Position text in the center horizontally
-            // The bounds dictate the rendering area
-            let bounds = TextBounds {
-                left: ((width as f32 - text_width) / 2.0) as i32, // Center the text horizontally
-                top: y_position as i32,
-                right: ((width as f32 + text_width) / 2.0) as i32, // Center + width
-                bottom: (y_position + font_size * 4.0) as i32, // Increased height for better visibility
-            };
-            info!(
-                "Text bounds: left={}, top={}, right={}, bottom={}",
-                bounds.left, bounds.top, bounds.right, bounds.bottom
-            );
+                        // Calculate text bounds
+                        let font_size = settings.font_size * (height as f32 / 1080.0); // Scale font size based on resolution
+                        let metrics = Metrics::new(font_size, font_size * 1.2); // 1.2 line height
 
-            // Apply text styling directly when setting the text
-            // Create text attributes with or without outline
-            let font_family = match settings.font {
-                0 => Family::SansSerif,
-                1 => Family::Serif,
-                2 => Family::Monospace,
-                _ => Family::SansSerif, // Default to SansSerif for any other value
-            };
-            let mut attrs = Attrs::new().family(font_family).color(color);
+                        // Create a new buffer with explicit size for this frame
+                        let mut updated_buffer = Buffer::new(&mut self.font_system, metrics);
 
-            // Apply text to buffer
-            updated_buffer.set_text(&mut self.font_system, text, attrs, Shaping::Advanced);
+                        // Set explicit width to enable proper text wrapping and centering
+                        // Set width to 90% of screen width for better appearance
+                        let text_width = width as f32 * 0.9;
+                        updated_buffer.set_size(&mut self.font_system, Some(text_width), None);
+                        updated_buffer.set_wrap(&mut self.font_system, glyphon::Wrap::Word);
 
-            // Replace the existing buffer
-            self.text_buffer = updated_buffer;
+                        // Position text in the center horizontally
+                        // The bounds dictate the rendering area
+                        let bounds = TextBounds {
+                            left: ((width as f32 - text_width) / 2.0) as i32, // Center the text horizontally
+                            top: y_position as i32,
+                            right: ((width as f32 + text_width) / 2.0) as i32, // Center + width
+                            bottom: (y_position + font_size * 4.0) as i32, // Increased height for better visibility
+                        };
 
-            // Update the viewport with explicit resolution
-            self.viewport.update(queue, Resolution { width, height });
+                        // Apply text styling directly when setting the text
+                        // Create text attributes with or without outline
+                        let font_family = match settings.font {
+                            0 => Family::SansSerif,
+                            1 => Family::Serif,
+                            2 => Family::Monospace,
+                            _ => Family::SansSerif, // Default to SansSerif for any other value
+                        };
+                        let attrs = Attrs::new().family(font_family).color(color);
 
-            // Background color
-            let bg_color = if settings.background_color[3] > 0.01 {
-                info!("Rendering with background color");
-                // Create a new text area with background color
-                Color::rgba(
-                    (settings.background_color[0] * 255.0) as u8,
-                    (settings.background_color[1] * 255.0) as u8,
-                    (settings.background_color[2] * 255.0) as u8,
-                    (settings.background_color[3] * 255.0) as u8,
-                )
-            } else {
-                info!("Using transparent background");
-                Color::rgba(0, 0, 0, 0)
-            };
+                        // Apply text to buffer
+                        updated_buffer.set_text(
+                            &mut self.font_system,
+                            text,
+                            attrs,
+                            Shaping::Advanced,
+                        );
 
-            // Prepare text areas for rendering
-            let mut text_areas = Vec::new();
+                        // Replace the existing buffer
+                        self.text_buffer = updated_buffer;
 
-            // Add background if enabled
-            if settings.background_color[3] > 0.01 {
-                text_areas.push(TextArea {
-                    buffer: &self.text_buffer,
-                    left: bounds.left as f32, // Match the bounds left for positioning
-                    top: y_position,
-                    scale: 1.0,
-                    bounds,
-                    default_color: bg_color,
-                    custom_glyphs: &[],
-                });
-            }
+                        // Update the viewport with explicit resolution
+                        self.viewport.update(queue, Resolution { width, height });
 
-            // Add outline if enabled (by rendering the text multiple times with slight offsets in different positions)
-            if settings.outline == 1 {
-                info!("Rendering with outline");
-                // Outline is created by drawing the text multiple times with small offsets in different directions
-                let outline_offsets = [
-                    (-1.0, -1.0),
-                    (0.0, -1.0),
-                    (1.0, -1.0),
-                    (-1.0, 0.0),
-                    (1.0, 0.0),
-                    (-1.0, 1.0),
-                    (0.0, 1.0),
-                    (1.0, 1.0),
-                ];
+                        // Background color
+                        let bg_color = if settings.background_color[3] > 0.01 {
+                            // Create a new text area with background color
+                            Color::rgba(
+                                (settings.background_color[0] * 255.0) as u8,
+                                (settings.background_color[1] * 255.0) as u8,
+                                (settings.background_color[2] * 255.0) as u8,
+                                (settings.background_color[3] * 255.0) as u8,
+                            )
+                        } else {
+                            Color::rgba(0, 0, 0, 0)
+                        };
 
-                for (offset_x, offset_y) in outline_offsets.iter() {
-                    text_areas.push(TextArea {
-                        buffer: &self.text_buffer,
-                        left: bounds.left as f32 + offset_x, // Match bounds with small offset for outline
-                        top: y_position + offset_y,
-                        scale: 1.0,
-                        bounds,
-                        default_color: outline_color,
-                        custom_glyphs: &[],
-                    });
+                        // Prepare text areas for rendering
+                        let mut text_areas = Vec::new();
+
+                        // Add background if enabled
+                        if settings.background_color[3] > 0.01 {
+                            text_areas.push(TextArea {
+                                buffer: &self.text_buffer,
+                                left: bounds.left as f32, // Match the bounds left for positioning
+                                top: y_position,
+                                scale: 1.0,
+                                bounds,
+                                default_color: bg_color,
+                                custom_glyphs: &[],
+                            });
+                        }
+
+                        // Add outline if enabled (by rendering the text multiple times with slight offsets in different positions)
+                        if settings.outline == 1 {
+                            info!("Rendering with outline");
+                            // Outline is created by drawing the text multiple times with small offsets in different directions
+                            let outline_offsets = [
+                                (-1.0, -1.0),
+                                (0.0, -1.0),
+                                (1.0, -1.0),
+                                (-1.0, 0.0),
+                                (1.0, 0.0),
+                                (-1.0, 1.0),
+                                (0.0, 1.0),
+                                (1.0, 1.0),
+                            ];
+
+                            for (offset_x, offset_y) in outline_offsets.iter() {
+                                text_areas.push(TextArea {
+                                    buffer: &self.text_buffer,
+                                    left: bounds.left as f32 + offset_x, // Match bounds with small offset for outline
+                                    top: y_position + offset_y,
+                                    scale: 1.0,
+                                    bounds,
+                                    default_color: outline_color,
+                                    custom_glyphs: &[],
+                                });
+                            }
+                        }
+
+                        // Add main text (rendered last, on top of everything)
+                        text_areas.push(TextArea {
+                            buffer: &self.text_buffer,
+                            left: bounds.left as f32, // Match the bounds left for positioning
+                            top: y_position,
+                            scale: 1.0,
+                            bounds,
+                            default_color: color,
+                            custom_glyphs: &[],
+                        });
+
+                        // Prepare text rendering
+                        match self.text_renderer.prepare(
+                            device,
+                            queue,
+                            &mut self.font_system,
+                            &mut self.text_atlas,
+                            &self.viewport,
+                            text_areas,
+                            &mut self.swash_cache,
+                        ) {
+                            Ok(_) => {}
+                            Err(e) => warn!("Error preparing text: {:?}", e),
+                        }
+                    }
+                } else {
                 }
+            } else {
             }
+        } else {
+        }
+    }
 
-            // Add main text (rendered last, on top of everything)
-            text_areas.push(TextArea {
-                buffer: &self.text_buffer,
-                left: bounds.left as f32, // Match the bounds left for positioning
-                top: y_position,
-                scale: 1.0,
-                bounds,
-                default_color: color,
-                custom_glyphs: &[],
-            });
-
-            // Prepare text rendering
-            match self.text_renderer.prepare(
-                device,
-                queue,
-                &mut self.font_system,
-                &mut self.text_atlas,
-                &self.viewport,
-                text_areas,
-                &mut self.swash_cache,
-            ) {
-                Ok(_) => info!("Text preparation successful"),
-                Err(e) => warn!("Error preparing text: {:?}", e),
-            }
-
-            // Create an explicit render pass for text rendering
-            let mut render_pass =
-                pipeline
-                    .encoder
-                    .encoder
-                    .begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Caption Text Render Pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: pipeline.state.get_current_texture_view(),
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Load,
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                    });
-
-            // Render the text to the frame
-            match self
-                .text_renderer
-                .render(&self.text_atlas, &self.viewport, &mut render_pass)
-            {
-                Ok(_) => info!("Text rendering successful"),
-                Err(e) => warn!("Error rendering text: {:?}", e),
-            }
+    /// Render the current caption to the frame
+    pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+        match self
+            .text_renderer
+            .render(&self.text_atlas, &self.viewport, pass)
+        {
+            Ok(_) => {}
+            Err(e) => warn!("Error rendering text: {:?}", e),
         }
     }
 }

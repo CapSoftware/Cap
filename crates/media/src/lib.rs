@@ -4,6 +4,8 @@
 //! as well as implementations of pipeline stages for individual tasks (encoding/decoding,
 //! editing frames, composition, muxing, etc).
 
+use std::borrow::Cow;
+
 use data::AudioInfoError;
 use thiserror::Error;
 
@@ -24,7 +26,7 @@ pub fn init() -> Result<(), MediaError> {
 #[derive(Error, Debug)]
 pub enum MediaError {
     #[error("{0}")]
-    Any(&'static str),
+    Any(Cow<'static, str>),
 
     #[error("Cannot build a pipeline without any tasks")]
     EmptyPipeline,

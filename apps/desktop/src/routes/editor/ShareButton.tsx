@@ -1,30 +1,22 @@
 import { Button } from "@cap/ui-solid";
 import { createMutation } from "@tanstack/solid-query";
-import { createEffect, createResource, createSignal, Show } from "solid-js";
-import { createStore, produce } from "solid-js/store";
-import Tooltip from "~/components/Tooltip";
+import { createSignal, Show } from "solid-js";
+import { createStore, produce, reconcile } from "solid-js/store";
 
-import { Channel } from "@tauri-apps/api/core";
+import Tooltip from "~/components/Tooltip";
 import { createProgressBar } from "~/routes/editor/utils";
 import { authStore } from "~/store";
-import { commands, events, RenderProgress } from "~/utils/tauri";
+import { exportVideo } from "~/utils/export";
+import { commands, events } from "~/utils/tauri";
 import { useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
 import { Dialog, DialogContent } from "./ui";
 
 function ShareButton() {
-  const { videoId, metaUpdateStore } = useEditorContext();
-  const [recordingMeta, metaActions] = createResource(() =>
-    commands.getRecordingMeta(videoId, "recording")
-  );
-  const [copyPressed, setCopyPressed] = createSignal(false);
-  const selectedFps = Number(localStorage.getItem("cap-export-fps")) || 30;
-  const selectedResolution =
-    RESOLUTION_OPTIONS.find(
-      (opt) => opt.value === localStorage.getItem("cap-export-resolution")
-    ) || RESOLUTION_OPTIONS[0];
+  const { editorInstance, meta } = useEditorContext();
+  const projectPath = editorInstance.path;
 
-  const uploadVideo = createMutation(() => ({
+  const upload = createMutation(() => ({
     mutationFn: async () => {
       setUploadState({ type: "idle" });
 
@@ -33,17 +25,10 @@ function ShareButton() {
       // Check authentication first
       const existingAuth = await authStore.get();
       if (!existingAuth) {
-        await commands.showWindow("SignIn");
         throw new Error("You need to sign in to share recordings");
       }
 
-      const meta = recordingMeta();
-      if (!meta) {
-        console.error("No recording metadata available");
-        throw new Error("Recording metadata not available");
-      }
-
-      const metadata = await commands.getVideoMetadata(videoId, null);
+      const metadata = await commands.getVideoMetadata(projectPath);
       const plan = await commands.checkUpgradedAndUpdate();
       const canShare = {
         allowed: plan || metadata.duration < 300,
@@ -77,40 +62,37 @@ function ShareButton() {
 
         console.log("Starting actual upload...");
 
-        const progress = new Channel<RenderProgress>();
-
-        progress.onmessage = (msg) => {
-          if (msg.type === "EstimatedTotalFrames")
-            setUploadState({
-              type: "rendering",
-              renderedFrames: 0,
-              totalFrames: msg.total_frames,
-            });
-          else
+        await exportVideo(
+          projectPath,
+          {
+            fps: 30,
+            resolution_base: {
+              x: RESOLUTION_OPTIONS._1080p.width,
+              y: RESOLUTION_OPTIONS._1080p.height,
+            },
+            compression: "Web",
+          },
+          (msg) => {
             setUploadState(
-              produce((state) => {
-                if (msg.type === "FrameRendered" && state.type === "rendering")
-                  state.renderedFrames = msg.current_frame;
+              reconcile({
+                type: "rendering",
+                renderedFrames: msg.renderedCount,
+                totalFrames: msg.totalFrames,
               })
             );
-        };
-
-        await commands.exportVideo(videoId, progress, true, selectedFps, {
-          x: selectedResolution.width,
-          y: selectedResolution.height,
-        });
+          }
+        );
 
         setUploadState({ type: "uploading", progress: 0 });
 
         // Now proceed with upload
-        const result = recordingMeta()?.sharing
-          ? await commands.uploadExportedVideo(videoId, "Reupload")
-          : await commands.uploadExportedVideo(videoId, {
+        const result = meta().sharing
+          ? await commands.uploadExportedVideo(projectPath, "Reupload")
+          : await commands.uploadExportedVideo(projectPath, {
               Initial: { pre_created_video: null },
             });
 
         if (result === "NotAuthenticated") {
-          await commands.showWindow("SignIn");
           throw new Error("You need to sign in to share recordings");
         } else if (result === "PlanCheckFailed")
           throw new Error("Failed to verify your subscription status");
@@ -120,17 +102,9 @@ function ShareButton() {
         setUploadState({ type: "link-copied" });
 
         return result;
-      } catch (error) {
-        console.error("Upload error:", error);
-        throw error instanceof Error
-          ? error
-          : new Error("Failed to upload recording");
       } finally {
         unlisten();
       }
-    },
-    onSuccess: () => {
-      metaActions.refetch();
     },
     onError: (error) => {
       commands.globalMessageDialog(
@@ -140,7 +114,7 @@ function ShareButton() {
     onSettled() {
       setTimeout(() => {
         setUploadState({ type: "idle" });
-        uploadVideo.reset();
+        upload.reset();
       }, 2000);
     },
   }));
@@ -154,27 +128,19 @@ function ShareButton() {
   >({ type: "idle" });
 
   createProgressBar(() => {
-    if (uploadVideo.isIdle || uploadState.type === "idle") return;
     if (uploadState.type === "starting") return 0;
     if (uploadState.type === "rendering")
       return (uploadState.renderedFrames / uploadState.totalFrames) * 100;
     if (uploadState.type === "uploading") return uploadState.progress;
-    return 100;
-  });
-
-  // Watch for metadata updates
-  createEffect(() => {
-    const update = metaUpdateStore.getLastUpdate();
-    if (update && update.videoId === videoId) {
-      metaActions.refetch();
-    }
   });
 
   return (
     <div class="relative">
-      <Show when={recordingMeta.latest?.sharing}>
+      <Show when={meta().sharing}>
         {(sharing) => {
           const url = () => new URL(sharing().link);
+
+          const [copyPressed, setCopyPressed] = createSignal(false);
           const copyLink = () => {
             navigator.clipboard.writeText(sharing().link);
             setCopyPressed(true);
@@ -182,20 +148,21 @@ function ShareButton() {
               setCopyPressed(false);
             }, 2000);
           };
+
           return (
             <div class="flex gap-3 items-center">
               <Tooltip
                 content={
-                  uploadVideo.isPending ? "Reuploading video" : "Reupload video"
+                  upload.isPending ? "Reuploading video" : "Reupload video"
                 }
               >
                 <Button
-                  disabled={uploadVideo.isPending}
-                  onClick={() => uploadVideo.mutate()}
+                  disabled={upload.isPending}
+                  onClick={() => upload.mutate()}
                   variant="primary"
                   class="flex justify-center items-center size-[41px] !px-0 !py-0 space-x-1 rounded-xl"
                 >
-                  {uploadVideo.isPending ? (
+                  {upload.isPending ? (
                     <IconLucideLoaderCircle class="animate-spin size-4" />
                   ) : (
                     <IconLucideRotateCcw class="size-4" />
@@ -203,14 +170,14 @@ function ShareButton() {
                 </Button>
               </Tooltip>
               <Tooltip content="Open link">
-                <div class="rounded-xl px-3 py-2 flex flex-row items-center gap-[0.375rem] bg-white-transparent-80 hover:bg-gray-200  dark:bg-gray-200 dark:hover:bg-gray-300 transition-colors duration-100">
+                <div class="rounded-xl px-3 py-2 flex flex-row items-center gap-[0.375rem] bg-gray-3 hover:bg-gray-4 transition-colors duration-100">
                   <a
                     href={sharing().link}
                     target="_blank"
                     rel="noreferrer"
                     class="w-full truncate max-w-48"
                   >
-                    <span class="text-xs text-gray-500">
+                    <span class="text-xs text-gray-12">
                       {url().host}
                       {url().pathname}
                     </span>
@@ -218,7 +185,7 @@ function ShareButton() {
                   {/** Copy button */}
                   <Tooltip content="Copy link">
                     <div
-                      class="flex justify-center items-center rounded-lg size-[22px] text-gray-500 !px-0 !py-0 dark:bg-black-transparent-10 dark:hover:bg-black-transparent-40 bg-gray-200 hover:bg-gray-300"
+                      class="flex justify-center items-center rounded-lg size-[22px] text-gray-12 !px-0 !py-0 dark:bg-black-transparent-10 dark:hover:bg-black-transparent-40 bg-gray-3 hover:bg-gray-5"
                       onClick={copyLink}
                     >
                       {!copyPressed() ? (
@@ -234,23 +201,17 @@ function ShareButton() {
           );
         }}
       </Show>
-      <Dialog.Root open={!uploadVideo.isIdle}>
+      <Dialog.Root open={!upload.isIdle}>
         <DialogContent
-          title={
-            uploadState.type === "uploading"
-              ? "Creating Shareable Link"
-              : uploadState.type === "link-copied"
-              ? "Link Copied"
-              : "Exporting Recording"
-          }
+          title={"Reupload Recording"}
           confirm={<></>}
           close={<></>}
-          class="text-gray-500 bg-gray-600 dark:text-gray-500"
+          class="text-gray-12 dark:text-gray-12"
         >
           <div class="w-[80%] text-center mx-auto relative z-10 space-y-6 py-4">
-            <div class="w-full bg-gray-200 rounded-full h-2.5 mb-2">
+            <div class="w-full bg-gray-3 rounded-full h-2.5 mb-2">
               <div
-                class="bg-blue-300 h-2.5 rounded-full"
+                class="bg-blue-9 h-2.5 rounded-full"
                 style={{
                   width: `${
                     uploadState.type === "uploading"

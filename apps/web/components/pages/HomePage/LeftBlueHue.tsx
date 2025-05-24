@@ -1,8 +1,8 @@
 "use client";
 
 const LeftBlueHue = () => {
-    return (
-      <svg
+  return (
+    <svg
       className="absolute top-10 -left-24 z-0 opacity-20 pointer-events-none md:opacity-100"
       width="1276"
       height="690"
@@ -31,7 +31,12 @@ const LeftBlueHue = () => {
           colorInterpolationFilters="sRGB"
         >
           <feFlood floodOpacity="0" result="BackgroundImageFix" />
-          <feBlend mode="normal" in="SourceGraphic" in2="BackgroundImageFix" result="shape" />
+          <feBlend
+            mode="normal"
+            in="SourceGraphic"
+            in2="BackgroundImageFix"
+            result="shape"
+          />
           <feGaussianBlur stdDeviation="50" result="blur-effect" />
         </filter>
         <linearGradient
@@ -49,4 +54,4 @@ const LeftBlueHue = () => {
     </svg>
   );
 };
-  export default LeftBlueHue;
+export default LeftBlueHue;

@@ -1,11 +1,16 @@
 mod record;
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    io::{stdout, Write},
+    path::PathBuf,
+    sync::Arc,
+};
 
 use cap_editor::create_segments;
+use cap_export::{ExportCompression, ExportSettings};
 use cap_media::sources::get_target_fps;
 use cap_project::{RecordingMeta, XY};
-use cap_rendering::RenderVideoConstants;
+use cap_rendering::{ProjectRecordings, RenderVideoConstants};
 use clap::{Args, Parser, Subcommand};
 use record::RecordStart;
 use serde_json::json;
@@ -163,7 +168,8 @@ impl Export {
 
         let recording_meta = RecordingMeta::load_for_project(&self.project_path).unwrap();
         let meta = recording_meta.studio_meta().unwrap();
-        let recordings = cap_rendering::ProjectRecordings::new(&recording_meta.project_path, meta);
+        let recordings =
+            Arc::new(ProjectRecordings::new(&recording_meta.project_path, meta).unwrap());
 
         let render_options = cap_rendering::RenderOptions {
             screen_size: XY::new(
@@ -183,18 +189,26 @@ impl Export {
 
         let segments = create_segments(&recording_meta, meta).await.unwrap();
 
-        let fps = meta.max_fps();
         let project_output_path = self.project_path.join("output/result.mp4");
+        let mut stdout = stdout();
         let exporter = cap_export::Exporter::new(
             project,
             project_output_path.clone(),
-            |_| {},
+            move |f| {
+                print!("\rrendered frame {f}");
+
+                stdout.flush().unwrap();
+            },
             self.project_path.clone(),
             recording_meta,
             render_constants,
             &segments,
-            60,
-            XY::new(1920, 1080),
+            recordings.clone(),
+            ExportSettings {
+                fps: 60,
+                resolution_base: XY::new(1920, 1080),
+                compression: ExportCompression::Web,
+            },
         )
         .await
         .unwrap();

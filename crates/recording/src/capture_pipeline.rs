@@ -1,8 +1,13 @@
-use std::{future::Future, path::PathBuf, sync::Arc};
+use std::{
+    future::Future,
+    path::PathBuf,
+    sync::{atomic::AtomicBool, Arc},
+    time::SystemTime,
+};
 
 use cap_media::{
     data::AudioInfo,
-    encoders::{H264Encoder, MP4File, OpusEncoder},
+    encoders::{AACEncoder, AudioEncoder, H264Encoder, MP4File, OpusEncoder},
     feeds::AudioInputFeed,
     pipeline::{builder::PipelineBuilder, task::PipelineSinkTask, RealTimeClock},
     sources::{
@@ -13,6 +18,7 @@ use cap_media::{
 };
 use ffmpeg::ffi::AV_TIME_BASE_Q;
 use flume::{Receiver, Sender};
+use tokio::sync::oneshot;
 use tracing::error;
 
 use crate::RecordingError;
@@ -40,6 +46,7 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         audio: Option<&AudioInputFeed>,
         system_audio: Option<(Receiver<(ffmpeg::frame::Audio, f64)>, AudioInfo)>,
         output_path: PathBuf,
+        pause_flag: Arc<AtomicBool>,
     ) -> impl Future<Output = Result<CapturePipelineBuilder, MediaError>> + Send
     where
         Self: Sized;
@@ -67,14 +74,6 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
         let (timestamp_tx, timestamp_rx) = flume::bounded(1);
 
         builder.spawn_task("screen_capture_encoder", move |ready| {
-            let start = std::time::SystemTime::now();
-            let start_time_unix = start
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("Time went backwards")
-                .as_secs_f64();
-            let start_cmtime = cidre::cm::Clock::host_time_clock().time();
-            let start_cmtime = start_cmtime.value as f64 / start_cmtime.scale as f64;
-
             let mut timestamp_tx = Some(timestamp_tx);
             let _ = ready.send(Ok(()));
 
@@ -102,6 +101,7 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
         audio: Option<&AudioInputFeed>,
         system_audio: Option<(Receiver<(ffmpeg::frame::Audio, f64)>, AudioInfo)>,
         output_path: PathBuf,
+        pause_flag: Arc<AtomicBool>,
     ) -> Result<CapturePipelineBuilder, MediaError> {
         let (audio_tx, audio_rx) = flume::bounded(64);
         let mut audio_mixer = AudioMixer::new(audio_tx);
@@ -112,7 +112,7 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
 
         if let Some(audio) = audio {
             let sink = audio_mixer.sink(audio.audio_info());
-            let source = AudioInputSource::init(audio, sink.tx);
+            let source = AudioInputSource::init(audio, sink.tx, SystemTime::now());
 
             builder.spawn_source("microphone_capture", source);
         }
@@ -129,13 +129,38 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
             )?,
         ));
 
+        use cidre::cm;
+
+        let (first_frame_tx, mut first_frame_rx) = oneshot::channel::<(cm::Time, f64)>();
+
         if has_audio_sources {
             builder.spawn_source("audio_mixer", audio_mixer);
 
             let mp4 = mp4.clone();
             builder.spawn_task("audio_encoding", move |ready| {
                 let _ = ready.send(Ok(()));
-                while let Ok(frame) = audio_rx.recv() {
+                let mut time = None;
+
+                while let Ok(mut frame) = audio_rx.recv() {
+                    let pts = frame.pts().unwrap();
+
+                    if let Ok(first_time) = first_frame_rx.try_recv() {
+                        time = Some(first_time);
+                    };
+
+                    let Some(time) = time else {
+                        continue;
+                    };
+
+                    let elapsed = (pts as f64 / AV_TIME_BASE_Q.den as f64) - time.1;
+
+                    let time = time.0.add(cm::Time::new(
+                        (elapsed * time.0.scale as f64 + time.1 * time.0.scale as f64) as i64,
+                        time.0.scale,
+                    ));
+
+                    frame.set_pts(Some(time.value / (time.scale / AV_TIME_BASE_Q.den) as i64));
+
                     if let Ok(mut mp4) = mp4.lock() {
                         if let Err(e) = mp4.queue_audio_frame(frame) {
                             error!("{e}");
@@ -146,10 +171,21 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
             });
         }
 
+        let mut first_frame_tx = Some(first_frame_tx);
         builder.spawn_task("screen_capture_encoder", move |ready| {
             let _ = ready.send(Ok(()));
             while let Ok((frame, unix_time)) = source.1.recv() {
                 if let Ok(mut mp4) = mp4.lock() {
+                    if pause_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                        mp4.pause();
+                    } else {
+                        mp4.resume();
+                    }
+
+                    if let Some(first_frame_tx) = first_frame_tx.take() {
+                        let _ = first_frame_tx.send((frame.pts(), unix_time));
+                    }
+
                     mp4.queue_video_frame(frame.as_ref());
                 }
             }
@@ -180,7 +216,7 @@ impl MakeCapturePipeline for AVFrameCapture {
         let mut screen_encoder = MP4File::init(
             "screen",
             output_path.into(),
-            H264Encoder::factory("screen", screen_config),
+            |o| H264Encoder::builder("screen", screen_config).build(o),
             |_| None,
         )?;
 
@@ -213,6 +249,7 @@ impl MakeCapturePipeline for AVFrameCapture {
         audio: Option<&AudioInputFeed>,
         system_audio: Option<(Receiver<(ffmpeg::frame::Audio, f64)>, AudioInfo)>,
         output_path: PathBuf,
+        _pause_flag: Arc<AtomicBool>,
     ) -> Result<CapturePipelineBuilder, MediaError>
     where
         Self: Sized,
@@ -226,7 +263,7 @@ impl MakeCapturePipeline for AVFrameCapture {
 
         if let Some(audio) = audio {
             let sink = audio_mixer.sink(audio.audio_info());
-            let source = AudioInputSource::init(audio, sink.tx);
+            let source = AudioInputSource::init(audio, sink.tx, SystemTime::now());
 
             builder.spawn_source("microphone_capture", source);
         }
@@ -237,8 +274,12 @@ impl MakeCapturePipeline for AVFrameCapture {
         let mp4 = Arc::new(std::sync::Mutex::new(MP4File::init(
             "screen",
             output_path.into(),
-            H264Encoder::factory("screen", screen_config),
-            |o| has_audio_sources.then(|| OpusEncoder::init("mic_audio", AudioMixer::info(), o)),
+            |o| H264Encoder::builder("screen", screen_config).build(o),
+            |o| {
+                has_audio_sources.then(|| {
+                    AACEncoder::init("mic_audio", AudioMixer::info(), o).map(|v| v.boxed())
+                })
+            },
         )?));
 
         if has_audio_sources {
@@ -249,7 +290,7 @@ impl MakeCapturePipeline for AVFrameCapture {
                 let _ = ready.send(Ok(()));
                 while let Ok(frame) = audio_rx.recv() {
                     if let Ok(mut mp4) = mp4.lock() {
-                        mp4.queue_audio_frame(dbg!(frame));
+                        mp4.queue_audio_frame(frame);
                     }
                 }
             });
@@ -261,6 +302,12 @@ impl MakeCapturePipeline for AVFrameCapture {
             let _ = ready.send(Ok(()));
             while let Ok((frame, unix_time)) = source.1.recv() {
                 if let Ok(mut mp4) = mp4.lock() {
+                    // if pause_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    //     mp4.pause();
+                    // } else {
+                    //     mp4.resume();
+                    // }
+
                     mp4.queue_video_frame(frame);
                 }
             }
@@ -290,35 +337,20 @@ pub fn create_screen_capture(
     force_show_cursor: bool,
     max_fps: u32,
     audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
+    start_time: SystemTime,
 ) -> Result<ScreenCaptureReturn<ScreenCaptureMethod>, RecordingError> {
     let (video_tx, video_rx) = flume::bounded(16);
 
-    #[cfg(target_os = "macos")]
-    {
-        ScreenCaptureSource::<cap_media::sources::CMSampleBufferCapture>::init(
-            capture_target,
-            None,
-            show_camera,
-            force_show_cursor,
-            max_fps,
-            video_tx,
-            audio_tx,
-        )
-        .map(|v| (v, video_rx))
-        .map_err(|e| RecordingError::Media(MediaError::TaskLaunch(e)))
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        ScreenCaptureSource::<cap_media::sources::AVFrameCapture>::init(
-            capture_target,
-            None,
-            show_camera,
-            force_show_cursor,
-            max_fps,
-            video_tx,
-            audio_tx,
-        )
-        .map(|v| (v, video_rx))
-        .map_err(|e| RecordingError::Media(MediaError::TaskLaunch(e)))
-    }
+    ScreenCaptureSource::<ScreenCaptureMethod>::init(
+        capture_target,
+        None,
+        show_camera,
+        force_show_cursor,
+        max_fps,
+        video_tx,
+        audio_tx,
+        start_time,
+    )
+    .map(|v| (v, video_rx))
+    .map_err(|e| RecordingError::Media(MediaError::TaskLaunch(e)))
 }

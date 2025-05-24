@@ -4,7 +4,7 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     console.log("Self-hosted checkout request body:", body);
-    
+
     // Forward the request to the external service
     console.log("Forwarding request to external service...");
     const response = await fetch("https://l.cap.so/api/selfhost/checkout", {
@@ -14,13 +14,13 @@ export async function POST(request: Request) {
       },
       body: JSON.stringify(body),
     });
-    
+
     console.log("External service response status:", response.status);
-    
+
     // Get the raw response text first
     const responseText = await response.text();
     console.log("External service raw response:", responseText);
-    
+
     // Then try to parse it as JSON
     let data;
     try {
@@ -33,14 +33,14 @@ export async function POST(request: Request) {
         { status: 500 }
       );
     }
-    
+
     if (!response.ok) {
       return NextResponse.json(
         { message: data.message || "Failed to process checkout" },
         { status: response.status }
       );
     }
-    
+
     return NextResponse.json(data);
   } catch (error) {
     console.error("Error in self-hosted checkout:", error);
@@ -52,4 +52,4 @@ export async function POST(request: Request) {
       { status: 500 }
     );
   }
-} 
+}

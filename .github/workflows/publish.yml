@@ -179,10 +179,8 @@ jobs:
           echo "CAP_DESKTOP_SENTRY_URL=https://6a3b6a09e6ae976c2ad6fff710e88748@o4506859771527168.ingest.us.sentry.io/4508330917101568" >> .env
           echo "NEXT_PUBLIC_WEB_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}" >> .env
           echo 'NEXTAUTH_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
-          echo 'NEXT_PUBLIC_POSTHOG_KEY=${{ secrets.NEXT_PUBLIC_POSTHOG_KEY }}' >> .env
-          echo 'NEXT_PUBLIC_POSTHOG_HOST=${{ secrets.NEXT_PUBLIC_POSTHOG_HOST }}' >> .env
-          echo 'VITE_POSTHOG_KEY=${{ secrets.NEXT_PUBLIC_POSTHOG_KEY }}' >> .env
-          echo 'VITE_POSTHOG_HOST=${{ secrets.NEXT_PUBLIC_POSTHOG_HOST }}' >> .env
+          echo 'VITE_POSTHOG_KEY=${{ secrets.VITE_POSTHOG_KEY }}' >> .env
+          echo 'VITE_POSTHOG_HOST=${{ secrets.VITE_POSTHOG_HOST }}' >> .env
           echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
           echo "NEXT_PUBLIC_CAP_AWS_REGION=${{ secrets.NEXT_PUBLIC_CAP_AWS_REGION }}" >> .env
           echo "NEXT_PUBLIC_CAP_AWS_BUCKET=${{ secrets.NEXT_PUBLIC_CAP_AWS_BUCKET }}" >> .env
@@ -245,7 +243,7 @@ jobs:
                 body: JSON.stringify({
                   type: "release-done",
                   interactionId: "${{ inputs.interactionId }}",
-                  version: "${{ steps.read_version.outputs.value }}",
+                  version: "${{ needs.draft.outputs.version }}",
                   releaseUrl: "${{ needs.draft.outputs.gh_release_url }}",
                   cnReleaseId
                 }),

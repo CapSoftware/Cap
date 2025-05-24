@@ -1,16 +1,16 @@
-import { Dialog, DialogContent, LogoBadge, Button } from "@cap/ui";
 import { NODE_ENV } from "@cap/env";
+import { Button, Dialog, DialogContent, LogoBadge } from "@cap/ui";
 import { motion } from "framer-motion";
 import { signIn } from "next-auth/react";
-import { useState, useEffect } from "react";
-import { toast } from "react-hot-toast";
+import { useState } from "react";
+import { toast } from "sonner";
 
 interface AuthOverlayProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-const MotionDialogContent = motion(DialogContent);
+const MotionDialogContent = motion.create(DialogContent);
 
 export const AuthOverlay: React.FC<AuthOverlayProps> = ({
   isOpen,
@@ -34,9 +34,9 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
         className="w-[90vw] sm:max-w-md p-6 rounded-xl"
       >
         <div className="space-y-6">
-          <LogoBadge className="h-12 w-auto" />
+          <LogoBadge className="w-auto h-12" />
 
-          <div className="text-left space-y-3">
+          <div className="space-y-3 text-left">
             <motion.h1
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -49,7 +49,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.2 }}
-              className="text-2xl text-gray-500"
+              className="text-2xl text-gray-1"
             >
               Join the conversation.
             </motion.p>
@@ -59,9 +59,9 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
             {NODE_ENV !== "development" && (
               <>
                 <Button
-                  variant="dark"
+                  variant="darkgradient"
                   size="lg"
-                  className="h-12 text-lg flex items-center justify-center space-x-2"
+                  className="flex justify-center items-center space-x-2 h-12 text-lg"
                   onClick={handleGoogleSignIn}
                   disabled={loading}
                 >
@@ -87,11 +87,11 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
                 </Button>
 
                 <div className="relative">
-                  <div className="absolute inset-0 flex items-center">
+                  <div className="flex absolute inset-0 items-center">
                     <div className="w-full border-t border-blue-100" />
                   </div>
-                  <div className="relative flex justify-center">
-                    <span className="bg-white px-2 text-gray-500 rounded-xl text-xs">
+                  <div className="flex relative justify-center">
+                    <span className="px-2 text-xs rounded-xl bg-gray-1 text-gray-1">
                       Or
                     </span>
                   </div>
@@ -119,7 +119,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
                       toast.error("Error sending email - try again?");
                     }
                   })
-                  .catch((err) => {
+                  .catch(() => {
                     setEmailSent(false);
                     setLoading(false);
                     toast.error("Error sending email - try again?");
@@ -141,11 +141,11 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
                   onChange={(e) => {
                     setEmail(e.target.value);
                   }}
-                  className="block w-full appearance-none rounded-full border border-gray-300 px-3 h-12 placeholder-gray-400 shadow-sm focus:border-black focus:outline-none focus:ring-black text-lg"
+                  className="block px-3 w-full h-12 text-lg placeholder-gray-400 rounded-full border border-gray-300 shadow-sm appearance-none focus:border-black focus:outline-none focus:ring-black"
                 />
                 {NODE_ENV === "development" && (
-                  <div className="py-3 px-6 flex items-center justify-center bg-red-600 rounded-xl mt-3">
-                    <p className="text-white text-lg">
+                  <div className="flex justify-center items-center px-6 py-3 mt-3 bg-red-600 rounded-xl">
+                    <p className="text-lg text-white">
                       <span className="font-bold text-white">
                         Development mode:
                       </span>{" "}
@@ -167,13 +167,13 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
                     : "Email sent to your inbox"
                   : "Continue with Email"}
               </Button>
-              <p className="text-xs text-gray-500 pt-2">
+              <p className="pt-2 text-xs text-gray-1">
                 By typing your email and clicking continue, you acknowledge that
                 you have both read and agree to Cap's{" "}
                 <a
                   href="/terms"
                   target="_blank"
-                  className="text-gray-600 font-semibold text-xs"
+                  className="text-xs font-semibold text-gray-600"
                 >
                   Terms of Service
                 </a>{" "}
@@ -181,7 +181,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
                 <a
                   href="/privacy"
                   target="_blank"
-                  className="text-gray-600 font-semibold text-xs"
+                  className="text-xs font-semibold text-gray-600"
                 >
                   Privacy Policy
                 </a>
@@ -193,7 +193,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
           {emailSent && (
             <div>
               <button
-                className="mt-5 text-sm text-gray-500 underline hover:text-black"
+                className="mt-5 text-sm underline text-gray-1 hover:text-black"
                 onClick={() => {
                   setEmailSent(false);
                   setEmail("");

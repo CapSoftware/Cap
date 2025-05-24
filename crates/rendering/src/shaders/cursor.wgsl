@@ -4,16 +4,12 @@ struct VertexOutput {
 };
 
 struct Uniforms {
-    position: vec4<f32>,
-    size: vec4<f32>,
+    position: vec2<f32>,
+    size: vec2<f32>,
     output_size: vec4<f32>,
     screen_bounds: vec4<f32>,
-    cursor_size: f32,
-    last_click_time: f32,
     velocity: vec2<f32>,
     motion_blur_amount: f32,
-    hotspot: vec2<f32>,
-    _alignment: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -41,18 +37,15 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
         vec2<f32>(1.0, 1.0)
     );
 
-    let pos = positions[vertex_index] - uniforms.hotspot;
-    let size = uniforms.size.xy;
+    let pos = positions[vertex_index];
     let screen_pos = uniforms.position.xy;
-
-    let scaled_size = size * uniforms.cursor_size;
 
     // Calculate final position - centered around cursor position
     // Flip the Y coordinate by subtracting from output height
     var adjusted_pos = screen_pos;
     adjusted_pos.y = uniforms.output_size.y - adjusted_pos.y;  // Flip Y coordinate
 
-    let final_pos = ((pos * scaled_size) + adjusted_pos) / uniforms.output_size.xy * 2.0 - 1.0;
+    let final_pos = ((pos * uniforms.size) + adjusted_pos) / uniforms.output_size.xy * 2.0 - 1.0;
 
     var output: VertexOutput;
     output.position = vec4<f32>(final_pos, 0.0, 1.0);

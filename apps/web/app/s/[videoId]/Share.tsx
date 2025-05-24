@@ -1,8 +1,8 @@
 "use client";
 
+import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
-import { clientEnv } from "@cap/env";
 import { Logo } from "@cap/ui";
 import { useEffect, useRef, useState } from "react";
 import { ShareHeader } from "./_components/ShareHeader";
@@ -20,19 +20,16 @@ interface Analytics {
   reactions: number;
 }
 
-type VideoWithSpaceInfo = typeof videos.$inferSelect & {
-  spaceMembers?: string[];
-  spaceId?: string;
+type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
+  organizationMembers?: string[];
+  organizationId?: string;
+  sharedOrganizations?: { id: string; name: string }[];
 };
 
 interface ShareProps {
-  data: VideoWithSpaceInfo;
+  data: VideoWithOrganizationInfo;
   user: typeof userSelectProps | null;
   comments: CommentWithAuthor[];
-  individualFiles: {
-    fileName: string;
-    url: string;
-  }[];
   initialAnalytics: {
     views: number;
     comments: number;
@@ -40,18 +37,22 @@ interface ShareProps {
   };
   customDomain: string | null;
   domainVerified: boolean;
+  userOrganizations?: { id: string; name: string }[];
 }
 
 export const Share: React.FC<ShareProps> = ({
   data,
   user,
   comments,
-  individualFiles,
   initialAnalytics,
   customDomain,
   domainVerified,
+  userOrganizations = [],
 }) => {
   const [analytics, setAnalytics] = useState(initialAnalytics);
+  const effectiveDate = data.metadata?.customCreatedAt
+    ? new Date(data.metadata.customCreatedAt)
+    : data.createdAt;
 
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -64,15 +65,11 @@ export const Share: React.FC<ShareProps> = ({
   useEffect(() => {
     const fetchViewCount = async () => {
       try {
-        const response = await fetch(`/api/video/analytics?videoId=${data.id}`);
-        if (!response.ok) {
-          throw new Error("Failed to fetch analytics");
-        }
-        const viewData = await response.json();
+        const result = await getVideoAnalytics(data.id);
 
         setAnalytics((prev) => ({
           ...prev,
-          views: viewData.count || 0,
+          views: result.count || 0,
         }));
       } catch (error) {
         console.error("Error fetching view count:", error);
@@ -82,7 +79,6 @@ export const Share: React.FC<ShareProps> = ({
     fetchViewCount();
   }, [data.id]);
 
-  // Update analytics when comments change
   useEffect(() => {
     setAnalytics((prev) => ({
       ...prev,
@@ -95,11 +91,12 @@ export const Share: React.FC<ShareProps> = ({
     <div className="min-h-screen flex flex-col bg-[#F7F8FA]">
       <div className="container flex-1 px-4 py-4 mx-auto">
         <ShareHeader
-          data={data}
+          data={{ ...data, createdAt: effectiveDate }}
           user={user}
-          individualFiles={individualFiles}
           customDomain={customDomain}
           domainVerified={domainVerified}
+          sharedOrganizations={data.sharedOrganizations || []}
+          userOrganizations={userOrganizations}
         />
 
         <div className="mt-4">
@@ -120,7 +117,7 @@ export const Share: React.FC<ShareProps> = ({
 
             <div className="flex flex-col lg:w-80">
               <Sidebar
-                data={data}
+                data={{ ...data, createdAt: effectiveDate }}
                 user={user}
                 comments={comments}
                 analytics={analytics}
@@ -139,8 +136,8 @@ export const Share: React.FC<ShareProps> = ({
       <div className="py-4 mt-auto">
         <a
           target="_blank"
-          href={`${clientEnv.NEXT_PUBLIC_WEB_URL}?ref=video_${data.id}`}
-          className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 bg-gray-100 rounded-full new-card-style w-fit"
+          href={`/?ref=video_${data.id}`}
+          className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 bg-gray-1 rounded-full new-card-style w-fit"
         >
           <span className="text-sm">Recorded with</span>
           <Logo className="w-14 h-auto" />

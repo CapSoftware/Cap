@@ -3,8 +3,8 @@
 "use client";
 
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
+import { Testimonials } from "@/components/ui/Testimonials";
 import {
-  detectPlatform,
   getDownloadButtonText,
   getDownloadUrl,
   getPlatformIcon,
@@ -16,34 +16,25 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import MuxPlayer from "@mux/mux-player-react";
 import { useClickAway } from "@uidotdev/usehooks";
 import { AnimatePresence, motion } from "framer-motion";
+import { useDetectPlatform } from "hooks/useDetectPlatform";
 import Link from "next/link";
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { Parallax, ParallaxProvider } from "react-scroll-parallax";
 import { LogoSection } from "../_components/LogoSection";
+import { FeatureCard } from "../SelfHostingPage";
 import LeftBlueHue from "./LeftBlueHue";
 import PowerfulFeaturesSVG from "./PowerfulFeaturesSVG";
 
-export const HomePage = () => {
+interface HomePageProps {
+  serverHomepageCopyVariant?: string;
+}
+
+export const HomePage: React.FC<HomePageProps> = ({
+  serverHomepageCopyVariant = "",
+}) => {
   const [videoToggled, setVideoToggled] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [platform, setPlatform] = useState<string | null>(null);
-  const [isIntel, setIsIntel] = useState(false);
-
-  useEffect(() => {
-    const detectUserPlatform = async () => {
-      try {
-        const { platform, isIntel } = await detectPlatform();
-        setPlatform(platform);
-        setIsIntel(isIntel);
-      } catch (error) {
-        console.error("Error detecting platform:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    detectUserPlatform();
-  }, []);
+  const { platform, isIntel } = useDetectPlatform();
+  const loading = platform === null;
 
   return (
     <ParallaxProvider>
@@ -53,19 +44,19 @@ export const HomePage = () => {
             <Link
               href="https://x.com/richiemcilroy/status/1895526857807733018"
               target="_blank"
-              className="flex gap-3 transition-opacity duration-300
-                 hover:opacity-90 mb-[52px] items-center relative z-[20] px-4 py-2
-               mx-auto bg-[#2e2e2e] rounded-full border w-fit border-zinc-200"
+              className="flex gap-3 transition-colors duration-300 shadow-sm
+                 mb-[52px] items-center relative z-[20] px-3.5 py-1
+               mx-auto bg-gray-1 rounded-full border w-fit border-gray-5 hover:bg-gray-3"
             >
-              <p className="text-xs text-white sm:text-sm">
+              <p className="text-[13px] text-gray-12">
                 Launch Week Day 5:{" "}
-                <span className="text-xs font-bold text-blue-100 sm:text-sm">
+                <span className="text-[13px] font-bold text-blue-9">
                   Self-host Cap
                 </span>
               </p>
               <FontAwesomeIcon
                 fontWeight="light"
-                className="w-2 text-white"
+                className="w-2 text-gray-12"
                 icon={faAngleRight}
               />
             </Link>
@@ -73,14 +64,50 @@ export const HomePage = () => {
               Record. Edit. Share.
             </h3>
             <h1 className="fade-in-down text-[2rem] font-bold leading-[2.5rem] md:text-[3.75rem] md:leading-[4rem] relative z-10 text-black mb-4">
-              Beautiful screen recordings,
-              <br />
-              owned by you.
+              {serverHomepageCopyVariant === "1" ? (
+                <>
+                  Beautiful screen recordings,
+                  <br />
+                  owned by you.
+                </>
+              ) : serverHomepageCopyVariant === "2" ? (
+                <>The open source Loom alternative.</>
+              ) : serverHomepageCopyVariant === "3" ? (
+                <>The open source screen recording suite.</>
+              ) : (
+                <>
+                  Beautiful screen recordings,
+                  <br />
+                  owned by you.
+                </>
+              )}
             </h1>
             <p className="mx-auto mb-8 max-w-3xl text-md sm:text-xl text-zinc-500 fade-in-down animate-delay-1">
-              Cap is the open source alternative to Loom. Lightweight, powerful,
-              and cross-platform. Record and share securely in seconds with
-              custom S3 bucket support.
+              {serverHomepageCopyVariant === "1" ? (
+                <>
+                  Cap is the open source alternative to Loom. Lightweight,
+                  powerful, and cross-platform. Record and share securely in
+                  seconds with custom S3 bucket support.
+                </>
+              ) : serverHomepageCopyVariant === "2" ? (
+                <>
+                  Cap is the open source alternative to Loom. Lightweight,
+                  powerful, and cross-platform. Record and share securely in
+                  seconds. Connect your own storage, domain & more.
+                </>
+              ) : serverHomepageCopyVariant === "3" ? (
+                <>
+                  Cap is open source, lightweight, powerful & cross-platform.
+                  With Instant Mode for shareable links and Studio Mode for
+                  high-quality recordings with local editing.
+                </>
+              ) : (
+                <>
+                  Cap is the open source alternative to Loom. Lightweight,
+                  powerful, and cross-platform. Record and share securely in
+                  seconds with custom S3 bucket support.
+                </>
+              )}
             </p>
           </div>
           <div className="flex flex-col justify-center items-center mb-5 space-y-2 fade-in-up animate-delay-2 sm:flex-row sm:space-y-0 sm:space-x-2">
@@ -387,7 +414,76 @@ export const HomePage = () => {
           </div>
         </div>
       </div>
-      <div className="px-5 mb-32 md:mb-40">
+      <div className="pb-32 wrapper" id="features">
+        <div className="space-y-3">
+          {/* Section 1: 35% / 65% split */}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
+            <div className="md:col-span-5">
+              <FeatureCard
+                title="Privacy-first"
+                description="Own your content with Cap's privacy-focused approach. Keep your sensitive information secure and maintain complete control over who can access your recordings - perfect for confidential client communications and internal team sharing."
+                imagePath="/illustrations/privacy.webp"
+                imageAlt="Complete Control"
+                imageHeight="h-[280px]"
+              />
+            </div>
+            <div className="md:col-span-7">
+              <FeatureCard
+                title="Multi-Platform Support"
+                description="Cap works seamlessly across macOS and Windows, giving you the flexibility to create content on any device. Capture, share, and collaborate regardless of which platform you or your team prefers, ensuring smooth workflows and consistent experience everywhere."
+                imagePath="/illustrations/multiplatmain.png"
+                bg="/illustrations/multiplatbg.webp"
+                imageAlt="Enterprise-Ready"
+                className="bg-[center_top_-90px] bg-no-repeat bg-cover lg:bg-[center_top_-60px]"
+                imageHeight="h-[280px]"
+              />
+            </div>
+          </div>
+
+          {/* Section 2: 65% / 35% split */}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
+            <div className="md:col-span-8">
+              <FeatureCard
+                title="Flexible Storage Options"
+                bg="/illustrations/multiplatbg.webp"
+                description="Choose how and where you store your recordings. Cap offers both local and cloud storage options to suit your needs. Save space on your device or keep your entire content library accessible from anywhere - ideal for freelancers and growing teams with varied content creation needs."
+                imagePath="/illustrations/cloud-feature.webp"
+                imageAlt="White Labeling"
+                imageHeight="h-[215px]"
+                className="lg:bg-[center_top_-150px] bg-[center_top_-120px] bg-no-repeat bg-cover"
+              />
+            </div>
+            <div className="md:col-span-4">
+              <FeatureCard
+                title="High-Quality Video Capture"
+                description="Deliver crystal-clear recordings that showcase your professionalism. Cap ensures exceptional quality for client presentations, tutorials, and team communications - making your content stand out whether you're a solo creator or a small business owner."
+                imagePath="/illustrations/video-capture.webp"
+                imageAlt="Data Sovereignty"
+                imageHeight="h-[224px]"
+              />
+            </div>
+          </div>
+
+          {/* Section 3: Full width */}
+          <div className="grid grid-cols-1">
+            <FeatureCard
+              title="Seamless Team Collaboration"
+              description="Share knowledge effortlessly with your team or clients. Cap's intuitive sharing features make it easy to organize content, provide access to specific people, and track engagement. Perfect for small businesses and growing teams who need simple yet powerful collaboration tools."
+              imagePath="/illustrations/collaboration.webp"
+              imageAlt="Dedicated Support"
+              imageHeight="h-[285px]"
+            />
+          </div>
+        </div>
+      </div>
+      <div className="mb-32 wrapper">
+        <Testimonials
+          amount={10}
+          title="What our users say about Cap after hitting record"
+          subtitle="Don't just take our word for it. Here's what our users are saying about their experience with Cap."
+        />
+      </div>
+      <div className="px-5 mb-32">
         <ReadyToGetStarted />
       </div>
     </ParallaxProvider>
@@ -418,7 +514,7 @@ const VideoModal = ({ setVideoToggled }: Props) => {
           damping: 20,
         }}
         ref={ref}
-        className="w-[calc(100%-20px)] max-w-[1000px] bg-white rounded-[16px] md:h-[700px] h-[300px]"
+        className="w-[calc(100%-20px)] max-w-[1000px] bg-gray-1 rounded-[16px] md:h-[700px] h-[300px]"
       >
         <MuxPlayer
           playbackId="A6oZoUWVZjOIVZB6XnBMLagYnXE6xhDhp8Hcyky018hk"

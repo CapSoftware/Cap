@@ -12,10 +12,10 @@
   "app": {
     "macOSPrivateApi": true,
     "security": {
-      "csp": "default-src 'self' ws: ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data:; media-src 'self' asset: http://asset.localhost",
+      "csp": "default-src 'self' ws: ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data:; media-src 'self' asset: http://asset.localhost; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'",
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA/**", "**/*.jpg", "**/*.webp", "$RESOURCE/**", "$HOME/**"]
+        "scope": ["$APPDATA/**", "**/*.jpg", "**/*.webp", "$RESOURCE/**", "**/*.riv", "$HOME/**"]
       }
     }
   },
@@ -49,7 +49,8 @@
       "assets/backgrounds/blue/*": "assets/backgrounds/blue/",
       "assets/backgrounds/dark/*": "assets/backgrounds/dark/",
       "assets/backgrounds/orange/*": "assets/backgrounds/orange/",
-      "assets/backgrounds/purple/*": "assets/backgrounds/purple/"
+      "assets/backgrounds/purple/*": "assets/backgrounds/purple/",
+      "../src/assets/rive/*.riv": "assets/rive/"
     },
     "macOS": {
       "dmg": {
@@ -76,6 +77,14 @@
         "bannerPath": "assets/wix-banner.bmp",
         "dialogImagePath": "assets/wix-dialog.bmp"
       }
-    }
+    },
+    "fileAssociations": [
+      {
+        "ext": ["cap"],
+        "name": "Cap Project",
+        "mimeType": "application/x-cap-project",
+        "role": "Editor"
+      }
+    ]
   }
 }

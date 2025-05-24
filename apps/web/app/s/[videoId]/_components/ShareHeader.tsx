@@ -1,60 +1,63 @@
-import { Button, LogoBadge } from "@cap/ui";
+import { Button } from "@cap/ui";
 import { videos } from "@cap/database/schema";
 import moment from "moment";
 import { userSelectProps } from "@cap/database/auth/session";
+import { faChevronDown } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { toast } from "react-hot-toast";
-import { Copy, Loader2 } from "lucide-react";
-import JSZip from "jszip";
-import { saveAs } from "file-saver";
-import { clientEnv, NODE_ENV } from "@cap/env";
+import { toast } from "sonner";
+import { Copy, Globe2 } from "lucide-react";
+import { buildEnv, NODE_ENV } from "@cap/env";
+import { editTitle } from "@/actions/videos/edit-title";
+import { usePublicEnv } from "@/utils/public-env";
+import { isUserOnProPlan } from "@cap/utils";
+import { UpgradeModal } from "@/components/UpgradeModal";
+import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
+import clsx from "clsx";
 
 export const ShareHeader = ({
   data,
   user,
-  individualFiles,
   customDomain,
   domainVerified,
+  sharedOrganizations = [],
+  userOrganizations = [],
 }: {
   data: typeof videos.$inferSelect;
   user: typeof userSelectProps | null;
-  individualFiles?: {
-    fileName: string;
-    url: string;
-  }[];
   customDomain: string | null;
   domainVerified: boolean;
+  sharedOrganizations?: { id: string; name: string }[];
+  userOrganizations?: { id: string; name: string }[];
 }) => {
   const { push, refresh } = useRouter();
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(data.name);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+  const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
+  const [currentSharedOrganizations, setCurrentSharedOrganizations] =
+    useState(sharedOrganizations);
+
+  const isOwner = user !== null && user.id.toString() === data.ownerId;
+
+  const { webUrl } = usePublicEnv();
 
   const handleBlur = async () => {
     setIsEditing(false);
-    const response = await fetch(
-      `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/title`,
-      {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, videoId: data.id }),
+
+    try {
+      await editTitle(data.id, title);
+      toast.success("Video title updated");
+      refresh();
+    } catch (error) {
+      if (error instanceof Error) {
+        toast.error(error.message);
+      } else {
+        toast.error("Failed to update title - please try again.");
       }
-    );
-
-    if (response.status === 429) {
-      toast.error("Too many requests - please try again later.");
-      return;
     }
-
-    if (!response.ok) {
-      toast.error("Failed to update title - please try again.");
-      return;
-    }
-
-    toast.success("Video title updated");
-
-    refresh();
   };
 
   const handleKeyDown = async (event: { key: string }) => {
@@ -63,52 +66,84 @@ export const ShareHeader = ({
     }
   };
 
-  const downloadZip = async () => {
-    if (!individualFiles) return;
-
-    setIsDownloading(true);
-    const zip = new JSZip();
-
-    try {
-      for (const file of individualFiles) {
-        const response = await fetch(file.url);
-        const blob = await response.blob();
-        zip.file(file.fileName, blob);
-      }
-
-      const content = await zip.generateAsync({ type: "blob" });
-      saveAs(content, `${data.id}.zip`);
-    } catch (error) {
-      console.error("Error downloading zip:", error);
-      toast.error("Failed to download files. Please try again.");
-    } finally {
-      setIsDownloading(false);
-    }
-  };
-
   const getVideoLink = () => {
     return customDomain && domainVerified
       ? `https://${customDomain}/s/${data.id}`
-      : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+      : buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
       ? `https://cap.link/${data.id}`
-      : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${data.id}`;
+      : `${webUrl}/s/${data.id}`;
   };
 
   const getDisplayLink = () => {
     return customDomain && domainVerified
       ? `${customDomain}/s/${data.id}`
-      : clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+      : buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
       ? `cap.link/${data.id}`
-      : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${data.id}`;
+      : `${webUrl}/s/${data.id}`;
+  };
+
+  const isUserPro = user
+    ? isUserOnProPlan({
+        subscriptionStatus: user.stripeSubscriptionStatus,
+      })
+    : false;
+
+  const handleSharingUpdated = (updatedSharedOrganizations: string[]) => {
+    setCurrentSharedOrganizations(
+      userOrganizations?.filter((organization) =>
+        updatedSharedOrganizations.includes(organization.id)
+      )
+    );
+    refresh();
+  };
+
+  const renderSharedStatus = () => {
+    const baseClassName =
+      "text-sm text-gray-10 transition-colors duration-200 flex items-center";
+
+    if (isOwner) {
+      if (currentSharedOrganizations?.length === 0) {
+        return (
+          <p
+            className={clsx(baseClassName, "hover:text-gray-12 cursor-pointer")}
+            onClick={() => setIsSharingDialogOpen(true)}
+          >
+            Not shared{" "}
+            <FontAwesomeIcon className="ml-2 size-2.5" icon={faChevronDown} />
+          </p>
+        );
+      } else {
+        return (
+          <p
+            className={clsx(baseClassName, "hover:text-gray-12 cursor-pointer")}
+            onClick={() => setIsSharingDialogOpen(true)}
+          >
+            Shared{" "}
+            <FontAwesomeIcon className="ml-1 size-2.5" icon={faChevronDown} />
+          </p>
+        );
+      }
+    } else {
+      return <p className={baseClassName}>Shared with you</p>;
+    }
   };
 
   return (
     <>
+      <SharingDialog
+        isOpen={isSharingDialogOpen}
+        onClose={() => setIsSharingDialogOpen(false)}
+        capId={data.id}
+        capName={data.name}
+        sharedOrganizations={currentSharedOrganizations || []}
+        userOrganizations={userOrganizations}
+        onSharingUpdated={handleSharingUpdated}
+      />
       <div>
-        <div className="md:flex md:items-center md:justify-between space-x-0 md:space-x-6">
-          <div className="md:flex items-center md:justify-between md:space-x-6">
+        <div className="space-x-0 md:flex md:items-center md:justify-between md:space-x-6">
+          <div className="items-center md:flex md:justify-between md:space-x-6">
             <div className="mb-3 md:mb-0">
-              <div className="flex items-center space-x-3">
+              <div className="flex items-center space-x-3  lg:min-w-[400px]">
                 {isEditing ? (
                   <input
                     value={title}
@@ -116,7 +151,7 @@ export const ShareHeader = ({
                     onBlur={handleBlur}
                     onKeyDown={handleKeyDown}
                     autoFocus
-                    className="text-xl sm:text-2xl font-semibold"
+                    className="w-full text-xl font-semibold sm:text-2xl"
                   />
                 ) : (
                   <h1
@@ -134,51 +169,46 @@ export const ShareHeader = ({
                   </h1>
                 )}
               </div>
-              <p className="text-gray-400 text-sm">
+              {user && renderSharedStatus()}
+              <p className="text-sm text-gray-10 mt-1">
                 {moment(data.createdAt).fromNow()}
               </p>
             </div>
           </div>
-          {(user !== null ||
-            (individualFiles && individualFiles.length > 0)) && (
-            <div className="flex items-center space-x-2">
-              {individualFiles && individualFiles.length > 0 && (
-                <div>
-                  <Button
-                    variant="gray"
-                    onClick={downloadZip}
-                    disabled={isDownloading}
+          {user !== null && (
+            <div className="flex space-x-2">
+              <div>
+                <Button
+                  variant="white"
+                  onClick={() => {
+                    navigator.clipboard.writeText(getVideoLink());
+                    toast.success("Link copied to clipboard!");
+                  }}
+                >
+                  {getDisplayLink()}
+                  <Copy className="ml-2 w-4 h-4" />
+                </Button>
+                {user !== null && !isUserPro && (
+                  <button
+                    className="flex items-center mt-1 text-sm text-gray-400 cursor-pointer hover:text-blue-500"
+                    onClick={() => setUpgradeModalOpen(true)}
                   >
-                    {isDownloading ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Downloading...
-                      </>
-                    ) : (
-                      "Download Assets"
-                    )}
-                  </Button>
-                </div>
-              )}
-              <Button
-                variant="gray"
-                className="hover:bg-gray-300"
-                onClick={() => {
-                  navigator.clipboard.writeText(getVideoLink());
-                  toast.success("Link copied to clipboard!");
-                }}
-              >
-                {getDisplayLink()}
-                <Copy className="ml-2 h-4 w-4" />
-              </Button>
+                    <Globe2 className="mr-1 w-4 h-4" />
+                    Connect a custom domain
+                  </button>
+                )}
+              </div>
               {user !== null && (
                 <div className="hidden md:flex">
                   <Button
                     onClick={() => {
-                      push(`${clientEnv.NEXT_PUBLIC_WEB_URL}/dashboard`);
+                      push("/dashboard");
                     }}
                   >
-                    Go to Dashboard
+                    <span className="hidden text-sm text-white lg:block">
+                      Go to
+                    </span>{" "}
+                    Dashboard
                   </Button>
                 </div>
               )}
@@ -186,6 +216,10 @@ export const ShareHeader = ({
           )}
         </div>
       </div>
+      <UpgradeModal
+        open={upgradeModalOpen}
+        onOpenChange={setUpgradeModalOpen}
+      />
     </>
   );
 };

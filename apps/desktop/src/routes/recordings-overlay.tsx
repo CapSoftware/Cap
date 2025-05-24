@@ -1,34 +1,34 @@
+import { Button } from "@cap/ui-solid";
+import Tooltip from "@corvu/tooltip";
+import { createElementBounds } from "@solid-primitives/bounds";
+import { makePersisted } from "@solid-primitives/storage";
 import { createMutation, createQuery } from "@tanstack/solid-query";
-import { Channel, convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { cx } from "cva";
 import {
-  type Accessor,
-  type ComponentProps,
-  For,
-  Match,
-  Show,
-  Suspense,
-  Switch,
-  createEffect,
-  createMemo,
-  createResource,
-  createSignal,
-  onCleanup,
-  startTransition,
-  onMount,
+    type Accessor,
+    type ComponentProps,
+    createEffect,
+    createMemo,
+    createResource,
+    createSignal,
+    For,
+    Match,
+    onCleanup,
+    onMount,
+    Show,
+    startTransition,
+    Suspense,
+    Switch,
 } from "solid-js";
-import Tooltip from "@corvu/tooltip";
-import { Button } from "@cap/ui-solid";
-import { createElementBounds } from "@solid-primitives/bounds";
-import { TransitionGroup } from "solid-transition-group";
-import { makePersisted } from "@solid-primitives/storage";
 import { createStore, produce, SetStoreFunction } from "solid-js/store";
+import { TransitionGroup } from "solid-transition-group";
 import IconLucideClock from "~icons/lucide/clock";
 
-import { commands, events, RenderProgress, UploadResult } from "~/utils/tauri";
-import { createPresets } from "~/utils/createPresets";
-import { FPS, OUTPUT_SIZE } from "./editor/context";
 import { authStore } from "~/store";
+import { exportVideo } from "~/utils/export";
+import { commands, events, FramesRendered, UploadResult } from "~/utils/tauri";
+import { FPS, OUTPUT_SIZE } from "./editor/context";
 
 type MediaEntry = {
   path: string;
@@ -96,7 +96,7 @@ export default function () {
       }}
     >
       <div class="w-full relative left-0 bottom-0 flex flex-col-reverse pl-[40px] pb-[80px] gap-4 h-full overflow-y-auto scrollbar-none">
-        <div class="pt-12 w-full flex flex-col gap-4">
+        <div class="flex flex-col gap-4 pt-12 w-full">
           <TransitionGroup
             enterToClass="translate-y-0"
             enterClass="opacity-0 translate-y-4"
@@ -107,8 +107,6 @@ export default function () {
             <For each={allMedia()}>
               {(media) => {
                 const [ref, setRef] = createSignal<HTMLElement | null>(null);
-                const normalizedPath = media.path.replace(/\\/g, "/");
-                const mediaId = normalizedPath.split("/").pop()?.split(".")[0]!;
 
                 const type = media.type ?? "recording";
                 const isRecording = type !== "screenshot";
@@ -122,7 +120,7 @@ export default function () {
                   if (!isRecording) return null;
 
                   const result = await commands
-                    .getVideoMetadata(media.path, null)
+                    .getVideoMetadata(media.path)
                     .catch((e) => {
                       console.error(`Failed to get metadata: ${e}`);
                     });
@@ -147,17 +145,9 @@ export default function () {
 
                 createFakeWindowBounds(ref, () => media.path);
 
-                const fileId =
-                  type === "recording"
-                    ? mediaId
-                    : normalizedPath
-                        .split("screenshots/")[1]
-                        .split("/")[0]
-                        .replace(".cap", "");
-
                 const recordingMeta = createQuery(() => ({
-                  queryKey: ["recordingMeta", fileId],
-                  queryFn: () => commands.getRecordingMeta(fileId, type),
+                  queryKey: ["recordingMeta", media.path],
+                  queryFn: () => commands.getRecordingMeta(media.path, type),
                 }));
 
                 return (
@@ -166,13 +156,13 @@ export default function () {
                       ref={setRef}
                       style={{ "border-color": "rgba(255, 255, 255, 0.1)" }}
                       class={cx(
-                        "w-[260px] h-[150px] bg-gray-500/40 rounded-xl border-[1px] overflow-hidden shadow group relative transition-all duration-300"
+                        "overflow-hidden relative rounded-xl shadow transition-all duration-200 w-[260px] h-[150px] bg-gray-12 border-[1px] group"
                       )}
                     >
                       <div
                         class={cx(
                           "w-full h-full flex relative bg-transparent z-10 overflow-hidden transition-all",
-                          isLoading() && "backdrop-blur bg-gray-500/80"
+                          isLoading() && "backdrop-blur bg-gray-12"
                         )}
                         style={{
                           "pointer-events": "auto",
@@ -181,7 +171,7 @@ export default function () {
                         <Show
                           when={imageExists()}
                           fallback={
-                            <div class="pointer-events-none w-full h-full absolute inset-0 -z-10 bg-gray-400" />
+                            <div class="absolute inset-0 w-full h-full pointer-events-none -z-10 bg-gray-10" />
                           }
                         >
                           <img
@@ -292,7 +282,7 @@ export default function () {
                           )}
                         >
                           <TooltipIconButton
-                            class="absolute left-3 top-3 z-20"
+                            class="absolute top-3 left-3 z-20"
                             tooltipText="Close"
                             tooltipPlacement="right"
                             onClick={() => {
@@ -315,7 +305,7 @@ export default function () {
                           </TooltipIconButton>
                           {isRecording ? (
                             <TooltipIconButton
-                              class="absolute left-3 bottom-3 z-20"
+                              class="absolute bottom-3 left-3 z-20"
                               tooltipText="Edit"
                               tooltipPlacement="right"
                               onClick={() => {
@@ -333,7 +323,7 @@ export default function () {
                                   })
                                 );
                                 commands.showWindow({
-                                  Editor: { project_id: mediaId },
+                                  Editor: { project_path: media.path },
                                 });
                               }}
                             >
@@ -341,7 +331,7 @@ export default function () {
                             </TooltipIconButton>
                           ) : (
                             <TooltipIconButton
-                              class="absolute left-3 bottom-3 z-20"
+                              class="absolute bottom-3 left-3 z-20"
                               tooltipText="View"
                               tooltipPlacement="right"
                               onClick={() => {
@@ -352,7 +342,7 @@ export default function () {
                             </TooltipIconButton>
                           )}
                           <TooltipIconButton
-                            class="absolute right-3 top-3 z-20"
+                            class="absolute top-3 right-3 z-20"
                             tooltipText={
                               copy.isPending
                                 ? "Copying to Clipboard"
@@ -375,7 +365,7 @@ export default function () {
                           >
                             <IconCapUpload class="size-[1rem]" />
                           </TooltipIconButton>
-                          <div class="absolute inset-0 flex items-center justify-center">
+                          <div class="flex absolute inset-0 justify-center items-center">
                             <Button
                               variant="white"
                               size="sm"
@@ -394,7 +384,7 @@ export default function () {
                                 "border-end-start-radius": "7.4px",
                               }}
                               class={cx(
-                                "absolute bottom-0 left-0 right-0 font-medium text-gray-200 dark:text-gray-500 bg-[#00000080] backdrop-blur-lg px-3 py-2 flex justify-between items-center pointer-events-none transition-all max-w-full overflow-hidden",
+                                "absolute bottom-0 left-0 right-0 font-medium text-gray-4 bg-[#00000080] backdrop-blur-lg px-3 py-2 flex justify-between items-center pointer-events-none transition-all max-w-full overflow-hidden",
                                 isLoading() || showUpgradeTooltip()
                                   ? "opacity-0"
                                   : "group-hover:opacity-0"
@@ -452,19 +442,19 @@ function ActionProgressOverlay(props: {
       class="absolute inset-0 flex items-center justify-center z-[999999] pointer-events-auto"
     >
       <div class="w-[80%] text-center">
-        <h3 class="text-sm font-medium mb-3 text-gray-50 dark:text-gray-500">
+        <h3 class="mb-3 text-sm font-medium text-gray-1 dark:text-gray-12">
           {props.title}
         </h3>
-        <div class="w-full bg-gray-400 rounded-full h-2.5 mb-2">
+        <div class="w-full bg-gray-10 rounded-full h-2.5 mb-2">
           <div
-            class="bg-blue-300 text-gray-50 dark:text-gray-500 h-2.5 rounded-full transition-all duration-200"
+            class="bg-blue-9 text-gray-1 dark:text-gray-12 h-2.5 rounded-full transition-all duration-200"
             style={{
               width: `${Math.max(0, Math.min(100, props.progressPercentage))}%`,
             }}
           />
         </div>
 
-        <p class="text-xs text-gray-50 dark:text-gray-500 mt-2">
+        <p class="mt-2 text-xs text-gray-1 dark:text-gray-12">
           {typeof props.progressMessage === "string"
             ? props.progressMessage
             : `${Math.floor(props.progressPercentage)}%`}
@@ -480,7 +470,7 @@ const IconButton = (props: ComponentProps<"button">) => {
       {...props}
       type="button"
       class={cx(
-        "p-[0.325rem] bg-gray-50 dark:bg-gray-500 rounded-full text-[12px] shadow-[0px 2px 4px rgba(18, 22, 31, 0.12)]",
+        "p-[0.325rem] bg-gray-1 dark:bg-gray-12 rounded-full text-[12px] shadow-[0px 2px 4px rgba(18, 22, 31, 0.12)]",
         props.class
       )}
     />
@@ -554,25 +544,23 @@ function createRecordingMutations(
   media: MediaEntry,
   onEvent: (e: "upgradeRequired") => void
 ) {
-  const presets = createPresets();
-
-  const normalizedPath = media.path.replace(/\\/g, "/");
-  const mediaId = normalizedPath.split("/").pop()?.split(".")[0]!;
   const type = media.type ?? "recording";
   const isRecording = type !== "screenshot";
 
-  const fileId =
-    type === "recording"
-      ? mediaId
-      : normalizedPath
-          .split("screenshots/")[1]
-          .split("/")[0]
-          .replace(".cap", "");
-
   const recordingMeta = createQuery(() => ({
-    queryKey: ["recordingMeta", fileId],
-    queryFn: () => commands.getRecordingMeta(fileId, type),
+    queryKey: ["recordingMeta", media.path],
+    queryFn: () => commands.getRecordingMeta(media.path, type),
   }));
+
+  // just a wrapper of exportVideo to provide base settings
+  const exportWithDefaultSettings = (
+    onProgress: (progress: FramesRendered) => void
+  ) =>
+    exportVideo(
+      media.path,
+      { fps: FPS, resolution_base: OUTPUT_SIZE, compression: "Web" },
+      onProgress
+    );
 
   const copy = createMutation(() => ({
     mutationFn: async () => {
@@ -583,15 +571,9 @@ function createRecordingMutations(
 
       try {
         if (isRecording) {
-          const progress = createRenderProgressChannel("copy", setActionState);
-
           // First try to get existing rendered video
-          const outputPath = await commands.exportVideo(
-            mediaId,
-            progress,
-            false,
-            FPS,
-            OUTPUT_SIZE
+          const outputPath = await exportWithDefaultSettings(
+            createRenderProgressCallback("copy", setActionState)
           );
 
           // Show quick progress animation for existing video
@@ -675,15 +657,8 @@ function createRecordingMutations(
       });
 
       if (isRecording) {
-        const progress = createRenderProgressChannel("save", setActionState);
-
-        // Always force re-render when saving
-        const outputPath = await commands.exportVideo(
-          mediaId,
-          progress,
-          true, // Force re-render
-          FPS,
-          OUTPUT_SIZE
+        const outputPath = await exportWithDefaultSettings(
+          createRenderProgressCallback("save", setActionState)
         );
 
         await commands.copyFileToPath(outputPath, savePath);
@@ -718,11 +693,10 @@ function createRecordingMutations(
       // Check authentication first
       const existingAuth = await authStore.get();
       if (!existingAuth) {
-        await commands.showWindow("SignIn");
         throw new Error("You need to sign in to share recordings");
       }
 
-      const metadata = await commands.getVideoMetadata(media.path, null);
+      const metadata = await commands.getVideoMetadata(media.path);
       const plan = await commands.checkUpgradedAndUpdate();
       const canShare = {
         allowed: plan || metadata.duration < 300,
@@ -763,20 +737,12 @@ function createRecordingMutations(
             state: { type: "rendering", state: { type: "starting" } },
           });
 
-          const progress = createRenderProgressChannel(
+          const progress = createRenderProgressCallback(
             "upload",
             setActionState
           );
 
-          // First try to get existing rendered video
-          await commands.exportVideo(
-            mediaId,
-            progress,
-            false,
-            FPS,
-            OUTPUT_SIZE
-          );
-          console.log("Using existing rendered video");
+          await exportWithDefaultSettings(progress);
 
           // Show quick progress animation for existing video
           setActionState(
@@ -795,7 +761,7 @@ function createRecordingMutations(
             state: { type: "uploading", progress: 0 },
           });
 
-          res = await commands.uploadExportedVideo(mediaId, {
+          res = await commands.uploadExportedVideo(media.path, {
             Initial: { pre_created_video: null },
           });
         } else {
@@ -868,13 +834,11 @@ type ActionState =
         | { type: "link-copied" };
     };
 
-function createRenderProgressChannel(
+function createRenderProgressCallback(
   actionType: Exclude<ActionState["type"], "idle">,
   setActionState: SetStoreFunction<ActionState>
 ) {
-  const progress = new Channel<RenderProgress>();
-
-  progress.onmessage = (msg) => {
+  return (msg: FramesRendered) => {
     setActionState(
       produce((progressState) => {
         if (
@@ -883,27 +847,15 @@ function createRenderProgressChannel(
         )
           return;
 
-        const renderState = progressState.state.state;
-
-        if (
-          msg.type === "EstimatedTotalFrames" &&
-          renderState.type === "starting"
-        )
+        if (progressState.state.state.type === "rendering")
           progressState.state.state = {
             type: "rendering",
-            renderedFrames: 0,
-            totalFrames: msg.total_frames,
+            renderedFrames: msg.renderedCount,
+            totalFrames: msg.totalFrames,
           };
-        else if (
-          msg.type === "FrameRendered" &&
-          renderState.type === "rendering"
-        )
-          renderState.renderedFrames = msg.current_frame;
       })
     );
   };
-
-  return progress;
 }
 
 function actionProgressPercentage(state: ActionState): number {

@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import Script from "next/script";
 import { users } from "@cap/database/schema";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 
 declare global {
   interface Window {
@@ -17,7 +17,6 @@ export function BentoScript({
   user?: typeof users.$inferSelect | null;
 }) {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
 
   useEffect(() => {
     if (window.bento !== undefined) {
@@ -26,7 +25,7 @@ export function BentoScript({
       }
       window.bento.view();
     }
-  }, [pathname, searchParams]);
+  }, [pathname]);
 
   return (
     <Script

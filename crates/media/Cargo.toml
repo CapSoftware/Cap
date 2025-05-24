@@ -5,6 +5,9 @@ description = "A modular multimedia processing library"
 edition = "2021"
 rust-version = "1.80"
 
+[lints]
+workspace = true
+
 [features]
 default = []
 debug-logging = [] # Feature flag to control debug logging
@@ -27,7 +30,7 @@ serde = { version = "1", features = ["derive"] }
 specta.workspace = true
 tempfile = "3.12.0"
 thiserror.workspace = true
-tracing = { workspace = true, features = ["release_max_level_info"] }
+tracing = { workspace = true }
 futures = "0.3.31"
 axum = { version = "0.7.9", features = ["macros", "ws"] }
 tokio.workspace = true

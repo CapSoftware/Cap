@@ -1,5 +1,12 @@
 use cap_project::XY;
 
+#[derive(Clone, Copy)]
+pub struct SpringMassDamperSimulationConfig {
+    pub tension: f32,
+    pub mass: f32,
+    pub friction: f32,
+}
+
 pub struct SpringMassDamperSimulation {
     tension: f32,
     mass: f32,
@@ -12,11 +19,11 @@ pub struct SpringMassDamperSimulation {
 const SIMULATION_TICK: f32 = 1000.0 / 60.0;
 
 impl SpringMassDamperSimulation {
-    pub fn new(tension: f32, mass: f32, friction: f32) -> Self {
+    pub fn new(config: SpringMassDamperSimulationConfig) -> Self {
         Self {
-            tension,
-            mass,
-            friction,
+            tension: config.tension,
+            mass: config.mass,
+            friction: config.friction,
             position: XY::new(0.0, 0.0),
             velocity: XY::new(0.0, 0.0),
             target_position: XY::new(0.0, 0.0),
