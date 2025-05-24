@@ -952,6 +952,7 @@ dependencies = [
  "device_query 2.1.0",
  "dirs",
  "dotenvy_macro",
+ "either",
  "ffmpeg-next",
  "flume 0.11.0",
  "futures",
