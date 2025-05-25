@@ -42,6 +42,7 @@ type VideoWithOrganization = typeof videos.$inferSelect & {
   organizationId?: string;
   sharedOrganizations?: { id: string; name: string }[];
   password?: string | null;
+  hasPassword?: boolean;
 };
 
 export async function generateMetadata(
@@ -147,6 +148,37 @@ export async function generateMetadata(
         ],
       },
       robots: isTwitterBot ? "index, follow" : "noindex, nofollow",
+    };
+  }
+
+  if (video.password !== null) {
+    return {
+      title: "Cap: Password Protected Video",
+      description: "This video is password protected.",
+      openGraph: {
+        images: [
+          {
+            url: new URL(
+              `/api/video/og?videoId=${videoId}`,
+              buildEnv.NEXT_PUBLIC_WEB_URL
+            ).toString(),
+            width: 1200,
+            height: 630,
+          },
+        ],
+      },
+      twitter: {
+        card: "summary_large_image",
+        title: "Cap: Password Protected Video",
+        description: "This video is password protected.",
+        images: [
+          new URL(
+            `/api/video/og?videoId=${videoId}`,
+            buildEnv.NEXT_PUBLIC_WEB_URL
+          ).toString(),
+        ],
+      },
+      robots: "noindex, nofollow",
     };
   }
 
@@ -277,7 +309,6 @@ export default async function ShareVideoPage(props: Props) {
     console.log("[ShareVideoPage] Starting transcription for video:", videoId);
     await transcribeVideo(videoId, video.ownerId);
 
-    // Re-fetch video data to get updated transcription status
     const updatedVideoQuery = await db()
       .select({
         id: videos.id,
@@ -318,7 +349,7 @@ export default async function ShareVideoPage(props: Props) {
   }
 
   const currentMetadata = (video.metadata as VideoMetadata) || {};
-  const metadata = currentMetadata; // Keep existing reference for compatibility
+  const metadata = currentMetadata;
   let initialAiData = null;
   let aiGenerationEnabled = false;
 
@@ -377,6 +408,35 @@ export default async function ShareVideoPage(props: Props) {
 
   if (video.public === false && userId !== video.ownerId) {
     return <p>This video is private</p>;
+  }
+
+  const isPasswordProtected = video.password !== null;
+  const isOwner = userId === video.ownerId;
+  const shouldHideMetadata = isPasswordProtected && !isOwner;
+
+  if (shouldHideMetadata) {
+    const videoWithMinimalInfo: VideoWithOrganization = {
+      ...video,
+      organizationMembers: [],
+      organizationId: undefined,
+      sharedOrganizations: [],
+      hasPassword: true,
+    };
+
+    return (
+      <Share
+        data={videoWithMinimalInfo}
+        user={user}
+        comments={[]}
+        initialAnalytics={{ views: 0, comments: 0, reactions: 0 }}
+        customDomain={null}
+        domainVerified={false}
+        userOrganizations={[]}
+        initialAiData={null}
+        aiGenerationEnabled={false}
+        aiUiEnabled={false}
+      />
+    );
   }
 
   const commentsQuery: CommentWithAuthor[] = await db()
@@ -530,11 +590,10 @@ export default async function ShareVideoPage(props: Props) {
     organizationMembers: membersList.map((member) => member.userId),
     organizationId: video.sharedOrganization?.organizationId ?? undefined,
     sharedOrganizations: sharedOrganizationsData,
-    password: undefined,
+    password: null,
     hasPassword: video.password !== null,
   };
 
-  // Check if AI UI should be shown for the current viewer
   let aiUiEnabled = false;
   if (user?.email) {
     aiUiEnabled = isAiUiEnabled({

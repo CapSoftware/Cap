@@ -16,6 +16,7 @@ import {
   faLink,
   faTrash,
   faLock,
+  faUnlock,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
@@ -71,9 +72,7 @@ export const CapCard = ({
   const [passwordProtected, setPasswordProtected] = useState(
     cap.hasPassword || false
   );
-  const [, setSharedOrganizations] = useState(
-    cap.sharedOrganizations
-  );
+  const [, setSharedOrganizations] = useState(cap.sharedOrganizations);
   const [isDateEditing, setIsDateEditing] = useState(false);
   const [copyPressed, setCopyPressed] = useState(false);
   const [dateValue, setDateValue] = useState(
@@ -343,7 +342,11 @@ export const CapCard = ({
                 )}
               </Button>
             </Tooltip>
-            <Tooltip content={passwordProtected ? "Edit password" : "Add password"}>
+            <Tooltip
+              content={
+                passwordProtected ? "Edit password" : "Add password to access"
+              }
+            >
               <Button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -353,7 +356,12 @@ export const CapCard = ({
                 variant="white"
                 size="sm"
               >
-                <FontAwesomeIcon className="text-gray-12 size-3" icon={faLock} />
+                <FontAwesomeIcon
+                  className={`size-3 ${
+                    passwordProtected ? "text-amber-600" : "text-gray-12"
+                  }`}
+                  icon={passwordProtected ? faLock : faUnlock}
+                />
               </Button>
             </Tooltip>
             <Tooltip content="Delete Cap">
@@ -423,7 +431,8 @@ export const CapCard = ({
           )}
         >
           <div>
-            <div className="h-[1.25rem] mb-1">  {/* Fixed height container */}
+            <div className="h-[1.25rem] mb-1">
+              {" "}
               {isEditing && !sharedCapCard ? (
                 <textarea
                   rows={1}
@@ -449,8 +458,10 @@ export const CapCard = ({
                 </p>
               )}
             </div>
+
             {renderSharedStatus()}
-            <div className="mb-1 h-[1.5rem]"> {/* Fixed height container */}
+            <div className="mb-1 h-[1.5rem]">
+              {" "}
               {isDateEditing && !sharedCapCard ? (
                 <div className="flex items-center h-full">
                   <input
