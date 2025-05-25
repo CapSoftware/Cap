@@ -3,6 +3,7 @@ import { editTitle } from "@/actions/videos/edit-title";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { CapCardAnalytics } from "@/app/dashboard/caps/components/CapCardAnalytics";
 import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
+import { PasswordDialog } from "@/app/dashboard/caps/components/PasswordDialog";
 import { Tooltip } from "@/components/Tooltip";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
 import { usePublicEnv } from "@/utils/public-env";
@@ -14,6 +15,7 @@ import {
   faChevronDown,
   faLink,
   faTrash,
+  faLock,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
@@ -34,6 +36,7 @@ interface Props extends PropsWithChildren {
     sharedOrganizations?: { id: string; name: string; iconUrl?: string }[];
     ownerName: string | null;
     metadata?: VideoMetadata;
+    hasPassword?: boolean;
   };
   analytics: number;
   onDelete?: (videoId: string) => Promise<void>;
@@ -64,6 +67,10 @@ export const CapCard = ({
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(cap.name);
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
+  const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
+  const [passwordProtected, setPasswordProtected] = useState(
+    cap.hasPassword || false
+  );
   const [, setSharedOrganizations] = useState(
     cap.sharedOrganizations
   );
@@ -107,6 +114,11 @@ export const CapCard = ({
         updatedSharedOrganizations.includes(organization.id)
       )
     );
+    router.refresh();
+  };
+
+  const handlePasswordUpdated = (protectedStatus: boolean) => {
+    setPasswordProtected(protectedStatus);
     router.refresh();
   };
 
@@ -264,6 +276,13 @@ export const CapCard = ({
         userOrganizations={userOrganizations}
         onSharingUpdated={handleSharingUpdated}
       />
+      <PasswordDialog
+        isOpen={isPasswordDialogOpen}
+        onClose={() => setIsPasswordDialogOpen(false)}
+        videoId={cap.id}
+        hasPassword={passwordProtected}
+        onPasswordUpdated={handlePasswordUpdated}
+      />
       <div
         onClick={handleCardClick}
         className={clsx(
@@ -322,6 +341,19 @@ export const CapCard = ({
                     <path d="M20 6 9 17l-5-5" />
                   </svg>
                 )}
+              </Button>
+            </Tooltip>
+            <Tooltip content={passwordProtected ? "Edit password" : "Add password"}>
+              <Button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsPasswordDialogOpen(true);
+                }}
+                className="!size-8 delay-50 hover:opacity-80 rounded-full min-w-fit !p-0"
+                variant="white"
+                size="sm"
+              >
+                <FontAwesomeIcon className="text-gray-12 size-3" icon={faLock} />
               </Button>
             </Tooltip>
             <Tooltip content="Delete Cap">

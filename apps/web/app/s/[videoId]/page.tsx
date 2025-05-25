@@ -41,6 +41,7 @@ type VideoWithOrganization = typeof videos.$inferSelect & {
   organizationMembers?: string[];
   organizationId?: string;
   sharedOrganizations?: { id: string; name: string }[];
+  password?: string | null;
 };
 
 export async function generateMetadata(
@@ -219,6 +220,7 @@ export default async function ShareVideoPage(props: Props) {
       isScreenshot: videos.isScreenshot,
       skipProcessing: videos.skipProcessing,
       transcriptionStatus: videos.transcriptionStatus,
+      password: videos.password,
       source: videos.source,
       sharedOrganization: {
         organizationId: sharedVideos.organizationId,
@@ -528,6 +530,8 @@ export default async function ShareVideoPage(props: Props) {
     organizationMembers: membersList.map((member) => member.userId),
     organizationId: video.sharedOrganization?.organizationId ?? undefined,
     sharedOrganizations: sharedOrganizationsData,
+    password: undefined,
+    hasPassword: video.password !== null,
   };
 
   // Check if AI UI should be shown for the current viewer

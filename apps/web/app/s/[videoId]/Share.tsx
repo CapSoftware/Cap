@@ -9,6 +9,7 @@ import { ShareHeader } from "./_components/ShareHeader";
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import { Toolbar } from "./_components/Toolbar";
+import { PasswordOverlay } from "./_components/PasswordOverlay";
 
 const formatTime = (time: number) => {
   const minutes = Math.floor(time / 60);
@@ -26,6 +27,7 @@ type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
   organizationMembers?: string[];
   organizationId?: string;
   sharedOrganizations?: { id: string; name: string }[];
+  hasPassword?: boolean;
 };
 
 interface ShareProps {
@@ -71,6 +73,7 @@ export const Share: React.FC<ShareProps> = ({
   const [transcriptionStatus, setTranscriptionStatus] = useState<string | null>(
     data.transcriptionStatus || null
   );
+  const [authorized, setAuthorized] = useState(!data.hasPassword);
 
   useEffect(() => {
     if (initialAiData) {
@@ -266,6 +269,13 @@ export const Share: React.FC<ShareProps> = ({
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F7F8FA]">
+      <PasswordOverlay
+        isOpen={!authorized}
+        videoId={data.id}
+        onSuccess={() => setAuthorized(true)}
+      />
+      {authorized && (
+        <>
       <div className="container flex-1 px-4 py-4 mx-auto">
         <ShareHeader
           data={headerData}
@@ -395,7 +405,6 @@ export const Share: React.FC<ShareProps> = ({
           </div>
         </div>
       </div>
-
       <div className="py-4 mt-auto">
         <a
           target="_blank"
@@ -406,6 +415,8 @@ export const Share: React.FC<ShareProps> = ({
           <Logo className="w-14 h-auto" />
         </a>
       </div>
+      </>
+      )}
     </div>
   );
 };

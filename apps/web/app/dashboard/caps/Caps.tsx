@@ -22,6 +22,7 @@ type VideoData = {
   sharedOrganizations: { id: string; name: string }[];
   ownerName: string;
   metadata?: VideoMetadata
+  hasPassword: boolean;
 }[];
 
 export const Caps = ({
