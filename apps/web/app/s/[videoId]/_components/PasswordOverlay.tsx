@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { useState } from "react";
 import { toast } from "sonner";
 import { verifyVideoPassword } from "@/actions/videos/password";
+import { useMutation } from "@tanstack/react-query";
 
 interface PasswordOverlayProps {
   isOpen: boolean;
@@ -18,24 +19,17 @@ export const PasswordOverlay: React.FC<PasswordOverlayProps> = ({
   onSuccess,
 }) => {
   const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      setLoading(true);
-      const result = await verifyVideoPassword(videoId, password);
-      if (result.success) {
-        onSuccess();
-      } else {
-        toast.error(result.message);
-      }
-    } catch (err) {
-      toast.error("Failed to verify password");
-    } finally {
-      setLoading(false);
-    }
-  };
+  const verifyPassword = useMutation({
+    mutationFn: () => verifyVideoPassword(videoId, password),
+    onSuccess: (result) => {
+      toast.success(result);
+      onSuccess();
+    },
+    onError: (e) => {
+      toast.error(e.message);
+    },
+  });
 
   return (
     <Dialog open={isOpen} onOpenChange={() => {}}>
@@ -60,7 +54,7 @@ export const PasswordOverlay: React.FC<PasswordOverlayProps> = ({
             </div>
           </div>
 
-          <form onSubmit={handleSubmit} className="w-full space-y-4">
+          <div className="w-full space-y-4">
             <div className="space-y-2">
               <label
                 htmlFor="password"
@@ -79,16 +73,17 @@ export const PasswordOverlay: React.FC<PasswordOverlayProps> = ({
               />
             </div>
             <Button
-              type="submit"
+              type="button"
               variant="dark"
               size="lg"
               className="w-full"
-              spinner={loading}
-              disabled={loading || !password.trim()}
+              spinner={verifyPassword.isPending}
+              disabled={verifyPassword.isPending || !password.trim()}
+              onClick={() => verifyPassword.mutate()}
             >
-              {loading ? "Verifying..." : "Access Video"}
+              {verifyPassword.isPending ? "Verifying..." : "Access Video"}
             </Button>
-          </form>
+          </div>
         </div>
       </MotionDialogContent>
     </Dialog>

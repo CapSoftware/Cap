@@ -12,38 +12,32 @@ export async function setVideoPassword(videoId: string, password: string) {
     const user = await getCurrentUser();
 
     if (!user || !videoId || typeof password !== "string") {
-      return {
-        success: false,
-        message: "Missing required data",
-      };
+      throw new Error("Missing required data");
     }
 
-    const [video] = await db().select().from(videos).where(eq(videos.id, videoId));
-    
+    const [video] = await db()
+      .select()
+      .from(videos)
+      .where(eq(videos.id, videoId));
+
     if (!video || video.ownerId !== user.id) {
-      return {
-        success: false,
-        message: "Unauthorized",
-      };
+      throw new Error("Unauthorized");
     }
 
     const hashed = await hashPassword(password);
-    await db().update(videos).set({ password: hashed }).where(eq(videos.id, videoId));
+    await db()
+      .update(videos)
+      .set({ password: hashed })
+      .where(eq(videos.id, videoId));
 
     revalidatePath("/dashboard/caps");
     revalidatePath("/dashboard/shared-caps");
     revalidatePath(`/s/${videoId}`);
 
-    return {
-      success: true,
-      message: "Password updated successfully",
-    };
+    return "Password updated successfully";
   } catch (error) {
     console.error("Error setting video password:", error);
-    return {
-      success: false,
-      message: "Failed to update password",
-    };
+    throw new Error("Failed to update password");
   }
 }
 
@@ -52,76 +46,53 @@ export async function removeVideoPassword(videoId: string) {
     const user = await getCurrentUser();
 
     if (!user || !videoId) {
-      return {
-        success: false,
-        message: "Missing required data",
-      };
+      throw new Error("Missing required data");
     }
 
-    const [video] = await db().select().from(videos).where(eq(videos.id, videoId));
-    
+    const [video] = await db()
+      .select()
+      .from(videos)
+      .where(eq(videos.id, videoId));
+
     if (!video || video.ownerId !== user.id) {
-      return {
-        success: false,
-        message: "Unauthorized",
-      };
+      throw new Error("Unauthorized");
     }
 
-    await db().update(videos).set({ password: null }).where(eq(videos.id, videoId));
+    await db()
+      .update(videos)
+      .set({ password: null })
+      .where(eq(videos.id, videoId));
 
     revalidatePath("/dashboard/caps");
     revalidatePath("/dashboard/shared-caps");
     revalidatePath(`/s/${videoId}`);
 
-    return {
-      success: true,
-      message: "Password removed successfully",
-    };
+    return "Password removed successfully";
   } catch (error) {
     console.error("Error removing video password:", error);
-    return {
-      success: false,
-      message: "Failed to remove password",
-    };
+    throw new Error("Failed to remove password");
   }
 }
 
 export async function verifyVideoPassword(videoId: string, password: string) {
   try {
-    if (!videoId || typeof password !== "string") {
-      return {
-        success: false,
-        message: "Missing data",
-      };
-    }
+    if (!videoId || typeof password !== "string")
+      throw new Error("Missing data");
 
-    const [video] = await db().select().from(videos).where(eq(videos.id, videoId));
-    
-    if (!video || !video.password) {
-      return {
-        success: false,
-        message: "No password set",
-      };
-    }
+    const [video] = await db()
+      .select()
+      .from(videos)
+      .where(eq(videos.id, videoId));
+
+    if (!video || !video.password) throw new Error("No password set");
 
     const valid = await verifyPassword(video.password, password);
-    
-    if (!valid) {
-      return {
-        success: false,
-        message: "Invalid password",
-      };
-    }
 
-    return {
-      success: true,
-      message: "Password verified",
-    };
+    if (!valid) throw new Error("Invalid password");
+
+    return "Password verified";
   } catch (error) {
     console.error("Error verifying video password:", error);
-    return {
-      success: false,
-      message: "Failed to verify password",
-    };
+    throw new Error("Failed to verify password");
   }
-} 
+}

@@ -8,6 +8,7 @@ import { buildEnv } from "@cap/env";
 import PostHogPageView from "./PosthogPageView";
 import Intercom from "@intercom/messenger-js-sdk";
 import { usePathname } from "next/navigation";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 export function PostHogProvider({
   children,
@@ -107,6 +108,8 @@ export function AnalyticsProvider({
   return <>{children}</>;
 }
 
+const queryClient = new QueryClient();
+
 export function Providers({
   children,
   userId,
@@ -121,13 +124,15 @@ export function Providers({
   email?: string;
 }) {
   return (
-    <AnalyticsProvider
-      userId={userId}
-      intercomHash={intercomHash}
-      name={name}
-      email={email}
-    >
-      {children}
-    </AnalyticsProvider>
+    <QueryClientProvider client={queryClient}>
+      <AnalyticsProvider
+        userId={userId}
+        intercomHash={intercomHash}
+        name={name}
+        email={email}
+      >
+        {children}
+      </AnalyticsProvider>
+    </QueryClientProvider>
   );
 }

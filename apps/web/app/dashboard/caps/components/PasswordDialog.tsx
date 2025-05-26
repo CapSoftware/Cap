@@ -1,3 +1,5 @@
+"use client";
+
 import {
   Button,
   Dialog,
@@ -11,6 +13,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faLock } from "@fortawesome/free-solid-svg-icons";
 import { useState } from "react";
 import { toast } from "sonner";
+import { useMutation } from "@tanstack/react-query";
 import {
   setVideoPassword,
   removeVideoPassword,
@@ -32,43 +35,32 @@ export const PasswordDialog: React.FC<PasswordDialogProps> = ({
   onPasswordUpdated,
 }) => {
   const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
 
-  const handleSave = async () => {
-    try {
-      setLoading(true);
-      const result = await setVideoPassword(videoId, password);
-      if (result.success) {
-        toast.success(result.message);
-        onPasswordUpdated(true);
-        onClose();
-      } else {
-        toast.error(result.message);
-      }
-    } catch (err) {
-      toast.error("Failed to update password");
-    } finally {
-      setLoading(false);
-    }
-  };
+  const updatePassword = useMutation({
+    mutationFn: () => setVideoPassword(videoId, password),
+    onSuccess: (result) => {
+      toast.success(result);
+      onPasswordUpdated(true);
+      onClose();
+    },
+    onError: (e) => {
+      toast.error(e.message);
+    },
+  });
 
-  const handleRemove = async () => {
-    try {
-      setLoading(true);
-      const result = await removeVideoPassword(videoId);
-      if (result.success) {
-        toast.success(result.message);
-        onPasswordUpdated(false);
-        onClose();
-      } else {
-        toast.error(result.message);
-      }
-    } catch (err) {
-      toast.error("Failed to remove password");
-    } finally {
-      setLoading(false);
-    }
-  };
+  const removePassword = useMutation({
+    mutationFn: () => removeVideoPassword(videoId),
+    onSuccess: (result) => {
+      toast.success(result);
+      onPasswordUpdated(false);
+      onClose();
+    },
+    onError: (e) => {
+      toast.error(e.message);
+    },
+  });
+
+  const pending = removePassword.isPending || updatePassword.isPending;
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -96,8 +88,8 @@ export const PasswordDialog: React.FC<PasswordDialogProps> = ({
             <Button
               size="sm"
               variant="destructive"
-              onClick={handleRemove}
-              disabled={loading}
+              onClick={() => removePassword.mutate()}
+              disabled={pending}
             >
               Remove
             </Button>
@@ -105,9 +97,9 @@ export const PasswordDialog: React.FC<PasswordDialogProps> = ({
           <Button
             size="sm"
             variant="dark"
-            onClick={handleSave}
-            spinner={loading}
-            disabled={loading}
+            onClick={() => updatePassword.mutate()}
+            spinner={pending}
+            disabled={pending}
           >
             Save
           </Button>
