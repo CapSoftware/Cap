@@ -2,6 +2,7 @@ import { Button, Dialog, DialogContent, Input, Logo } from "@cap/ui";
 import { motion } from "framer-motion";
 import { useState } from "react";
 import { toast } from "sonner";
+import { verifyVideoPassword } from "@/actions/videos/password";
 
 interface PasswordOverlayProps {
   isOpen: boolean;
@@ -23,15 +24,11 @@ export const PasswordOverlay: React.FC<PasswordOverlayProps> = ({
     e.preventDefault();
     try {
       setLoading(true);
-      const res = await fetch("/api/video/password/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ videoId, password }),
-      });
-      if (res.ok) {
+      const result = await verifyVideoPassword(videoId, password);
+      if (result.success) {
         onSuccess();
       } else {
-        toast.error("Incorrect password");
+        toast.error(result.message);
       }
     } catch (err) {
       toast.error("Failed to verify password");

@@ -11,6 +11,10 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faLock } from "@fortawesome/free-solid-svg-icons";
 import { useState } from "react";
 import { toast } from "sonner";
+import {
+  setVideoPassword,
+  removeVideoPassword,
+} from "@/actions/videos/password";
 
 interface PasswordDialogProps {
   isOpen: boolean;
@@ -33,15 +37,14 @@ export const PasswordDialog: React.FC<PasswordDialogProps> = ({
   const handleSave = async () => {
     try {
       setLoading(true);
-      const res = await fetch("/api/video/password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ videoId, password }),
-      });
-      if (!res.ok) throw new Error("Failed");
-      toast.success("Password updated");
-      onPasswordUpdated(true);
-      onClose();
+      const result = await setVideoPassword(videoId, password);
+      if (result.success) {
+        toast.success(result.message);
+        onPasswordUpdated(true);
+        onClose();
+      } else {
+        toast.error(result.message);
+      }
     } catch (err) {
       toast.error("Failed to update password");
     } finally {
@@ -52,13 +55,14 @@ export const PasswordDialog: React.FC<PasswordDialogProps> = ({
   const handleRemove = async () => {
     try {
       setLoading(true);
-      const res = await fetch(`/api/video/password?videoId=${videoId}`, {
-        method: "DELETE",
-      });
-      if (!res.ok) throw new Error("Failed");
-      toast.success("Password removed");
-      onPasswordUpdated(false);
-      onClose();
+      const result = await removeVideoPassword(videoId);
+      if (result.success) {
+        toast.success(result.message);
+        onPasswordUpdated(false);
+        onClose();
+      } else {
+        toast.error(result.message);
+      }
     } catch (err) {
       toast.error("Failed to remove password");
     } finally {
@@ -71,26 +75,27 @@ export const PasswordDialog: React.FC<PasswordDialogProps> = ({
       <DialogContent className="p-0 w-full max-w-sm rounded-xl border bg-gray-2 border-gray-4">
         <DialogHeader
           icon={<FontAwesomeIcon icon={faLock} className="size-3.5" />}
-          description="Restrict access to this video with a password"
+          description={
+            hasPassword
+              ? "Update or remove the password for this video"
+              : "Restrict access to this video with a password"
+          }
         >
           <DialogTitle>Password Protection</DialogTitle>
         </DialogHeader>
         <div className="p-5 space-y-4">
           <Input
             type="password"
-            placeholder="Password"
+            placeholder={hasPassword ? "Enter new password" : "Password"}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
         </div>
         <DialogFooter className="p-5 border-t border-gray-4">
-          <Button size="sm" variant="gray" onClick={onClose} disabled={loading}>
-            Cancel
-          </Button>
           {hasPassword && (
             <Button
               size="sm"
-              variant="gray"
+              variant="destructive"
               onClick={handleRemove}
               disabled={loading}
             >
