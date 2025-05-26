@@ -1027,14 +1027,14 @@ impl RendererLayers {
             );
         }
 
-        if let Some(captions) = &uniforms.project.captions {
-            self.captions.prepare(
-                uniforms,
-                segment_frames,
-                uniforms.resolution_base,
-                constants,
-            );
-        }
+        // if let Some(captions) = &uniforms.project.captions {
+        //     self.captions.prepare(
+        //         uniforms,
+        //         segment_frames,
+        //         uniforms.resolution_base,
+        //         constants,
+        //     );
+        // }
 
         Ok(())
     }
@@ -1095,10 +1095,10 @@ impl RendererLayers {
             self.camera.render(&mut pass);
         }
 
-        {
-            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
-            self.captions.render(&mut pass);
-        }
+        // {
+        //     let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+        //     self.captions.render(&mut pass);
+        // }
     }
 }
 

@@ -240,9 +240,12 @@ export function ConfigSidebar() {
                 meta().type === "multiple" && (meta() as any).segments[0].cursor
               ),
             },
-            { id: "captions" as const, icon: IconCapMessageBubble },
+            window.FLAGS.captions && {
+              id: "captions" as const,
+              icon: IconCapMessageBubble,
+            },
             // { id: "hotkeys" as const, icon: IconCapHotkeys },
-          ]}
+          ].filter(Boolean)}
         >
           {(item) => (
             <KTabs.Trigger
@@ -280,21 +283,6 @@ export function ConfigSidebar() {
       >
         <BackgroundConfig scrollRef={scrollRef} />
         <CameraConfig scrollRef={scrollRef} />
-        <KTabs.Content value="transcript" class="flex flex-col gap-6">
-          <Field name="Transcript" icon={<IconCapMessageBubble />}>
-            <div class="p-1 rounded-md border bg-gray-1 text-gray-11 text-wrap">
-              Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed ac
-              purus sit amet nunc ultrices ultricies. Nullam nec scelerisque
-              nunc. Nullam nec scelerisque nunc.
-            </div>
-            <button
-              type="button"
-              class="w-full bg-gray-10/20 hover:bg-gray-10/30 transition-colors duration-100 rounded-full py-1.5"
-            >
-              Edit
-            </button>
-          </Field>
-        </KTabs.Content>
         <KTabs.Content value="audio" class="flex flex-col gap-6">
           <Field
             name="Audio Controls"
@@ -545,6 +533,9 @@ export function ConfigSidebar() {
               </Subfield>
             </ComingSoonTooltip>
           </Field>
+        </KTabs.Content>
+        <KTabs.Content value="captions" class="flex flex-col gap-6">
+          <CaptionsTab />
         </KTabs.Content>
       </div>
       <Show when={editorState.timeline.selection}>

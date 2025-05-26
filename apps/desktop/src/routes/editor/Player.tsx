@@ -6,21 +6,16 @@ import { createEffect, createSignal, Show } from "solid-js";
 import { cx } from "cva";
 import {
   For,
-  Show,
   Suspense,
-  createEffect,
   createResource,
-  createSignal,
   on,
   onMount,
   onCleanup,
 } from "solid-js";
 import { reconcile, createStore } from "solid-js/store";
-import { createEventListener } from "@solid-primitives/event-listener";
 
 import Tooltip from "~/components/Tooltip";
 import { commands } from "~/utils/tauri";
-import AspectRatioSelect from "./AspectRatioSelect";
 import { FPS, OUTPUT_SIZE, useEditorContext } from "./context";
 import { ComingSoonTooltip, EditorButton, Slider } from "./ui";
 import { formatTime } from "./utils";
@@ -92,7 +87,7 @@ export function Player() {
   // Continue to update current caption when playback time changes
   // This is still needed for CaptionsTab to highlight the current caption
   createEffect(() => {
-    const time = playbackTime();
+    const time = editorState.playbackTime;
     // Only update captions if we have a valid time and segments exist
     if (
       time !== undefined &&
@@ -106,17 +101,6 @@ export function Player() {
   const [canvasContainerRef, setCanvasContainerRef] =
     createSignal<HTMLDivElement>();
   const containerBounds = createElementBounds(canvasContainerRef);
-
-  const splitButton = () => (
-    <EditorButton<typeof KToggleButton>
-      disabled={!window.FLAGS.split}
-      pressed={split()}
-      onChange={setSplit}
-      as={KToggleButton}
-      variant="danger"
-      leftIcon={<IconCapScissors class="text-gray-500" />}
-    />
-  );
 
   const isAtEnd = () => {
     const total = totalDuration();
@@ -246,7 +230,6 @@ export function Player() {
         <div class="flex flex-row flex-1 gap-4 justify-end items-center">
           <div class="flex-1" />
           <EditorButton<typeof KToggleButton>
-            disabled={!window.FLAGS.split}
             pressed={editorState.timeline.interactMode === "split"}
             onChange={(v: boolean) =>
               setEditorState("timeline", "interactMode", v ? "split" : "seek")
