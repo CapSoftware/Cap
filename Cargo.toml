@@ -46,6 +46,7 @@ cidre = { git = "https://github.com/yury/cidre", rev = "ef04aaabe14ffbbce4a33097
 windows = "0.58.0"
 windows-sys = "0.59.0"
 windows-capture = "1.4.2"
+percent-encoding = "2.3.1"
 
 [workspace.lints.clippy]
 dbg_macro = "deny"

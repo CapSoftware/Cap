@@ -9,6 +9,7 @@ import {
   organizationMembers,
   organizations,
 } from "@cap/database/schema";
+import { VideoMetadata } from "@cap/database/types";
 import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
 import type { Metadata, ResolvingMetadata } from "next";
 import { notFound } from "next/navigation";
@@ -18,6 +19,8 @@ import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { transcribeVideo } from "@/actions/videos/transcribe";
 import { getScreenshot } from "@/actions/screenshots/get-screenshot";
 import { headers } from "next/headers";
+import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
+import { isAiGenerationEnabled, isAiUiEnabled } from "@/utils/flags";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -38,10 +41,6 @@ type VideoWithOrganization = typeof videos.$inferSelect & {
   organizationMembers?: string[];
   organizationId?: string;
   sharedOrganizations?: { id: string; name: string }[];
-};
-
-type OrganizationMember = {
-  userId: string;
 };
 
 export async function generateMetadata(
@@ -269,17 +268,115 @@ export default async function ShareVideoPage(props: Props) {
     }
   }
 
-  if (video.transcriptionStatus !== "COMPLETE") {
+  if (
+    video.transcriptionStatus !== "COMPLETE" &&
+    video.transcriptionStatus !== "PROCESSING"
+  ) {
     console.log("[ShareVideoPage] Starting transcription for video:", videoId);
     await transcribeVideo(videoId, video.ownerId);
+
+    // Re-fetch video data to get updated transcription status
+    const updatedVideoQuery = await db()
+      .select({
+        id: videos.id,
+        name: videos.name,
+        ownerId: videos.ownerId,
+        createdAt: videos.createdAt,
+        updatedAt: videos.updatedAt,
+        awsRegion: videos.awsRegion,
+        awsBucket: videos.awsBucket,
+        bucket: videos.bucket,
+        metadata: videos.metadata,
+        public: videos.public,
+        videoStartTime: videos.videoStartTime,
+        audioStartTime: videos.audioStartTime,
+        xStreamInfo: videos.xStreamInfo,
+        jobId: videos.jobId,
+        jobStatus: videos.jobStatus,
+        isScreenshot: videos.isScreenshot,
+        skipProcessing: videos.skipProcessing,
+        transcriptionStatus: videos.transcriptionStatus,
+        source: videos.source,
+        sharedOrganization: {
+          organizationId: sharedVideos.organizationId,
+        },
+      })
+      .from(videos)
+      .leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
+      .where(eq(videos.id, videoId))
+      .execute();
+
+    if (updatedVideoQuery[0]) {
+      Object.assign(video, updatedVideoQuery[0]);
+      console.log(
+        "[ShareVideoPage] Updated transcription status:",
+        video.transcriptionStatus
+      );
+    }
+  }
+
+  const currentMetadata = (video.metadata as VideoMetadata) || {};
+  const metadata = currentMetadata; // Keep existing reference for compatibility
+  let initialAiData = null;
+  let aiGenerationEnabled = false;
+
+  const videoOwnerQuery = await db()
+    .select({
+      email: users.email,
+      stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+    })
+    .from(users)
+    .where(eq(users.id, video.ownerId))
+    .limit(1);
+
+  if (videoOwnerQuery.length > 0 && videoOwnerQuery[0]) {
+    const videoOwner = videoOwnerQuery[0];
+    aiGenerationEnabled = isAiGenerationEnabled(videoOwner);
+  }
+
+  if (metadata.summary || metadata.chapters || metadata.aiTitle) {
+    initialAiData = {
+      title: metadata.aiTitle || null,
+      summary: metadata.summary || null,
+      chapters: metadata.chapters || null,
+      processing: metadata.aiProcessing || false,
+    };
+  } else if (metadata.aiProcessing) {
+    initialAiData = {
+      title: null,
+      summary: null,
+      chapters: null,
+      processing: true,
+    };
+  }
+
+  if (
+    video.transcriptionStatus === "COMPLETE" &&
+    !currentMetadata.aiProcessing &&
+    !currentMetadata.summary &&
+    !currentMetadata.chapters &&
+    !currentMetadata.generationError &&
+    aiGenerationEnabled
+  ) {
+    try {
+      generateAiMetadata(videoId, video.ownerId).catch((error) => {
+        console.error(
+          `[ShareVideoPage] Error generating AI metadata for video ${videoId}:`,
+          error
+        );
+      });
+    } catch (error) {
+      console.error(
+        `[ShareVideoPage] Error starting AI metadata generation for video ${videoId}:`,
+        error
+      );
+    }
   }
 
   if (video.public === false && userId !== video.ownerId) {
-    console.log("[ShareVideoPage] Access denied - private video:", videoId);
     return <p>This video is private</p>;
   }
 
-  console.log("[ShareVideoPage] Fetching comments for video:", videoId);
   const commentsQuery: CommentWithAuthor[] = await db()
     .select({
       id: comments.id,
@@ -299,7 +396,6 @@ export default async function ShareVideoPage(props: Props) {
 
   let screenshotUrl;
   if (video.isScreenshot === true) {
-    console.log("[ShareVideoPage] Fetching screenshot for video:", videoId);
     try {
       const data = await getScreenshot(video.ownerId, videoId);
       screenshotUrl = data.url;
@@ -318,7 +414,6 @@ export default async function ShareVideoPage(props: Props) {
     }
   }
 
-  console.log("[ShareVideoPage] Fetching analytics for video:", videoId);
   const analyticsData = await getVideoAnalytics(videoId);
 
   const initialAnalytics = {
@@ -435,6 +530,18 @@ export default async function ShareVideoPage(props: Props) {
     sharedOrganizations: sharedOrganizationsData,
   };
 
+  // Check if AI UI should be shown for the current viewer
+  let aiUiEnabled = false;
+  if (user?.email) {
+    aiUiEnabled = isAiUiEnabled({
+      email: user.email,
+      stripeSubscriptionStatus: user.stripeSubscriptionStatus,
+    });
+    console.log(
+      `[ShareVideoPage] AI UI feature flag check for viewer ${user.id}: ${aiUiEnabled} (email: ${user.email})`
+    );
+  }
+
   return (
     <Share
       data={videoWithOrganizationInfo}
@@ -444,6 +551,9 @@ export default async function ShareVideoPage(props: Props) {
       customDomain={customDomain}
       domainVerified={domainVerified}
       userOrganizations={userOrganizations}
+      initialAiData={initialAiData}
+      aiGenerationEnabled={aiGenerationEnabled}
+      aiUiEnabled={aiUiEnabled}
     />
   );
 }
