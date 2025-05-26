@@ -77,7 +77,7 @@ use tracing::debug;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
-use upload::{get_s3_config, upload_image, upload_video, S3UploadMeta};
+use upload::{create_or_get_video, upload_image, upload_video, S3UploadMeta};
 use web_api::ManagerExt as WebManagerExt;
 use windows::set_window_transparent;
 use windows::EditorWindowIds;
@@ -1265,7 +1265,7 @@ async fn upload_exported_video(
             }
         };
 
-        get_s3_config(&app, false, video_id).await
+        create_or_get_video(&app, false, video_id, None).await
     }
     .await?;
 
