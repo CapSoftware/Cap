@@ -80,7 +80,8 @@ export const CapCard = ({
   );
   const [showFullDate, setShowFullDate] = useState(false);
   const router = useRouter();
-  const { activeOrganization } = useSharedContext();
+  const { activeOrganization, isSubscribed, setUpgradeModalOpen } =
+    useSharedContext();
 
   const handleTitleBlur = async (capName: string) => {
     if (!title || capName === title) {
@@ -350,7 +351,11 @@ export const CapCard = ({
               <Button
                 onClick={(e) => {
                   e.stopPropagation();
-                  setIsPasswordDialogOpen(true);
+                  if (!isSubscribed) {
+                    setUpgradeModalOpen(true);
+                  } else {
+                    setIsPasswordDialogOpen(true);
+                  }
                 }}
                 className="!size-8 delay-50 hover:opacity-80 rounded-full min-w-fit !p-0"
                 variant="white"
