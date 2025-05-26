@@ -194,22 +194,23 @@ pub async fn start_recording(
     let logfile = std::fs::File::create(recording_dir.join("recording-logs.log"))
         .map_err(|e| format!("Failed to create logfile: {e}"))?;
 
-    let mut state = state_mtx.write().await;
+    let recording_options = {
+        let mut state = state_mtx.write().await;
 
-    state
-        .recording_logging_handle
-        .reload(Some(Box::new(
-            tracing_subscriber::fmt::layer()
-                .with_ansi(false)
-                .with_target(true)
-                .with_writer(logfile),
-        ) as DynLoggingLayer))
-        .map_err(|e| format!("Failed to reload logging layer: {e}"))?;
+        state
+            .recording_logging_handle
+            .reload(Some(Box::new(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_target(true)
+                    .with_writer(logfile),
+            ) as DynLoggingLayer))
+            .map_err(|e| format!("Failed to reload logging layer: {e}"))?;
 
-    let recording_options = recording_options.unwrap_or(state.recording_options.clone());
-    state.recording_options = recording_options.clone();
-
-    drop(state);
+        let recording_options = recording_options.unwrap_or(state.recording_options.clone());
+        state.recording_options = recording_options.clone();
+        recording_options
+    };
 
     let target_name = {
         let title = recording_options.capture_target.get_title();
@@ -242,7 +243,17 @@ pub async fn start_recording(
             match AuthStore::get(&app).ok().flatten() {
                 Some(_) => {
                     // Pre-create the video and get the shareable link
-                    if let Ok(s3_config) = create_or_get_video(&app, false, None, None).await {
+                    if let Ok(s3_config) = create_or_get_video(
+                        &app,
+                        false,
+                        None,
+                        Some(format!(
+                            "{target_name} {}",
+                            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+                        )),
+                    )
+                    .await
+                    {
                         let link = app.make_app_url(format!("/s/{}", s3_config.id())).await;
                         info!("Pre-created shareable link: {}", link);
 

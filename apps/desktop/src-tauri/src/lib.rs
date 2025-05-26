@@ -1265,7 +1265,7 @@ async fn upload_exported_video(
             }
         };
 
-        create_or_get_video(&app, false, video_id, None).await
+        create_or_get_video(&app, false, video_id, Some(meta.pretty_name.clone())).await
     }
     .await?;
 
