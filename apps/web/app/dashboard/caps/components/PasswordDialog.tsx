@@ -1,4 +1,12 @@
-import { Button, Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, Input } from "@cap/ui";
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  Input,
+} from "@cap/ui";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faLock } from "@fortawesome/free-solid-svg-icons";
 import { useState } from "react";
@@ -61,7 +69,10 @@ export const PasswordDialog: React.FC<PasswordDialogProps> = ({
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="p-0 w-full max-w-sm rounded-xl border bg-gray-2 border-gray-4">
-        <DialogHeader icon={<FontAwesomeIcon icon={faLock} className="size-3.5" />} description="Restrict access with a password">
+        <DialogHeader
+          icon={<FontAwesomeIcon icon={faLock} className="size-3.5" />}
+          description="Restrict access to this video with a password"
+        >
           <DialogTitle>Password Protection</DialogTitle>
         </DialogHeader>
         <div className="p-5 space-y-4">
@@ -77,11 +88,22 @@ export const PasswordDialog: React.FC<PasswordDialogProps> = ({
             Cancel
           </Button>
           {hasPassword && (
-            <Button size="sm" variant="gray" onClick={handleRemove} disabled={loading}>
+            <Button
+              size="sm"
+              variant="gray"
+              onClick={handleRemove}
+              disabled={loading}
+            >
               Remove
             </Button>
           )}
-          <Button size="sm" variant="dark" onClick={handleSave} spinner={loading} disabled={loading}>
+          <Button
+            size="sm"
+            variant="dark"
+            onClick={handleSave}
+            spinner={loading}
+            disabled={loading}
+          >
             Save
           </Button>
         </DialogFooter>

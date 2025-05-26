@@ -90,6 +90,7 @@ export const ShareVideo = forwardRef<
   const [isHoveringVideo, setIsHoveringVideo] = useState(false);
   const [isHoveringControls, setIsHoveringControls] = useState(false);
   const hideControlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [userMuted, setUserMuted] = useState(false);
 
   const [scrubbingVideo, setScrubbingVideo] = useState<HTMLVideoElement | null>(
     null
@@ -255,26 +256,6 @@ export const ShareVideo = forwardRef<
       setVideoMetadataLoaded(true);
       setVideoReadyToPlay(true);
 
-      setIsPlaying(true);
-      if (videoRef.current) {
-        videoRef.current.play().catch((error) => {
-          console.error("Error auto-playing video:", error);
-          setIsPlaying(false);
-        });
-      }
-
-      if (isPlaying && videoRef.current) {
-        const currentPosition = videoRef.current.currentTime;
-
-        videoRef.current.play().catch((error) => {
-          console.error("Error playing video in onCanPlay:", error);
-        });
-
-        if (videoRef.current.currentTime === 0 && currentPosition > 0) {
-          videoRef.current.currentTime = currentPosition;
-        }
-      }
-
       setTimeout(() => {
         setIsLoading(false);
       }, 100);
@@ -310,7 +291,9 @@ export const ShareVideo = forwardRef<
         if (!videoReadyToPlay) {
           setIsPlaying(true);
         } else {
-          videoElement.muted = false;
+          if (!userMuted) {
+            videoElement.muted = false;
+          }
 
           const currentPosition = videoElement.currentTime;
 
@@ -334,9 +317,11 @@ export const ShareVideo = forwardRef<
                     .play()
                     .then(() => {
                       setIsPlaying(true);
-                      setTimeout(() => {
-                        videoElement.muted = false;
-                      }, 100);
+                      if (!userMuted) {
+                        setTimeout(() => {
+                          videoElement.muted = false;
+                        }, 100);
+                      }
 
                       if (
                         videoElement.currentTime === 0 &&
@@ -729,7 +714,9 @@ export const ShareVideo = forwardRef<
 
   const handleMuteClick = () => {
     if (videoRef.current) {
-      videoRef.current.muted = videoRef.current.muted ? false : true;
+      const newMutedState = !videoRef.current.muted;
+      videoRef.current.muted = newMutedState;
+      setUserMuted(newMutedState);
     }
   };
 
