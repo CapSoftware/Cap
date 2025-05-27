@@ -113,7 +113,7 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
 
   return (
     <>
-    <header className="sticky inset-0 top-4 z-50 md:top-10">
+    <header className="sticky inset-0 top-4 z-[51] md:top-10">
       <nav className="p-2 mx-auto w-full max-w-[calc(100%-20px)] bg-white rounded-full border backdrop-blur-md md:max-w-fit border-zinc-200 h-fit">
         <div className="flex gap-12 justify-between items-center mx-auto max-w-4xl h-full transition-all">
           <div className="flex items-center">
