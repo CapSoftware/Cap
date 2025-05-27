@@ -327,10 +327,6 @@ label {
   mask-composite: exclude;
 }
 
-.custom-bg {
-  background: linear-gradient(180deg, #4785FF 0%, #85ADFF 100%);
-}
-
 .muted-custom-bg {
   background: radial-gradient(
     50.01% 50.01% at 53.53% 49.99%,

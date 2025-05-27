@@ -63,7 +63,7 @@ export const CommercialCard = () => {
     <div
       onMouseEnter={() => setCardHover(true)}
       onMouseLeave={() => setCardHover(false)}
-      className="flex flex-col flex-1 justify-between p-8 bg-white rounded-2xl border shadow-lg border-gray-5"
+      className="flex flex-col flex-1 justify-between p-8 rounded-2xl border shadow-lg bg-gray-1 border-gray-5"
     >
       <div>
         <div className="md:h-[300px]">

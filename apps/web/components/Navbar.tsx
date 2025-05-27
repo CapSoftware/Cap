@@ -109,6 +109,8 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
   )
     return null;
 
+   const isActive = (href: string) => pathname === href; 
+
   return (
     <>
     <header className="sticky inset-0 top-4 z-50 md:top-10">
@@ -151,7 +153,8 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
                           <NavigationMenuLink
                             className={classNames(
                               navigationMenuTriggerStyle(),
-                              "px-2 py-0 text-sm font-medium text-gray-10 hover:text-blue-9 focus:text-8"
+                              isActive(link.href) ? "text-blue-9" : "text-gray-10",
+                              "px-2 py-0 text-sm font-medium hover:text-blue-9 focus:text-8"
                             )}
                           >
                             {link.label}

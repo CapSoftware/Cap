@@ -60,7 +60,7 @@ export const getVersionText = (platform: string | null): React.ReactNode => {
 
 export const PlatformIcons: React.FC = () => {
   return (
-    <div className="flex relative z-10 gap-3 mt-5 animate-delay-2 fade-in-up">
+    <div className="flex relative z-10 gap-3 mt-5">
       <div>
         <button
           onClick={() => {

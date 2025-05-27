@@ -46,7 +46,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
               />
             </Link>
             <div className="flex flex-col text-left w-full max-w-[650px]">
-              <h1 className="fade-in-down text-[2.8rem] font-medium leading-[3rem] md:text-[3.75rem] md:leading-[4rem] relative z-10 text-black mb-4">
+              <h1 className="text-[2.8rem] font-medium leading-[3rem] md:text-[3.75rem] md:leading-[4rem] relative z-10 text-black mb-4">
                 {serverHomepageCopyVariant === "1" ? (
                   <>Beautiful screen recordings, owned by you.</>
                 ) : serverHomepageCopyVariant === "2" ? (
@@ -57,7 +57,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
                   <>Beautiful screen recordings, owned by you.</>
                 )}
               </h1>
-              <p className="mx-auto mb-8 max-w-3xl text-lg text-zinc-500 fade-in-down animate-delay-1">
+              <p className="mx-auto mb-8 max-w-3xl text-lg text-zinc-500">
                 {serverHomepageCopyVariant === "1" ? (
                   <>
                     Cap is the open source alternative to Loom. Lightweight,
@@ -85,7 +85,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
                 )}
               </p>
             </div>
-            <div className="flex flex-col items-center mb-5 space-y-2 fade-in-up animate-delay-2 sm:flex-row sm:space-y-0 sm:space-x-4">
+            <div className="flex flex-col items-center mb-5 space-y-2 sm:flex-row sm:space-y-0 sm:space-x-4">
               <Button
                 variant="white"
                 href={
@@ -108,7 +108,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
                 Buy Now
               </Button>
             </div>
-            <p className="text-sm text-gray-10 animate-delay-2 fade-in-up">
+            <p className="text-sm text-gray-10">
               Free version available. No credit card required.
             </p>
             <div className="mt-6 mb-10">
@@ -118,13 +118,13 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
               {/* See other options button */}
               <Link
                 href="/download"
-                className="mt-2 text-sm underline text-gray-10 animate-delay-2 fade-in-up hover:text-gray-12"
+                className="mt-2 text-sm underline text-gray-10 hover:text-gray-12"
               >
                 See other options
               </Link>
             </div>
             {/* Logo Marquee */}
-            <div className="mt-14 animate-delay-2 fade-in-up">
+            <div className="mt-14">
               <LogoMarquee />
             </div>
           </div>

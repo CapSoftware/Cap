@@ -2,7 +2,7 @@ import { classNames } from "@cap/utils";
 import React from "react";
 
 const BaseQuantityButtonClasses =
-  "flex justify-center items-center px-2 py-0 w-6 h-6 rounded-md focus:outline-none focus:ring-2 focus:ring-gray-400";
+  "flex justify-center items-center px-2 w-6 h-6 rounded-md outline-none";
 
 export const QuantityButton = ({
   onClick,

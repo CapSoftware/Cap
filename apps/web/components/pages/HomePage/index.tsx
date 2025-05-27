@@ -5,6 +5,7 @@
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
 import { TextReveal } from "@/components/ui/TextReveal";
 import React from "react";
+import Faq from "./Faq";
 import Features from "./Features";
 import Header from "./Header";
 import Pricing from "./Pricing";
@@ -31,6 +32,7 @@ export const HomePage: React.FC<HomePageProps> = ({
       <Features />
       <Testimonials />
       <Pricing/>
+      <Faq/>
       <ReadyToGetStarted />
     </>
   );
