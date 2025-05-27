@@ -26,16 +26,17 @@ app.get(
         .optional(),
       isScreenshot: z.coerce.boolean().default(false),
       videoId: z.string().optional(),
+      name: z.string().optional(),
     })
   ),
   async (c) => {
     try {
-      const { duration, recordingMode, isScreenshot, videoId } =
+      const { duration, recordingMode, isScreenshot, videoId, name } =
         c.req.valid("query");
       const user = c.get("user");
 
       console.log("Video create request:", { duration, recordingMode, isScreenshot, videoId, userId: user.id });
-
+        
       const isUpgraded = user.stripeSubscriptionStatus === "active";
 
       if (!isUpgraded && duration && duration > 300)
@@ -78,9 +79,9 @@ app.get(
 
     const videoData = {
       id: idToUse,
-      name: `Cap ${
-        isScreenshot ? "Screenshot" : "Recording"
-      } - ${formattedDate}`,
+      name:
+        name ??
+        `Cap ${isScreenshot ? "Screenshot" : "Recording"} - ${formattedDate}`,
       ownerId: user.id,
       awsRegion: s3Config.region,
       awsBucket: bucketName,

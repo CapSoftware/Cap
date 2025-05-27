@@ -205,7 +205,7 @@ pub async fn upload_video(
     let client = reqwest::Client::new();
     let s3_config = match existing_config {
         Some(config) => config,
-        None => get_s3_config(app, false, Some(video_id)).await?,
+        None => create_or_get_video(app, false, Some(video_id), None).await?,
     };
 
     let file_key = format!(
@@ -341,7 +341,7 @@ pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
         .to_string();
 
     let client = reqwest::Client::new();
-    let s3_config = get_s3_config(app, true, None).await?;
+    let s3_config = create_or_get_video(app, true, None, None).await?;
 
     let file_key = format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name);
 
@@ -408,7 +408,7 @@ pub async fn upload_audio(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
         .to_string();
 
     let client = reqwest::Client::new();
-    let s3_config = get_s3_config(app, false, None).await?;
+    let s3_config = create_or_get_video(app, false, None, None).await?;
 
     let file_key = format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name);
 
@@ -475,18 +475,23 @@ pub async fn upload_audio(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
     ))
 }
 
-pub async fn get_s3_config(
+pub async fn create_or_get_video(
     app: &AppHandle,
     is_screenshot: bool,
     video_id: Option<String>,
+    name: Option<String>,
 ) -> Result<S3UploadMeta, String> {
-    let s3_config_url = if let Some(id) = video_id {
+    let mut s3_config_url = if let Some(id) = video_id {
         format!("/api/desktop/video/create?recordingMode=desktopMP4&videoId={id}")
     } else if is_screenshot {
         "/api/desktop/video/create?recordingMode=desktopMP4&isScreenshot=true".to_string()
     } else {
         "/api/desktop/video/create?recordingMode=desktopMP4".to_string()
     };
+
+    if let Some(name) = name {
+        s3_config_url.push_str(&format!("&name={}", name));
+    }
 
     let response = app
         .authed_api_request(s3_config_url, |client, url| client.get(url))

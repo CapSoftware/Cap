@@ -74,7 +74,8 @@ impl Renderer {
 
         let mut frame_renderer = FrameRenderer::new(&self.render_constants);
 
-        let mut layers = RendererLayers::new(&self.render_constants.device);
+        let mut layers =
+            RendererLayers::new(&self.render_constants.device, &self.render_constants.queue);
 
         loop {
             while let Some(msg) = self.rx.recv().await {

@@ -1,6 +1,7 @@
 mod audio;
 mod auth;
 mod camera;
+mod captions;
 mod flags;
 mod general_settings;
 mod hotkeys;
@@ -35,6 +36,7 @@ use cap_project::{ProjectConfiguration, RecordingMeta, SharingMeta, StudioRecord
 use cap_recording::RecordingMode;
 use cap_recording::RecordingOptions;
 use cap_rendering::ProjectRecordings;
+use captions::DownloadProgress;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
 use editor_window::EditorInstances;
@@ -75,7 +77,7 @@ use tracing::debug;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
-use upload::{get_s3_config, upload_image, upload_video, S3UploadMeta};
+use upload::{create_or_get_video, upload_image, upload_video, S3UploadMeta};
 use web_api::ManagerExt as WebManagerExt;
 use windows::set_window_transparent;
 use windows::EditorWindowIds;
@@ -1263,7 +1265,7 @@ async fn upload_exported_video(
             }
         };
 
-        get_s3_config(&app, false, video_id).await
+        create_or_get_video(&app, false, video_id, Some(meta.pretty_name.clone())).await
     }
     .await?;
 
@@ -2008,7 +2010,16 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             update_auth_plan,
             set_window_transparent,
             get_editor_meta,
-            set_server_url
+            set_server_url,
+            captions::create_dir,
+            captions::save_model_file,
+            captions::transcribe_audio,
+            captions::save_captions,
+            captions::load_captions,
+            captions::download_whisper_model,
+            captions::check_model_exists,
+            captions::delete_whisper_model,
+            captions::export_captions_srt
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2028,6 +2039,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             AuthenticationInvalid,
             audio_meter::AudioInputLevelChange,
             UploadProgress,
+            captions::DownloadProgress,
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()

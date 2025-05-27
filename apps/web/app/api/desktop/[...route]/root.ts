@@ -7,7 +7,7 @@ import { db } from "@cap/database";
 import { users } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import * as crypto from "node:crypto";
-import { withAuth } from "../utils";
+import { withAuth } from "../../utils";
 
 export const app = new Hono().use(withAuth);
 
