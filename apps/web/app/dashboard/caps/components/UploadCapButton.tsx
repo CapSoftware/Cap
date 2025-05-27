@@ -11,7 +11,9 @@ import {
   calculateStrokeDashoffset,
   getUploadStatus,
   getDisplayProgress,
+  isUserOnProPlan,
 } from "@cap/utils";
+import { UpgradeModal } from "@/components/UpgradeModal";
 
 export const UploadCapButton = ({
   onStart,
@@ -31,9 +33,8 @@ export const UploadCapButton = ({
     undefined
   );
   const [processingProgress, setProcessingProgress] = useState(0);
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const router = useRouter();
-
-  if (!isSubscribed) return null;
 
   const { circumference } = getProgressCircleConfig();
   const status = getUploadStatus(uploadProgress);
@@ -47,6 +48,17 @@ export const UploadCapButton = ({
   );
 
   const handleClick = () => {
+    if (!user) return;
+
+    const isCapPro = isUserOnProPlan({
+      subscriptionStatus: user.stripeSubscriptionStatus,
+    });
+
+    if (!isCapPro) {
+      setUpgradeModalOpen(true);
+      return;
+    }
+
     inputRef.current?.click();
   };
 
@@ -431,6 +443,10 @@ export const UploadCapButton = ({
         accept="video/*,.mov,.MOV,.mp4,.MP4,.avi,.AVI,.mkv,.MKV,.webm,.WEBM,.m4v,.M4V"
         onChange={handleChange}
         className="hidden"
+      />
+      <UpgradeModal
+        open={upgradeModalOpen}
+        onOpenChange={setUpgradeModalOpen}
       />
     </>
   );

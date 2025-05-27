@@ -18,6 +18,7 @@ import {
   Shield,
   Sparkles,
   Users,
+  Video,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { memo, useState } from "react";
@@ -98,9 +99,9 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
       description: "Commercial license for desktop app automatically included",
     },
     {
-      icon: <Users className={iconStyling} />,
-      title: "Team features",
-      description: "Collaborate with your team and create shared spaces",
+      icon: <Video className={iconStyling} />,
+      title: "Upload videos",
+      description: "Upload custom videos directly to Cap",
     },
     {
       icon: <Sparkles className={iconStyling} />,
