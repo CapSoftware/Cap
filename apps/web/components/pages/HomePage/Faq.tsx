@@ -56,7 +56,7 @@ const Faq = () => {
               key={index}
               className={clsx("rounded-xl overflow-hidde border border-gray-5",
                 openIndex === index 
-                  ? 'bg-blue-9 text-white' 
+                  ? 'bg-blue-500 text-white' 
                   : 'bg-gray-1 hover:bg-gray-3 text-gray-12',
               "transition-colors duration-200")}
             >
