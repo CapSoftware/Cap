@@ -12,7 +12,6 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { ProArt } from "./ProArt";
-import { QuantityButton } from "./QuantityButton";
 
 export const ProCard = () => {
   const [users, setUsers] = useState(1);
@@ -80,7 +79,7 @@ export const ProCard = () => {
     >
       <div>
         <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
-          <span className="rounded-full font-mono bg-gray-11 px-4 py-1.5 text-xs uppercase text-gray-1">
+          <span className="rounded-full font-mono bg-blue-500 px-4 py-1.5 text-xs uppercase text-gray-1">
             Most Popular
           </span>
         </div>
@@ -156,28 +155,30 @@ export const ProCard = () => {
           )}
         </div>
 
-        <div className="flex gap-3 justify-center items-center mb-6">
+        <div className="flex flex-wrap gap-5 justify-center items-center p-5 my-8 w-full rounded-xl border xs:gap-3 xs:p-3 xs:rounded-full xs:justify-between bg-zinc-700/50 border-zinc-700">
+
+        <div className="flex gap-3 justify-center items-center">
           <p className="text-base text-gray-1">Users:</p>
           <div className="flex items-center">
-            <QuantityButton
+            <Button
               onClick={decrementUsers}
-              className="bg-gray-1 hover:bg-gray-3"
+              className="px-1.5 py-1.5 bg-gray-1 hover:bg-gray-3 min-w-fit h-fit"
             >
               <FontAwesomeIcon icon={faMinus} className="text-gray-12 size-3" />
-            </QuantityButton>
+            </Button>
             <span className="w-8 font-medium tabular-nums text-center text-white">
               <NumberFlow value={users} />
             </span>
-            <QuantityButton
+            <Button
               onClick={incrementUsers}
-              className="bg-gray-1 hover:bg-gray-3"
+              className="px-1.5 py-1.5 bg-gray-1 hover:bg-gray-3 min-w-fit h-fit"
             >
               <FontAwesomeIcon icon={faPlus} className="text-gray-12 size-3" />
-            </QuantityButton>
+            </Button>
           </div>
         </div>
 
-        <div className="flex justify-center items-center mb-8">
+        <div className="flex justify-center items-center">
           <div className="flex gap-2 items-center">
             <span
               className={clsx(
@@ -203,7 +204,9 @@ export const ProCard = () => {
           </div>
         </div>
 
-        <ul className="mb-8 space-y-3 text-sm">
+        </div>
+
+        <ul className="mb-8 space-y-3 text-base">
           {[
             "Commercial License included",
             "Unlimited cloud storage & Shareable links",

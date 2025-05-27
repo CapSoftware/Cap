@@ -10,7 +10,6 @@ import clsx from "clsx";
 import { useState } from "react";
 import { toast } from "sonner";
 import { CommercialArt } from "./CommercialArt";
-import { QuantityButton } from "./QuantityButton";
 
 export const CommercialCard = () => {
   const [licenses, setLicenses] = useState(1);
@@ -99,28 +98,30 @@ export const CommercialCard = () => {
           )}
         </div>
 
-        <div className="flex gap-3 justify-center items-center mb-6">
+        <div className="flex flex-wrap gap-5 justify-center items-center p-5 my-8 w-full rounded-xl border xs:gap-3 xs:p-3 xs:rounded-full xs:justify-between bg-gray-3 border-gray-4">
+
+        <div className="flex gap-3 justify-center items-center">
           <p className="text-base text-gray-12">Licenses:</p>
           <div className="flex items-center">
-            <QuantityButton
+          <Button
               onClick={decrementLicenses}
-              className="bg-gray-12 hover:bg-gray-11"
+              className="px-1.5 py-1.5 bg-gray-12 hover:bg-gray-11 min-w-fit h-fit"
             >
               <FontAwesomeIcon icon={faMinus} className="text-gray-1 size-3" />
-            </QuantityButton>
+            </Button>
             <span className="w-8 font-medium tabular-nums text-center text-gray-12">
               <NumberFlow value={licenses} />
             </span>
-            <QuantityButton
+            <Button
               onClick={incrementLicenses}
-              className="bg-gray-12 hover:bg-gray-11"
+              className="px-1.5 py-1.5 bg-gray-12 hover:bg-gray-11 min-w-fit h-fit"
             >
               <FontAwesomeIcon icon={faPlus} className="text-gray-1 size-3" />
-            </QuantityButton>
+            </Button>
           </div>
         </div>
 
-        <div className="flex justify-center items-center mb-8">
+        <div className="flex justify-center items-center">
           <div className="flex gap-2 items-center">
             <span
               className={clsx(
@@ -145,8 +146,11 @@ export const CommercialCard = () => {
             </span>
           </div>
         </div>
+        
+        </div>
 
-        <ul className="mb-8 space-y-3 text-sm">
+
+        <ul className="mb-8 space-y-3 text-base">
           <li className="flex items-center text-gray-12">
             <FontAwesomeIcon icon={faCheck} className="mr-2 text-gray-12" />
             Commercial use of Cap Recorder + Editor

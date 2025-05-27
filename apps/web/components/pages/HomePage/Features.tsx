@@ -12,7 +12,7 @@ const features: Feature[] = [
   {
     title: "Flexible Storage Options",
     img: "/illustrations/storageoptions.svg",
-    imageClass: "w-full max-w-[400px]",
+    imageClass: "w-full max-w-[340px]",
     description:
       "Choose how and where you store your recordings. Cap offers both local and cloud storage options to suit your needs. Save space on your device or keep your entire content library accessible from anywhere – ideal for freelancers and growing teams with varied content creation needs.",
   },
@@ -37,14 +37,14 @@ const features: Feature[] = [
   {
     title: "High-Quality Video Capture",
     img: "/illustrations/videocapture.svg",
-    imageClass: "w-full max-w-[420px] mt-6",
+    imageClass: "w-full max-w-[360px] mt-6",
     description:
       "Deliver crystal-clear recordings that showcase your professionalism. Cap ensures exceptional quality for client presentations, tutorials, and team communications – making your content stand out whether you’re a solo creator or a small business owner.",
   },
   {
     title: "Built for everyone",
     img: "/illustrations/everyone.svg",
-    imageClass: "w-full max-w-[370px]",
+    imageClass: "w-full max-w-[350px]",
     description:
       "For creators, teams, and educators alike, this screen recorder is designed to adapt to different needs and workflows—whether you’re capturing lessons, product demos, or quick updates. It’s a simple, customizable tool that makes screen recording accessible to everyone.",
   },
