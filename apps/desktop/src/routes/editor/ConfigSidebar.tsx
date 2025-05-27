@@ -1519,6 +1519,12 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
               onChange={(mirror) => setProject("camera", "mirror", mirror)}
             />
           </Subfield>
+          <Subfield name="Remove Background">
+            <Toggle
+              checked={project.camera.remove_background ?? false}
+              onChange={(v) => setProject("camera", "remove_background", v)}
+            />
+          </Subfield>
         </div>
       </Field>
       {/** Dashed divider */}

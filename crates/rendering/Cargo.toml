@@ -28,6 +28,8 @@ bezier_easing = "0.1.1"
 reactive_graph = "0.1.5"
 glyphon = "0.6.0"
 tracing.workspace = true
+ndarray = "0.15"
+ort = "1.16"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre.workspace = true

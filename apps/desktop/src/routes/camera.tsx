@@ -28,6 +28,7 @@ namespace CameraWindow {
     size: Size;
     shape: Shape;
     mirrored: boolean;
+    removeBackground: boolean;
   };
 }
 
@@ -43,6 +44,7 @@ export default function () {
       size: "sm",
       shape: "round",
       mirrored: false,
+      removeBackground: false,
     }),
     { name: "cameraWindowState" }
   );
@@ -59,7 +61,11 @@ export default function () {
     (imageData) => {
       setLatestFrame(imageData);
       const ctx = cameraCanvasRef?.getContext("2d");
-      ctx?.putImageData(imageData.data, 0, 0);
+      if (state.removeBackground) {
+        ctx?.putImageData(applyRemoveBg(imageData.data), 0, 0);
+      } else {
+        ctx?.putImageData(imageData.data, 0, 0);
+      }
       setIsLoading(false);
     }
   );
@@ -84,7 +90,11 @@ export default function () {
         (imageData) => {
           setLatestFrame(imageData);
           const ctx = cameraCanvasRef?.getContext("2d");
-          ctx?.putImageData(imageData.data, 0, 0);
+          if (state.removeBackground) {
+            ctx?.putImageData(applyRemoveBg(imageData.data), 0, 0);
+          } else {
+            ctx?.putImageData(imageData.data, 0, 0);
+          }
           setIsLoading(false);
         }
       );
@@ -172,6 +182,12 @@ export default function () {
                     onClick={() => setState("mirrored", (m) => !m)}
                   >
                     <IconCapArrows class="size-5.5" />
+                  </ControlButton>
+                  <ControlButton
+                    pressed={state.removeBackground}
+                    onClick={() => setState("removeBackground", (v) => !v)}
+                  >
+                    <IconCapBgBlur class="size-5.5" />
                   </ControlButton>
                 </div>
               </div>
@@ -302,4 +318,21 @@ function ControlButton(
       {...props}
     />
   );
+}
+
+function applyRemoveBg(data: ImageData): ImageData {
+  const pixels = new Uint8ClampedArray(data.data);
+  const r = pixels[0];
+  const g = pixels[1];
+  const b = pixels[2];
+  for (let i = 0; i < pixels.length; i += 4) {
+    const diff =
+      Math.abs(pixels[i] - r) +
+      Math.abs(pixels[i + 1] - g) +
+      Math.abs(pixels[i + 2] - b);
+    if (diff < 60) {
+      pixels[i + 3] = 0;
+    }
+  }
+  return new ImageData(pixels, data.width, data.height);
 }

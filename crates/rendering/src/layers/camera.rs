@@ -33,9 +33,23 @@ impl CameraLayer {
         uniforms: CompositeVideoFrameUniforms,
         camera_size: XY<u32>,
         camera_frame: &DecodedFrame,
+        remove_background: bool,
+        remover: Option<&crate::BackgroundRemover>,
         (texture, texture_view): (&wgpu::Texture, &wgpu::TextureView),
     ) {
         queue.write_buffer(&self.uniforms_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+
+        let frame_data: Vec<u8> = if remove_background {
+            if let Some(remover) = remover {
+                remover
+                    .remove_background(camera_frame.as_ref(), camera_size.x, camera_size.y)
+                    .unwrap_or_else(|_| camera_frame.as_ref().clone())
+            } else {
+                camera_frame.as_ref().clone()
+            }
+        } else {
+            camera_frame.as_ref().clone()
+        };
 
         queue.write_texture(
             wgpu::ImageCopyTexture {
@@ -44,7 +58,7 @@ impl CameraLayer {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            camera_frame,
+            &frame_data,
             wgpu::ImageDataLayout {
                 offset: 0,
                 bytes_per_row: Some(camera_size.x * 4),

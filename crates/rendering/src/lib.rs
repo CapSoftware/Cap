@@ -30,9 +30,12 @@ mod cursor_interpolation;
 pub mod decoder;
 mod frame_pipeline;
 mod layers;
+mod background_removal;
 mod project_recordings;
 mod spring_mass_damper;
 mod zoom;
+
+pub use background_removal::{BackgroundRemover, MODEL_PATH as BG_MODEL_PATH};
 
 pub use coord::*;
 pub use decoder::DecodedFrame;
@@ -194,6 +197,8 @@ pub async fn render_video_to_channel(
 
     ffmpeg::init().unwrap();
 
+    let remover = BackgroundRemover::new(BG_MODEL_PATH).ok();
+
     let start_time = Instant::now();
 
     // Get the duration from the timeline if it exists, otherwise use the longest source duration
@@ -246,7 +251,13 @@ pub async fn render_video_to_channel(
             );
 
             let frame = frame_renderer
-                .render(segment_frames, uniforms, &segment.cursor, &mut layers)
+                .render(
+                    segment_frames,
+                    uniforms,
+                    &segment.cursor,
+                    &mut layers,
+                    remover.as_ref(),
+                )
                 .await?;
 
             if frame.width == 0 || frame.height == 0 {
@@ -922,6 +933,7 @@ impl<'a> FrameRenderer<'a> {
         uniforms: ProjectUniforms,
         cursor: &CursorEvents,
         layers: &mut RendererLayers,
+        remover: Option<&BackgroundRemover>,
     ) -> Result<RenderedFrame, RenderingError> {
         let session = self.session.get_or_insert_with(|| {
             RenderSession::new(
@@ -943,6 +955,7 @@ impl<'a> FrameRenderer<'a> {
             uniforms,
             cursor,
             layers,
+            remover,
             session,
         )
         .await
@@ -976,6 +989,7 @@ impl RendererLayers {
         uniforms: &ProjectUniforms,
         segment_frames: &DecodedSegmentFrames,
         cursor: &CursorEvents,
+        remover: Option<&BackgroundRemover>,
     ) -> Result<(), RenderingError> {
         self.background
             .prepare(
@@ -1023,6 +1037,8 @@ impl RendererLayers {
                 *uniforms,
                 camera_size,
                 camera_frame,
+                uniforms.project.camera.remove_background,
+                remover,
                 (texture, texture_view),
             );
         }
@@ -1205,10 +1221,11 @@ async fn produce_frame(
     uniforms: ProjectUniforms,
     cursor: &CursorEvents,
     layers: &mut RendererLayers,
+    remover: Option<&BackgroundRemover>,
     session: &mut RenderSession,
 ) -> Result<RenderedFrame, RenderingError> {
     layers
-        .prepare(constants, &uniforms, &segment_frames, cursor)
+        .prepare(constants, &uniforms, &segment_frames, cursor, remover)
         .await?;
 
     let mut encoder = constants.device.create_command_encoder(

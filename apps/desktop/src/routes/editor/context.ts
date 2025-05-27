@@ -4,6 +4,7 @@ import { trackStore } from "@solid-primitives/deep";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { createUndoHistory } from "@solid-primitives/history";
 import { debounce } from "@solid-primitives/scheduled";
+import { makePersisted } from "@solid-primitives/storage";
 import { createQuery, skipToken } from "@tanstack/solid-query";
 import {
   Accessor,
@@ -58,10 +59,23 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
     editorInstance: SerializedEditorInstance;
     refetchMeta(): Promise<void>;
   }) => {
-    const editorInstanceContext = useEditorInstanceContext();
-    const [project, setProject] = createStore<ProjectConfiguration>(
-      props.editorInstance.savedProjectConfig
-    );
+  const editorInstanceContext = useEditorInstanceContext();
+  const [project, setProject] = createStore<ProjectConfiguration>(
+    props.editorInstance.savedProjectConfig
+  );
+
+  type CameraPersistedState = { removeBackground?: boolean };
+  const [cameraWindowState] = makePersisted<CameraPersistedState | null>(
+    createSignal(null),
+    { name: "cameraWindowState" }
+  );
+
+  createEffect(() => {
+    const state = cameraWindowState();
+    if (state && state.removeBackground) {
+      setProject("camera", "remove_background", true);
+    }
+  });
 
     createEffect(
       on(
