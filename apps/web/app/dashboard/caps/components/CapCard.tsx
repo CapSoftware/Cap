@@ -6,7 +6,6 @@ import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
 import { PasswordDialog } from "@/app/dashboard/caps/components/PasswordDialog";
 import { Tooltip } from "@/components/Tooltip";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
-import { usePublicEnv } from "@/utils/public-env";
 import { VideoMetadata } from "@cap/database/types";
 import { buildEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
@@ -80,8 +79,7 @@ export const CapCard = ({
   );
   const [showFullDate, setShowFullDate] = useState(false);
   const router = useRouter();
-  const { activeOrganization, isSubscribed, setUpgradeModalOpen } =
-    useSharedContext();
+  const { isSubscribed, setUpgradeModalOpen } = useSharedContext();
 
   const handleTitleBlur = async (capName: string) => {
     if (!title || capName === title) {
@@ -255,16 +253,6 @@ export const CapCard = ({
     }
   };
 
-  const { webUrl } = usePublicEnv();
-
-  const capUrl =
-    activeOrganization?.organization.customDomain &&
-    activeOrganization?.organization.domainVerified
-      ? `https://${activeOrganization.organization.customDomain}/s/${cap.id}`
-      : buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-      ? `https://cap.link/${cap.id}`
-      : `${webUrl}/s/${cap.id}`;
-
   return (
     <>
       <SharingDialog
@@ -314,7 +302,11 @@ export const CapCard = ({
               <Button
                 onClick={(e) => {
                   e.stopPropagation();
-                  handleCopy(capUrl);
+                  handleCopy(
+                    buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+                      ? `https://cap.link/${cap.id}`
+                      : `${location.origin}/s/${cap.id}`
+                  );
                 }}
                 className="!size-8 delay-0 hover:opacity-80 rounded-full min-w-fit !p-0"
                 variant="white"
@@ -418,7 +410,7 @@ export const CapCard = ({
             "block group",
             anyCapSelected && "cursor-pointer pointer-events-none"
           )}
-          href={capUrl}
+          href={`/s/${cap.id}`}
         >
           <VideoThumbnail
             imageClass={`${
