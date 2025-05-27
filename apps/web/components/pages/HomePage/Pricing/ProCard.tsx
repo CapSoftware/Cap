@@ -1,0 +1,236 @@
+import { Button, Switch } from "@cap/ui";
+import { getProPlanId } from "@cap/utils";
+import {
+  faCheck,
+  faMinus,
+  faPlus,
+} from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import NumberFlow from "@number-flow/react";
+import clsx from "clsx";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { toast } from "sonner";
+import { ProArt } from "./ProArt";
+import { QuantityButton } from "./QuantityButton";
+
+export const ProCard = () => {
+  const [users, setUsers] = useState(1);
+  const [isAnnually, setIsAnnually] = useState(true);
+  const [proLoading, setProLoading] = useState(false);
+  const [cardHover, setCardHover] = useState(false);
+  const { push } = useRouter();
+
+  const CAP_PRO_ANNUAL_PRICE_PER_USER = 6;
+  const CAP_PRO_MONTHLY_PRICE_PER_USER = 9;
+
+  const currentTotalPricePro =
+    users *
+    (isAnnually
+      ? CAP_PRO_ANNUAL_PRICE_PER_USER
+      : CAP_PRO_MONTHLY_PRICE_PER_USER);
+  const billingCycleTextPro = isAnnually ? "per user, billed annually" : "per user, billed monthly";
+
+  const incrementUsers = () => setUsers((prev) => prev + 1);
+  const decrementUsers = () => setUsers((prev) => (prev > 1 ? prev - 1 : 1));
+
+  const planCheckout = async (planId?: string) => {
+    setProLoading(true);
+
+    if (!planId) {
+      planId = getProPlanId(isAnnually ? "yearly" : "monthly");
+    }
+
+    const response = await fetch(`/api/settings/billing/subscribe`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ priceId: planId, quantity: users }),
+    });
+    const data = await response.json();
+
+    if (data.auth === false) {
+      localStorage.setItem("pendingPriceId", planId);
+      localStorage.setItem("pendingQuantity", users.toString());
+      push(`/login?next=/pricing`);
+      return;
+    }
+
+    if (data.subscription === true) {
+      toast.success("You are already on the Cap Pro plan");
+    }
+
+    if (data.url) {
+      window.location.href = data.url;
+    }
+
+    setProLoading(false);
+  };
+
+  return (
+    <div
+      onMouseEnter={() => {
+        setCardHover(true);
+      }}
+      onMouseLeave={() => {
+        setCardHover(false);
+      }}
+      className="flex relative flex-col flex-1 justify-between p-8 text-white rounded-2xl shadow-2xl bg-gray-12"
+    >
+      <div>
+        <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
+          <span className="rounded-full font-mono bg-gray-11 px-4 py-1.5 text-xs uppercase text-gray-1">
+            Most Popular
+          </span>
+        </div>
+        <div className="md:h-[300px]">
+        <ProArt cardHover={cardHover} />
+        <h3 className="mb-2 text-2xl text-center">
+          App + Commercial License +{" "}
+          <span className="text-blue-9">Cap Pro</span>
+        </h3>
+        <p className="mb-6 text-base text-center text-gray-8">
+          For professional use + cloud features like shareable links,
+          transcriptions, comments, & more. Perfect for teams or sharing with
+          clients.
+        </p>
+        </div>
+
+        <div className="mb-6 text-center">
+          <span className="mr-2 text-5xl tabular-nums text-gray-1">
+            $<NumberFlow suffix="/mo" value={currentTotalPricePro} />
+          </span>
+          <span className="text-lg tabular-nums text-gray-8">
+            {" "}
+            {billingCycleTextPro}
+          </span>
+          {isAnnually ? (
+            <p className="text-lg text-gray-8">
+              or,{" "}
+              <NumberFlow
+                value={9 * users}
+                className="text-lg tabular-nums"
+                format={{
+                  notation: "compact",
+                  style: "currency",
+                  currency: "USD",
+                }}
+                suffix="/mo"
+              />{" "}
+              {users === 1 ? (
+                "per user, "
+              ) : (
+                <>
+                  for{" "}
+                  <NumberFlow value={users} className="text-lg tabular-nums" />{" "}
+                  users,{" "}
+                </>
+              )}
+              billed monthly
+            </p>
+          ) : (
+            <p className="text-lg text-gray-8">
+              or,{" "}
+              <NumberFlow
+                value={6 * users}
+                className="text-lg tabular-nums"
+                format={{
+                  notation: "compact",
+                  style: "currency",
+                  currency: "USD",
+                }}
+                suffix="/mo"
+              />{" "}
+              {users === 1 ? (
+                "per user, "
+              ) : (
+                <>
+                  for{" "}
+                  <NumberFlow value={users} className="text-lg tabular-nums" />{" "}
+                  users,{" "}
+                </>
+              )}
+              billed annually
+            </p>
+          )}
+        </div>
+
+        <div className="flex gap-3 justify-center items-center mb-6">
+          <p className="text-base text-gray-1">Users:</p>
+          <div className="flex items-center">
+            <QuantityButton
+              onClick={decrementUsers}
+              className="bg-gray-1 hover:bg-gray-3"
+            >
+              <FontAwesomeIcon icon={faMinus} className="text-gray-12 size-3" />
+            </QuantityButton>
+            <span className="w-8 font-medium tabular-nums text-center text-white">
+              <NumberFlow value={users} />
+            </span>
+            <QuantityButton
+              onClick={incrementUsers}
+              className="bg-gray-1 hover:bg-gray-3"
+            >
+              <FontAwesomeIcon icon={faPlus} className="text-gray-12 size-3" />
+            </QuantityButton>
+          </div>
+        </div>
+
+        <div className="flex justify-center items-center mb-8">
+          <div className="flex gap-2 items-center">
+            <span
+              className={clsx(
+                "text-md",
+                !isAnnually ? "text-white" : "text-gray-8"
+              )}
+            >
+              Monthly
+            </span>
+            <Switch
+              checked={isAnnually}
+              onCheckedChange={setIsAnnually}
+              id="billing-cycle-cap-pro"
+            />
+            <span
+              className={clsx(
+                "text-md",
+                isAnnually ? "text-white" : "text-gray-8"
+              )}
+            >
+              Annually
+            </span>
+          </div>
+        </div>
+
+        <ul className="mb-8 space-y-3 text-sm">
+          {[
+            "Commercial License included",
+            "Unlimited cloud storage & Shareable links",
+            "Connect custom S3 storage bucket",
+            "Advanced teams features",
+            "Unlimited views",
+            "Password protected videos",
+            "Advanced analytics",
+            "Priority support",
+          ].map((feature) => (
+            <li key={feature} className="flex items-center text-gray-1">
+              <FontAwesomeIcon icon={faCheck} className="mr-2 text-gray-1" />
+              {feature}
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <Button
+        variant="white"
+        size="lg"
+        onClick={() => planCheckout()}
+        disabled={proLoading}
+        className="w-full font-medium"
+      >
+        {proLoading ? "Loading..." : "Purchase License"}
+      </Button>
+    </div>
+  );
+};
