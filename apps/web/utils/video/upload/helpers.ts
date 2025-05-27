@@ -10,6 +10,7 @@ export async function uploadToS3({
   audioCodec,
   awsBucket,
   awsRegion,
+  onProgress,
 }: {
   filename: string;
   blobData: Blob;
@@ -20,6 +21,7 @@ export async function uploadToS3({
   audioCodec?: string;
   awsBucket: string;
   awsRegion: string;
+  onProgress?: (progress: number) => void;
 }) {
   const response = await fetch(`${serverEnv().WEB_URL}/api/upload/signed`, {
     method: "POST",
@@ -46,14 +48,24 @@ export async function uploadToS3({
   });
   formData.append("file", blobData);
 
-  const uploadResponse = await fetch(presignedPostData.url, {
-    method: "POST",
-    body: formData,
+  const uploadResponse: boolean = await new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", presignedPostData.url);
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && onProgress) {
+        const percent = (event.loaded / event.total) * 100;
+        onProgress(percent);
+      }
+    };
+
+    xhr.onload = () => {
+      resolve(xhr.status >= 200 && xhr.status < 300);
+    };
+    xhr.onerror = () => reject(new Error("Upload failed"));
+
+    xhr.send(formData);
   });
 
-  if (!uploadResponse.ok) {
-    return false;
-  }
-
-  return true;
+  return uploadResponse;
 }

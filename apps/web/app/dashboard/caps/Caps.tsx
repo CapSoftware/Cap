@@ -10,6 +10,8 @@ import { CapCard } from "./components/CapCard";
 import { CapPagination } from "./components/CapPagination";
 import { EmptyCapState } from "./components/EmptyCapState";
 import { SelectedCapsBar } from "./components/SelectedCapsBar";
+import { UploadCapButton } from "./components/UploadCapButton";
+import { UploadPlaceholderCard } from "./components/UploadPlaceholderCard";
 
 
 type VideoData = {
@@ -43,6 +45,9 @@ export const Caps = ({
   const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
   const previousCountRef = useRef<number>(0);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [uploadPlaceholders, setUploadPlaceholders] = useState<
+    { id: string; progress: number; thumbnail?: string }[]
+  >([]);
 
   const anyCapSelected = selectedCaps.length > 0;
 
@@ -202,13 +207,41 @@ export const Caps = ({
     }
   };
 
+  const handleUploadStart = (id: string, thumbnail?: string) => {
+    setUploadPlaceholders((prev) => [
+      { id, progress: 0, thumbnail },
+      ...prev,
+    ]);
+  };
+
+  const handleUploadProgress = (id: string, progress: number) => {
+    setUploadPlaceholders((prev) =>
+      prev.map((u) => (u.id === id ? { ...u, progress } : u))
+    );
+  };
+
+  const handleUploadComplete = (id: string) => {
+    setUploadPlaceholders((prev) => prev.filter((u) => u.id !== id));
+    refresh();
+  };
+
   if (data.length === 0) {
     return <EmptyCapState />;
   }
 
   return (
     <div className="flex relative flex-col w-full">
+      <div className="flex justify-end mb-4">
+        <UploadCapButton
+          onStart={handleUploadStart}
+          onProgress={handleUploadProgress}
+          onComplete={handleUploadComplete}
+        />
+      </div>
       <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+        {uploadPlaceholders.map((u) => (
+          <UploadPlaceholderCard key={u.id} thumbnail={u.thumbnail} progress={u.progress} />
+        ))}
         {data.map((cap) => (
           <CapCard
             key={cap.id}
