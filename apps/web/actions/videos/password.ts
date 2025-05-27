@@ -34,10 +34,10 @@ export async function setVideoPassword(videoId: string, password: string) {
     revalidatePath("/dashboard/shared-caps");
     revalidatePath(`/s/${videoId}`);
 
-    return "Password updated successfully";
+    return { success: true, value: "Password updated successfully" };
   } catch (error) {
     console.error("Error setting video password:", error);
-    throw new Error("Failed to update password");
+    return { success: false, error: "Failed to update password" };
   }
 }
 
@@ -67,10 +67,10 @@ export async function removeVideoPassword(videoId: string) {
     revalidatePath("/dashboard/shared-caps");
     revalidatePath(`/s/${videoId}`);
 
-    return "Password removed successfully";
+    return { success: true, value: "Password removed successfully" };
   } catch (error) {
     console.error("Error removing video password:", error);
-    throw new Error("Failed to remove password");
+    return { success: false, error: "Failed to remove password" };
   }
 }
 
@@ -90,9 +90,9 @@ export async function verifyVideoPassword(videoId: string, password: string) {
 
     if (!valid) throw new Error("Invalid password");
 
-    return "Password verified";
+    return { success: true, value: "Password verified" };
   } catch (error) {
     console.error("Error verifying video password:", error);
-    throw new Error("Failed to verify password");
+    return { success: false, error: "Failed to verify password" };
   }
 }

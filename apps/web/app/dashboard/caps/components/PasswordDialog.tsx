@@ -37,7 +37,11 @@ export const PasswordDialog: React.FC<PasswordDialogProps> = ({
   const [password, setPassword] = useState("");
 
   const updatePassword = useMutation({
-    mutationFn: () => setVideoPassword(videoId, password),
+    mutationFn: () =>
+      setVideoPassword(videoId, password).then((v) => {
+        if (v.success) return v.value;
+        throw new Error(v.error);
+      }),
     onSuccess: (result) => {
       toast.success(result);
       onPasswordUpdated(true);
@@ -49,7 +53,11 @@ export const PasswordDialog: React.FC<PasswordDialogProps> = ({
   });
 
   const removePassword = useMutation({
-    mutationFn: () => removeVideoPassword(videoId),
+    mutationFn: () =>
+      removeVideoPassword(videoId).then((v) => {
+        if (v.success) return v.value;
+        throw new Error(v.error);
+      }),
     onSuccess: (result) => {
       toast.success(result);
       onPasswordUpdated(false);

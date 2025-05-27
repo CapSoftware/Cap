@@ -21,7 +21,11 @@ export const PasswordOverlay: React.FC<PasswordOverlayProps> = ({
   const [password, setPassword] = useState("");
 
   const verifyPassword = useMutation({
-    mutationFn: () => verifyVideoPassword(videoId, password),
+    mutationFn: () =>
+      verifyVideoPassword(videoId, password).then((v) => {
+        if (v.success) return v.value;
+        throw new Error(v.error);
+      }),
     onSuccess: (result) => {
       toast.success(result);
       onSuccess();
