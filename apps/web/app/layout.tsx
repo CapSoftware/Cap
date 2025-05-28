@@ -128,7 +128,7 @@ export default async function RootLayout({ children }: PropsWithChildren) {
                   email={user?.email ?? ""}
                 >
                   <SonnerToastProvider />
-                  <main className="w-full">
+                  <main className="overflow-x-hidden w-full">
                     <Navbar auth={user ? true : false} />
                     {children}
                     <Footer />

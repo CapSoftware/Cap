@@ -13,6 +13,7 @@ import { faAngleRight, faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { AnimatePresence, motion } from "framer-motion";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
+import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
 import VideoModal from "./VideoModal";
@@ -26,7 +27,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
     const { platform, isIntel } = useDetectPlatform();
     const loading = platform === null;
     return (
-        <div className="mt-[60px] min-h-screen md:mt-[15vh] overflow-x-hidden">
+        <div className="mt-[60px] min-h-screen w-full max-w-[1920px] mx-auto md:mt-[15vh]">
         <div className="flex flex-col justify-center lg:justify-start xl:flex-row relative z-10 px-5 w-full mb-[200px]">
           <div className="w-full max-w-[500px] 2xl:mt-12 mx-auto xl:ml-[100px] 2xl:ml-[150px]">
             <Link
@@ -139,8 +140,10 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
             >
               <FontAwesomeIcon icon={faPlay} className="text-white size-4 md:size-6" />
             </motion.div>
-            <img
+            <Image
               src="/illustrations/app.webp"
+              width={1000}
+              height={1000}
               alt="App"
               className="object-cover relative inset-0 rounded-xl opacity-70 size-full"
             />

@@ -112,7 +112,7 @@ const FeatureCard = ({
     imageClass?: string;
 }) => {
   return (
-    <div className="flex flex-col gap-10 justify-evenly p-8 text-left rounded-xl border bg-gray-1 border-gray-5">
+    <div className="flex flex-col gap-10 justify-evenly p-6 text-left rounded-xl border md:p-8 bg-gray-1 border-gray-5">
       <div className="flex-1 flex-grow justify-center content-center">
       {rive && rive}
       {img && <img src={img} alt={imageAlt} className={clsx("m-auto",imageClass)} />}
