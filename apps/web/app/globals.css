@@ -41,6 +41,10 @@
   }
 }
 
+body {
+  overflow-x: hidden;
+}
+
 body,
 html {
   color: #000000;

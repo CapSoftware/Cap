@@ -27,7 +27,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
     const { platform, isIntel } = useDetectPlatform();
     const loading = platform === null;
     return (
-        <div className="mt-[60px] min-h-screen w-full max-w-[1920px] mx-auto md:mt-[15vh]">
+        <div className="mt-[60px] min-h-screen w-full max-w-[1920px] overflow-x-hidden md:overflow-visible mx-auto md:mt-[15vh]">
         <div className="flex flex-col justify-center lg:justify-start xl:flex-row relative z-10 px-5 w-full mb-[200px]">
           <div className="w-full max-w-[500px] 2xl:mt-12 mx-auto xl:ml-[100px] 2xl:ml-[150px]">
             <Link
