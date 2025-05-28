@@ -9,6 +9,12 @@ type Feature = {
   rive?: JSX.Element;
   img?: string;
   imageClass?: string;
+  relative?: {
+    top?: number;
+    bottom?: number;
+    left?: number;
+    right?: number;
+  }
 };
 
 
@@ -27,12 +33,29 @@ const VideoCaptureArt = memo(() => {
   )
 })
 
+const StorageOptionsArt = memo(() => {
+  const {RiveComponent: StorageOptionsRive} = useRive({
+    src: "/rive/bento.riv",
+    artboard: "storageoptions",
+    animations: ["in"],
+    autoplay: true,
+    layout: new Layout({
+      fit: Fit.Contain
+    }),
+  });
+  return (
+    <StorageOptionsRive className="w-full max-w-[400px] mx-auto h-[300px]" />
+  )
+})
+
 
 const features: Feature[] = [
   {
     title: "Flexible Storage Options",
-    img: "/illustrations/storageoptions.svg",
-    imageClass: "w-full max-w-[340px]",
+    rive: <StorageOptionsArt />,
+    relative: {
+      top: 20,
+    },
     description:
       "Choose how and where you store your recordings. Cap offers both local and cloud storage options to suit your needs. Save space on your device or keep your entire content library accessible from anywhere – ideal for freelancers and growing teams with varied content creation needs.",
   },
@@ -88,6 +111,7 @@ const Features = () => {
             img={feature.img}
             imageAlt={feature.title}
             imageClass={feature.imageClass}
+            relative={feature.relative}
           />
         ))}
       </div>
@@ -103,6 +127,7 @@ const FeatureCard = ({
   img,
   imageAlt,
   imageClass,
+  relative,
 }: {
     title: string;
     description: string;
@@ -110,10 +135,23 @@ const FeatureCard = ({
     img?: string;
     imageAlt: string;
     imageClass?: string;
+    relative?: {
+      top?: number;
+      bottom?: number;
+      left?: number;
+      right?: number;
+    }
 }) => {
   return (
     <div className="flex flex-col gap-10 justify-evenly p-6 text-left rounded-xl border md:p-8 bg-gray-1 border-gray-5">
-      <div className="flex-1 flex-grow justify-center content-center">
+      <div 
+      style={{
+        top: relative?.top,
+        bottom: relative?.bottom,
+        left: relative?.left,
+        right: relative?.right,
+      }}
+      className="relative flex-1 flex-grow justify-center content-center">
       {rive && rive}
       {img && <img src={img} alt={imageAlt} className={clsx("m-auto",imageClass)} />}
       </div>
