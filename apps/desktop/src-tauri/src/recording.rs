@@ -297,8 +297,7 @@ pub async fn start_recording(
 
             #[cfg(windows)]
             let display = {
-                let Target::Window(target) = recording_options.capture_target.get_target().unwrap()
-                else {
+                let Target::Window(target) = inputs.capture_target.get_target().unwrap() else {
                     unreachable!();
                 };
                 display_for_window(target.raw_handle).unwrap().0 as u32
