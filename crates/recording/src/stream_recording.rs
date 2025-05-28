@@ -109,13 +109,13 @@ pub async fn spawn_stream_recording_actor<'a>(
         "stream",
         stream_url,
         |o| {
-            // Use direct bitrate control for streaming - target 4000 kbps for video
-            tracing::info!("Stream encoder config: {}x{} @ {}fps, target video bitrate: 4000kbps", 
+            // Use direct bitrate control for streaming - target 2500 kbps for video (balanced)
+            tracing::info!("Stream encoder config: {}x{} @ {}fps, target video bitrate: 2500kbps", 
                 screen_config.width, screen_config.height, 
                 screen_config.frame_rate.0 as f32 / screen_config.frame_rate.1 as f32);
             
             H264Encoder::builder("stream", screen_config)
-                .with_direct_bitrate_kbps(4000) // 4 Mbps video
+                .with_direct_bitrate_kbps(2500) // 2.5 Mbps video (increased for better quality)
                 .with_preset(cap_media::encoders::H264Preset::Ultrafast) // Use ultrafast for low latency
                 .build(o)
         },

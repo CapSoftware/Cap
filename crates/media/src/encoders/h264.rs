@@ -56,7 +56,23 @@ impl H264EncoderBuilder {
     pub fn build(self, output: &mut format::context::Output) -> Result<H264Encoder, MediaError> {
         let input_config = &self.input_config;
         let is_streaming = self.direct_bitrate_bps.is_some();
-        let (codec, encoder_options) = get_codec_and_options(&input_config, self.preset, is_streaming)?;
+        
+        // Calculate bitrate first so we can pass it to codec options
+        let bitrate = if let Some(direct_bitrate) = self.direct_bitrate_bps {
+            tracing::info!("Using direct bitrate: {} bps ({} kbps)", direct_bitrate, direct_bitrate / 1000);
+            direct_bitrate
+        } else {
+            let calculated = get_bitrate(
+                input_config.width,
+                input_config.height,
+                input_config.frame_rate.0 as f32 / input_config.frame_rate.1 as f32,
+                self.bpp,
+            );
+            tracing::info!("Using calculated bitrate: {} bps ({} kbps)", calculated, calculated / 1000);
+            calculated
+        };
+        
+        let (codec, encoder_options) = get_codec_and_options(&input_config, self.preset, is_streaming, bitrate)?;
 
         let (format, converter) = if !codec
             .video()
@@ -104,31 +120,9 @@ impl H264EncoderBuilder {
         encoder.set_time_base(input_config.frame_rate.invert());
         encoder.set_frame_rate(Some(input_config.frame_rate));
 
-        let bitrate = if let Some(direct_bitrate) = self.direct_bitrate_bps {
-            tracing::info!("Using direct bitrate: {} bps ({} kbps)", direct_bitrate, direct_bitrate / 1000);
-            direct_bitrate
-        } else {
-            let calculated = get_bitrate(
-                input_config.width,
-                input_config.height,
-                input_config.frame_rate.0 as f32 / input_config.frame_rate.1 as f32,
-                self.bpp,
-            );
-            tracing::info!("Using calculated bitrate: {} bps ({} kbps)", calculated, calculated / 1000);
-            calculated
-        };
-
         tracing::info!("Setting encoder bitrate to: {} bps ({} kbps)", bitrate, bitrate / 1000);
         encoder.set_bit_rate(bitrate);
         encoder.set_max_bit_rate(bitrate);
-        
-        // For streaming, be more aggressive about bitrate control
-        if self.direct_bitrate_bps.is_some() {
-            // Set buffer size for more consistent bitrate
-            encoder.set_rc_buffer_size(bitrate); // 1 second buffer
-            encoder.set_rc_max_rate(bitrate); // Hard limit
-            tracing::info!("Applied streaming bitrate controls: buffer_size={}, max_rate={}", bitrate, bitrate);
-        }
 
         let video_encoder = encoder.open_with(encoder_options)?;
 
@@ -222,6 +216,7 @@ fn get_codec_and_options(
     config: &VideoInfo,
     preset: H264Preset,
     is_streaming: bool,
+    target_bitrate: usize,
 ) -> Result<(Codec, Dictionary), MediaError> {
     let encoder_name = {
         if cfg!(target_os = "macos") {
@@ -257,11 +252,19 @@ fn get_codec_and_options(
             
             // Streaming-specific options for better bitrate control
             if is_streaming {
-                options.set("rc", "cbr"); // Constant bitrate mode
-                options.set("bufsize", "4000k"); // Buffer size
-                options.set("maxrate", "4000k"); // Max bitrate 
-                options.set("minrate", "3800k"); // Min bitrate
-                tracing::info!("Applied streaming encoder options: cbr mode, bufsize=4000k, maxrate=4000k");
+                let bitrate_kbps = (target_bitrate / 1000).to_string() + "k";
+                let min_bitrate_kbps = ((target_bitrate as f32 * 0.8) as usize / 1000).to_string() + "k";
+                let buffer_size = ((target_bitrate * 2) / 1000).to_string() + "k"; // 2x bitrate buffer
+                
+                // Balanced rate control for streaming
+                options.set("b:v", &bitrate_kbps); // Target bitrate
+                options.set("maxrate", &bitrate_kbps); // Max bitrate 
+                options.set("minrate", &min_bitrate_kbps); // Min bitrate (80% of target)
+                options.set("bufsize", &buffer_size); // 2x bitrate buffer for smoother quality
+                options.set("rc-lookahead", "10"); // Short lookahead for streaming
+                
+                tracing::info!("Applied balanced streaming options: bitrate={}, maxrate={}, minrate={}, bufsize={}", 
+                    bitrate_kbps, bitrate_kbps, min_bitrate_kbps, buffer_size);
             }
             
             options.set("vsync", "1");
@@ -281,4 +284,4 @@ fn get_bitrate(width: u32, height: u32, frame_rate: f32, bpp: f32) -> usize {
     let pixels_per_second = (width * height) as f32 * frame_rate_multiplier;
 
     (pixels_per_second * bpp) as usize
-}
+} 
