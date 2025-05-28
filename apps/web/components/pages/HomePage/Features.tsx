@@ -1,12 +1,32 @@
+import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import clsx from "clsx";
+import { memo } from "react";
 
 
 type Feature = {
   title: string;
   description: string;
-  img: string;
+  rive?: JSX.Element;
+  img?: string;
   imageClass?: string;
 };
+
+
+const VideoCaptureArt = memo(() => {
+  const {RiveComponent: VideoCaptureRive} = useRive({
+    src: "/rive/bento.riv",
+    artboard: "videocapture",
+    animations: ["in"],
+    autoplay: true,
+    layout: new Layout({
+      fit: Fit.Contain
+    }),
+  });
+  return (
+    <VideoCaptureRive className="w-full max-w-[420px] mx-auto h-[244px]" />
+  )
+})
+
 
 const features: Feature[] = [
   {
@@ -36,8 +56,7 @@ const features: Feature[] = [
   },
   {
     title: "High-Quality Video Capture",
-    img: "/illustrations/videocapture.svg",
-    imageClass: "w-full max-w-[360px] mt-6",
+    rive: <VideoCaptureArt />,
     description:
       "Deliver crystal-clear recordings that showcase your professionalism. Cap ensures exceptional quality for client presentations, tutorials, and team communications – making your content stand out whether you’re a solo creator or a small business owner.",
   },
@@ -65,7 +84,8 @@ const Features = () => {
             key={feature.title}
             title={feature.title}
             description={feature.description}
-            imagePath={feature.img}
+            rive={feature.rive}
+            img={feature.img}
             imageAlt={feature.title}
             imageClass={feature.imageClass}
           />
@@ -75,23 +95,27 @@ const Features = () => {
   );
 };
 
+
 const FeatureCard = ({
   title,
   description,
-  imagePath,
+  rive,
+  img,
   imageAlt,
   imageClass,
 }: {
     title: string;
     description: string;
-    imagePath: string;
+    rive?: JSX.Element;
+    img?: string;
     imageAlt: string;
     imageClass?: string;
 }) => {
   return (
-    <div className="flex flex-col gap-10 justify-between p-5 text-left rounded-xl border bg-gray-1 border-gray-5">
+    <div className="flex flex-col gap-10 justify-evenly p-8 text-left rounded-xl border bg-gray-1 border-gray-5">
       <div className="flex-1 flex-grow justify-center content-center">
-      <img src={imagePath} alt={imageAlt} className={clsx("m-auto",imageClass)} />
+      {rive && rive}
+      {img && <img src={img} alt={imageAlt} className={clsx("m-auto",imageClass)} />}
       </div>
       <div className="flex flex-col gap-2 justify-end h-fit">
       <h3 className="text-xl font-medium">{title}</h3>
