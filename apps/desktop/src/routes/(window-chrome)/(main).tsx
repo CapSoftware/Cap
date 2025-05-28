@@ -423,9 +423,7 @@ function Page() {
         value={mics.isPending ? rawOptions.micName : options.micName() ?? null}
         onChange={(v) => setMicInput.mutate(v)}
       />
-      {generalSettings.data?.systemAudioCapture && (
-        <SystemAudio options={rawOptions} setOptions={setOptions} />
-      )}
+      {generalSettings.data?.systemAudioCapture && <SystemAudio />}
       <div class="flex items-center space-x-1 w-full">
         {rawOptions.mode === "instant" && !auth.data ? (
           <SignInButton>

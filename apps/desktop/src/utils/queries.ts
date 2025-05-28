@@ -89,6 +89,7 @@ export function createOptionsQuery() {
       micName: string | null;
       cameraLabel: string | null;
       mode: RecordingMode;
+      captureSystemAudio?: boolean;
     }>({
       captureTarget: { variant: "screen", id: 0 },
       micName: null,
