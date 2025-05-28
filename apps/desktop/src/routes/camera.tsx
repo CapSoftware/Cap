@@ -18,8 +18,12 @@ import {
 } from "solid-js";
 import { createStore } from "solid-js/store";
 
-import { createOptionsQuery } from "~/utils/queries";
+import { createCameraMutation } from "~/utils/queries";
 import { createImageDataWS, createLazySignal } from "~/utils/socket";
+import {
+  RecordingOptionsProvider,
+  useRecordingOptions,
+} from "./(window-chrome)/OptionsContext";
 
 namespace CameraWindow {
   export type Size = "sm" | "lg";
@@ -36,7 +40,15 @@ const BAR_HEIGHT = 56;
 const { cameraWsPort } = (window as any).__CAP__;
 
 export default function () {
-  const { options, setOptions } = createOptionsQuery();
+  return (
+    <RecordingOptionsProvider>
+      <Page />
+    </RecordingOptionsProvider>
+  );
+}
+
+function Page() {
+  const { rawOptions } = useRecordingOptions();
 
   const [state, setState] = makePersisted(
     createStore<CameraWindow.State>({
@@ -127,159 +139,114 @@ export default function () {
 
   let cameraCanvasRef: HTMLCanvasElement | undefined;
 
-  return (
-    <Suspense fallback={<CameraLoadingState shape={state.shape} />}>
-      <Show when={options.data}>
-        {(options) => (
-          <div
-            data-tauri-drag-region
-            class="flex relative flex-col w-screen h-screen cursor-move group"
-            style={{ "border-radius": cameraBorderRadius(state) }}
-          >
-            <div class="h-14">
-              <div class="flex flex-row justify-center items-center">
-                <div class="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-12 border border-white-transparent-20 text-gray-11">
-                  <ControlButton
-                    onClick={() => {
-                      setOptions.mutate({
-                        ...options(),
-                        cameraLabel: null,
-                      });
-                    }}
-                  >
-                    <IconCapCircleX class="size-5.5" />
-                  </ControlButton>
-                  <ControlButton
-                    pressed={state.size === "lg"}
-                    onClick={() => {
-                      setState("size", (s) => (s === "sm" ? "lg" : "sm"));
-                    }}
-                  >
-                    <IconCapEnlarge class="size-5.5" />
-                  </ControlButton>
-                  <ControlButton
-                    pressed={state.shape === "square"}
-                    onClick={() =>
-                      setState("shape", (s) =>
-                        s === "round" ? "square" : "round"
-                      )
-                    }
-                  >
-                    <IconCapSquare class="size-5.5" />
-                  </ControlButton>
-                  <ControlButton
-                    pressed={state.mirrored}
-                    onClick={() => setState("mirrored", (m) => !m)}
-                  >
-                    <IconCapArrows class="size-5.5" />
-                  </ControlButton>
-                </div>
-              </div>
-            </div>
-            <div
-              class={cx(
-                "flex flex-col flex-1 relative overflow-hidden pointer-events-none border-none shadow-lg",
-                state.shape === "round" ? "rounded-full" : "rounded-3xl"
-              )}
-              data-tauri-drag-region
-            >
-              <Show
-                when={!isLoading() && !error()}
-                fallback={
-                  <div class="flex justify-center items-center h-full">
-                    {error() ? (
-                      <div class="text-red-500">{error()}</div>
-                    ) : (
-                      <div class="text-white">Loading camera...</div>
-                    )}
-                  </div>
-                }
-              >
-                <Show when={latestFrame()}>
-                  {(latestFrame) => {
-                    const style = () => {
-                      const aspectRatio =
-                        latestFrame().data.width / latestFrame().data.height;
-
-                      const windowWidth = windowSize.latest?.size ?? 0;
-
-                      const size = (() => {
-                        if (aspectRatio > 1)
-                          return {
-                            width: windowWidth * aspectRatio,
-                            height: windowWidth,
-                          };
-                        else
-                          return {
-                            width: windowWidth,
-                            height: windowWidth * aspectRatio,
-                          };
-                      })();
-
-                      const left =
-                        aspectRatio > 1 ? (size.width - windowWidth) / 2 : 0;
-                      const top =
-                        aspectRatio > 1 ? 0 : (windowWidth - size.height) / 2;
-
-                      return {
-                        width: `${size.width}px`,
-                        height: `${size.height}px`,
-                        left: `-${left}px`,
-                        top: `-${top}px`,
-                        transform: state.mirrored ? "scaleX(-1)" : "scaleX(1)",
-                      };
-                    };
-
-                    return (
-                      <canvas
-                        data-tauri-drag-region
-                        class={cx("absolute")}
-                        style={style()}
-                        width={latestFrame().data.width}
-                        height={latestFrame().data.height}
-                        ref={cameraCanvasRef!}
-                      />
-                    );
-                  }}
-                </Show>
-              </Show>
-            </div>
-          </div>
-        )}
-      </Show>
-    </Suspense>
-  );
-}
-
-function CameraLoadingState(props: { shape: CameraWindow.Shape }) {
-  const [loadingText, setLoadingText] = createSignal("Camera is loading");
+  const setCamera = createCameraMutation();
 
   createEffect(() => {
-    const loadingMessages = [
-      "Camera is loading",
-      "Acquiring lock on camera",
-      "Camera is starting",
-    ];
-    let index = 0;
-    const interval = setInterval(() => {
-      setLoadingText(loadingMessages[index]);
-      index = (index + 1) % loadingMessages.length;
-    }, 2000);
-
-    onCleanup(() => clearInterval(interval));
+    if (rawOptions.cameraLabel === null) getCurrentWindow().close();
   });
 
   return (
-    <div class="flex flex-col w-full h-full bg-transparent">
-      <div class="h-14" />
+    <div
+      data-tauri-drag-region
+      class="flex relative flex-col w-screen h-screen cursor-move group"
+      style={{ "border-radius": cameraBorderRadius(state) }}
+    >
+      <div class="h-14">
+        <div class="flex flex-row justify-center items-center">
+          <div class="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10">
+            <ControlButton onClick={() => setCamera.mutate(null)}>
+              <IconCapCircleX class="size-5.5" />
+            </ControlButton>
+            <ControlButton
+              pressed={state.size === "lg"}
+              onClick={() => {
+                setState("size", (s) => (s === "sm" ? "lg" : "sm"));
+              }}
+            >
+              <IconCapEnlarge class="size-5.5" />
+            </ControlButton>
+            <ControlButton
+              pressed={state.shape === "square"}
+              onClick={() =>
+                setState("shape", (s) => (s === "round" ? "square" : "round"))
+              }
+            >
+              <IconCapSquare class="size-5.5" />
+            </ControlButton>
+            <ControlButton
+              pressed={state.mirrored}
+              onClick={() => setState("mirrored", (m) => !m)}
+            >
+              <IconCapArrows class="size-5.5" />
+            </ControlButton>
+          </div>
+        </div>
+      </div>
       <div
         class={cx(
-          "w-full flex-1 bg-gray-12 flex items-center justify-center",
-          props.shape === "round" ? "rounded-full" : "rounded-3xl"
+          "flex flex-col flex-1 relative overflow-hidden pointer-events-none border-none shadow-lg bg-gray-1 text-gray-12",
+          state.shape === "round" ? "rounded-full" : "rounded-3xl"
         )}
+        data-tauri-drag-region
       >
-        <div class="text-sm text-gray-9">{loadingText()}</div>
+        <Suspense fallback={<CameraLoadingState />}>
+          <Show when={latestFrame()}>
+            {(latestFrame) => {
+              const style = () => {
+                const aspectRatio =
+                  latestFrame().data.width / latestFrame().data.height;
+
+                const windowWidth = windowSize.latest?.size ?? 0;
+
+                const size = (() => {
+                  if (aspectRatio > 1)
+                    return {
+                      width: windowWidth * aspectRatio,
+                      height: windowWidth,
+                    };
+                  else
+                    return {
+                      width: windowWidth,
+                      height: windowWidth * aspectRatio,
+                    };
+                })();
+
+                const left =
+                  aspectRatio > 1 ? (size.width - windowWidth) / 2 : 0;
+                const top =
+                  aspectRatio > 1 ? 0 : (windowWidth - size.height) / 2;
+
+                return {
+                  width: `${size.width}px`,
+                  height: `${size.height}px`,
+                  left: `-${left}px`,
+                  top: `-${top}px`,
+                  transform: state.mirrored ? "scaleX(-1)" : "scaleX(1)",
+                };
+              };
+
+              return (
+                <canvas
+                  data-tauri-drag-region
+                  class={cx("absolute")}
+                  style={style()}
+                  width={latestFrame().data.width}
+                  height={latestFrame().data.height}
+                  ref={cameraCanvasRef!}
+                />
+              );
+            }}
+          </Show>
+        </Suspense>
       </div>
+    </div>
+  );
+}
+
+function CameraLoadingState() {
+  return (
+    <div class="w-full flex-1 flex items-center justify-center">
+      <div class="text-gray-11">Loading camera...</div>
     </div>
   );
 }
@@ -298,7 +265,7 @@ function ControlButton(
   return (
     <KToggleButton
       type="button"
-      class="p-2 rounded-lg ui-pressed:bg-white-transparent-5 ui-pressed:text-gray-1"
+      class="p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12"
       {...props}
     />
   );

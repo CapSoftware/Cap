@@ -23,7 +23,7 @@ use tracing_subscriber::{layer::SubscriberExt, Layer};
 
 use crate::{
     capture_pipeline::{create_screen_capture, MakeCapturePipeline},
-    ActorError, RecordingError, RecordingOptions,
+    ActorError, RecordingBaseInputs, RecordingError, RecordingOptions,
 };
 
 struct InstantRecordingPipeline {
@@ -49,7 +49,7 @@ enum InstantRecordingActorState {
 #[derive(Clone)]
 pub struct InstantRecordingHandle {
     ctrl_tx: flume::Sender<InstantRecordingActorControlMessage>,
-    pub options: RecordingOptions,
+    pub capture_target: ScreenCaptureTarget,
     pub bounds: Bounds,
 }
 
@@ -105,7 +105,6 @@ pub struct InstantRecordingActor {
     recording_dir: PathBuf,
     capture_target: ScreenCaptureTarget,
     video_info: VideoInfo,
-    audio_input_name: Option<String>,
 }
 
 pub struct CompletedInstantRecording {
@@ -154,11 +153,10 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
     ))
 }
 
-pub async fn spawn_instant_recording_actor(
+pub async fn spawn_instant_recording_actor<'a>(
     id: String,
     recording_dir: PathBuf,
-    options: RecordingOptions,
-    audio_input_feed: Option<&AudioInputFeed>,
+    inputs: RecordingBaseInputs<'a>,
 ) -> Result<(InstantRecordingHandle, tokio::sync::oneshot::Receiver<()>), RecordingError> {
     ensure_dir(&recording_dir)?;
 
@@ -170,7 +168,7 @@ pub async fn spawn_instant_recording_actor(
 
     let content_dir = ensure_dir(&recording_dir.join("content"))?;
 
-    let system_audio = if options.capture_system_audio {
+    let system_audio = if inputs.capture_system_audio {
         let (tx, rx) = flume::bounded(64);
         (Some(tx), Some(rx))
     } else {
@@ -178,7 +176,7 @@ pub async fn spawn_instant_recording_actor(
     };
 
     let (screen_source, screen_rx) = create_screen_capture(
-        &options.capture_target,
+        &inputs.capture_target,
         true,
         true,
         30,
@@ -188,14 +186,14 @@ pub async fn spawn_instant_recording_actor(
 
     debug!("screen capture: {screen_source:#?}");
 
-    if let Some(audio_feed) = &audio_input_feed {
+    if let Some(audio_feed) = inputs.mic_feed {
         debug!("mic audio info: {:#?}", audio_feed.audio_info())
     }
 
     let (pipeline, pipeline_done_rx) = create_pipeline(
         content_dir.join("output.mp4"),
         (screen_source.clone(), screen_rx.clone()),
-        audio_input_feed,
+        inputs.mic_feed.as_ref(),
         system_audio.1,
     )
     .await?;
@@ -207,15 +205,14 @@ pub async fn spawn_instant_recording_actor(
     trace!("spawning recording actor");
 
     spawn_actor({
-        let options = options.clone();
+        let inputs = inputs.clone();
         let video_info = screen_source.info();
         async move {
             let mut actor = InstantRecordingActor {
                 id,
                 recording_dir,
-                capture_target: options.capture_target,
+                capture_target: inputs.capture_target,
                 video_info,
-                audio_input_name: options.mic_name,
             };
 
             let mut state = InstantRecordingActorState::Recording {
@@ -359,7 +356,7 @@ pub async fn spawn_instant_recording_actor(
     Ok((
         InstantRecordingHandle {
             ctrl_tx,
-            options,
+            capture_target: inputs.capture_target,
             bounds: screen_source.get_bounds().clone(),
         },
         done_rx,

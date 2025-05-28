@@ -36,6 +36,8 @@ use cap_recording::{
 use cap_rendering::ProjectRecordings;
 use cap_utils::{ensure_dir, spawn_actor};
 use scap::Target;
+use serde::Deserialize;
+use specta::Type;
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
 use tracing::{error, info};
@@ -46,18 +48,27 @@ pub enum InProgressRecording {
         handle: InstantRecordingHandle,
         progressive_upload: Option<InstantMultipartUpload>,
         video_upload_info: VideoUploadInfo,
+        inputs: StartRecordingInputs,
     },
     Studio {
         target_name: String,
         handle: StudioRecordingHandle,
+        inputs: StartRecordingInputs,
     },
 }
 
 impl InProgressRecording {
     pub fn capture_target(&self) -> &ScreenCaptureTarget {
         match self {
-            Self::Instant { handle, .. } => &handle.options.capture_target,
-            Self::Studio { handle, .. } => &handle.options.capture_target,
+            Self::Instant { handle, .. } => &handle.capture_target,
+            Self::Studio { handle, .. } => &handle.capture_target,
+        }
+    }
+
+    pub fn inputs(&self) -> &StartRecordingInputs {
+        match self {
+            Self::Instant { inputs, .. } => inputs,
+            Self::Studio { inputs, .. } => inputs,
         }
     }
 
@@ -82,6 +93,7 @@ impl InProgressRecording {
                 progressive_upload,
                 video_upload_info,
                 target_name,
+                ..
             } => CompletedRecording::Instant {
                 recording: handle.stop().await?,
                 progressive_upload,
@@ -91,6 +103,7 @@ impl InProgressRecording {
             Self::Studio {
                 handle,
                 target_name,
+                ..
             } => CompletedRecording::Studio {
                 recording: handle.stop().await?,
                 target_name,
@@ -173,13 +186,21 @@ pub fn list_cameras() -> Vec<String> {
     CameraFeed::list_cameras()
 }
 
+#[derive(Deserialize, Type, Clone)]
+pub struct StartRecordingInputs {
+    pub capture_target: ScreenCaptureTarget,
+    #[serde(default)]
+    pub capture_system_audio: bool,
+    pub mode: RecordingMode,
+}
+
 #[tauri::command]
 #[specta::specta]
 #[tracing::instrument(name = "recording", skip_all)]
 pub async fn start_recording(
     app: AppHandle,
     state_mtx: MutableState<'_, App>,
-    recording_options: Option<RecordingOptions>,
+    inputs: StartRecordingInputs,
 ) -> Result<(), String> {
     let id = uuid::Uuid::new_v4().to_string();
 
@@ -194,28 +215,22 @@ pub async fn start_recording(
     let logfile = std::fs::File::create(recording_dir.join("recording-logs.log"))
         .map_err(|e| format!("Failed to create logfile: {e}"))?;
 
-    let recording_options = {
-        let mut state = state_mtx.write().await;
-
-        state
-            .recording_logging_handle
-            .reload(Some(Box::new(
-                tracing_subscriber::fmt::layer()
-                    .with_ansi(false)
-                    .with_target(true)
-                    .with_writer(logfile),
-            ) as DynLoggingLayer))
-            .map_err(|e| format!("Failed to reload logging layer: {e}"))?;
-
-        let recording_options = recording_options.unwrap_or(state.recording_options.clone());
-        state.recording_options = recording_options.clone();
-        recording_options
-    };
+    state_mtx
+        .write()
+        .await
+        .recording_logging_handle
+        .reload(Some(Box::new(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_target(true)
+                .with_writer(logfile),
+        ) as DynLoggingLayer))
+        .map_err(|e| format!("Failed to reload logging layer: {e}"))?;
 
     let target_name = {
-        let title = recording_options.capture_target.get_title();
+        let title = inputs.capture_target.get_title();
 
-        match recording_options.capture_target {
+        match inputs.capture_target {
             ScreenCaptureTarget::Area { .. } => "Area".to_string(),
             ScreenCaptureTarget::Window { id, .. } => {
                 let platform_windows: HashMap<u32, cap_media::platform::Window> =
@@ -234,11 +249,10 @@ pub async fn start_recording(
     };
 
     if let Some(window) = CapWindowId::Camera.get(&app) {
-        let _ =
-            window.set_content_protected(matches!(recording_options.mode, RecordingMode::Studio));
+        let _ = window.set_content_protected(matches!(inputs.mode, RecordingMode::Studio));
     }
 
-    let video_upload_info = match recording_options.mode {
+    let video_upload_info = match inputs.mode {
         RecordingMode::Instant => {
             match AuthStore::get(&app).ok().flatten() {
                 Some(_) => {
@@ -276,7 +290,7 @@ pub async fn start_recording(
         RecordingMode::Studio => None,
     };
 
-    match &recording_options.capture_target {
+    match &inputs.capture_target {
         ScreenCaptureTarget::Window { id } => {
             #[cfg(target_os = "macos")]
             let display = display_for_window(*id).unwrap().id;
@@ -305,7 +319,7 @@ pub async fn start_recording(
     let (finish_upload_tx, finish_upload_rx) = flume::bounded(1);
     let progressive_upload = video_upload_info
         .as_ref()
-        .filter(|_| matches!(recording_options.mode, RecordingMode::Instant))
+        .filter(|_| matches!(inputs.mode, RecordingMode::Instant))
         .map(|video_upload_info| {
             InstantMultipartUpload::spawn(
                 app.clone(),
@@ -326,14 +340,17 @@ pub async fn start_recording(
             fail!("recording::spawn_actor");
             let mut state = state_mtx.write().await;
 
-            let (actor, actor_done_rx) = match recording_options.mode {
+            let (actor, actor_done_rx) = match inputs.mode {
                 RecordingMode::Studio => {
                     let (handle, actor_done_rx) = cap_recording::spawn_studio_recording_actor(
                         id.clone(),
                         recording_dir.clone(),
-                        recording_options.clone(),
+                        cap_recording::RecordingBaseInputs {
+                            capture_target: inputs.capture_target,
+                            capture_system_audio: inputs.capture_system_audio,
+                            mic_feed: &state.mic_feed,
+                        },
                         state.camera_feed.clone(),
-                        &state.mic_feed,
                         GeneralSettingsStore::get(&app)
                             .ok()
                             .flatten()
@@ -350,6 +367,7 @@ pub async fn start_recording(
                         InProgressRecording::Studio {
                             handle,
                             target_name,
+                            inputs,
                         },
                         actor_done_rx,
                     )
@@ -363,8 +381,11 @@ pub async fn start_recording(
                         cap_recording::instant_recording::spawn_instant_recording_actor(
                             id.clone(),
                             recording_dir.clone(),
-                            recording_options.clone(),
-                            state.mic_feed.as_ref(),
+                            cap_recording::RecordingBaseInputs {
+                                capture_target: inputs.capture_target,
+                                capture_system_audio: inputs.capture_system_audio,
+                                mic_feed: &state.mic_feed,
+                            },
                         )
                         .await
                         .map_err(|e| {
@@ -378,6 +399,7 @@ pub async fn start_recording(
                             progressive_upload,
                             video_upload_info,
                             target_name,
+                            inputs,
                         },
                         actor_done_rx,
                     )
@@ -482,37 +504,37 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
 
 // runs when a recording ends, whether from success or failure
 async fn handle_recording_end(
-    app: AppHandle,
+    handle: AppHandle,
     recording: Option<CompletedRecording>,
-    state: &mut App,
+    app: &mut App,
 ) -> Result<(), String> {
     // Clear current recording, just in case :)
-    state.current_recording.take();
+    app.current_recording.take();
 
     if let Some(recording) = recording {
-        handle_recording_finish(&app, recording).await?;
+        handle_recording_finish(&handle, recording).await?;
     };
 
-    let _ = state.recording_logging_handle.reload(None);
+    let _ = app.recording_logging_handle.reload(None);
 
-    if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
+    if let Some(window) = CapWindowId::InProgressRecording.get(&handle) {
         let _ = window.close();
     }
 
-    if let Some(window) = CapWindowId::Main.get(&app) {
+    if let Some(window) = CapWindowId::Main.get(&handle) {
         window.unminimize().ok();
     } else {
-        CapWindowId::Camera.get(&app).map(|v| {
+        CapWindowId::Camera.get(&handle).map(|v| {
             let _ = v.close();
         });
-        state.remove_camera_feed();
-        state.remove_mic_feed();
+        app.camera_feed.take();
+        app.mic_feed.take();
     }
 
     // Play sound to indicate recording has stopped
     AppSounds::StopRecording.play();
 
-    CurrentRecordingChanged.emit(&app).ok();
+    CurrentRecordingChanged.emit(&handle).ok();
 
     Ok(())
 }

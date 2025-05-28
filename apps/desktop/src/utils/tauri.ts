@@ -5,14 +5,14 @@
 
 
 export const commands = {
-async getRecordingOptions() : Promise<RecordingOptions> {
-    return await TAURI_INVOKE("get_recording_options");
+async setMicInput(label: string | null) : Promise<null> {
+    return await TAURI_INVOKE("set_mic_input", { label });
 },
-async setRecordingOptions(options: RecordingOptions) : Promise<null> {
-    return await TAURI_INVOKE("set_recording_options", { options });
+async setCameraInput(label: string | null) : Promise<null> {
+    return await TAURI_INVOKE("set_camera_input", { label });
 },
-async startRecording(recordingOptions: RecordingOptions | null) : Promise<null> {
-    return await TAURI_INVOKE("start_recording", { recordingOptions });
+async startRecording(inputs: StartRecordingInputs) : Promise<null> {
+    return await TAURI_INVOKE("start_recording", { inputs });
 },
 async stopRecording() : Promise<null> {
     return await TAURI_INVOKE("stop_recording");
@@ -353,7 +353,6 @@ export type ProjectRecordings = { segments: SegmentRecordings[] }
 export type RecordingMeta = (StudioRecordingMeta | InstantRecordingMeta) & { platform: Platform | null; pretty_name: string; sharing?: SharingMeta | null }
 export type RecordingMetaWithType = ((StudioRecordingMeta | InstantRecordingMeta) & { platform: Platform | null; pretty_name: string; sharing?: SharingMeta | null }) & { type: RecordingType }
 export type RecordingMode = "studio" | "instant"
-export type RecordingOptions = { captureTarget: ScreenCaptureTarget; micName: string | null; cameraLabel: string | null; captureSystemAudio?: boolean; mode: RecordingMode }
 export type RecordingOptionsChanged = null
 export type RecordingStarted = null
 export type RecordingStopped = { path: string }
@@ -372,6 +371,7 @@ export type ShadowConfiguration = { size: number; opacity: number; blur: number 
 export type SharingMeta = { id: string; link: string }
 export type ShowCapWindow = "Setup" | "Main" | { Settings: { page: string | null } } | { Editor: { project_path: string } } | "RecordingsOverlay" | { WindowCaptureOccluder: { screen_id: number } } | { CaptureArea: { screen_id: number } } | { Camera: { ws_port: number } } | { InProgressRecording: { position: [number, number] | null } } | "Upgrade" | "ModeSelect"
 export type SingleSegment = { display: VideoMeta; camera?: VideoMeta | null; audio?: AudioMeta | null; cursor?: string | null }
+export type StartRecordingInputs = { capture_target: ScreenCaptureTarget; capture_system_audio?: boolean; mode: RecordingMode }
 export type StereoMode = "stereo" | "monoL" | "monoR"
 export type StudioRecordingMeta = { segment: SingleSegment } | { inner: MultipleSegments }
 export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments: ZoomSegment[] }
