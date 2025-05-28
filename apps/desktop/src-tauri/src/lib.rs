@@ -1849,6 +1849,48 @@ async fn seek_to(editor_instance: WindowEditorInstance, frame_number: u32) -> Re
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn get_mic_waveforms(editor_instance: WindowEditorInstance) -> Result<Vec<Vec<f32>>, String> {
+    const CHUNK_SIZE: usize = (cap_audio::AudioData::SAMPLE_RATE as usize) / 10; // ~100ms
+
+    let mut out = Vec::new();
+
+    for segment in editor_instance.segments.iter() {
+        if let Some(audio) = &segment.audio {
+            let channels = audio.channels() as usize;
+            let samples = audio.samples();
+            let mut waveform = Vec::new();
+
+            let mut i = 0;
+            while i < samples.len() {
+                let end = (i + CHUNK_SIZE * channels).min(samples.len());
+                let mut sum = 0.0f32;
+                for s in &samples[i..end] {
+                    sum += s.abs();
+                }
+                let avg = if end > i { sum / (end - i) as f32 } else { 0.0 };
+                waveform.push(avg);
+                i += CHUNK_SIZE * channels;
+            }
+
+            if let Some(max) = waveform.iter().cloned().fold(None, |m, v| Some(m.map_or(v, |m| m.max(v)))) {
+                if max > 0.0 {
+                    for v in waveform.iter_mut() {
+                        *v /= max;
+                    }
+                }
+            }
+
+            out.push(waveform);
+        } else {
+            out.push(Vec::new());
+        }
+    }
+
+    Ok(out)
+}
+
 // keep this async otherwise opening windows may hang on windows
 #[tauri::command]
 #[specta::specta]
@@ -1979,6 +2021,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             open_file_path,
             get_video_metadata,
             create_editor_instance,
+            get_mic_waveforms,
             start_playback,
             stop_playback,
             set_playhead_position,

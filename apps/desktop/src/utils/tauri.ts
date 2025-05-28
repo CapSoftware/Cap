@@ -77,6 +77,9 @@ async getVideoMetadata(path: string) : Promise<VideoRecordingMetadata> {
 async createEditorInstance() : Promise<SerializedEditorInstance> {
     return await TAURI_INVOKE("create_editor_instance");
 },
+async getMicWaveforms() : Promise<number[][]> {
+    return await TAURI_INVOKE("get_mic_waveforms");
+},
 async startPlayback(fps: number, resolutionBase: XY<number>) : Promise<null> {
     return await TAURI_INVOKE("start_playback", { fps, resolutionBase });
 },
