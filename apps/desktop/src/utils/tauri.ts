@@ -173,6 +173,15 @@ async getEditorMeta() : Promise<RecordingMeta> {
 async setServerUrl(serverUrl: string) : Promise<null> {
     return await TAURI_INVOKE("set_server_url", { serverUrl });
 },
+async getStreamConfig() : Promise<StreamConfigStore | null> {
+    return await TAURI_INVOKE("get_stream_config");
+},
+async setStreamConfig(config: StreamConfigStore) : Promise<null> {
+    return await TAURI_INVOKE("set_stream_config", { config });
+},
+async deleteStreamConfig() : Promise<null> {
+    return await TAURI_INVOKE("delete_stream_config");
+},
 /**
  * Function to handle creating directories for the model
  */
@@ -352,11 +361,11 @@ export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background
 export type ProjectRecordings = { segments: SegmentRecordings[] }
 export type RecordingMeta = (StudioRecordingMeta | InstantRecordingMeta) & { platform: Platform | null; pretty_name: string; sharing?: SharingMeta | null }
 export type RecordingMetaWithType = ((StudioRecordingMeta | InstantRecordingMeta) & { platform: Platform | null; pretty_name: string; sharing?: SharingMeta | null }) & { type: RecordingType }
-export type RecordingMode = "studio" | "instant"
+export type RecordingMode = "studio" | "instant" | "stream"
 export type RecordingOptionsChanged = null
 export type RecordingStarted = null
 export type RecordingStopped = { path: string }
-export type RecordingType = "studio" | "instant"
+export type RecordingType = "studio" | "instant" | "stream"
 export type RenderFrameEvent = { frame_number: number; fps: number; resolution_base: XY<number> }
 export type RequestNewScreenshot = null
 export type RequestOpenSettings = { page: string }
@@ -364,6 +373,7 @@ export type RequestRestartRecording = null
 export type RequestStartRecording = null
 export type RequestStopRecording = null
 export type S3UploadMeta = { id: string; user_id: string; aws_region?: string; aws_bucket?: string; aws_endpoint?: string }
+export type StreamConfigStore = { server_url: string; stream_key: string; preset_index?: number | null }
 export type ScreenCaptureTarget = { variant: "window"; id: number } | { variant: "screen"; id: number } | { variant: "area"; screen: number; bounds: Bounds }
 export type SegmentRecordings = { display: Video; camera: Video | null; mic: Audio | null; system_audio: Audio | null }
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordings; path: string }

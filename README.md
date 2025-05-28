@@ -48,3 +48,7 @@ We use a combination of Rust, React (Next.js), TypeScript, Tauri, Drizzle (ORM),
 # Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for more information. This guide is a work in progress, and is updated regularly as the app matures.
+
+## Streaming Best Practices
+
+When streaming directly from Cap to an RTMP server, rendering happens while the stream is being sent. Introducing a short delay (around 2–3 seconds) gives the renderer enough time to prepare frames without noticeably increasing viewer latency.

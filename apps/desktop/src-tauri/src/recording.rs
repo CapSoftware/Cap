@@ -9,6 +9,7 @@ use crate::{
     },
     open_external_link,
     presets::PresetsStore,
+    stream_config,
     upload::{
         create_or_get_video, prepare_screenshot_upload, upload_video, InstantMultipartUpload,
     },
@@ -30,6 +31,7 @@ use cap_project::{
 };
 use cap_recording::{
     instant_recording::{CompletedInstantRecording, InstantRecordingHandle},
+    stream_recording::{CompletedStreamRecording, StreamRecordingHandle},
     CompletedStudioRecording, RecordingError, RecordingMode, RecordingOptions,
     StudioRecordingHandle,
 };
@@ -55,6 +57,11 @@ pub enum InProgressRecording {
         handle: StudioRecordingHandle,
         inputs: StartRecordingInputs,
     },
+    Stream {
+        target_name: String,
+        handle: StreamRecordingHandle,
+        inputs: StartRecordingInputs,
+    },
 }
 
 impl InProgressRecording {
@@ -62,6 +69,7 @@ impl InProgressRecording {
         match self {
             Self::Instant { handle, .. } => &handle.capture_target,
             Self::Studio { handle, .. } => &handle.capture_target,
+            Self::Stream { handle, .. } => &handle.capture_target,
         }
     }
 
@@ -69,6 +77,7 @@ impl InProgressRecording {
         match self {
             Self::Instant { inputs, .. } => inputs,
             Self::Studio { inputs, .. } => inputs,
+            Self::Stream { inputs, .. } => inputs,
         }
     }
 
@@ -76,6 +85,7 @@ impl InProgressRecording {
         match self {
             Self::Instant { handle, .. } => handle.pause().await,
             Self::Studio { handle, .. } => handle.pause().await,
+            Self::Stream { .. } => Ok(()),
         }
     }
 
@@ -83,6 +93,7 @@ impl InProgressRecording {
         match self {
             Self::Instant { handle, .. } => handle.resume().await,
             Self::Studio { handle, .. } => handle.resume().await,
+            Self::Stream { .. } => Ok(()),
         }
     }
 
@@ -108,6 +119,14 @@ impl InProgressRecording {
                 recording: handle.stop().await?,
                 target_name,
             },
+            Self::Stream {
+                handle,
+                target_name,
+                ..
+            } => CompletedRecording::Stream {
+                recording: handle.stop().await?,
+                target_name,
+            },
         })
     }
 
@@ -115,6 +134,7 @@ impl InProgressRecording {
         match self {
             Self::Instant { handle, .. } => handle.cancel().await,
             Self::Studio { handle, .. } => handle.cancel().await,
+            Self::Stream { handle, .. } => handle.cancel().await,
         }
     }
 
@@ -137,6 +157,10 @@ pub enum CompletedRecording {
         recording: CompletedStudioRecording,
         target_name: String,
     },
+    Stream {
+        recording: CompletedStreamRecording,
+        target_name: String,
+    },
 }
 
 impl CompletedRecording {
@@ -144,6 +168,7 @@ impl CompletedRecording {
         match self {
             Self::Instant { recording, .. } => &recording.id,
             Self::Studio { recording, .. } => &recording.id,
+            Self::Stream { recording, .. } => &recording.id,
         }
     }
 
@@ -151,6 +176,7 @@ impl CompletedRecording {
         match self {
             Self::Instant { recording, .. } => &recording.project_path,
             Self::Studio { recording, .. } => &recording.project_path,
+            Self::Stream { recording, .. } => &recording.project_path,
         }
     }
 
@@ -158,6 +184,7 @@ impl CompletedRecording {
         match self {
             Self::Instant { target_name, .. } => target_name,
             Self::Studio { target_name, .. } => target_name,
+            Self::Stream { target_name, .. } => target_name,
         }
     }
 }
@@ -288,6 +315,7 @@ pub async fn start_recording(
             }
         }
         RecordingMode::Studio => None,
+        RecordingMode::Stream => None,
     };
 
     match &inputs.capture_target {
@@ -397,6 +425,35 @@ pub async fn start_recording(
                             handle,
                             progressive_upload,
                             video_upload_info,
+                            target_name,
+                            inputs,
+                        },
+                        actor_done_rx,
+                    )
+                }
+                RecordingMode::Stream => {
+                    let (handle, actor_done_rx) = cap_recording::stream_recording::spawn_stream_recording_actor(
+                        id.clone(),
+                        recording_dir.clone(),
+                        cap_recording::RecordingBaseInputs {
+                            capture_target: inputs.capture_target,
+                            capture_system_audio: inputs.capture_system_audio,
+                            mic_feed: &state.mic_feed,
+                        },
+                        match stream_config::StreamConfigStore::get(&app).map_err(|e| e.to_string())? {
+                            Some(c) => format!("{}/{}", c.server_url, c.stream_key),
+                            None => return Err("Stream configuration not found".to_string()),
+                        },
+                    )
+                    .await
+                    .map_err(|e| {
+                        error!("Failed to spawn stream recording actor: {e}");
+                        e.to_string()
+                    })?;
+
+                    (
+                        InProgressRecording::Stream {
+                            handle,
                             target_name,
                             inputs,
                         },
@@ -543,6 +600,10 @@ async fn handle_recording_finish(
     app: &AppHandle,
     completed_recording: CompletedRecording,
 ) -> Result<(), String> {
+    if let CompletedRecording::Stream { .. } = completed_recording {
+        return Ok(());
+    }
+
     let recording_dir = completed_recording.project_path().clone();
     let id = completed_recording.id().clone();
 

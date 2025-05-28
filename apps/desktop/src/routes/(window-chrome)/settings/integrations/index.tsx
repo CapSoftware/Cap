@@ -1,6 +1,8 @@
 import { Button } from "@cap/ui-solid";
 import { useNavigate } from "@solidjs/router";
 import { For, createResource } from "solid-js";
+import IconLucideDatabase from "~icons/lucide/database";
+import IconCapBroadcast from "~icons/cap/broadcast";
 
 import "@total-typescript/ts-reset/filter-boolean";
 import { commands } from "~/utils/tauri";
@@ -24,6 +26,13 @@ export default function AppsTab() {
         "Connect your own S3 bucket. All new shareable link uploads will be uploaded here. Maintain complete ownership over your data.",
       icon: IconLucideDatabase,
       url: "/settings/integrations/s3-config",
+      pro: true,
+    },
+    {
+      name: "Stream Config",
+      description: "Configure an RTMP server to stream directly from Cap.",
+      icon: IconCapBroadcast,
+      url: "/settings/integrations/stream-config",
       pro: true,
     },
   ];

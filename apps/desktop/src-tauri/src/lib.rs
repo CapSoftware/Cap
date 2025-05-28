@@ -16,6 +16,7 @@ mod export;
 mod fake_window;
 // mod live_state;
 mod presets;
+mod stream_config;
 mod tray;
 mod upload;
 mod web_api;
@@ -1712,6 +1713,24 @@ async fn update_auth_plan(app: AppHandle) {
     AuthStore::update_auth_plan(&app).await.ok();
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn get_stream_config(app: AppHandle) -> Result<Option<stream_config::StreamConfigStore>, String> {
+    stream_config::StreamConfigStore::get(&app)
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn set_stream_config(app: AppHandle, config: stream_config::StreamConfigStore) -> Result<(), String> {
+    stream_config::StreamConfigStore::set(&app, Some(config))
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn delete_stream_config(app: AppHandle) -> Result<(), String> {
+    stream_config::StreamConfigStore::set(&app, None)
+}
+
 pub type FilteredRegistry = tracing_subscriber::layer::Layered<
     tracing_subscriber::filter::FilterFn<fn(m: &tracing::Metadata) -> bool>,
     tracing_subscriber::Registry,
@@ -1782,6 +1801,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             set_window_transparent,
             get_editor_meta,
             set_server_url,
+            get_stream_config,
+            set_stream_config,
+            delete_stream_config,
             captions::create_dir,
             captions::save_model_file,
             captions::transcribe_audio,
@@ -1816,6 +1838,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         .typ::<ProjectConfiguration>()
         .typ::<AuthStore>()
         .typ::<presets::PresetsStore>()
+        .typ::<stream_config::StreamConfigStore>()
         .typ::<hotkeys::HotkeysStore>()
         .typ::<general_settings::GeneralSettingsStore>()
         .typ::<cap_flags::Flags>();

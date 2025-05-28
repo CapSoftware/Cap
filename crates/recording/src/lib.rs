@@ -2,12 +2,14 @@ mod capture_pipeline;
 pub mod cursor;
 pub mod instant_recording;
 pub mod studio_recording;
+pub mod stream_recording;
 
 use std::sync::Arc;
 
 pub use studio_recording::{
     spawn_studio_recording_actor, CompletedStudioRecording, StudioRecordingHandle,
 };
+pub use stream_recording::{spawn_stream_recording_actor, CompletedStreamRecording, StreamRecordingHandle};
 
 use cap_media::{
     feeds::{AudioInputFeed, CameraFeed},
@@ -24,6 +26,7 @@ use tokio::sync::Mutex;
 pub enum RecordingMode {
     Studio,
     Instant,
+    Stream,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]

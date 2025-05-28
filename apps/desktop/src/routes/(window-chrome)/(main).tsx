@@ -445,10 +445,12 @@ function Page() {
               <>
                 {rawOptions.mode === "instant" ? (
                   <IconCapInstant class="size-[0.8rem] mr-1.5" />
-                ) : (
+                ) : rawOptions.mode === "studio" ? (
                   <IconCapFilmCut class="size-[0.8rem] mr-2 -mt-[1.5px]" />
+                ) : (
+                  <IconCapBroadcast class="size-[0.8rem] mr-2 -mt-[1.5px]" />
                 )}
-                Start Recording
+                {rawOptions.mode === "stream" ? "Start Stream" : "Start Recording"}
               </>
             )}
           </Button>

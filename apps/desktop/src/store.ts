@@ -7,6 +7,7 @@ import {
   type PresetsStore,
   type HotkeysStore,
   type GeneralSettingsStore,
+  type StreamConfigStore,
   commands,
 } from "~/utils/tauri";
 
@@ -60,3 +61,4 @@ export const authStore = declareStore<AuthStore>("auth");
 export const hotkeysStore = declareStore<HotkeysStore>("hotkeys");
 export const generalSettingsStore =
   declareStore<GeneralSettingsStore>("general_settings");
+export const streamConfigStore = declareStore<StreamConfigStore>("stream_config");

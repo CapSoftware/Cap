@@ -70,6 +70,14 @@ const ModeSelect = () => {
       darkimg: StudioModeDark,
       lightimg: StudioModeLight,
     },
+    {
+      mode: "stream" as const,
+      title: "Stream Mode",
+      description: "Render and stream directly to your configured server.",
+      icon: IconCapBroadcast,
+      darkimg: InstantModeDark,
+      lightimg: InstantModeLight,
+    },
   ];
 
   return (
