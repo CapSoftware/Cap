@@ -1,14 +1,23 @@
-import { Button, Dialog, DialogContent, Input, Logo } from "@cap/ui";
+"use client";
+
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  Input,
+  Logo,
+} from "@cap/ui";
 import { motion } from "framer-motion";
 import { useState } from "react";
 import { toast } from "sonner";
 import { verifyVideoPassword } from "@/actions/videos/password";
 import { useMutation } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 
 interface PasswordOverlayProps {
   isOpen: boolean;
   videoId: string;
-  onSuccess: () => void;
 }
 
 const MotionDialogContent = motion.create(DialogContent);
@@ -16,9 +25,9 @@ const MotionDialogContent = motion.create(DialogContent);
 export const PasswordOverlay: React.FC<PasswordOverlayProps> = ({
   isOpen,
   videoId,
-  onSuccess,
 }) => {
   const [password, setPassword] = useState("");
+  const router = useRouter();
 
   const verifyPassword = useMutation({
     mutationFn: () =>
@@ -28,7 +37,7 @@ export const PasswordOverlay: React.FC<PasswordOverlayProps> = ({
       }),
     onSuccess: (result) => {
       toast.success(result);
-      onSuccess();
+      router.refresh();
     },
     onError: (e) => {
       toast.error(e.message);
@@ -36,12 +45,12 @@ export const PasswordOverlay: React.FC<PasswordOverlayProps> = ({
   });
 
   return (
-    <Dialog open={isOpen} onOpenChange={() => {}}>
+    <Dialog open={isOpen}>
       <MotionDialogContent
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.95 }}
-        transition={{ duration: 0.2 }}
+        // initial={{ opacity: 0, scale: 0.95 }}
+        // animate={{ opacity: 1, scale: 1 }}
+        // exit={{ opacity: 0, scale: 0.95 }}
+        // transition={{ duration: 0.2 }}
         className="w-[90vw] sm:max-w-md p-8 rounded-xl border border-gray-200 bg-white shadow-xl"
       >
         <div className="flex flex-col items-center space-y-6">

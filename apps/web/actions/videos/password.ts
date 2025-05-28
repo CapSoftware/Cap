@@ -4,8 +4,9 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import { db } from "@cap/database";
 import { eq } from "drizzle-orm";
-import { hashPassword, verifyPassword } from "@cap/database/crypto";
+import { encrypt, hashPassword, verifyPassword } from "@cap/database/crypto";
 import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
 
 export async function setVideoPassword(videoId: string, password: string) {
   try {
@@ -89,6 +90,8 @@ export async function verifyVideoPassword(videoId: string, password: string) {
     const valid = await verifyPassword(video.password, password);
 
     if (!valid) throw new Error("Invalid password");
+
+    cookies().set("x-cap-password", await encrypt(video.password));
 
     return { success: true, value: "Password verified" };
   } catch (error) {

@@ -18,9 +18,11 @@ import { buildEnv } from "@cap/env";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { transcribeVideo } from "@/actions/videos/transcribe";
 import { getScreenshot } from "@/actions/screenshots/get-screenshot";
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
 import { isAiGenerationEnabled, isAiUiEnabled } from "@/utils/flags";
+import { PasswordOverlay } from "./_components/PasswordOverlay";
+import { decrypt } from "@cap/database/crypto";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -410,35 +412,6 @@ export default async function ShareVideoPage(props: Props) {
     return <p>This video is private</p>;
   }
 
-  const isPasswordProtected = video.password !== null;
-  const isOwner = userId === video.ownerId;
-  const shouldHideMetadata = isPasswordProtected && !isOwner;
-
-  if (shouldHideMetadata) {
-    const videoWithMinimalInfo: VideoWithOrganization = {
-      ...video,
-      organizationMembers: [],
-      organizationId: undefined,
-      sharedOrganizations: [],
-      hasPassword: true,
-    };
-
-    return (
-      <Share
-        data={videoWithMinimalInfo}
-        user={user}
-        comments={[]}
-        initialAnalytics={{ views: 0, comments: 0, reactions: 0 }}
-        customDomain={null}
-        domainVerified={false}
-        userOrganizations={[]}
-        initialAiData={null}
-        aiGenerationEnabled={false}
-        aiUiEnabled={false}
-      />
-    );
-  }
-
   const commentsQuery: CommentWithAuthor[] = await db()
     .select({
       id: comments.id,
@@ -605,18 +578,39 @@ export default async function ShareVideoPage(props: Props) {
     );
   }
 
+  const authorized =
+    !videoWithOrganizationInfo.hasPassword ||
+    user?.id === videoWithOrganizationInfo.ownerId ||
+    (await verifyPasswordCookie(video.password ?? ""));
+
   return (
-    <Share
-      data={videoWithOrganizationInfo}
-      user={user}
-      comments={commentsQuery}
-      initialAnalytics={initialAnalytics}
-      customDomain={customDomain}
-      domainVerified={domainVerified}
-      userOrganizations={userOrganizations}
-      initialAiData={initialAiData}
-      aiGenerationEnabled={aiGenerationEnabled}
-      aiUiEnabled={aiUiEnabled}
-    />
+    <div className="min-h-screen flex flex-col bg-[#F7F8FA]">
+      <PasswordOverlay
+        isOpen={!authorized}
+        videoId={videoWithOrganizationInfo.id}
+      />
+      {authorized && (
+        <Share
+          data={videoWithOrganizationInfo}
+          user={user}
+          comments={commentsQuery}
+          initialAnalytics={initialAnalytics}
+          customDomain={customDomain}
+          domainVerified={domainVerified}
+          userOrganizations={userOrganizations}
+          initialAiData={initialAiData}
+          aiGenerationEnabled={aiGenerationEnabled}
+          aiUiEnabled={aiUiEnabled}
+        />
+      )}
+    </div>
   );
+}
+
+async function verifyPasswordCookie(videoPassword: string) {
+  const password = cookies().get("x-cap-password")?.value;
+  if (!password) return false;
+
+  const decrypted = await decrypt(password).catch(() => "");
+  return decrypted === videoPassword;
 }
