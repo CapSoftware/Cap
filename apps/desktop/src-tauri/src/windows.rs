@@ -166,7 +166,7 @@ pub enum ShowCapWindow {
     RecordingsOverlay,
     WindowCaptureOccluder { screen_id: u32 },
     CaptureArea { screen_id: u32 },
-    Camera { ws_port: u16 },
+    Camera,
     InProgressRecording { position: Option<(f64, f64)> },
     Upgrade,
     ModeSelect,
@@ -207,30 +207,14 @@ impl ShowCapWindow {
                 .build()?,
             Self::Main => {
                 if permissions::do_permissions_check(false).necessary_granted() {
-                    let window = self
-                        .window_builder(app, "/")
+                    self.window_builder(app, "/")
                         .resizable(false)
                         .maximized(false)
                         .maximizable(false)
                         .always_on_top(true)
                         .visible_on_all_workspaces(true)
                         .center()
-                        .build()?;
-
-                    let state = app.state::<Arc<RwLock<App>>>();
-                    let state = &mut *state.write().await;
-
-                    // if state.create_camera_feed().await.unwrap_or(false) {
-                    //     Box::pin(
-                    //         Self::Camera {
-                    //             ws_port: state.camera_ws_port,
-                    //         }
-                    //         .show(&app),
-                    //     )
-                    //     .await?;
-                    // }
-
-                    window
+                        .build()?
                 } else {
                     Box::pin(Self::Setup.show(app)).await?
                 }
@@ -277,8 +261,10 @@ impl ShowCapWindow {
                 .focused(true)
                 .shadow(true)
                 .build()?,
-            Self::Camera { ws_port } => {
+            Self::Camera => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
+
+                let port = app.state::<Arc<RwLock<App>>>().read().await.camera_ws_port;
 
                 let mut window_builder = self
                     .window_builder(app, "/camera")
@@ -298,7 +284,7 @@ impl ShowCapWindow {
                     .initialization_script(&format!(
                         "
 			                window.__CAP__ = window.__CAP__ ?? {{}};
-			                window.__CAP__.cameraWsPort = {ws_port};
+			                window.__CAP__.cameraWsPort = {port};
 		                ",
                     ))
                     .transparent(true);

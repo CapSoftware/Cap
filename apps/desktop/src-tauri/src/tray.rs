@@ -44,7 +44,6 @@ impl TryFrom<MenuId> for TrayItem {
     fn try_from(value: MenuId) -> Result<Self, Self::Error> {
         match value.0.as_str() {
             "open_cap" => Ok(TrayItem::OpenCap),
-            // "new_recording" => Ok(TrayItem::StartNewRecording),
             "take_screenshot" => Ok(TrayItem::TakeScreenshot),
             "previous_recordings" => Ok(TrayItem::PreviousRecordings),
             "previous_screenshots" => Ok(TrayItem::PreviousScreenshots),
@@ -59,22 +58,8 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     let menu = Menu::with_items(
         app,
         &[
-            &MenuItem::with_id(
-                app,
-                "version",
-                format!("Cap v{}", env!("CARGO_PKG_VERSION")),
-                false,
-                None::<&str>,
-            )?,
-            &MenuItem::with_id(app, TrayItem::OpenCap, "Open Cap", true, None::<&str>)?,
+            &MenuItem::with_id(app, TrayItem::OpenCap, "New Recording", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
-            // &MenuItem::with_id(
-            //     app,
-            //     TrayItem::StartNewRecording,
-            //     "Start New Recording",
-            //     true,
-            //     None::<&str>,
-            // )?,
             // &MenuItem::with_id(
             //     app,
             //     TrayItem::TakeScreenshot,
@@ -89,8 +74,15 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 true,
                 None::<&str>,
             )?,
-            &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, TrayItem::OpenSettings, "Settings", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(
+                app,
+                "version",
+                format!("Cap v{}", env!("CARGO_PKG_VERSION")),
+                false,
+                None::<&str>,
+            )?,
             &MenuItem::with_id(app, TrayItem::Quit, "Quit Cap", true, None::<&str>)?,
         ],
     )?;

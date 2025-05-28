@@ -154,10 +154,7 @@ function createThemeListener(currentWindow: WebviewWindow) {
   });
 
   function update(appTheme: AppTheme | null | undefined) {
-    if (location.pathname === "/camera") {
-      document.documentElement.classList.toggle("dark", true);
-      return;
-    }
+    if (location.pathname === "/camera") return;
 
     if (appTheme === undefined || appTheme === null) return;
 

@@ -14,6 +14,7 @@ import {
   createEffect,
   createResource,
   createSignal,
+  on,
   onCleanup,
 } from "solid-js";
 import { createStore } from "solid-js/store";
@@ -40,6 +41,8 @@ const BAR_HEIGHT = 56;
 const { cameraWsPort } = (window as any).__CAP__;
 
 export default function () {
+  document.documentElement.classList.toggle("dark", true);
+
   return (
     <RecordingOptionsProvider>
       <Page />
@@ -141,9 +144,15 @@ function Page() {
 
   const setCamera = createCameraMutation();
 
-  createEffect(() => {
-    if (rawOptions.cameraLabel === null) getCurrentWindow().close();
-  });
+  createEffect(
+    on(
+      () => rawOptions.cameraLabel,
+      (label) => {
+        if (label === null) getCurrentWindow().close();
+      },
+      { defer: true }
+    )
+  );
 
   return (
     <div

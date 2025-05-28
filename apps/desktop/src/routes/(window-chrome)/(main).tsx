@@ -192,11 +192,9 @@ function Page() {
     mutationFn: async () => {
       if (!isRecording()) {
         await commands.startRecording({
-          captureTarget: options.target(),
+          capture_target: options.target(),
           mode: rawOptions.mode,
-          cameraLabel: options.cameraLabel() ?? null,
-          micName: options.micName() ?? null,
-          captureSystemAudio: rawOptions.captureSystemAudio,
+          capture_system_audio: rawOptions.captureSystemAudio,
         });
       } else {
         await commands.stopRecording();
@@ -865,19 +863,15 @@ function MicrophoneSelect(props: {
   );
 }
 
-function SystemAudio(props: {
-  options: ReturnType<typeof createOptionsQuery>["rawOptions"];
-  setOptions: ReturnType<typeof createOptionsQuery>["setOptions"];
-}) {
+function SystemAudio() {
+  const { rawOptions, setOptions } = useRecordingOptions();
   const currentRecording = createCurrentRecordingQuery();
 
   return (
     <button
       onClick={() => {
-        if (!props.options) return;
-        props.setOptions({
-          captureSystemAudio: !props.options?.captureSystemAudio,
-        });
+        if (!rawOptions) return;
+        setOptions({ captureSystemAudio: !rawOptions.captureSystemAudio });
       }}
       disabled={!!currentRecording.data}
       class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
@@ -886,12 +880,12 @@ function SystemAudio(props: {
         <IconPhMonitorBold class="text-gray-11 stroke-2 size-[1.2rem]" />
       </div>
       <span class="flex-1 text-left truncate">
-        {props.options?.captureSystemAudio
+        {rawOptions.captureSystemAudio
           ? "Record System Audio"
           : "No System Audio"}
       </span>
-      <InfoPill variant={props.options?.captureSystemAudio ? "blue" : "red"}>
-        {props.options?.captureSystemAudio ? "On" : "Off"}
+      <InfoPill variant={rawOptions.captureSystemAudio ? "blue" : "red"}>
+        {rawOptions.captureSystemAudio ? "On" : "Off"}
       </InfoPill>
     </button>
   );

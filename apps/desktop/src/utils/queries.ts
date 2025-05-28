@@ -8,10 +8,11 @@ import { createMemo, createSignal } from "solid-js";
 import { makePersisted } from "@solid-primitives/storage";
 
 import { authStore, generalSettingsStore } from "~/store";
-import { commands, events, RecordingOptions } from "./tauri";
+import { commands, events, RecordingMode, ScreenCaptureTarget } from "./tauri";
 import { createQueryInvalidate } from "./events";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export const listWindows = queryOptions({
   queryKey: ["capture", "windows"] as const,
@@ -83,7 +84,12 @@ export const getPermissions = queryOptions({
 export function createOptionsQuery() {
   const PERSIST_KEY = "recording-options-query";
   const [state, setState] = makePersisted(
-    createStore<RecordingOptions>({
+    createStore<{
+      captureTarget: ScreenCaptureTarget;
+      micName: string | null;
+      cameraLabel: string | null;
+      mode: RecordingMode;
+    }>({
       captureTarget: { variant: "screen", id: 0 },
       micName: null,
       cameraLabel: null,
@@ -139,6 +145,7 @@ export function createCameraMutation() {
     mutationFn: async (label: string | null) => {
       await commands.setCameraInput(label);
       setOptions("cameraLabel", label);
+      await commands.showWindow("Camera");
     },
   }));
 

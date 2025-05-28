@@ -134,27 +134,9 @@ pub struct VideoUploadInfo {
     config: S3UploadMeta,
 }
 
-// sentry::configure_scope(move |scope| {
-//     let mut ctx = std::collections::BTreeMap::new();
-//     if let Some(capture_target_title) = capture_target_title {
-//         ctx.insert("capture_target".into(), capture_target_title.into());
-//     }
-//     ctx.insert(
-//         "camera".into(),
-//         options.camera_label.unwrap_or("None".into()).into(),
-//     );
-//     ctx.insert(
-//         "microphone".into(),
-//         options.mic_name.unwrap_or("None".into()).into(),
-//     );
-//     scope.set_context("recording_options", sentry::protocol::Context::Other(ctx));
-
-//     Some(())
-// });
-
 impl App {
     pub fn set_current_recording(&mut self, actor: InProgressRecording) {
-        self.current_recording.insert(actor);
+        self.current_recording = Some(actor);
 
         CurrentRecordingChanged.emit(&self.handle).ok();
     }
@@ -209,15 +191,6 @@ async fn set_camera_input(
 ) -> Result<(), String> {
     let mut app = state.write().await;
 
-    // this comes second in case an error occurs when updating the feed
-    if CapWindowId::Camera.get(&app_handle).is_none() && label.is_some() {
-        let _ = ShowCapWindow::Camera {
-            ws_port: app.camera_ws_port,
-        }
-        .show(&app_handle)
-        .await;
-    }
-
     let res = match (&label, app.camera_feed.as_ref()) {
         (Some(label), Some(camera_feed)) => camera_feed
             .lock()
@@ -237,12 +210,6 @@ async fn set_camera_input(
             Ok(())
         }
     };
-
-    if res.is_err() {
-        if let Some(window) = CapWindowId::Camera.get(&app_handle) {
-            let _ = window.close();
-        }
-    }
 
     res
 }
@@ -294,48 +261,6 @@ pub struct NewNotification {
 
 type ArcLock<T> = Arc<RwLock<T>>;
 pub type MutableState<'a, T> = State<'a, Arc<RwLock<T>>>;
-
-// #[tauri::command]
-// #[specta::specta]
-// async fn get_recording_options(
-//     app: AppHandle,
-//     state: MutableState<'_, App>,
-// ) -> Result<RecordingOptions, ()> {
-//     let mut state = state.write().await;
-
-// If there's a saved audio input but no feed, initialize it
-// if let Some(audio_input_name) = state.recording_options.mic_name() {
-//     if state.mic_feed.is_none() {
-//         state.mic_feed = if let Ok(feed) = AudioInputFeed::init(audio_input_name)
-//             .await
-//             .map_err(|error| eprintln!("{error}"))
-//         {
-//             feed.add_sender(state.audio_input_tx.clone()).await.unwrap();
-//             Some(feed)
-//         } else {
-//             None
-//         };
-//     }
-// }
-
-//     Ok(state.recording_options.clone())
-// }
-
-// #[tauri::command]
-// #[specta::specta]
-// async fn set_recording_options(
-//     state: MutableState<'_, App>,
-//     options: RecordingOptions,
-// ) -> Result<(), String> {
-//     // Update in-memory state
-//     state
-//         .write()
-//         .await
-//         .set_start_recording_options(options.clone())
-//         .await?;
-
-//     Ok(())
-// }
 
 type SingleTuple<T> = (T,);
 
@@ -1998,13 +1923,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     camera_feed: None,
                     mic_samples_tx: audio_input_tx,
                     mic_feed: None,
-                    // recording_options: RecordingOptions {
-                    //     capture_target: ScreenCaptureTarget::primary_display(),
-                    //     camera_label: None,
-                    //     mic_name: None,
-                    //     mode: RecordingMode::Studio,
-                    //     capture_system_audio: false,
-                    // },
                     current_recording: None,
                     recording_logging_handle,
                     server_url: GeneralSettingsStore::get(&app)
@@ -2116,10 +2034,10 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 
                                     if app_state.current_recording.is_none() {
                                         app_state.mic_feed.take();
+                                        app_state.camera_feed.take();
 
                                         if let Some(camera) = CapWindowId::Camera.get(&app) {
                                             let _ = camera.close();
-                                            app_state.camera_feed.take();
                                         }
                                     }
                                 });

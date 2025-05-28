@@ -1,11 +1,11 @@
 import { createSignal } from "solid-js";
 
 import Tooltip from "~/components/Tooltip";
-import { createOptionsQuery } from "~/utils/queries";
+import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";
 import { commands } from "~/utils/tauri";
 
 const Mode = () => {
-  const { rawOptions, setOptions } = createOptionsQuery();
+  const { rawOptions, setOptions } = useRecordingOptions();
   const [isInfoHovered, setIsInfoHovered] = createSignal(false);
 
   return (
