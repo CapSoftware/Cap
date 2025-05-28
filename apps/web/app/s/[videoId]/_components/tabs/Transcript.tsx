@@ -122,10 +122,8 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
       let transcriptionUrl;
 
       if (data.bucket && data.awsBucket !== publicEnv.awsBucket) {
-        // For custom S3 buckets, fetch through the API
         transcriptionUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&fileType=transcription`;
       } else {
-        // For default Cap storage
         transcriptionUrl = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/transcription.vtt`;
       }
 
@@ -134,11 +132,14 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
         const vttContent = await response.text();
         const parsed = parseVTT(vttContent);
         setTranscriptData(parsed);
+        setIsTranscriptionProcessing(false);
       } catch (error) {
         console.error("Error loading transcript:", error);
       }
       setIsLoading(false);
     };
+
+    console.log("[Transcript] Transcription status:", data.transcriptionStatus);
 
     const videoCreationTime = new Date(data.createdAt).getTime();
     const fiveMinutesInMs = 5 * 60 * 1000;
@@ -146,11 +147,21 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
       Date.now() - videoCreationTime > fiveMinutesInMs;
 
     if (data.transcriptionStatus === "COMPLETE") {
+      console.log("[Transcript] Transcription complete, fetching transcript");
       fetchTranscript();
+    } else if (data.transcriptionStatus === "PROCESSING") {
+      console.log("[Transcript] Transcription in progress");
+      setIsTranscriptionProcessing(true);
+      setIsLoading(true);
+    } else if (data.transcriptionStatus === "ERROR") {
+      console.log("[Transcript] Transcription error");
+      setIsTranscriptionProcessing(false);
+      setIsLoading(false);
     } else if (isVideoOlderThanFiveMinutes && !data.transcriptionStatus) {
       setIsLoading(false);
       setHasTimedOut(true);
     } else {
+      // Transcription hasn't started or status unknown, start our own polling
       const startTime = Date.now();
       const maxDuration = 2 * 60 * 1000;
 
@@ -185,6 +196,8 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
     data.awsBucket,
     data.transcriptionStatus,
     data.createdAt,
+    publicEnv.awsBucket,
+    publicEnv.s3BucketUrl,
   ]);
 
   const handleReset = () => {

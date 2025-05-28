@@ -444,6 +444,71 @@ impl TimelineConfiguration {
 
 pub const WALLPAPERS_PATH: &str = "assets/backgrounds/macOS";
 
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionSegment {
+    pub id: String,
+    pub start: f32,
+    pub end: f32,
+    pub text: String,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionSettings {
+    pub enabled: bool,
+    pub font: String,
+    pub size: u32,
+    pub color: String,
+    #[serde(alias = "backgroundColor")]
+    pub background_color: String,
+    #[serde(alias = "backgroundOpacity")]
+    pub background_opacity: u32,
+    pub position: String,
+    pub bold: bool,
+    pub italic: bool,
+    pub outline: bool,
+    #[serde(alias = "outlineColor")]
+    pub outline_color: String,
+    #[serde(alias = "exportWithSubtitles")]
+    pub export_with_subtitles: bool,
+}
+
+impl Default for CaptionSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            font: "System Sans-Serif".to_string(),
+            size: 24,
+            color: "#FFFFFF".to_string(),
+            background_color: "#000000".to_string(),
+            background_opacity: 80,
+            position: "bottom".to_string(),
+            bold: true,
+            italic: false,
+            outline: true,
+            outline_color: "#000000".to_string(),
+            export_with_subtitles: false,
+        }
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionsData {
+    pub segments: Vec<CaptionSegment>,
+    pub settings: CaptionSettings,
+}
+
+impl Default for CaptionsData {
+    fn default() -> Self {
+        Self {
+            segments: Vec::new(),
+            settings: CaptionSettings::default(),
+        }
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectConfiguration {
@@ -455,6 +520,8 @@ pub struct ProjectConfiguration {
     pub hotkeys: HotkeysConfiguration,
     #[serde(default)]
     pub timeline: Option<TimelineConfiguration>,
+    #[serde(default)]
+    pub captions: Option<CaptionsData>,
 }
 
 impl ProjectConfiguration {
@@ -491,6 +558,7 @@ impl Default for ProjectConfiguration {
             cursor: CursorConfiguration::default(),
             hotkeys: HotkeysConfiguration::default(),
             timeline: None,
+            captions: None,
         }
     }
 }

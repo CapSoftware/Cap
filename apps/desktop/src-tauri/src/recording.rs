@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 
 use crate::{
     audio::AppSounds,
@@ -9,7 +9,9 @@ use crate::{
     },
     open_external_link,
     presets::PresetsStore,
-    upload::{get_s3_config, prepare_screenshot_upload, upload_video, InstantMultipartUpload},
+    upload::{
+        create_or_get_video, prepare_screenshot_upload, upload_video, InstantMultipartUpload,
+    },
     web_api::{self, ManagerExt},
     windows::{CapWindowId, ShowCapWindow},
     App, CurrentRecordingChanged, DynLoggingLayer, MutableState, NewStudioRecordingAdded,
@@ -40,11 +42,13 @@ use tracing::{error, info};
 
 pub enum InProgressRecording {
     Instant {
+        target_name: String,
         handle: InstantRecordingHandle,
         progressive_upload: Option<InstantMultipartUpload>,
         video_upload_info: VideoUploadInfo,
     },
     Studio {
+        target_name: String,
         handle: StudioRecordingHandle,
     },
 }
@@ -53,21 +57,21 @@ impl InProgressRecording {
     pub fn capture_target(&self) -> &ScreenCaptureTarget {
         match self {
             Self::Instant { handle, .. } => &handle.options.capture_target,
-            Self::Studio { handle } => &handle.options.capture_target,
+            Self::Studio { handle, .. } => &handle.options.capture_target,
         }
     }
 
     pub async fn pause(&self) -> Result<(), RecordingError> {
         match self {
             Self::Instant { handle, .. } => handle.pause().await,
-            Self::Studio { handle } => handle.pause().await,
+            Self::Studio { handle, .. } => handle.pause().await,
         }
     }
 
     pub async fn resume(&self) -> Result<(), RecordingError> {
         match self {
             Self::Instant { handle, .. } => handle.resume().await,
-            Self::Studio { handle } => handle.resume().await,
+            Self::Studio { handle, .. } => handle.resume().await,
         }
     }
 
@@ -77,26 +81,34 @@ impl InProgressRecording {
                 handle,
                 progressive_upload,
                 video_upload_info,
+                target_name,
             } => CompletedRecording::Instant {
                 recording: handle.stop().await?,
                 progressive_upload,
                 video_upload_info,
+                target_name,
             },
-            Self::Studio { handle } => CompletedRecording::Studio(handle.stop().await?),
+            Self::Studio {
+                handle,
+                target_name,
+            } => CompletedRecording::Studio {
+                recording: handle.stop().await?,
+                target_name,
+            },
         })
     }
 
     pub async fn cancel(self) -> Result<(), RecordingError> {
         match self {
             Self::Instant { handle, .. } => handle.cancel().await,
-            Self::Studio { handle } => handle.cancel().await,
+            Self::Studio { handle, .. } => handle.cancel().await,
         }
     }
 
     pub fn bounds(&self) -> &Bounds {
         match self {
             Self::Instant { handle, .. } => &handle.bounds,
-            Self::Studio { handle } => &handle.bounds,
+            Self::Studio { handle, .. } => &handle.bounds,
         }
     }
 }
@@ -104,24 +116,35 @@ impl InProgressRecording {
 pub enum CompletedRecording {
     Instant {
         recording: CompletedInstantRecording,
+        target_name: String,
         progressive_upload: Option<InstantMultipartUpload>,
         video_upload_info: VideoUploadInfo,
     },
-    Studio(CompletedStudioRecording),
+    Studio {
+        recording: CompletedStudioRecording,
+        target_name: String,
+    },
 }
 
 impl CompletedRecording {
     pub fn id(&self) -> &String {
         match self {
             Self::Instant { recording, .. } => &recording.id,
-            Self::Studio(a) => &a.id,
+            Self::Studio { recording, .. } => &recording.id,
         }
     }
 
     pub fn project_path(&self) -> &PathBuf {
         match self {
             Self::Instant { recording, .. } => &recording.project_path,
-            Self::Studio(a) => &a.project_path,
+            Self::Studio { recording, .. } => &recording.project_path,
+        }
+    }
+
+    pub fn target_name(&self) -> &String {
+        match self {
+            Self::Instant { target_name, .. } => target_name,
+            Self::Studio { target_name, .. } => target_name,
         }
     }
 }
@@ -171,22 +194,44 @@ pub async fn start_recording(
     let logfile = std::fs::File::create(recording_dir.join("recording-logs.log"))
         .map_err(|e| format!("Failed to create logfile: {e}"))?;
 
-    let mut state = state_mtx.write().await;
+    let recording_options = {
+        let mut state = state_mtx.write().await;
 
-    state
-        .recording_logging_handle
-        .reload(Some(Box::new(
-            tracing_subscriber::fmt::layer()
-                .with_ansi(false)
-                .with_target(true)
-                .with_writer(logfile),
-        ) as DynLoggingLayer))
-        .map_err(|e| format!("Failed to reload logging layer: {e}"))?;
+        state
+            .recording_logging_handle
+            .reload(Some(Box::new(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_target(true)
+                    .with_writer(logfile),
+            ) as DynLoggingLayer))
+            .map_err(|e| format!("Failed to reload logging layer: {e}"))?;
 
-    let recording_options = recording_options.unwrap_or(state.recording_options.clone());
-    state.recording_options = recording_options.clone();
+        let recording_options = recording_options.unwrap_or(state.recording_options.clone());
+        state.recording_options = recording_options.clone();
+        recording_options
+    };
 
-    drop(state);
+    let target_name = {
+        let title = recording_options.capture_target.get_title();
+
+        match recording_options.capture_target {
+            ScreenCaptureTarget::Area { .. } => "Area".to_string(),
+            ScreenCaptureTarget::Window { id, .. } => {
+                let platform_windows: HashMap<u32, cap_media::platform::Window> =
+                    cap_media::platform::get_on_screen_windows()
+                        .into_iter()
+                        .map(|window| (window.window_id, window))
+                        .collect();
+
+                platform_windows
+                    .get(&id)
+                    .map(|v| v.owner_name.to_string())
+                    .unwrap_or_else(|| "Window".to_string())
+            }
+            ScreenCaptureTarget::Screen { .. } => title.unwrap_or_else(|| "Screen".to_string()),
+        }
+    };
 
     if let Some(window) = CapWindowId::Camera.get(&app) {
         let _ =
@@ -198,7 +243,17 @@ pub async fn start_recording(
             match AuthStore::get(&app).ok().flatten() {
                 Some(_) => {
                     // Pre-create the video and get the shareable link
-                    if let Ok(s3_config) = get_s3_config(&app, false, None).await {
+                    if let Ok(s3_config) = create_or_get_video(
+                        &app,
+                        false,
+                        None,
+                        Some(format!(
+                            "{target_name} {}",
+                            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+                        )),
+                    )
+                    .await
+                    {
                         let link = app.make_app_url(format!("/s/{}", s3_config.id())).await;
                         info!("Pre-created shareable link: {}", link);
 
@@ -291,7 +346,13 @@ pub async fn start_recording(
                         e.to_string()
                     })?;
 
-                    (InProgressRecording::Studio { handle }, actor_done_rx)
+                    (
+                        InProgressRecording::Studio {
+                            handle,
+                            target_name,
+                        },
+                        actor_done_rx,
+                    )
                 }
                 RecordingMode::Instant => {
                     let Some(video_upload_info) = video_upload_info.clone() else {
@@ -316,6 +377,7 @@ pub async fn start_recording(
                             handle,
                             progressive_upload,
                             video_upload_info,
+                            target_name,
                         },
                         actor_done_rx,
                     )
@@ -467,7 +529,7 @@ async fn handle_recording_finish(
     std::fs::create_dir_all(&screenshots_dir).ok();
 
     let display_output_path = match &completed_recording {
-        CompletedRecording::Studio(recording) => match &recording.meta {
+        CompletedRecording::Studio { recording, .. } => match &recording.meta {
             StudioRecordingMeta::SingleSegment { segment } => {
                 segment.display.path.to_path(&recording_dir)
             }
@@ -487,8 +549,10 @@ async fn handle_recording_finish(
         None,
     ));
 
+    let target_name = completed_recording.target_name().clone();
+
     let (meta_inner, sharing) = match completed_recording {
-        CompletedRecording::Studio(recording) => {
+        CompletedRecording::Studio { recording, .. } => {
             let recordings = ProjectRecordings::new(&recording_dir, &recording.meta)?;
 
             let config = project_config_from_recording(
@@ -505,6 +569,7 @@ async fn handle_recording_finish(
             recording,
             progressive_upload,
             video_upload_info,
+            ..
         } => {
             // shareable_link = Some(video_upload_info.link.clone());
             let app = app.clone();
@@ -614,8 +679,8 @@ async fn handle_recording_finish(
         project_path: recording_dir.clone(),
         sharing,
         pretty_name: format!(
-            "Cap {}",
-            chrono::Local::now().format("%Y-%m-%d at %H.%M.%S")
+            "{target_name} {}",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
         ),
         inner: meta_inner,
     };
