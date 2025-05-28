@@ -10,7 +10,6 @@ import "../../../styles/timeline.css";
 import { useEditorContext } from "../context";
 import { formatTime } from "../utils";
 import { ClipTrack } from "./ClipTrack";
-import WaveformTrack from "./WaveformTrack";
 import { TimelineContextProvider, useTimelineContext } from "./context";
 import { ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
 
@@ -25,7 +24,6 @@ export function Timeline() {
     setEditorState,
     totalDuration,
     editorState,
-    meta,
   } = useEditorContext();
 
   const duration = () => editorInstance.recordingDuration;
@@ -246,9 +244,6 @@ export function Timeline() {
           ref={setTimelineRef}
           handleUpdatePlayhead={handleUpdatePlayhead}
         />
-        <Show when={meta().hasMicrophone}>
-          <WaveformTrack />
-        </Show>
         <ZoomTrack
           onDragStateChanged={(v) => {
             zoomSegmentDragState = v;

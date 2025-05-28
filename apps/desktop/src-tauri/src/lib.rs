@@ -1874,7 +1874,11 @@ async fn get_mic_waveforms(editor_instance: WindowEditorInstance) -> Result<Vec<
                 i += CHUNK_SIZE * channels;
             }
 
-            if let Some(max) = waveform.iter().cloned().fold(None, |m, v| Some(m.map_or(v, |m| m.max(v)))) {
+            if let Some(max) = waveform
+                .iter()
+                .cloned()
+                .fold(None, |m, v| Some(m.map_or(v, |m: f32| m.max(v))))
+            {
                 if max > 0.0 {
                     for v in waveform.iter_mut() {
                         *v /= max;
