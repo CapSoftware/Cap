@@ -98,8 +98,6 @@ pub struct MP4Input {
     pub audio: Option<FFAudio>,
 }
 
-unsafe impl Send for H264Encoder {}
-
 impl PipelineSinkTask<MP4Input> for MP4File {
     fn run(
         &mut self,

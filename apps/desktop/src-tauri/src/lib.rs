@@ -330,6 +330,7 @@ async fn get_current_recording(
             r#type: match r {
                 InProgressRecording::Instant { .. } => RecordingType::Instant,
                 InProgressRecording::Studio { .. } => RecordingType::Studio,
+                InProgressRecording::Stream { .. } => RecordingType::Stream,
             },
         }
     })))
@@ -1367,6 +1368,7 @@ impl RecordingMetaWithType {
 pub enum RecordingType {
     Studio,
     Instant,
+    Stream,
 }
 
 #[tauri::command(async)]

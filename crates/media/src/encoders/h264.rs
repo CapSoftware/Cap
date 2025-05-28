@@ -14,6 +14,7 @@ pub struct H264EncoderBuilder {
     bpp: f32,
     input_config: VideoInfo,
     preset: H264Preset,
+    direct_bitrate_bps: Option<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -32,6 +33,7 @@ impl H264EncoderBuilder {
             input_config,
             bpp: Self::QUALITY_BPP,
             preset: H264Preset::Ultrafast,
+            direct_bitrate_bps: None,
         }
     }
 
@@ -45,9 +47,16 @@ impl H264EncoderBuilder {
         self
     }
 
+    pub fn with_direct_bitrate_kbps(mut self, bitrate_kbps: u32) -> Self {
+        // Store direct bitrate to bypass BPP calculation entirely
+        self.direct_bitrate_bps = Some((bitrate_kbps * 1000) as usize);
+        self
+    }
+
     pub fn build(self, output: &mut format::context::Output) -> Result<H264Encoder, MediaError> {
         let input_config = &self.input_config;
-        let (codec, encoder_options) = get_codec_and_options(&input_config, self.preset)?;
+        let is_streaming = self.direct_bitrate_bps.is_some();
+        let (codec, encoder_options) = get_codec_and_options(&input_config, self.preset, is_streaming)?;
 
         let (format, converter) = if !codec
             .video()
@@ -95,16 +104,31 @@ impl H264EncoderBuilder {
         encoder.set_time_base(input_config.frame_rate.invert());
         encoder.set_frame_rate(Some(input_config.frame_rate));
 
-        // let target_bitrate = compression.bitrate();
-        let bitrate = get_bitrate(
-            input_config.width,
-            input_config.height,
-            input_config.frame_rate.0 as f32 / input_config.frame_rate.1 as f32,
-            self.bpp,
-        );
+        let bitrate = if let Some(direct_bitrate) = self.direct_bitrate_bps {
+            tracing::info!("Using direct bitrate: {} bps ({} kbps)", direct_bitrate, direct_bitrate / 1000);
+            direct_bitrate
+        } else {
+            let calculated = get_bitrate(
+                input_config.width,
+                input_config.height,
+                input_config.frame_rate.0 as f32 / input_config.frame_rate.1 as f32,
+                self.bpp,
+            );
+            tracing::info!("Using calculated bitrate: {} bps ({} kbps)", calculated, calculated / 1000);
+            calculated
+        };
 
+        tracing::info!("Setting encoder bitrate to: {} bps ({} kbps)", bitrate, bitrate / 1000);
         encoder.set_bit_rate(bitrate);
         encoder.set_max_bit_rate(bitrate);
+        
+        // For streaming, be more aggressive about bitrate control
+        if self.direct_bitrate_bps.is_some() {
+            // Set buffer size for more consistent bitrate
+            encoder.set_rc_buffer_size(bitrate); // 1 second buffer
+            encoder.set_rc_max_rate(bitrate); // Hard limit
+            tracing::info!("Applied streaming bitrate controls: buffer_size={}, max_rate={}", bitrate, bitrate);
+        }
 
         let video_encoder = encoder.open_with(encoder_options)?;
 
@@ -133,6 +157,8 @@ pub struct H264Encoder {
     stream_index: usize,
     packet: ffmpeg::Packet,
 }
+
+unsafe impl Send for H264Encoder {}
 
 impl H264Encoder {
     pub fn builder(name: &'static str, input_config: VideoInfo) -> H264EncoderBuilder {
@@ -195,6 +221,7 @@ impl H264Encoder {
 fn get_codec_and_options(
     config: &VideoInfo,
     preset: H264Preset,
+    is_streaming: bool,
 ) -> Result<(Codec, Dictionary), MediaError> {
     let encoder_name = {
         if cfg!(target_os = "macos") {
@@ -227,6 +254,16 @@ fn get_codec_and_options(
             if let H264Preset::Ultrafast = preset {
                 options.set("tune", "zerolatency");
             }
+            
+            // Streaming-specific options for better bitrate control
+            if is_streaming {
+                options.set("rc", "cbr"); // Constant bitrate mode
+                options.set("bufsize", "4000k"); // Buffer size
+                options.set("maxrate", "4000k"); // Max bitrate 
+                options.set("minrate", "3800k"); // Min bitrate
+                tracing::info!("Applied streaming encoder options: cbr mode, bufsize=4000k, maxrate=4000k");
+            }
+            
             options.set("vsync", "1");
             options.set("g", &keyframe_interval_str);
             options.set("keyint_min", &keyframe_interval_str);

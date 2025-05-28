@@ -23,9 +23,9 @@ export default function StreamConfigPage() {
     try {
       const config = await commands.getStreamConfig();
       if (config) {
-        setServerUrl(config.server_url);
-        setStreamKey(config.stream_key);
-        setPresetIndex(config.preset_index ?? null);
+        setServerUrl(config.serverUrl);
+        setStreamKey(config.streamKey);
+        setPresetIndex(config.presetIndex ?? null);
         setHasConfig(true);
       }
     } catch (e) {
@@ -39,9 +39,9 @@ export default function StreamConfigPage() {
     setSaving(true);
     try {
       await commands.setStreamConfig({
-        server_url: serverUrl(),
-        stream_key: streamKey(),
-        preset_index: presetIndex(),
+        serverUrl: serverUrl(),
+        streamKey: streamKey(),
+        presetIndex: presetIndex(),
       });
       setHasConfig(true);
       await commands.globalMessageDialog("Stream configuration saved");
@@ -70,7 +70,9 @@ export default function StreamConfigPage() {
     label: string,
     value: () => string,
     setter: (v: string) => void,
-    type: "text" | "password" = "text"
+    type: "text" | "password" = "text",
+    placeholder?: string,
+    helpText?: string
   ) => (
     <div>
       <label class="text-sm text-gray-12">{label}</label>
@@ -80,9 +82,13 @@ export default function StreamConfigPage() {
         onInput={(e: InputEvent & { currentTarget: HTMLInputElement }) =>
           setter(e.currentTarget.value)
         }
+        placeholder={placeholder}
         class="px-3 py-2 w-full rounded-lg border border-gray-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
         autocomplete="off"
       />
+      {helpText && (
+        <p class="text-xs text-gray-11 mt-1">{helpText}</p>
+      )}
     </div>
   );
 
@@ -96,8 +102,22 @@ export default function StreamConfigPage() {
             </div>
           ) : (
             <div class="space-y-4">
-              {renderInput("Server URL", serverUrl, setServerUrl)}
-              {renderInput("Stream Key", streamKey, setStreamKey, "password")}
+              {renderInput(
+                "Server URL", 
+                serverUrl, 
+                setServerUrl, 
+                "text", 
+                "rtmp://live.twitch.tv/app", 
+                "Enter the RTMP server URL. Examples: rtmp://live.twitch.tv/app, rtmp://a.rtmp.youtube.com/live2"
+              )}
+              {renderInput(
+                "Stream Key", 
+                streamKey, 
+                setStreamKey, 
+                "password", 
+                "Your stream key...", 
+                "Your unique stream key from your streaming platform"
+              )}
               <div>
                 <label class="text-sm text-gray-12">Editor Preset</label>
                 <select
@@ -110,7 +130,7 @@ export default function StreamConfigPage() {
                   class="px-3 py-2 pr-10 w-full bg-white rounded-lg border border-gray-3 appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="">Default</option>
-                  <For each={presets.query.data?.presets ?? []}>
+                  <For each={presets.data?.presets ?? []}>
                     {(p, i) => <option value={i()}>{p.name}</option>}
                   </For>
                 </select>

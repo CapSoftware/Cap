@@ -32,14 +32,42 @@ impl RtmpStream {
 
     pub fn video_format() -> RawVideoFormat { RawVideoFormat::YUYV420 }
 
-    pub fn queue_video_frame(&mut self, frame: FFVideo) {
-        if self.is_finished { return; }
-        self.video.queue_frame(frame, &mut self.output);
+    pub fn queue_video_frame(&mut self, frame: FFVideo) -> Result<(), MediaError> {
+        if self.is_finished { 
+            tracing::warn!("Attempted to queue video frame on finished RTMP stream");
+            return Ok(()); 
+        }
+        
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.video.queue_frame(frame, &mut self.output);
+        })) {
+            Ok(()) => Ok(()),
+            Err(_) => {
+                tracing::error!("RTMP video frame queuing panicked");
+                Err(MediaError::Any("RTMP connection failed".into()))
+            }
+        }
     }
 
-    pub fn queue_audio_frame(&mut self, frame: FFAudio) {
-        if self.is_finished { return; }
-        if let Some(audio) = &mut self.audio { audio.queue_frame(frame, &mut self.output); }
+    pub fn queue_audio_frame(&mut self, frame: FFAudio) -> Result<(), MediaError> {
+        if self.is_finished { 
+            tracing::warn!("Attempted to queue audio frame on finished RTMP stream");
+            return Ok(()); 
+        }
+        
+        if let Some(audio) = &mut self.audio { 
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                audio.queue_frame(frame, &mut self.output);
+            })) {
+                Ok(()) => Ok(()),
+                Err(_) => {
+                    tracing::error!("RTMP audio frame queuing panicked");
+                    Err(MediaError::Any("RTMP connection failed".into()))
+                }
+            }
+        } else {
+            Ok(())
+        }
     }
 
     pub fn finish(&mut self) {
@@ -56,14 +84,12 @@ pub struct RtmpInput {
     pub audio: Option<FFAudio>,
 }
 
-unsafe impl Send for H264Encoder {}
-
 impl PipelineSinkTask<RtmpInput> for RtmpStream {
     fn run(&mut self, ready: crate::pipeline::task::PipelineReadySignal, rx: &flume::Receiver<RtmpInput>) {
         let _ = ready.send(Ok(()));
         while let Ok(frame) = rx.recv() {
-            self.queue_video_frame(frame.video);
-            if let Some(audio) = frame.audio { self.queue_audio_frame(audio); }
+            self.queue_video_frame(frame.video).unwrap();
+            if let Some(audio) = frame.audio { self.queue_audio_frame(audio).unwrap(); }
         }
     }
 
@@ -74,7 +100,7 @@ impl PipelineSinkTask<FFAudio> for Arc<Mutex<RtmpStream>> {
     fn run(&mut self, ready: crate::pipeline::task::PipelineReadySignal, rx: &flume::Receiver<FFAudio>) {
         let _ = ready.send(Ok(()));
         while let Ok(frame) = rx.recv() {
-            if let Ok(mut s) = self.lock() { s.queue_audio_frame(frame); }
+            if let Ok(mut s) = self.lock() { s.queue_audio_frame(frame).unwrap(); }
         }
     }
 
@@ -85,7 +111,7 @@ impl PipelineSinkTask<FFVideo> for Arc<Mutex<RtmpStream>> {
     fn run(&mut self, ready: crate::pipeline::task::PipelineReadySignal, rx: &flume::Receiver<FFVideo>) {
         let _ = ready.send(Ok(()));
         while let Ok(frame) = rx.recv() {
-            if let Ok(mut s) = self.lock() { s.queue_video_frame(frame); }
+            if let Ok(mut s) = self.lock() { s.queue_video_frame(frame).unwrap(); }
         }
     }
 

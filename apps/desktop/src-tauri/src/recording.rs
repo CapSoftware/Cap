@@ -142,6 +142,7 @@ impl InProgressRecording {
         match self {
             Self::Instant { handle, .. } => &handle.bounds,
             Self::Studio { handle, .. } => &handle.bounds,
+            Self::Stream { handle, .. } => &handle.bounds,
         }
     }
 }
@@ -319,9 +320,9 @@ pub async fn start_recording(
     };
 
     match &inputs.capture_target {
-        ScreenCaptureTarget::Window { id } => {
+        ScreenCaptureTarget::Window { id: _id } => {
             #[cfg(target_os = "macos")]
-            let display = display_for_window(*id).unwrap().id;
+            let display = display_for_window(*_id).unwrap().id;
 
             #[cfg(windows)]
             let display = {
@@ -441,7 +442,20 @@ pub async fn start_recording(
                             mic_feed: &state.mic_feed,
                         },
                         match stream_config::StreamConfigStore::get(&app).map_err(|e| e.to_string())? {
-                            Some(c) => format!("{}/{}", c.server_url, c.stream_key),
+                            Some(c) => {
+                                // Improve RTMP URL construction
+                                let stream_url = if c.server_url.contains("{stream_key}") {
+                                    // If server_url contains a placeholder, replace it
+                                    c.server_url.replace("{stream_key}", &c.stream_key)
+                                } else if c.server_url.ends_with("/") {
+                                    // If server_url ends with /, just append stream_key
+                                    format!("{}{}", c.server_url, c.stream_key)
+                                } else {
+                                    // Default: append with /
+                                    format!("{}/{}", c.server_url, c.stream_key)
+                                };
+                                stream_url
+                            },
                             None => return Err("Stream configuration not found".to_string()),
                         },
                     )
@@ -622,6 +636,10 @@ async fn handle_recording_finish(
         CompletedRecording::Instant { recording, .. } => {
             recording.project_path.join("./content/output.mp4")
         }
+        CompletedRecording::Stream { .. } => {
+            // Stream recordings don't have a local output file, so we skip screenshot creation
+            return Ok(());
+        }
     };
 
     let display_screenshot = screenshots_dir.join("display.jpg");
@@ -748,6 +766,10 @@ async fn handle_recording_finish(
                     id: video_upload_info.id,
                 }),
             )
+        }
+        CompletedRecording::Stream { .. } => {
+            // This branch will never be reached due to early return above
+            unreachable!()
         }
     };
 

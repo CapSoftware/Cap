@@ -26,7 +26,7 @@ pub struct AACEncoder {
 }
 
 impl AACEncoder {
-    const OUTPUT_BITRATE: usize = 320 * 1000; // 128k
+    const OUTPUT_BITRATE: usize = 320 * 1000; // 320k
     const SAMPLE_FORMAT: Sample = Sample::F32(Type::Planar);
 
     pub fn factory(
@@ -36,9 +36,25 @@ impl AACEncoder {
         move |o| Self::init(tag, input_config, o)
     }
 
+    pub fn streaming_factory(
+        tag: &'static str,
+        input_config: AudioInfo,
+    ) -> impl FnOnce(&mut format::context::Output) -> Result<Self, MediaError> {
+        move |o| Self::init_with_bitrate(tag, input_config, 128 * 1000, o) // 128kbps for streaming
+    }
+
     pub fn init(
         tag: &'static str,
         input_config: AudioInfo,
+        output: &mut format::context::Output,
+    ) -> Result<Self, MediaError> {
+        Self::init_with_bitrate(tag, input_config, Self::OUTPUT_BITRATE, output)
+    }
+
+    pub fn init_with_bitrate(
+        tag: &'static str,
+        input_config: AudioInfo,
+        bitrate: usize,
         output: &mut format::context::Output,
     ) -> Result<Self, MediaError> {
         let codec = encoder::find_by_name("aac")
@@ -102,7 +118,7 @@ impl AACEncoder {
             None
         };
 
-        encoder.set_bit_rate(Self::OUTPUT_BITRATE);
+        encoder.set_bit_rate(bitrate);
         encoder.set_rate(rate);
         encoder.set_format(output_config.sample_format);
         encoder.set_channel_layout(output_config.channel_layout());
