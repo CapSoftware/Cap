@@ -144,6 +144,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
               src="/illustrations/app.webp"
               width={1000}
               height={1000}
+              quality={100}
               alt="App"
               className="object-cover relative inset-0 rounded-xl opacity-70 size-full"
             />
