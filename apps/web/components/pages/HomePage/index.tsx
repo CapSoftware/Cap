@@ -23,16 +23,13 @@ export const HomePage: React.FC<HomePageProps> = ({
     <>
       <Header serverHomepageCopyVariant={serverHomepageCopyVariant} />
       <RecordingModes />
-      <TextReveal
-        className="max-w-[600px] mx-auto leading-[1.2] text-center"
-        wordToStrike="edit,"
-      >
-        Record, edit, share
+      <TextReveal className="max-w-[600px] mx-auto leading-[1.2] text-center">
+        Record. Edit. Share.
       </TextReveal>
       <Features />
       <Testimonials />
-      <Pricing/>
-      <Faq/>
+      <Pricing />
+      <Faq />
       <ReadyToGetStarted />
     </>
   );
