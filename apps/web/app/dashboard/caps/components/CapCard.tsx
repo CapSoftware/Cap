@@ -72,6 +72,7 @@ export const CapCard = ({
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(cap.name);
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
+  const [, setSharedOrganizations] = useState(cap.sharedOrganizations);
   const [isDateEditing, setIsDateEditing] = useState(false);
   const [copyPressed, setCopyPressed] = useState(false);
   const [dateValue, setDateValue] = useState(
@@ -416,7 +417,7 @@ export const CapCard = ({
             "block group",
             anyCapSelected && "cursor-pointer pointer-events-none"
           )}
-          href={capUrl}
+          href={`/s/${cap.id}`}
         >
           <VideoThumbnail
             imageClass={`${
@@ -436,6 +437,7 @@ export const CapCard = ({
           <div>
             <div className="h-[1.25rem] mb-1">
               {" "}
+              {/* Fixed height container */}
               {isEditing && !sharedCapCard ? (
                 <textarea
                   rows={1}
@@ -464,6 +466,7 @@ export const CapCard = ({
             {renderSharedStatus()}
             <div className="mb-1 h-[1.5rem]">
               {" "}
+              {/* Fixed height container */}
               {isDateEditing && !sharedCapCard ? (
                 <div className="flex items-center h-full">
                   <input

@@ -3,7 +3,7 @@ import { organizations } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { buildEnv, serverEnv } from "@cap/env";
 import { notFound } from "next/navigation";
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, userAgent } from "next/server";
 
 const addHttps = (s?: string) => {
   if (!s) return s;

@@ -4,6 +4,8 @@ import { NextRequest } from "next/server";
 import { count, eq } from "drizzle-orm";
 import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
+import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
+import { isAiGenerationEnabled } from "@/utils/flags";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +32,18 @@ export async function GET(request: NextRequest) {
       { error: true, message: "Video does not exist" },
       { status: 404 }
     );
+  }
+
+  if (video[0].transcriptionStatus === "COMPLETE") {
+    if (isAiGenerationEnabled(user)) {
+      Promise.resolve().then(() => {
+        generateAiMetadata(videoId, user.id).catch(error => {
+          console.error("Error generating AI metadata:", error);
+        });
+      });
+    } else {
+      console.log(`[transcribe-status] AI generation feature disabled for user ${user.id} (email: ${user.email}, pro: ${user.stripeSubscriptionStatus})`);
+    }
   }
 
   return Response.json(

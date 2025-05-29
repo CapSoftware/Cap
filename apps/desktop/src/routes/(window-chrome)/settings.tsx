@@ -3,6 +3,7 @@ import { A, type RouteSectionProps } from "@solidjs/router";
 import { getVersion } from "@tauri-apps/api/app";
 import "@total-typescript/ts-reset/filter-boolean";
 import { createResource, For, Show, Suspense } from "solid-js";
+import { CapErrorBoundary } from "~/components/CapErrorBoundary";
 import { SignInButton } from "~/components/SignInButton";
 
 import { authStore } from "~/store";
@@ -18,7 +19,6 @@ export default function Settings(props: RouteSectionProps) {
       authStore.set(undefined);
     }
   };
-
 
   return (
     <div class="flex-1 flex flex-row divide-x divide-gray-5 text-[0.875rem] leading-[1.25rem] overflow-y-hidden">
@@ -45,6 +45,11 @@ export default function Settings(props: RouteSectionProps) {
                 href: "integrations",
                 name: "Integrations",
                 icon: IconLucideUnplug,
+              },
+              {
+                href: "license",
+                name: "License",
+                icon: IconLucideGift,
               },
               {
                 href: "experimental",
@@ -91,7 +96,9 @@ export default function Settings(props: RouteSectionProps) {
         </div>
       </div>
       <div class="overflow-y-hidden flex-1 animate-in">
-        <Suspense>{props.children}</Suspense>
+        <CapErrorBoundary>
+          <Suspense>{props.children}</Suspense>
+        </CapErrorBoundary>
       </div>
     </div>
   );

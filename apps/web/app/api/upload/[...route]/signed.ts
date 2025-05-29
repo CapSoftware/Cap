@@ -14,38 +14,32 @@ import { eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import type { NextRequest } from "next/server";
 import { serverEnv } from "@cap/env";
+import { Hono } from "hono";
+import { zValidator } from "@hono/zod-validator";
+import { z } from "zod";
+import { handle } from "hono/vercel";
 
-export async function POST(request: NextRequest) {
-  try {
+import { corsMiddleware, withAuth } from "../../utils";
+
+export const app = new Hono().use(withAuth);
+
+app.post(
+  "/",
+  zValidator(
+    "json",
+    z.object({
+      fileKey: z.string(),
+      duration: z.string().optional(),
+      bandwidth: z.string().optional(),
+      resolution: z.string().optional(),
+      videoCodec: z.string().optional(),
+      audioCodec: z.string().optional(),
+    })
+  ),
+  async (c) => {
+    const user = c.get("user");
     const { fileKey, duration, bandwidth, resolution, videoCodec, audioCodec } =
-      await request.json();
-
-    if (!fileKey) {
-      console.error("Missing required fields in /api/upload/signed/route.ts");
-      return Response.json(
-        { error: "Missing required fields" },
-        { status: 400 }
-      );
-    }
-
-    const token = request.headers.get("authorization")?.split(" ")[1];
-    if (token) {
-      cookies().set({
-        name: "next-auth.session-token",
-        value: token,
-        path: "/",
-        sameSite: "none",
-        secure: true,
-        httpOnly: true,
-      });
-    }
-
-    const user = await getCurrentUser();
-    console.log("/api/upload/signed user", user);
-
-    if (!user) {
-      return Response.json({ error: true }, { status: 401 });
-    }
+      c.req.valid("json");
 
     try {
       const [bucket] = await db()
@@ -136,12 +130,7 @@ export async function POST(request: NextRequest) {
 
       const presignedPostData: PresignedPost = await createPresignedPost(
         s3Client,
-        {
-          Bucket: bucketName,
-          Key: fileKey,
-          Fields,
-          Expires: 1800,
-        }
+        { Bucket: bucketName, Key: fileKey, Fields, Expires: 1800 }
       );
 
       // When not using aws s3, we need to transform the url to the local endpoint
@@ -173,7 +162,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      return Response.json({ presignedPostData });
+      return c.json({ presignedPostData });
     } catch (s3Error) {
       console.error("S3 operation failed:", s3Error);
       throw new Error(
@@ -182,14 +171,5 @@ export async function POST(request: NextRequest) {
         }`
       );
     }
-  } catch (error) {
-    console.error("Error creating presigned URL", error);
-    return Response.json(
-      {
-        error: "Error creating presigned URL",
-        details: error instanceof Error ? error.message : String(error),
-      },
-      { status: 500 }
-    );
   }
-}
+);

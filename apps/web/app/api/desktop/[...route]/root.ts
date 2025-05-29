@@ -7,15 +7,22 @@ import { db } from "@cap/database";
 import { users } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import * as crypto from "node:crypto";
-import { withAuth } from "../utils";
+import { withAuth } from "../../utils";
 
 export const app = new Hono().use(withAuth);
 
 app.post(
   "/feedback",
-  zValidator("form", z.object({ feedback: z.string() })),
+  zValidator(
+    "form",
+    z.object({
+      feedback: z.string(),
+      os: z.union([z.literal("macos"), z.literal("windows")]).optional(),
+      version: z.string().optional(),
+    })
+  ),
   async (c) => {
-    const { feedback } = c.req.valid("form");
+    const { feedback, os, version } = c.req.valid("form");
 
     try {
       const discordWebhookUrl = serverEnv().DISCORD_FEEDBACK_WEBHOOK_URL;
@@ -26,7 +33,13 @@ app.post(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          content: `New feedback from ${c.get("user").email}:\n${feedback}`,
+          content: [
+            `New feedback from ${c.get("user").email}:`,
+            feedback,
+            os && version && `${os} v${version}`,
+          ]
+            .filter(Boolean)
+            .join("\n"),
         }),
       });
 

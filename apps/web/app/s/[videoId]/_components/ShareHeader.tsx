@@ -5,7 +5,7 @@ import { userSelectProps } from "@cap/database/auth/session";
 import { faChevronDown } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { Copy, Globe2 } from "lucide-react";
 import { buildEnv, NODE_ENV } from "@cap/env";
@@ -61,6 +61,10 @@ export const ShareHeader = ({
   const isOwner = user !== null && user.id.toString() === data.ownerId;
 
   const { webUrl } = usePublicEnv();
+
+  useEffect(() => {
+    setTitle(data.name);
+  }, [data.name]);
 
   const handleBlur = async () => {
     setIsEditing(false);

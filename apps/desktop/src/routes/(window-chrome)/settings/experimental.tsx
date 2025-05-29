@@ -41,10 +41,10 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
       <div class="flex-1 custom-scroll">
         <div class="p-4 space-y-2 divide-y divide-gray-200">
           <div class="py-2 mb-4">
-            <h2 class="text-[--text-primary] text-lg font-medium">
+            <h2 class="text-gray-12 text-lg font-medium">
               Experimental Features
             </h2>
-            <p class="text-[--text-secondary] text-sm">
+            <p class="text-gray-11 text-sm">
               These features are still in development and may not work as
               expected.
             </p>

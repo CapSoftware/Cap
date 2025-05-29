@@ -1,7 +1,9 @@
 #[derive(serde::Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Flags {
-    pub split: bool,
+    pub captions: bool,
 }
 
-pub const FLAGS: Flags = Flags { split: true };
+pub const FLAGS: Flags = Flags {
+    captions: false, // cfg!(debug_assertions),
+};

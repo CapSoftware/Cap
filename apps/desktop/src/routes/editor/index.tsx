@@ -22,7 +22,7 @@ export default function () {
   return (
     <div
       class={cx(
-        "flex flex-col w-screen h-screen bg-gray-1",
+        "flex flex-col w-screen h-screen dark:bg-gray-1 bg-gray-2",
         !(
           ostype() === "windows" || !generalSettings.data?.windowTransparency
         ) && "bg-transparent-window"

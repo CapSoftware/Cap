@@ -19,6 +19,7 @@ import { cx } from "cva";
 import {
   For,
   Show,
+  Suspense,
   ValidComponent,
   batch,
   createEffect,
@@ -42,6 +43,7 @@ import { generalSettingsStore } from "~/store";
 import {
   type BackgroundSource,
   StereoMode,
+  TimelineSegment,
   ZoomSegment,
   commands,
 } from "~/utils/tauri";
@@ -64,6 +66,7 @@ import {
   Subfield,
   topSlideAnimateClasses,
 } from "./ui";
+import { CaptionsTab } from "./CaptionsTab";
 
 const BACKGROUND_SOURCES = {
   wallpaper: "Wallpaper",
@@ -207,7 +210,8 @@ export function ConfigSidebar() {
       | "transcript"
       | "audio"
       | "cursor"
-      | "hotkeys",
+      | "hotkeys"
+      | "captions",
   });
 
   let scrollRef!: HTMLDivElement;
@@ -215,7 +219,7 @@ export function ConfigSidebar() {
   return (
     <KTabs
       value={state.selectedTab}
-      class="flex flex-col shrink-0 flex-1 max-w-[26rem] overflow-hidden rounded-xl z-10 bg-gray-50 relative shadow-sm"
+      class="flex flex-col shrink-0 flex-1 max-w-[26rem] overflow-hidden rounded-xl z-10 relative bg-gray-1 dark:bg-gray-2 border border-gray-3"
     >
       <KTabs.List class="flex overflow-hidden relative z-40 flex-row items-center h-16 text-lg border-b border-gray-3 shrink-0">
         <For
@@ -228,10 +232,6 @@ export function ConfigSidebar() {
                 (s) => s.camera === null
               ),
             },
-            // {
-            //   id: "transcript" as const,
-            //   icon: IconCapMessageBubble,
-            // },
             { id: TAB_IDS.audio, icon: IconCapAudioOn },
             {
               id: TAB_IDS.cursor,
@@ -240,8 +240,12 @@ export function ConfigSidebar() {
                 meta().type === "multiple" && (meta() as any).segments[0].cursor
               ),
             },
+            window.FLAGS.captions && {
+              id: "captions" as const,
+              icon: IconCapMessageBubble,
+            },
             // { id: "hotkeys" as const, icon: IconCapHotkeys },
-          ]}
+          ].filter(Boolean)}
         >
           {(item) => (
             <KTabs.Trigger
@@ -279,21 +283,6 @@ export function ConfigSidebar() {
       >
         <BackgroundConfig scrollRef={scrollRef} />
         <CameraConfig scrollRef={scrollRef} />
-        <KTabs.Content value="transcript" class="flex flex-col gap-6">
-          <Field name="Transcript" icon={<IconCapMessageBubble />}>
-            <div class="p-1 rounded-md border bg-gray-1 text-gray-11 text-wrap">
-              Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed ac
-              purus sit amet nunc ultrices ultricies. Nullam nec scelerisque
-              nunc. Nullam nec scelerisque nunc.
-            </div>
-            <button
-              type="button"
-              class="w-full bg-gray-10/20 hover:bg-gray-10/30 transition-colors duration-100 rounded-full py-1.5"
-            >
-              Edit
-            </button>
-          </Field>
-        </KTabs.Content>
         <KTabs.Content value="audio" class="flex flex-col gap-6">
           <Field
             name="Audio Controls"
@@ -545,25 +534,54 @@ export function ConfigSidebar() {
             </ComingSoonTooltip>
           </Field>
         </KTabs.Content>
+        <KTabs.Content value="captions" class="flex flex-col gap-6">
+          <CaptionsTab />
+        </KTabs.Content>
       </div>
-      <Show
-        when={(() => {
-          const selection =
-            editorState.timeline.selection?.type === "zoom" &&
-            editorState.timeline.selection;
-          if (!selection) return;
+      <Show when={editorState.timeline.selection}>
+        {(selection) => (
+          <div class="absolute inset-0 p-[0.75rem] text-[0.875rem] space-y-4 bg-gray-1 dark:bg-gray-2 z-50 animate-in slide-in-from-bottom-2 fade-in">
+            <Suspense>
+              <Show
+                when={(() => {
+                  const zoomSelection = selection();
+                  if (zoomSelection.type !== "zoom") return;
 
-          const segment = project.timeline?.zoomSegments?.[selection.index];
-          if (!segment) return;
+                  const segment =
+                    project.timeline?.zoomSegments?.[zoomSelection.index];
+                  if (!segment) return;
 
-          return { selection, segment };
-        })()}
-      >
-        {(value) => (
-          <ZoomSegmentConfig
-            segment={value().segment}
-            segmentIndex={value().selection.index}
-          />
+                  return { selection: zoomSelection, segment };
+                })()}
+              >
+                {(value) => (
+                  <ZoomSegmentConfig
+                    segment={value().segment}
+                    segmentIndex={value().selection.index}
+                  />
+                )}
+              </Show>
+              <Show
+                when={(() => {
+                  const clipSegment = selection();
+                  if (clipSegment.type !== "clip") return;
+
+                  const segment =
+                    project.timeline?.segments?.[clipSegment.index];
+                  if (!segment) return;
+
+                  return { selection: clipSegment, segment };
+                })()}
+              >
+                {(value) => (
+                  <ClipSegmentConfig
+                    segment={value().segment}
+                    segmentIndex={value().selection.index}
+                  />
+                )}
+              </Show>
+            </Suspense>
+          </div>
         )}
       </Show>
     </KTabs>
@@ -1613,7 +1631,6 @@ function ZoomSegmentConfig(props: {
     project,
     setProject,
     editorInstance,
-    editorState,
     setEditorState,
     projectHistory,
   } = useEditorContext();
@@ -1626,10 +1643,7 @@ function ZoomSegmentConfig(props: {
   };
 
   return (
-    <div
-      data-visible={editorState.timeline.selection?.type === "zoom"}
-      class="absolute inset-0 p-[0.75rem] text-[0.875rem] space-y-6 bg-gray-2 z-50 animate-in slide-in-from-bottom-2 fade-in"
-    >
+    <>
       <div class="flex flex-row justify-between items-center">
         <div class="flex gap-2 items-center">
           <EditorButton
@@ -1682,23 +1696,13 @@ function ZoomSegmentConfig(props: {
           class="space-y-6"
           value={props.segment.mode === "auto" ? "auto" : "manual"}
           onChange={(v) => {
-            if (v === "auto") {
-              setProject(
-                "timeline",
-                "zoomSegments",
-                props.segmentIndex,
-                "mode",
-                "auto"
-              );
-            } else {
-              setProject(
-                "timeline",
-                "zoomSegments",
-                props.segmentIndex,
-                "mode",
-                { manual: states.manual }
-              );
-            }
+            setProject(
+              "timeline",
+              "zoomSegments",
+              props.segmentIndex,
+              "mode",
+              v === "auto" ? "auto" : { manual: states.manual }
+            );
           }}
         >
           <KTabs.List class="flex flex-row items-center rounded-[0.5rem] relative border">
@@ -1716,7 +1720,7 @@ function ZoomSegmentConfig(props: {
               Manual
             </KTabs.Trigger>
             <KTabs.Indicator class="absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-9 outline-offset-2 rounded-[0.6rem] overflow-hidden">
-              <div class="flex-1 bg-gray-2" />
+              <div class="flex-1 bg-gray-3" />
             </KTabs.Indicator>
           </KTabs.List>
           <KTabs.Content value="manual" tabIndex="">
@@ -1893,7 +1897,65 @@ function ZoomSegmentConfig(props: {
           </KTabs.Content>
         </KTabs>
       </Field>
-    </div>
+    </>
+  );
+}
+
+function ClipSegmentConfig(props: {
+  segmentIndex: number;
+  segment: TimelineSegment;
+}) {
+  const { setProject, setEditorState, project } = useEditorContext();
+
+  return (
+    <>
+      <div class="flex flex-row justify-between items-center">
+        <div class="flex gap-2 items-center">
+          <EditorButton
+            onClick={() => setEditorState("timeline", "selection", null)}
+            leftIcon={<IconLucideCheck />}
+          >
+            Done
+          </EditorButton>
+        </div>
+        <EditorButton
+          variant="danger"
+          onClick={() => {
+            batch(() => {
+              setProject(
+                "timeline",
+                "segments",
+                produce((s) => {
+                  if (!s) return;
+                  return s.splice(props.segmentIndex, 1);
+                })
+              );
+              setEditorState("timeline", "selection", null);
+            });
+          }}
+          disabled={
+            (
+              project.timeline?.segments.filter(
+                (s) => s.recordingSegment === props.segment.recordingSegment
+              ) ?? []
+            ).length < 2
+          }
+          leftIcon={<IconCapTrash />}
+        >
+          Delete
+        </EditorButton>
+      </div>
+      <ComingSoonTooltip>
+        <Field name="Hide Cursor" disabled value={<Toggle disabled />} />
+      </ComingSoonTooltip>
+      <ComingSoonTooltip>
+        <Field
+          name="Disable Smooth Cursor Movement"
+          disabled
+          value={<Toggle disabled />}
+        />
+      </ComingSoonTooltip>
+    </>
   );
 }
 
