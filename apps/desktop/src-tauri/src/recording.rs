@@ -339,16 +339,18 @@ pub async fn start_recording(
             fail!("recording::spawn_actor");
             let mut state = state_mtx.write().await;
 
+            let base_inputs = cap_recording::RecordingBaseInputs {
+                capture_target: inputs.capture_target,
+                capture_system_audio: inputs.capture_system_audio,
+                mic_feed: &state.mic_feed,
+            };
+
             let (actor, actor_done_rx) = match inputs.mode {
                 RecordingMode::Studio => {
                     let (handle, actor_done_rx) = cap_recording::spawn_studio_recording_actor(
                         id.clone(),
                         recording_dir.clone(),
-                        cap_recording::RecordingBaseInputs {
-                            capture_target: inputs.capture_target,
-                            capture_system_audio: inputs.capture_system_audio,
-                            mic_feed: &state.mic_feed,
-                        },
+                        base_inputs,
                         state.camera_feed.clone(),
                         GeneralSettingsStore::get(&app)
                             .ok()
@@ -380,11 +382,7 @@ pub async fn start_recording(
                         cap_recording::instant_recording::spawn_instant_recording_actor(
                             id.clone(),
                             recording_dir.clone(),
-                            cap_recording::RecordingBaseInputs {
-                                capture_target: inputs.capture_target,
-                                capture_system_audio: inputs.capture_system_audio,
-                                mic_feed: &state.mic_feed,
-                            },
+                            base_inputs,
                         )
                         .await
                         .map_err(|e| {

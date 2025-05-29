@@ -4,15 +4,14 @@ import {
   queryOptions,
 } from "@tanstack/solid-query";
 import { createStore, reconcile } from "solid-js/store";
-import { createMemo, createSignal } from "solid-js";
+import { createMemo } from "solid-js";
 import { makePersisted } from "@solid-primitives/storage";
 
 import { authStore, generalSettingsStore } from "~/store";
-import { commands, events, RecordingMode, ScreenCaptureTarget } from "./tauri";
+import { commands, RecordingMode, ScreenCaptureTarget } from "./tauri";
 import { createQueryInvalidate } from "./events";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export const listWindows = queryOptions({
   queryKey: ["capture", "windows"] as const,
@@ -36,11 +35,6 @@ export const listScreens = queryOptions({
   reconcile: "id",
   refetchInterval: 1000,
 });
-
-// const getOptions = queryOptions({
-//   queryKey: ["recordingOptions"] as const,
-//   queryFn: () => commands.getRecordingOptions(),
-// });
 
 const getCurrentRecording = queryOptions({
   queryKey: ["currentRecording"] as const,

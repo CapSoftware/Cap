@@ -10,17 +10,17 @@ import {
   onMount,
   Suspense,
 } from "solid-js";
-
-import "@cap/ui-solid/main.css";
-import "unfonts.css";
-import "./styles/theme.css";
-
 import { Button } from "@cap/ui-solid";
 import {
   getCurrentWebviewWindow,
   WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
 import { Toaster } from "solid-toast";
+
+import "@cap/ui-solid/main.css";
+import "unfonts.css";
+import "./styles/theme.css";
+
 import { generalSettingsStore } from "./store";
 import { initAnonymousUser } from "./utils/analytics";
 import { commands, type AppTheme } from "./utils/tauri";

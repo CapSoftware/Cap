@@ -74,16 +74,16 @@ function Page() {
 
   onMount(async () => {
     const auth = await authStore.get();
-    const authUserId = auth?.user_id;
-    if (!authUserId) return;
+    const userId = auth?.user_id;
+    if (!userId) return;
 
     const trackedSession = localStorage.getItem("tracked_signin_session");
 
-    if (trackedSession !== authUserId) {
+    if (trackedSession !== userId) {
       console.log("New auth session detected, tracking sign in event");
-      identifyUser(authUserId);
+      identifyUser(userId);
       trackEvent("user_signed_in", { platform: "desktop" });
-      localStorage.setItem("tracked_signin_session", authUserId);
+      localStorage.setItem("tracked_signin_session", userId);
     } else {
       console.log("Auth session already tracked, skipping sign in event");
     }
