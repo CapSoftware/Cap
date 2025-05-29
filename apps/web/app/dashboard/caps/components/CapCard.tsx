@@ -3,9 +3,9 @@ import { editTitle } from "@/actions/videos/edit-title";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { CapCardAnalytics } from "@/app/dashboard/caps/components/CapCardAnalytics";
 import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
+import { PasswordDialog } from "@/app/dashboard/caps/components/PasswordDialog";
 import { Tooltip } from "@/components/Tooltip";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
-import { usePublicEnv } from "@/utils/public-env";
 import { VideoMetadata } from "@cap/database/types";
 import { buildEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
@@ -14,6 +14,8 @@ import {
   faChevronDown,
   faLink,
   faTrash,
+  faLock,
+  faUnlock,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
@@ -34,6 +36,7 @@ interface Props extends PropsWithChildren {
     sharedOrganizations?: { id: string; name: string; iconUrl?: string }[];
     ownerName: string | null;
     metadata?: VideoMetadata;
+    hasPassword?: boolean;
   };
   analytics: number;
   onDelete?: (videoId: string) => Promise<void>;
@@ -64,6 +67,10 @@ export const CapCard = ({
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(cap.name);
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
+  const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
+  const [passwordProtected, setPasswordProtected] = useState(
+    cap.hasPassword || false
+  );
   const [, setSharedOrganizations] = useState(cap.sharedOrganizations);
   const [isDateEditing, setIsDateEditing] = useState(false);
   const [copyPressed, setCopyPressed] = useState(false);
@@ -72,7 +79,7 @@ export const CapCard = ({
   );
   const [showFullDate, setShowFullDate] = useState(false);
   const router = useRouter();
-  const { activeOrganization } = useSharedContext();
+  const { isSubscribed, setUpgradeModalOpen } = useSharedContext();
 
   const handleTitleBlur = async (capName: string) => {
     if (!title || capName === title) {
@@ -105,6 +112,11 @@ export const CapCard = ({
         updatedSharedOrganizations.includes(organization.id)
       )
     );
+    router.refresh();
+  };
+
+  const handlePasswordUpdated = (protectedStatus: boolean) => {
+    setPasswordProtected(protectedStatus);
     router.refresh();
   };
 
@@ -241,16 +253,6 @@ export const CapCard = ({
     }
   };
 
-  const { webUrl } = usePublicEnv();
-
-  const capUrl =
-    activeOrganization?.organization.customDomain &&
-    activeOrganization?.organization.domainVerified
-      ? `https://${activeOrganization.organization.customDomain}/s/${cap.id}`
-      : buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-      ? `https://cap.link/${cap.id}`
-      : `${webUrl}/s/${cap.id}`;
-
   return (
     <>
       <SharingDialog
@@ -261,6 +263,13 @@ export const CapCard = ({
         sharedOrganizations={cap.sharedOrganizations || []}
         userOrganizations={userOrganizations}
         onSharingUpdated={handleSharingUpdated}
+      />
+      <PasswordDialog
+        isOpen={isPasswordDialogOpen}
+        onClose={() => setIsPasswordDialogOpen(false)}
+        videoId={cap.id}
+        hasPassword={passwordProtected}
+        onPasswordUpdated={handlePasswordUpdated}
       />
       <div
         onClick={handleCardClick}
@@ -293,7 +302,11 @@ export const CapCard = ({
               <Button
                 onClick={(e) => {
                   e.stopPropagation();
-                  handleCopy(capUrl);
+                  handleCopy(
+                    buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+                      ? `https://cap.link/${cap.id}`
+                      : `${location.origin}/s/${cap.id}`
+                  );
                 }}
                 className="!size-8 delay-0 hover:opacity-80 rounded-full min-w-fit !p-0"
                 variant="white"
@@ -320,6 +333,32 @@ export const CapCard = ({
                     <path d="M20 6 9 17l-5-5" />
                   </svg>
                 )}
+              </Button>
+            </Tooltip>
+            <Tooltip
+              content={
+                passwordProtected ? "Edit password" : "Add password to access"
+              }
+            >
+              <Button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!isSubscribed) {
+                    setUpgradeModalOpen(true);
+                  } else {
+                    setIsPasswordDialogOpen(true);
+                  }
+                }}
+                className="!size-8 delay-50 hover:opacity-80 rounded-full min-w-fit !p-0"
+                variant="white"
+                size="sm"
+              >
+                <FontAwesomeIcon
+                  className={`size-3 ${
+                    passwordProtected ? "text-amber-600" : "text-gray-12"
+                  }`}
+                  icon={passwordProtected ? faLock : faUnlock}
+                />
               </Button>
             </Tooltip>
             <Tooltip content="Delete Cap">
@@ -417,10 +456,10 @@ export const CapCard = ({
                 </p>
               )}
             </div>
+
             {renderSharedStatus()}
             <div className="mb-1 h-[1.5rem]">
               {" "}
-              {/* Fixed height container */}
               {isDateEditing && !sharedCapCard ? (
                 <div className="flex items-center h-full">
                   <input
