@@ -4,11 +4,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { message } from "@tauri-apps/plugin-dialog";
 import {
-    createEffect,
-    ErrorBoundary,
-    onCleanup,
-    onMount,
-    Suspense,
+  createEffect,
+  ErrorBoundary,
+  onCleanup,
+  onMount,
+  Suspense,
 } from "solid-js";
 
 import "@cap/ui-solid/main.css";
@@ -17,8 +17,8 @@ import "./styles/theme.css";
 
 import { Button } from "@cap/ui-solid";
 import {
-    getCurrentWebviewWindow,
-    WebviewWindow,
+  getCurrentWebviewWindow,
+  WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
 import { Toaster } from "solid-toast";
 import { generalSettingsStore } from "./store";
@@ -103,6 +103,16 @@ function Inner() {
                   Reload
                 </Button>
               </div>
+
+              {import.meta.env.DEV && (
+                <div class="h-0 text-sm">
+                  <pre class="text-left mt-8">{`${e.toString()}\n\n${e.stack
+                    ?.toString()
+                    .split("\n")
+                    .slice(0, 10)
+                    .join("\n")}`}</pre>
+                </div>
+              )}
             </div>
           );
         }}

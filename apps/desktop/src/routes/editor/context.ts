@@ -198,6 +198,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       },
     });
 
+    const [micWaveforms] = createResource(() => commands.getMicWaveforms());
+
     return {
       ...editorInstanceContext,
       meta() {
@@ -216,7 +218,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       zoomOutLimit,
       exportState,
       setExportState,
-      micWaveforms: editorInstanceContext.micWaveforms,
+      micWaveforms,
     };
   },
   // biome-ignore lint/style/noNonNullAssertion: it's ok
@@ -293,14 +295,6 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
       return instance;
     });
 
-    const [micWaveforms] = createResource(
-      () => editorInstance(),
-      async () => {
-        if (!editorInstance()) return [] as number[][];
-        return await commands.getMicWaveforms();
-      }
-    );
-
     const metaQuery = createQuery(() => ({
       queryKey: ["editor", "meta"],
       queryFn: editorInstance()
@@ -315,7 +309,6 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
       latestFrame,
       presets: createPresets(),
       metaQuery,
-      micWaveforms,
     };
   }, null!);
 

@@ -36,6 +36,7 @@ function WaveformCanvas(props: {
 }) {
   let canvas: HTMLCanvasElement | undefined;
   const { width } = useSegmentContext();
+  const { secsPerPixel } = useTimelineContext();
 
   const render = () => {
     if (!canvas) return;
@@ -49,38 +50,42 @@ function WaveformCanvas(props: {
     canvas.width = w;
     ctx.clearRect(0, 0, w, h);
 
-    const startIdx = Math.floor(props.segment.start * 10);
-    const endIdx = Math.floor(props.segment.end * 10);
-    const slice = props.waveform.slice(startIdx, endIdx);
-
-    if (slice.length === 0) return;
-
-    const step = w / slice.length;
-    const centerY = h / 2;
-    const maxAmplitude = h / 2 - 2;
+    const maxAmplitude = h;
 
     ctx.fillStyle = "rgba(255,255,255,0.3)";
     ctx.beginPath();
 
-    const firstAmplitude = slice[0] * maxAmplitude;
-    ctx.moveTo(0, centerY - firstAmplitude);
+    const step = 0.05 / secsPerPixel();
 
-    for (let i = 1; i < slice.length; i++) {
-      const x = i * step;
-      const amplitude = slice[i] * maxAmplitude;
-      const y = centerY - amplitude;
-      ctx.lineTo(x, y);
+    ctx.moveTo(0, h);
+
+    for (
+      let segmentTime = props.segment.start;
+      segmentTime <= props.segment.end + 0.1;
+      segmentTime += 0.1
+    ) {
+      const index = Math.floor(segmentTime * 10);
+      const xTime = index / 10;
+
+      const amplitude = props.waveform[index] * maxAmplitude;
+
+      const x = (xTime - props.segment.start) / secsPerPixel();
+      const y = h - amplitude;
+
+      const prevX = (xTime - 0.1 - props.segment.start) / secsPerPixel();
+      const prevAmplitude = props.waveform[index - 1] * maxAmplitude;
+      const prevY = h - prevAmplitude;
+
+      const cpX1 = prevX + step / 2;
+      const cpX2 = x - step / 2;
+
+      ctx.bezierCurveTo(cpX1, prevY, cpX2, y, x, y);
     }
 
-    const lastAmplitude = slice[slice.length - 1] * maxAmplitude;
-    ctx.lineTo((slice.length - 1) * step, centerY + lastAmplitude);
-
-    for (let i = slice.length - 2; i >= 0; i--) {
-      const x = i * step;
-      const amplitude = slice[i] * maxAmplitude;
-      const y = centerY + amplitude;
-      ctx.lineTo(x, y);
-    }
+    ctx.lineTo(
+      (props.segment.end + 0.3 - props.segment.start) / secsPerPixel(),
+      h
+    );
 
     ctx.closePath();
     ctx.fill();
@@ -98,7 +103,7 @@ function WaveformCanvas(props: {
       }}
       class="absolute inset-0 w-full h-full pointer-events-none"
       height={52}
-    ></canvas>
+    />
   );
 }
 
@@ -206,19 +211,24 @@ export function ClipTrack(
                         })()}
                       >
                         {(marker) => (
-                          <div class="h-7 w-0 absolute -top-8 flex flex-row rounded-full">
+                          <div class="h-7 -top-8 overflow-hidden rounded-full -translate-x-1/2 z-10">
                             <CutOffsetButton
-                              value={
-                                marker().type === "time" ? marker().time : 0
-                              }
-                              class="-left-px absolute rounded-r-full !pl-1.5 rounded-tl-full"
+                              value={(() => {
+                                const m = marker();
+                                return m.type === "time" ? m.time : 0;
+                              })()}
                               onClick={() => {
                                 setProject(
                                   "timeline",
                                   "segments",
-                                  i(),
-                                  "start",
-                                  0
+                                  produce((s) => {
+                                    if (marker().type === "reset") {
+                                      s[i() - 1].end = s[i()].end;
+                                      s.splice(i(), 1);
+                                    } else {
+                                      s[i() - 1].end = s[i()].start;
+                                    }
+                                  })
                                 );
                               }}
                             />
