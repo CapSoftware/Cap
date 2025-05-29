@@ -74,6 +74,7 @@ export default async function CapsPage({
           ${videos.createdAt}
         )
       `,
+      hasPassword: sql<number>`IF(${videos.password} IS NULL, 0, 1)`,
     })
     .from(videos)
     .leftJoin(comments, eq(videos.id, comments.videoId))
@@ -126,6 +127,7 @@ export default async function CapsPage({
             [key: string]: any;
           }
         | undefined,
+      hasPassword: video.hasPassword === 1,
     };
   });
 
