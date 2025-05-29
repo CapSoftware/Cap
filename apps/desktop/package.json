@@ -24,6 +24,7 @@
     "@solid-primitives/context": "^0.2.3",
     "@solid-primitives/date": "^2.0.23",
     "@solid-primitives/deep": "^0.2.9",
+    "@solid-primitives/event-bus": "^1.1.1",
     "@solid-primitives/event-listener": "^2.3.3",
     "@solid-primitives/history": "^0.1.5",
     "@solid-primitives/memo": "^1.4.2",

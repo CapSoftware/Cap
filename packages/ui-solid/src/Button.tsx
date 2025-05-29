@@ -15,7 +15,7 @@ const styles = cva(
         secondary:
           "bg-gray-4 enabled:hover:opacity-80 text-gray-500 disabled:bg-gray-3 disabled:text-gray-10 outline-blue-300",
         destructive:
-          "bg-red-300 text-gray-50 dark:text-gray-500 enabled:hover:bg-red-400 disabled:bg-red-200 outline-red-300",
+          "bg-red-300 text-gray-50 dark:text-gray-12 dark:disabled:text-gray-10 enabled:hover:bg-red-400 disabled:bg-red-200 outline-red-300",
         white:
           "bg-gray-1 dark:bg-gray-12 enabled:hover:opacity-80 text-gray-500 dark:disabled:bg-gray-300 dark:disabled:text-gray-8 dark:text-gray-1 disabled:bg-gray-400 disabled:text-gray-8 outline-blue-300",
         lightdark:
