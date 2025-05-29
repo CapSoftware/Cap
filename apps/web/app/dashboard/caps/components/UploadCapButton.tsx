@@ -73,85 +73,6 @@ export const UploadCapButton = ({
       const parser = await import("@remotion/media-parser");
       const webcodecs = await import("@remotion/webcodecs");
 
-      const captureThumbnail = (): Promise<Blob | null> => {
-        return new Promise((resolve) => {
-          const video = document.createElement("video");
-          video.src = URL.createObjectURL(file);
-          video.muted = true;
-          video.playsInline = true;
-          video.crossOrigin = "anonymous";
-
-          const cleanup = () => {
-            URL.revokeObjectURL(video.src);
-          };
-
-          const timeout = setTimeout(() => {
-            cleanup();
-            console.warn(
-              "Thumbnail generation timed out, proceeding without thumbnail"
-            );
-            resolve(null);
-          }, 10000);
-
-          video.addEventListener("loadedmetadata", () => {
-            try {
-              const seekTime = Math.min(1, video.duration / 4);
-              video.currentTime = seekTime;
-            } catch (err) {
-              console.warn("Failed to seek video for thumbnail:", err);
-              clearTimeout(timeout);
-              cleanup();
-              resolve(null);
-            }
-          });
-
-          video.addEventListener("seeked", () => {
-            try {
-              const canvas = document.createElement("canvas");
-              canvas.width = video.videoWidth || 640;
-              canvas.height = video.videoHeight || 480;
-              const ctx = canvas.getContext("2d");
-              if (!ctx) {
-                console.warn("Failed to get canvas context");
-                clearTimeout(timeout);
-                cleanup();
-                resolve(null);
-                return;
-              }
-              ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-              canvas.toBlob(
-                (blob) => {
-                  clearTimeout(timeout);
-                  cleanup();
-                  if (blob) {
-                    resolve(blob);
-                  } else {
-                    console.warn("Failed to create thumbnail blob");
-                    resolve(null);
-                  }
-                },
-                "image/jpeg",
-                0.8
-              );
-            } catch (err) {
-              console.warn("Error during thumbnail capture:", err);
-              clearTimeout(timeout);
-              cleanup();
-              resolve(null);
-            }
-          });
-
-          video.addEventListener("error", (err) => {
-            console.warn("Video loading error for thumbnail:", err);
-            clearTimeout(timeout);
-            cleanup();
-            resolve(null);
-          });
-
-          video.addEventListener("loadstart", () => {});
-        });
-      };
-
       const metadata = await parser.parseMedia({
         src: file,
         fields: {
@@ -162,11 +83,6 @@ export const UploadCapButton = ({
           sampleRate: true,
         },
       });
-
-      const thumbnailBlob = await captureThumbnail();
-      const thumbnailUrl = thumbnailBlob
-        ? URL.createObjectURL(thumbnailBlob)
-        : undefined;
 
       const duration = metadata.durationInSeconds
         ? Math.round(metadata.durationInSeconds)
@@ -184,7 +100,7 @@ export const UploadCapButton = ({
       });
 
       const uploadId = videoData.id;
-      onStart?.(uploadId, thumbnailUrl);
+      onStart?.(uploadId);
       onProgress?.(uploadId, 10);
 
       const fileSizeMB = file.size / (1024 * 1024);
@@ -302,6 +218,91 @@ export const UploadCapButton = ({
         return;
       }
 
+      const captureThumbnail = (): Promise<Blob | null> => {
+        return new Promise((resolve) => {
+          const video = document.createElement("video");
+          video.src = URL.createObjectURL(optimizedBlob);
+          video.muted = true;
+          video.playsInline = true;
+          video.crossOrigin = "anonymous";
+
+          const cleanup = () => {
+            URL.revokeObjectURL(video.src);
+          };
+
+          const timeout = setTimeout(() => {
+            cleanup();
+            console.warn(
+              "Thumbnail generation timed out, proceeding without thumbnail"
+            );
+            resolve(null);
+          }, 10000);
+
+          video.addEventListener("loadedmetadata", () => {
+            try {
+              const seekTime = Math.min(1, video.duration / 4);
+              video.currentTime = seekTime;
+            } catch (err) {
+              console.warn("Failed to seek video for thumbnail:", err);
+              clearTimeout(timeout);
+              cleanup();
+              resolve(null);
+            }
+          });
+
+          video.addEventListener("seeked", () => {
+            try {
+              const canvas = document.createElement("canvas");
+              canvas.width = video.videoWidth || 640;
+              canvas.height = video.videoHeight || 480;
+              const ctx = canvas.getContext("2d");
+              if (!ctx) {
+                console.warn("Failed to get canvas context");
+                clearTimeout(timeout);
+                cleanup();
+                resolve(null);
+                return;
+              }
+              ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+              canvas.toBlob(
+                (blob) => {
+                  clearTimeout(timeout);
+                  cleanup();
+                  if (blob) {
+                    resolve(blob);
+                  } else {
+                    console.warn("Failed to create thumbnail blob");
+                    resolve(null);
+                  }
+                },
+                "image/jpeg",
+                0.8
+              );
+            } catch (err) {
+              console.warn("Error during thumbnail capture:", err);
+              clearTimeout(timeout);
+              cleanup();
+              resolve(null);
+            }
+          });
+
+          video.addEventListener("error", (err) => {
+            console.warn("Video loading error for thumbnail:", err);
+            clearTimeout(timeout);
+            cleanup();
+            resolve(null);
+          });
+
+          video.addEventListener("loadstart", () => {});
+        });
+      };
+
+      const thumbnailBlob = await captureThumbnail();
+      const thumbnailUrl = thumbnailBlob
+        ? URL.createObjectURL(thumbnailBlob)
+        : undefined;
+
+      onStart?.(uploadId, thumbnailUrl);
       onProgress?.(uploadId, 100);
 
       const formData = new FormData();
