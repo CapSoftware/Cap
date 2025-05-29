@@ -12,6 +12,7 @@ import { count, desc, eq, sql } from "drizzle-orm";
 import { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { Caps } from "./Caps";
+import { serverEnv } from "@cap/env";
 
 export const metadata: Metadata = {
   title: "My Caps — Cap",
@@ -136,6 +137,7 @@ export default async function CapsPage({
       data={processedVideoData}
       count={totalCount}
       userOrganizations={userOrganizations}
+      dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
     />
   );
 }
