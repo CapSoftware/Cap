@@ -44,30 +44,74 @@ const StorageOptionsArt = memo(() => {
     }),
   });
   return (
-    <StorageOptionsRive className="w-full max-w-[400px] mx-auto h-[300px]" />
+    <StorageOptionsRive className="w-full max-w-[450px] mx-auto h-[300px]" />
   )
 })
 
+const CollabArt = memo(() => {
+  const {RiveComponent: CollabRive} = useRive({
+    src: "/rive/bento.riv",
+    artboard: "collab",
+    animations: ["in"],
+    autoplay: true,
+    layout: new Layout({
+      fit: Fit.Contain
+    }),
+  });
+  return (
+    <CollabRive className="w-full max-w-[500px] mx-auto h-[300px]" />
+  )
+})
+
+const PrivacyFirstArt = memo(() => {
+  const {RiveComponent: PrivacyFirstRive} = useRive({
+    src: "/rive/bento.riv",
+    artboard: "privacyfirst",
+    animations: ["in"],
+    autoplay: true,
+    layout: new Layout({
+      fit: Fit.Contain
+    }),
+  });
+  return (
+    <PrivacyFirstRive className="w-full max-w-[560px] mx-auto h-[300px]" />
+  )
+})
+
+const EveryoneArt = memo(() => {
+  const {RiveComponent: EveryoneRive} = useRive({
+    src: "/rive/bento.riv",
+    artboard: "everyone",
+    animations: ["in"],
+    autoplay: true,
+    layout: new Layout({
+      fit: Fit.Contain
+    }),
+  });
+  return (
+    <EveryoneRive className="w-full max-w-[500px] mx-auto h-[300px]" />
+  )
+})
 
 const features: Feature[] = [
   {
     title: "Flexible Storage Options",
     rive: <StorageOptionsArt />,
     relative: {
-      top: 20,
+      top: 25,
     },
     description:
       "Choose how and where you store your recordings. Cap offers both local and cloud storage options to suit your needs. Save space on your device or keep your entire content library accessible from anywhere – ideal for freelancers and growing teams with varied content creation needs.",
   },
   {
     title: "Privacy-first",
-    img: "/illustrations/privacyfirst.svg",
+    rive: <PrivacyFirstArt />,
     description:
       "Own your content with Cap’s privacy-focused approach. Keep your sensitive information secure and maintain complete control over who can access your recordings – perfect for confidential client communications and internal team sharing.",
   },
   {
     title: "Seamless Team Collaboration",
-    img: "/illustrations/teamcollab.svg",
+    rive: <CollabArt />,
     description:
       "Share knowledge effortlessly with your team or clients. Cap’s intuitive sharing features make it easy to organize content, provide access to specific people, and track engagement. Perfect for small businesses and growing teams who need simple yet powerful collaboration tools.",
   },
@@ -85,8 +129,7 @@ const features: Feature[] = [
   },
   {
     title: "Built for everyone",
-    img: "/illustrations/everyone.svg",
-    imageClass: "w-full max-w-[350px]",
+    rive: <EveryoneArt />,
     description:
       "For creators, teams, and educators alike, this screen recorder is designed to adapt to different needs and workflows—whether you’re capturing lessons, product demos, or quick updates. It’s a simple, customizable tool that makes screen recording accessible to everyone.",
   },
