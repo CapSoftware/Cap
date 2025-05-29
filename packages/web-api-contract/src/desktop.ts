@@ -70,11 +70,11 @@ const protectedContract = c.router(
         200: z.object({
           config: z.custom<{
             provider: string;
-            accessKeyId: string | null;
-            secretAccessKey: string | null;
-            endpoint: string | null;
-            bucketName: string | null;
-            region: string | null;
+            accessKeyId: string;
+            secretAccessKey: string;
+            endpoint: string;
+            bucketName: string;
+            region: string;
           }>(),
         }),
       },
