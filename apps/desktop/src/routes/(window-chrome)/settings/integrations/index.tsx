@@ -1,20 +1,19 @@
 import { Button } from "@cap/ui-solid";
 import { useNavigate } from "@solidjs/router";
-import { For, createResource } from "solid-js";
+import { For, createResource, onMount } from "solid-js";
 
 import "@total-typescript/ts-reset/filter-boolean";
 import { commands } from "~/utils/tauri";
+import { authStore } from "~/store";
 
 export default function AppsTab() {
   const navigate = useNavigate();
-  // Add error handling for plan fetching
-  const [isUpgraded] = createResource(async () => {
-    try {
-      return await commands.checkUpgradedAndUpdate();
-    } catch (error) {
-      console.error("Failed to fetch plan:", error);
-      return false; // Default to not upgraded on error
-    }
+  const auth = authStore.createQuery();
+
+  const isPro = () => auth.data?.plan?.upgraded;
+
+  onMount(() => {
+    void commands.checkUpgradedAndUpdate();
   });
 
   const apps = [
@@ -30,7 +29,7 @@ export default function AppsTab() {
 
   const handleAppClick = async (app: (typeof apps)[number]) => {
     try {
-      if (app.pro && !isUpgraded()) {
+      if (app.pro && !isPro()) {
         await commands.showWindow("Upgrade");
         return;
       }
@@ -57,15 +56,10 @@ export default function AppsTab() {
                 </div>
               </div>
               <Button
-                variant={app.pro && !isUpgraded() ? "primary" : "secondary"}
+                variant={app.pro && !isPro() ? "primary" : "secondary"}
                 onClick={() => handleAppClick(app)}
-                disabled={isUpgraded.loading}
               >
-                {isUpgraded.loading
-                  ? "Loading..."
-                  : app.pro && !isUpgraded()
-                  ? "Upgrade to Pro"
-                  : "Configure"}
+                {app.pro && !isPro() ? "Upgrade to Pro" : "Configure"}
               </Button>
             </div>
             <div class="p-2">

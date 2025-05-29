@@ -26,10 +26,11 @@ app.get(
         .optional(),
       isScreenshot: z.coerce.boolean().default(false),
       videoId: z.string().optional(),
+      name: z.string().optional(),
     })
   ),
   async (c) => {
-    const { duration, recordingMode, isScreenshot, videoId } =
+    const { duration, recordingMode, isScreenshot, videoId, name } =
       c.req.valid("query");
     const user = c.get("user");
 
@@ -72,9 +73,9 @@ app.get(
 
     const videoData = {
       id: idToUse,
-      name: `Cap ${
-        isScreenshot ? "Screenshot" : "Recording"
-      } - ${formattedDate}`,
+      name:
+        name ??
+        `Cap ${isScreenshot ? "Screenshot" : "Recording"} - ${formattedDate}`,
       ownerId: user.id,
       awsRegion: s3Config.region,
       awsBucket: bucketName,

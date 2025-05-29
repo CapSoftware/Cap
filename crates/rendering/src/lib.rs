@@ -11,7 +11,7 @@ use frame_pipeline::finish_encoder;
 use futures::future::OptionFuture;
 use futures::FutureExt;
 use layers::{
-    Background, BackgroundLayer, BlurLayer, CameraLayer, CursorLayer, DisplayLayer,
+    Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,
     GradientOrColorPipeline, ImageBackgroundPipeline,
 };
 use specta::Type;
@@ -21,6 +21,7 @@ use tokio::sync::mpsc;
 use tracing::subscriber::DefaultGuard;
 
 use image::GenericImageView;
+use log::{debug, info, warn};
 use std::{path::PathBuf, time::Instant};
 
 mod composite_frame;
@@ -205,11 +206,10 @@ pub async fn render_video_to_channel(
     );
 
     let mut frame_number = 0;
-    let background = project.background.source.clone();
 
     let mut frame_renderer = FrameRenderer::new(&constants);
 
-    let mut layers = RendererLayers::new(&constants.device);
+    let mut layers = RendererLayers::new(&constants.device, &constants.queue);
 
     loop {
         if frame_number >= total_frames {
@@ -938,7 +938,7 @@ impl<'a> FrameRenderer<'a> {
         );
 
         produce_frame(
-            &self.constants,
+            self.constants,
             segment_frames,
             uniforms,
             cursor,
@@ -955,16 +955,18 @@ pub struct RendererLayers {
     display: DisplayLayer,
     cursor: CursorLayer,
     camera: CameraLayer,
+    captions: CaptionsLayer,
 }
 
 impl RendererLayers {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         Self {
             background: BackgroundLayer::new(device),
             background_blur: BlurLayer::new(device),
             display: DisplayLayer::new(device),
             cursor: CursorLayer::new(device),
             camera: CameraLayer::new(device),
+            captions: CaptionsLayer::new(device, queue),
         }
     }
 
@@ -1025,6 +1027,15 @@ impl RendererLayers {
             );
         }
 
+        // if let Some(captions) = &uniforms.project.captions {
+        //     self.captions.prepare(
+        //         uniforms,
+        //         segment_frames,
+        //         uniforms.resolution_base,
+        //         constants,
+        //     );
+        // }
+
         Ok(())
     }
 
@@ -1083,6 +1094,11 @@ impl RendererLayers {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.camera.render(&mut pass);
         }
+
+        // {
+        //     let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+        //     self.captions.render(&mut pass);
+        // }
     }
 }
 
@@ -1211,6 +1227,29 @@ async fn produce_frame(
         encoder,
     )
     .await?)
+}
+
+// Helper function to parse color components from hex strings
+fn parse_color_component(hex_color: &str, index: usize) -> f32 {
+    // Remove # prefix if present
+    let color = hex_color.trim_start_matches('#');
+
+    // Parse the color component
+    if color.len() == 6 {
+        // Standard hex color #RRGGBB
+        let start = index * 2;
+        if let Ok(value) = u8::from_str_radix(&color[start..start + 2], 16) {
+            return value as f32 / 255.0;
+        }
+    }
+
+    // Default fallback values
+    match index {
+        0 => 1.0, // Red default
+        1 => 1.0, // Green default
+        2 => 1.0, // Blue default
+        _ => 1.0, // Alpha default
+    }
 }
 
 pub fn create_shader_render_pipeline(

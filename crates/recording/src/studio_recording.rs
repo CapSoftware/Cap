@@ -29,7 +29,7 @@ use tracing::{debug, info, trace, Instrument};
 use crate::{
     capture_pipeline::{create_screen_capture, MakeCapturePipeline, ScreenCaptureMethod},
     cursor::{spawn_cursor_recorder, CursorActor, Cursors},
-    ActorError, RecordingError, RecordingOptions,
+    ActorError, RecordingBaseInputs, RecordingError, RecordingOptions,
 };
 
 enum StudioRecordingActorState {
@@ -59,7 +59,6 @@ pub struct StudioRecordingActor {
     id: String,
     recording_dir: PathBuf,
     fps: u32,
-    options: RecordingOptions,
     segments: Vec<StudioRecordingSegment>,
     start_time: SystemTime,
 }
@@ -98,7 +97,7 @@ struct CursorPipeline {
 #[derive(Clone)]
 pub struct StudioRecordingHandle {
     ctrl_tx: flume::Sender<StudioRecordingActorControlMessage>,
-    pub options: RecordingOptions,
+    pub capture_target: ScreenCaptureTarget,
     pub bounds: Bounds,
 }
 
@@ -131,17 +130,14 @@ impl StudioRecordingHandle {
     }
 }
 
-pub async fn spawn_studio_recording_actor(
+pub async fn spawn_studio_recording_actor<'a>(
     id: String,
     recording_dir: PathBuf,
-    options: RecordingOptions,
+    base_inputs: RecordingBaseInputs<'a>,
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
-    mic_feed: &Option<AudioInputFeed>,
     custom_cursor_capture: bool,
 ) -> Result<(StudioRecordingHandle, tokio::sync::oneshot::Receiver<()>), RecordingError> {
     ensure_dir(&recording_dir)?;
-
-    let start_time = SystemTime::now();
 
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
 
@@ -164,18 +160,19 @@ pub async fn spawn_studio_recording_actor(
         debug!("camera video info: {:#?}", camera_feed.video_info());
     }
 
-    if let Some(audio_feed) = mic_feed {
+    if let Some(audio_feed) = base_inputs.mic_feed {
         debug!("mic audio info: {:#?}", audio_feed.audio_info())
     }
-    let audio_input_feed = mic_feed.clone();
+    let audio_input_feed = base_inputs.mic_feed.clone();
 
     let index = 0;
     let (pipeline, pipeline_done_rx) = create_segment_pipeline(
         &segments_dir,
         &cursors_dir,
         index,
-        &options,
+        base_inputs.capture_target,
         &audio_input_feed,
+        base_inputs.capture_system_audio,
         camera_feed.as_deref(),
         Default::default(),
         index,
@@ -195,13 +192,12 @@ pub async fn spawn_studio_recording_actor(
     debug!("screen bounds: {bounds:?}");
 
     spawn_actor({
-        let options = options.clone();
+        let base_inputs = base_inputs.clone();
         let fps = pipeline.screen.video_info.fps();
         async move {
             let mut actor = StudioRecordingActor {
                 id,
                 recording_dir,
-                options: options.clone(),
                 fps,
                 segments: Vec::new(),
                 start_time,
@@ -355,8 +351,9 @@ pub async fn spawn_studio_recording_actor(
                                         &segments_dir,
                                         &cursors_dir,
                                         next_index,
-                                        &options,
+                                        base_inputs.capture_target,
                                         &audio_input_feed,
+                                        base_inputs.capture_system_audio,
                                         camera_feed.as_deref(),
                                         cursors,
                                         next_cursor_id,
@@ -410,7 +407,7 @@ pub async fn spawn_studio_recording_actor(
     Ok((
         StudioRecordingHandle {
             ctrl_tx,
-            options,
+            capture_target: base_inputs.capture_target,
             bounds,
         },
         done_rx,
@@ -509,15 +506,16 @@ async fn create_segment_pipeline(
     segments_dir: &PathBuf,
     cursors_dir: &PathBuf,
     index: u32,
-    options: &RecordingOptions,
+    capture_target: ScreenCaptureTarget,
     mic_feed: &Option<AudioInputFeed>,
+    capture_system_audio: bool,
     camera_feed: Option<&Mutex<CameraFeed>>,
     prev_cursors: Cursors,
     next_cursors_id: u32,
     custom_cursor_capture: bool,
     start_time: SystemTime,
 ) -> Result<(StudioRecordingPipeline, oneshot::Receiver<()>), RecordingError> {
-    let system_audio = if options.capture_system_audio {
+    let system_audio = if capture_system_audio {
         let (tx, rx) = flume::bounded(64);
         (Some(tx), Some(rx))
     } else {
@@ -525,7 +523,7 @@ async fn create_segment_pipeline(
     };
 
     let (screen_source, screen_rx) = create_screen_capture(
-        &options.capture_target,
+        &capture_target,
         false,
         !custom_cursor_capture,
         120,
@@ -725,7 +723,7 @@ async fn create_segment_pipeline(
             #[cfg(target_os = "macos")]
             cap_displays::Display::list()
                 .into_iter()
-                .find(|m| match &options.capture_target {
+                .find(|m| match &capture_target {
                     ScreenCaptureTarget::Screen { id }
                     | ScreenCaptureTarget::Area { screen: id, .. } => {
                         m.raw_handle().inner().id == *id

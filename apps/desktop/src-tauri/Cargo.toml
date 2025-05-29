@@ -76,7 +76,9 @@ cpal.workspace = true
 keyed_priority_queue = "0.4.2"
 sentry.workspace = true
 clipboard-rs = "0.2.2"
-percent-encoding = { workspace = true }
+whisper-rs = "0.11.0"
+lazy_static = "1.4.0"
+log = "0.4.20"
 
 cap-utils = { path = "../../../crates/utils" }
 cap-project = { path = "../../../crates/project" }
@@ -86,6 +88,7 @@ cap-media = { path = "../../../crates/media" }
 cap-flags = { path = "../../../crates/flags" }
 cap-recording = { path = "../../../crates/recording" }
 cap-export = { path = "../../../crates/export" }
+cap-audio = { path = "../../../crates/audio" }
 flume.workspace = true
 tracing-subscriber = "0.3.19"
 tracing-appender = "0.2.3"

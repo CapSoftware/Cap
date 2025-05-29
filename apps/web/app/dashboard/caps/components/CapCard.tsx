@@ -430,6 +430,7 @@ export const CapCard = ({
           <div>
             <div className="h-[1.25rem] mb-1">
               {" "}
+              {/* Fixed height container */}
               {isEditing && !sharedCapCard ? (
                 <textarea
                   rows={1}
