@@ -686,6 +686,90 @@ async fn open_file_path(_app: AppHandle, path: PathBuf) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn open_video_dialog(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.dialog()
+        .file()
+        .set_title("Select Video")
+        .add_filter("Video", &["mp4", "mov", "webm", "mkv"])
+        .pick_file(move |p| {
+            let _ = tx.send(p.and_then(|p| p.as_path().to_str().map(|s| s.to_string())));
+        });
+
+    rx.recv().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn import_video(app: AppHandle, path: String) -> Result<String, String> {
+    use uuid::Uuid;
+
+    let id = Uuid::new_v4().to_string();
+    let project_dir = recordings_path(&app).join(format!("{}.cap", id));
+    let segment_dir = project_dir.join("content/segments/segment-0");
+    tokio::fs::create_dir_all(&segment_dir)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let display_path = segment_dir.join("display.mp4");
+    let audio_path = segment_dir.join("audio-input.ogg");
+
+    let status = Command::new("ffmpeg")
+        .args(["-i", &path, "-y", "-c:v", "libx264", "-pix_fmt", "yuv420p", display_path.to_str().unwrap()])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if !status.success() {
+        return Err("ffmpeg video convert failed".into());
+    }
+
+    let status = Command::new("ffmpeg")
+        .args(["-i", &path, "-y", "-vn", "-c:a", "libopus", audio_path.to_str().unwrap()])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if !status.success() {
+        return Err("ffmpeg audio extract failed".into());
+    }
+
+    let mut meta = RecordingMeta {
+        platform: Some(Platform::default()),
+        project_path: project_dir.clone(),
+        pretty_name: std::path::Path::new(&path)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string(),
+        sharing: None,
+        inner: RecordingMetaInner::Studio(StudioRecordingMeta::SingleSegment {
+            segment: cap_project::SingleSegment {
+                display: cap_project::VideoMeta {
+                    path: cap_project::RelativePathBuf::from("content/segments/segment-0/display.mp4"),
+                    fps: 30,
+                    start_time: None,
+                },
+                camera: None,
+                audio: Some(cap_project::AudioMeta {
+                    path: cap_project::RelativePathBuf::from("content/segments/segment-0/audio-input.ogg"),
+                    start_time: None,
+                }),
+                cursor: None,
+            },
+        }),
+    };
+
+    meta.save_for_project().map_err(|e| e.to_string())?;
+    ProjectConfiguration::default()
+        .write(&project_dir)
+        .map_err(|e| e.to_string())?;
+
+    NewStudioRecordingAdded { path: project_dir.clone() }.emit(&app).ok();
+
+    Ok(project_dir.to_string_lossy().to_string())
+}
+
 #[derive(Deserialize, specta::Type, tauri_specta::Event, Debug, Clone)]
 struct RenderFrameEvent {
     frame_number: u32,
@@ -1790,7 +1874,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             captions::download_whisper_model,
             captions::check_model_exists,
             captions::delete_whisper_model,
-            captions::export_captions_srt
+            captions::export_captions_srt,
+            open_video_dialog,
+            import_video
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,

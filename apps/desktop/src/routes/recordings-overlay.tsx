@@ -97,6 +97,9 @@ export default function () {
     >
       <div class="w-full relative left-0 bottom-0 flex flex-col-reverse pl-[40px] pb-[80px] gap-4 h-full overflow-y-auto scrollbar-none">
         <div class="flex flex-col gap-4 pt-12 w-full">
+          <div class="flex justify-end pr-2">
+            <Button onClick={() => commands.showWindow("Import")}>Import Video</Button>
+          </div>
           <TransitionGroup
             enterToClass="translate-y-0"
             enterClass="opacity-0 translate-y-4"

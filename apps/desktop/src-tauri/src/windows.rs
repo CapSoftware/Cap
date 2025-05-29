@@ -37,6 +37,7 @@ pub enum CapWindowId {
     InProgressRecording,
     Upgrade,
     ModeSelect,
+    Import,
     Debug,
 }
 
@@ -54,6 +55,7 @@ impl FromStr for CapWindowId {
             "recordings-overlay" => Self::RecordingsOverlay,
             "upgrade" => Self::Upgrade,
             "mode-select" => Self::ModeSelect,
+            "import" => Self::Import,
             "debug" => Self::Debug,
             s if s.starts_with("editor-") => Self::Editor {
                 id: s
@@ -87,6 +89,7 @@ impl std::fmt::Display for CapWindowId {
             Self::RecordingsOverlay => write!(f, "recordings-overlay"),
             Self::Upgrade => write!(f, "upgrade"),
             Self::ModeSelect => write!(f, "mode-select"),
+            Self::Import => write!(f, "import"),
             Self::Editor { id } => write!(f, "editor-{id}"),
             Self::Debug => write!(f, "debug"),
         }
@@ -107,6 +110,7 @@ impl CapWindowId {
             Self::InProgressRecording => "Cap In Progress Recording".to_string(),
             Self::Editor { .. } => "Cap Editor".to_string(),
             Self::ModeSelect => "Cap Mode Selection".to_string(),
+            Self::Import => "Cap Import".to_string(),
             Self::Camera => "Cap Camera".to_string(),
             Self::RecordingsOverlay => "Cap Recordings Overlay".to_string(),
             _ => "Cap".to_string(),
@@ -122,6 +126,7 @@ impl CapWindowId {
                 | Self::Settings
                 | Self::Upgrade
                 | Self::ModeSelect
+                | Self::Import
         )
     }
 
@@ -152,6 +157,7 @@ impl CapWindowId {
             Self::Camera => (460.0, 920.0),
             Self::Upgrade => (950.0, 850.0),
             Self::ModeSelect => (900.0, 500.0),
+            Self::Import => (600.0, 400.0),
             _ => return None,
         })
     }
@@ -170,6 +176,7 @@ pub enum ShowCapWindow {
     InProgressRecording { position: Option<(f64, f64)> },
     Upgrade,
     ModeSelect,
+    Import,
 }
 
 impl ShowCapWindow {
@@ -254,6 +261,15 @@ impl ShowCapWindow {
                 .build()?,
             Self::ModeSelect => self
                 .window_builder(app, "/mode-select")
+                .resizable(false)
+                .maximized(false)
+                .maximizable(false)
+                .center()
+                .focused(true)
+                .shadow(true)
+                .build()?,
+            Self::Import => self
+                .window_builder(app, "/import")
                 .resizable(false)
                 .maximized(false)
                 .maximizable(false)
@@ -544,6 +560,7 @@ impl ShowCapWindow {
             ShowCapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
             ShowCapWindow::Upgrade => CapWindowId::Upgrade,
             ShowCapWindow::ModeSelect => CapWindowId::ModeSelect,
+            ShowCapWindow::Import => CapWindowId::Import,
         }
     }
 }

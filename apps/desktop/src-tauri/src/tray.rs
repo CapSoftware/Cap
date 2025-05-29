@@ -20,6 +20,7 @@ pub enum TrayItem {
     TakeScreenshot,
     PreviousRecordings,
     PreviousScreenshots,
+    ImportVideo,
     OpenSettings,
     Quit,
 }
@@ -31,6 +32,7 @@ impl From<TrayItem> for MenuId {
             TrayItem::TakeScreenshot => "take_screenshot",
             TrayItem::PreviousRecordings => "previous_recordings",
             TrayItem::PreviousScreenshots => "previous_screenshots",
+            TrayItem::ImportVideo => "import_video",
             TrayItem::OpenSettings => "open_settings",
             TrayItem::Quit => "quit",
         }
@@ -47,6 +49,7 @@ impl TryFrom<MenuId> for TrayItem {
             "take_screenshot" => Ok(TrayItem::TakeScreenshot),
             "previous_recordings" => Ok(TrayItem::PreviousRecordings),
             "previous_screenshots" => Ok(TrayItem::PreviousScreenshots),
+            "import_video" => Ok(TrayItem::ImportVideo),
             "open_settings" => Ok(TrayItem::OpenSettings),
             "quit" => Ok(TrayItem::Quit),
             value => Err(format!("Invalid tray item id {value}")),
@@ -71,6 +74,13 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 app,
                 TrayItem::PreviousRecordings,
                 "Previous Recordings",
+                true,
+                None::<&str>,
+            )?,
+            &MenuItem::with_id(
+                app,
+                TrayItem::ImportVideo,
+                "Import Video",
                 true,
                 None::<&str>,
             )?,
@@ -115,6 +125,10 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                         page: "screenshots".to_string(),
                     }
                     .emit(&app_handle);
+                }
+                Ok(TrayItem::ImportVideo) => {
+                    let app = app.clone();
+                    tokio::spawn(async move { ShowCapWindow::Import.show(&app).await });
                 }
                 Ok(TrayItem::OpenSettings) => {
                     let app = app.clone();
