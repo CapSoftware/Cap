@@ -1,4 +1,4 @@
-use std::{env::current_dir, hash::Hash, path::PathBuf, sync::Arc};
+use std::{env::current_dir, path::PathBuf, sync::Arc};
 
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
 use cap_recording::{RecordingMode, RecordingOptions};
@@ -75,15 +75,12 @@ impl RecordStart {
         let actor = cap_recording::spawn_studio_recording_actor(
             id,
             path,
-            RecordingOptions {
+            cap_recording::RecordingBaseInputs {
                 capture_target: target_info,
-                camera_label: camera.as_ref().map(|c| c.camera_info.human_name()),
-                mic_name: None,
-                mode: RecordingMode::Studio,
                 capture_system_audio: self.system_audio,
+                mic_feed: &None,
             },
             camera.map(|c| Arc::new(Mutex::new(c))),
-            &None,
             false,
         )
         .await

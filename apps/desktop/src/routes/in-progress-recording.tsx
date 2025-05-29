@@ -4,11 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
-import {
-  createEffect,
-  createSignal,
-  type ComponentProps
-} from "solid-js";
+import { createEffect, createSignal, type ComponentProps } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 
 import {
@@ -24,7 +20,7 @@ export default function () {
   const [time, setTime] = createSignal(Date.now());
   const [state, setState] = createSignal<State>("recording");
   const currentRecording = createCurrentRecordingQuery();
-  const { options } = createOptionsQuery();
+  const { rawOptions } = createOptionsQuery();
 
   const audioLevel = createAudioInputLevel();
 
@@ -117,7 +113,7 @@ export default function () {
 
         <div class="flex gap-1 items-center">
           <div class="flex relative justify-center items-center w-8 h-8">
-            {options.data?.micName != null ? (
+            {rawOptions.micName != null ? (
               <>
                 <IconCapMicrophone class="size-5 text-gray-12" />
                 <div class="absolute bottom-1 left-1 right-1 h-0.5 bg-gray-10 overflow-hidden rounded-full">
