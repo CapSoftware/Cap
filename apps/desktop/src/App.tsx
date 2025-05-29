@@ -4,23 +4,23 @@ import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { message } from "@tauri-apps/plugin-dialog";
 import {
-    createEffect,
-    ErrorBoundary,
-    onCleanup,
-    onMount,
-    Suspense,
+  createEffect,
+  ErrorBoundary,
+  onCleanup,
+  onMount,
+  Suspense,
 } from "solid-js";
+import { Button } from "@cap/ui-solid";
+import {
+  getCurrentWebviewWindow,
+  WebviewWindow,
+} from "@tauri-apps/api/webviewWindow";
+import { Toaster } from "solid-toast";
 
 import "@cap/ui-solid/main.css";
 import "unfonts.css";
 import "./styles/theme.css";
 
-import { Button } from "@cap/ui-solid";
-import {
-    getCurrentWebviewWindow,
-    WebviewWindow,
-} from "@tauri-apps/api/webviewWindow";
-import { Toaster } from "solid-toast";
 import { generalSettingsStore } from "./store";
 import { initAnonymousUser } from "./utils/analytics";
 import { commands, type AppTheme } from "./utils/tauri";
@@ -154,12 +154,9 @@ function createThemeListener(currentWindow: WebviewWindow) {
   });
 
   function update(appTheme: AppTheme | null | undefined) {
+    if (location.pathname === "/camera") return;
+
     if (appTheme === undefined || appTheme === null) return;
-    if (
-      location.pathname === "/camera" ||
-      location.pathname === "/prev-recordings"
-    )
-      return;
 
     commands.setTheme(appTheme).then(() => {
       document.documentElement.classList.toggle(

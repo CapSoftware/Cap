@@ -22,15 +22,12 @@ const ModeOption = (props: ModeOptionProps) => {
   return (
     <div
       onClick={() => props.onSelect(props.mode)}
-      class={cx(
-        `p-4 rounded-lg bg-gray-2 transition-all duration-200`,
-        {
-          "ring-2 ring-offset-2 hover:bg-gray-2 cursor-default ring-blue-9 ring-offset-gray-100":
-            props.isSelected,
-          "ring-2 ring-transparent ring-offset-transparent hover:bg-gray-3 cursor-pointer":
-            !props.isSelected,
-        }
-      )}
+      class={cx(`p-4 rounded-lg bg-gray-2 transition-all duration-200`, {
+        "ring-2 ring-offset-2 hover:bg-gray-2 cursor-default ring-blue-9 ring-offset-gray-100":
+          props.isSelected,
+        "ring-2 ring-transparent ring-offset-transparent hover:bg-gray-3 cursor-pointer":
+          !props.isSelected,
+      })}
     >
       <div class="flex flex-col items-center mb-2 text-center">
         <img
@@ -48,10 +45,10 @@ const ModeOption = (props: ModeOptionProps) => {
 };
 
 const ModeSelect = () => {
-  const { options, setOptions } = createOptionsQuery();
+  const { rawOptions, setOptions } = createOptionsQuery();
 
   const handleModeChange = (mode: RecordingMode) => {
-    if (options.data) setOptions.mutate({ ...options.data, mode });
+    setOptions({ mode });
   };
 
   const modeOptions = [
@@ -85,7 +82,7 @@ const ModeSelect = () => {
           darkimg={option.darkimg}
           lightimg={option.lightimg}
           icon={option.icon}
-          isSelected={options.data?.mode === option.mode}
+          isSelected={rawOptions.mode === option.mode}
           onSelect={handleModeChange}
         />
       ))}
