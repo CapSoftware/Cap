@@ -225,21 +225,24 @@ export function Timeline() {
             </div>
           )}
         </Show>
-        <Show when={!split()}>
-          <div
-            class="absolute bottom-0 top-4 h-full rounded-full z-10 w-px pointer-events-none bg-gradient-to-b to-[120%] from-[rgb(226,64,64)]"
-            style={{
-              left: `${TIMELINE_PADDING}px`,
-              transform: `translateX(${Math.min(
-                (editorState.playbackTime - transform().position) /
-                  secsPerPixel(),
-                timelineBounds.width ?? 0
-              )}px)`,
-            }}
-          >
-            <div class="size-3 bg-[rgb(226,64,64)] rounded-full -mt-2 -ml-[calc(0.37rem-0.5px)]" />
-          </div>
-        </Show>
+        {/* <Show when={!split()}> */}
+        <div
+          class={cx(
+            "absolute bottom-0 top-4 h-full rounded-full z-10 w-px pointer-events-none bg-gradient-to-b to-[120%] from-[rgb(226,64,64)]",
+            split() && "opacity-70"
+          )}
+          style={{
+            left: `${TIMELINE_PADDING}px`,
+            transform: `translateX(${Math.min(
+              (editorState.playbackTime - transform().position) /
+                secsPerPixel(),
+              timelineBounds.width ?? 0
+            )}px)`,
+          }}
+        >
+          <div class="size-3 bg-[rgb(226,64,64)] rounded-full -mt-2 -ml-[calc(0.37rem-0.5px)]" />
+        </div>
+        {/* </Show> */}
         <ClipTrack
           ref={setTimelineRef}
           handleUpdatePlayhead={handleUpdatePlayhead}

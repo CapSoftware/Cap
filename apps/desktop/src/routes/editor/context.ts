@@ -198,6 +198,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       },
     });
 
+    const [micWaveforms] = createResource(() => commands.getMicWaveforms());
+
     return {
       ...editorInstanceContext,
       meta() {
@@ -216,6 +218,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       zoomOutLimit,
       exportState,
       setExportState,
+      micWaveforms,
     };
   },
   // biome-ignore lint/style/noNonNullAssertion: it's ok
