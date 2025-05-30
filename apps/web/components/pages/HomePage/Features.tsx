@@ -1,14 +1,11 @@
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
-import clsx from "clsx";
 import { memo } from "react";
 
 
 type Feature = {
   title: string;
   description: string;
-  rive?: JSX.Element;
-  img?: string;
-  imageClass?: string;
+  rive: JSX.Element;
   relative?: {
     top?: number;
     bottom?: number;
@@ -78,6 +75,21 @@ const PrivacyFirstArt = memo(() => {
   )
 })
 
+const PlatformSupportArt = memo(() => {
+  const {RiveComponent: PlatformSupportRive} = useRive({
+    src: "/rive/bento.riv",
+    artboard: "platformsupport",
+    animations: ["in"],
+    autoplay: true,
+    layout: new Layout({
+      fit: Fit.Contain
+    }),
+  });
+  return (
+    <PlatformSupportRive className="w-full max-w-[500px] mx-auto h-[300px]" />
+  )
+})
+
 const EveryoneArt = memo(() => {
   const {RiveComponent: EveryoneRive} = useRive({
     src: "/rive/bento.riv",
@@ -117,7 +129,7 @@ const features: Feature[] = [
   },
   {
     title: "Multi-Platform Support",
-    img: "/illustrations/platformsupport.svg",
+    rive: <PlatformSupportArt />,
     description:
       "Cap works seamlessly across macOS and Windows, giving you the flexibility to create content on any device. Capture, share, and collaborate regardless of which platform you or your team prefers, ensuring smooth workflows and consistent experience everywhere.",
   },
@@ -151,9 +163,7 @@ const Features = () => {
             title={feature.title}
             description={feature.description}
             rive={feature.rive}
-            img={feature.img}
             imageAlt={feature.title}
-            imageClass={feature.imageClass}
             relative={feature.relative}
           />
         ))}
@@ -195,8 +205,7 @@ const FeatureCard = ({
         right: relative?.right,
       }}
       className="relative flex-1 flex-grow justify-center content-center">
-      {rive && rive}
-      {img && <img src={img} alt={imageAlt} className={clsx("m-auto",imageClass)} />}
+      {rive}
       </div>
       <div className="flex flex-col gap-2 justify-end h-fit">
       <h3 className="text-xl font-medium">{title}</h3>
