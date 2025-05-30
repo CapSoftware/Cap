@@ -5,6 +5,8 @@ import { Resend } from "resend";
 export const resend = () =>
   serverEnv().RESEND_API_KEY ? new Resend(serverEnv().RESEND_API_KEY) : null;
 
+const resendCustomDomain = serverEnv().RESEND_FROM_DOMAIN ? serverEnv().RESEND_FROM_DOMAIN : buildEnv.NEXT_PUBLIC_WEB_URL
+
 // Augment the CreateEmailOptions type to include scheduledAt
 type EmailOptions = {
   from: string;
@@ -39,9 +41,7 @@ export const sendEmail = async ({
       ? "Richie from Cap <richie@send.cap.so>"
       : buildEnv.NEXT_PUBLIC_IS_CAP
       ? "Cap Auth <no-reply@auth.cap.so>"
-      : `auth@${
-          serverEnv().RESEND_FROM_DOMAIN ?? buildEnv.NEXT_PUBLIC_WEB_URL
-        }`,
+      : `auth@${resendCustomDomain}`,
     to: test ? "delivered@resend.dev" : email,
     subject,
     react,
