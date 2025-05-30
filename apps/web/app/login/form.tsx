@@ -5,13 +5,15 @@ import { NODE_ENV } from "@cap/env";
 import { Button, Input, LogoBadge } from "@cap/ui";
 import {
   faArrowLeft,
+  faEnvelope,
   faExclamationCircle,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { AnimatePresence, motion } from "framer-motion";
 import Cookies from "js-cookie";
-import { LucideArrowUpRight, LucideMail } from "lucide-react";
+import { LucideArrowUpRight } from "lucide-react";
 import { signIn } from "next-auth/react";
+import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
@@ -32,11 +34,11 @@ export function LoginForm() {
 
   useEffect(() => {
     theme === "dark"
-      ? document.documentElement.classList.add("dark")
-      : document.documentElement.classList.remove("dark");
+      ? document.body.className = "dark"
+      : document.body.className = "light";
     //remove the dark mode when we leave the dashboard
     return () => {
-      document.documentElement.classList.remove("dark");
+      document.body.className = "light";
     };
   }, [theme]);
 
@@ -123,8 +125,7 @@ export function LoginForm() {
   };
 
   return (
-    <div className="flex justify-center items-center w-full h-screen bg-gray-1">
-      <div className="overflow-hidden relative w-[calc(100%-5%)] p-[28px] max-w-[472px] bg-gray-2 border border-gray-4 rounded-2xl">
+      <div className="overflow-hidden relative w-[calc(100%-5%)] p-[28px] max-w-[472px] bg-gray-3 border border-gray-5 rounded-2xl">
         <motion.div
           key="back-button"
           initial={{ opacity: 0, display: "none" }}
@@ -155,7 +156,6 @@ export function LoginForm() {
             fallback={
               <>
                 <Button disabled={true} variant="primary" />
-                <Button disabled={true} variant="secondary" />
                 <Button disabled={true} variant="destructive" />
                 <div className="mx-auto w-3/4 h-5 rounded-lg bg-gray-1" />
               </>
@@ -233,7 +233,7 @@ export function LoginForm() {
                   </motion.form>
                 )}
               </AnimatePresence>
-              <p className="pt-3 text-xs text-center text-gray-8">
+              <p className="pt-3 text-xs text-center text-gray-9">
                 By typing your email and clicking continue, you acknowledge that
                 you have both read and agree to Cap's{" "}
                 <Link
@@ -269,7 +269,6 @@ export function LoginForm() {
           </Suspense>
         </div>
       </div>
-    </div>
   );
 }
 
@@ -347,7 +346,7 @@ const NormalLogin = ({
           variant="primary"
           type="submit"
           disabled={loading || emailSent}
-          icon={<LucideMail size={16} />}
+          icon={<FontAwesomeIcon className="size-4" icon={faEnvelope} />}
         >
           {emailSent
             ? NODE_ENV === "development"
@@ -375,25 +374,13 @@ const NormalLogin = ({
         {!oauthError && (
           <>
             <Button
-              variant="red"
+              variant="gray"
               type="button"
-              className="flex justify-center items-center space-x-2 w-full text-sm"
+              className="flex gap-2 justify-center items-center w-full text-sm"
               onClick={handleGoogleSignIn}
               disabled={loading}
             >
-              <svg
-                width="15"
-                height="16"
-                viewBox="0 0 15 16"
-                fill="none"
-                className="mr-1"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <path
-                  d="M15 8.1754C15 12.4546 12.0215 15.5 7.62295 15.5C3.40574 15.5 0 12.1492 0 8C0 3.85081 3.40574 0.5 7.62295 0.5C9.67623 0.5 11.4037 1.24093 12.7346 2.4627L10.6598 4.4254C7.9457 1.84879 2.89857 3.78427 2.89857 8C2.89857 10.6159 5.02254 12.7359 7.62295 12.7359C10.6414 12.7359 11.7725 10.6069 11.9508 9.50302H7.62295V6.92339H14.8801C14.9508 7.30746 15 7.67641 15 8.1754Z"
-                  fill="white"
-                />
-              </svg>
+             <Image src="/logos/google.svg" alt="Google" width={16} height={16} />
               Login with Google
             </Button>
           </>
@@ -413,7 +400,7 @@ const NormalLogin = ({
           </div>
         )}
         <Button
-          variant="white"
+          variant="gray"
           type="button"
           className="w-full"
           onClick={() => setShowOrgInput(true)}

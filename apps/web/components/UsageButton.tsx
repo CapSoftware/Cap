@@ -26,7 +26,9 @@ export const UsageButton = ({
             size="lg"
             className={clsx(
               "overflow-hidden truncate",
-              sidebarCollapsed ? "p-0 w-10 h-10 rounded-full min-w-10" : "w-full"
+              sidebarCollapsed
+                ? "p-0 w-10 h-10 rounded-full min-w-10"
+                : "w-full"
             )}
             variant="primary"
           >
@@ -37,11 +39,7 @@ export const UsageButton = ({
               )}
               icon={faCheck}
             />
-            {sidebarCollapsed ? null : (
-              <p className="text-gray-50">
-                Cap Pro
-              </p>
-            )}
+            {sidebarCollapsed ? null : <p className="text-gray-50">Cap Pro</p>}
           </Button>
         </Link>
       </Tooltip>
@@ -50,15 +48,21 @@ export const UsageButton = ({
 
   return (
     <>
-      <Tooltip position="right" content="Upgrade to Pro">
+      <Tooltip
+        disable={!sidebarCollapsed}
+        position="right"
+        content="Upgrade to Pro"
+      >
         <div className="flex justify-center mx-auto w-full">
           <Button
-            size="lg"
+            size="sm"
             className={clsx(
               "overflow-hidden truncate",
-              sidebarCollapsed ? "p-0 w-10 h-10 rounded-full min-w-10" : "w-full"
+              sidebarCollapsed
+                ? "p-0 w-10 h-10 rounded-full min-w-10"
+                : "px-5 w-fit"
             )}
-            variant="primary"
+            variant="blue"
             onClick={() => {
               setUpgradeModalOpen(true);
               toggleMobileNav?.();
@@ -66,16 +70,12 @@ export const UsageButton = ({
           >
             <FontAwesomeIcon
               className={clsx(
-                "text-gray-50",
-                sidebarCollapsed ? "mr-0" : "mr-1"
+                "text-white size-4",
+                sidebarCollapsed ? "mr-0" : null
               )}
               icon={faArrowUp}
             />
-            {sidebarCollapsed ? null : (
-              <p className="text-base text-gray-50">
-                Upgrade to Pro
-              </p>
-            )}
+            {sidebarCollapsed ? null : "Upgrade to Pro"}
           </Button>
         </div>
       </Tooltip>

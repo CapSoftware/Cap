@@ -224,12 +224,10 @@ export const Caps = ({
         ))}
       </div>
       {(data.length > limit || data.length === limit || page !== 1) && (
-        <div className="mt-10">
+        <div className="mt-7">
           <CapPagination currentPage={page} totalPages={totalPages} />
         </div>
       )}
-
-        
       <SelectedCapsBar
         selectedCaps={selectedCaps}
         setSelectedCaps={setSelectedCaps}

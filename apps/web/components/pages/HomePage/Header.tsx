@@ -33,7 +33,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
             <Link
               href="https://x.com/richiemcilroy/status/1895526857807733018"
               target="_blank"
-              className="flex gap-2 transition-colors duration-300
+              className="flex gap-2 transition-colors
                  mb-8 items-center relative z-[20] px-3.5 py-2
               bg-gray-1 rounded-full group border w-fit border-gray-5 hover:bg-gray-3"
             >
@@ -42,7 +42,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
               </p>
               <FontAwesomeIcon
                 fontWeight="light"
-                className="w-1.5 text-gray-12 group-hover:translate-x-0.5 transition-all duration-300"
+                className="w-1.5 text-gray-12 group-hover:translate-x-0.5 transition-transform"
                 icon={faAngleRight}
               />
             </Link>

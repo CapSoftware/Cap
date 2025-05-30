@@ -153,9 +153,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
           icon={<FontAwesomeIcon icon={faShareNodes} className="size-3.5" />}
           description="Select the organizations you would like to share with"
         >
-          <DialogTitle>
-            Share <span className="font-bold text-gray-12">{capName}</span>
-          </DialogTitle>
+          <DialogTitle>Share {capName}</DialogTitle>
         </DialogHeader>
         <div className="p-5">
           <div className="relative mb-4">
@@ -182,7 +180,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
                 />
               ))
             ) : (
-              <div className="flex gap-2 justify-center items-center pt-2 text-sm">
+              <div className="flex col-span-4 gap-2 justify-center items-center pt-2 text-sm">
                 <p className="text-gray-12">No organizations found</p>
               </div>
             )}
@@ -194,7 +192,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
           </Button>
           <Button
             spinner={loading}
-            disabled={loading}
+            disabled={loading || selectedOrganizations.size === 0}
             size="sm"
             variant="dark"
             onClick={handleSave}
@@ -220,9 +218,9 @@ const SpaceCard = ({
     <Tooltip content={organization.name}>
     <div
       className={clsx(
-        "flex items-center relative flex-col justify-center gap-2 border transition-colors bg-gray-1 duration-200 border-gray-3 w-full p-3 rounded-xl cursor-pointer",
+        "flex items-center relative flex-col justify-center gap-2 border transition-colors bg-gray-1 duration-200 border-gray-4 w-full p-3 rounded-xl cursor-pointer",
         selectedOrganizations.has(organization.id)
-          ? "bg-gray-3 border-gray-4"
+          ? "bg-gray-3 border-green-500"
           : "hover:bg-gray-3 hover:border-gray-4"
       )}
       onClick={() => handleToggleOrganization(organization.id)}

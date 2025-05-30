@@ -147,7 +147,9 @@ const Testimonials = () => {
           ))}
         </div>
       </div>
-      <Button className="mx-auto mt-10 md:mt-0" variant="primary" size="lg">
+      <Button 
+      href="/testimonials"
+      className="mx-auto mt-10 md:mt-0 w-fit" variant="primary" size="lg">
         View more
       </Button>
     </div>

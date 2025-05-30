@@ -33,9 +33,9 @@ export const SelectedCapsBar = ({
             transition: { duration: 0.2 },
           }}
           transition={{
-            type: "spring",
-            damping: 15,
-            stiffness: 200,
+            opacity: { duration: 0.3, ease: "easeOut" },
+            y: { type: "spring", damping: 15, stiffness: 200 },
+            scale: { type: "spring", damping: 15, stiffness: 200 }
           }}
         >
           <div className="flex gap-1 text-sm font-medium text-gray-10">
@@ -63,7 +63,7 @@ export const SelectedCapsBar = ({
               spinner={isDeleting}
               size="sm"
             >
-              <FontAwesomeIcon icon={faTrash} />
+              <FontAwesomeIcon className="text-white size-3.5" icon={faTrash} />
             </Button>
           </div>
         </motion.div>

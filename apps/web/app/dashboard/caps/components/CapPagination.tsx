@@ -23,13 +23,14 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
         {currentPage > 1 && (
           <PaginationItem>
             <PaginationPrevious
+              className="h-10 bg-transparent hover:bg-gray-4"
               href={`/dashboard/caps?page=${currentPage - 1}`}
             />
           </PaginationItem>
         )}
         <PaginationItem>
           <PaginationLink
-            className="min-w-[54px]"
+            className="h-10 min-w-10"
             href={`/dashboard/caps?page=1`}
             isActive={currentPage === 1}
           >
@@ -39,7 +40,7 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
         {currentPage !== 1 && (
           <PaginationItem>
             <PaginationLink
-         className="min-w-[54px]"
+              className="h-10 min-w-10"
               href={`/dashboard/caps?page=${currentPage}`}
               isActive={true}
             >
@@ -50,7 +51,7 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
         {totalPages > currentPage + 1 && (
           <PaginationItem>
             <PaginationLink
-              className="min-w-[54px]"
+              className="h-10 min-w-10"
               href={`/dashboard/caps?page=${currentPage + 1}`}
               isActive={false}
             >
@@ -61,6 +62,7 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
         {currentPage > 2 && <PaginationEllipsis />}
         <PaginationItem>
           <PaginationNext
+            className="h-10 bg-transparent hover:bg-gray-4"
             href={`/dashboard/caps?page=${
               currentPage === totalPages ? currentPage : currentPage + 1
             }`}

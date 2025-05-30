@@ -4,7 +4,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import * as React from "react";
 
 const buttonVariants = cva(
-  "flex items-center justify-center cursor-pointer ring-offset-transparent relative min-w-[100px] gap-1 rounded-xl",
+  "flex items-center justify-center rounded-full cursor-pointer font-medium ring-offset-transparent relative min-w-[100px] gap-1",
   {
     defaultVariants: {
       variant: "primary",
@@ -13,23 +13,21 @@ const buttonVariants = cva(
     variants: {
       variant: {
         primary:
-          "bg-gray-12 rounded-full text-gray-1 hover:bg-gray-11",
-        red: "bg-gradient-to-t button-gradient-border from-[#772828] to-[#9F3C3C] shadow-[0_0_0_1px] hover:brightness-110 shadow-red-900 text-gray-50 hover:bg-red-400 disabled:bg-red-200",
-        secondary:
-          "bg-blue-400 text-gray-50 hover:bg-blue-500 disabled:bg-blue-200 disabled:text-gray-8 border-blue-300",
+          "bg-gray-12 text-gray-1 hover:bg-gray-11",
+        blue: "bg-blue-400 text-white hover:bg-blue-500 disabled:bg-blue-200 disabled:text-gray-8",  
         destructive:
-          "bg-gradient-to-t disabled:opacity-50 disabled:from-red-800 disabled:to-red-600 disabled:cursor-not-allowed shadow-[0_0_0_1px] shadow-red-900 hover:brightness-110 from-red-600 to-red-400 text-gray-50 button-gradient-border hover:bg-red-400 border-red-300",
+          "bg-red-500 text-white hover:bg-red-600 disabled:bg-red-200",
         white:
-          "bg-gray-1 text-gray-12 rounded-full hover:bg-gray-3 disabled:bg-gray-8",
-        gray: "bg-gray-3 text-gray-12 hover:bg-gray-6 hover:border-gray-7 disabled:bg-gray-1 rounded-full",
-        dark: "bg-gray-12 text-gray-1 disabled:cursor-not-allowed hover:bg-gray-11 disabled:text-gray-10 border disabled:bg-gray-7 disabled:border-gray-8 border-gray-12",
+          "bg-gray-1 text-gray-12 hover:bg-gray-2 disabled:bg-gray-8",
+        gray: "bg-gray-4 text-gray-12 hover:bg-gray-5 disabled:bg-gray-1",
+        dark: "bg-gray-12 text-gray-1 disabled:cursor-not-allowed hover:bg-gray-11 disabled:text-gray-10 disabled:bg-gray-7 disabled:border-gray-8",
         darkgradient:
           "bg-gradient-to-t button-gradient-border from-[#0f0f0f] to-[#404040] shadow-[0_0_0_1px] hover:brightness-110 shadow-[#383838] text-gray-50 hover:bg-[#383838] disabled:bg-[#383838] border-transparent",
         radialblue:
           "text-gray-50 border button-gradient-border shadow-[0_0_0_1px] shadow-blue-400 disabled:bg-gray-1 border-0 [background:radial-gradient(90%_100%_at_15%_12%,#9BC4FF_0%,#3588FF_100%)] border-transparent hover:opacity-80",
       },
       size: {
-        xs: "text-xs [var(--gradient-border-radius: 20px)] rounded-lg h-[32px] px-[0.5rem] ",
+        xs: "text-xs h-[32px] px-[0.5rem] ",
         sm: "text-sm h-[40px] px-[0.75rem]",
         md: "text-sm px-[1rem] h-[48px]",
         lg: "text-md h-[48px] px-[2rem]",

@@ -196,9 +196,6 @@ export const FileInput: React.FC<FileInputProps> = ({
             </div>
             <Button
               variant="destructive"
-              style={{
-                "--gradient-border-radius": "8px",
-              } as React.CSSProperties}
               size="xs"
               className="min-w-[80px]"
               disabled={isLoading || disabled}

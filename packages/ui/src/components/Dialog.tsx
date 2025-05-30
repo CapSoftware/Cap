@@ -108,7 +108,7 @@ const DialogTitle = React.forwardRef<
   <DialogPrimitive.Title
     ref={ref}
     className={classNames(
-      "text-lg font-bold text-gray-12",
+      "text-lg font-medium text-gray-12",
       className
     )}
     {...props}
@@ -138,4 +138,5 @@ export {
   DialogTrigger
 };
 
-export type { DialogHeaderProps };
+  export type { DialogHeaderProps };
+

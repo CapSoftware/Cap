@@ -125,7 +125,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
               }}
               className={
                 clsx(
-                  "p-2.5 mt-2.5 rounded-xl border cursor-pointer bg-gradient-to-t from-gray-4 to-gray-2 border-gray-4",
+                  "p-2.5 mt-2.5 rounded-xl cursor-pointer bg-gray-3",
                 )
               }
             >
@@ -267,7 +267,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                   layoutId="underline"
                   id="underline"
                   className={clsx(
-                    "absolute rounded-xl border bg-gray-3 border-gray-4",
+                    "absolute rounded-xl bg-gray-3",
                     sidebarCollapsed ? "inset-0 right-0 left-0 mx-auto w-9 h-9" : "inset-0 ml-[2px]"
                   )}
                 />
@@ -278,7 +278,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                 <motion.div
                   layoutId="hoverIndicator"
                   className={clsx(
-                    "absolute bg-transparent rounded-xl border-gray-4 border-[1px]",
+                    "absolute bg-transparent rounded-xl",
                     sidebarCollapsed ? "inset-0 right-0 left-0 mx-auto w-9 h-9" : "inset-0 ml-[2px]"
                   )}
                   initial={{ opacity: 0 }}
@@ -337,7 +337,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
           </p>
         </div>
       </nav>
-      <DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
+      <DialogContent className="p-0 w-full max-w-md rounded-xl bg-gray-2">
         <DialogHeader icon={<FontAwesomeIcon icon={faBuilding} />} description="A new organization to share caps with your team">
           <DialogTitle className="text-lg text-gray-12">Create New Organization</DialogTitle>
         </DialogHeader>

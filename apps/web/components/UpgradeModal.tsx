@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Dialog, DialogContent, DialogTitle, Switch } from "@cap/ui";
+import { Button, Dialog, DialogContent, Switch } from "@cap/ui";
 import { getProPlanId } from "@cap/utils";
 import NumberFlow from "@number-flow/react";
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
@@ -168,7 +168,6 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
         className="sm:max-w-[1100px] w-[calc(100%-20px)] custom-scroll bg-gray-2 border 
       border-gray-4 overflow-y-auto md:overflow-hidden max-h-[90vh] p-0"
       >
-        <DialogTitle className="sr-only">Upgrade to Cap Pro</DialogTitle>
         <AnimatePresence mode="wait">
           {open && (
             <motion.div
@@ -184,7 +183,7 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
                 </div>
                 <div className="flex relative flex-col flex-1 justify-center items-center py-6 w-full">
                   <div className="flex flex-col items-center">
-                    <h1 className="text-3xl font-bold text-gray-12">
+                    <h1 className="text-3xl font-medium text-gray-12">
                       Upgrade to Cap Pro
                     </h1>
                   </div>
@@ -255,9 +254,9 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
                   </div>
 
                   <Button
-                    variant="primary"
+                    variant="blue"
                     onClick={planCheckout}
-                    className="mt-5 w-full max-w-sm h-14 text-lg rounded-xl"
+                    className="mt-5 w-full max-w-sm h-14 text-lg"
                     disabled={proLoading}
                   >
                     {proLoading ? "Loading..." : "Upgrade to Cap Pro"}
@@ -278,7 +277,7 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
                       key={index}
                       className="flex flex-col justify-center items-center"
                     >
-                      <div className="mb-3.5 bg-gray-5 rounded-full size-10 flex items-center border border-gray-6 justify-center">
+                      <div className="mb-3.5 bg-gray-5 rounded-full size-10 flex items-center justify-center">
                         {feature.icon}
                       </div>
                       <h3 className="text-base font-medium text-center text-gray-12">
