@@ -7,15 +7,15 @@ import {
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
 import clsx from "clsx";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { CommercialArt } from "./CommercialArt";
+import { CommercialArt, CommercialArtRef } from "./CommercialArt";
 
 export const CommercialCard = () => {
   const [licenses, setLicenses] = useState(1);
   const [isYearly, setIsYearly] = useState(false);
   const [commercialLoading, setCommercialLoading] = useState(false);
-  const [cardHover, setCardHover] = useState(false);
+  const commercialArtRef = useRef<CommercialArtRef>(null);
 
   const COMMERCIAL_LICENSE_YEARLY_PRICE = 29;
   const COMMERCIAL_LICENSE_LIFETIME_PRICE = 58;
@@ -60,13 +60,13 @@ export const CommercialCard = () => {
 
   return (
     <div
-      onMouseEnter={() => setCardHover(true)}
-      onMouseLeave={() => setCardHover(false)}
+      onMouseEnter={() => commercialArtRef.current?.playHoverAnimation()}
+      onMouseLeave={() => commercialArtRef.current?.playDefaultAnimation()}
       className="flex flex-col flex-1 justify-between p-8 rounded-2xl border shadow-lg bg-gray-1 border-gray-5"
     >
       <div>
         <div className="md:h-[300px]">
-        <CommercialArt cardHover={cardHover} />
+        <CommercialArt ref={commercialArtRef} />
         <h3 className="mb-2 text-2xl text-center text-gray-12">
           App + Commercial License
         </h3>

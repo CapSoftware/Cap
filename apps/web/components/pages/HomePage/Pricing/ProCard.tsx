@@ -9,15 +9,15 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
 import clsx from "clsx";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { ProArt } from "./ProArt";
+import { ProArt, ProArtRef } from "./ProArt";
 
 export const ProCard = () => {
   const [users, setUsers] = useState(1);
   const [isAnnually, setIsAnnually] = useState(true);
   const [proLoading, setProLoading] = useState(false);
-  const [cardHover, setCardHover] = useState(false);
+  const proArtRef = useRef<ProArtRef>(null);
   const { push } = useRouter();
 
   const CAP_PRO_ANNUAL_PRICE_PER_USER = 6;
@@ -70,10 +70,10 @@ export const ProCard = () => {
   return (
     <div
       onMouseEnter={() => {
-        setCardHover(true);
+        proArtRef.current?.playHoverAnimation();
       }}
       onMouseLeave={() => {
-        setCardHover(false);
+        proArtRef.current?.playDefaultAnimation();
       }}
       className="flex relative flex-col flex-1 justify-between p-8 text-white rounded-2xl shadow-2xl bg-gray-12"
     >
@@ -84,7 +84,7 @@ export const ProCard = () => {
           </span>
         </div>
         <div className="md:h-[300px]">
-        <ProArt cardHover={cardHover} />
+        <ProArt ref={proArtRef} />
         <h3 className="mb-2 text-2xl text-center">
           App + Commercial License +{" "}
           <span className="text-blue-9">Cap Pro</span>
