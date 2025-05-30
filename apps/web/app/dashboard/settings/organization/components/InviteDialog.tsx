@@ -4,13 +4,13 @@ import { sendOrganizationInvites } from "@/actions/organization/send-invites";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { calculateSeats } from "@/utils/organization";
 import {
-  Button,
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  Input,
+    Button,
+    Dialog,
+    DialogContent,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+    Input,
 } from "@cap/ui";
 import { faUserGroup } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -120,7 +120,7 @@ export const InviteDialog = ({
         >
           <DialogTitle>
             Invite to{" "}
-            <span className="font-bold text-gray-12">
+            <span className="font-medium text-gray-12">
               {activeOrganization?.organization.name}
             </span>
           </DialogTitle>

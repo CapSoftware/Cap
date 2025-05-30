@@ -1,10 +1,10 @@
 "use client";
 
-import { Button } from "@cap/ui";
 import { ToolPageContent } from "@/components/tools/types";
-import { useEffect, ReactNode } from "react";
+import { Button } from "@cap/ui";
 import { motion } from "framer-motion";
 import Link from "next/link";
+import { ReactNode, useEffect } from "react";
 
 const renderHTML = (content: string) => {
   const styledContent = content.replace(
@@ -198,7 +198,7 @@ export const ToolsPageTemplate = ({
         {/* Features Section */}
         <div className="mb-20">
           <div className="text-center max-w-[800px] mx-auto mb-12">
-            <h2 className="text-3xl font-bold text-gray-800 mb-5 relative inline-block">
+            <h2 className="text-3xl font-medium text-gray-800 mb-5 relative inline-block">
               {content.featuresTitle}
               <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-16 h-1 bg-blue-500 rounded-full"></span>
             </h2>
@@ -217,7 +217,7 @@ export const ToolsPageTemplate = ({
                   className="p-6 bg-white rounded-xl shadow-sm hover:shadow-md transition-all duration-300 border border-gray-100 hover:border-blue-100"
                 >
                   <div className="bg-blue-50 w-10 h-10 flex items-center justify-center rounded-full mb-4">
-                    <span className="text-blue-500 text-lg font-bold">
+                    <span className="text-blue-500 text-lg font-medium">
                       {index + 1}
                     </span>
                   </div>
@@ -237,7 +237,7 @@ export const ToolsPageTemplate = ({
         {content.faqs && (
           <div className="mb-20">
             <div className="text-center max-w-[800px] mx-auto mb-12">
-              <h2 className="text-3xl font-bold text-gray-800 mb-5 relative inline-block">
+              <h2 className="text-3xl font-medium text-gray-800 mb-5 relative inline-block">
                 Frequently Asked Questions
                 <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-16 h-1 bg-blue-500 rounded-full"></span>
               </h2>
@@ -292,7 +292,7 @@ export const ToolsPageTemplate = ({
           </div>
           <div className="wrapper mx-auto h-full flex flex-col justify-center items-center relative z-10">
             <div className="text-center max-w-[700px] mx-auto mb-6">
-              <h2 className="text-2xl md:text-3xl font-bold text-white mb-3 drop-shadow-md">
+              <h2 className="text-2xl md:text-3xl font-medium text-white mb-3 drop-shadow-md">
                 {content.cta.title}
               </h2>
               <p className="text-lg text-white/90 mb-5">

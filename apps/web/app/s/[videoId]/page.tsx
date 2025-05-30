@@ -1,26 +1,26 @@
-import { Share } from "./Share";
-import { db } from "@cap/database";
-import { eq, desc, sql, count } from "drizzle-orm";
-import {
-  videos,
-  comments,
-  users,
-  sharedVideos,
-  organizationMembers,
-  organizations,
-} from "@cap/database/schema";
-import { VideoMetadata } from "@cap/database/types";
-import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
-import type { Metadata, ResolvingMetadata } from "next";
-import { notFound } from "next/navigation";
-import { ImageViewer } from "./_components/ImageViewer";
-import { buildEnv, serverEnv } from "@cap/env";
+import { getScreenshot } from "@/actions/screenshots/get-screenshot";
+import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { transcribeVideo } from "@/actions/videos/transcribe";
-import { getScreenshot } from "@/actions/screenshots/get-screenshot";
-import { headers } from "next/headers";
-import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
 import { isAiGenerationEnabled, isAiUiEnabled } from "@/utils/flags";
+import { db } from "@cap/database";
+import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
+import {
+    comments,
+    organizationMembers,
+    organizations,
+    sharedVideos,
+    users,
+    videos,
+} from "@cap/database/schema";
+import { VideoMetadata } from "@cap/database/types";
+import { buildEnv } from "@cap/env";
+import { eq } from "drizzle-orm";
+import type { Metadata, ResolvingMetadata } from "next";
+import { headers } from "next/headers";
+import { notFound } from "next/navigation";
+import { ImageViewer } from "./_components/ImageViewer";
+import { Share } from "./Share";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -254,7 +254,7 @@ export default async function ShareVideoPage(props: Props) {
         );
         return (
           <div className="flex flex-col items-center justify-center min-h-screen p-4 text-center">
-            <h1 className="text-2xl font-bold mb-4">Access Restricted</h1>
+            <h1 className="text-2xl font-medium mb-4">Access Restricted</h1>
             <p className="text-gray-600 mb-2">
               This video is only accessible to members of this organization.
             </p>

@@ -73,7 +73,7 @@ export const AboutPage = () => {
 
             <div className="mb-12" id="video">
               <div className="text-center max-w-[800px] mx-auto mb-10">
-                <h2 className="inline-block relative mb-6 text-3xl font-bold text-gray-800">
+                <h2 className="inline-block relative mb-6 text-3xl font-medium text-gray-800">
                   See Cap In Action
                   <span className="absolute -bottom-2 left-1/2 w-20 h-1 bg-blue-500 rounded-full transform -translate-x-1/2"></span>
                 </h2>
@@ -106,7 +106,7 @@ export const AboutPage = () => {
               <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
                 <div className="p-8 bg-gray-1 rounded-2xl border border-gray-4 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] transition-all duration-300 transform hover:-translate-y-[2px]">
                   <div className="flex justify-center items-center mb-4 w-12 h-12 bg-blue-50 rounded-full">
-                    <span className="text-xl font-bold text-blue-500">1</span>
+                    <span className="text-xl font-medium text-blue-500">1</span>
                   </div>
                   <h2 className="mb-4 text-2xl font-semibold text-gray-800">
                     The Problem
@@ -122,7 +122,7 @@ export const AboutPage = () => {
 
                 <div className="p-8 bg-gray-1 rounded-2xl border border-gray-4 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.03)] hover:shadow-[0_5px_30px_rgba(0,0,0,0.05)] transition-all duration-300 transform hover:-translate-y-[2px]">
                   <div className="flex justify-center items-center mb-4 w-12 h-12 bg-blue-50 rounded-full">
-                    <span className="text-xl font-bold text-blue-500">2</span>
+                    <span className="text-xl font-medium text-blue-500">2</span>
                   </div>
                   <h2 className="mb-4 text-2xl font-semibold text-gray-800">
                     Our Solution
