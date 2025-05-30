@@ -2,14 +2,16 @@ import { Button } from "@cap/ui";
 import { motion } from "framer-motion";
 import Image from "next/image";
 import { useState } from "react";
+import { testimonials } from "../../../data/testimonials";
 
 // Combined type for testimonial data and its position/style configuration
 interface TestimonialItem {
   name: string;
-  username: string;
-  avatarSrc: string;
-  testimonial: string;
-  position: { left?: string; right?: string; top: string };
+  handle: string;
+  image: string;
+  content: string;
+  url: string;
+  position: { left?: string; right?: string; top?: string };
   rotation: number;
   zIndex: number;
 }
@@ -23,10 +25,13 @@ interface TestimonialCardProps {
 const TestimonialCard: React.FC<TestimonialCardProps> = ({ item }) => {
   const [isHovered, setIsHovered] = useState(false);
   // Destructure all properties from item, including position, rotation and zIndex
-  const { name, username, avatarSrc, testimonial, position, rotation, zIndex } = item;
+  const { name, handle, image, content, url, position, rotation, zIndex } = item;
 
   return (
-    <motion.div
+    <motion.a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
       className="md:absolute bg-white p-6 h-fit md:h-auto rounded-xl transition-shadow duration-200 ease-in-out border border-gray-5 shadow-lg min-w-[300px] md:min-w-min md:w-full md:max-w-[300px] cursor-pointer"
       style={{
         ...position,
@@ -48,10 +53,10 @@ const TestimonialCard: React.FC<TestimonialCardProps> = ({ item }) => {
       onHoverEnd={() => setIsHovered(false)}
     >
       <div className="flex items-center mb-4">
-        <div className="overflow-hidden relative mr-3 w-12 h-12 rounded-full">
+        <div className="overflow-hidden relative mr-3 w-12 h-12 rounded-full border-2 border-gray-100">
           <Image
-            src={avatarSrc}
-            key={avatarSrc}
+            src={image}
+            key={image}
             alt={`${name}'s profile picture`}
             fill
             className="object-cover"
@@ -59,66 +64,48 @@ const TestimonialCard: React.FC<TestimonialCardProps> = ({ item }) => {
         </div>
         <div>
           <h4 className="text-lg font-semibold text-gray-12">{name}</h4>
-          <p className="text-sm text-gray-10">{username}</p>
+          <p className="text-sm text-gray-10">{handle}</p>
         </div>
       </div>
-      <p className="text-sm leading-relaxed text-gray-10">{testimonial}</p>
-    </motion.div>
+      <p className="text-sm leading-relaxed text-gray-10">{content}</p>
+    </motion.a>
   );
 };
 
 // Combined testimonial data with position and style configurations
 const testimonialItems: TestimonialItem[] = [
   {
-    name: "Bilal Budhani",
-    username: "@BilalBudhani",
-    avatarSrc: "/testimonials/BilalBudhani.jpg",
-    testimonial: "Tried @Cap v 0.3 beta and found an issue while exporting video. Wrote to @richellemcroy about the problem and within 30 minutes later the issue was resolved. Checkout Cap.so!",
-    position: { left: '5%', top: '10%' }, 
-    rotation: -8, 
+    ...testimonials[2], 
+    position: { right: '5%', top: '5%' }, 
+    rotation: 8, 
     zIndex: 4 
   },
   {
-    name: "Greg LD",
-    username: "@Greg__LD",
-    avatarSrc: "/testimonials/Greg__LD.jpg",
-    testimonial: "I recently tested @Cap v 0.3 beta and encountered a glitch during video export, reached out to @richellemcroy for assistance, and within about 30 minutes, the issue was resolved. I'm thoroughly impressed! Definitely give Cap.so a try!",
-    position: { left: '25%', top: '5%' }, 
-    rotation: 5, 
+    ...testimonials[25], 
+    position: { right: '25%', top: '15%' }, 
+    rotation: -5, 
     zIndex: 3 
   },
   {
-    name: "Guillermo Rauch",
-    username: "@guillermo_rauch",
-    avatarSrc: "/testimonials/guillermo_rauch.jpg",
-    testimonial: "I had a great experience using @Cap v 0.3 beta. I faced a minor bug during video import, but after contacting @sarahpixels for help, they fixed it promptly! Highly recommended! Highly recommend trying Cap.so!",
-    position: { right: '25%', top: '15%' }, 
-    rotation: -5, 
+    ...testimonials[9], 
+    position: { left: '5%', top: '10%' }, 
+    rotation: -8, 
     zIndex: 2 
   },
   {
-    name: "Steven Tey",
-    username: "@steven_tey",
-    avatarSrc: "/testimonials/steven_tey.jpg",
-    testimonial: "Tried @Cap v 0.3 beta and encountered a minor bug with my video. I reached out to @richellemcroy for support, and within 30 minutes, the issue was resolved. I'm giving Cap.so a shot!",
-    position: { right: '5%', top: '5%' }, 
-    rotation: 8, 
+    ...testimonials[22], 
+    position: { left: '25%', top: '5%' }, 
+    rotation: 5, 
     zIndex: 1 
   },
   {
-    name: "Dozibe",
-    username: "@Dozibe",
-    avatarSrc: "/testimonials/dozibe.jpg",
-    testimonial: "Tried @Cap v 0.3 beta and found an issue while exporting video. Wrote to @richellemcroy about the problem and within 30 minutes later the issue was resolved. Checkout Cap.so!",
-    position: { right: '20%', top: '40%' }, 
+    ...testimonials[12], 
+    position: { right: '18%', top: '40%' }, 
     rotation: 8, 
-    zIndex: 0
+    zIndex: 3
   },
   {
-    name: "Campak",
-    username: "@Campak",
-    avatarSrc: "/testimonials/campak.jpg",
-    testimonial: "Tried @Cap v 0.3 beta and found an issue while exporting video. Wrote to @richellemcroy about the problem and within 30 minutes later the issue was resolved. Checkout Cap.so!",
+    ...testimonials[10], 
     position: { left: '20%', top: '40%' }, 
     rotation: -4, 
     zIndex: 0 

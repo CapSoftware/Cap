@@ -206,7 +206,7 @@ export const testimonials = [
     content: "Thank you for Cap!",
     url: "https://www.producthunt.com/products/cap-3?comment=4174238#cap-4",
   },
-];
+] as const;
 
 export type Testimonial = {
   name: string;
