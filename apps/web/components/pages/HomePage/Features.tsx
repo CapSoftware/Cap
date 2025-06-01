@@ -41,7 +41,7 @@ const StorageOptionsArt = memo(() => {
     }),
   });
   return (
-    <StorageOptionsRive className="w-full max-w-[450px] mx-auto h-[300px]" />
+    <StorageOptionsRive className="w-full max-w-[350px] mx-auto h-[300px]" />
   )
 })
 
@@ -56,7 +56,7 @@ const CollabArt = memo(() => {
     }),
   });
   return (
-    <CollabRive className="w-full max-w-[500px] mx-auto h-[300px]" />
+    <CollabRive className="w-full max-w-[500px] mx-auto h-[280px]" />
   )
 })
 
@@ -71,7 +71,7 @@ const PrivacyFirstArt = memo(() => {
     }),
   });
   return (
-    <PrivacyFirstRive className="w-full max-w-[560px] mx-auto h-[300px]" />
+    <PrivacyFirstRive className="w-full max-w-[560px] mx-auto h-[250px]" />
   )
 })
 
@@ -86,7 +86,7 @@ const PlatformSupportArt = memo(() => {
     }),
   });
   return (
-    <PlatformSupportRive className="w-full max-w-[500px] mx-auto h-[300px]" />
+    <PlatformSupportRive className="w-full max-w-[550px] mx-auto h-[250px]" />
   )
 })
 
@@ -101,7 +101,7 @@ const EveryoneArt = memo(() => {
     }),
   });
   return (
-    <EveryoneRive className="w-full max-w-[500px] mx-auto h-[300px]" />
+    <EveryoneRive className="w-full max-w-[500px] mx-auto h-[250px]" />
   )
 })
 
@@ -113,7 +113,7 @@ const features: Feature[] = [
       top: 25,
     },
     description:
-      "Choose how and where you store your recordings. Cap offers both local and cloud storage options to suit your needs. Save space on your device or keep your entire content library accessible from anywhere – ideal for freelancers and growing teams with varied content creation needs.",
+      "Choose how and where you store your recordings. Cap offers both local and cloud storage options to suit your needs. Save space on your device or keep your entire content library accessible from anywhere – ideal for freelancers and growing teams.",
   },
   {
     title: "Privacy-first",
@@ -149,14 +149,14 @@ const features: Feature[] = [
 
 const Features = () => {
   return (
-    <div className="text-center max-w-[1200px] mx-auto mb-8 px-5">
+    <div className="text-center max-w-[1440px] mx-auto mb-8 px-5">
       <h2 className="mb-3">Crafted for simplicity</h2>
       <p className="text-lg leading-[1.75rem] w-full max-w-[800px] mx-auto">
         We believe great tools should make your life easier, not more
         complicated. Cap is crafted to streamline your workflow, so you can
         record, edit, and share without jumping through hoops.
       </p>
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 mt-[52px]">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 mt-[52px]">
         {features.map((feature) => (
           <FeatureCard
             key={feature.title}
@@ -177,9 +177,6 @@ const FeatureCard = ({
   title,
   description,
   rive,
-  img,
-  imageAlt,
-  imageClass,
   relative,
 }: {
     title: string;
@@ -208,8 +205,8 @@ const FeatureCard = ({
       {rive}
       </div>
       <div className="flex flex-col gap-2 justify-end h-fit">
-      <h3 className="text-xl font-medium">{title}</h3>
-      <p className="text-lg text-gray-10">{description}</p>
+      <h3 className="text-lg font-medium">{title}</h3>
+      <p className="text-base text-gray-10">{description}</p>
       </div>
     </div>
   );
