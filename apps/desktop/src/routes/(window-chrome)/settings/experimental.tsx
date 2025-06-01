@@ -3,6 +3,7 @@ import { createStore } from "solid-js/store";
 
 import { generalSettingsStore } from "~/store";
 import { type GeneralSettingsStore } from "~/utils/tauri";
+import { platform } from "@tauri-apps/plugin-os";
 import { ToggleSetting } from "./Setting";
 
 export default function ExperimentalSettings() {
@@ -23,6 +24,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
       hideDockIcon: false,
       autoCreateShareableLink: false,
       enableNotifications: true,
+      voiceIsolation: false,
     }
   );
 
@@ -63,6 +65,15 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
             value={!!settings.systemAudioCapture}
             onChange={(value) => handleChange("systemAudioCapture", value)}
           />
+
+          {platform() === "macos" && (
+            <ToggleSetting
+              label="Enable Voice Isolation (macOS only)"
+              description="Reduces background noise like fan hum using Apple's Voice Isolation. May improve audio clarity for client-facing videos."
+              value={!!settings.voiceIsolation}
+              onChange={(value) => handleChange("voiceIsolation", value)}
+            />
+          )}
         </div>
       </div>
     </div>

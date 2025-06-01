@@ -163,7 +163,13 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
 
     match (label, &mut app.mic_feed) {
         (Some(label), None) => {
-            AudioInputFeed::init(&label)
+            let voice_iso = GeneralSettingsStore::get(&app.handle)
+                .ok()
+                .flatten()
+                .map(|s| s.voice_isolation)
+                .unwrap_or_default();
+
+            AudioInputFeed::init(&label, voice_iso)
                 .await
                 .map_err(|e| e.to_string())
                 .map(async |feed| {

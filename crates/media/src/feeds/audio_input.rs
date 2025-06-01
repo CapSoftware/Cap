@@ -45,6 +45,36 @@ pub type AudioInputDeviceMap = IndexMap<String, (Device, SupportedStreamConfig)>
 
 pub const MAX_AUDIO_CHANNELS: u16 = 2;
 
+#[cfg(target_os = "macos")]
+fn set_voice_isolation(enable: bool) -> Result<(), String> {
+    use cocoa::base::{id, nil};
+    use cocoa::foundation::NSString;
+    use objc::{class, msg_send};
+
+    unsafe {
+        let session: id = msg_send![class!(AVAudioSession), sharedInstance];
+        if session.is_null() {
+            return Err("AVAudioSession unavailable".into());
+        }
+
+        let mode = if enable {
+            NSString::alloc(nil).init_str("AVAudioSessionModeVoiceIsolation")
+        } else {
+            NSString::alloc(nil).init_str("AVAudioSessionModeDefault")
+        };
+
+        let mut error: id = nil;
+        let _: () = msg_send![session, setMode: mode error: &mut error];
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_voice_isolation(_enable: bool) -> Result<(), String> {
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct AudioInputFeed {
     pub control_tx: Sender<AudioInputControl>,
@@ -57,7 +87,10 @@ impl AudioInputFeed {
         flume::bounded(60)
     }
 
-    pub async fn init(selected_input: &str) -> Result<Self, MediaError> {
+    pub async fn init(
+        selected_input: &str,
+        #[cfg(target_os = "macos")] voice_isolation: bool,
+    ) -> Result<Self, MediaError> {
         trace!("Initializing audio input feed with device");
         debug!(selected_input);
 
@@ -81,6 +114,13 @@ impl AudioInputFeed {
             })?;
 
         let audio_info = AudioInfo::from_stream_config(&config);
+
+        #[cfg(target_os = "macos")]
+        if voice_isolation {
+            if let Err(e) = set_voice_isolation(true) {
+                warn!("Failed to enable voice isolation: {}", e);
+            }
+        }
 
         debug!("Created audio info: {:?}", audio_info);
         let (control_tx, control_rx) = flume::bounded(1);
