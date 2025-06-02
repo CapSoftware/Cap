@@ -23,7 +23,7 @@ export const SelectedCapsBar = ({
     <AnimatePresence>
       {selectedCaps.length > 0 && (
         <motion.div
-          className="flex fixed right-0 left-0 bottom-4 z-50 justify-between items-center px-6 py-3 mx-auto w-full max-w-xl rounded-xl border shadow-lg border-gray-2 bg-gray-1"
+          className="flex fixed right-0 left-0 bottom-4 z-50 justify-between items-center p-3 mx-auto w-full max-w-xl rounded-xl border shadow-lg border-gray-2 bg-gray-1"
           initial={{ opacity: 0, y: 10, scale: 0.9 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{
