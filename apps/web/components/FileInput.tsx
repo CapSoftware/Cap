@@ -169,7 +169,7 @@ export const FileInput: React.FC<FileInputProps> = ({
     <div className={`relative ${className}`}>
       <div className="h-[46.5px]"> {/* Fixed height container to prevent resizing */}
         {(selectedFile || previewUrl) ? (
-          <div className="flex gap-2 items-center p-1.5 rounded-xl border bg-gray-3 border-gray-4 h-full">
+          <div className="flex gap-2 items-center p-1.5 rounded-xl border bg-gray-1 border-gray-4 h-full">
             <div className="flex flex-1 gap-1.5 items-center">
               <div className="flex flex-1 gap-1 items-center">
                 {selectedFile ? (
@@ -197,7 +197,6 @@ export const FileInput: React.FC<FileInputProps> = ({
             <Button
               variant="destructive"
               size="xs"
-              className="min-w-[80px]"
               disabled={isLoading || disabled}
               onClick={handleRemove}
             >

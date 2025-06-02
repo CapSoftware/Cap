@@ -41,7 +41,7 @@ const StorageOptionsArt = memo(() => {
     }),
   });
   return (
-    <StorageOptionsRive className="w-full max-w-[350px] mx-auto h-[300px]" />
+    <StorageOptionsRive className="w-full max-w-[350px] mx-auto h-[275px]" />
   )
 })
 
@@ -86,7 +86,7 @@ const PlatformSupportArt = memo(() => {
     }),
   });
   return (
-    <PlatformSupportRive className="w-full max-w-[550px] mx-auto h-[250px]" />
+    <PlatformSupportRive className="w-full max-w-[600px] mx-auto h-[300px]" />
   )
 })
 

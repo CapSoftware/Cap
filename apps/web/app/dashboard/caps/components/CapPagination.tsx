@@ -51,7 +51,7 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
         {totalPages > currentPage + 1 && (
           <PaginationItem>
             <PaginationLink
-              className="h-10 min-w-10"
+              className="h-10 min-w-10 hover:bg-gray-3"
               href={`/dashboard/caps?page=${currentPage + 1}`}
               isActive={false}
             >
