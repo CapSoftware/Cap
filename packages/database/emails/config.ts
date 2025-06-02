@@ -5,7 +5,7 @@ import { Resend } from "resend";
 export const resend = () =>
   serverEnv().RESEND_API_KEY ? new Resend(serverEnv().RESEND_API_KEY) : null;
 
-const resendCustomDomain = serverEnv().RESEND_FROM_DOMAIN ? serverEnv().RESEND_FROM_DOMAIN : null
+const resendCustomDomain = serverEnv().RESEND_FROM_DOMAIN
 
 // Augment the CreateEmailOptions type to include scheduledAt
 type EmailOptions = {
@@ -36,12 +36,24 @@ export const sendEmail = async ({
     return Promise.resolve();
   }
 
+  let from: string | null = null;
+
+  if (marketing) {
+    from = "Richie from Cap <richie@send.cap.so>"
+  } else if (buildEnv.NEXT_PUBLIC_IS_CAP) {
+    from = "Cap Auth <no-reply@auth.cap.so>"
+  } else if (resendCustomDomain) {
+    from = `auth@${resendCustomDomain}`;
+  } else if (buildEnv.NEXT_PUBLIC_WEB_URL) {
+    const webUrl = new URL(buildEnv.NEXT_PUBLIC_WEB_URL);
+
+    from = `auth@${webUrl.hostname}`;
+  } else {
+    throw new Error("No valid sender email configured");
+  }
+
   return r.emails.send({
-    from: marketing
-      ? "Richie from Cap <richie@send.cap.so>"
-      : buildEnv.NEXT_PUBLIC_IS_CAP
-      ? "Cap Auth <no-reply@auth.cap.so>"
-      : `auth@${resendCustomDomain || ''}`,
+    from,
     to: test ? "delivered@resend.dev" : email,
     subject,
     react,
