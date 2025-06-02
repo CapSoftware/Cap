@@ -114,7 +114,11 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
   return (
     <>
     <header className="sticky inset-0 top-4 z-[51] md:top-10">
-      <nav className="p-2 mx-auto w-full max-w-[calc(100%-20px)] bg-white rounded-full border backdrop-blur-md md:max-w-fit border-zinc-200 h-fit">
+      <motion.nav 
+      initial={{ opacity: 0, y: -10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2, ease: "easeOut" }}
+      className="p-2 mx-auto w-full max-w-[calc(100%-20px)] bg-white rounded-full border backdrop-blur-md md:max-w-fit border-zinc-200 h-fit">
         <div className="flex gap-12 justify-between items-center mx-auto max-w-4xl h-full transition-all">
           <div className="flex items-center">
             <Link passHref href="/home">
@@ -209,7 +213,7 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
             </div>
           </button>
         </div>
-      </nav>
+      </motion.nav>
     </header>
       {showMobileMenu && (
         <MobileMenu
