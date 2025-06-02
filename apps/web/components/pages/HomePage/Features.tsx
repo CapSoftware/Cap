@@ -86,7 +86,7 @@ const PlatformSupportArt = memo(() => {
     }),
   });
   return (
-    <PlatformSupportRive className="w-full max-w-[600px] mx-auto h-[300px]" />
+    <PlatformSupportRive className="w-full max-w-[600px] mx-auto h-[280px]" />
   )
 })
 
