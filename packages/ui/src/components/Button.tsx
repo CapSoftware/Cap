@@ -4,7 +4,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import * as React from "react";
 
 const buttonVariants = cva(
-  "flex items-center justify-center rounded-full cursor-pointer font-medium px-[1.25rem] ring-offset-transparent relative gap-1",
+  "flex items-center justify-center rounded-full cursor-pointer disabled:!cursor-not-allowed font-medium px-[1.25rem] ring-offset-transparent relative gap-1",
   {
     defaultVariants: {
       variant: "primary",
@@ -13,7 +13,7 @@ const buttonVariants = cva(
     variants: {
       variant: {
         primary: "bg-gray-12 text-gray-1 hover:bg-gray-11",
-        blue: "bg-blue-600 text-white hover:bg-blue-700 disabled:bg-blue-800 disabled:text-gray-8",
+        blue: "bg-blue-600 text-white hover:bg-blue-700 disabled:bg-blue-800",
         destructive:
           "bg-red-500 text-white hover:bg-red-600 disabled:bg-red-200",
         white: "bg-gray-1 text-gray-12 hover:bg-gray-2 disabled:bg-gray-8",
