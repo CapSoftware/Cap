@@ -21,7 +21,13 @@ type VideoData = {
   createdAt: Date;
   totalComments: number;
   totalReactions: number;
-  sharedOrganizations: { id: string; name: string }[];
+  sharedOrganizations: { id: string; name: string; iconUrl?: string }[];
+  sharedSpaces: {
+    id: string;
+    name: string;
+    iconUrl?: string;
+    organizationId: string;
+  }[];
   ownerName: string;
   metadata?: VideoMetadata;
   hasPassword: boolean;
@@ -30,24 +36,23 @@ type VideoData = {
 export const Caps = ({
   data,
   count,
-  userOrganizations,
   dubApiKeyEnabled,
 }: {
   data: VideoData;
   count: number;
-  userOrganizations: { id: string; name: string }[];
   dubApiKeyEnabled: boolean;
 }) => {
   const { refresh } = useRouter();
   const params = useSearchParams();
   const page = Number(params.get("page")) || 1;
   const [analytics, setAnalytics] = useState<Record<string, number>>({});
-  const { user } = useSharedContext();
+  const { user, spacesData, organizationData } = useSharedContext();
   const limit = 15;
   const totalPages = Math.ceil(count / limit);
   const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
   const previousCountRef = useRef<number>(0);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isDraggingCap, setIsDraggingCap] = useState(false);
   const [uploadPlaceholders, setUploadPlaceholders] = useState<
     {
       id: string;
@@ -126,6 +131,19 @@ export const Caps = ({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [selectedCaps.length, data]);
+
+  useEffect(() => {
+    const handleDragStart = () => setIsDraggingCap(true);
+    const handleDragEnd = () => setIsDraggingCap(false);
+
+    window.addEventListener("dragstart", handleDragStart);
+    window.addEventListener("dragend", handleDragEnd);
+
+    return () => {
+      window.removeEventListener("dragstart", handleDragStart);
+      window.removeEventListener("dragend", handleDragEnd);
+    };
+  }, []);
 
   const deleteCap = async (videoId: string) => {
     if (
@@ -222,7 +240,6 @@ export const Caps = ({
       setSelectedCaps([]);
       refresh();
     } catch (error) {
-      // Error is handled by toast.promise
     } finally {
       setIsDeleting(false);
     }
@@ -253,7 +270,16 @@ export const Caps = ({
 
   return (
     <div className="flex relative flex-col w-full">
-      <div className="flex justify-end mb-8">
+      {isDraggingCap && (
+        <div className="fixed inset-0 z-50 pointer-events-none">
+          <div className="flex justify-center items-center w-full h-full">
+            <div className="px-5 py-3 text-sm font-medium rounded-lg border backdrop-blur-md bg-gray-1/80 border-gray-4 text-gray-12">
+              Drag to a space to share
+            </div>
+          </div>
+        </div>
+      )}
+      <div className="flex justify-end mb-4">
         <UploadCapButton
           onStart={handleUploadStart}
           onProgress={handleUploadProgress}
@@ -276,7 +302,6 @@ export const Caps = ({
             analytics={analytics[cap.id] || 0}
             onDelete={deleteCap}
             userId={user?.id}
-            userOrganizations={userOrganizations}
             isSelected={selectedCaps.includes(cap.id)}
             onSelectToggle={() => handleCapSelection(cap.id)}
             anyCapSelected={anyCapSelected}

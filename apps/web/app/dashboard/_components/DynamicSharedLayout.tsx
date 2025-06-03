@@ -1,15 +1,20 @@
 "use client";
 import AdminMobileNav from "@/app/dashboard/_components/AdminNavbar/AdminMobileNav";
-import { Organization } from "@/app/dashboard/layout";
-import { UpgradeModal } from "@/components/UpgradeModal";
+import { Organization, Space } from "@/app/dashboard/layout";
 import { users } from "@cap/database/schema";
 import Cookies from "js-cookie";
 import { createContext, useContext, useEffect, useState } from "react";
 import AdminDesktopNav from "./AdminNavbar/AdminDesktopNav";
+import { UpgradeModal } from "@/components/UpgradeModal";
+import { usePathname } from "next/navigation";
 
 type SharedContext = {
   organizationData: Organization[] | null;
   activeOrganization: Organization | null;
+  spacesData: Space[] | null;
+  userSpaces: Space[] | null;
+  sharedSpaces: Space[] | null;
+  activeSpace: Space | null;
   user: typeof users.$inferSelect;
   isSubscribed: boolean;
   toggleSidebarCollapsed: () => void;
@@ -36,6 +41,7 @@ export default function DynamicSharedLayout({
   children,
   organizationData,
   activeOrganization,
+  spacesData,
   user,
   isSubscribed,
   initialTheme,
@@ -44,6 +50,7 @@ export default function DynamicSharedLayout({
   children: React.ReactNode;
   organizationData: SharedContext["organizationData"];
   activeOrganization: SharedContext["activeOrganization"];
+  spacesData: SharedContext["spacesData"];
   user: SharedContext["user"];
   isSubscribed: SharedContext["isSubscribed"];
   initialTheme: ITheme;
@@ -54,6 +61,45 @@ export default function DynamicSharedLayout({
     initialSidebarCollapsed
   );
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+  const pathname = usePathname();
+
+  // Calculate user's spaces (both owned and member of)
+  const userSpaces =
+    spacesData?.filter((space) =>
+      // User might be the space owner or a member of the space in the organization
+      activeOrganization?.members.some(
+        (member) =>
+          member.userId === user.id &&
+          member.organizationId === space.organizationId
+      )
+    ) || null;
+
+  // Spaces shared with the user but not owned by them
+  const sharedSpaces =
+    spacesData?.filter((space) =>
+      activeOrganization?.members.some(
+        (member) =>
+          member.userId === user.id &&
+          member.organizationId === space.organizationId &&
+          member.role === "MEMBER"
+      )
+    ) || null;
+
+  // Get activeSpace from URL if on a space page
+  const [activeSpace, setActiveSpace] = useState<Space | null>(null);
+
+  useEffect(() => {
+    const spaceIdMatch = pathname.match(/\/dashboard\/spaces\/([^\/]+)/);
+    const spaceId = spaceIdMatch ? spaceIdMatch[1] : null;
+
+    if (spaceId && spacesData) {
+      const space = spacesData.find((space) => space.id === spaceId) || null;
+      setActiveSpace(space);
+    } else {
+      setActiveSpace(null);
+    }
+  }, [spacesData, pathname]);
+
   const setThemeHandler = (newTheme: ITheme) => {
     setTheme(newTheme);
     Cookies.set("theme", newTheme, {
@@ -85,6 +131,10 @@ export default function DynamicSharedLayout({
         value={{
           organizationData,
           activeOrganization,
+          spacesData,
+          userSpaces,
+          sharedSpaces,
+          activeSpace,
           user,
           isSubscribed,
           toggleSidebarCollapsed,

@@ -1,5 +1,5 @@
 import { useRive } from "@rive-app/react-canvas";
-import { useTheme } from "../../_components/DynamicSharedLayout";
+import { useTheme } from "../../../_components/DynamicSharedLayout";
 
 interface EmptySharedCapStateProps {
   organizationName: string;

@@ -34,8 +34,8 @@ export function LoginForm() {
 
   useEffect(() => {
     theme === "dark"
-      ? document.body.className = "dark"
-      : document.body.className = "light";
+      ? (document.body.className = "dark")
+      : (document.body.className = "light");
     //remove the dark mode when we leave the dashboard
     return () => {
       document.body.className = "light";
@@ -125,150 +125,146 @@ export function LoginForm() {
   };
 
   return (
-      <div className="overflow-hidden relative w-[calc(100%-5%)] p-[28px] max-w-[472px] bg-gray-3 border border-gray-5 rounded-2xl">
-        <motion.div
-          key="back-button"
-          initial={{ opacity: 0, display: "none" }}
-          animate={{
-            opacity: showOrgInput ? 1 : 0,
-            display: showOrgInput ? "flex" : "none",
-            transition: { duration: 0.2 },
-          }}
-          onClick={() => setShowOrgInput(false)}
-          className="flex absolute top-5 left-5 z-20 hover:bg-gray-1 gap-2 items-center py-1.5 px-3 text-gray-12 bg-transparent rounded-full border border-gray-4 transition-colors duration-300 cursor-pointer "
-        >
-          <FontAwesomeIcon className="w-2" icon={faArrowLeft} />
-          <p className="text-xs text-inherit">Back</p>
-        </motion.div>
-        <Link className="flex mx-auto w-fit" href="/">
-          <LogoBadge className="w-[72px] mx-auto" />
-        </Link>
-        <div className="flex flex-col justify-center items-center my-7 text-left">
-          <h1 className="text-2xl font-semibold text-gray-12">
-            Sign in to Cap
-          </h1>
-          <p className="text-[16px] text-gray-10">
-            Beautiful screen recordings, owned by you.
-          </p>
-        </div>
-        <div className="flex flex-col space-y-3">
-          <Suspense
-            fallback={
-              <>
-                <Button disabled={true} variant="primary" />
-                <Button disabled={true} variant="destructive" />
-                <div className="mx-auto w-3/4 h-5 rounded-lg bg-gray-1" />
-              </>
-            }
-          >
-            <div className="flex flex-col space-y-3">
-              <AnimatePresence mode="wait" initial={false}>
-                {showOrgInput ? (
-                  <motion.div
-                    key="sso"
-                    initial={{ x: 450, opacity: 0, filter: "blur(10px)" }}
-                    animate={{ x: 0, opacity: 1, filter: "blur(0px)" }}
-                    exit={{ x: 450, opacity: 0, filter: "blur(10px)" }}
-                    transition={{ duration: 0.2, type: "spring", bounce: 0.2 }}
-                  >
-                    <LoginWithSSO
-                      handleOrganizationLookup={handleOrganizationLookup}
-                      organizationId={organizationId}
-                      setOrganizationId={setOrganizationId}
-                      organizationName={organizationName}
-                    />
-                  </motion.div>
-                ) : (
-                  <motion.form
-                    key="email"
-                    initial={{ x: -450, opacity: 0, filter: "blur(10px)" }}
-                    animate={{ x: 0, opacity: 1, filter: "blur(0px)" }}
-                    exit={{ x: -450, opacity: 0, filter: "blur(10px)" }}
-                    transition={{ duration: 0.2, type: "spring", bounce: 0.2 }}
-                    onSubmit={async (e) => {
-                      e.preventDefault();
-                      if (!email) return;
-
-                      setLoading(true);
-                      trackEvent("auth_started", {
-                        method: "email",
-                        is_signup: !oauthError,
-                      });
-                      signIn("email", {
-                        email,
-                        redirect: false,
-                        ...(next && next.length > 0
-                          ? { callbackUrl: next }
-                          : {}),
-                      })
-                        .then((res) => {
-                          setLoading(false);
-                          if (res?.ok && !res?.error) {
-                            setEmailSent(true);
-                            trackEvent("auth_email_sent", {
-                              email_domain: email.split("@")[1],
-                            });
-                            toast.success("Email sent - check your inbox!");
-                          } else {
-                            toast.error("Error sending email - try again?");
-                          }
-                        })
-                        .catch(() => {
-                          setEmailSent(false);
-                          setLoading(false);
-                          toast.error("Error sending email - try again?");
-                        });
-                    }}
-                    className="flex flex-col space-y-3"
-                  >
-                    <NormalLogin
-                      setShowOrgInput={setShowOrgInput}
-                      email={email}
-                      emailSent={emailSent}
-                      setEmail={setEmail}
-                      loading={loading}
-                      oauthError={oauthError}
-                      handleGoogleSignIn={handleGoogleSignIn}
-                    />
-                  </motion.form>
-                )}
-              </AnimatePresence>
-              <p className="pt-3 text-xs text-center text-gray-9">
-                By typing your email and clicking continue, you acknowledge that
-                you have both read and agree to Cap's{" "}
-                <Link
-                  href="/terms"
-                  target="_blank"
-                  className="text-xs font-semibold text-gray-12 hover:text-blue-300"
-                >
-                  Terms of Service
-                </Link>{" "}
-                and{" "}
-                <Link
-                  href="/privacy"
-                  target="_blank"
-                  className="text-xs font-semibold text-gray-12 hover:text-blue-300"
-                >
-                  Privacy Policy
-                </Link>
-                .
-              </p>
-            </div>
-            {emailSent && (
-              <button
-                className="pt-3 mx-auto text-sm underline text-gray-10 hover:text-gray-8"
-                onClick={() => {
-                  setEmailSent(false);
-                  setEmail("");
-                  setLoading(false);
-                }}
-              >
-                Click to restart sign in process
-              </button>
-            )}
-          </Suspense>
-        </div>
+    <div className="overflow-hidden relative w-[calc(100%-5%)] p-[28px] max-w-[472px] bg-gray-3 border border-gray-5 rounded-2xl">
+      <motion.div
+        key="back-button"
+        initial={{ opacity: 0, display: "none" }}
+        animate={{
+          opacity: showOrgInput ? 1 : 0,
+          display: showOrgInput ? "flex" : "none",
+          transition: { duration: 0.2 },
+        }}
+        onClick={() => setShowOrgInput(false)}
+        className="flex absolute top-5 left-5 z-20 hover:bg-gray-1 gap-2 items-center py-1.5 px-3 text-gray-12 bg-transparent rounded-full border border-gray-4 transition-colors duration-300 cursor-pointer "
+      >
+        <FontAwesomeIcon className="w-2" icon={faArrowLeft} />
+        <p className="text-xs text-inherit">Back</p>
+      </motion.div>
+      <Link className="flex mx-auto w-fit" href="/">
+        <LogoBadge className="w-[72px] mx-auto" />
+      </Link>
+      <div className="flex flex-col justify-center items-center my-7 text-left">
+        <h1 className="text-2xl font-semibold text-gray-12">Sign in to Cap</h1>
+        <p className="text-[16px] text-gray-10">
+          Beautiful screen recordings, owned by you.
+        </p>
       </div>
+      <div className="flex flex-col space-y-3">
+        <Suspense
+          fallback={
+            <>
+              <Button disabled={true} variant="primary" />
+              <Button disabled={true} variant="destructive" />
+              <div className="mx-auto w-3/4 h-5 rounded-lg bg-gray-1" />
+            </>
+          }
+        >
+          <div className="flex flex-col space-y-3">
+            <AnimatePresence mode="wait" initial={false}>
+              {showOrgInput ? (
+                <motion.div
+                  key="sso"
+                  initial={{ x: 450, opacity: 0, filter: "blur(10px)" }}
+                  animate={{ x: 0, opacity: 1, filter: "blur(0px)" }}
+                  exit={{ x: 450, opacity: 0, filter: "blur(10px)" }}
+                  transition={{ duration: 0.2, type: "spring", bounce: 0.2 }}
+                >
+                  <LoginWithSSO
+                    handleOrganizationLookup={handleOrganizationLookup}
+                    organizationId={organizationId}
+                    setOrganizationId={setOrganizationId}
+                    organizationName={organizationName}
+                  />
+                </motion.div>
+              ) : (
+                <motion.form
+                  key="email"
+                  initial={{ x: -450, opacity: 0, filter: "blur(10px)" }}
+                  animate={{ x: 0, opacity: 1, filter: "blur(0px)" }}
+                  exit={{ x: -450, opacity: 0, filter: "blur(10px)" }}
+                  transition={{ duration: 0.2, type: "spring", bounce: 0.2 }}
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    if (!email) return;
+
+                    setLoading(true);
+                    trackEvent("auth_started", {
+                      method: "email",
+                      is_signup: !oauthError,
+                    });
+                    signIn("email", {
+                      email,
+                      redirect: false,
+                      ...(next && next.length > 0 ? { callbackUrl: next } : {}),
+                    })
+                      .then((res) => {
+                        setLoading(false);
+                        if (res?.ok && !res?.error) {
+                          setEmailSent(true);
+                          trackEvent("auth_email_sent", {
+                            email_domain: email.split("@")[1],
+                          });
+                          toast.success("Email sent - check your inbox!");
+                        } else {
+                          toast.error("Error sending email - try again?");
+                        }
+                      })
+                      .catch(() => {
+                        setEmailSent(false);
+                        setLoading(false);
+                        toast.error("Error sending email - try again?");
+                      });
+                  }}
+                  className="flex flex-col space-y-3"
+                >
+                  <NormalLogin
+                    setShowOrgInput={setShowOrgInput}
+                    email={email}
+                    emailSent={emailSent}
+                    setEmail={setEmail}
+                    loading={loading}
+                    oauthError={oauthError}
+                    handleGoogleSignIn={handleGoogleSignIn}
+                  />
+                </motion.form>
+              )}
+            </AnimatePresence>
+            <p className="pt-3 text-xs text-center text-gray-9">
+              By typing your email and clicking continue, you acknowledge that
+              you have both read and agree to Cap's{" "}
+              <Link
+                href="/terms"
+                target="_blank"
+                className="text-xs font-semibold text-gray-12 hover:text-blue-300"
+              >
+                Terms of Service
+              </Link>{" "}
+              and{" "}
+              <Link
+                href="/privacy"
+                target="_blank"
+                className="text-xs font-semibold text-gray-12 hover:text-blue-300"
+              >
+                Privacy Policy
+              </Link>
+              .
+            </p>
+          </div>
+          {emailSent && (
+            <button
+              className="pt-3 mx-auto text-sm underline text-gray-10 hover:text-gray-8"
+              onClick={() => {
+                setEmailSent(false);
+                setEmail("");
+                setLoading(false);
+              }}
+            >
+              Click to restart sign in process
+            </button>
+          )}
+        </Suspense>
+      </div>
+    </div>
   );
 }
 
@@ -380,7 +376,12 @@ const NormalLogin = ({
               onClick={handleGoogleSignIn}
               disabled={loading}
             >
-             <Image src="/logos/google.svg" alt="Google" width={16} height={16} />
+              <Image
+                src="/logos/google.svg"
+                alt="Google"
+                width={16}
+                height={16}
+              />
               Login with Google
             </Button>
           </>

@@ -1,4 +1,5 @@
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
+import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Tooltip } from "@/components/Tooltip";
 import {
   Button,
@@ -17,15 +18,20 @@ import { Check, Search } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { shareCap } from "@/actions/caps/share";
 
 interface SharingDialogProps {
   isOpen: boolean;
   onClose: () => void;
   capId: string;
   capName: string;
-  sharedOrganizations: { id: string; name: string; iconUrl?: string }[];
-  userOrganizations?: { id: string; name: string; iconUrl?: string }[];
-  onSharingUpdated: (updatedSharedOrganizations: string[]) => void;
+  sharedSpaces: {
+    id: string;
+    name: string;
+    iconUrl?: string | null;
+    organizationId: string;
+  }[];
+  onSharingUpdated: (updatedSharedSpaces: string[]) => void;
 }
 
 export const SharingDialog: React.FC<SharingDialogProps> = ({
@@ -33,38 +39,47 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
   onClose,
   capId,
   capName,
-  sharedOrganizations,
-  userOrganizations,
+  sharedSpaces,
   onSharingUpdated,
 }) => {
-  const [selectedOrganizations, setSelectedOrganizations] = useState<
-    Set<string>
-  >(new Set(sharedOrganizations.map((organization) => organization.id)));
+  console.log("sharedSpaces:", sharedSpaces);
+
+  const { spacesData, activeOrganization } = useSharedContext();
+  const [selectedSpaces, setSelectedSpaces] = useState<Set<string>>(new Set());
   const [searchTerm, setSearchTerm] = useState("");
-  const [initialSelectedOrganizations, setInitialSelectedOrganizations] =
-    useState<Set<string>>(
-      new Set(sharedOrganizations.map((organization) => organization.id))
-    );
+  const [initialSelectedSpaces, setInitialSelectedSpaces] = useState<
+    Set<string>
+  >(new Set());
   const [loading, setLoading] = useState(false);
 
+  const sharedOrganizationIds = new Set(
+    sharedSpaces?.map((space) => space.organizationId) || []
+  );
+
   useEffect(() => {
-    if (isOpen) {
-      const currentOrganizationIds = new Set(
-        sharedOrganizations.map((organization) => organization.id)
-      );
-      setSelectedOrganizations(currentOrganizationIds);
-      setInitialSelectedOrganizations(currentOrganizationIds);
+    if (isOpen && sharedSpaces) {
+      const spaceIds = new Set(sharedSpaces.map((space) => space.id));
+      setSelectedSpaces(spaceIds);
+      setInitialSelectedSpaces(spaceIds);
       setSearchTerm("");
     }
-  }, [isOpen, sharedOrganizations]);
+  }, [isOpen, sharedSpaces]);
 
-  const handleToggleOrganization = (organizationId: string) => {
-    setSelectedOrganizations((prev) => {
+  const isSpaceSharedViaOrganization = (spaceId: string) => {
+    const space = spacesData?.find((s) => s.id === spaceId);
+    return space && sharedOrganizationIds.has(space.organizationId);
+  };
+
+  const handleToggleSpace = (spaceId: string) => {
+    console.log(`Toggling space: ${spaceId}`);
+    setSelectedSpaces((prev) => {
       const newSet = new Set(prev);
-      if (newSet.has(organizationId)) {
-        newSet.delete(organizationId);
+      if (newSet.has(spaceId)) {
+        console.log(`Removing space ${spaceId} from selection`);
+        newSet.delete(spaceId);
       } else {
-        newSet.add(organizationId);
+        console.log(`Adding space ${spaceId} to selection`);
+        newSet.add(spaceId);
       }
       return newSet;
     });
@@ -72,67 +87,53 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 
   const handleSave = async () => {
     try {
+      console.log("Starting save operation for cap:", capId);
+      console.log("Selected spaces:", Array.from(selectedSpaces));
       setLoading(true);
-      const response = await fetch("/api/caps/share", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          capId,
-          organizationIds: Array.from(selectedOrganizations),
-        }),
+      const result = await shareCap({
+        capId,
+        spaceIds: Array.from(selectedSpaces),
       });
 
-      if (!response.ok) {
-        throw new Error("Failed to update sharing settings");
+      if (!result.success) {
+        console.error("Share operation failed:", result.error);
+        throw new Error(result.error || "Failed to update sharing settings");
       }
 
-      const newSelectedOrganizations = Array.from(selectedOrganizations);
-      const initialOrganizations = Array.from(initialSelectedOrganizations);
+      const newSelectedSpaces = Array.from(selectedSpaces);
+      const initialSpaces = Array.from(initialSelectedSpaces);
 
-      const addedOrganizationIds = newSelectedOrganizations.filter(
-        (id) => !initialOrganizations.includes(id)
+      const addedSpaceIds = newSelectedSpaces.filter(
+        (id) => !initialSpaces.includes(id)
       );
-      const removedOrganizationIds = initialOrganizations.filter(
-        (id) => !newSelectedOrganizations.includes(id)
+      const removedSpaceIds = initialSpaces.filter(
+        (id) => !newSelectedSpaces.includes(id)
       );
 
-      if (
-        addedOrganizationIds.length === 1 &&
-        removedOrganizationIds.length === 0
-      ) {
-        const addedOrganizationName = userOrganizations?.find(
-          (organization) => organization.id === addedOrganizationIds[0]
-        )?.name;
-        toast.success(`Shared to ${addedOrganizationName}`);
-      } else if (
-        removedOrganizationIds.length === 1 &&
-        addedOrganizationIds.length === 0
-      ) {
-        const removedOrganizationName = sharedOrganizations.find(
-          (organization) => organization.id === removedOrganizationIds[0]
-        )?.name;
-        toast.success(`Unshared from ${removedOrganizationName}`);
-      } else if (
-        addedOrganizationIds.length > 0 &&
-        removedOrganizationIds.length === 0
-      ) {
-        toast.success(`Shared to ${addedOrganizationIds.length} organizations`);
-      } else if (
-        removedOrganizationIds.length > 0 &&
-        addedOrganizationIds.length === 0
-      ) {
+      console.log("Added spaces:", addedSpaceIds);
+      console.log("Removed spaces:", removedSpaceIds);
+
+      const getSpaceName = (id: string) => {
+        const space = spacesData?.find((space) => space.id === id);
+        return space?.name || `Space ${id}`;
+      };
+
+      if (addedSpaceIds.length === 1 && removedSpaceIds.length === 0) {
+        toast.success(`Shared to ${getSpaceName(addedSpaceIds[0] as string)}`);
+      } else if (removedSpaceIds.length === 1 && addedSpaceIds.length === 0) {
         toast.success(
-          `Unshared from ${removedOrganizationIds.length} organizations`
+          `Unshared from ${getSpaceName(removedSpaceIds[0] as string)}`
         );
-      } else if (
-        addedOrganizationIds.length > 0 &&
-        removedOrganizationIds.length > 0
-      ) {
+      } else if (addedSpaceIds.length > 0 && removedSpaceIds.length === 0) {
+        toast.success(`Shared to ${addedSpaceIds.length} spaces`);
+      } else if (removedSpaceIds.length > 0 && addedSpaceIds.length === 0) {
+        toast.success(`Unshared from ${removedSpaceIds.length} spaces`);
+      } else if (addedSpaceIds.length > 0 && removedSpaceIds.length > 0) {
         toast.success(`Sharing settings updated`);
       } else {
         toast.success("No changes to sharing settings");
       }
-      onSharingUpdated(newSelectedOrganizations);
+      onSharingUpdated(newSelectedSpaces);
       onClose();
     } catch (error) {
       console.error("Error updating sharing settings:", error);
@@ -142,16 +143,18 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
     }
   };
 
-  const filteredOrganizations = userOrganizations?.filter((organization) =>
-    organization.name.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredSpaces = searchTerm
+    ? spacesData?.filter((space) =>
+        space.name.toLowerCase().includes(searchTerm.toLowerCase())
+      )
+    : spacesData;
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
         <DialogHeader
           icon={<FontAwesomeIcon icon={faShareNodes} className="size-3.5" />}
-          description="Select the organizations you would like to share with"
+          description="Select the spaces you would like to share with"
         >
           <DialogTitle>Share {capName}</DialogTitle>
         </DialogHeader>
@@ -169,19 +172,26 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
               size={20}
             />
           </div>
-          <div className="grid grid-cols-4 gap-3 max-h-60">
-            {filteredOrganizations && filteredOrganizations.length > 0 ? (
-              filteredOrganizations.map((organization) => (
+          <div className="grid overflow-y-auto grid-cols-4 gap-3 max-h-60">
+            {filteredSpaces && filteredSpaces.length > 0 ? (
+              filteredSpaces.map((space) => (
                 <SpaceCard
-                  key={organization.id}
-                  organization={organization}
-                  selectedOrganizations={selectedOrganizations}
-                  handleToggleOrganization={handleToggleOrganization}
+                  key={space.id}
+                  space={space}
+                  selectedSpaces={selectedSpaces}
+                  handleToggleSpace={handleToggleSpace}
+                  isSharedViaOrganization={isSpaceSharedViaOrganization(
+                    space.id
+                  )}
                 />
               ))
             ) : (
               <div className="flex col-span-4 gap-2 justify-center items-center pt-2 text-sm">
-                <p className="text-gray-12">No organizations found</p>
+                <p className="text-gray-12">
+                  {spacesData && spacesData.length > 0
+                    ? "No spaces match your search"
+                    : "No spaces available"}
+                </p>
               </div>
             )}
           </div>
@@ -192,7 +202,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
           </Button>
           <Button
             spinner={loading}
-            disabled={loading || selectedOrganizations.size === 0}
+            disabled={loading || selectedSpaces.size === 0}
             size="sm"
             variant="dark"
             onClick={handleSave}
@@ -206,73 +216,85 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 };
 
 const SpaceCard = ({
-  organization,
-  selectedOrganizations,
-  handleToggleOrganization,
+  space,
+  selectedSpaces,
+  handleToggleSpace,
+  isSharedViaOrganization,
 }: {
-  organization: { id: string; name: string; iconUrl?: string };
-  selectedOrganizations: Set<string>;
-  handleToggleOrganization: (organizationId: string) => void;
+  space: {
+    id: string;
+    name: string;
+    iconUrl?: string | null;
+    organizationId: string;
+  };
+  selectedSpaces: Set<string>;
+  handleToggleSpace: (spaceId: string) => void;
+  isSharedViaOrganization?: boolean;
 }) => {
+  const isSelected = selectedSpaces.has(space.id);
+
   return (
-    <Tooltip content={organization.name}>
-    <div
-      className={clsx(
-        "flex items-center relative flex-col justify-center gap-2 border transition-colors bg-gray-1 duration-200 border-gray-4 w-full p-3 rounded-xl cursor-pointer",
-        selectedOrganizations.has(organization.id)
-          ? "bg-gray-3 border-green-500"
-          : "hover:bg-gray-3 hover:border-gray-4"
-      )}
-      onClick={() => handleToggleOrganization(organization.id)}
+    <Tooltip
+      content={
+        isSharedViaOrganization
+          ? `${space.name} (shared via organization)`
+          : space.name
+      }
     >
-      {organization.iconUrl ? (
-        <div className="overflow-hidden relative flex-shrink-0 rounded-full size-6">
-          <Image
-            src={organization.iconUrl}
-            alt={organization.name}
-            width={24}
-            height={24}
-            className="object-cover w-full h-full"
-          />
-        </div>
-      ) : (
-        <Avatar
-          letterClass="text-gray-1 text-xs"
-          className="relative flex-shrink-0 size-6"
-          name={organization.name}
-        />
-      )}
-        <p className="max-w-full text-xs truncate transition-colors duration-200 text-gray-10">
-          {organization.name}
-        </p>
-      <motion.div
-        key={organization.id}
-        animate={{
-          scale: selectedOrganizations.has(organization.id) ? 1 : 0,
-        }}
-        initial={{
-          scale: 0,
-        }}
-        transition={{
-          type: selectedOrganizations.has(organization.id) ? "spring" : "tween",
-          stiffness: selectedOrganizations.has(organization.id)
-            ? 300
-            : undefined,
-          damping: selectedOrganizations.has(organization.id) ? 20 : undefined,
-          duration: !selectedOrganizations.has(organization.id)
-            ? 0.2
-            : undefined,
-        }}
+      <div
         className={clsx(
-          "absolute top-[-6px] flex items-center justify-center right-[-5px] bg-gray-4 rounded-full border size-4",
-          selectedOrganizations.has(organization.id)
-            ? "bg-green-500 border-transparent"
-            : "bg-gray-4 border-gray-5"
+          "flex items-center relative flex-col justify-center gap-2 border transition-colors bg-gray-1 duration-200 border-gray-3 w-full p-3 rounded-xl cursor-pointer",
+          isSelected
+            ? "bg-gray-3 border-green-500"
+            : "hover:bg-gray-3 hover:border-gray-4",
+          isSharedViaOrganization && "ring-1 ring-inset ring-green-500/20"
         )}
+        onClick={() => handleToggleSpace(space.id)}
       >
-        <Check className="text-white" size={10} />
-      </motion.div>
-    </div>
+        {space.iconUrl ? (
+          <div className="overflow-hidden relative flex-shrink-0 rounded-full size-6">
+            <Image
+              src={space.iconUrl}
+              alt={space.name}
+              width={24}
+              height={24}
+              className="object-cover w-full h-full"
+            />
+          </div>
+        ) : (
+          <Avatar
+            letterClass="text-gray-1 text-xs"
+            className="relative z-10 flex-shrink-0 size-6"
+            name={space.name}
+          />
+        )}
+        <p className="max-w-full text-xs truncate transition-colors duration-200 text-gray-10">
+          {space.name}
+        </p>
+        <motion.div
+          key={space.id}
+          animate={{
+            scale: isSelected ? 1 : 0,
+          }}
+          initial={{
+            scale: 0,
+          }}
+          transition={{
+            type: isSelected ? "spring" : "tween",
+            stiffness: isSelected ? 300 : undefined,
+            damping: isSelected ? 20 : undefined,
+            duration: !isSelected ? 0.2 : undefined,
+          }}
+          className={clsx(
+            "flex absolute top-0 right-0 justify-center items-center rounded-full border bg-gray-4 size-5",
+            isSelected
+              ? "bg-green-500 border-transparent"
+              : "bg-gray-4 border-gray-5"
+          )}
+        >
+          <Check className="text-white" size={10} />
+        </motion.div>
+      </div>
     </Tooltip>
   );
 };

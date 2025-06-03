@@ -1,5 +1,3 @@
-// million-ignore
-
 "use client";
 
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";

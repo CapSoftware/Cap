@@ -85,14 +85,10 @@ export async function middleware(request: NextRequest) {
     // Get the pathname and referrer
     const { pathname } = request.nextUrl;
     const referrer = request.headers.get('referer') || '';
-    
-    // Parse user agent with the userAgent utility
-    const ua = userAgent(request);
-    
+
     // Add custom headers to check in generateMetadata
     response.headers.set('x-pathname', pathname);
     response.headers.set('x-referrer', referrer);
-    response.headers.set('x-user-agent', JSON.stringify(ua));
 
     return response;
   } catch (error) {
