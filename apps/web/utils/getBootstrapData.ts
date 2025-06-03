@@ -1,4 +1,5 @@
 import { buildEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 import { cookies } from 'next/headers';
 import { PostHog } from 'posthog-node';
 import { cache } from 'react';
@@ -12,13 +13,15 @@ export const generateId = cache(() => {
 export interface BootstrapData {
   distinctID: string;
   featureFlags: Record<string, string | boolean>;
+  allowedEmails: string[];
 }
 
 export async function getBootstrapData(): Promise<BootstrapData> {
 
   if (!buildEnv.NEXT_PUBLIC_POSTHOG_KEY) return {
     distinctID: '',
-    featureFlags: {}
+    featureFlags: {},
+    allowedEmails: []
   };
   
   let distinct_id = '';
@@ -42,14 +45,44 @@ export async function getBootstrapData(): Promise<BootstrapData> {
 
   const client = new PostHog(
     phProjectAPIKey,
-    { host: buildEnv.NEXT_PUBLIC_POSTHOG_HOST || "https://app.posthog.com" }
+    { 
+      host: buildEnv.NEXT_PUBLIC_POSTHOG_HOST || "https://app.posthog.com",
+      personalApiKey: serverEnv().POSTHOG_PERSONAL_API_KEY
+    }
   );
   
   const flags = await client.getAllFlags(distinct_id);
   
+  let allowedEmails: string[] = [];
+  try {
+    const remoteConfigPayload = await client.getRemoteConfigPayload('cap-ai-testers');
+    
+    if (remoteConfigPayload) {
+      let parsedPayload = remoteConfigPayload;
+      if (typeof remoteConfigPayload === 'string') {
+        try {
+          parsedPayload = JSON.parse(remoteConfigPayload);
+        } catch (parseError) {
+          console.error('Error parsing remote config payload as JSON:', parseError);
+        }
+      }
+      
+      if (parsedPayload && typeof parsedPayload === 'object' && !Array.isArray(parsedPayload) && 'emails' in parsedPayload) {
+        const emails = (parsedPayload as { emails: unknown }).emails;
+        
+        if (Array.isArray(emails)) {
+          allowedEmails = emails.filter((email): email is string => typeof email === 'string');
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Error fetching PostHog remote config:', e);
+  }
+  
   const bootstrap: BootstrapData = {
     distinctID: distinct_id,
-    featureFlags: flags
+    featureFlags: flags,
+    allowedEmails
   };
 
   return bootstrap;

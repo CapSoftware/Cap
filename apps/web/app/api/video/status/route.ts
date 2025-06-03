@@ -125,7 +125,7 @@ export async function GET(request: NextRequest) {
         .where(eq(users.id, video.ownerId))
         .limit(1);
 
-      if (videoOwnerQuery.length > 0 && videoOwnerQuery[0] && isAiGenerationEnabled(videoOwnerQuery[0])) {
+      if (videoOwnerQuery.length > 0 && videoOwnerQuery[0] && (await isAiGenerationEnabled(videoOwnerQuery[0]))) {
         console.log(`[Status API] Feature flag enabled, triggering AI generation for video ${videoId}`);
         
         (async () => {

@@ -50,6 +50,7 @@ function createServerEnv() {
       VERCEL_BRANCH_URL: z.string().optional(),
       VERCEL_PROJECT_PRODUCTION_URL: z.string().optional(),
       DOCKER_BUILD: z.string().optional(),
+      POSTHOG_PERSONAL_API_KEY: z.string().optional(),
     },
     experimental__runtimeEnv: {
       ...process.env,
