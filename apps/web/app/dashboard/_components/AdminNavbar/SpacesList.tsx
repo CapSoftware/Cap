@@ -1,7 +1,7 @@
 "use client";
 
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { Search } from "lucide-react";
+import { ChevronDown, ChevronUp, Search } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
@@ -11,6 +11,7 @@ import { Input } from "@cap/ui";
 import { shareCap } from "@/actions/caps/share";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
+import { Tooltip } from "@/components/Tooltip";
 
 export const SpacesList = () => {
   const { spacesData, sidebarCollapsed } = useSharedContext();
@@ -72,11 +73,11 @@ export const SpacesList = () => {
   };
 
   return (
-    <div className="mt-4 flex flex-col">
-      <div className="flex items-center mb-1">
+    <div className="flex flex-col mt-4">
+      <div className="flex items-center mb-3">
         <h2
           className={clsx(
-            "text-gray-12 font-medium text-sm",
+            "text-sm font-medium text-gray-12",
             sidebarCollapsed ? "hidden" : "text-base"
           )}
         >
@@ -109,81 +110,83 @@ export const SpacesList = () => {
       </div>
 
       <div className={clsx("relative mb-2", sidebarCollapsed ? "hidden" : "")}>
-        <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
-          <Search className="h-4 w-4 text-gray-9" />
+        <div className="flex absolute inset-y-0 left-3 items-center pointer-events-none">
+          <Search className="size-3.5 text-gray-9" />
         </div>
         <Input
           type="text"
-          placeholder="Search spaces"
-          className="w-full h-9 pl-10 pr-3 py-2 bg-gray-3 border border-gray-4 rounded-lg text-sm text-gray-11 placeholder-gray-8 focus:outline-none focus:ring-1 focus:ring-gray-7"
+          placeholder="Search spaces..."
+          className="pr-3 pl-8 w-full h-9 text-xs placeholder-gray-8"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
         />
       </div>
 
-      <div
-        className={clsx(
-          "space-y-2",
-          showAllSpaces && !sidebarCollapsed
-            ? "max-h-[calc(100vh-450px)] overflow-y-auto pr-1 mb-3"
-            : ""
-        )}
-      >
-        {displayedSpaces.map((space) => (
-          <div
-            key={space.id}
-            className={clsx(
-              "relative transition-colors duration-150 rounded-xl",
-              activeDropTarget === space.id && "ring-2 ring-blue-500"
-            )}
-            onDragOver={(e) => handleDragOver(e, space.id)}
-            onDragLeave={handleDragLeave}
-            onDrop={(e) => handleDrop(e, space.id)}
-          >
-            {activeDropTarget === space.id && (
-              <div className="absolute inset-0 bg-blue-500/10 rounded-xl z-10 pointer-events-none" />
-            )}
-            <Link
-              href={`/dashboard/spaces/${space.id}`}
-              className={clsx(
-                "flex items-center group py-1 px-3 rounded-xl transition-colors hover:bg-gray-3",
-                sidebarCollapsed ? "justify-center" : ""
-              )}
+      {/* Wrapper div with overflow hidden to prevent scrollbar flash */}
+      <div className="overflow-hidden">
+        <div
+          className={clsx(
+            "transition-all duration-300",
+            showAllSpaces && !sidebarCollapsed
+              ? "max-h-[calc(100vh-450px)] overflow-y-auto pr-1"
+              : "max-h-max overflow-hidden"
+          )}
+          style={{
+            scrollbarWidth: "none",
+            msOverflowStyle: "none",
+            WebkitOverflowScrolling: "touch",
+          }}
+        >
+          {displayedSpaces.map((space) => (
+            <Tooltip
+              position="right"
+              disable={!sidebarCollapsed}
+              content={space.name}
             >
-              <Avatar
-                letterClass="text-gray-1 text-xs"
-                className="relative flex-shrink-0 size-[25px]"
-                name={space.name}
-              />
-              {!sidebarCollapsed && (
-                <span className="ml-3 text-sm text-gray-11 group-hover:text-gray-12">
-                  {space.name}
-                </span>
-              )}
-            </Link>
-          </div>
-        ))}
-
-        {!showAllSpaces && hasMoreSpaces && !sidebarCollapsed && (
-          <button
-            onClick={() => setShowAllSpaces(true)}
-            className="flex items-center w-full py-1 px-3 text-gray-10 hover:text-gray-12 rounded-xl transition-colors hover:bg-gray-3"
-          >
-            <span className="ml-3 text-gray-10 text-sm">
-              + {hiddenSpacesCount} more
-            </span>
-          </button>
-        )}
-
-        {showAllSpaces && !sidebarCollapsed && (
-          <button
-            onClick={() => setShowAllSpaces(false)}
-            className="flex items-center w-full py-1 px-3 text-gray-10 hover:text-gray-12 rounded-xl transition-colors hover:bg-gray-3"
-          >
-            <span className="ml-3 text-gray-10 text-sm">Show less</span>
-          </button>
-        )}
+              <div
+                key={space.id}
+                className={clsx(
+                  "relative transition-colors duration-150 rounded-xl mb-2",
+                  activeDropTarget === space.id && "ring-2 ring-blue-500"
+                )}
+                onDragOver={(e) => handleDragOver(e, space.id)}
+                onDragLeave={handleDragLeave}
+                onDrop={(e) => handleDrop(e, space.id)}
+              >
+                {activeDropTarget === space.id && (
+                  <div className="absolute inset-0 z-10 rounded-xl pointer-events-none bg-blue-500/10" />
+                )}
+                <Link
+                  href={`/dashboard/spaces/${space.id}`}
+                  className={clsx(
+                    "flex items-center py-2 truncate rounded-xl transition-colors group hover:bg-gray-3",
+                    sidebarCollapsed ? "justify-center px-2" : "px-3"
+                  )}
+                >
+                  <Avatar
+                    letterClass="text-gray-1 text-xs"
+                    className="relative flex-shrink-0 size-[25px]"
+                    name={space.name}
+                  />
+                  {!sidebarCollapsed && (
+                    <span className="ml-3 text-sm transition-colors text-gray-11 group-hover:text-gray-12">
+                      {space.name}
+                    </span>
+                  )}
+                </Link>
+              </div>
+            </Tooltip>
+          ))}
+        </div>
       </div>
+
+      <SpaceToggleControl
+        showAllSpaces={showAllSpaces}
+        hasMoreSpaces={hasMoreSpaces}
+        sidebarCollapsed={sidebarCollapsed}
+        hiddenSpacesCount={hiddenSpacesCount}
+        setShowAllSpaces={setShowAllSpaces}
+      />
 
       <SpaceDialog
         open={showSpaceDialog}
@@ -191,6 +194,45 @@ export const SpacesList = () => {
       />
     </div>
   );
+};
+
+const SpaceToggleControl = ({
+  showAllSpaces,
+  hasMoreSpaces,
+  sidebarCollapsed,
+  hiddenSpacesCount,
+  setShowAllSpaces,
+}: {
+  showAllSpaces: boolean;
+  hasMoreSpaces: boolean;
+  sidebarCollapsed: boolean;
+  hiddenSpacesCount: number;
+  setShowAllSpaces: (show: boolean) => void;
+}) => {
+  if (sidebarCollapsed) return null;
+  if (!showAllSpaces && hasMoreSpaces) {
+    return (
+      <div
+        onClick={() => setShowAllSpaces(true)}
+        className="flex justify-between items-center p-2 w-full truncate rounded-xl transition-colors cursor-pointer text-gray-10 hover:text-gray-12 hover:bg-gray-3"
+      >
+        <span className="text-sm text-gray-10">+ {hiddenSpacesCount} more</span>
+        <ChevronDown size={16} className="ml-2" />
+      </div>
+    );
+  }
+  if (showAllSpaces) {
+    return (
+      <div
+        onClick={() => setShowAllSpaces(false)}
+        className="flex justify-between items-center p-2 w-full truncate rounded-xl transition-colors cursor-pointer text-gray-10 hover:text-gray-12 hover:bg-gray-3"
+      >
+        <span className="text-sm text-gray-10">Show less</span>
+        <ChevronUp size={16} className="ml-2" />
+      </div>
+    );
+  }
+  return null;
 };
 
 export default SpacesList;

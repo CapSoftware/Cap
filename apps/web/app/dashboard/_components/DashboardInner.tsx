@@ -65,7 +65,9 @@ export default function DashboardInner({
         <div className="flex gap-2 items-center">
           <div className="flex flex-col">
             {activeSpace && <span className="text-xs text-gray-11">Space</span>}
-            <p className="relative text-xl text-gray-12 lg:text-2xl">{title}</p>
+            <p className="relative text-base truncate md:text-lg text-gray-12 lg:text-2xl">
+              {title}
+            </p>
           </div>
         </div>
         <div className="flex gap-4 items-center">

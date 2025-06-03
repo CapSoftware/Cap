@@ -446,7 +446,10 @@ export const UploadCapButton = ({
         ) : (
           <div className="flex gap-2 items-center">
             <FontAwesomeIcon
-              className={clsx(grey ? "text-gray-12" : "text-gray-1")}
+              className={clsx(
+                grey ? "text-gray-12" : "text-gray-1",
+                "size-3.5"
+              )}
               icon={faUpload}
             />
             Upload Video
