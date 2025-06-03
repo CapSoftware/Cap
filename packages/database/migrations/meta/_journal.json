@@ -50,6 +50,13 @@
       "when": 1748207569898,
       "tag": "0005_jazzy_brood",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1748949964461,
+      "tag": "0006_melted_paibok",
+      "breakpoints": true
     }
   ]
 }
