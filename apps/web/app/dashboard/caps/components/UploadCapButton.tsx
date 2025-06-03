@@ -22,13 +22,13 @@ export const UploadCapButton = ({
   onStart,
   onProgress,
   onComplete,
-  size,
+  size = "md",
   grey = false,
 }: {
   onStart?: (id: string, thumbnail?: string) => void;
   onProgress?: (id: string, progress: number, uploadProgress?: number) => void;
   onComplete?: (id: string) => void;
-  size?: "sm" | "lg";
+  size?: "sm" | "lg" | "md";
   grey?: boolean;
 }) => {
   const { user, isSubscribed } = useSharedContext();
