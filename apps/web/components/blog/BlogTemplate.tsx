@@ -131,7 +131,8 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
         <p className="text-xl md:text-2xl mb-8 max-w-3xl mx-auto text-gray-700 fade-in-down animate-delay-1">
           {content.description}
         </p>
-        <div className="flex items-center justify-center space-x-2 text-sm text-gray-1 fade-in-down animate-delay-2">
+        <div className="flex items-center justify-center space-x-2 text-sm fade-in-down animate-delay-2 "
+        style={{ color: "#838383" }}>
           <time dateTime={content.publishedAt}>
             {formatDate(content.publishedAt)}
           </time>
