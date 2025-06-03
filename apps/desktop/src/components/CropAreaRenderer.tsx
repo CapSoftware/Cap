@@ -5,6 +5,7 @@ import {
   createEffect,
   type ParentProps,
   createSignal,
+  createMemo,
 } from "solid-js";
 import { createHiDPICanvasContext } from "~/utils/canvas";
 
@@ -249,40 +250,43 @@ export default function CropAreaRenderer(
       )
     );
     const ctx = hidpiCanvas?.ctx;
-    if (!ctx) return;
 
-    let lastAnimationFrameId: number | undefined;
+    let lastFrameId: number | null = null;
+
     createEffect(() => {
-      if (lastAnimationFrameId) cancelAnimationFrame(lastAnimationFrameId);
+      if (lastFrameId !== null) cancelAnimationFrame(lastFrameId);
 
       const { x, y, width, height } = props.bounds;
       const { guideLines, handles, borderRadius, highlighted, selected } =
         props;
 
-      const prefersDark = prefersDarkScheme();
-      lastAnimationFrameId = requestAnimationFrame(() =>
+      lastFrameId = requestAnimationFrame(() => {
         draw(
-          ctx,
+          ctx!,
           { x, y, width, height },
           borderRadius || 0,
           guideLines || false,
           handles || false,
           highlighted || false,
           selected || false,
-          prefersDark
-        )
-      );
+          prefersDarkScheme()
+        );
+      });
     });
 
     onCleanup(() => {
-      if (lastAnimationFrameId) cancelAnimationFrame(lastAnimationFrameId);
-      hidpiCanvas.cleanup();
+      if (lastFrameId !== null) cancelAnimationFrame(lastFrameId);
       colorSchemeQuery.removeEventListener("change", handleChange);
+      hidpiCanvas?.cleanup();
     });
   });
 
   return (
     <div class="*:h-full *:w-full animate-in fade-in">
+      <div class="bg-blue-2 p-2 font-mono w-fit fixed top-20 left-2 z-50">
+        {JSON.stringify(props)}
+        <br />
+      </div>
       <canvas ref={canvasRef} class="pointer-events-none absolute" />
       <div>{props.children}</div>
     </div>

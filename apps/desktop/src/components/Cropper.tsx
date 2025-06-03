@@ -5,9 +5,9 @@ import { type as ostype } from "@tauri-apps/plugin-os";
 import {
   type ParentProps,
   batch,
+  createComputed,
   createEffect,
   createMemo,
-  createResource,
   createRoot,
   createSignal,
   For,
@@ -22,6 +22,7 @@ import { generalSettingsStore } from "~/store";
 import Box from "~/utils/box";
 import { type Crop, type XY, commands } from "~/utils/tauri";
 import CropAreaRenderer from "./CropAreaRenderer";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 type Direction = "n" | "e" | "s" | "w" | "nw" | "ne" | "se" | "sw";
 type HandleSide = {
@@ -117,19 +118,26 @@ export default function Cropper(
     };
   });
 
-  const displayScaledCrop = createMemo(() => {
+  const [scaledCrop, setScaledCrop] = createSignal(crop);
+  createComputed(() => {
     const mapped = mappedSize();
     const container = containerSize();
-    return {
-      x: (crop.position.x / mapped.x) * container.x,
-      y: (crop.position.y / mapped.y) * container.y,
-      width: (crop.size.x / mapped.x) * container.x,
-      height: (crop.size.y / mapped.y) * container.y,
-    };
+    const cpos = crop.position;
+    const csize = crop.size;
+    setScaledCrop({
+      position: {
+        x: (cpos.x / mapped.x) * container.x,
+        y: (cpos.y / mapped.y) * container.y,
+      },
+      size: {
+        x: (csize.x / mapped.x) * container.x,
+        y: (csize.y / mapped.y) * container.y,
+      },
+    });
   });
 
   let containerRef: HTMLDivElement | undefined;
-  onMount(() => {
+  onMount(async () => {
     if (!containerRef) return;
 
     const updateContainerSize = () => {
@@ -143,6 +151,11 @@ export default function Cropper(
     const resizeObserver = new ResizeObserver(updateContainerSize);
     resizeObserver.observe(containerRef);
     onCleanup(() => resizeObserver.disconnect());
+
+    let unlistenScaleFactor = await getCurrentWindow().onScaleChanged(
+      () => updateContainerSize
+    );
+    onCleanup(unlistenScaleFactor);
 
     const mapped = mappedSize();
     const initial = props.initialSize || {
@@ -407,6 +420,13 @@ export default function Cropper(
     return null;
   }
 
+  const [hapticsEnabled, setHapticsEnabled] = createSignal(false);
+  if (ostype() === "macos") {
+    generalSettingsStore
+      .get()
+      .then((s) => setHapticsEnabled(s?.hapticsEnabled || false));
+  }
+
   function handleResizeStart(clientX: number, clientY: number, dir: Direction) {
     const origin: XY<number> = {
       x: dir.includes("w") ? 1 : 0,
@@ -447,13 +467,6 @@ export default function Cropper(
         },
       });
     });
-
-    const [hapticsEnabled, hapticsEnabledOptions] = createResource(
-      async () =>
-        (await generalSettingsStore.get())?.hapticsEnabled &&
-        ostype() === "macos"
-    );
-    generalSettingsStore.listen(() => hapticsEnabledOptions.refetch());
 
     function handleResizeMove(
       moveX: number,
@@ -611,6 +624,27 @@ export default function Cropper(
     });
   }
 
+  const rendererBounds = createMemo(() => {
+    const { position, size } = scaledCrop();
+    return {
+      x: position.x,
+      y: position.y,
+      width: size.x,
+      height: size.y,
+    };
+  });
+
+  const cropHandlesStyle = createMemo(() => {
+    const { position, size } = scaledCrop();
+    return {
+      top: `${position.y}px`,
+      left: `${position.x}px`,
+      width: `${size.x}px`,
+      height: `${size.y}px`,
+      cursor: dragging() ? "grabbing" : "grab",
+    };
+  });
+
   return (
     <div
       aria-label="Crop area"
@@ -640,13 +674,14 @@ export default function Cropper(
         menu.popup();
       }}
     >
+      <div class="bg-blue-2 p-2 font-mono w-fit fixed top-5 left-2 z-50">
+        {JSON.stringify(rendererBounds())}
+        <br />
+        {JSON.stringify(snappedRatio())}
+      </div>
+
       <CropAreaRenderer
-        bounds={{
-          x: displayScaledCrop().x,
-          y: displayScaledCrop().y,
-          width: displayScaledCrop().width,
-          height: displayScaledCrop().height,
-        }}
+        bounds={rendererBounds()}
         borderRadius={9}
         guideLines={props.showGuideLines}
         handles={true}
@@ -655,14 +690,8 @@ export default function Cropper(
         {props.children}
       </CropAreaRenderer>
       <div
-        class="absolute"
-        style={{
-          top: `${displayScaledCrop().y}px`,
-          left: `${displayScaledCrop().x}px`,
-          width: `${displayScaledCrop().width}px`,
-          height: `${displayScaledCrop().height}px`,
-          cursor: dragging() ? "grabbing" : "grab",
-        }}
+        class="absolute border-8 border-red-200"
+        style={cropHandlesStyle()}
         onMouseDown={handleDragStart}
       >
         <div class="relative w-full">
