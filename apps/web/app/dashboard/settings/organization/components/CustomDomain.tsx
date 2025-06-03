@@ -32,7 +32,6 @@ type DomainConfig = {
   requiredAValue?: string;
 };
 
-
 export function CustomDomain() {
   const router = useRouter();
   const { activeOrganization, isSubscribed } = useSharedContext();
@@ -265,6 +264,7 @@ export function CustomDomain() {
             <Button
               type="submit"
               size="sm"
+              className="px-[1.5rem]"
               variant="dark"
               onClick={handleSubmit}
               spinner={loading}
