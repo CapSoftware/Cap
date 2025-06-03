@@ -10,7 +10,6 @@ import { ShareHeader } from "./_components/ShareHeader";
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import { Toolbar } from "./_components/Toolbar";
-import { PasswordOverlay } from "./_components/PasswordOverlay";
 
 const formatTime = (time: number) => {
   const minutes = Math.floor(time / 60);
