@@ -1,6 +1,7 @@
 import { Button } from "@cap/ui";
 import { useRive } from "@rive-app/react-canvas";
 import { useTheme } from "../../_components/DynamicSharedLayout";
+import { UploadCapButton } from "./UploadCapButton";
 
 interface EmptyCapStateProps {
   userName?: string;
@@ -27,7 +28,7 @@ export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
             Craft your narrative with Cap - get projects done quicker.
           </p>
         </div>
-        <div className="flex justify-center mt-4">
+        <div className="flex flex-col gap-3 justify-center mt-4">
           <Button
             size="lg"
             href="/download"
@@ -36,6 +37,8 @@ export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
           >
             Download Cap
           </Button>
+          <p className="text-gray-10 text-sm">or</p>
+          <UploadCapButton grey={true} />
         </div>
       </div>
     </div>

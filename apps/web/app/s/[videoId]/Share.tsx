@@ -4,7 +4,8 @@ import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { Logo } from "@cap/ui";
-import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useMemo, useRef } from "react";
 import { ShareHeader } from "./_components/ShareHeader";
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
@@ -26,6 +27,7 @@ type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
   organizationMembers?: string[];
   organizationId?: string;
   sharedOrganizations?: { id: string; name: string }[];
+  hasPassword?: boolean;
 };
 
 interface ShareProps {
@@ -50,6 +52,104 @@ interface ShareProps {
   aiUiEnabled: boolean;
 }
 
+interface VideoStatusResponse {
+  transcriptionStatus?: "PROCESSING" | "COMPLETE" | "ERROR" | null;
+  aiProcessing?: boolean;
+  aiTitle?: string | null;
+  summary?: string | null;
+  chapters?: { title: string; start: number }[] | null;
+}
+
+const useVideoStatus = (
+  videoId: string,
+  aiGenerationEnabled: boolean,
+  initialData?: {
+    transcriptionStatus?: string | null;
+    aiData?: {
+      title?: string | null;
+      summary?: string | null;
+      chapters?: { title: string; start: number }[] | null;
+      processing?: boolean;
+    } | null;
+  }
+) => {
+  return useQuery({
+    queryKey: ["videoStatus", videoId],
+    queryFn: async (): Promise<VideoStatusResponse> => {
+      const res = await fetch(`/api/video/status?videoId=${videoId}`);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+      }
+      return res.json();
+    },
+    initialData: initialData
+      ? {
+          transcriptionStatus: initialData.transcriptionStatus as
+            | "PROCESSING"
+            | "COMPLETE"
+            | "ERROR"
+            | null,
+          aiProcessing: initialData.aiData?.processing || false,
+          aiTitle: initialData.aiData?.title || null,
+          summary: initialData.aiData?.summary || null,
+          chapters: initialData.aiData?.chapters || null,
+        }
+      : undefined,
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!data) return 2000;
+
+      const shouldContinuePolling = () => {
+        if (
+          !data.transcriptionStatus ||
+          data.transcriptionStatus === "PROCESSING"
+        ) {
+          return true;
+        }
+
+        if (data.transcriptionStatus === "ERROR") {
+          return false;
+        }
+
+        if (data.transcriptionStatus === "COMPLETE") {
+          if (!aiGenerationEnabled) {
+            return false;
+          }
+
+          if (data.aiProcessing) {
+            return true;
+          }
+
+          if (!data.summary && !data.chapters) {
+            return true;
+          }
+
+          return false;
+        }
+
+        return false;
+      };
+
+      return shouldContinuePolling() ? 2000 : false;
+    },
+    refetchIntervalInBackground: false,
+    staleTime: 1000,
+  });
+};
+
+const useVideoAnalytics = (videoId: string, initialCount: number) => {
+  return useQuery({
+    queryKey: ["videoAnalytics", videoId],
+    queryFn: async () => {
+      const result = await getVideoAnalytics(videoId);
+      return result.count || 0;
+    },
+    initialData: initialCount,
+    staleTime: 30000,
+    refetchOnWindowFocus: false,
+  });
+};
+
 export const Share: React.FC<ShareProps> = ({
   data,
   user,
@@ -62,47 +162,62 @@ export const Share: React.FC<ShareProps> = ({
   aiGenerationEnabled,
   aiUiEnabled,
 }) => {
-  const [analytics, setAnalytics] = useState(initialAnalytics);
   const effectiveDate: Date = data.metadata?.customCreatedAt
     ? new Date(data.metadata.customCreatedAt)
     : data.createdAt;
 
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [transcriptionStatus, setTranscriptionStatus] = useState<string | null>(
-    data.transcriptionStatus || null
+
+  const { data: videoStatus } = useVideoStatus(data.id, aiGenerationEnabled, {
+    transcriptionStatus: data.transcriptionStatus,
+    aiData: initialAiData,
+  });
+
+  const { data: viewCount } = useVideoAnalytics(
+    data.id,
+    initialAnalytics.views
   );
 
-  useEffect(() => {
-    if (initialAiData) {
-    } else {
-    }
-  }, [initialAiData]);
+  const analytics = useMemo(
+    () => ({
+      views: viewCount || 0,
+      comments: comments.filter((c) => c.type === "text").length,
+      reactions: comments.filter((c) => c.type === "emoji").length,
+    }),
+    [viewCount, comments]
+  );
 
-  const [aiData, setAiData] = useState<{
-    title?: string | null;
-    summary?: string | null;
-    chapters?: { title: string; start: number }[] | null;
-    processing?: boolean;
-  } | null>(initialAiData || null);
+  const transcriptionStatus =
+    videoStatus?.transcriptionStatus || data.transcriptionStatus;
+
+  const aiData = useMemo(
+    () => ({
+      title: videoStatus?.aiTitle || null,
+      summary: videoStatus?.summary || null,
+      chapters: videoStatus?.chapters || null,
+      processing: videoStatus?.aiProcessing || false,
+    }),
+    [videoStatus]
+  );
 
   const shouldShowLoading = () => {
     if (!aiGenerationEnabled) {
       return false;
     }
 
-    if (
-      !transcriptionStatus ||
-      transcriptionStatus === "PROCESSING" ||
-      transcriptionStatus === "ERROR"
-    ) {
+    if (!transcriptionStatus || transcriptionStatus === "PROCESSING") {
       return true;
     }
 
+    if (transcriptionStatus === "ERROR") {
+      return false;
+    }
+
     if (transcriptionStatus === "COMPLETE") {
-      if (!initialAiData || initialAiData.processing === true) {
+      if (aiData.processing === true) {
         return true;
       }
-      if (!initialAiData.summary && !initialAiData.chapters) {
+      if (!aiData.summary && !aiData.chapters) {
         return true;
       }
     }
@@ -110,123 +225,7 @@ export const Share: React.FC<ShareProps> = ({
     return false;
   };
 
-  const [aiLoading, setAiLoading] = useState(shouldShowLoading());
-
-  const aiDataRef = useRef(aiData);
-  useEffect(() => {
-    aiDataRef.current = aiData;
-  }, [aiData]);
-
-  useEffect(() => {
-    let active = true;
-    let pollInterval: NodeJS.Timeout | null = null;
-    let pollCount = 0;
-    const MAX_POLLS = 300;
-    const POLL_INTERVAL = 2000;
-
-    const shouldPoll = () => {
-      if (pollCount >= MAX_POLLS) {
-        return false;
-      }
-
-      if (!transcriptionStatus || transcriptionStatus === "PROCESSING") {
-        return true;
-      }
-
-      if (transcriptionStatus === "ERROR") {
-        return true;
-      }
-
-      if (transcriptionStatus === "COMPLETE") {
-        if (!aiGenerationEnabled) {
-          return false;
-        }
-
-        const currentAiData = aiDataRef.current;
-
-        if (!currentAiData || currentAiData.processing) {
-          return true;
-        }
-
-        if (!currentAiData.summary && !currentAiData.chapters) {
-          return true;
-        }
-
-        return false;
-      }
-
-      return false;
-    };
-
-    const pollStatus = async () => {
-      if (!active) return;
-
-      pollCount++;
-
-      try {
-        const res = await fetch(`/api/video/status?videoId=${data.id}`);
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-        }
-
-        const json = await res.json();
-
-        if (!active) return;
-
-        if (
-          json.transcriptionStatus &&
-          json.transcriptionStatus !== transcriptionStatus
-        ) {
-          setTranscriptionStatus(json.transcriptionStatus);
-        }
-
-        const hasAiData = json.summary || json.chapters || json.aiTitle;
-        if (hasAiData) {
-          const newAiData = {
-            title: json.aiTitle || null,
-            summary: json.summary || null,
-            chapters: json.chapters || null,
-            processing: json.aiProcessing || false,
-          };
-          setAiData(newAiData);
-          setAiLoading(json.aiProcessing || false);
-        } else if (json.aiProcessing) {
-          setAiData((prev) => ({ ...prev, processing: true }));
-          setAiLoading(true);
-        } else if (
-          json.transcriptionStatus === "COMPLETE" &&
-          !json.aiProcessing
-        ) {
-          setAiData((prev) => ({ ...prev, processing: false }));
-        }
-
-        if (!shouldPoll()) {
-          if (pollInterval) {
-            clearInterval(pollInterval);
-            pollInterval = null;
-          }
-          setAiLoading(false);
-        }
-      } catch (err) {
-        console.error("[Share] Error polling video status:", err);
-      }
-    };
-
-    if (shouldPoll()) {
-      pollStatus();
-
-      pollInterval = setInterval(pollStatus, POLL_INTERVAL);
-    } else {
-      setAiLoading(false);
-    }
-
-    return () => {
-      active = false;
-      if (pollInterval) {
-        clearInterval(pollInterval);
-      }
-    };
-  }, [data.id, transcriptionStatus]);
+  const aiLoading = shouldShowLoading();
 
   const handleSeek = (time: number) => {
     if (videoRef.current) {
@@ -234,38 +233,17 @@ export const Share: React.FC<ShareProps> = ({
     }
   };
 
-  useEffect(() => {
-    const fetchViewCount = async () => {
-      try {
-        const result = await getVideoAnalytics(data.id);
-
-        setAnalytics((prev) => ({
-          ...prev,
-          views: result.count || 0,
-        }));
-      } catch (error) {
-        console.error("Error fetching view count:", error);
-      }
-    };
-
-    fetchViewCount();
-  }, [data.id]);
-
-  useEffect(() => {
-    setAnalytics((prev) => ({
-      ...prev,
-      comments: comments.filter((c) => c.type === "text").length,
-      reactions: comments.filter((c) => c.type === "emoji").length,
-    }));
-  }, [comments]);
-
   const headerData =
     aiData && aiData.title && !aiData.processing
       ? { ...data, name: aiData.title, createdAt: effectiveDate }
       : { ...data, createdAt: effectiveDate };
 
+  console.log("aiLoading", aiLoading);
+  console.log("transcriptionStatus", transcriptionStatus);
+  console.log("aiData", aiData);
+
   return (
-    <div className="min-h-screen flex flex-col bg-[#F7F8FA]">
+    <>
       <div className="container flex-1 px-4 py-4 mx-auto">
         <ShareHeader
           data={headerData}
@@ -395,7 +373,6 @@ export const Share: React.FC<ShareProps> = ({
           </div>
         </div>
       </div>
-
       <div className="py-4 mt-auto">
         <a
           target="_blank"
@@ -406,6 +383,6 @@ export const Share: React.FC<ShareProps> = ({
           <Logo className="w-14 h-auto" />
         </a>
       </div>
-    </div>
+    </>
   );
 };

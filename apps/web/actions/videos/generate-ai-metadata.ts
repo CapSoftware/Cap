@@ -3,35 +3,15 @@
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { db } from "@cap/database";
-import { s3Buckets, videos, users } from "@cap/database/schema";
+import { s3Buckets, videos } from "@cap/database/schema";
 import { VideoMetadata } from "@cap/database/types";
 import { eq } from "drizzle-orm";
 import { serverEnv } from "@cap/env";
 import { createS3Client } from "@/utils/s3";
-import { isAiGenerationEnabled } from "@/utils/flags";
-
 export async function generateAiMetadata(videoId: string, userId: string) {
   
   if (!serverEnv().OPENAI_API_KEY) {
     console.error("[generateAiMetadata] Missing OpenAI API key, skipping AI metadata generation");
-    return;
-  }
-  const userQuery = await db()
-    .select({ 
-      email: users.email, 
-      stripeSubscriptionStatus: users.stripeSubscriptionStatus 
-    })
-    .from(users)
-    .where(eq(users.id, userId))
-    .limit(1);
-
-  if (userQuery.length === 0 || !userQuery[0]) {
-    console.error(`[generateAiMetadata] User ${userId} not found for feature flag check`);
-    return;
-  }
-
-  const user = userQuery[0];
-  if (!isAiGenerationEnabled(user)) {
     return;
   }
   const videoQuery = await db()

@@ -10,9 +10,6 @@ import Intercom from "@intercom/messenger-js-sdk";
 import { usePathname } from "next/navigation";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-// Create a client
-const queryClient = new QueryClient();
-
 export function PostHogProvider({
   children,
   bootstrapData,
@@ -110,6 +107,8 @@ export function AnalyticsProvider({
 
   return <>{children}</>;
 }
+
+const queryClient = new QueryClient();
 
 export function Providers({
   children,

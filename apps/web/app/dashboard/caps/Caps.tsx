@@ -10,6 +10,9 @@ import { CapCard } from "./components/CapCard";
 import { CapPagination } from "./components/CapPagination";
 import { EmptyCapState } from "./components/EmptyCapState";
 import { SelectedCapsBar } from "./components/SelectedCapsBar";
+import { UploadCapButton } from "./components/UploadCapButton";
+import { UploadPlaceholderCard } from "./components/UploadPlaceholderCard";
+import { serverEnv } from "@cap/env";
 
 type VideoData = {
   id: string;
@@ -27,9 +30,18 @@ type VideoData = {
   }[];
   ownerName: string;
   metadata?: VideoMetadata;
+  hasPassword: boolean;
 }[];
 
-export const Caps = ({ data, count }: { data: VideoData; count: number }) => {
+export const Caps = ({
+  data,
+  count,
+  dubApiKeyEnabled,
+}: {
+  data: VideoData;
+  count: number;
+  dubApiKeyEnabled: boolean;
+}) => {
   const { refresh } = useRouter();
   const params = useSearchParams();
   const page = Number(params.get("page")) || 1;
@@ -41,6 +53,14 @@ export const Caps = ({ data, count }: { data: VideoData; count: number }) => {
   const previousCountRef = useRef<number>(0);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDraggingCap, setIsDraggingCap] = useState(false);
+  const [uploadPlaceholders, setUploadPlaceholders] = useState<
+    {
+      id: string;
+      progress: number;
+      thumbnail?: string;
+      uploadProgress?: number;
+    }[]
+  >([]);
 
   const anyCapSelected = selectedCaps.length > 0;
 
@@ -48,6 +68,8 @@ export const Caps = ({ data, count }: { data: VideoData; count: number }) => {
 
   useEffect(() => {
     const fetchAnalytics = async () => {
+      if (!dubApiKeyEnabled) return;
+
       const analyticsData: Record<string, number> = {};
 
       for (const video of data) {
@@ -223,6 +245,25 @@ export const Caps = ({ data, count }: { data: VideoData; count: number }) => {
     }
   };
 
+  const handleUploadStart = (id: string, thumbnail?: string) => {
+    setUploadPlaceholders((prev) => [{ id, progress: 0, thumbnail }, ...prev]);
+  };
+
+  const handleUploadProgress = (
+    id: string,
+    progress: number,
+    uploadProgress?: number
+  ) => {
+    setUploadPlaceholders((prev) =>
+      prev.map((u) => (u.id === id ? { ...u, progress, uploadProgress } : u))
+    );
+  };
+
+  const handleUploadComplete = (id: string) => {
+    setUploadPlaceholders((prev) => prev.filter((u) => u.id !== id));
+    refresh();
+  };
+
   if (data.length === 0) {
     return <EmptyCapState />;
   }
@@ -232,13 +273,28 @@ export const Caps = ({ data, count }: { data: VideoData; count: number }) => {
       {isDraggingCap && (
         <div className="fixed inset-0 z-50 pointer-events-none">
           <div className="flex justify-center items-center w-full h-full">
-            <div className="px-5 py-3 text-sm font-medium rounded-lg bg-gray-1/80 border border-gray-4 backdrop-blur-md text-gray-12">
+            <div className="px-5 py-3 text-sm font-medium rounded-lg border backdrop-blur-md bg-gray-1/80 border-gray-4 text-gray-12">
               Drag to a space to share
             </div>
           </div>
         </div>
       )}
+      <div className="flex justify-end mb-4">
+        <UploadCapButton
+          onStart={handleUploadStart}
+          onProgress={handleUploadProgress}
+          onComplete={handleUploadComplete}
+        />
+      </div>
       <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+        {uploadPlaceholders.map((u) => (
+          <UploadPlaceholderCard
+            key={u.id}
+            thumbnail={u.thumbnail}
+            progress={u.progress}
+            uploadProgress={u.uploadProgress}
+          />
+        ))}
         {data.map((cap) => (
           <CapCard
             key={cap.id}

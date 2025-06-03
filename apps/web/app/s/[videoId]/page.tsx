@@ -14,13 +14,15 @@ import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
 import type { Metadata, ResolvingMetadata } from "next";
 import { notFound } from "next/navigation";
 import { ImageViewer } from "./_components/ImageViewer";
-import { buildEnv, serverEnv } from "@cap/env";
+import { buildEnv } from "@cap/env";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { transcribeVideo } from "@/actions/videos/transcribe";
 import { getScreenshot } from "@/actions/screenshots/get-screenshot";
-import { headers } from "next/headers";
-import { isAiGenerationEnabled, isAiUiEnabled } from "@/utils/flags";
+import { cookies, headers } from "next/headers";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
+import { isAiGenerationEnabled, isAiUiEnabled } from "@/utils/flags";
+import { PasswordOverlay } from "./_components/PasswordOverlay";
+import { decrypt } from "@cap/database/crypto";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -41,6 +43,8 @@ type VideoWithOrganization = typeof videos.$inferSelect & {
   organizationMembers?: string[];
   organizationId?: string;
   sharedOrganizations?: { id: string; name: string }[];
+  password?: string | null;
+  hasPassword?: boolean;
 };
 
 export async function generateMetadata(
@@ -120,6 +124,37 @@ export async function generateMetadata(
     };
   }
 
+  if (video.password !== null) {
+    return {
+      title: "Cap: Password Protected Video",
+      description: "This video is password protected.",
+      openGraph: {
+        images: [
+          {
+            url: new URL(
+              `/api/video/og?videoId=${videoId}`,
+              buildEnv.NEXT_PUBLIC_WEB_URL
+            ).toString(),
+            width: 1200,
+            height: 630,
+          },
+        ],
+      },
+      twitter: {
+        card: "summary_large_image",
+        title: "Cap: Password Protected Video",
+        description: "This video is password protected.",
+        images: [
+          new URL(
+            `/api/video/og?videoId=${videoId}`,
+            buildEnv.NEXT_PUBLIC_WEB_URL
+          ).toString(),
+        ],
+      },
+      robots: "noindex, nofollow",
+    };
+  }
+
   return {
     title: video.name + " | Cap Recording",
     description: "Watch this video on Cap",
@@ -179,6 +214,7 @@ export default async function ShareVideoPage(props: Props) {
       isScreenshot: videos.isScreenshot,
       skipProcessing: videos.skipProcessing,
       transcriptionStatus: videos.transcriptionStatus,
+      password: videos.password,
       source: videos.source,
       sharedOrganization: {
         organizationId: sharedVideos.organizationId,
@@ -194,6 +230,21 @@ export default async function ShareVideoPage(props: Props) {
   if (!video) {
     console.log("[ShareVideoPage] No video found for videoId:", videoId);
     return <p>No video found</p>;
+  }
+
+  let aiGenerationEnabled = false;
+  const videoOwnerQuery = await db()
+    .select({
+      email: users.email,
+      stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+    })
+    .from(users)
+    .where(eq(users.id, video.ownerId))
+    .limit(1);
+
+  if (videoOwnerQuery.length > 0 && videoOwnerQuery[0]) {
+    const videoOwner = videoOwnerQuery[0];
+    aiGenerationEnabled = isAiGenerationEnabled(videoOwner);
   }
 
   if (video.sharedOrganization?.organizationId) {
@@ -213,9 +264,9 @@ export default async function ShareVideoPage(props: Props) {
           organization[0].allowedEmailDomain
         );
         return (
-          <div className="flex flex-col items-center justify-center min-h-screen p-4 text-center">
-            <h1 className="text-2xl font-bold mb-4">Access Restricted</h1>
-            <p className="text-gray-600 mb-2">
+          <div className="flex flex-col justify-center items-center p-4 min-h-screen text-center">
+            <h1 className="mb-4 text-2xl font-bold">Access Restricted</h1>
+            <p className="mb-2 text-gray-600">
               This video is only accessible to members of this organization.
             </p>
             <p className="text-gray-600">
@@ -233,9 +284,8 @@ export default async function ShareVideoPage(props: Props) {
     video.transcriptionStatus !== "PROCESSING"
   ) {
     console.log("[ShareVideoPage] Starting transcription for video:", videoId);
-    await transcribeVideo(videoId, video.ownerId);
+    await transcribeVideo(videoId, video.ownerId, aiGenerationEnabled);
 
-    // Re-fetch video data to get updated transcription status
     const updatedVideoQuery = await db()
       .select({
         id: videos.id,
@@ -276,23 +326,8 @@ export default async function ShareVideoPage(props: Props) {
   }
 
   const currentMetadata = (video.metadata as VideoMetadata) || {};
-  const metadata = currentMetadata; // Keep existing reference for compatibility
+  const metadata = currentMetadata;
   let initialAiData = null;
-  let aiGenerationEnabled = false;
-
-  const videoOwnerQuery = await db()
-    .select({
-      email: users.email,
-      stripeSubscriptionStatus: users.stripeSubscriptionStatus,
-    })
-    .from(users)
-    .where(eq(users.id, video.ownerId))
-    .limit(1);
-
-  if (videoOwnerQuery.length > 0 && videoOwnerQuery[0]) {
-    const videoOwner = videoOwnerQuery[0];
-    aiGenerationEnabled = isAiGenerationEnabled(videoOwner);
-  }
 
   if (metadata.summary || metadata.chapters || metadata.aiTitle) {
     initialAiData = {
@@ -488,9 +523,10 @@ export default async function ShareVideoPage(props: Props) {
     organizationMembers: membersList.map((member) => member.userId),
     organizationId: video.sharedOrganization?.organizationId ?? undefined,
     sharedOrganizations: sharedOrganizationsData,
+    password: null,
+    hasPassword: video.password !== null,
   };
 
-  // Check if AI UI should be shown for the current viewer
   let aiUiEnabled = false;
   if (user?.email) {
     aiUiEnabled = isAiUiEnabled({
@@ -502,18 +538,39 @@ export default async function ShareVideoPage(props: Props) {
     );
   }
 
+  const authorized =
+    !videoWithOrganizationInfo.hasPassword ||
+    user?.id === videoWithOrganizationInfo.ownerId ||
+    (await verifyPasswordCookie(video.password ?? ""));
+
   return (
-    <Share
-      data={videoWithOrganizationInfo}
-      user={user}
-      comments={commentsQuery}
-      initialAnalytics={initialAnalytics}
-      customDomain={customDomain}
-      domainVerified={domainVerified}
-      userOrganizations={userOrganizations}
-      initialAiData={initialAiData}
-      aiGenerationEnabled={aiGenerationEnabled}
-      aiUiEnabled={aiUiEnabled}
-    />
+    <div className="min-h-screen flex flex-col bg-[#F7F8FA]">
+      <PasswordOverlay
+        isOpen={!authorized}
+        videoId={videoWithOrganizationInfo.id}
+      />
+      {authorized && (
+        <Share
+          data={videoWithOrganizationInfo}
+          user={user}
+          comments={commentsQuery}
+          initialAnalytics={initialAnalytics}
+          customDomain={customDomain}
+          domainVerified={domainVerified}
+          userOrganizations={userOrganizations}
+          initialAiData={initialAiData}
+          aiGenerationEnabled={aiGenerationEnabled}
+          aiUiEnabled={aiUiEnabled}
+        />
+      )}
+    </div>
   );
+}
+
+async function verifyPasswordCookie(videoPassword: string) {
+  const password = cookies().get("x-cap-password")?.value;
+  if (!password) return false;
+
+  const decrypted = await decrypt(password).catch(() => "");
+  return decrypted === videoPassword;
 }

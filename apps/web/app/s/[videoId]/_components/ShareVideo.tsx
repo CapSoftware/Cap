@@ -43,6 +43,15 @@ const formatTime = (time: number) => {
     .padStart(2, "0")}`;
 };
 
+const formatTimeWithMilliseconds = (time: number) => {
+  const minutes = Math.floor(time / 60);
+  const seconds = Math.floor(time % 60);
+  const milliseconds = Math.floor((time % 1) * 100);
+  return `${minutes.toString().padStart(2, "0")}:${seconds
+    .toString()
+    .padStart(2, "0")}.${milliseconds.toString().padStart(2, "0")}`;
+};
+
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
   authorName: string | null;
 };
@@ -81,8 +90,8 @@ export const ShareVideo = forwardRef<
   const [previewTime, setPreviewTime] = useState(0);
   const [previewPosition, setPreviewPosition] = useState(0);
   const [previewLoaded, setPreviewLoaded] = useState(false);
-  const [previewWidth, setPreviewWidth] = useState(160);
-  const [previewHeight, setPreviewHeight] = useState(90);
+  const [previewWidth, setPreviewWidth] = useState(200);
+  const [previewHeight, setPreviewHeight] = useState(112);
   const [isMP4Source, setIsMP4Source] = useState(false);
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
 
@@ -90,6 +99,7 @@ export const ShareVideo = forwardRef<
   const [isHoveringVideo, setIsHoveringVideo] = useState(false);
   const [isHoveringControls, setIsHoveringControls] = useState(false);
   const hideControlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [userMuted, setUserMuted] = useState(false);
 
   const [scrubbingVideo, setScrubbingVideo] = useState<HTMLVideoElement | null>(
     null
@@ -255,26 +265,6 @@ export const ShareVideo = forwardRef<
       setVideoMetadataLoaded(true);
       setVideoReadyToPlay(true);
 
-      setIsPlaying(true);
-      if (videoRef.current) {
-        videoRef.current.play().catch((error) => {
-          console.error("Error auto-playing video:", error);
-          setIsPlaying(false);
-        });
-      }
-
-      if (isPlaying && videoRef.current) {
-        const currentPosition = videoRef.current.currentTime;
-
-        videoRef.current.play().catch((error) => {
-          console.error("Error playing video in onCanPlay:", error);
-        });
-
-        if (videoRef.current.currentTime === 0 && currentPosition > 0) {
-          videoRef.current.currentTime = currentPosition;
-        }
-      }
-
       setTimeout(() => {
         setIsLoading(false);
       }, 100);
@@ -310,7 +300,9 @@ export const ShareVideo = forwardRef<
         if (!videoReadyToPlay) {
           setIsPlaying(true);
         } else {
-          videoElement.muted = false;
+          if (!userMuted) {
+            videoElement.muted = false;
+          }
 
           const currentPosition = videoElement.currentTime;
 
@@ -334,9 +326,11 @@ export const ShareVideo = forwardRef<
                     .play()
                     .then(() => {
                       setIsPlaying(true);
-                      setTimeout(() => {
-                        videoElement.muted = false;
-                      }, 100);
+                      if (!userMuted) {
+                        setTimeout(() => {
+                          videoElement.muted = false;
+                        }, 100);
+                      }
 
                       if (
                         videoElement.currentTime === 0 &&
@@ -373,8 +367,27 @@ export const ShareVideo = forwardRef<
       return;
     }
     const validTime = Math.max(0, Math.min(time, longestDuration));
-    if (videoRef.current) videoRef.current.currentTime = validTime;
-    setCurrentTime(validTime);
+
+    if (videoRef.current && videoRef.current.readyState >= 2) {
+      try {
+        const video = videoRef.current;
+        video.currentTime = validTime;
+
+        const handleSeeked = () => {
+          setCurrentTime(video.currentTime);
+          video.removeEventListener("seeked", handleSeeked);
+        };
+
+        video.addEventListener("seeked", handleSeeked);
+
+        setTimeout(() => {
+          video.removeEventListener("seeked", handleSeeked);
+          setCurrentTime(validTime);
+        }, 1000);
+      } catch (error) {
+        console.error("Error setting video currentTime:", error);
+      }
+    }
   };
 
   useEffect(() => {
@@ -397,20 +410,16 @@ export const ShareVideo = forwardRef<
     if (!videoElement || !videoReadyToPlay) return;
 
     if (isPlaying) {
-      const currentPosition = videoElement.currentTime;
-
-      videoElement.play().catch((error) => {
-        console.error("Error playing video", error);
-        setIsPlaying(false);
-      });
-
-      if (videoElement.currentTime === 0 && currentPosition > 0) {
-        videoElement.currentTime = currentPosition;
+      if (!seeking) {
+        videoElement.play().catch((error) => {
+          console.error("Error playing video", error);
+          setIsPlaying(false);
+        });
       }
     } else {
       videoElement.pause();
     }
-  }, [isPlaying, videoReadyToPlay]);
+  }, [isPlaying, videoReadyToPlay, seeking]);
 
   useEffect(() => {
     const handleSeeking = () => {
@@ -676,7 +685,15 @@ export const ShareVideo = forwardRef<
   };
 
   const calculateNewTime = (event: any, seekBar: any) => {
+    if (!longestDuration || longestDuration <= 0) {
+      return 0;
+    }
+
     const rect = seekBar.getBoundingClientRect();
+
+    if (rect.width <= 0) {
+      return 0;
+    }
 
     let clientX = 0;
     if (event.touches && event.touches.length > 0) {
@@ -687,12 +704,18 @@ export const ShareVideo = forwardRef<
 
     const offsetX = Math.max(0, Math.min(clientX - rect.left, rect.width));
     const relativePosition = offsetX / rect.width;
-    const newTime = relativePosition * longestDuration;
+    const newTime = Math.max(
+      0,
+      Math.min(relativePosition * longestDuration, longestDuration)
+    );
+
     return newTime;
   };
 
   const handleSeekMouseDown = () => {
-    setSeeking(true);
+    if (videoRef.current && videoRef.current.readyState >= 2) {
+      setSeeking(true);
+    }
   };
 
   const handleSeekMouseUp = (
@@ -703,11 +726,15 @@ export const ShareVideo = forwardRef<
     setSeeking(false);
     const seekBar = event.currentTarget;
     const seekTo = calculateNewTime(event, seekBar);
-    if (!isTouch) {
-      applyTimeToVideos(seekTo);
-    }
-    if (isPlaying) {
-      videoRef.current?.play();
+
+    applyTimeToVideos(seekTo);
+
+    if (isPlaying && videoRef.current) {
+      setTimeout(() => {
+        videoRef.current?.play().catch((error) => {
+          console.error("Error resuming playback after seek:", error);
+        });
+      }, 100);
     }
     setShowPreview(false);
   };
@@ -717,7 +744,10 @@ export const ShareVideo = forwardRef<
 
     const seekBar = event.currentTarget;
     const seekTo = calculateNewTime(event, seekBar);
-    applyTimeToVideos(seekTo);
+
+    if (Math.abs(seekTo - currentTime) > 0.1) {
+      applyTimeToVideos(seekTo);
+    }
   };
 
   const handleTimelineLeave = () => {
@@ -729,7 +759,9 @@ export const ShareVideo = forwardRef<
 
   const handleMuteClick = () => {
     if (videoRef.current) {
-      videoRef.current.muted = videoRef.current.muted ? false : true;
+      const newMutedState = !videoRef.current.muted;
+      videoRef.current.muted = newMutedState;
+      setUserMuted(newMutedState);
     }
   };
 
@@ -1064,41 +1096,77 @@ export const ShareVideo = forwardRef<
 
       {showPreview && !isLoading && isMP4Source && isLargeScreen && (
         <div
-          className="hidden overflow-hidden absolute z-30 bg-black rounded-md border border-gray-700 shadow-lg transition-opacity duration-150 xl:block"
+          className="hidden absolute z-30 transition-opacity duration-150 xl:block"
           style={{
             left: `${previewPosition}px`,
-            bottom: "70px",
-            width: `${previewWidth}px`,
-            height: `${previewHeight}px`,
+            bottom: "80px",
             opacity: previewLoaded ? 1 : 0.7,
           }}
         >
-          {thumbnailUrl ? (
-            <img
-              src={thumbnailUrl}
-              alt={`Preview at ${formatTime(previewTime)}`}
-              className="object-contain w-full h-full bg-black"
-              onError={() => {
-                setThumbnailUrl(null);
-              }}
-            />
-          ) : (
-            <canvas
-              ref={previewCanvasRef}
-              className="object-contain w-full h-full bg-black"
-            />
-          )}
-          {!thumbnailUrl && (
-            <div className="absolute right-0 bottom-0 left-0 px-2 py-1 text-xs text-center text-white bg-black bg-opacity-70">
-              {formatTime(previewTime)}
+          <div className="flex flex-col items-center">
+            <div
+              style={{ boxShadow: "0 0 100px rgba(0, 0, 0, 0.75)" }}
+              className="bg-black rounded-lg border border-gray-600 overflow-hidden"
+            >
+              <div
+                className="bg-black"
+                style={{
+                  width: `${previewWidth}px`,
+                  height: `${previewHeight}px`,
+                }}
+              >
+                {thumbnailUrl ? (
+                  <img
+                    src={thumbnailUrl}
+                    alt={`Preview at ${formatTime(previewTime)}`}
+                    className="object-contain w-full h-full bg-black"
+                    onError={() => {
+                      setThumbnailUrl(null);
+                    }}
+                  />
+                ) : (
+                  <canvas
+                    ref={previewCanvasRef}
+                    className="object-contain w-full h-full bg-black"
+                  />
+                )}
+              </div>
             </div>
-          )}
+            <div className="mt-2 text-center space-y-0.5">
+              {chapters.length > 0 && longestDuration > 0 && (
+                <div
+                  className="text-sm text-white font-medium leading-tight"
+                  style={{ textShadow: "0 0 3px rgba(0, 0, 0, 0.7)" }}
+                >
+                  {(() => {
+                    const previewChapter = chapters.find((chapter, index) => {
+                      const nextChapter = chapters[index + 1];
+                      const chapterStart = chapter.start;
+                      const chapterEnd = nextChapter
+                        ? nextChapter.start
+                        : longestDuration;
+                      return (
+                        previewTime >= chapterStart && previewTime < chapterEnd
+                      );
+                    });
+                    return previewChapter ? previewChapter.title : "";
+                  })()}
+                </div>
+              )}
+              <div
+                className="text-sm text-white font-medium"
+                style={{ textShadow: "0 0 3px rgba(0, 0, 0, 0.7)" }}
+              >
+                {formatTimeWithMilliseconds(previewTime)}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
       <div
         className={`absolute left-0 right-0 z-30 transition-all duration-300 ease-in-out ${
-          overlayVisible ? "bottom-[60px]" : "bottom-1"
+          overlayVisible ? "bottom-[40px] md:bottom-[60px]" : "bottom-1"
         }`}
       >
         <div
@@ -1123,7 +1191,7 @@ export const ShareVideo = forwardRef<
           onTouchEnd={(e) => handleSeekMouseUp(e, true)}
         >
           {!isLoading && comments !== null && (
-            <div className="-mt-7 w-full md:-mt-6">
+            <div className="-mt-6 w-full md:-mt-6">
               {comments.map((comment) => {
                 const commentPosition =
                   comment.timestamp === null
@@ -1146,7 +1214,7 @@ export const ShareVideo = forwardRef<
                 return (
                   <div
                     key={comment.id}
-                    className="absolute z-10 text-sm transition-all hover:scale-125"
+                    className="absolute z-10 text-sm transition-all hover:scale-125 -mt-5 md:-mt-5"
                     style={{
                       left: `${commentPosition}%`,
                     }}
@@ -1175,14 +1243,72 @@ export const ShareVideo = forwardRef<
             onMouseMove={handleTimelineHover}
             onMouseLeave={handleTimelineLeave}
           >
-            <div
-              style={{ boxShadow: "0 0 20px rgba(0,0,0,0.6)" }}
-              className="absolute top-2.5 w-full h-1 sm:h-1.5 bg-gray-400 bg-opacity-50 z-10"
-            />
-            <div
-              className="absolute top-2.5 h-1 sm:h-1.5 bg-white cursor-pointer z-10"
-              style={{ width: `${watchedPercentage}%` }}
-            />
+            {chapters.length > 0 && longestDuration > 0 ? (
+              <div className="absolute top-2.5 w-full h-1 sm:h-1.5 z-10 flex">
+                {chapters.map((chapter, index) => {
+                  const nextChapter = chapters[index + 1];
+                  const chapterStart = chapter.start;
+                  const chapterEnd = nextChapter
+                    ? nextChapter.start
+                    : longestDuration;
+                  const chapterDuration = chapterEnd - chapterStart;
+                  const chapterWidth =
+                    (chapterDuration / longestDuration) * 100;
+
+                  const chapterProgress = Math.max(
+                    0,
+                    Math.min((currentTime - chapterStart) / chapterDuration, 1)
+                  );
+
+                  const isCurrentChapter =
+                    currentTime >= chapterStart && currentTime < chapterEnd;
+
+                  return (
+                    <div
+                      key={chapter.start}
+                      className="relative h-full cursor-pointer group"
+                      style={{ width: `${chapterWidth}%` }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        applyTimeToVideos(chapter.start);
+                      }}
+                    >
+                      <div
+                        className="w-full h-full bg-gray-400 bg-opacity-50 group-hover:bg-opacity-70 transition-colors"
+                        style={{
+                          boxShadow: "0 0 20px rgba(0,0,0,0.6)",
+                          borderRight:
+                            index < chapters.length - 1
+                              ? "1px solid rgba(255,255,255,0.3)"
+                              : "none",
+                        }}
+                      />
+                      {isCurrentChapter && (
+                        <div
+                          className="absolute top-0 left-0 h-full bg-white transition-all duration-100"
+                          style={{ width: `${chapterProgress * 100}%` }}
+                        />
+                      )}
+                      {currentTime > chapterEnd && (
+                        <div className="absolute top-0 left-0 w-full h-full bg-white" />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <>
+                <div
+                  style={{ boxShadow: "0 0 20px rgba(0,0,0,0.6)" }}
+                  className="absolute top-2.5 w-full h-1 sm:h-1.5 bg-gray-400 bg-opacity-50 z-10"
+                />
+                <div
+                  className="absolute top-2.5 h-1 sm:h-1.5 bg-white cursor-pointer z-10"
+                  style={{ width: `${watchedPercentage}%` }}
+                />
+              </>
+            )}
+
             <div
               style={{
                 boxShadow: "0 0 20px rgba(0,0,0,0.1)",
@@ -1197,43 +1323,11 @@ export const ShareVideo = forwardRef<
               tabIndex={0}
             />
           </div>
-
-          {chapters.length > 0 && longestDuration > 0 && (
-            <div
-              className={`-mt-10 w-full md:-mt-10 pointer-events-none transition-opacity duration-300 ${
-                overlayVisible ? "opacity-100" : "opacity-0"
-              }`}
-            >
-              {chapters.map((ch) => {
-                const pos = (ch.start / longestDuration) * 100;
-                return (
-                  <div
-                    key={ch.start}
-                    className="absolute z-50 -translate-x-1/2 cursor-pointer pointer-events-auto"
-                    style={{ left: `${pos}%` }}
-                    data-tooltip-id={`chapter-${ch.start}`}
-                    data-tooltip-content={ch.title}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      applyTimeToVideos(ch.start);
-                    }}
-                  >
-                    <div className="w-4 h-4 bg-white bg-opacity-70 rounded-full hover:bg-opacity-100 hover:scale-125 transition-all duration-200 border-2 border-gray-10" />
-                    <Tooltip
-                      id={`chapter-${ch.start}`}
-                      place="top"
-                      className="z-50"
-                    />
-                  </div>
-                );
-              })}
-            </div>
-          )}
         </div>
       </div>
 
       <div
-        className={`absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 z-20 transition-transform duration-300 ease-in-out ${
+        className={`absolute bottom-0 left-0 right-0 bg-black bg-opacity-60 z-20 transition-transform duration-300 ease-in-out ${
           overlayVisible ? "translate-y-0" : "translate-y-full"
         }`}
         onMouseEnter={() => {
@@ -1260,8 +1354,27 @@ export const ShareVideo = forwardRef<
                 )}
               </button>
             </span>
-            <div className="text-xs sm:text-sm text-white font-medium select-none tabular text-clip overflow-hidden whitespace-nowrap space-x-0.5">
-              {formatTime(currentTime)} - {formatTime(longestDuration)}
+            <div className="flex items-center space-x-2">
+              <div className="text-xs sm:text-sm text-white font-medium select-none tabular text-clip overflow-hidden whitespace-nowrap">
+                {formatTime(currentTime)} - {formatTime(longestDuration)}
+              </div>
+              {chapters.length > 0 && longestDuration > 0 && (
+                <div className="hidden sm:block text-xs sm:text-sm text-gray-200 font-medium select-none text-clip overflow-hidden whitespace-nowrap max-w-[200px]">
+                  {(() => {
+                    const currentChapter = chapters.find((chapter, index) => {
+                      const nextChapter = chapters[index + 1];
+                      const chapterStart = chapter.start;
+                      const chapterEnd = nextChapter
+                        ? nextChapter.start
+                        : longestDuration;
+                      return (
+                        currentTime >= chapterStart && currentTime < chapterEnd
+                      );
+                    });
+                    return currentChapter ? `• ${currentChapter.title}` : "";
+                  })()}
+                </div>
+              )}
             </div>
           </div>
           <div className="flex justify-end space-x-1 sm:space-x-2">
