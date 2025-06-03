@@ -6,46 +6,45 @@ import { motion } from "framer-motion";
 import { Testimonials } from "../ui/Testimonials";
 import { CommercialCard, ProCard } from "./HomePage/Pricing";
 
-  // Animation variants
-  const fadeIn = {
-    hidden: { opacity: 0, y: 20 },
-    visible: (custom: number = 0) => ({
-      opacity: 1,
-      y: 0,
-      transition: {
-        delay: custom * 0.1,
-        duration: 0.5,
-        ease: "easeOut"
-      }
-    })
-  };
+// Animation variants
+const fadeIn = {
+  hidden: { opacity: 0, y: 20 },
+  visible: (custom: number = 0) => ({
+    opacity: 1,
+    y: 0,
+    transition: {
+      delay: custom * 0.1,
+      duration: 0.5,
+      ease: "easeOut",
+    },
+  }),
+};
 
-  const fadeInFromBottom = {
-    hidden: { opacity: 0, y: 50 },
-    visible: (custom: number = 0) => ({
-      opacity: 1,
-      y: 0,
-      transition: {
-        delay: 0.3 + (custom * 0.1),
-        duration: 0.6,
-        ease: "easeOut"
-      }
-    })
-  };
+const fadeInFromBottom = {
+  hidden: { opacity: 0, y: 50 },
+  visible: (custom: number = 0) => ({
+    opacity: 1,
+    y: 0,
+    transition: {
+      delay: 0.3 + custom * 0.1,
+      duration: 0.6,
+      ease: "easeOut",
+    },
+  }),
+};
 
-  const staggerContainer = {
-    hidden: { opacity: 0 },
-    visible: {
-      opacity: 1,
-      transition: {
-        staggerChildren: 0.1,
-        delayChildren: 0.2
-      }
-    }
-  };
+const staggerContainer = {
+  hidden: { opacity: 0 },
+  visible: {
+    opacity: 1,
+    transition: {
+      staggerChildren: 0.1,
+      delayChildren: 0.2,
+    },
+  },
+};
 
 export const PricingPage = () => {
-
   const scrollToTestimonials = (e: React.MouseEvent) => {
     e.preventDefault();
     const testimonials = document.getElementById("testimonials");
@@ -61,18 +60,10 @@ export const PricingPage = () => {
   };
 
   return (
-    <motion.div
-      initial="hidden"
-      animate="visible"
-      variants={staggerContainer}
-    >
+    <motion.div initial="hidden" animate="visible" variants={staggerContainer}>
       <div className="py-12 mt-16 space-y-24 wrapper">
         <div>
-          <motion.div 
-            className="mb-8 text-center"
-            variants={fadeIn}
-            custom={0}
-          >
+          <motion.div className="mb-8 text-center" variants={fadeIn} custom={0}>
             <motion.h1
               className="text-4xl md:text-5xl"
               variants={fadeIn}
@@ -105,20 +96,20 @@ export const PricingPage = () => {
             </motion.div>
           </motion.div>
 
-          <motion.div 
+          <motion.div
             className="w-full max-w-[1000px] mx-auto"
             variants={fadeInFromBottom}
             custom={0}
           >
-               <div className="flex flex-col gap-8 justify-center items-stretch lg:flex-row">
-                  <CommercialCard />
-                  <ProCard />
-                </div>
+            <div className="flex flex-col gap-8 justify-center items-stretch lg:flex-row">
+              <CommercialCard />
+              <ProCard />
+            </div>
           </motion.div>
         </div>
-        
-        <motion.div 
-          className="mb-32 wrapper" 
+
+        <motion.div
+          className="mb-32 wrapper"
           id="testimonials"
           variants={fadeIn}
           custom={4}
@@ -129,7 +120,7 @@ export const PricingPage = () => {
             subtitle="Don't just take our word for it. Here's what our users are saying about their experience with Cap."
           />
         </motion.div>
-        
+
         <motion.div
           variants={fadeIn}
           custom={5}

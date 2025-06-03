@@ -72,8 +72,8 @@ const ProRiveButton = memo(({ toggleMobileNav
   const { rive, RiveComponent: ProRive } = useRive({
     src: "/rive/pricing.riv",
     artboard: "pro",
+    animations: "idle",
     autoplay: false,
-    animations: "default",
     layout: new Layout({
       fit: Fit.Cover,
     }),

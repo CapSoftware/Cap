@@ -10,7 +10,7 @@ export const ProArt = memo(forwardRef<ProArtRef>((_, ref) => {
   const { rive, RiveComponent: ProRive } = useRive({
     src: "/rive/pricing.riv",
     artboard: "pro",
-    animations: "default",
+    animations: "idle",
     autoplay: false,
     layout: new Layout({
       fit: Fit.Contain,

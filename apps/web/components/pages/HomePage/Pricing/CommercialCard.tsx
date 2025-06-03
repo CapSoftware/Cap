@@ -104,20 +104,22 @@ export const CommercialCard = () => {
           <p className="text-base text-gray-12">Licenses:</p>
           <div className="flex items-center">
           <Button
-              onClick={decrementLicenses}
-              className="px-1.5 py-1.5 bg-gray-12 hover:bg-gray-11 min-w-fit h-fit"
-            >
-              <FontAwesomeIcon icon={faMinus} className="text-gray-1 size-3" />
-            </Button>
+               onClick={decrementLicenses}
+               className="px-1.5 py-1.5 bg-gray-12 hover:bg-gray-11 min-w-fit h-fit"
+               aria-label="Decrease license count"
+             >
+               <FontAwesomeIcon icon={faMinus} className="text-gray-1 size-3" />
+             </Button>
             <span className="w-8 font-medium tabular-nums text-center text-gray-12">
               <NumberFlow value={licenses} />
             </span>
             <Button
-              onClick={incrementLicenses}
-              className="px-1.5 py-1.5 bg-gray-12 hover:bg-gray-11 min-w-fit h-fit"
-            >
-              <FontAwesomeIcon icon={faPlus} className="text-gray-1 size-3" />
-            </Button>
+               onClick={incrementLicenses}
+               className="px-1.5 py-1.5 bg-gray-12 hover:bg-gray-11 min-w-fit h-fit"
+               aria-label="Increase license count"
+             >
+               <FontAwesomeIcon icon={faPlus} className="text-gray-1 size-3" />
+             </Button>
           </div>
         </div>
 
@@ -134,6 +136,7 @@ export const CommercialCard = () => {
             <Switch
               checked={!isYearly}
               onCheckedChange={(checked) => setIsYearly(!checked)}
+              aria-label="Billing Cycle For Commercial"
               id="billing-cycle-commercial"
             />
             <span
@@ -171,14 +174,15 @@ export const CommercialCard = () => {
       </div>
 
       <Button
-        disabled={commercialLoading}
-        onClick={openCommercialCheckout}
-        variant="primary"
-        size="lg"
-        className="w-full font-medium"
-      >
-        {commercialLoading ? "Loading..." : "Purchase License"}
-      </Button>
+         disabled={commercialLoading}
+         onClick={openCommercialCheckout}
+         variant="primary"
+         size="lg"
+         className="w-full font-medium"
+         aria-label="Purchase Commercial License"
+       >
+         {commercialLoading ? "Loading..." : "Purchase License"}
+       </Button>
     </div>
   );
 };

@@ -8,15 +8,18 @@ export const QuantityButton = ({
   onClick,
   children,
   className,
+  ariaLabel,
 }: {
   onClick: () => void;
   children: React.ReactNode;
   className?: string;
+  ariaLabel?: string;
 }) => {
   return (
     <button
       onClick={onClick}
       className={classNames(BaseQuantityButtonClasses, className)}
+      aria-label={ariaLabel}
     >
       {children}
     </button>

@@ -161,20 +161,22 @@ export const ProCard = () => {
           <p className="text-base text-gray-1">Users:</p>
           <div className="flex items-center">
             <Button
-              onClick={decrementUsers}
-              className="px-1.5 py-1.5 bg-gray-1 hover:bg-gray-3 min-w-fit h-fit"
-            >
-              <FontAwesomeIcon icon={faMinus} className="text-gray-12 size-3" />
-            </Button>
+               onClick={decrementUsers}
+               className="px-1.5 py-1.5 bg-gray-1 hover:bg-gray-3 min-w-fit h-fit"
+               aria-label="Decrease user count"
+             >
+               <FontAwesomeIcon icon={faMinus} className="text-gray-12 size-3" />
+             </Button>
             <span className="w-8 font-medium tabular-nums text-center text-white">
               <NumberFlow value={users} />
             </span>
             <Button
-              onClick={incrementUsers}
-              className="px-1.5 py-1.5 bg-gray-1 hover:bg-gray-3 min-w-fit h-fit"
-            >
-              <FontAwesomeIcon icon={faPlus} className="text-gray-12 size-3" />
-            </Button>
+               onClick={incrementUsers}
+               className="px-1.5 py-1.5 bg-gray-1 hover:bg-gray-3 min-w-fit h-fit"
+               aria-label="Increase user count"
+             >
+               <FontAwesomeIcon icon={faPlus} className="text-gray-12 size-3" />
+             </Button>
           </div>
         </div>
 
@@ -191,6 +193,7 @@ export const ProCard = () => {
             <Switch
               checked={isAnnually}
               onCheckedChange={setIsAnnually}
+              aria-label="Billing Cycle For Pro"
               id="billing-cycle-cap-pro"
             />
             <span
@@ -226,14 +229,15 @@ export const ProCard = () => {
       </div>
 
       <Button
-        variant="white"
-        size="lg"
-        onClick={() => planCheckout()}
-        disabled={proLoading}
-        className="w-full font-medium"
-      >
-        {proLoading ? "Loading..." : "Purchase License"}
-      </Button>
+         variant="white"
+         size="lg"
+         onClick={() => planCheckout()}
+         disabled={proLoading}
+         className="w-full font-medium"
+         aria-label="Purchase Cap Pro License"
+       >
+         {proLoading ? "Loading..." : "Purchase License"}
+       </Button>
     </div>
   );
 };

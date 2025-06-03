@@ -44,6 +44,9 @@ module.exports = function (app, options) {
         typography: {
           DEFAULT: {
             css: {
+              strong: {
+                fontWeight: "500",
+              },
               h1: {
                 fontWeight: "500",
               },

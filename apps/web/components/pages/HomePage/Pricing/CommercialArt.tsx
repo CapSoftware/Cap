@@ -10,7 +10,7 @@ export const CommercialArt = memo(forwardRef<CommercialArtRef>((_, ref) => {
   const { rive, RiveComponent: CommercialRive } = useRive({
     src: "/rive/pricing.riv",
     artboard: "commercial",
-    animations: ["cards"],
+    animations: "idle",
     autoplay: false,
     layout: new Layout({
       fit: Fit.Cover,
