@@ -322,6 +322,7 @@ function Page() {
               ? "other"
               : rawOptions.captureTarget.variant
           }
+          screen={options.screen()}
           onChange={(area) => {
             if (!area)
               setOptions(
