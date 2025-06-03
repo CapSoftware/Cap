@@ -10,7 +10,7 @@ import { SpaceDialog } from "./SpaceDialog";
 import { Input } from "@cap/ui";
 import { shareCap } from "@/actions/caps/share";
 import { toast } from "sonner";
-import { useRouter } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { Tooltip } from "@/components/Tooltip";
 
 export const SpacesList = () => {
@@ -20,6 +20,7 @@ export const SpacesList = () => {
   const [showAllSpaces, setShowAllSpaces] = useState(false);
   const [activeDropTarget, setActiveDropTarget] = useState<string | null>(null);
   const router = useRouter();
+  const params = useParams();
 
   if (!spacesData) return null;
 
@@ -71,6 +72,8 @@ export const SpacesList = () => {
       toast.error("Failed to share cap");
     }
   };
+
+  const activeSpaceParams = (spaceId: string) => params.spaceId === spaceId;
 
   return (
     <div className="flex flex-col mt-4">
@@ -147,7 +150,8 @@ export const SpacesList = () => {
                 key={space.id}
                 className={clsx(
                   "relative transition-colors duration-150 rounded-xl mb-2",
-                  activeDropTarget === space.id && "ring-2 ring-blue-500"
+                  activeDropTarget === space.id && "ring-2 ring-blue-500",
+                  activeSpaceParams(space.id) ? "bg-gray-3" : "bg-transparent"
                 )}
                 onDragOver={(e) => handleDragOver(e, space.id)}
                 onDragLeave={handleDragLeave}
@@ -159,13 +163,13 @@ export const SpacesList = () => {
                 <Link
                   href={`/dashboard/spaces/${space.id}`}
                   className={clsx(
-                    "flex items-center py-2 truncate rounded-xl transition-colors group hover:bg-gray-3",
-                    sidebarCollapsed ? "justify-center px-2" : "px-3"
+                    "flex items-center px-2 py-2 truncate rounded-xl transition-colors group hover:bg-gray-2",
+                    sidebarCollapsed ? "justify-center" : ""
                   )}
                 >
                   <Avatar
                     letterClass="text-gray-1 text-xs"
-                    className="relative flex-shrink-0 size-[25px]"
+                    className="relative flex-shrink-0 size-5"
                     name={space.name}
                   />
                   {!sidebarCollapsed && (
