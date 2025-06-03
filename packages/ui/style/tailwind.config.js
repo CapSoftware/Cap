@@ -47,6 +47,9 @@ module.exports = function (app, options) {
               strong: {
                 fontWeight: "500",
               },
+              b: {
+                fontWeight: "500",
+              },
               h1: {
                 fontWeight: "500",
               },

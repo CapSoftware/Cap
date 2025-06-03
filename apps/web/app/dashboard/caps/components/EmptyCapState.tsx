@@ -2,6 +2,8 @@ import { Button } from "@cap/ui";
 import { useRive } from "@rive-app/react-canvas";
 import { useTheme } from "../../_components/DynamicSharedLayout";
 import { UploadCapButton } from "./UploadCapButton";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faDownload } from "@fortawesome/free-solid-svg-icons";
 
 interface EmptyCapStateProps {
   userName?: string;
@@ -28,16 +30,19 @@ export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
             Craft your narrative with Cap - get projects done quicker.
           </p>
         </div>
-        <div className="flex flex-col gap-3 justify-center mt-4">
+        <div className="flex gap-3 justify-center items-center mt-4">
           <Button
-            size="lg"
             href="/download"
-            className="relative"
+            className="flex relative gap-2 justify-center items-center"
             variant="primary"
           >
+            <FontAwesomeIcon
+              className="text-gray-1 size-3.5"
+              icon={faDownload}
+            />
             Download Cap
           </Button>
-          <p className="text-gray-10 text-sm">or</p>
+          <p className="text-sm text-gray-10">or</p>
           <UploadCapButton grey={true} />
         </div>
       </div>

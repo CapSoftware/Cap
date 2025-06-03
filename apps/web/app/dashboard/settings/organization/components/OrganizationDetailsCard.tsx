@@ -1,12 +1,7 @@
 "use client";
 
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import {
-  Button,
-  Card,
-  Input,
-  Label
-} from "@cap/ui";
+import { Button, Card, Input, Label } from "@cap/ui";
 
 interface OrganizationDetailsCardProps {
   isOwner: boolean;
@@ -19,7 +14,7 @@ export const OrganizationDetailsCard = ({
   isOwner,
   saveLoading,
   showOwnerToast,
-  organizationName
+  organizationName,
 }: OrganizationDetailsCardProps) => {
   const { activeOrganization } = useSharedContext();
 
@@ -49,9 +44,9 @@ export const OrganizationDetailsCard = ({
         <div className="flex-1 w-full">
           <div className="space-y-1">
             <Label htmlFor="allowedEmailDomain">Access email domain</Label>
-            <p className="mt-1 text-sm text-gray-10">
+            <p className="text-sm text-gray-10">
               Only emails from this domain can access shared videos.{" "}
-              <span className="font-medium">Leave blank to allow everyone.</span>
+              <b>Leave blank to allow everyone.</b>
             </p>
           </div>
           <Input

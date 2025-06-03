@@ -14,16 +14,21 @@ import {
   isUserOnProPlan,
 } from "@cap/utils";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faUpload } from "@fortawesome/free-solid-svg-icons";
+import clsx from "clsx";
 
 export const UploadCapButton = ({
   onStart,
   onProgress,
   onComplete,
+  size,
   grey = false,
 }: {
   onStart?: (id: string, thumbnail?: string) => void;
   onProgress?: (id: string, progress: number, uploadProgress?: number) => void;
   onComplete?: (id: string) => void;
+  size?: "sm" | "lg";
   grey?: boolean;
 }) => {
   const { user, isSubscribed } = useSharedContext();
@@ -401,10 +406,10 @@ export const UploadCapButton = ({
         onClick={handleClick}
         disabled={uploading}
         variant={grey ? "gray" : "primary"}
-        size="sm"
+        size={size}
       >
         {uploading ? (
-          <div className="flex items-center gap-2">
+          <div className="flex gap-2 items-center">
             {status}
             <svg className="w-4 h-4 transform -rotate-90" viewBox="0 0 20 20">
               <circle
@@ -414,7 +419,10 @@ export const UploadCapButton = ({
                 stroke="currentColor"
                 strokeWidth="3"
                 fill="none"
-                className={grey ? "text-black/30" : "text-white/30"}
+                className={clsx(
+                  grey ? "text-black/30" : "text-white/30",
+                  "transition-all duration-200 ease-out"
+                )}
               />
               <circle
                 cx="10"
@@ -424,9 +432,10 @@ export const UploadCapButton = ({
                 strokeWidth="3"
                 fill="none"
                 strokeLinecap="round"
-                className={`${
-                  grey ? "text-black" : "text-white"
-                } transition-all duration-200 ease-out`}
+                className={clsx(
+                  grey ? "text-black" : "text-white",
+                  "transition-all duration-200 ease-out"
+                )}
                 style={{
                   strokeDasharray: `${circumference} ${circumference}`,
                   strokeDashoffset: `${strokeDashoffset}`,
@@ -435,7 +444,13 @@ export const UploadCapButton = ({
             </svg>
           </div>
         ) : (
-          "Upload Video"
+          <div className="flex gap-2 items-center">
+            <FontAwesomeIcon
+              className={clsx(grey ? "text-gray-12" : "text-gray-1")}
+              icon={faUpload}
+            />
+            Upload Video
+          </div>
         )}
       </Button>
       <input

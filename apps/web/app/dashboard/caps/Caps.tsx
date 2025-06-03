@@ -253,7 +253,7 @@ export const Caps = ({
 
   return (
     <div className="flex relative flex-col w-full">
-      <div className="flex justify-end mb-4">
+      <div className="flex justify-end mb-8">
         <UploadCapButton
           onStart={handleUploadStart}
           onProgress={handleUploadProgress}
