@@ -84,8 +84,18 @@ export default async function DashboardLayout({
       .where(inArray(organizationInvites.organizationId, organizationIds));
   }
 
+  // Find active organization ID
+  let activeOrganizationId = organizationIds.find(
+    (orgId) => orgId === user.activeOrganizationId
+  );
+
+  if (!activeOrganizationId && organizationIds.length > 0) {
+    activeOrganizationId = organizationIds[0];
+  }
+
+  // Only fetch spaces for the active organization
   let spacesData: Space[] = [];
-  if (organizationIds.length > 0) {
+  if (activeOrganizationId) {
     spacesData = await db()
       .select({
         id: spaces.id,
@@ -94,29 +104,24 @@ export default async function DashboardLayout({
         organizationId: spaces.organizationId,
       })
       .from(spaces)
-      .where(inArray(spaces.organizationId, organizationIds));
+      .where(eq(spaces.organizationId, activeOrganizationId));
 
-    const uniqueOrganizations = organizationsWithMembers.reduce(
-      (acc: { id: string; name: string }[], row) => {
-        if (!acc.some((org) => org.id === row.organization.id)) {
-          acc.push({
-            id: row.organization.id,
-            name: row.organization.name,
-          });
-        }
-        return acc;
-      },
-      []
+    // Get organization name for the "All spaces" entry
+    const activeOrgInfo = organizationsWithMembers.find(
+      (row) => row.organization.id === activeOrganizationId
     );
 
-    const allSpaces = uniqueOrganizations.map((org) => ({
-      id: org.id,
-      name: `All ${org.name}`,
-      description: `View all content in ${org.name}`,
-      organizationId: org.id,
-    }));
+    if (activeOrgInfo) {
+      // Add "All spaces" entry for the active organization
+      const allSpacesEntry = {
+        id: activeOrgInfo.organization.id,
+        name: `All ${activeOrgInfo.organization.name}`,
+        description: `View all content in ${activeOrgInfo.organization.name}`,
+        organizationId: activeOrgInfo.organization.id,
+      };
 
-    spacesData = [...allSpaces, ...spacesData];
+      spacesData = [allSpacesEntry, ...spacesData];
+    }
   }
 
   const organizationSelect: Organization[] = await Promise.all(
@@ -186,12 +191,12 @@ export default async function DashboardLayout({
       })
   );
 
-  let findActiveOrganization = organizationSelect.find(
+  let activeOrganization = organizationSelect.find(
     (organization) => organization.organization.id === user.activeOrganizationId
   );
 
-  if (!findActiveOrganization && organizationSelect.length > 0) {
-    findActiveOrganization = organizationSelect[0];
+  if (!activeOrganization && organizationSelect.length > 0) {
+    activeOrganization = organizationSelect[0];
   }
 
   const isSubscribed =
@@ -205,7 +210,7 @@ export default async function DashboardLayout({
   return (
     <DynamicSharedLayout
       organizationData={organizationSelect}
-      activeOrganization={findActiveOrganization || null}
+      activeOrganization={activeOrganization || null}
       spacesData={spacesData}
       user={user}
       isSubscribed={isSubscribed}
