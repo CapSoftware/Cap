@@ -418,19 +418,33 @@ export default function Cropper(
     const scaleFactors = containerToMappedSizeScale();
     const mapped = mappedSize();
 
+    let lastAnimationFrameId: number | null = null;
     createRoot((dispose) => {
+      const cleanup = () => {
+        lastAnimationFrameId = null;
+        dispose();
+      };
+
       createEventListenerMap(window, {
-        mouseup: dispose,
-        touchend: dispose,
-        touchmove: (e) =>
-          requestAnimationFrame(() => {
-            if (e.touches.length !== 1) return;
-            handleResizeMove(e.touches[0].clientX, e.touches[0].clientY);
-          }),
-        mousemove: (e) =>
-          requestAnimationFrame(() =>
-            handleResizeMove(e.clientX, e.clientY, e.altKey)
-          ),
+        mouseup: cleanup,
+        touchend: cleanup,
+        touchmove: (e) => {
+          if (!lastAnimationFrameId) {
+            lastAnimationFrameId = requestAnimationFrame(() => {
+              lastAnimationFrameId = null;
+              if (e.touches.length !== 1) return;
+              handleResizeMove(e.touches[0].clientX, e.touches[0].clientY);
+            });
+          }
+        },
+        mousemove: (e) => {
+          if (!lastAnimationFrameId) {
+            lastAnimationFrameId = requestAnimationFrame(() => {
+              handleResizeMove(e.clientX, e.clientY, e.altKey);
+              lastAnimationFrameId = null;
+            });
+          }
+        },
       });
     });
 
