@@ -88,9 +88,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [activeTab, setActiveTab] = useState<TabType>("activity");
   const [[page, direction], setPage] = useState([0, 0]);
 
+  const hasExistingAiData =
+    aiData?.summary || (aiData?.chapters && aiData.chapters.length > 0);
+
   const tabs = [
     { id: "activity", label: "Comments" },
-    ...(aiUiEnabled ? [{ id: "summary", label: "Summary" }] : []),
+    ...(aiUiEnabled || hasExistingAiData
+      ? [{ id: "summary", label: "Summary" }]
+      : []),
     { id: "transcript", label: "Transcript" },
   ];
 

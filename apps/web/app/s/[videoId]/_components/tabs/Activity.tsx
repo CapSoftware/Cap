@@ -214,11 +214,11 @@ const Comment: React.FC<{
         <Avatar name={comment.authorName} />
         <div className="flex-1">
           <div className="flex items-center space-x-2">
-            <span className="font-medium text-gray-900">
+            <span className="font-medium text-gray-12">
               {comment.authorName || "Anonymous"}
             </span>
             <span
-              className="text-sm text-gray-1"
+              className="text-sm text-gray-8"
               data-tooltip-id={`comment-${comment.id}-timestamp`}
               data-tooltip-content={formatTimestamp(commentDate)}
             >

@@ -18,6 +18,7 @@ import {
   Shield,
   Sparkles,
   Users,
+  Video,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { memo, useState } from "react";
@@ -88,6 +89,16 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
       description: "Cloud storage & shareable links",
     },
     {
+      icon: <Sparkles className={iconStyling} />,
+      title: "Cap AI",
+      description: "Automatic video chapters, summaries & more",
+    },
+    {
+      icon: <Lock className={iconStyling} />,
+      title: "Password protected videos",
+      description: "Enhanced security for your content",
+    },
+    {
       icon: <Database className={iconStyling} />,
       title: "Custom storage",
       description: "Connect your own S3 bucket",
@@ -98,24 +109,14 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
       description: "Commercial license for desktop app automatically included",
     },
     {
-      icon: <Users className={iconStyling} />,
-      title: "Team features",
-      description: "Collaborate with your team and create shared spaces",
-    },
-    {
-      icon: <Sparkles className={iconStyling} />,
-      title: "Cap AI (Coming Soon)",
-      description: "Automatic video chapters, summaries & more",
+      icon: <Video className={iconStyling} />,
+      title: "Upload videos",
+      description: "Upload custom videos directly to Cap",
     },
     {
       icon: <Infinity className={iconStyling} />,
       title: "Unlimited views",
       description: "No limits on video views",
-    },
-    {
-      icon: <Lock className={iconStyling} />,
-      title: "Password protected videos",
-      description: "Enhanced security for your content",
     },
     {
       icon: <BarChart3 className={iconStyling} />,

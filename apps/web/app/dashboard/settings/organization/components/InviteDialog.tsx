@@ -17,6 +17,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
+import { useMutation } from "@tanstack/react-query";
 
 interface InviteDialogProps {
   isOpen: boolean;
@@ -37,7 +38,6 @@ export const InviteDialog = ({
   const { activeOrganization } = useSharedContext();
   const [inviteEmails, setInviteEmails] = useState<string[]>([]);
   const [emailInput, setEmailInput] = useState("");
-  const [inviteLoading, setInviteLoading] = useState(false);
   const [upgradeLoading, setUpgradeLoading] = useState(false);
 
   const { inviteQuota, remainingSeats } = calculateSeats(
@@ -80,35 +80,38 @@ export const InviteDialog = ({
     }
   };
 
-  const handleSendInvites = async () => {
-    if (!isOwner) {
-      showOwnerToast();
-      return;
-    }
+  const sendInvites = useMutation({
+    mutationFn: async () => {
+      if (!isOwner) {
+        showOwnerToast();
+        throw new Error("Not authorized");
+      }
 
-    if (inviteEmails.length > remainingSeats) {
-      toast.error(
-        `Not enough seats available. You have ${remainingSeats} seats remaining.`
-      );
-      return;
-    }
+      if (inviteEmails.length > remainingSeats) {
+        throw new Error(
+          `Not enough seats available. You have ${remainingSeats} seats remaining.`
+        );
+      }
 
-    try {
-      setInviteLoading(true);
-      await sendOrganizationInvites(
+      return await sendOrganizationInvites(
         inviteEmails,
         activeOrganization?.organization.id as string
       );
+    },
+    onSuccess: () => {
       toast.success("Invites sent successfully");
       setInviteEmails([]);
       setIsOpen(false);
       router.refresh();
-    } catch (error) {
+    },
+    onError: (error) => {
       console.error("Error sending invites:", error);
-      toast.error("An error occurred while sending invites");
-    } finally {
-      setInviteLoading(false);
-    }
+      toast.error(error instanceof Error ? error.message : "An error occurred while sending invites");
+    },
+  });
+
+  const handleSendInvites = () => {
+    sendInvites.mutate();
   };
 
   return (
@@ -200,9 +203,9 @@ export const InviteDialog = ({
             type="button"
             size="sm"
             variant="dark"
-            spinner={inviteLoading}
+            spinner={sendInvites.isPending}
             disabled={
-              inviteLoading || inviteEmails.length === 0 || remainingSeats === 0
+              sendInvites.isPending || inviteEmails.length === 0 || remainingSeats === 0
             }
             onClick={handleSendInvites}
           >

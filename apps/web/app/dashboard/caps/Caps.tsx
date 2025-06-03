@@ -10,7 +10,9 @@ import { CapCard } from "./components/CapCard";
 import { CapPagination } from "./components/CapPagination";
 import { EmptyCapState } from "./components/EmptyCapState";
 import { SelectedCapsBar } from "./components/SelectedCapsBar";
-
+import { UploadCapButton } from "./components/UploadCapButton";
+import { UploadPlaceholderCard } from "./components/UploadPlaceholderCard";
+import { serverEnv } from "@cap/env";
 
 type VideoData = {
   id: string;
@@ -21,17 +23,20 @@ type VideoData = {
   totalReactions: number;
   sharedOrganizations: { id: string; name: string }[];
   ownerName: string;
-  metadata?: VideoMetadata
+  metadata?: VideoMetadata;
+  hasPassword: boolean;
 }[];
 
 export const Caps = ({
   data,
   count,
   userOrganizations,
+  dubApiKeyEnabled,
 }: {
   data: VideoData;
   count: number;
   userOrganizations: { id: string; name: string }[];
+  dubApiKeyEnabled: boolean;
 }) => {
   const { refresh } = useRouter();
   const params = useSearchParams();
@@ -43,6 +48,14 @@ export const Caps = ({
   const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
   const previousCountRef = useRef<number>(0);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [uploadPlaceholders, setUploadPlaceholders] = useState<
+    {
+      id: string;
+      progress: number;
+      thumbnail?: string;
+      uploadProgress?: number;
+    }[]
+  >([]);
 
   const anyCapSelected = selectedCaps.length > 0;
 
@@ -50,6 +63,8 @@ export const Caps = ({
 
   useEffect(() => {
     const fetchAnalytics = async () => {
+      if (!dubApiKeyEnabled) return;
+
       const analyticsData: Record<string, number> = {};
 
       for (const video of data) {
@@ -166,30 +181,41 @@ export const Caps = ({
           const results = await Promise.allSettled(
             selectedCaps.map((capId) => deleteVideo(capId))
           );
-          
+
           const successCount = results.filter(
             (result) => result.status === "fulfilled" && result.value.success
           ).length;
-          
+
           const errorCount = selectedCaps.length - successCount;
-          
+
           if (successCount > 0 && errorCount > 0) {
             return { success: successCount, error: errorCount };
           } else if (successCount > 0) {
             return { success: successCount };
           } else {
-            throw new Error(`Failed to delete ${errorCount} cap${errorCount === 1 ? "" : "s"}`);
+            throw new Error(
+              `Failed to delete ${errorCount} cap${errorCount === 1 ? "" : "s"}`
+            );
           }
         },
         {
-          loading: `Deleting ${selectedCaps.length} cap${selectedCaps.length === 1 ? "" : "s"}...`,
+          loading: `Deleting ${selectedCaps.length} cap${
+            selectedCaps.length === 1 ? "" : "s"
+          }...`,
           success: (data) => {
             if (data.error) {
-              return `Successfully deleted ${data.success} cap${data.success === 1 ? "" : "s"}, but failed to delete ${data.error} cap${data.error === 1 ? "" : "s"}`;
+              return `Successfully deleted ${data.success} cap${
+                data.success === 1 ? "" : "s"
+              }, but failed to delete ${data.error} cap${
+                data.error === 1 ? "" : "s"
+              }`;
             }
-            return `Successfully deleted ${data.success} cap${data.success === 1 ? "" : "s"}`;
+            return `Successfully deleted ${data.success} cap${
+              data.success === 1 ? "" : "s"
+            }`;
           },
-          error: (error) => error.message || "An error occurred while deleting caps"
+          error: (error) =>
+            error.message || "An error occurred while deleting caps",
         }
       );
 
@@ -202,13 +228,47 @@ export const Caps = ({
     }
   };
 
+  const handleUploadStart = (id: string, thumbnail?: string) => {
+    setUploadPlaceholders((prev) => [{ id, progress: 0, thumbnail }, ...prev]);
+  };
+
+  const handleUploadProgress = (
+    id: string,
+    progress: number,
+    uploadProgress?: number
+  ) => {
+    setUploadPlaceholders((prev) =>
+      prev.map((u) => (u.id === id ? { ...u, progress, uploadProgress } : u))
+    );
+  };
+
+  const handleUploadComplete = (id: string) => {
+    setUploadPlaceholders((prev) => prev.filter((u) => u.id !== id));
+    refresh();
+  };
+
   if (data.length === 0) {
     return <EmptyCapState />;
   }
 
   return (
     <div className="flex relative flex-col w-full">
+      <div className="flex justify-end mb-4">
+        <UploadCapButton
+          onStart={handleUploadStart}
+          onProgress={handleUploadProgress}
+          onComplete={handleUploadComplete}
+        />
+      </div>
       <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+        {uploadPlaceholders.map((u) => (
+          <UploadPlaceholderCard
+            key={u.id}
+            thumbnail={u.thumbnail}
+            progress={u.progress}
+            uploadProgress={u.uploadProgress}
+          />
+        ))}
         {data.map((cap) => (
           <CapCard
             key={cap.id}
@@ -228,6 +288,7 @@ export const Caps = ({
           <CapPagination currentPage={page} totalPages={totalPages} />
         </div>
       )}
+
       <SelectedCapsBar
         selectedCaps={selectedCaps}
         setSelectedCaps={setSelectedCaps}

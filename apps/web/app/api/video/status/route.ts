@@ -34,11 +34,9 @@ export async function GET(request: NextRequest) {
     const video = result[0];
     const metadata: VideoMetadata = (video.metadata as VideoMetadata) || {};
 
-    // Trigger transcription if it hasn't started yet
-    if (!video.transcriptionStatus || video.transcriptionStatus === "ERROR") {
+    if (!video.transcriptionStatus) {
       console.log(`[Status API] Transcription not started for video ${videoId}, triggering transcription`);
       try {
-        // Trigger transcription in the background
         transcribeVideo(videoId, video.ownerId).catch(error => {
           console.error(`[Status API] Error starting transcription for video ${videoId}:`, error);
         });
@@ -52,7 +50,26 @@ export async function GET(request: NextRequest) {
         }, { status: 200 });
       } catch (error) {
         console.error(`[Status API] Error triggering transcription for video ${videoId}:`, error);
+        return Response.json({
+          transcriptionStatus: "ERROR",
+          aiProcessing: false,
+          aiTitle: metadata.aiTitle || null,
+          summary: metadata.summary || null,
+          chapters: metadata.chapters || null,
+          error: "Failed to start transcription"
+        }, { status: 500 });
       }
+    }
+
+    if (video.transcriptionStatus === "ERROR") {
+      return Response.json({
+        transcriptionStatus: "ERROR",
+        aiProcessing: false,
+        aiTitle: metadata.aiTitle || null,
+        summary: metadata.summary || null,
+        chapters: metadata.chapters || null,
+        error: "Transcription failed"
+      }, { status: 200 });
     }
 
     if (metadata.aiProcessing) {

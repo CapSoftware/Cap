@@ -2,7 +2,11 @@ import { Button } from "@cap/ui";
 import { videos } from "@cap/database/schema";
 import moment from "moment";
 import { userSelectProps } from "@cap/database/auth/session";
-import { faChevronDown } from "@fortawesome/free-solid-svg-icons";
+import {
+  faChevronDown,
+  faLock,
+  faUnlock,
+} from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
@@ -182,16 +186,24 @@ export const ShareHeader = ({
           {user !== null && (
             <div className="flex space-x-2">
               <div>
-                <Button
-                  variant="white"
-                  onClick={() => {
-                    navigator.clipboard.writeText(getVideoLink());
-                    toast.success("Link copied to clipboard!");
-                  }}
-                >
-                  {getDisplayLink()}
-                  <Copy className="ml-2 w-4 h-4" />
-                </Button>
+                <div className="flex items-center gap-2">
+                  {data.password && (
+                    <FontAwesomeIcon
+                      className="size-4 text-amber-600"
+                      icon={faLock}
+                    />
+                  )}
+                  <Button
+                    variant="white"
+                    onClick={() => {
+                      navigator.clipboard.writeText(getVideoLink());
+                      toast.success("Link copied to clipboard!");
+                    }}
+                  >
+                    {getDisplayLink()}
+                    <Copy className="ml-2 w-4 h-4" />
+                  </Button>
+                </div>
                 {user !== null && !isUserPro && (
                   <button
                     className="flex items-center mt-1 text-sm text-gray-400 cursor-pointer hover:text-blue-500"

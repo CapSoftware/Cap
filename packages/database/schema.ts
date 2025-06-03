@@ -202,6 +202,7 @@ export const videos = mysqlTable(
     bucket: nanoIdNullable("bucket"),
     metadata: json("metadata").$type<VideoMetadata>(),
     public: boolean("public").notNull().default(true),
+    password: encryptedTextNullable("password"),
     videoStartTime: varchar("videoStartTime", { length: 255 }),
     audioStartTime: varchar("audioStartTime", { length: 255 }),
     xStreamInfo: text("xStreamInfo"),

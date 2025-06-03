@@ -20,7 +20,7 @@ app.get(
   zValidator(
     "query",
     z.object({
-      duration: z.number().optional(),
+      duration: z.coerce.number().optional(),
       recordingMode: z
         .union([z.literal("hls"), z.literal("desktopMP4")])
         .optional(),
@@ -30,23 +30,29 @@ app.get(
     })
   ),
   async (c) => {
-    const { duration, recordingMode, isScreenshot, videoId, name } =
-      c.req.valid("query");
-    const user = c.get("user");
+    try {
+      const { duration, recordingMode, isScreenshot, videoId, name } =
+        c.req.valid("query");
+      const user = c.get("user");
 
-    // Check if user is on free plan and video is over 5 minutes
-    const isUpgraded = user.stripeSubscriptionStatus === "active";
+      console.log("Video create request:", { duration, recordingMode, isScreenshot, videoId, userId: user.id });
+        
+      const isUpgraded = user.stripeSubscriptionStatus === "active";
 
-    if (!isUpgraded && duration && duration > 300)
-      return c.json({ error: "upgrade_required" }, { status: 403 });
+      if (!isUpgraded && duration && duration > 300)
+        return c.json({ error: "upgrade_required" }, { status: 403 });
 
-    const [bucket] = await db()
-      .select()
-      .from(s3Buckets)
-      .where(eq(s3Buckets.ownerId, user.id));
+      const [bucket] = await db()
+        .select()
+        .from(s3Buckets)
+        .where(eq(s3Buckets.ownerId, user.id));
 
-    const s3Config = await getS3Config(bucket);
-    const bucketName = await getS3Bucket(bucket);
+      console.log("User bucket:", bucket ? "found" : "not found");
+
+      const s3Config = await getS3Config(bucket);
+      const bucketName = await getS3Bucket(bucket);
+
+      console.log("S3 Config:", { region: s3Config.region, bucketName });
 
     const date = new Date();
     const formattedDate = `${date.getDate()} ${date.toLocaleString("default", {
@@ -98,7 +104,6 @@ app.get(
         key: idToUse,
       });
 
-    // Check if this is the user's first video and send the first shareable link email
     try {
       const videoCount = await db()
         .select({ count: count() })
@@ -119,7 +124,6 @@ app.get(
           ? `https://cap.link/${idToUse}`
           : `${serverEnv().WEB_URL}/s/${idToUse}`;
 
-        // Send email with 5-minute delay using Resend's scheduling feature
         await sendEmail({
           email: user.email,
           subject: "You created your first Cap! 🥳",
@@ -146,5 +150,9 @@ app.get(
       aws_region: s3Config.region,
       aws_bucket: bucketName,
     });
+    } catch (error) {
+      console.error("Error in video create endpoint:", error);
+      return c.json({ error: "Internal server error" }, { status: 500 });
+    }
   }
 );

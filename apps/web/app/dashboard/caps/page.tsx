@@ -12,6 +12,7 @@ import { count, desc, eq, sql } from "drizzle-orm";
 import { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { Caps } from "./Caps";
+import { serverEnv } from "@cap/env";
 
 export const metadata: Metadata = {
   title: "My Caps — Cap",
@@ -74,6 +75,7 @@ export default async function CapsPage({
           ${videos.createdAt}
         )
       `,
+      hasPassword: sql<number>`IF(${videos.password} IS NULL, 0, 1)`,
     })
     .from(videos)
     .leftJoin(comments, eq(videos.id, comments.videoId))
@@ -126,6 +128,7 @@ export default async function CapsPage({
             [key: string]: any;
           }
         | undefined,
+      hasPassword: video.hasPassword === 1,
     };
   });
 
@@ -134,6 +137,7 @@ export default async function CapsPage({
       data={processedVideoData}
       count={totalCount}
       userOrganizations={userOrganizations}
+      dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
     />
   );
 }
