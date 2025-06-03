@@ -12,6 +12,7 @@ import { shareCap } from "@/actions/caps/share";
 import { toast } from "sonner";
 import { useParams, useRouter } from "next/navigation";
 import { Tooltip } from "@/components/Tooltip";
+import { motion } from "framer-motion";
 
 export const SpacesList = () => {
   const { spacesData, sidebarCollapsed } = useSharedContext();
@@ -150,20 +151,48 @@ export const SpacesList = () => {
                 key={space.id}
                 className={clsx(
                   "relative transition-colors duration-150 rounded-xl mb-1.5",
-                  activeDropTarget === space.id && "ring-2 ring-blue-500",
-                  activeSpaceParams(space.id) ? "bg-gray-3" : "bg-transparent"
+                  activeSpaceParams(space.id)
+                    ? "pointer-events-none"
+                    : "cursor-pointer",
+                  activeDropTarget === space.id && "ring-2 ring-blue-500"
                 )}
                 onDragOver={(e) => handleDragOver(e, space.id)}
                 onDragLeave={handleDragLeave}
                 onDrop={(e) => handleDrop(e, space.id)}
               >
+                {activeSpaceParams(space.id) && (
+                  <motion.div
+                    initial={{
+                      width: sidebarCollapsed ? 36 : "100%",
+                      height: sidebarCollapsed ? 36 : "100%",
+                    }}
+                    animate={{
+                      width: sidebarCollapsed ? 36 : "100%",
+                      height: sidebarCollapsed ? 36 : "100%",
+                    }}
+                    transition={{
+                      type: "spring",
+                      bounce: 0.2,
+                      duration: 0.4,
+                      width: { type: "tween", duration: 0.05 },
+                    }}
+                    layoutId="underline"
+                    id="underline"
+                    className={clsx(
+                      "absolute rounded-xl pointer-events-none bg-gray-3",
+                      sidebarCollapsed
+                        ? "inset-0 right-0 left-0 mx-auto w-9 h-9"
+                        : "inset-0"
+                    )}
+                  />
+                )}
                 {activeDropTarget === space.id && (
                   <div className="absolute inset-0 z-10 rounded-xl pointer-events-none bg-blue-500/10" />
                 )}
                 <Link
                   href={`/dashboard/spaces/${space.id}`}
                   className={clsx(
-                    "flex items-center px-2 py-2 truncate rounded-xl transition-colors group hover:bg-gray-2",
+                    "flex relative z-10 items-center px-2 py-2 truncate rounded-xl transition-colors group hover:bg-gray-2",
                     sidebarCollapsed ? "justify-center" : ""
                   )}
                 >
