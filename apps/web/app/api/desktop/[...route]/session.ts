@@ -35,7 +35,11 @@ app.get(
     let redirectOrigin = serverEnv().VERCEL_BRANCH_URL_HOST
       ? `https://${serverEnv().VERCEL_BRANCH_URL_HOST}`
       : serverEnv().WEB_URL;
-    const loginRedirectUrl = `${redirectOrigin}/login?next=${redirectOrigin}${url.pathname}${url.search}`;
+    const loginRedirectUrl = new URL(`${redirectOrigin}/login`);
+    loginRedirectUrl.searchParams.set(
+      "next",
+      new URL(`${redirectOrigin}${url.pathname}${url.search}`).toString()
+    );
 
     const session = await getServerSession(authOptions());
     if (!session) return c.redirect(loginRedirectUrl);
