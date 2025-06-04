@@ -41,8 +41,7 @@ const app = new Hono()
       })
     ),
     async (c) => {
-      const { userId, videoId, videoType, thumbnail, fileType } =
-        c.req.valid("query");
+      const { videoId, videoType, thumbnail, fileType } = c.req.valid("query");
 
       const query = await db()
         .select({ video: videos, bucket: s3Buckets })
