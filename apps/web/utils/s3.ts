@@ -9,7 +9,7 @@ import {
 import type { s3Buckets } from "@cap/database/schema";
 import type { InferSelectModel } from "drizzle-orm";
 import { decrypt } from "@cap/database/crypto";
-import { serverEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 import * as S3Presigner from "@aws-sdk/s3-request-presigner";
 import * as CloudFrontPresigner from "@aws-sdk/cloudfront-signer";
 import { S3_BUCKET_URL } from "@cap/utils";
@@ -124,7 +124,9 @@ function createCloudFrontProvider(config: {
   keyPairId: string;
   privateKey: string;
 }): S3BucketProvider {
+  const s3 = createS3Provider(config.s3, config.bucket);
   return {
+    ...s3,
     async getSignedObjectUrl(key: string) {
       const url = `${S3_BUCKET_URL}/${key}`;
       const expires = Math.floor((Date.now() + 3600 * 1000) / 1000);
@@ -141,7 +143,7 @@ function createCloudFrontProvider(config: {
       };
 
       return CloudFrontPresigner.getSignedUrl({
-        url: S3_BUCKET_URL,
+        url: buildEnv.NEXT_PUBLIC_CAP_AWS_BUCKET_URL,
         keyPairId: config.keyPairId,
         privateKey: config.privateKey,
         policy: JSON.stringify(policy),
@@ -187,11 +189,23 @@ function createS3Provider(client: S3Client, bucket: string): S3BucketProvider {
 export async function createBucketProvider(
   customBucket?: InferSelectModel<typeof s3Buckets> | null
 ) {
+  const bucket = await getS3Bucket(customBucket);
+  const [s3Client] = await createS3Client(customBucket);
+
   if (serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID) {
-    throw new Error("CloudFront not implemented yet");
+    const keyPairId = serverEnv().CLOUDFRONT_KEYPAIR_ID;
+    const privateKey = serverEnv().CLOUDFRONT_KEYPAIR_PRIVATE_KEY;
+
+    if (!keyPairId || !privateKey)
+      throw new Error("Missing CloudFront keypair ID or private key");
+
+    return createCloudFrontProvider({
+      s3: s3Client,
+      bucket,
+      keyPairId,
+      privateKey,
+    });
   } else {
-    const bucket = await getS3Bucket(customBucket);
-    const [s3Client] = await createS3Client(customBucket);
     return createS3Provider(s3Client, bucket);
   }
 }
