@@ -18,6 +18,7 @@ import { handle } from "hono/vercel";
 export const revalidate = 60;
 
 const app = new Hono()
+  .basePath("/api/playlist")
   .use(corsMiddleware)
   .use(withOptionalAuth)
   .get(
