@@ -179,7 +179,7 @@ export async function GET(request: NextRequest) {
     }
 
     if (video.source.type === "desktopMP4") {
-      const playlistUrl = await bucket.getObject(
+      const playlistUrl = await bucket.getSignedObjectUrl(
         `${userId}/${videoId}/result.mp4`
       );
       if (!playlistUrl) return new Response(null, { status: 404 });
