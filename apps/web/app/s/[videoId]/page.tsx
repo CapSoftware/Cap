@@ -24,6 +24,7 @@ import { isAiGenerationEnabled, isAiUiEnabled } from "@/utils/flags";
 import { Share } from "./Share";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { ImageViewer } from "./_components/ImageViewer";
+import { decrypt } from "@cap/database/crypto";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
