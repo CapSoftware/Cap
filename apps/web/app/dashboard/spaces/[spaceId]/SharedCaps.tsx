@@ -39,16 +39,16 @@ type SpaceMemberData = {
 export const SharedCaps = ({
   data,
   count,
-  activeOrganizationId,
   spaceData,
+  hideSharedWith,
   spaceMembers,
   organizationMembers,
   currentUserId,
 }: {
   data: SharedVideoData;
   count: number;
-  activeOrganizationId: string;
   spaceData?: SpaceData;
+  hideSharedWith?: boolean;
   spaceMembers?: SpaceMemberData[];
   organizationMembers?: SpaceMemberData[];
   currentUserId?: string;
@@ -92,7 +92,7 @@ export const SharedCaps = ({
 
   if (data.length === 0) {
     return (
-      <div className="relative flex flex-col w-full h-full">
+      <div className="flex relative flex-col w-full h-full">
         {spaceData && spaceMembers && (
           <MembersIndicator
             memberCount={spaceMembers.length}
@@ -110,11 +110,11 @@ export const SharedCaps = ({
   }
 
   return (
-    <div className="relative flex flex-col w-full h-full">
+    <div className="flex relative flex-col w-full h-full">
       {isDraggingCap && (
         <div className="fixed inset-0 z-50 pointer-events-none">
           <div className="flex justify-center items-center w-full h-full">
-            <div className="px-5 py-3 text-sm font-medium rounded-lg bg-gray-1/80 border border-gray-4 backdrop-blur-md text-gray-12">
+            <div className="px-5 py-3 text-sm font-medium rounded-lg border backdrop-blur-md bg-gray-1/80 border-gray-4 text-gray-12">
               Drag to a space to share
             </div>
           </div>

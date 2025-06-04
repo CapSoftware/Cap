@@ -330,16 +330,19 @@ export const s3BucketsRelations = relations(s3Buckets, ({ one }) => ({
   }),
 }));
 
-export const organizationsRelations = relations(organizations, ({ one, many }) => ({
-  owner: one(users, {
-    fields: [organizations.ownerId],
-    references: [users.id],
-  }),
-  organizationMembers: many(organizationMembers),
-  sharedVideos: many(sharedVideos),
-  organizationInvites: many(organizationInvites),
-  spaces: many(spaces),
-}));
+export const organizationsRelations = relations(
+  organizations,
+  ({ one, many }) => ({
+    owner: one(users, {
+      fields: [organizations.ownerId],
+      references: [users.id],
+    }),
+    organizationMembers: many(organizationMembers),
+    sharedVideos: many(sharedVideos),
+    organizationInvites: many(organizationInvites),
+    spaces: many(spaces),
+  })
+);
 
 export const sessionsRelations = relations(sessions, ({ one }) => ({
   user: one(users, {
@@ -414,6 +417,7 @@ export const spaces = mysqlTable(
     name: varchar("name", { length: 255 }).notNull(),
     organizationId: nanoId("organizationId").notNull(),
     createdById: nanoId("createdById").notNull(),
+    iconUrl: varchar("iconUrl", { length: 255 }),
     description: varchar("description", { length: 1000 }),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),

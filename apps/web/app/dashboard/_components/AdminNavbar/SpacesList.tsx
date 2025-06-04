@@ -3,18 +3,23 @@
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { ChevronDown, ChevronUp, Search } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { memo, useState } from "react";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faPlus, faXmark } from "@fortawesome/free-solid-svg-icons";
+import { deleteSpace } from "@/actions/organization/delete-space";
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 import clsx from "clsx";
 import { SpaceDialog } from "./SpaceDialog";
-import { Input } from "@cap/ui";
+import { Button, Input } from "@cap/ui";
 import { shareCap } from "@/actions/caps/share";
 import { toast } from "sonner";
 import { useParams, useRouter } from "next/navigation";
 import { Tooltip } from "@/components/Tooltip";
 import { motion } from "framer-motion";
+import { useMemo } from "react";
+import Image from "next/image";
 
-export const SpacesList = () => {
+export const SpacesList = memo(() => {
   const { spacesData, sidebarCollapsed } = useSharedContext();
   const [showSpaceDialog, setShowSpaceDialog] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -23,18 +28,66 @@ export const SpacesList = () => {
   const router = useRouter();
   const params = useParams();
 
+  const handleDeleteSpace = async (e: React.MouseEvent, spaceId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (
+      confirm(
+        "Are you sure you want to delete this space? This action cannot be undone."
+      )
+    ) {
+      try {
+        const result = await deleteSpace(spaceId);
+
+        if (result.success) {
+          toast.success("Space deleted successfully");
+
+          // If the number of spaces will drop to 3 or fewer after deletion,
+          // automatically set showAllSpaces to false
+          if (filteredSpaces.length <= 4) {
+            setShowAllSpaces(false);
+          }
+
+          router.refresh();
+
+          // If we're currently on the deleted space's page, redirect to dashboard
+          if (params.spaceId === spaceId) {
+            router.push("/dashboard");
+          }
+        } else {
+          toast.error(result.error || "Failed to delete space");
+        }
+      } catch (error) {
+        console.error("Error deleting space:", error);
+        toast.error("Failed to delete space");
+      }
+    }
+  };
+
   if (!spacesData) return null;
 
-  const filteredSpaces = spacesData.filter((space) =>
-    space.name.toLowerCase().includes(searchQuery.toLowerCase())
+  const filteredSpaces = useMemo(
+    () =>
+      spacesData.filter((space) =>
+        space.name.toLowerCase().includes(searchQuery.toLowerCase())
+      ),
+    [spacesData, searchQuery]
   );
 
-  const displayedSpaces = showAllSpaces
-    ? filteredSpaces
-    : filteredSpaces.slice(0, 3);
+  const displayedSpaces = useMemo(
+    () => (showAllSpaces ? filteredSpaces : filteredSpaces.slice(0, 3)),
+    [showAllSpaces, filteredSpaces]
+  );
 
-  const hasMoreSpaces = filteredSpaces.length > 3;
-  const hiddenSpacesCount = filteredSpaces.length - 3;
+  const hasMoreSpaces = useMemo(
+    () => filteredSpaces.length > 3,
+    [filteredSpaces]
+  );
+  const hiddenSpacesCount = useMemo(
+    () => filteredSpaces.length - 3,
+    [filteredSpaces]
+  );
 
   const handleDragOver = (e: React.DragEvent, spaceId: string) => {
     e.preventDefault();
@@ -76,41 +129,44 @@ export const SpacesList = () => {
 
   const activeSpaceParams = (spaceId: string) => params.spaceId === spaceId;
 
+  // Force re-render of toggle control when spaces count changes
+  const spacesCount = useMemo(() => spacesData?.length || 0, [spacesData]);
+
   return (
     <div className="flex flex-col mt-4">
-      <div className="flex items-center mb-3">
+      <div
+        className={clsx(
+          "flex items-center mb-3",
+          sidebarCollapsed ? "justify-center" : "justify-between"
+        )}
+      >
         <h2
           className={clsx(
-            "text-sm font-medium text-gray-12",
-            sidebarCollapsed ? "hidden" : "text-base"
+            "text-sm font-medium truncate text-gray-12",
+            sidebarCollapsed ? "hidden" : ""
           )}
         >
           Spaces
         </h2>
-        {!sidebarCollapsed && (
-          <div className="ml-auto">
-            <button
-              className="p-1 rounded-lg hover:bg-gray-4"
-              onClick={() => {
-                setShowSpaceDialog(true);
-              }}
-            >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="text-gray-11"
-              >
-                <path d="M12 5v14M5 12h14"></path>
-              </svg>
-            </button>
-          </div>
-        )}
+        <Tooltip position="right" content="Create space">
+          <Button
+            className={clsx(
+              "p-0 bg-transparent hover:bg-gray-3",
+              sidebarCollapsed ? "size-8" : "size-7"
+            )}
+            onClick={() => {
+              setShowSpaceDialog(true);
+            }}
+          >
+            <FontAwesomeIcon
+              className={clsx(
+                "text-gray-12",
+                sidebarCollapsed ? "size-4" : "size-3"
+              )}
+              icon={faPlus}
+            />
+          </Button>
+        </Tooltip>
       </div>
 
       <div className={clsx("relative mb-2", sidebarCollapsed ? "hidden" : "")}>
@@ -150,9 +206,9 @@ export const SpacesList = () => {
               <div
                 key={space.id}
                 className={clsx(
-                  "relative transition-colors duration-150 rounded-xl mb-1.5",
+                  "relative transition-colors overflow-visible duration-150 rounded-xl mb-1.5",
                   activeSpaceParams(space.id)
-                    ? "pointer-events-none"
+                    ? "hover:bg-gray-3 cursor-default"
                     : "cursor-pointer",
                   activeDropTarget === space.id && "ring-2 ring-blue-500"
                 )}
@@ -163,25 +219,23 @@ export const SpacesList = () => {
                 {activeSpaceParams(space.id) && (
                   <motion.div
                     initial={{
-                      width: sidebarCollapsed ? 36 : "100%",
-                      height: sidebarCollapsed ? 36 : "100%",
+                      width: sidebarCollapsed ? 40 : "100%",
+                      height: sidebarCollapsed ? 40 : "100%",
                     }}
                     animate={{
-                      width: sidebarCollapsed ? 36 : "100%",
-                      height: sidebarCollapsed ? 36 : "100%",
+                      width: sidebarCollapsed ? 40 : "100%",
+                      height: sidebarCollapsed ? 40 : "100%",
                     }}
                     transition={{
-                      type: "spring",
-                      bounce: 0.2,
-                      duration: 0.4,
-                      width: { type: "tween", duration: 0.05 },
+                      ease: "easeInOut",
+                      duration: 0.2,
                     }}
                     layoutId="underline"
                     id="underline"
                     className={clsx(
-                      "absolute rounded-xl pointer-events-none bg-gray-3",
+                      "absolute rounded-xl bg-gray-3",
                       sidebarCollapsed
-                        ? "inset-0 right-0 left-0 mx-auto w-9 h-9"
+                        ? "inset-0 right-0 left-0 mx-auto"
                         : "inset-0"
                     )}
                   />
@@ -192,19 +246,50 @@ export const SpacesList = () => {
                 <Link
                   href={`/dashboard/spaces/${space.id}`}
                   className={clsx(
-                    "flex relative z-10 items-center px-2 py-2 truncate rounded-xl transition-colors group hover:bg-gray-2",
-                    sidebarCollapsed ? "justify-center" : ""
+                    "flex relative z-10 items-center px-2 py-2 truncate rounded-xl transition-colors group",
+                    sidebarCollapsed ? "justify-center" : "",
+                    activeSpaceParams(space.id)
+                      ? "hover:bg-gray-3"
+                      : "hover:bg-gray-2"
                   )}
                 >
-                  <Avatar
-                    letterClass="text-gray-1 text-xs"
-                    className="relative flex-shrink-0 size-5"
-                    name={space.name}
-                  />
+                  {space.iconUrl ? (
+                    <Image
+                      src={space.iconUrl}
+                      alt={space.name}
+                      className="relative flex-shrink-0 rounded-full"
+                      width={sidebarCollapsed ? 24 : 20}
+                      height={sidebarCollapsed ? 24 : 20}
+                    />
+                  ) : (
+                    <Avatar
+                      letterClass={clsx(
+                        "text-gray-1",
+                        sidebarCollapsed ? "text-sm" : "text-[11px]"
+                      )}
+                      className={clsx(
+                        "relative flex-shrink-0",
+                        sidebarCollapsed ? "size-6" : "size-5"
+                      )}
+                      name={space.name}
+                    />
+                  )}
                   {!sidebarCollapsed && (
-                    <span className="ml-3 text-sm transition-colors text-gray-11 group-hover:text-gray-12">
-                      {space.name}
-                    </span>
+                    <>
+                      <span className="ml-2.5 text-sm truncate transition-colors text-gray-11 group-hover:text-gray-12">
+                        {space.name}
+                      </span>
+                      <div
+                        onClick={(e) => handleDeleteSpace(e, space.id)}
+                        className="flex justify-center items-center ml-auto rounded-full opacity-0 transition-opacity group size-6 group-hover:opacity-100 hover:bg-gray-4"
+                        aria-label={`Delete ${space.name} space`}
+                      >
+                        <FontAwesomeIcon
+                          icon={faXmark}
+                          className="size-3.5 text-gray-8 group:hover:text-gray-12"
+                        />
+                      </div>
+                    </>
                   )}
                 </Link>
               </div>
@@ -213,7 +298,9 @@ export const SpacesList = () => {
         </div>
       </div>
 
+      {/* Key added to force re-render when spaces count changes */}
       <SpaceToggleControl
+        key={`space-toggle-${spacesCount}-${filteredSpaces.length}`}
         showAllSpaces={showAllSpaces}
         hasMoreSpaces={hasMoreSpaces}
         sidebarCollapsed={sidebarCollapsed}
@@ -227,7 +314,7 @@ export const SpacesList = () => {
       />
     </div>
   );
-};
+});
 
 const SpaceToggleControl = ({
   showAllSpaces,
