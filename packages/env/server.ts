@@ -46,13 +46,17 @@ function createServerEnv() {
       VERCEL_TEAM_ID: z.string().optional(),
       VERCEL_PROJECT_ID: z.string().optional(),
       VERCEL_AUTH_TOKEN: z.string().optional(),
-      VERCEL_URL: z.string().optional(),
-      VERCEL_BRANCH_URL: z.string().optional(),
-      VERCEL_PROJECT_PRODUCTION_URL: z.string().optional(),
+      VERCEL_URL_HOST: z.string().optional(),
+      VERCEL_BRANCH_URL_HOST: z.string().optional(),
+      VERCEL_PROJECT_PRODUCTION_URL_HOST: z.string().optional(),
       DOCKER_BUILD: z.string().optional(),
     },
     experimental__runtimeEnv: {
       ...process.env,
+      VERCEL_URL_HOST: process.env.VERCEL_URL,
+      VERCEL_BRANCH_URL_HOST: process.env.VERCEL,
+      VERCEL_PROJECT_PRODUCTION_URL_HOST:
+        process.env.VERCEL_PROJECT_PRODUCTION_URL,
     },
   });
 }
