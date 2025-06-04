@@ -36,6 +36,7 @@ export const MP4VideoPlayer = memo(
         const response = await fetch(urlWithTimestamp, { method: "HEAD" });
 
         if (response.redirected) {
+          console.log({ response });
           // If the API redirected us, use the redirected URL
           setCurrentSrc(response.url);
           return response.url;
