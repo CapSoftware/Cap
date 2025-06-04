@@ -11,7 +11,7 @@ import { getHeaders, CACHE_CONTROL_HEADERS } from "@/utils/helpers";
 import { createBucketProvider } from "@/utils/s3";
 import { serverEnv } from "@cap/env";
 
-export const revalidate = 3599;
+export const revalidate = 60;
 
 export async function OPTIONS(request: NextRequest) {
   const origin = request.headers.get("origin") as string;
@@ -183,6 +183,8 @@ export async function GET(request: NextRequest) {
         `${userId}/${videoId}/result.mp4`
       );
       if (!playlistUrl) return new Response(null, { status: 404 });
+
+      console.log(`Got signed url for desktop: ${playlistUrl}`);
 
       return new Response(null, {
         status: 302,
