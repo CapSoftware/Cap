@@ -54,7 +54,7 @@ function createServerEnv() {
     experimental__runtimeEnv: {
       ...process.env,
       VERCEL_URL_HOST: process.env.VERCEL_URL,
-      VERCEL_BRANCH_URL_HOST: process.env.VERCEL,
+      VERCEL_BRANCH_URL_HOST: process.env.VERCEL_BRANCH_URL,
       VERCEL_PROJECT_PRODUCTION_URL_HOST:
         process.env.VERCEL_PROJECT_PRODUCTION_URL,
     },
