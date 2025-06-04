@@ -79,7 +79,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
   ];
 
   const navItemClass =
-    "flex items-center justify-start px-3 rounded-xl outline-none tracking-tight overflow-hidden";
+    "flex items-center justify-start rounded-xl outline-none tracking-tight overflow-hidden";
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const {
@@ -103,27 +103,31 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
         >
           <PopoverTrigger asChild>
             <motion.div
-              initial={{
-                width: sidebarCollapsed ? "40px" : "100%",
-              }}
-              animate={{
-                width: sidebarCollapsed ? "40px" : "100%",
-              }}
               transition={{
-                type: "spring",
-                bounce: 0.2,
-                width: { type: "tween", duration: 0.2 },
+                type: "easeInOut",
+                duration: 0.2,
               }}
               className={clsx(
-                "p-2.5 mt-1.5 rounded-xl cursor-pointer bg-gray-3"
+                "mt-1.5 mx-auto p-2.5 rounded-xl cursor-pointer bg-gray-3",
+                sidebarCollapsed ? "w-fit" : "w-full"
               )}
             >
               <div
-                className="flex justify-between items-center cursor-pointer"
+                className={clsx(
+                  "flex items-center cursor-pointer",
+                  sidebarCollapsed ? "justify-center" : "justify-between"
+                )}
                 role="combobox"
                 aria-expanded={open}
               >
-                <div className="flex justify-between items-center w-full text-left">
+                <div
+                  className={clsx(
+                    "flex items-center",
+                    sidebarCollapsed
+                      ? "justify-center w-fit"
+                      : "justify-between w-full"
+                  )}
+                >
                   <div className="flex items-center">
                     {activeOrg?.organization.iconUrl ? (
                       <div className="overflow-hidden relative flex-shrink-0 rounded-full size-[18px]">
@@ -139,16 +143,19 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                     ) : (
                       <Avatar
                         letterClass="text-gray-1 text-[10px]"
-                        className="relative flex-shrink-0 size-[18px]"
+                        className="relative flex-shrink-0 mx-auto size-[18px]"
                         name={
                           activeOrg?.organization.name ??
                           "No organization found"
                         }
                       />
                     )}
-                    <p className="ml-2.5 text-sm text-gray-12 truncate">
-                      {activeOrg?.organization.name ?? "No organization found"}
-                    </p>
+                    {!sidebarCollapsed && (
+                      <p className="ml-2.5 text-sm text-gray-12 truncate">
+                        {activeOrg?.organization.name ??
+                          "No organization found"}
+                      </p>
+                    )}
                   </div>
                   {!sidebarCollapsed && (
                     <ChevronDown
@@ -260,28 +267,18 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
             >
               {isPathActive(item.href) && (
                 <motion.div
-                  initial={{
-                    width: sidebarCollapsed ? 36 : "100%",
-                    height: sidebarCollapsed ? 36 : "100%",
-                  }}
-                  animate={{
-                    width: sidebarCollapsed ? 36 : "100%",
-                    height: sidebarCollapsed ? 36 : "100%",
-                  }}
-                  transition={{
-                    type: "spring",
-                    bounce: 0.2,
-                    duration: 0.4,
-                    width: { type: "tween", duration: 0.05 },
-                  }}
-                  layoutId="underline"
-                  id="underline"
+                  layoutId="navlinks"
+                  id="navlinks"
                   className={clsx(
                     "absolute rounded-xl pointer-events-none bg-gray-3",
                     sidebarCollapsed
-                      ? "inset-0 right-0 left-0 mx-auto w-9 h-9"
-                      : "inset-0 ml-[2px]"
+                      ? "inset-0 mx-auto w-9 h-full"
+                      : "inset-0 size-full"
                   )}
+                  transition={{
+                    type: "tween",
+                    duration: 0.15,
+                  }}
                 />
               )}
 
@@ -290,9 +287,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                   layoutId="hoverIndicator"
                   className={clsx(
                     "absolute bg-transparent rounded-xl",
-                    sidebarCollapsed
-                      ? "inset-0 right-0 left-0 mx-auto w-9 h-9"
-                      : "inset-0 ml-[2px]"
+                    sidebarCollapsed ? "inset-0 mx-auto w-9 h-9" : "inset-0"
                   )}
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
@@ -319,8 +314,8 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                   className={classNames(
                     "relative border border-transparent transition z-3",
                     sidebarCollapsed
-                      ? "flex justify-center items-center w-full h-9"
-                      : "py-2 w-full",
+                      ? "flex justify-center px-0 items-center w-full size-9"
+                      : "py-2 w-full px-3",
                     isPathActive(item.href)
                       ? "bg-transparent pointer-events-none"
                       : "hover:bg-gray-2",
@@ -330,8 +325,10 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                   <FontAwesomeIcon
                     icon={item.icon as IconDefinition}
                     className={clsx(
-                      "flex-shrink-0 size-3.5 transition-colors stroke-[1.5px]",
-                      sidebarCollapsed ? "text-gray-12 mx-auto" : "text-gray-10"
+                      "flex-shrink-0 transition-colors",
+                      sidebarCollapsed
+                        ? "text-gray-12 size-[18px] mx-auto"
+                        : "text-gray-10 size-3.5"
                     )}
                     aria-hidden="true"
                   />

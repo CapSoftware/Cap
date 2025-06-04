@@ -56,8 +56,6 @@ export default async function SharedCapsPage({
   const userId = user?.id as string;
   const id = params.spaceId;
 
-  console.log("Debug - Checking access:", { userId, id });
-
   const spaceData = await db()
     .select({
       id: spaces.id,
@@ -165,7 +163,6 @@ export default async function SharedCapsPage({
         .limit(1);
 
       if (orgMembership.length === 0) {
-        console.log("Debug - User has no access to this organization");
         notFound();
       }
     }
@@ -262,13 +259,10 @@ export default async function SharedCapsPage({
       };
     });
 
-    console.log("spaceVideoData:", processedVideoData);
-
     return (
       <SharedCaps
         data={processedVideoData}
         count={totalCount}
-        activeOrganizationId={id}
         spaceData={space}
         spaceMembers={spaceMembersData}
         organizationMembers={organizationMembersData}
@@ -337,14 +331,8 @@ export default async function SharedCapsPage({
       };
     });
 
-    console.log("sharedVideoData:", processedVideoData);
-
     return (
-      <SharedCaps
-        data={processedVideoData}
-        count={totalCount}
-        activeOrganizationId={id}
-      />
+      <SharedCaps data={processedVideoData} count={totalCount} hideSharedWith />
     );
   }
 }

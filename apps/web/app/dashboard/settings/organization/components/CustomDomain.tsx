@@ -226,7 +226,7 @@ export function CustomDomain() {
   };
 
   return (
-    <div className="flex flex-wrap space-y-6">
+    <div className="flex flex-wrap mt-4 space-y-6">
       <div className="flex-1">
         <div className="flex flex-col justify-between items-start">
           <Input
@@ -236,7 +236,7 @@ export function CustomDomain() {
             value={domain}
             onChange={(e) => setDomain(e.target.value)}
             disabled={loading}
-            className="flex-1"
+            className="flex-1 min-h-[44px]"
           />
           <div className="flex gap-2 justify-between items-center mt-4">
             {activeOrganization?.organization.customDomain &&

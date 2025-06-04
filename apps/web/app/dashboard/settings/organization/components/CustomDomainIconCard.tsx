@@ -26,9 +26,7 @@ export const CustomDomainIconCard = ({
             it unique.
           </CardDescription>
         </div>
-        <div className="mt-4">
-          <CustomDomain />
-        </div>
+        <CustomDomain />
       </div>
     </Card>
   );
