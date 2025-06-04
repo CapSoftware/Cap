@@ -10,10 +10,11 @@ import { CACHE_CONTROL_HEADERS } from "@/utils/helpers";
 import { createBucketProvider } from "@/utils/s3";
 import { serverEnv } from "@cap/env";
 import { Hono } from "hono";
-import { corsMiddleware, withOptionalAuth } from "../../utils";
 import { zValidator } from "@hono/zod-validator";
 import z from "zod";
 import { handle } from "hono/vercel";
+
+import { corsMiddleware, withOptionalAuth } from "../utils";
 
 export const revalidate = 60;
 
@@ -26,10 +27,14 @@ const app = new Hono()
     zValidator(
       "query",
       z.object({
-        userId: z.string(),
         videoId: z.string(),
         videoType: z
-          .union([z.literal("video"), z.literal("audio"), z.literal("master")])
+          .union([
+            z.literal("video"),
+            z.literal("audio"),
+            z.literal("master"),
+            z.literal("mp4"),
+          ])
           .optional(),
         thumbnail: z.string().optional(),
         fileType: z.string().optional(),
@@ -70,21 +75,23 @@ const app = new Hono()
       if (!customBucket || video.awsBucket === serverEnv().CAP_AWS_BUCKET) {
         if (video.source.type === "desktopMP4") {
           return c.redirect(
-            await bucket.getSignedObjectUrl(`${userId}/${videoId}/result.mp4`)
+            await bucket.getSignedObjectUrl(
+              `${video.ownerId}/${videoId}/result.mp4`
+            )
           );
         }
 
         if (video.source.type === "MediaConvert") {
           return c.redirect(
             await bucket.getSignedObjectUrl(
-              `${userId}/${videoId}/output/video_recording_000.m3u8`
+              `${video.ownerId}/${videoId}/output/video_recording_000.m3u8`
             )
           );
         }
 
         return c.redirect(
           await bucket.getSignedObjectUrl(
-            `${userId}/${videoId}/combined-source/stream.m3u8`
+            `${video.ownerId}/${videoId}/combined-source/stream.m3u8`
           )
         );
       }
@@ -93,7 +100,7 @@ const app = new Hono()
       if (fileType === "transcription") {
         try {
           const transcriptionContent = await bucket.getObject(
-            `${userId}/${videoId}/transcription.vtt`
+            `${video.ownerId}/${videoId}/transcription.vtt`
           );
 
           return c.body(transcriptionContent ?? "", {
@@ -115,14 +122,14 @@ const app = new Hono()
       }
 
       // Handle video/audio files
-      const videoPrefix = `${userId}/${videoId}/video/`;
-      const audioPrefix = `${userId}/${videoId}/audio/`;
+      const videoPrefix = `${video.ownerId}/${videoId}/video/`;
+      const audioPrefix = `${video.ownerId}/${videoId}/audio/`;
 
       try {
         if (video.source.type === "local") {
           const playlistText =
             (await bucket.getObject(
-              `${userId}/${videoId}/combined-source/stream.m3u8`
+              `${video.ownerId}/${videoId}/combined-source/stream.m3u8`
             )) ?? "";
 
           const lines = playlistText.split("\n");
@@ -130,7 +137,7 @@ const app = new Hono()
           for (const [index, line] of lines.entries()) {
             if (line.endsWith(".ts")) {
               const url = await bucket.getObject(
-                `${userId}/${videoId}/combined-source/${line}`
+                `${video.ownerId}/${videoId}/combined-source/${line}`
               );
               if (!url) continue;
               lines[index] = url;
@@ -146,7 +153,7 @@ const app = new Hono()
 
         if (video.source.type === "desktopMP4") {
           const playlistUrl = await bucket.getSignedObjectUrl(
-            `${userId}/${videoId}/result.mp4`
+            `${video.ownerId}/${videoId}/result.mp4`
           );
           if (!playlistUrl) return new Response(null, { status: 404 });
 
@@ -190,13 +197,13 @@ const app = new Hono()
           const generatedPlaylist = await generateMasterPlaylist(
             videoMetadata?.Metadata?.resolution ?? "",
             videoMetadata?.Metadata?.bandwidth ?? "",
-            `${
-              serverEnv().WEB_URL
-            }/api/playlist?userId=${userId}&videoId=${videoId}&videoType=video`,
+            `${serverEnv().WEB_URL}/api/playlist?userId=${
+              video.ownerId
+            }&videoId=${videoId}&videoType=video`,
             audioMetadata
-              ? `${
-                  serverEnv().WEB_URL
-                }/api/playlist?userId=${userId}&videoId=${videoId}&videoType=audio`
+              ? `${serverEnv().WEB_URL}/api/playlist?userId=${
+                  video.ownerId
+                }&videoId=${videoId}&videoType=audio`
               : null,
             video.xStreamInfo ?? ""
           );
@@ -247,3 +254,4 @@ const app = new Hono()
 
 export const GET = handle(app);
 export const OPTIONS = handle(app);
+export const HEAD = handle(app);
