@@ -143,7 +143,7 @@ function createCloudFrontProvider(config: {
       };
 
       return CloudFrontPresigner.getSignedUrl({
-        url: buildEnv.NEXT_PUBLIC_CAP_AWS_BUCKET_URL,
+        url,
         keyPairId: config.keyPairId,
         privateKey: config.privateKey,
         policy: JSON.stringify(policy),

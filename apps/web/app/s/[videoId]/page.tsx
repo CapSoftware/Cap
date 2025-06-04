@@ -25,6 +25,7 @@ import { Share } from "./Share";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { ImageViewer } from "./_components/ImageViewer";
 import { decrypt } from "@cap/database/crypto";
+import { ShareHeader } from "./_components/ShareHeader";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -594,6 +595,22 @@ export default async function ShareVideoPage(props: Props) {
       {authorized && (
         <>
           <div className="container flex-1 px-4 py-4 mx-auto">
+            <ShareHeader
+              data={{
+                ...videoWithOrganizationInfo,
+                createdAt: video.metadata?.customCreatedAt
+                  ? new Date(video.metadata.customCreatedAt)
+                  : video.createdAt,
+              }}
+              user={user}
+              customDomain={customDomain}
+              domainVerified={domainVerified}
+              sharedOrganizations={
+                videoWithOrganizationInfo.sharedOrganizations || []
+              }
+              userOrganizations={userOrganizations}
+            />
+
             <Share
               data={videoWithOrganizationInfo}
               user={user}
