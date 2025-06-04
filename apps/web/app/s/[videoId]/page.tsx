@@ -244,7 +244,7 @@ export default async function ShareVideoPage(props: Props) {
 
   if (videoOwnerQuery.length > 0 && videoOwnerQuery[0]) {
     const videoOwner = videoOwnerQuery[0];
-    aiGenerationEnabled = isAiGenerationEnabled(videoOwner);
+    aiGenerationEnabled = await isAiGenerationEnabled(videoOwner);
   }
 
   if (video.sharedOrganization?.organizationId) {
@@ -529,7 +529,7 @@ export default async function ShareVideoPage(props: Props) {
 
   let aiUiEnabled = false;
   if (user?.email) {
-    aiUiEnabled = isAiUiEnabled({
+    aiUiEnabled = await isAiUiEnabled({
       email: user.email,
       stripeSubscriptionStatus: user.stripeSubscriptionStatus,
     });

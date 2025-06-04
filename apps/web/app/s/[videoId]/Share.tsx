@@ -238,10 +238,6 @@ export const Share: React.FC<ShareProps> = ({
       ? { ...data, name: aiData.title, createdAt: effectiveDate }
       : { ...data, createdAt: effectiveDate };
 
-  console.log("aiLoading", aiLoading);
-  console.log("transcriptionStatus", transcriptionStatus);
-  console.log("aiData", aiData);
-
   return (
     <>
       <div className="container flex-1 px-4 py-4 mx-auto">
