@@ -297,13 +297,13 @@ export const SpacesList = ({
                         <div
                           onClick={(e) => handleDeleteSpace(e, space.id)}
                           className={
-                            "flex justify-center items-center ml-auto rounded-full opacity-0 transition-opacity group size-6 group-hover:opacity-100 hover:bg-gray-4"
+                            "flex justify-center items-center ml-auto rounded-full opacity-0 transition-all group size-6 group-hover:opacity-100 hover:bg-gray-4"
                           }
                           aria-label={`Delete ${space.name} space`}
                         >
                           <FontAwesomeIcon
                             icon={faXmark}
-                            className="size-3.5 text-gray-8 group:hover:text-gray-12"
+                            className="size-3.5 text-gray-12"
                           />
                         </div>
                       )}
