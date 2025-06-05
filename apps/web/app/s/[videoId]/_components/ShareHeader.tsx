@@ -1,3 +1,5 @@
+"use client";
+
 import { Button } from "@cap/ui";
 import { videos } from "@cap/database/schema";
 import moment from "moment";
