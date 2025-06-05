@@ -272,6 +272,21 @@ export default async function ShareVideoPage(props: Props) {
     return <p>No video found</p>;
   }
 
+  let aiGenerationEnabled = false;
+  const videoOwnerQuery = await db()
+    .select({
+      email: users.email,
+      stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+    })
+    .from(users)
+    .where(eq(users.id, video.ownerId))
+    .limit(1);
+
+  if (videoOwnerQuery.length > 0 && videoOwnerQuery[0]) {
+    const videoOwner = videoOwnerQuery[0];
+    aiGenerationEnabled = await isAiGenerationEnabled(videoOwner);
+  }
+
   if (video.sharedOrganization?.organizationId) {
     const organization = await db()
       .select()
@@ -309,7 +324,7 @@ export default async function ShareVideoPage(props: Props) {
     video.transcriptionStatus !== "PROCESSING"
   ) {
     console.log("[ShareVideoPage] Starting transcription for video:", videoId);
-    await transcribeVideo(videoId, video.ownerId);
+    await transcribeVideo(videoId, video.ownerId, aiGenerationEnabled);
 
     const updatedVideoQuery = await db()
       .select({
@@ -353,21 +368,6 @@ export default async function ShareVideoPage(props: Props) {
   const currentMetadata = (video.metadata as VideoMetadata) || {};
   const metadata = currentMetadata;
   let initialAiData = null;
-  let aiGenerationEnabled = false;
-
-  const videoOwnerQuery = await db()
-    .select({
-      email: users.email,
-      stripeSubscriptionStatus: users.stripeSubscriptionStatus,
-    })
-    .from(users)
-    .where(eq(users.id, video.ownerId))
-    .limit(1);
-
-  if (videoOwnerQuery.length > 0 && videoOwnerQuery[0]) {
-    const videoOwner = videoOwnerQuery[0];
-    aiGenerationEnabled = isAiGenerationEnabled(videoOwner);
-  }
 
   if (metadata.summary || metadata.chapters || metadata.aiTitle) {
     initialAiData = {
@@ -569,7 +569,7 @@ export default async function ShareVideoPage(props: Props) {
 
   let aiUiEnabled = false;
   if (user?.email) {
-    aiUiEnabled = isAiUiEnabled({
+    aiUiEnabled = await isAiUiEnabled({
       email: user.email,
       stripeSubscriptionStatus: user.stripeSubscriptionStatus,
     });

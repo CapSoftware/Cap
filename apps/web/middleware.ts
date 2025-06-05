@@ -15,9 +15,9 @@ const mainOrigins = [
   "https://cap.link",
   "http://localhost",
   serverEnv().WEB_URL,
-  addHttps(serverEnv().VERCEL_URL),
-  addHttps(serverEnv().VERCEL_BRANCH_URL),
-  addHttps(serverEnv().VERCEL_PROJECT_PRODUCTION_URL),
+  addHttps(serverEnv().VERCEL_URL_HOST),
+  addHttps(serverEnv().VERCEL_BRANCH_URL_HOST),
+  addHttps(serverEnv().VERCEL_PROJECT_PRODUCTION_URL_HOST),
 ].filter(Boolean) as string[];
 
 export async function middleware(request: NextRequest) {
@@ -25,21 +25,23 @@ export async function middleware(request: NextRequest) {
   const hostname = url.hostname;
   const path = url.pathname;
 
-  if((buildEnv.NEXT_PUBLIC_IS_CAP !== "true" &&
-    !(path.startsWith("/s/") ||
+  if (
+    buildEnv.NEXT_PUBLIC_IS_CAP !== "true" &&
+    !(
+      path.startsWith("/s/") ||
       path.startsWith("/dashboard") ||
       path.startsWith("/onboarding") ||
-      path.startsWith("/api") || 
-      path.startsWith("/login") || 
+      path.startsWith("/api") ||
+      path.startsWith("/login") ||
       path.startsWith("/invite") ||
       path.startsWith("/self-hosting") ||
-      path.startsWith("/terms")))) {
+      path.startsWith("/terms")
+    )
+  ) {
     return NextResponse.redirect(new URL("/login", url.origin));
   }
 
-  if (
-    mainOrigins.some((d) => url.origin.startsWith(d))
-  ) {
+  if (mainOrigins.some((d) => url.origin.startsWith(d))) {
     // We just let the request go through for main domains, page-level logic will handle redirects
     return NextResponse.next();
   }
@@ -84,15 +86,15 @@ export async function middleware(request: NextRequest) {
 
     // Get the pathname and referrer
     const { pathname } = request.nextUrl;
-    const referrer = request.headers.get('referer') || '';
-    
+    const referrer = request.headers.get("referer") || "";
+
     // Parse user agent with the userAgent utility
     const ua = userAgent(request);
-    
+
     // Add custom headers to check in generateMetadata
-    response.headers.set('x-pathname', pathname);
-    response.headers.set('x-referrer', referrer);
-    response.headers.set('x-user-agent', JSON.stringify(ua));
+    response.headers.set("x-pathname", pathname);
+    response.headers.set("x-referrer", referrer);
+    response.headers.set("x-user-agent", JSON.stringify(ua));
 
     return response;
   } catch (error) {
@@ -110,6 +112,6 @@ export const config = {
      * - _next/image (image optimization files)
      * - favicon.ico, robots.txt, sitemap.xml (static files)
      */
-    '/((?!api|_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml).*)',
+    "/((?!api|_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml).*)",
   ],
 };

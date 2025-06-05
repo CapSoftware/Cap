@@ -1,30 +1,28 @@
 import { isUserOnProPlan } from "@cap/utils";
+import { getBootstrapData } from "./getBootstrapData";
 
 export interface FeatureFlagUser {
   email: string;
   stripeSubscriptionStatus?: string | null;
 }
 
-export function isAiUiEnabled(user: FeatureFlagUser): boolean {
+export async function isAiUiEnabled(user: FeatureFlagUser): Promise<boolean> {
   if (!user.email) {
     return false;
   }
 
-  const allowedDomains = ["@cap.so", "@mcilroy.co"];
-  return allowedDomains.some(domain => 
-    user.email.includes(domain)
-  );
+  const bootstrap = await getBootstrapData();
+
+  return bootstrap.allowedEmails.includes(user.email);
 }
 
-export function isAiGenerationEnabled(user: FeatureFlagUser): boolean {
+export async function isAiGenerationEnabled(user: FeatureFlagUser): Promise<boolean> {
   if (!user.email) {
     return false;
   }
 
-  const allowedDomains = ["@cap.so", "@mcilroy.co"];
-  const hasAllowedEmail = allowedDomains.some(domain => 
-    user.email.includes(domain)
-  );
+  const bootstrap = await getBootstrapData();
+  const hasAllowedEmail = bootstrap.allowedEmails.includes(user.email);
 
   const isProUser = isUserOnProPlan({
     subscriptionStatus: user.stripeSubscriptionStatus || null,
