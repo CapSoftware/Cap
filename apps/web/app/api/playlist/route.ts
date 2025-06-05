@@ -16,7 +16,7 @@ import { handle } from "hono/vercel";
 
 import { corsMiddleware, withOptionalAuth } from "../utils";
 
-export const revalidate = 60;
+export const revalidate = "force-dynamic";
 
 const app = new Hono()
   .basePath("/api/playlist")
