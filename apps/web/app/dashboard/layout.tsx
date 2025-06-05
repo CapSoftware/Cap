@@ -29,6 +29,8 @@ export type Space = {
   description: string | null;
   organizationId: string;
   iconUrl: string | null;
+  memberCount: number;
+  videoCount: number;
 };
 
 export const dynamic = "force-dynamic";
@@ -104,6 +106,12 @@ export default async function DashboardLayout({
         description: spaces.description,
         organizationId: spaces.organizationId,
         iconUrl: spaces.iconUrl,
+        memberCount: sql<number>`(
+          SELECT COUNT(*) FROM space_members WHERE space_members.spaceId = spaces.id
+        )`,
+        videoCount: sql<number>`(
+          SELECT COUNT(*) FROM space_videos WHERE space_videos.spaceId = spaces.id
+        )`,
       })
       .from(spaces)
       .where(eq(spaces.organizationId, activeOrganizationId));
@@ -121,6 +129,8 @@ export default async function DashboardLayout({
         description: `View all content in ${activeOrgInfo.organization.name}`,
         organizationId: activeOrgInfo.organization.id,
         iconUrl: null,
+        memberCount: 0,
+        videoCount: 0,
       };
 
       spacesData = [allSpacesEntry, ...spacesData];

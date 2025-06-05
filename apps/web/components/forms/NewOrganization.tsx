@@ -97,6 +97,7 @@ export const NewOrganization: React.FC<NewOrganizationProps> = (props) => {
             <FileInput
               id="icon"
               name="icon"
+              notDraggingClassName="hover:bg-gray-3"
               onChange={setSelectedFile}
               disabled={isUploading}
               isLoading={isUploading}

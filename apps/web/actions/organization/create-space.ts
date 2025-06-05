@@ -2,12 +2,14 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { spaces } from "@cap/database/schema";
-import { nanoId } from "@cap/database/helpers";
+import { spaces, users, spaceMembers } from "@cap/database/schema";
+import { inArray } from "drizzle-orm";
+import { nanoId, nanoIdLength } from "@cap/database/helpers";
 import { revalidatePath } from "next/cache";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
 import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
 import { serverEnv } from "@cap/env";
+import { v4 as uuidv4 } from "uuid";
 
 interface CreateSpaceResponse {
   success: boolean;
@@ -133,6 +135,59 @@ export async function createSpace(
         createdAt: new Date(),
         updatedAt: new Date(),
       });
+
+    // --- Member Management Logic ---
+    // Collect member emails from formData
+    const members: string[] = [];
+    for (const entry of formData.getAll("members[]")) {
+      if (typeof entry === "string" && entry.length > 0) {
+        members.push(entry);
+      }
+    }
+
+    // Always add the creator as admin (if not already in the list)
+    const memberEmailsSet = new Set(members.map((e) => e.toLowerCase()));
+    const creatorEmail = user.email.toLowerCase();
+    if (!memberEmailsSet.has(creatorEmail)) {
+      members.push(user.email);
+    }
+
+    // Look up user IDs for each email
+    if (members.length > 0) {
+      // Fetch all users with these emails
+      const usersFound = await db()
+        .select({ id: users.id, email: users.email })
+        .from(users)
+        .where(inArray(users.email, members));
+
+      // Map email to userId
+      const emailToUserId = Object.fromEntries(
+        usersFound.map((u) => [u.email.toLowerCase(), u.id])
+      );
+
+      // Prepare spaceMembers insertions
+      const spaceMembersToInsert = members
+        .map((email) => {
+          const userId = emailToUserId[email.toLowerCase()];
+          if (!userId) return null;
+          // Creator is always admin, others are member
+          const role =
+            email.toLowerCase() === creatorEmail ? "admin" : "member";
+          return {
+            id: uuidv4().substring(0, nanoIdLength),
+            spaceId,
+            userId,
+            role,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          };
+        })
+        .filter((v): v is NonNullable<typeof v> => Boolean(v));
+
+      if (spaceMembersToInsert.length > 0) {
+        await db().insert(spaceMembers).values(spaceMembersToInsert);
+      }
+    }
 
     revalidatePath("/dashboard");
 

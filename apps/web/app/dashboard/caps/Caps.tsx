@@ -12,7 +12,6 @@ import { EmptyCapState } from "./components/EmptyCapState";
 import { SelectedCapsBar } from "./components/SelectedCapsBar";
 import { UploadCapButton } from "./components/UploadCapButton";
 import { UploadPlaceholderCard } from "./components/UploadPlaceholderCard";
-import { serverEnv } from "@cap/env";
 
 type VideoData = {
   id: string;
