@@ -23,6 +23,7 @@ import Box from "~/utils/box";
 import { type Crop, type XY, commands } from "~/utils/tauri";
 import CropAreaRenderer from "./CropAreaRenderer";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { debounce } from "@solid-primitives/scheduled";
 
 type Direction = "n" | "e" | "s" | "w" | "nw" | "ne" | "se" | "sw";
 type HandleSide = {
@@ -72,7 +73,7 @@ function distanceOf(firstPoint: Touch, secondPoint: Touch): number {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
-export function cropToFloor(value: Crop): Crop {
+export function calcCropFloor(value: Crop): Crop {
   return {
     size: {
       x: Math.floor(value.size.x),
@@ -97,48 +98,63 @@ export default function Cropper(
     showGuideLines?: boolean;
   }>
 ) {
-  const crop = props.value;
+  function setCrop(value: Crop) {
+    setInnerCrop(value);
+    debounce(() => props.onCropChange(value), 33);
+  }
+
+  const [innerCrop, setInnerCrop] = createSignal(props.value);
+  createEffect(
+    on(
+      () => props.value,
+      (newValue) => setInnerCrop(newValue),
+      { defer: true }
+    )
+  );
 
   const [containerSize, setContainerSize] = createSignal({ x: 0, y: 0 });
-  const mappedSize = createMemo(() => props.mappedSize || containerSize());
+  const logicalSize = createMemo(() => props.mappedSize || containerSize());
   const minSize = createMemo(() => {
-    const mapped = mappedSize();
+    console.log(`minSize changed`);
+    const logical = logicalSize();
     return {
-      x: Math.min(100, mapped.x * 0.1),
-      y: Math.min(100, mapped.y * 0.1),
+      x: Math.min(100, logical.x * 0.1),
+      y: Math.min(100, logical.y * 0.1),
     };
   });
 
-  const containerToMappedSizeScale = createMemo(() => {
+  const logicalScale = createMemo(() => {
+    console.log(`containerToMappedSizeScale changed`);
     const container = containerSize();
-    const mapped = mappedSize();
+    const logical = logicalSize();
     return {
-      x: container.x / mapped.x,
-      y: container.y / mapped.y,
+      x: container.x / logical.x,
+      y: container.y / logical.y,
     };
   });
 
-  const [scaledCrop, setScaledCrop] = createSignal(crop);
+  const [scaledCrop, setScaledCrop] = createSignal(innerCrop());
   createComputed(() => {
-    const mapped = mappedSize();
+    const logical = logicalSize();
     const container = containerSize();
-    const cpos = crop.position;
-    const csize = crop.size;
+    const cpos = innerCrop().position;
+    const csize = innerCrop().size;
     setScaledCrop({
       position: {
-        x: (cpos.x / mapped.x) * container.x,
-        y: (cpos.y / mapped.y) * container.y,
+        x: (cpos.x / logical.x) * container.x,
+        y: (cpos.y / logical.y) * container.y,
       },
       size: {
-        x: (csize.x / mapped.x) * container.x,
-        y: (csize.y / mapped.y) * container.y,
+        x: (csize.x / logical.x) * container.x,
+        y: (csize.y / logical.y) * container.y,
       },
     });
   });
 
   let containerRef: HTMLDivElement | undefined;
+  let selAreaRef: HTMLDivElement | undefined;
   onMount(async () => {
-    if (!containerRef) return;
+    if (!containerRef || !selAreaRef) return;
 
     const updateContainerSize = () => {
       setContainerSize({
@@ -150,24 +166,27 @@ export default function Cropper(
     updateContainerSize();
     const resizeObserver = new ResizeObserver(updateContainerSize);
     resizeObserver.observe(containerRef);
-    onCleanup(() => resizeObserver.disconnect());
 
     let unlistenScaleFactor = await getCurrentWindow().onScaleChanged(
       () => updateContainerSize
     );
-    onCleanup(unlistenScaleFactor);
 
-    const mapped = mappedSize();
+    onCleanup(() => {
+      resizeObserver.disconnect();
+      unlistenScaleFactor();
+    });
+
+    const logical = logicalSize();
     const initial = props.initialSize || {
-      x: mapped.x / 2,
-      y: mapped.y / 2,
+      x: logical.x / 2,
+      y: logical.y / 2,
     };
 
-    let width = clamp(initial.x, minSize().x, mapped.x);
-    let height = clamp(initial.y, minSize().y, mapped.y);
+    let width = clamp(initial.x, minSize().x, logical.x);
+    let height = clamp(initial.y, minSize().y, logical.y);
 
     const box = Box.from(
-      { x: (mapped.x - width) / 2, y: (mapped.y - height) / 2 },
+      { x: (logical.x - width) / 2, y: (logical.y - height) / 2 },
       { x: width, y: height }
     );
     box.constrainAll(box, containerSize(), ORIGIN_CENTER, props.aspectRatio);
@@ -175,8 +194,8 @@ export default function Cropper(
     setCrop({
       size: { x: width, y: height },
       position: {
-        x: (mapped.x - width) / 2,
-        y: (mapped.y - height) / 2,
+        x: (logical.x - width) / 2,
+        y: (logical.y - height) / 2,
       },
     });
   });
@@ -186,13 +205,28 @@ export default function Cropper(
       () => props.aspectRatio,
       () => {
         if (!props.aspectRatio) return;
-        const box = Box.from(crop.position, crop.size);
+        const box = Box.from(innerCrop().position, innerCrop().size);
         box.constrainToRatio(props.aspectRatio, ORIGIN_CENTER);
-        box.constrainToBoundary(mappedSize().x, mappedSize().y, ORIGIN_CENTER);
+        box.constrainToBoundary(
+          logicalSize().x,
+          logicalSize().y,
+          ORIGIN_CENTER
+        );
         setCrop(box.toBounds());
       }
     )
   );
+
+  createEffect(() => {
+    const el = selAreaRef;
+    if (!el) return;
+    const crop = scaledCrop();
+    el.style.top = `${crop.position.y}px`;
+    el.style.left = `${crop.position.x}px`;
+    el.style.width = `${crop.size.x}px`;
+    el.style.height = `${crop.size.y}px`;
+    el.style.cursor = dragging() ? "grabbing" : "grab";
+  });
 
   const [snapToRatioEnabled, setSnapToRatioEnabled] = makePersisted(
     createSignal(true),
@@ -200,14 +234,9 @@ export default function Cropper(
   );
   const [snappedRatio, setSnappedRatio] = createSignal<Ratio | null>(null);
   const [dragging, setDragging] = createSignal(false);
-  const [gestureState, setGestureState] = createStore<{
-    isTrackpadGesture: boolean;
-    lastTouchCenter: XY<number> | null;
-    initialPinchDistance: number;
-    initialSize: { width: number; height: number };
-  }>({
+  const [gestureState, setGestureState] = createStore({
     isTrackpadGesture: false,
-    lastTouchCenter: null,
+    lastTouchCenter: null as XY<number> | null,
     initialPinchDistance: 0,
     initialSize: { width: 0, height: 0 },
   });
@@ -217,11 +246,11 @@ export default function Cropper(
     event.stopPropagation();
     setDragging(true);
     let lastValidPos = { x: event.clientX, y: event.clientY };
-    const box = Box.from(crop.position, crop.size);
-    const scaleFactors = containerToMappedSizeScale();
+    const box = Box.from(innerCrop().position, innerCrop().size);
+    const scaleFactors = logicalScale();
 
     createRoot((dispose) => {
-      const mapped = mappedSize();
+      const logical = logicalSize();
       createEventListenerMap(window, {
         mouseup: () => {
           setDragging(false);
@@ -233,12 +262,15 @@ export default function Cropper(
             const dy = (e.clientY - lastValidPos.y) / scaleFactors.y;
 
             box.move(
-              clamp(box.x + dx, 0, mapped.x - box.width),
-              clamp(box.y + dy, 0, mapped.y - box.height)
+              clamp(box.x + dx, 0, logical.x - box.width),
+              clamp(box.y + dy, 0, logical.y - box.height)
             );
 
             const newBox = box;
-            if (newBox.x !== crop.position.x || newBox.y !== crop.position.y) {
+            if (
+              newBox.x !== innerCrop().position.x ||
+              newBox.y !== innerCrop().position.y
+            ) {
               lastValidPos = { x: e.clientX, y: e.clientY };
               setCrop(newBox.toBounds());
             }
@@ -250,8 +282,8 @@ export default function Cropper(
 
   function handleWheel(event: WheelEvent) {
     event.preventDefault();
-    const box = Box.from(crop.position, crop.size);
-    const mapped = mappedSize();
+    const box = Box.from(innerCrop().position, innerCrop().size);
+    const logical = logicalSize();
 
     if (event.ctrlKey) {
       setGestureState("isTrackpadGesture", true);
@@ -260,22 +292,22 @@ export default function Cropper(
       const scale = 1 - event.deltaY * velocity;
 
       box.resize(
-        clamp(box.width * scale, minSize().x, mapped.x),
-        clamp(box.height * scale, minSize().y, mapped.y),
+        clamp(box.width * scale, minSize().x, logical.x),
+        clamp(box.height * scale, minSize().y, logical.y),
         ORIGIN_CENTER
       );
-      box.constrainAll(box, mapped, ORIGIN_CENTER, props.aspectRatio);
+      box.constrainAll(box, logical, ORIGIN_CENTER, props.aspectRatio);
       setTimeout(() => setGestureState("isTrackpadGesture", false), 100);
       setSnappedRatio(null);
     } else {
       const velocity = Math.max(1, Math.abs(event.deltaY) * 0.01);
-      const scaleFactors = containerToMappedSizeScale();
+      const scaleFactors = logicalScale();
       const dx = (-event.deltaX * velocity) / scaleFactors.x;
       const dy = (-event.deltaY * velocity) / scaleFactors.y;
 
       box.move(
-        clamp(box.x + dx, 0, mapped.x - box.width),
-        clamp(box.y + dy, 0, mapped.y - box.height)
+        clamp(box.x + dx, 0, logical.x - box.width),
+        clamp(box.y + dy, 0, logical.y - box.height)
       );
     }
 
@@ -294,8 +326,8 @@ export default function Cropper(
       batch(() => {
         setGestureState("initialPinchDistance", distance);
         setGestureState("initialSize", {
-          width: crop.size.x,
-          height: crop.size.y,
+          width: innerCrop().size.x,
+          height: innerCrop().size.y,
         });
         setGestureState("lastTouchCenter", { x: centerX, y: centerY });
       });
@@ -317,21 +349,21 @@ export default function Cropper(
       const currentDistance = distanceOf(event.touches[0], event.touches[1]);
       const scale = currentDistance / gestureState.initialPinchDistance;
 
-      const box = Box.from(crop.position, crop.size);
-      const mapped = mappedSize();
+      const box = Box.from(innerCrop().position, innerCrop().size);
+      const logical = logicalSize();
 
       // Calculate new dimensions while maintaining aspect ratio
-      const currentRatio = crop.size.x / crop.size.y;
+      const currentRatio = innerCrop().size.x / innerCrop().size.y;
       let newWidth = clamp(
         gestureState.initialSize.width * scale,
         minSize().x,
-        mapped.x
+        logical.x
       );
       let newHeight = newWidth / currentRatio;
 
       // Adjust if height exceeds bounds
-      if (newHeight < minSize().y || newHeight > mapped.y) {
-        newHeight = clamp(newHeight, minSize().y, mapped.y);
+      if (newHeight < minSize().y || newHeight > logical.y) {
+        newHeight = clamp(newHeight, minSize().y, logical.y);
         newWidth = newHeight * currentRatio;
       }
 
@@ -343,13 +375,13 @@ export default function Cropper(
       const centerY = (event.touches[0].clientY + event.touches[1].clientY) / 2;
 
       if (gestureState.lastTouchCenter) {
-        const scaleFactors = containerToMappedSizeScale();
+        const scaleFactors = logicalScale();
         const dx = (centerX - gestureState.lastTouchCenter.x) / scaleFactors.x;
         const dy = (centerY - gestureState.lastTouchCenter.y) / scaleFactors.y;
 
         box.move(
-          clamp(box.x + dx, 0, mapped.x - box.width),
-          clamp(box.y + dy, 0, mapped.y - box.height)
+          clamp(box.x + dx, 0, logical.x - box.width),
+          clamp(box.y + dy, 0, logical.y - box.height)
         );
       }
 
@@ -357,9 +389,9 @@ export default function Cropper(
       setCrop(box.toBounds());
     } else if (event.touches.length === 1 && dragging()) {
       // Handle single touch drag
-      const box = Box.from(crop.position, crop.size);
-      const scaleFactors = containerToMappedSizeScale();
-      const mapped = mappedSize();
+      const box = Box.from(innerCrop().position, innerCrop().size);
+      const scaleFactors = logicalScale();
+      const logical = logicalSize();
 
       if (gestureState.lastTouchCenter) {
         const dx =
@@ -370,8 +402,8 @@ export default function Cropper(
           scaleFactors.y;
 
         box.move(
-          clamp(box.x + dx, 0, mapped.x - box.width),
-          clamp(box.y + dy, 0, mapped.y - box.height)
+          clamp(box.x + dx, 0, logical.x - box.width),
+          clamp(box.y + dy, 0, logical.y - box.height)
         );
       }
 
@@ -434,14 +466,14 @@ export default function Cropper(
     };
 
     let lastValidPos = { x: clientX, y: clientY };
-    const box = Box.from(crop.position, crop.size);
-    const scaleFactors = containerToMappedSizeScale();
-    const mapped = mappedSize();
+    const box = Box.from(innerCrop().position, innerCrop().size);
+    const scaleFactors = logicalScale();
+    const logical = logicalSize();
 
-    let lastAnimationFrameId: number | null = null;
+    let rafId: number | null = null;
     createRoot((dispose) => {
       const cleanup = () => {
-        lastAnimationFrameId = null;
+        rafId = null;
         dispose();
       };
 
@@ -449,19 +481,19 @@ export default function Cropper(
         mouseup: cleanup,
         touchend: cleanup,
         touchmove: (e) => {
-          if (!lastAnimationFrameId) {
-            lastAnimationFrameId = requestAnimationFrame(() => {
-              lastAnimationFrameId = null;
+          if (!rafId) {
+            rafId = requestAnimationFrame(() => {
+              rafId = null;
               if (e.touches.length !== 1) return;
               handleResizeMove(e.touches[0].clientX, e.touches[0].clientY);
             });
           }
         },
         mousemove: (e) => {
-          if (!lastAnimationFrameId) {
-            lastAnimationFrameId = requestAnimationFrame(() => {
+          if (!rafId) {
+            rafId = requestAnimationFrame(() => {
               handleResizeMove(e.clientX, e.clientY, e.altKey);
-              lastAnimationFrameId = null;
+              rafId = null;
             });
           }
         },
@@ -486,7 +518,7 @@ export default function Cropper(
                 ? currentBox.size.x - dx * scaleMultiplier
                 : currentBox.size.x + dx * scaleMultiplier,
               minSize().x,
-              mapped.x
+              logical.x
             )
           : currentBox.size.x;
 
@@ -497,7 +529,7 @@ export default function Cropper(
                 ? currentBox.size.y - dy * scaleMultiplier
                 : currentBox.size.y + dy * scaleMultiplier,
               minSize().y,
-              mapped.y
+              logical.y
             )
           : currentBox.size.y;
 
@@ -527,23 +559,19 @@ export default function Cropper(
           dir.includes("n") || dir.includes("s") ? "width" : "height"
         );
       }
-      box.constrainToBoundary(mapped.x, mapped.y, newOrigin);
+      box.constrainToBoundary(logical.x, logical.y, newOrigin);
 
       const newBox = box.toBounds();
       if (
-        newBox.size.x !== crop.size.x ||
-        newBox.size.y !== crop.size.y ||
-        newBox.position.x !== crop.position.x ||
-        newBox.position.y !== crop.position.y
+        newBox.size.x !== innerCrop().size.x ||
+        newBox.size.y !== innerCrop().size.y ||
+        newBox.position.x !== innerCrop().position.x ||
+        newBox.position.y !== innerCrop().position.y
       ) {
         lastValidPos = { x: moveX, y: moveY };
-        props.onCropChange(newBox);
+        setCrop(newBox);
       }
     }
-  }
-
-  function setCrop(value: Crop) {
-    props.onCropChange(value);
   }
 
   let pressedKeys = new Set<string>([]);
@@ -557,9 +585,9 @@ export default function Cropper(
 
     if (lastKeyHandleFrame) return;
     lastKeyHandleFrame = requestAnimationFrame(() => {
-      const box = Box.from(crop.position, crop.size);
-      const mapped = mappedSize();
-      const scaleFactors = containerToMappedSizeScale();
+      const box = Box.from(innerCrop().position, innerCrop().size);
+      const logical = logicalSize();
+      const scaleFactors = logicalScale();
 
       const moveDelta = event.shiftKey ? 20 : 5;
       const origin = event.altKey ? ORIGIN_CENTER : { x: 0, y: 0 };
@@ -586,7 +614,7 @@ export default function Cropper(
                 ? currentBox.size.x - moveDelta * scaleMultiplier
                 : currentBox.size.x + moveDelta * scaleMultiplier,
               minSize().x,
-              mapped.x
+              logical.x
             );
           }
 
@@ -596,7 +624,7 @@ export default function Cropper(
                 ? currentBox.size.y - moveDelta * scaleMultiplier
                 : currentBox.size.y + moveDelta * scaleMultiplier,
               minSize().y,
-              mapped.y
+              logical.y
             );
           }
 
@@ -609,41 +637,20 @@ export default function Cropper(
             (isDownKey ? moveDelta : isUpKey ? -moveDelta : 0) / scaleFactors.y;
 
           box.move(
-            clamp(box.x + dx, 0, mapped.x - box.width),
-            clamp(box.y + dy, 0, mapped.y - box.height)
+            clamp(box.x + dx, 0, logical.x - box.width),
+            clamp(box.y + dy, 0, logical.y - box.height)
           );
         }
       }
 
       if (props.aspectRatio) box.constrainToRatio(props.aspectRatio, origin);
-      box.constrainToBoundary(mapped.x, mapped.y, origin);
+      box.constrainToBoundary(logical.x, logical.y, origin);
       setCrop(box.toBounds());
 
       pressedKeys.clear();
       lastKeyHandleFrame = null;
     });
   }
-
-  const rendererBounds = createMemo(() => {
-    const { position, size } = scaledCrop();
-    return {
-      x: position.x,
-      y: position.y,
-      width: size.x,
-      height: size.y,
-    };
-  });
-
-  const cropHandlesStyle = createMemo(() => {
-    const { position, size } = scaledCrop();
-    return {
-      top: `${position.y}px`,
-      left: `${position.x}px`,
-      width: `${size.x}px`,
-      height: `${size.y}px`,
-      cursor: dragging() ? "grabbing" : "grab",
-    };
-  });
 
   return (
     <div
@@ -674,26 +681,21 @@ export default function Cropper(
         menu.popup();
       }}
     >
-      <div class="bg-blue-2 p-2 font-mono w-fit fixed top-5 left-2 z-50">
-        {JSON.stringify(rendererBounds())}
-        <br />
-        {JSON.stringify(snappedRatio())}
-      </div>
-
       <CropAreaRenderer
-        bounds={rendererBounds()}
-        borderRadius={9}
+        bounds={{
+          x: scaledCrop().position.x,
+          y: scaledCrop().position.y,
+          width: scaledCrop().size.x,
+          height: scaledCrop().size.y,
+        }}
+        borderRadius={4}
         guideLines={props.showGuideLines}
         handles={true}
         highlighted={snappedRatio() !== null}
       >
         {props.children}
       </CropAreaRenderer>
-      <div
-        class="absolute border-8 border-red-200"
-        style={cropHandlesStyle()}
-        onMouseDown={handleDragStart}
-      >
+      <div ref={selAreaRef} class="absolute" onMouseDown={handleDragStart}>
         <div class="relative w-full">
           <Transition
             name="slide"
@@ -724,7 +726,7 @@ export default function Cropper(
               animation.finished.then(done);
             }}
           >
-            <Show when={snappedRatio() !== null}>
+            <Show when={snappedRatio() !== null && !dragging()}>
               <div class="absolute left-0 right-0 mx-auto top-2 bg-gray-3 opacity-80 h-6 w-10 rounded-[7px] text-center text-blue-9 text-sm border border-blue-9 outline outline-1 outline-[#dedede] dark:outline-[#000]">
                 {snappedRatio()![0]}:{snappedRatio()![1]}
               </div>
