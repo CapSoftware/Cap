@@ -1,6 +1,7 @@
 "use client";
 
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
+import { getVideoStatus, VideoStatusResult } from "@/actions/videos/get-status";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { useQuery } from "@tanstack/react-query";
@@ -51,14 +52,6 @@ interface ShareProps {
   aiUiEnabled: boolean;
 }
 
-interface VideoStatusResponse {
-  transcriptionStatus?: "PROCESSING" | "COMPLETE" | "ERROR" | null;
-  aiProcessing?: boolean;
-  aiTitle?: string | null;
-  summary?: string | null;
-  chapters?: { title: string; start: number }[] | null;
-}
-
 const useVideoStatus = (
   videoId: string,
   aiGenerationEnabled: boolean,
@@ -74,12 +67,8 @@ const useVideoStatus = (
 ) => {
   return useQuery({
     queryKey: ["videoStatus", videoId],
-    queryFn: async (): Promise<VideoStatusResponse> => {
-      const res = await fetch(`/api/video/status?videoId=${videoId}`);
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-      }
-      return res.json();
+    queryFn: async (): Promise<VideoStatusResult> => {
+      return await getVideoStatus(videoId);
     },
     initialData: initialData
       ? {
@@ -92,6 +81,7 @@ const useVideoStatus = (
           aiTitle: initialData.aiData?.title || null,
           summary: initialData.aiData?.summary || null,
           chapters: initialData.aiData?.chapters || null,
+          generationError: null,
         }
       : undefined,
     refetchInterval: (query) => {
@@ -192,6 +182,7 @@ export const Share = ({
       summary: videoStatus?.summary || null,
       chapters: videoStatus?.chapters || null,
       processing: videoStatus?.aiProcessing || false,
+      generationError: videoStatus?.generationError || null,
     }),
     [videoStatus]
   );
@@ -210,6 +201,9 @@ export const Share = ({
     }
 
     if (transcriptionStatus === "COMPLETE") {
+      if (aiData.generationError) {
+        return false;
+      }
       if (aiData.processing === true) {
         return true;
       }
@@ -279,8 +273,7 @@ export const Share = ({
       <div className="mt-4 hidden lg:block">
         {aiLoading &&
           (transcriptionStatus === "PROCESSING" ||
-            transcriptionStatus === "COMPLETE" ||
-            transcriptionStatus === "ERROR") && (
+            transcriptionStatus === "COMPLETE") && (
             <div className="p-4 new-card-style animate-pulse">
               <div className="space-y-6">
                 <div>

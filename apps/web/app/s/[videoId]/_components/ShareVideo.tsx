@@ -1,6 +1,7 @@
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { usePublicEnv } from "@/utils/public-env";
 import { useApiClient } from "@/utils/web-api";
+import { useTranscript } from "hooks/use-transcript";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
@@ -28,6 +29,7 @@ import { toast } from "sonner";
 import { fromVtt, Subtitle } from "subtitles-parser-vtt";
 import { MP4VideoPlayer } from "./MP4VideoPlayer";
 import { VideoPlayer } from "./VideoPlayer";
+import { useQuery } from "@tanstack/react-query";
 
 declare global {
   interface Window {
@@ -78,11 +80,7 @@ export const ShareVideo = forwardRef<
   const [videoMetadataLoaded, setVideoMetadataLoaded] = useState(false);
   const [videoReadyToPlay, setVideoReadyToPlay] = useState(false);
   const [overlayVisible, setOverlayVisible] = useState(true);
-  const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
   const [subtitlesVisible, setSubtitlesVisible] = useState(true);
-  const [isTranscriptionProcessing, setIsTranscriptionProcessing] = useState(
-    data.transcriptionStatus === "PROCESSING"
-  );
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [tempOverlayVisible, setTempOverlayVisible] = useState(false);
 
@@ -109,7 +107,22 @@ export const ShareVideo = forwardRef<
   const lastUpdateTimeRef = useRef<number>(0);
   const lastMousePosRef = useRef<number>(0);
 
-  const [isLargeScreen, setIsLargeScreen] = useState(false);
+  const isLargeScreen = useScreenSize();
+
+  // Use TanStack Query for video source validation
+  const { data: videoSourceData } = useVideoSourceValidation(
+    data,
+    videoMetadataLoaded
+  );
+
+  // Update isMP4Source based on query result
+  useEffect(() => {
+    if (videoSourceData) {
+      setIsMP4Source(videoSourceData.isMP4Source);
+    } else if (videoMetadataLoaded) {
+      setIsMP4Source(data.source.type === "desktopMP4");
+    }
+  }, [videoSourceData, videoMetadataLoaded, data.source.type]);
 
   useEffect(() => {
     if (videoRef.current) {
@@ -120,29 +133,6 @@ export const ShareVideo = forwardRef<
       }
     }
   }, [ref]);
-
-  useEffect(() => {
-    if (!videoMetadataLoaded) return;
-
-    setIsMP4Source(data.source.type === "desktopMP4");
-
-    if (data.source.type === "desktopMP4") {
-      const thumbUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&thumbnailTime=0`;
-
-      fetch(thumbUrl, { method: "HEAD" })
-        .then((response) => {
-          if (response.ok) {
-            setIsMP4Source(true);
-          } else {
-            setIsMP4Source(false);
-          }
-        })
-        .catch((error) => {
-          console.error("Error checking thumbnails:", error);
-          setIsMP4Source(false);
-        });
-    }
-  }, [videoMetadataLoaded, data.ownerId, data.id, data.source.type]);
 
   const showControls = () => {
     setOverlayVisible(true);
@@ -216,11 +206,6 @@ export const ShareVideo = forwardRef<
       scheduleHideControls();
     }
   }, [isHoveringControls, isPlaying, isHoveringVideo]);
-
-  useEffect(() => {
-    if (videoMetadataLoaded) {
-    }
-  }, [videoMetadataLoaded]);
 
   useEffect(() => {
     const handleShortcuts = (e: KeyboardEvent) => {
@@ -872,62 +857,23 @@ export const ShareVideo = forwardRef<
   const publicEnv = usePublicEnv();
   const apiClient = useApiClient();
 
-  useEffect(() => {
-    const fetchSubtitles = async () => {
-      let transcriptionUrl;
-
-      if (data.bucket && data.awsBucket !== publicEnv.awsBucket) {
-        transcriptionUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&fileType=transcription`;
-      } else {
-        transcriptionUrl = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/transcription.vtt`;
-      }
-
-      try {
-        const response = await fetch(transcriptionUrl);
-        const text = await response.text();
-        const parsedSubtitles = fromVtt(text);
-        setSubtitles(parsedSubtitles);
-        setIsTranscriptionProcessing(false);
-      } catch (error) {
-        console.error("Error fetching subtitles:", error);
-        setIsTranscriptionProcessing(false);
-      }
-    };
-
-    if (data.transcriptionStatus === "PROCESSING") {
-      setIsTranscriptionProcessing(true);
-    } else if (data.transcriptionStatus === "COMPLETE") {
-      fetchSubtitles();
-    } else if (data.transcriptionStatus === "ERROR") {
-      setIsTranscriptionProcessing(false);
-    }
-  }, [
-    data.transcriptionStatus,
-    data.bucket,
-    data.awsBucket,
-    data.ownerId,
+  const { data: transcriptContent, error: transcriptError } = useTranscript(
     data.id,
-    publicEnv.awsBucket,
-    publicEnv.s3BucketUrl,
-  ]);
+    data.transcriptionStatus
+  );
+
+  // Use custom hook for transcription processing
+  const { isTranscriptionProcessing, subtitles } = useTranscriptionProcessing(
+    data,
+    transcriptContent,
+    transcriptError
+  );
 
   const currentSubtitle = subtitles.find(
     (subtitle) =>
       parseSubTime(subtitle.startTime) <= currentTime &&
       parseSubTime(subtitle.endTime) >= currentTime
   );
-
-  useEffect(() => {
-    const checkScreenSize = () => {
-      setIsLargeScreen(window.innerWidth >= 1024);
-    };
-
-    checkScreenSize();
-
-    window.addEventListener("resize", checkScreenSize);
-
-    return () => window.removeEventListener("resize", checkScreenSize);
-  }, []);
 
   useEffect(() => {
     if (previewCanvasRef.current && isLargeScreen) {
@@ -964,14 +910,6 @@ export const ShareVideo = forwardRef<
 
     detectSafari();
   }, []);
-
-  useEffect(() => {
-    if (data.transcriptionStatus === "PROCESSING") {
-      setIsTranscriptionProcessing(true);
-    } else if (data.transcriptionStatus === "ERROR") {
-      setIsTranscriptionProcessing(false);
-    }
-  }, [data.transcriptionStatus]);
 
   if (data.jobStatus === "ERROR") {
     return (
@@ -1578,3 +1516,85 @@ export const ShareVideo = forwardRef<
     </div>
   );
 });
+
+// Custom hook for video source validation using TanStack Query
+const useVideoSourceValidation = (
+  data: typeof videos.$inferSelect,
+  videoMetadataLoaded: boolean
+) => {
+  return useQuery({
+    queryKey: ["video-source-validation", data.id, data.source.type],
+    queryFn: async () => {
+      if (data.source.type !== "desktopMP4") {
+        return { isMP4Source: false };
+      }
+
+      const thumbUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&thumbnailTime=0`;
+
+      try {
+        const response = await fetch(thumbUrl, { method: "HEAD" });
+        return { isMP4Source: response.ok };
+      } catch (error) {
+        console.error("Error checking thumbnails:", error);
+        return { isMP4Source: false };
+      }
+    },
+    enabled: videoMetadataLoaded && data.source.type === "desktopMP4",
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    gcTime: 10 * 60 * 1000, // 10 minutes
+  });
+};
+
+// Custom hook for screen size detection
+const useScreenSize = () => {
+  const [isLargeScreen, setIsLargeScreen] = useState(false);
+
+  useEffect(() => {
+    const checkScreenSize = () => {
+      setIsLargeScreen(window.innerWidth >= 1024);
+    };
+
+    checkScreenSize();
+    window.addEventListener("resize", checkScreenSize);
+
+    return () => window.removeEventListener("resize", checkScreenSize);
+  }, []);
+
+  return isLargeScreen;
+};
+
+// Custom hook for transcription processing
+const useTranscriptionProcessing = (
+  data: typeof videos.$inferSelect,
+  transcriptContent: string | undefined,
+  transcriptError: any
+) => {
+  const [isTranscriptionProcessing, setIsTranscriptionProcessing] = useState(
+    data.transcriptionStatus === "PROCESSING"
+  );
+  const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
+
+  useEffect(() => {
+    if (transcriptContent) {
+      const parsedSubtitles = fromVtt(transcriptContent);
+      setSubtitles(parsedSubtitles);
+      setIsTranscriptionProcessing(false);
+    } else if (transcriptError) {
+      console.error(
+        "[ShareVideo] Subtitle error from React Query:",
+        transcriptError.message
+      );
+      if (transcriptError.message === "TRANSCRIPT_NOT_READY") {
+        setIsTranscriptionProcessing(true);
+      } else {
+        setIsTranscriptionProcessing(false);
+      }
+    } else if (data.transcriptionStatus === "PROCESSING") {
+      setIsTranscriptionProcessing(true);
+    } else if (data.transcriptionStatus === "ERROR") {
+      setIsTranscriptionProcessing(false);
+    }
+  }, [transcriptContent, transcriptError, data.transcriptionStatus]);
+
+  return { isTranscriptionProcessing, subtitles };
+};

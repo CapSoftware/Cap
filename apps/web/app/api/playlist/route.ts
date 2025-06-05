@@ -95,7 +95,6 @@ const app = new Hono()
         );
       }
 
-      // Handle transcription file request first
       if (fileType === "transcription") {
         try {
           const transcriptionContent = await bucket.getObject(
@@ -120,7 +119,6 @@ const app = new Hono()
         }
       }
 
-      // Handle video/audio files
       const videoPrefix = `${video.ownerId}/${videoId}/video/`;
       const audioPrefix = `${video.ownerId}/${videoId}/audio/`;
 
@@ -161,7 +159,6 @@ const app = new Hono()
           return c.redirect(playlistUrl);
         }
 
-        // Handle screen, video, and now audio types
         let prefix;
         switch (videoType) {
           case "video":
