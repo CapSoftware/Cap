@@ -223,7 +223,6 @@ export const SpacesList = () => {
                     transition={{
                       layout: {
                         type: "tween",
-                        ease: "linear",
                         duration: 0.1,
                       },
                     }}

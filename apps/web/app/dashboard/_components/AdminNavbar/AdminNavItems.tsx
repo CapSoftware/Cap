@@ -275,6 +275,10 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                       type: "tween",
                       duration: 0.15,
                     },
+                    width: {
+                      type: "tween",
+                      duration: 0.05,
+                    },
                   }}
                   layoutId="navlinks"
                   id="navlinks"
