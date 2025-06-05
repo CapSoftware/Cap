@@ -19,7 +19,12 @@ import { motion } from "framer-motion";
 import { useMemo } from "react";
 import Image from "next/image";
 
-export const SpacesList = memo(() => {
+import { useEffect } from "react";
+
+export const SpacesList = () => {
+  useEffect(() => {
+    console.log("SpacesList mounted");
+  }, []);
   const { spacesData, sidebarCollapsed } = useSharedContext();
   const [showSpaceDialog, setShowSpaceDialog] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -67,27 +72,19 @@ export const SpacesList = memo(() => {
 
   if (!spacesData) return null;
 
-  const filteredSpaces = useMemo(
-    () =>
-      spacesData.filter((space) =>
+  const { displayedSpaces, hasMoreSpaces, hiddenSpacesCount, filteredSpaces } =
+    useMemo(() => {
+      const filtered = spacesData.filter((space) =>
         space.name.toLowerCase().includes(searchQuery.toLowerCase())
-      ),
-    [spacesData, searchQuery]
-  );
+      );
 
-  const displayedSpaces = useMemo(
-    () => (showAllSpaces ? filteredSpaces : filteredSpaces.slice(0, 3)),
-    [showAllSpaces, filteredSpaces]
-  );
-
-  const hasMoreSpaces = useMemo(
-    () => filteredSpaces.length > 3,
-    [filteredSpaces]
-  );
-  const hiddenSpacesCount = useMemo(
-    () => filteredSpaces.length - 3,
-    [filteredSpaces]
-  );
+      return {
+        filteredSpaces: filtered,
+        displayedSpaces: showAllSpaces ? filtered : filtered.slice(0, 3),
+        hasMoreSpaces: filtered.length > 3,
+        hiddenSpacesCount: Math.max(0, filtered.length - 3),
+      };
+    }, [spacesData, searchQuery, showAllSpaces]);
 
   const handleDragOver = (e: React.DragEvent, spaceId: string) => {
     e.preventDefault();
@@ -129,9 +126,6 @@ export const SpacesList = memo(() => {
 
   const activeSpaceParams = (spaceId: string) => params.spaceId === spaceId;
 
-  // Force re-render of toggle control when spaces count changes
-  const spacesCount = useMemo(() => spacesData?.length || 0, [spacesData]);
-
   return (
     <div className="flex flex-col mt-4">
       <div
@@ -143,7 +137,7 @@ export const SpacesList = memo(() => {
         <h2
           className={clsx(
             "text-sm font-medium truncate text-gray-12",
-            sidebarCollapsed ? "hidden" : ""
+            sidebarCollapsed ? "hidden" : "flex"
           )}
         >
           Spaces
@@ -218,26 +212,21 @@ export const SpacesList = memo(() => {
               >
                 {activeSpaceParams(space.id) && (
                   <motion.div
-                    initial={{
-                      width: sidebarCollapsed ? 40 : "100%",
-                      height: sidebarCollapsed ? 40 : "100%",
-                    }}
-                    animate={{
-                      width: sidebarCollapsed ? 40 : "100%",
-                      height: sidebarCollapsed ? 40 : "100%",
-                    }}
-                    transition={{
-                      ease: "easeInOut",
-                      duration: 0.2,
-                    }}
-                    layoutId="underline"
-                    id="underline"
+                    layoutId="navlinks"
                     className={clsx(
                       "absolute rounded-xl bg-gray-3",
                       sidebarCollapsed
                         ? "inset-0 right-0 left-0 mx-auto"
                         : "inset-0"
                     )}
+                    style={{ willChange: "transform" }}
+                    transition={{
+                      layout: {
+                        type: "tween",
+                        ease: "linear",
+                        duration: 0.1,
+                      },
+                    }}
                   />
                 )}
                 {activeDropTarget === space.id && (
@@ -298,9 +287,7 @@ export const SpacesList = memo(() => {
         </div>
       </div>
 
-      {/* Key added to force re-render when spaces count changes */}
       <SpaceToggleControl
-        key={`space-toggle-${spacesCount}-${filteredSpaces.length}`}
         showAllSpaces={showAllSpaces}
         hasMoreSpaces={hasMoreSpaces}
         sidebarCollapsed={sidebarCollapsed}
@@ -314,7 +301,7 @@ export const SpacesList = memo(() => {
       />
     </div>
   );
-});
+};
 
 const SpaceToggleControl = ({
   showAllSpaces,

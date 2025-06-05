@@ -2,9 +2,8 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { spaces, organizations } from "@cap/database/schema";
+import { spaces } from "@cap/database/schema";
 import { nanoId } from "@cap/database/helpers";
-import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
 import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
