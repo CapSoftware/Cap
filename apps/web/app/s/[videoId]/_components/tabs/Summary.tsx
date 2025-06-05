@@ -79,7 +79,6 @@ export const Summary: React.FC<SummaryProps> = ({
   );
 
   useEffect(() => {
-    console.log("[Summary] Received initialAiData update:", initialAiData);
     if (initialAiData) {
       setAiData(initialAiData);
       setIsLoading(aiGenerationEnabled && initialAiData.processing === true);
@@ -99,15 +98,6 @@ export const Summary: React.FC<SummaryProps> = ({
         subscriptionStatus: user.stripeSubscriptionStatus || null,
       })
     : false;
-
-  console.log("[Summary] Current state:", {
-    isLoading,
-    aiData,
-    initialAiData,
-    aiUiEnabled,
-    aiGenerationEnabled,
-    hasProAccess,
-  });
 
   const hasExistingAiData =
     aiData?.summary || (aiData?.chapters && aiData.chapters.length > 0);
