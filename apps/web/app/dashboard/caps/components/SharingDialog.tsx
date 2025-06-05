@@ -270,7 +270,7 @@ const SpaceCard = ({
             scale: isSelected ? 1 : 0,
           }}
           initial={{
-            scale: 0,
+            scale: isSelected ? 1 : 0,
           }}
           transition={{
             type: isSelected ? "spring" : "tween",
