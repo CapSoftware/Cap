@@ -23,7 +23,7 @@ export default function BrowseSpacesPage() {
   const router = useRouter();
   return (
     <div>
-      <div className="flex flex-wrap gap-3 justify-between items-center mb-4 w-full">
+      <div className="flex flex-wrap gap-3 justify-between items-start mb-4 w-full">
         <Button
           onClick={() => setShowSpaceDialog(true)}
           size="sm"
@@ -39,7 +39,7 @@ export default function BrowseSpacesPage() {
           <Input
             type="text"
             placeholder="Search spaces..."
-            className="pr-3 pl-8 w-full text-sm placeholder-gray-8"
+            className="flex-1 pr-3 pl-8 w-full min-w-full text-sm placeholder-gray-8"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
@@ -59,7 +59,7 @@ export default function BrowseSpacesPage() {
             {!spacesData && (
               <tr>
                 <td colSpan={4} className="px-6 py-6 text-center text-gray-8">
-                  Loading spaces…
+                  Loading Spaces…
                 </td>
               </tr>
             )}
