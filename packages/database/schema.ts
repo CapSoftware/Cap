@@ -414,13 +414,20 @@ export const spaces = mysqlTable(
   "spaces",
   {
     id: nanoId("id").notNull().primaryKey().unique(),
+    primary: boolean("primary").notNull().default(false),
     name: varchar("name", { length: 255 }).notNull(),
     organizationId: nanoId("organizationId").notNull(),
     createdById: nanoId("createdById").notNull(),
     iconUrl: varchar("iconUrl", { length: 255 }),
+    role: varchar("role", { length: 255, enum: ["Owner", "Member"] })
+      .notNull()
+      .default("Owner"),
     description: varchar("description", { length: 1000 }),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+    privacy: varchar("privacy", { length: 255, enum: ["Public", "Private"] })
+      .notNull()
+      .default("Private"),
   },
   (table) => ({
     organizationIdIndex: index("organization_id_idx").on(table.organizationId),

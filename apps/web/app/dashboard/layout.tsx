@@ -26,11 +26,14 @@ export type Organization = {
 export type Space = {
   id: string;
   name: string;
+  role: "Owner" | "Member" | null;
   description: string | null;
   organizationId: string;
   iconUrl: string | null;
   memberCount: number;
   videoCount: number;
+  primary: boolean;
+  privacy: "Public" | "Private";
 };
 
 export const dynamic = "force-dynamic";
@@ -102,7 +105,10 @@ export default async function DashboardLayout({
     spacesData = await db()
       .select({
         id: spaces.id,
+        primary: spaces.primary,
+        privacy: spaces.privacy,
         name: spaces.name,
+        role: spaces.role,
         description: spaces.description,
         organizationId: spaces.organizationId,
         iconUrl: spaces.iconUrl,
@@ -125,11 +131,14 @@ export default async function DashboardLayout({
       // Add "All spaces" entry for the active organization
       const allSpacesEntry = {
         id: activeOrgInfo.organization.id,
+        primary: true,
+        privacy: "Public" as Space["privacy"],
         name: `All ${activeOrgInfo.organization.name}`,
         description: `View all content in ${activeOrgInfo.organization.name}`,
         organizationId: activeOrgInfo.organization.id,
         iconUrl: null,
         memberCount: 0,
+        role: "Owner" as Space["role"],
         videoCount: 0,
       };
 
