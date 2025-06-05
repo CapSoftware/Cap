@@ -1,20 +1,20 @@
 "use client";
 
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { ChevronDown, ChevronUp, Search } from "lucide-react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import Link from "next/link";
-import { memo, useState } from "react";
+import { useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
+  faLayerGroup,
   faPlus,
-  faShareNodes,
   faXmark,
 } from "@fortawesome/free-solid-svg-icons";
 import { deleteSpace } from "@/actions/organization/delete-space";
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 import clsx from "clsx";
 import { SpaceDialog } from "./SpaceDialog";
-import { Button, Input } from "@cap/ui";
+import { Button } from "@cap/ui";
 import { shareCap } from "@/actions/caps/share";
 import { toast } from "sonner";
 import { useParams, usePathname, useRouter } from "next/navigation";
@@ -23,20 +23,17 @@ import { motion } from "framer-motion";
 import { useMemo } from "react";
 import Image from "next/image";
 
-import { useEffect } from "react";
 import { navItemClass } from "./AdminNavItems";
+import { Space } from "../../layout";
 
 export const SpacesList = ({
   toggleMobileNav,
 }: {
   toggleMobileNav?: () => void;
 }) => {
-  useEffect(() => {
-    console.log("SpacesList mounted");
-  }, []);
   const { spacesData, sidebarCollapsed } = useSharedContext();
   const [showSpaceDialog, setShowSpaceDialog] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
+
   const [showAllSpaces, setShowAllSpaces] = useState(false);
   const [activeDropTarget, setActiveDropTarget] = useState<string | null>(null);
   const router = useRouter();
@@ -58,12 +55,6 @@ export const SpacesList = ({
         if (result.success) {
           toast.success("Space deleted successfully");
 
-          // If the number of spaces will drop to 3 or fewer after deletion,
-          // automatically set showAllSpaces to false
-          if (filteredSpaces.length <= 4) {
-            setShowAllSpaces(false);
-          }
-
           router.refresh();
 
           // If we're currently on the deleted space's page, redirect to dashboard
@@ -82,19 +73,13 @@ export const SpacesList = ({
 
   if (!spacesData) return null;
 
-  const { displayedSpaces, hasMoreSpaces, hiddenSpacesCount, filteredSpaces } =
-    useMemo(() => {
-      const filtered = spacesData.filter((space) =>
-        space.name.toLowerCase().includes(searchQuery.toLowerCase())
-      );
-
-      return {
-        filteredSpaces: filtered,
-        displayedSpaces: showAllSpaces ? filtered : filtered.slice(0, 3),
-        hasMoreSpaces: filtered.length > 3,
-        hiddenSpacesCount: Math.max(0, filtered.length - 3),
-      };
-    }, [spacesData, searchQuery, showAllSpaces]);
+  const { displayedSpaces, hasMoreSpaces, hiddenSpacesCount } = useMemo(() => {
+    return {
+      displayedSpaces: showAllSpaces ? spacesData : spacesData.slice(0, 3),
+      hasMoreSpaces: spacesData.length > 3,
+      hiddenSpacesCount: Math.max(0, spacesData.length - 3),
+    };
+  }, [spacesData, showAllSpaces]);
 
   const handleDragOver = (e: React.DragEvent, spaceId: string) => {
     e.preventDefault();
@@ -195,7 +180,7 @@ export const SpacesList = ({
           )}
         >
           <FontAwesomeIcon
-            icon={faShareNodes}
+            icon={faLayerGroup}
             className={clsx(
               "flex-shrink-0 transition-colors",
               sidebarCollapsed
@@ -215,19 +200,6 @@ export const SpacesList = ({
         </Link>
       </Tooltip>
 
-      <div className={clsx("relative mb-2", sidebarCollapsed ? "hidden" : "")}>
-        <div className="flex absolute inset-y-0 left-3 items-center pointer-events-none">
-          <Search className="size-3.5 text-gray-9" />
-        </div>
-        <Input
-          type="text"
-          placeholder="Search spaces..."
-          className="pr-3 pl-8 w-full h-9 text-xs placeholder-gray-8"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-        />
-      </div>
-
       {/* Wrapper div with overflow hidden to prevent scrollbar flash */}
       <div className="overflow-hidden">
         <div
@@ -243,14 +215,14 @@ export const SpacesList = ({
             WebkitOverflowScrolling: "touch",
           }}
         >
-          {displayedSpaces.map((space) => (
+          {displayedSpaces.map((space: Space) => (
             <Tooltip
               position="right"
               disable={!sidebarCollapsed}
               content={space.name}
+              key={space.id}
             >
               <div
-                key={space.id}
                 className={clsx(
                   "relative transition-colors overflow-visible duration-150 rounded-xl mb-1.5",
                   activeSpaceParams(space.id)
@@ -290,7 +262,8 @@ export const SpacesList = ({
                     sidebarCollapsed ? "justify-center" : "",
                     activeSpaceParams(space.id)
                       ? "hover:bg-gray-3"
-                      : "hover:bg-gray-2"
+                      : "hover:bg-gray-2",
+                    space.primary ? "h-10" : "h-fit"
                   )}
                 >
                   {space.iconUrl ? (
@@ -319,16 +292,21 @@ export const SpacesList = ({
                       <span className="ml-2.5 text-sm truncate transition-colors text-gray-11 group-hover:text-gray-12">
                         {space.name}
                       </span>
-                      <div
-                        onClick={(e) => handleDeleteSpace(e, space.id)}
-                        className="flex justify-center items-center ml-auto rounded-full opacity-0 transition-opacity group size-6 group-hover:opacity-100 hover:bg-gray-4"
-                        aria-label={`Delete ${space.name} space`}
-                      >
-                        <FontAwesomeIcon
-                          icon={faXmark}
-                          className="size-3.5 text-gray-8 group:hover:text-gray-12"
-                        />
-                      </div>
+                      {/* Hide delete button for 'All spaces' synthetic entry */}
+                      {!space.primary && (
+                        <div
+                          onClick={(e) => handleDeleteSpace(e, space.id)}
+                          className={
+                            "flex justify-center items-center ml-auto rounded-full opacity-0 transition-opacity group size-6 group-hover:opacity-100 hover:bg-gray-4"
+                          }
+                          aria-label={`Delete ${space.name} space`}
+                        >
+                          <FontAwesomeIcon
+                            icon={faXmark}
+                            className="size-3.5 text-gray-8 group:hover:text-gray-12"
+                          />
+                        </div>
+                      )}
                     </>
                   )}
                 </Link>
