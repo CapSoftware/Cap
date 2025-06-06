@@ -47,9 +47,6 @@ interface Props {
   toggleMobileNav?: () => void;
 }
 
-export const navItemClass =
-  "flex items-center justify-start rounded-xl outline-none tracking-tight overflow-hidden";
-
 export const AdminNavItems = ({ toggleMobileNav }: Props) => {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
@@ -80,6 +77,9 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
         ]
       : []),
   ];
+
+  const navItemClass =
+    "flex items-center justify-start rounded-xl outline-none tracking-tight overflow-hidden";
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const {
@@ -256,7 +256,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
       >
         <div
           className={clsx(
-            "mt-5",
+            "mt-8",
             sidebarCollapsed ? "flex flex-col justify-center items-center" : ""
           )}
         >
@@ -349,7 +349,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
             </div>
           ))}
 
-          <SpacesList toggleMobileNav={() => toggleMobileNav?.()} />
+          <SpacesList />
         </div>
         <div className="pb-4 mt-auto w-full">
           <UsageButton

@@ -5,11 +5,7 @@ import { ChevronDown, ChevronUp, Search } from "lucide-react";
 import Link from "next/link";
 import { memo, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import {
-  faPlus,
-  faShareNodes,
-  faXmark,
-} from "@fortawesome/free-solid-svg-icons";
+import { faPlus, faXmark } from "@fortawesome/free-solid-svg-icons";
 import { deleteSpace } from "@/actions/organization/delete-space";
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 import clsx from "clsx";
@@ -17,20 +13,15 @@ import { SpaceDialog } from "./SpaceDialog";
 import { Button, Input } from "@cap/ui";
 import { shareCap } from "@/actions/caps/share";
 import { toast } from "sonner";
-import { useParams, usePathname, useRouter } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { Tooltip } from "@/components/Tooltip";
 import { motion } from "framer-motion";
 import { useMemo } from "react";
 import Image from "next/image";
 
 import { useEffect } from "react";
-import { navItemClass } from "./AdminNavItems";
 
-export const SpacesList = ({
-  toggleMobileNav,
-}: {
-  toggleMobileNav?: () => void;
-}) => {
+export const SpacesList = () => {
   useEffect(() => {
     console.log("SpacesList mounted");
   }, []);
@@ -41,7 +32,6 @@ export const SpacesList = ({
   const [activeDropTarget, setActiveDropTarget] = useState<string | null>(null);
   const router = useRouter();
   const params = useParams();
-  const pathname = usePathname();
 
   const handleDeleteSpace = async (e: React.MouseEvent, spaceId: string) => {
     e.preventDefault();
@@ -172,48 +162,6 @@ export const SpacesList = ({
           </Button>
         </Tooltip>
       </div>
-
-      <Tooltip
-        content="Browse spaces"
-        disable={sidebarCollapsed === false}
-        position="right"
-      >
-        <Link
-          passHref
-          onClick={() => toggleMobileNav?.()}
-          prefetch={false}
-          href="/dashboard/spaces/browse"
-          className={clsx(
-            "relative border border-transparent transition z-3",
-            sidebarCollapsed
-              ? "flex justify-center px-0 mb-2 items-center w-full size-10"
-              : "py-2 w-full px-3 mb-2",
-            pathname.includes("/dashboard/spaces/browse")
-              ? "bg-gray-3 pointer-events-none"
-              : "hover:bg-gray-2",
-            navItemClass
-          )}
-        >
-          <FontAwesomeIcon
-            icon={faShareNodes}
-            className={clsx(
-              "flex-shrink-0 transition-colors",
-              sidebarCollapsed
-                ? "text-gray-12 size-[18px] mx-auto"
-                : "text-gray-10 size-3.5"
-            )}
-            aria-hidden="true"
-          />
-          <p
-            className={clsx(
-              "text-sm text-gray-12 truncate",
-              sidebarCollapsed ? "hidden" : "ml-2.5"
-            )}
-          >
-            Browse spaces
-          </p>
-        </Link>
-      </Tooltip>
 
       <div className={clsx("relative mb-2", sidebarCollapsed ? "hidden" : "")}>
         <div className="flex absolute inset-y-0 left-3 items-center pointer-events-none">

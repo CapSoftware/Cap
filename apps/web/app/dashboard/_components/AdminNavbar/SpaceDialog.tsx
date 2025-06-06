@@ -18,16 +18,11 @@ import {
 } from "@cap/ui";
 import { useForm } from "react-hook-form";
 import { useState, useRef } from "react";
-import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { toast } from "sonner";
 import { FileInput } from "@/components/FileInput";
 import { createSpace } from "./server";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faLayerGroup } from "@fortawesome/free-solid-svg-icons";
-import {
-  MemberSelect,
-  TagOption,
-} from "../../spaces/[spaceId]/components/MemberSelect";
 
 interface SpaceDialogProps {
   open: boolean;
@@ -91,20 +86,17 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
       .string()
       .min(1, "Space name is required")
       .max(25, "Space name must be at most 25 characters"),
-    members: z.array(z.string().email("Invalid email address")).optional(),
   });
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       name: "",
-      members: [],
     },
   });
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
-  const { activeOrganization } = useSharedContext();
 
   return (
     <Form {...form}>
@@ -121,12 +113,6 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 
             if (selectedFile) {
               formData.append("icon", selectedFile);
-            }
-
-            if (values.members && values.members.length > 0) {
-              values.members.forEach((email) => {
-                formData.append("members[]", email);
-              });
             }
 
             await createSpace(formData);
@@ -162,80 +148,6 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
             )}
           />
 
-          {/* Space Members Input */}
-          <div className="space-y-1">
-            <Label htmlFor="members">Members</Label>
-            <CardDescription className="w-full max-w-[400px]">
-              Add team members to this space.
-            </CardDescription>
-          </div>
-          <FormField
-            control={form.control}
-            name="members"
-            render={({ field }) => {
-              // Fake test members for development
-              const fakeMemberOptions: TagOption[] = [
-                {
-                  value: "john.doe@example.com",
-                  label: "John",
-                  avatarUrl: "https://i.pravatar.cc/150?u=john",
-                },
-                {
-                  value: "jane.smith@example.com",
-                  label: "Jane",
-                  avatarUrl: "https://i.pravatar.cc/150?u=jane",
-                },
-                {
-                  value: "alex.wong@example.com",
-                  label: "Alex",
-                  avatarUrl: "https://i.pravatar.cc/150?u=alex",
-                },
-                {
-                  value: "sarah.johnson@example.com",
-                  label: "Sarah",
-                  avatarUrl: "https://i.pravatar.cc/150?u=sarah",
-                },
-              ];
-
-              // Real members from organization
-              const realMemberOptions: TagOption[] = (
-                activeOrganization?.members || []
-              )
-                .filter((m) => m.user?.email)
-                .map((m) => ({
-                  value: m.user.email,
-                  label: m.user.name || m.user.email,
-                  avatarUrl: (m.user as any).avatarUrl || undefined,
-                }));
-
-              // Combine real and fake members, removing duplicates by email
-              const memberOptions: TagOption[] = [
-                ...realMemberOptions,
-                ...fakeMemberOptions.filter(
-                  (fake) =>
-                    !realMemberOptions.some((real) => real.value === fake.value)
-                ),
-              ];
-              // Convert selected emails to TagOption[] for TagsInput
-              const selectedTags = memberOptions.filter((opt) =>
-                field.value?.includes(opt.value)
-              );
-              return (
-                <FormControl>
-                  <MemberSelect
-                    value={selectedTags}
-                    onChange={(tags) =>
-                      field.onChange(tags.map((t) => t.value))
-                    }
-                    options={memberOptions}
-                    placeholder="Add member..."
-                    disabled={isUploading}
-                  />
-                </FormControl>
-              );
-            }}
-          />
-
           <div className="space-y-1">
             <Label htmlFor="icon">Space Icon</Label>
             <CardDescription className="w-full max-w-[400px]">
@@ -247,7 +159,6 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
             <FileInput
               id="icon"
               name="icon"
-              notDraggingClassName="hover:bg-gray-3"
               onChange={setSelectedFile}
               disabled={isUploading}
               isLoading={isUploading}

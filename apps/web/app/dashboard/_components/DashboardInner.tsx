@@ -49,7 +49,6 @@ export default function DashboardInner({
     "/dashboard/settings/organization": "Organization Settings",
     "/dashboard/settings/account": "Account Settings",
     "/dashboard/spaces": "Spaces",
-    "/dashboard/spaces/browse": "Browse Spaces",
   };
 
   const title = activeSpace ? activeSpace.name : titles[pathname] || "";

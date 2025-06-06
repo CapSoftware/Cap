@@ -14,7 +14,6 @@ export interface FileInputProps {
   id?: string;
   name?: string;
   className?: string;
-  notDraggingClassName?: string;
   initialPreviewUrl?: string | null;
   onRemove?: () => void;
   isLoading?: boolean;
@@ -26,7 +25,6 @@ export const FileInput: React.FC<FileInputProps> = ({
   id = "file",
   name = "file",
   className = "",
-  notDraggingClassName = "",
   initialPreviewUrl = null,
   onRemove,
   isLoading = false,
@@ -235,7 +233,7 @@ export const FileInput: React.FC<FileInputProps> = ({
               "flex gap-3 justify-center items-center px-4 w-full rounded-xl border border-dashed transition-all duration-300 cursor-pointer h-full",
               isDragging
                 ? "border-blue-500 bg-gray-5"
-                : "hover:bg-gray-2 border-gray-5 " + notDraggingClassName,
+                : "hover:bg-gray-2 border-gray-5",
               isLoading || disabled ? "opacity-50 pointer-events-none" : ""
             )}
           >
