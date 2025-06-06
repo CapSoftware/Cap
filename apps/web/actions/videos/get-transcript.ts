@@ -13,14 +13,13 @@ export async function getTranscript(
 
   const user = await getCurrentUser();
 
-  if (!user || !videoId) {
+  if (!videoId) {
     return {
       success: false,
       message: "Missing required data for fetching transcript",
     };
   }
 
-  const userId = user.id;
   const query = await db()
     .select({
       video: videos,
@@ -40,13 +39,6 @@ export async function getTranscript(
   }
 
   const { video, bucket } = result;
-
-  if (video.ownerId !== userId) {
-    return {
-      success: false,
-      message: "You don't have permission to access this transcript",
-    };
-  }
 
   if (video.transcriptionStatus !== "COMPLETE") {
     return {
@@ -90,7 +82,7 @@ export async function getTranscript(
     console.error("[getTranscript] Error fetching transcript:", {
       error: error instanceof Error ? error.message : error,
       videoId,
-      userId
+      userId: user?.id
     });
     return {
       success: false,
