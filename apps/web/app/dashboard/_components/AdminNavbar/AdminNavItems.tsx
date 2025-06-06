@@ -267,18 +267,18 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
             >
               {isPathActive(item.href) && (
                 <motion.div
-                  animate={{
-                    width: sidebarCollapsed ? 36 : "100%",
-                  }}
-                  transition={{
-                    layout: {
-                      type: "tween",
-                      duration: 0.15,
-                    },
-                  }}
                   layoutId="navlinks"
                   id="navlinks"
-                  className="absolute h-[36px] w-full rounded-xl pointer-events-none bg-gray-3"
+                  className={clsx(
+                    "absolute rounded-xl pointer-events-none bg-gray-3",
+                    sidebarCollapsed
+                      ? "inset-0 mx-auto w-9 h-full"
+                      : "inset-0 size-full"
+                  )}
+                  transition={{
+                    type: "tween",
+                    duration: 0.15,
+                  }}
                 />
               )}
 
