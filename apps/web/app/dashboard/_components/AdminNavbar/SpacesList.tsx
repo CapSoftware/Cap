@@ -131,7 +131,7 @@ export const SpacesList = () => {
           className={clsx(
             "transition-all duration-300",
             showAllSpaces && !sidebarCollapsed
-              ? "max-h-[calc(100vh-450px)] overflow-y-auto"
+              ? "max-h-[calc(100vh-450px)] overflow-y-auto pr-1"
               : "max-h-max overflow-hidden"
           )}
           style={{
