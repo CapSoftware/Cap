@@ -110,6 +110,9 @@
     "tailwindcss": "^3",
     "typescript": "^5.8.3"
   },
+  "browser": {
+    "crypto": false
+  },
   "engines": {
     "node": "20"
   }

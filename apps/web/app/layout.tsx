@@ -8,7 +8,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { buildEnv, serverEnv } from "@cap/env";
 import { S3_BUCKET_URL } from "@cap/utils";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
-import crypto from "crypto";
+import crypto from "node:crypto";
 import type { Metadata } from "next";
 import { PropsWithChildren } from "react";
 import { AuthProvider } from "./AuthProvider";
