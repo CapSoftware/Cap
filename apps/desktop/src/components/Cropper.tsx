@@ -1,6 +1,11 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { makePersisted } from "@solid-primitives/storage";
-import { type CheckMenuItemOptions, Menu } from "@tauri-apps/api/menu";
+import {
+  type CheckMenuItemOptions,
+  Menu,
+  PredefinedMenuItemOptions,
+  SubmenuOptions,
+} from "@tauri-apps/api/menu";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import {
   type ParentProps,
@@ -104,6 +109,13 @@ export default function Cropper(
   }
 
   const [containerSize, setContainerSize] = createSignal({ x: 0, y: 0 });
+  const [aspectRatio, setAspectRatio] = createSignal<number | null>(
+    props.aspectRatio ?? null
+  );
+  createEffect(() => {
+    if (props.aspectRatio) setAspectRatio(props.aspectRatio);
+  });
+
   const logicalSize = createMemo(() => props.mappedSize || containerSize());
   const minSize = createMemo(() => {
     const logical = logicalSize();
@@ -179,24 +191,29 @@ export default function Cropper(
       { x: (logical.x - width) / 2, y: (logical.y - height) / 2 },
       { x: width, y: height }
     );
-    box.constrainAll(box, containerSize(), ORIGIN_CENTER, props.aspectRatio);
+    box.constrainAll(
+      box,
+      containerSize(),
+      ORIGIN_CENTER,
+      aspectRatio() ?? undefined
+    );
 
     setCrop({
-      size: { x: width, y: height },
+      size: { x: box.width, y: box.height },
       position: {
-        x: (logical.x - width) / 2,
-        y: (logical.y - height) / 2,
+        x: (logical.x - box.width) / 2,
+        y: (logical.y - box.height) / 2,
       },
     });
   });
 
   createEffect(
     on(
-      () => props.aspectRatio,
-      () => {
-        if (!props.aspectRatio) return;
+      () => aspectRatio(),
+      (ratio) => {
+        if (!ratio) return;
         const box = Box.from(crop.position, crop.size);
-        box.constrainToRatio(props.aspectRatio, ORIGIN_CENTER);
+        box.constrainToRatio(ratio, ORIGIN_CENTER);
         box.constrainToBoundary(
           logicalSize().x,
           logicalSize().y,
@@ -211,6 +228,15 @@ export default function Cropper(
     createSignal(true),
     { name: "cropSnapsToRatio" }
   );
+  const [selectedAspect, setSelectedAspect] = createSignal<Ratio | null>(null);
+  createEffect(() => {
+    const ratio = selectedAspect();
+    if (!ratio) {
+      setAspectRatio(null);
+      return;
+    }
+    setAspectRatio(ratio[0] / ratio[1]);
+  });
   const [snappedRatio, setSnappedRatio] = createSignal<Ratio | null>(null);
   const [dragging, setDragging] = createSignal(false);
   const [resizing, setResizing] = createSignal(false);
@@ -444,7 +470,7 @@ export default function Cropper(
     height: number,
     threshold = 0.01
   ): Ratio | null {
-    if (props.aspectRatio) return null;
+    if (aspectRatio()) return null;
     const currentRatio = width / height;
     for (const ratio of COMMON_RATIOS) {
       if (Math.abs(currentRatio - ratio[0] / ratio[1]) < threshold) {
@@ -560,9 +586,9 @@ export default function Cropper(
       const newOrigin = centerOrigin ? ORIGIN_CENTER : origin;
       box.resize(newWidth, newHeight, newOrigin);
 
-      if (props.aspectRatio) {
+      if (aspectRatio()) {
         box.constrainToRatio(
-          props.aspectRatio,
+          aspectRatio()!,
           newOrigin,
           dir.includes("n") || dir.includes("s") ? "width" : "height"
         );
@@ -651,13 +677,57 @@ export default function Cropper(
         }
       }
 
-      if (props.aspectRatio) box.constrainToRatio(props.aspectRatio, origin);
+      if (aspectRatio()) box.constrainToRatio(aspectRatio()!, origin);
       box.constrainToBoundary(logical.x, logical.y, origin);
       setCrop(box.toBounds());
 
       pressedKeys.clear();
       lastKeyHandleFrame = null;
     });
+  }
+
+  async function menu() {
+    const aspects = {
+      id: "crop-options-aspect",
+      text: "Aspect",
+      enabled: !props.aspectRatio,
+      items: [
+        {
+          id: "crop-options-aspect-none",
+          text: "None",
+          checked: !selectedAspect(),
+          action: () => setSelectedAspect(null),
+        } satisfies CheckMenuItemOptions,
+        ...COMMON_RATIOS.map((ratio) => {
+          return {
+            id: `crop-options-aspect-${ratio[0]}-${ratio[1]}`,
+            text: `${ratio[0]}:${ratio[1]}`,
+            checked: selectedAspect() == ratio,
+            action: () => setSelectedAspect(ratio),
+          } satisfies CheckMenuItemOptions;
+        }),
+      ],
+    } satisfies SubmenuOptions;
+
+    const menu = await Menu.new({
+      id: "crop-options",
+      items: [
+        {
+          id: "enableRatioSnap",
+          text: "Snap to aspect ratios",
+          checked: snapToRatioEnabled(),
+          action: () => {
+            setSnapToRatioEnabled((v) => !v);
+          },
+        } satisfies CheckMenuItemOptions,
+        {
+          item: "Separator",
+        } satisfies PredefinedMenuItemOptions,
+        aspects,
+      ],
+    });
+
+    menu.popup();
   }
 
   return (
@@ -676,20 +746,8 @@ export default function Cropper(
       tabIndex={0}
       onContextMenu={async (e) => {
         e.preventDefault();
-        const menu = await Menu.new({
-          id: "crop-options",
-          items: [
-            {
-              id: "enableRatioSnap",
-              text: "Snap to aspect ratios",
-              checked: snapToRatioEnabled(),
-              action: () => {
-                setSnapToRatioEnabled((v) => !v);
-              },
-            } satisfies CheckMenuItemOptions,
-          ],
-        });
-        menu.popup();
+        e.stopPropagation();
+        menu();
       }}
     >
       <CropAreaRenderer
