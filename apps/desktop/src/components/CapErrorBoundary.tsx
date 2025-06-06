@@ -1,4 +1,5 @@
 import { Button } from "@cap/ui-solid";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { ErrorBoundary, ParentProps } from "solid-js";
 
@@ -31,6 +32,15 @@ export function CapErrorBoundary(props: ParentProps) {
                 variant="secondary"
               >
                 Reload
+              </Button>
+              <Button
+                onClick={() => {
+                  getCurrentWebviewWindow().close();
+                  window.close();
+                }}
+                variant="destructive"
+              >
+                Close
               </Button>
             </div>
           </div>
