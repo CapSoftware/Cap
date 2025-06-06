@@ -15,6 +15,7 @@ import z from "zod";
 import { handle } from "hono/vercel";
 
 import { corsMiddleware, withOptionalAuth } from "../utils";
+import { userHasAccessToVideo } from "@/utils/auth";
 
 export const revalidate = "force-dynamic";
 
@@ -42,6 +43,7 @@ const app = new Hono()
     ),
     async (c) => {
       const { videoId, videoType, thumbnail, fileType } = c.req.valid("query");
+      const user = c.get("user");
 
       const query = await db()
         .select({ video: videos, bucket: s3Buckets })
@@ -49,25 +51,26 @@ const app = new Hono()
         .leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
         .where(eq(videos.id, videoId));
 
-      if (!query[0]) {
+      if (!query[0])
         return c.json(
           JSON.stringify({ error: true, message: "Video does not exist" }),
           404
         );
-      }
 
       const { video, bucket: customBucket } = query[0];
 
-      if (video.public === false) {
-        const user = await getCurrentUser();
+      const hasAccess = await userHasAccessToVideo(user, video);
 
-        if (!user || user.id !== video.ownerId) {
-          return c.json(
-            JSON.stringify({ error: true, message: "Video is not public" }),
-            401
-          );
-        }
-      }
+      if (hasAccess === "private")
+        return c.json(
+          JSON.stringify({ error: true, message: "Video is not public" }),
+          401
+        );
+      else if (hasAccess === "needs-password")
+        return c.json(
+          JSON.stringify({ error: true, message: "Video requires password" }),
+          403
+        );
 
       const bucket = await createBucketProvider(customBucket);
 
