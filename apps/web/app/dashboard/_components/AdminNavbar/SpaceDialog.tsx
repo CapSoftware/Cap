@@ -113,9 +113,7 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
         ref={props.formRef}
         onSubmit={form.handleSubmit(async (values) => {
           try {
-            if (selectedFile) {
-              setIsUploading(true);
-            }
+            setIsUploading(true);
             props.setCreateLoading?.(true);
 
             const formData = new FormData();
@@ -132,17 +130,13 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
             }
 
             await createSpace(formData);
-
             toast.success("Space created successfully");
             form.reset();
             setSelectedFile(null);
             props.onSpaceCreated();
-            //TODO: create a type that can be imported
-          } catch (error: any) {
+          } catch (error) {
             console.error("Error creating space:", error);
-            toast.error(
-              error?.message || error?.error || "Failed to create space"
-            );
+            toast.error("Failed to create space");
           } finally {
             setIsUploading(false);
             props.setCreateLoading?.(false);

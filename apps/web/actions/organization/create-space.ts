@@ -3,7 +3,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { spaces, users, spaceMembers } from "@cap/database/schema";
-import { inArray, eq, and } from "drizzle-orm";
+import { inArray } from "drizzle-orm";
 import { nanoId, nanoIdLength } from "@cap/database/helpers";
 import { revalidatePath } from "next/cache";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
@@ -38,24 +38,6 @@ export async function createSpace(
       return {
         success: false,
         error: "Space name is required",
-      };
-    }
-
-    // Check for duplicate space name in the same organization
-    const existingSpace = await db()
-      .select({ id: spaces.id })
-      .from(spaces)
-      .where(
-        and(
-          eq(spaces.organizationId, user.activeOrganizationId),
-          eq(spaces.name, name)
-        )
-      )
-      .limit(1);
-    if (existingSpace.length > 0) {
-      return {
-        success: false,
-        error: "A space with this name already exists.",
       };
     }
 
@@ -147,9 +129,8 @@ export async function createSpace(
         id: spaceId,
         name,
         organizationId: user.activeOrganizationId,
-        createdById: user.id,
         iconUrl,
-        role: "Owner",
+        createdById: user.id,
         description: iconUrl ? `Space with custom icon: ${iconUrl}` : null,
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -164,7 +145,7 @@ export async function createSpace(
       }
     }
 
-    // Always add the creator as Owner (if not already in the list)
+    // Always add the creator as admin (if not already in the list)
     const memberEmailsSet = new Set(members.map((e) => e.toLowerCase()));
     const creatorEmail = user.email.toLowerCase();
     if (!memberEmailsSet.has(creatorEmail)) {
@@ -189,9 +170,9 @@ export async function createSpace(
         .map((email) => {
           const userId = emailToUserId[email.toLowerCase()];
           if (!userId) return null;
-          // Creator is always Owner, others are Member
+          // Creator is always admin, others are member
           const role =
-            email.toLowerCase() === creatorEmail ? "Owner" : "Member";
+            email.toLowerCase() === creatorEmail ? "admin" : "member";
           return {
             id: uuidv4().substring(0, nanoIdLength),
             spaceId,
