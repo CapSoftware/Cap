@@ -91,8 +91,6 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
   const [createLoading, setCreateLoading] = useState(false);
   const [organizationName, setOrganizationName] = useState("");
 
-  const isPathActive = (path: string) => pathname.includes(path);
-
   return (
     <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
       <Popover open={open} onOpenChange={setOpen}>
@@ -230,10 +228,10 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                       <Button
                         variant="dark"
                         size="sm"
-                        className="flex gap-1 items-center my-2 w-[90%] mx-auto text-sm"
+                        className="flex gap-1 items-center mt-3 w-full"
                       >
-                        <Plus className="w-3.5 h-auto" />
-                        New organization
+                        <Plus className="w-4 h-auto" />
+                        Add new organization
                       </Button>
                     </DialogTrigger>
                   </CommandGroup>
@@ -258,7 +256,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
               key={item.name}
               className="flex relative justify-center items-center w-full mb-2.5"
             >
-              {isPathActive(item.href) && (
+              {pathname.includes(item.href) && (
                 <motion.div
                   initial={{
                     width: sidebarCollapsed ? 36 : "100%",
@@ -277,7 +275,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                   layoutId="underline"
                   id="underline"
                   className={clsx(
-                    "absolute rounded-xl pointer-events-none bg-gray-3",
+                    "absolute rounded-xl bg-gray-3",
                     sidebarCollapsed
                       ? "inset-0 right-0 left-0 mx-auto w-9 h-9"
                       : "inset-0 ml-[2px]"
@@ -285,7 +283,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                 />
               )}
 
-              {hoveredItem === item.name && !isPathActive(item.href) && (
+              {hoveredItem === item.name && !pathname.includes(item.href) && (
                 <motion.div
                   layoutId="hoverIndicator"
                   className={clsx(
@@ -317,20 +315,17 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                   prefetch={false}
                   href={item.href}
                   className={classNames(
-                    "relative border border-transparent transition z-3",
+                    "relative border border-transparent transition-opacity duration-200 z-3",
                     sidebarCollapsed
                       ? "flex justify-center items-center w-full h-9"
                       : "py-2 w-full",
-                    isPathActive(item.href)
-                      ? "bg-transparent pointer-events-none"
-                      : "hover:bg-gray-2",
                     navItemClass
                   )}
                 >
                   <FontAwesomeIcon
                     icon={item.icon as IconDefinition}
                     className={clsx(
-                      "flex-shrink-0 size-3.5 transition-colors stroke-[1.5px]",
+                      "flex-shrink-0 size-3.5 transition-colors duration-200 stroke-[1.5px]",
                       sidebarCollapsed ? "text-gray-12 mx-auto" : "text-gray-10"
                     )}
                     aria-hidden="true"

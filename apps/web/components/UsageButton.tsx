@@ -8,112 +8,104 @@ import clsx from "clsx";
 import Link from "next/link";
 import { memo } from "react";
 
-export const UsageButton = memo(
-  ({
-    subscribed,
-    toggleMobileNav,
-  }: {
-    subscribed: boolean;
-    toggleMobileNav?: () => void;
-  }) => {
-    const { sidebarCollapsed } = useSharedContext();
-    if (subscribed) {
-      return (
-        <Tooltip position="right" content="Cap Pro">
-          <Link
-            className="flex justify-center mx-auto w-full"
-            href="/dashboard/settings/workspace"
-          >
-            <Button
-              size="lg"
-              className={clsx(
-                "overflow-hidden truncate",
-                sidebarCollapsed
-                  ? "p-0 w-10 h-10 rounded-full min-w-10"
-                  : "w-full"
-              )}
-              variant="blue"
-            >
-              <FontAwesomeIcon
-                className={clsx(
-                  "text-white",
-                  sidebarCollapsed ? "mr-0" : "mr-1"
-                )}
-                icon={faCheck}
-              />
-              {sidebarCollapsed ? null : <p className="text-white">Cap Pro</p>}
-            </Button>
-          </Link>
-        </Tooltip>
-      );
-    }
 
+export const UsageButton = memo(({
+  subscribed,
+  toggleMobileNav,
+}: {
+  subscribed: boolean;
+  toggleMobileNav?: () => void;
+}) => {
+  const { sidebarCollapsed } = useSharedContext();
+  if (subscribed) {
     return (
-      <>
-        <Tooltip
-          disable={!sidebarCollapsed}
-          position="right"
-          content="Upgrade to Pro"
+      <Tooltip position="right" content="Cap Pro">
+        <Link
+          className="flex justify-center mx-auto w-full"
+          href="/dashboard/settings/workspace"
         >
-          <ProRiveButton toggleMobileNav={toggleMobileNav} />
-        </Tooltip>
-      </>
+          <Button
+            size="lg"
+            className={clsx(
+              "overflow-hidden truncate",
+              sidebarCollapsed
+                ? "p-0 w-10 h-10 rounded-full min-w-10"
+                : "w-full"
+            )}
+            variant="primary"
+          >
+            <FontAwesomeIcon
+              className={clsx(
+                "text-gray-50",
+                sidebarCollapsed ? "mr-0" : "mr-1"
+              )}
+              icon={faCheck}
+            />
+            {sidebarCollapsed ? null : <p className="text-gray-50">Cap Pro</p>}
+          </Button>
+        </Link>
+      </Tooltip>
     );
   }
-);
 
-const ProRiveButton = memo(
-  ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
-    const { setUpgradeModalOpen, sidebarCollapsed } = useSharedContext();
-
-    const { rive, RiveComponent: ProRive } = useRive({
-      src: "/rive/pricing.riv",
-      artboard: "pro",
-      animations: "idle",
-      autoplay: false,
-      layout: new Layout({
-        fit: Fit.Cover,
-      }),
-    });
-
-    return (
-      <div
-        onMouseEnter={() => {
-          if (rive) {
-            rive.stop();
-            rive.play("items-coming-out");
-          }
-        }}
-        onMouseLeave={() => {
-          if (rive) {
-            rive.stop();
-            rive.play("items-coming-in");
-          }
-        }}
-        className={clsx(
-          "flex overflow-visible relative gap-3 justify-evenly items-center cursor-pointer",
-          "mx-auto bg-blue-600 rounded-full transition-colors hover:bg-blue-700",
-          sidebarCollapsed ? "py-0 h-[45px] min-w-[unset]" : "py-3 w-full h-fit"
-        )}
-        onClick={() => {
-          setUpgradeModalOpen(true);
-          toggleMobileNav?.();
-        }}
+  return (
+    <>
+      <Tooltip
+        disable={!sidebarCollapsed}
+        position="right"
+        content="Upgrade to Pro"
       >
-        <ProRive
-          className={clsx(
-            sidebarCollapsed
-              ? "bottom-[4px] absolute h-[45px] w-[68px]"
-              : "absolute w-[90px] h-[66px] bottom-[-3px] left-[-20px]",
-            "scale-[0.8]"
-          )}
-        />
-        {!sidebarCollapsed ? (
-          <p className="relative left-8 text-center text-white truncate">
-            Upgrade to Pro
-          </p>
-        ) : null}
-      </div>
-    );
-  }
-);
+         <ProRiveButton
+          toggleMobileNav={toggleMobileNav}
+         />
+      </Tooltip>
+    </>
+  );
+});
+
+const ProRiveButton = memo(({ toggleMobileNav
+}: {
+  toggleMobileNav?: () => void;
+}) => {
+  const { setUpgradeModalOpen, sidebarCollapsed } = useSharedContext();
+
+  const { rive, RiveComponent: ProRive } = useRive({
+    src: "/rive/pricing.riv",
+    artboard: "pro",
+    animations: "idle",
+    autoplay: false,
+    layout: new Layout({
+      fit: Fit.Cover,
+    }),
+  });
+
+  return (
+    <div
+    onMouseEnter={() => {
+      if (rive) {
+        rive.stop();
+        rive.play("items-coming-out");
+      }
+    }}
+    onMouseLeave={() => {
+      if (rive) {
+        rive.stop();
+        rive.play("items-coming-in");
+      }
+    }}
+    className={clsx("flex overflow-visible relative gap-3 justify-evenly items-center",
+       "mx-auto bg-blue-600 rounded-full transition-colors hover:bg-blue-700",
+        sidebarCollapsed ? "py-0 h-[45px] min-w-[unset]":"py-3 w-full h-fit")}
+    onClick={() => {
+      setUpgradeModalOpen(true);
+      toggleMobileNav?.();
+    }}
+  >
+      <ProRive className={clsx(sidebarCollapsed ? "bottom-[4px] absolute h-[45px] w-[68px]" : "absolute w-[90px] h-[66px] bottom-[-3px] left-[-20px]", "scale-[0.8]")} />
+    {!sidebarCollapsed ? (
+    <p 
+    className="relative left-8 text-center text-white truncate">Upgrade to Pro</p>
+    ) : null}
+  </div>
+  )
+})

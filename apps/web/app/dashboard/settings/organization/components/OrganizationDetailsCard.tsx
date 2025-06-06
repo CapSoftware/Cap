@@ -45,10 +45,8 @@ export const OrganizationDetailsCard = ({
           <div className="space-y-1">
             <Label htmlFor="allowedEmailDomain">Access email domain</Label>
             <p className="text-sm text-gray-10">
-              Only emails from this domain can access shared videos. <br />
-              <span className="font-medium text-gray-11 leading-[0px]">
-                Leave blank to allow everyone.
-              </span>
+              Only emails from this domain can access shared videos.{" "}
+              <b>Leave blank to allow everyone.</b>
             </p>
           </div>
           <Input
