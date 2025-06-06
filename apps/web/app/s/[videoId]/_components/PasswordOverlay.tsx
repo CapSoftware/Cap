@@ -1,14 +1,6 @@
 "use client";
 
-import {
-  Button,
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  Input,
-  Logo,
-} from "@cap/ui";
-import { motion } from "framer-motion";
+import { Button, Dialog, DialogContent, Input, Logo } from "@cap/ui";
 import { useState } from "react";
 import { toast } from "sonner";
 import { verifyVideoPassword } from "@/actions/videos/password";
@@ -19,8 +11,6 @@ interface PasswordOverlayProps {
   isOpen: boolean;
   videoId: string;
 }
-
-const MotionDialogContent = motion.create(DialogContent);
 
 export const PasswordOverlay: React.FC<PasswordOverlayProps> = ({
   isOpen,
@@ -46,13 +36,7 @@ export const PasswordOverlay: React.FC<PasswordOverlayProps> = ({
 
   return (
     <Dialog open={isOpen}>
-      <MotionDialogContent
-        // initial={{ opacity: 0, scale: 0.95 }}
-        // animate={{ opacity: 1, scale: 1 }}
-        // exit={{ opacity: 0, scale: 0.95 }}
-        // transition={{ duration: 0.2 }}
-        className="w-[90vw] sm:max-w-md p-8 rounded-xl border border-gray-200 bg-white shadow-xl"
-      >
+      <DialogContent className="w-[90vw] sm:max-w-md p-8 rounded-xl border border-gray-200 bg-white shadow-xl">
         <div className="flex flex-col items-center space-y-6">
           <div className="flex flex-col items-center space-y-4">
             <Logo className="w-24 h-auto" />
@@ -98,7 +82,7 @@ export const PasswordOverlay: React.FC<PasswordOverlayProps> = ({
             </Button>
           </div>
         </div>
-      </MotionDialogContent>
+      </DialogContent>
     </Dialog>
   );
 };
