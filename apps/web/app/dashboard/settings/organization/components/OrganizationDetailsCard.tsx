@@ -68,7 +68,7 @@ export const OrganizationDetailsCard = ({
         </div>
       </div>
       <Button
-        className="mt-8 px-[1.5rem] w-fit"
+        className="mt-8 w-fit"
         type="submit"
         spinner={saveLoading}
         size="sm"

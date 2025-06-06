@@ -5,7 +5,7 @@ import { updateOrganizationDetails } from "@/actions/organization/update-details
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Card, CardDescription, CardTitle } from "@cap/ui";
 import { useRouter } from "next/navigation";
-import { Dispatch, SetStateAction, useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 import { BillingCard } from "./components/BillingCard";
 import { CustomDomainIconCard } from "./components/CustomDomainIconCard";
@@ -19,7 +19,6 @@ export const Organization = () => {
   const organizationName = activeOrganization?.organization.name;
   const router = useRouter();
   const [loading, setLoading] = useState(false);
-  const [billingLoading, setBillingLoading] = useState(false);
   const isOwner = user?.id === activeOrganization?.organization.ownerId;
   const [isInviteDialogOpen, setIsInviteDialogOpen] = useState(false);
   const ownerToastShown = useRef(false);
@@ -67,24 +66,22 @@ export const Organization = () => {
     [isOwner, showOwnerToast, activeOrganization?.organization.id, router]
   );
 
-  const handleManageBilling = useCallback(
-    async (loadingDispatch: Dispatch<SetStateAction<boolean>>) => {
-      if (!isOwner) {
-        showOwnerToast();
-        return;
-      }
-      loadingDispatch(true);
-      try {
-        const url = await manageBilling();
-        router.push(url);
-      } catch (error) {
-        console.error("Error managing billing:", error);
-        toast.error("An error occurred while managing billing");
-        loadingDispatch(false);
-      }
-    },
-    [isOwner, showOwnerToast, router]
-  );
+  const handleManageBilling = useCallback(async () => {
+    if (!isOwner) {
+      showOwnerToast();
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const url = await manageBilling();
+      router.push(url);
+    } catch (error) {
+      console.error("Error managing billing:", error);
+      toast.error("An error occurred while managing billing");
+      setLoading(false);
+    }
+  }, [isOwner, showOwnerToast, router]);
 
   return (
     <form className="flex flex-col gap-6" onSubmit={handleSubmit}>
@@ -115,15 +112,15 @@ export const Organization = () => {
       <MembersCard
         isOwner={isOwner}
         loading={loading}
-        handleManageBilling={() => handleManageBilling(setLoading)}
+        handleManageBilling={handleManageBilling}
         showOwnerToast={showOwnerToast}
         setIsInviteDialogOpen={setIsInviteDialogOpen}
       />
 
       <BillingCard
         isOwner={isOwner}
-        loading={billingLoading}
-        handleManageBilling={() => handleManageBilling(setBillingLoading)}
+        loading={loading}
+        handleManageBilling={handleManageBilling}
       />
 
       <InviteDialog
@@ -131,7 +128,7 @@ export const Organization = () => {
         setIsOpen={setIsInviteDialogOpen}
         isOwner={isOwner}
         showOwnerToast={showOwnerToast}
-        handleManageBilling={() => handleManageBilling(setLoading)}
+        handleManageBilling={handleManageBilling}
       />
     </form>
   );

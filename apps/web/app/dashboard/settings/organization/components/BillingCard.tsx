@@ -1,6 +1,13 @@
 "use client";
 
-import { Button, Card, CardDescription, CardHeader, CardTitle } from "@cap/ui";
+import {
+  Button,
+  Card,
+  CardDescription,
+  CardHeader,
+  CardTitle
+} from "@cap/ui";
+
 
 interface BillingCardProps {
   isOwner: boolean;
@@ -11,7 +18,7 @@ interface BillingCardProps {
 export const BillingCard = ({
   isOwner,
   loading,
-  handleManageBilling,
+  handleManageBilling
 }: BillingCardProps) => {
   return (
     <Card className="flex flex-wrap gap-6 justify-between items-center w-full">
@@ -26,9 +33,8 @@ export const BillingCard = ({
         type="button"
         size="sm"
         variant="dark"
-        spinner={loading}
         onClick={handleManageBilling}
-        disabled={!isOwner || loading}
+        disabled={!isOwner}
       >
         {loading ? "Loading..." : "Manage Billing"}
       </Button>
