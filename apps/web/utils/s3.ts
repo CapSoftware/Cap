@@ -192,7 +192,7 @@ export async function createBucketProvider(
   const bucket = await getS3Bucket(customBucket);
   const [s3Client] = await createS3Client(customBucket);
 
-  if (serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID) {
+  if (!customBucket && serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID) {
     const keyPairId = serverEnv().CLOUDFRONT_KEYPAIR_ID;
     const privateKey = serverEnv().CLOUDFRONT_KEYPAIR_PRIVATE_KEY;
 
@@ -205,7 +205,7 @@ export async function createBucketProvider(
       keyPairId,
       privateKey,
     });
-  } else {
-    return createS3Provider(s3Client, bucket);
   }
+
+  return createS3Provider(s3Client, bucket);
 }
