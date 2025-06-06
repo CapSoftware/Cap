@@ -38,6 +38,7 @@ export default function () {
   });
 
   const [borderColor, setBorderColor] = createSignal("#4686FF");
+
   onMount(async () => {
     const color = (await generalSettingsStore.get())
       ?.activeRecordingBorderColorHex;
