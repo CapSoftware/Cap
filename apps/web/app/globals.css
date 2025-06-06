@@ -41,20 +41,14 @@
   }
 }
 
-
-body {
-  overflow-x: hidden;
-}
-
 body,
 html {
   color: #000000;
-  background-color: #F2F2F2;
+  background-color: white;
 }
 
 ::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
+  width: 7px;
 }
 
 /* Track */
@@ -261,7 +255,7 @@ h2,
 h3,
 h4,
 h5 {
-  @apply font-normal tracking-normal text-[1.75rem] leading-[2.5rem] md:text-[2.5rem] md:leading-[3.25rem];
+  @apply font-normal tracking-[-0.03em] text-[1.75rem] leading-[2.5rem] md:text-[2.5rem] md:leading-[3.25rem];
 }
 
 a,
@@ -269,7 +263,7 @@ p,
 span,
 input,
 label, button {
-  @apply tracking-normal text-gray-10 font-normal leading-[1.5rem];
+  @apply tracking-tight text-gray-10 font-normal text-[1rem] leading-[1.5rem];
 }
 
 a,
@@ -281,10 +275,18 @@ nav ul {
   @apply list-none;
 }
 
+nav a {
+  @apply text-sm md:text-base;
+}
+
 nav.mobile a {
   @apply flex w-full;
 }
 
+nav.mobile a:not(.button),
+nav.mobile a:not(.button) * {
+  @apply text-[1.3rem] text-gray-700;
+}
 
 label {
   @apply block text-sm font-semibold text-left;
@@ -330,6 +332,10 @@ label {
     linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
+}
+
+.custom-bg {
+  background: linear-gradient(180deg, #4785FF 0%, #85ADFF 100%);
 }
 
 .muted-custom-bg {
@@ -545,63 +551,8 @@ footer a {
   @apply mt-6 text-2xl font-semibold;
 }
 
-/* Logo Marquee Animation */
-@keyframes wobble {
-  0% {
-    transform: rotate(-3deg) scale(1.05);
-  }
-  10% {
-    transform: rotate(3deg) scale(1.05);
-  }
-  20% {
-    transform: rotate(-3deg) scale(1.05);
-  }
-  30% {
-    transform: rotate(3deg) scale(1.05);
-  }
-  40% {
-    transform: rotate(-2deg) scale(1.05);
-  }
-  50% {
-    transform: rotate(2deg) scale(1.05);
-  }
-  60% {
-    transform: rotate(-1deg) scale(1.05);
-  }
-  70% {
-    transform: rotate(1deg) scale(1.05);
-  }
-  80% {
-    transform: rotate(-1deg) scale(1.05);
-  }
-  90% {
-    transform: rotate(1deg) scale(1.05);
-  }
-  100% {
-    transform: rotate(-3deg) scale(1.05);
-  }
-}
-
-.wobble {
-  animation: wobble 2.5s infinite linear;
-}
-
-@keyframes marquee {
-  0% {
-    transform: translateX(0);
-  }
-  100% {
-    transform: translateX(-50%);
-  }
-}
-
-.animate-marquee {
-  animation: marquee 30s linear infinite;
-  min-width: max-content;
-}
-
 .prose p, .prose li, .prose a {
-  @apply tracking-normal font-normal text-[1.125rem] leading-[1.75rem] !important;
+  @apply tracking-tight font-normal text-[1.125rem] leading-[1.75rem] !important;
 }
 
 .prose p, .prose li {
@@ -636,4 +587,3 @@ footer a {
     height: calc(100% - 1.70rem) !important;
   }
 }
-

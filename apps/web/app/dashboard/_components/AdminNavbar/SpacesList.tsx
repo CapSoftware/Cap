@@ -140,9 +140,10 @@ export const SpacesList = ({
         <Tooltip position="right" content="Create space">
           <Button
             className={clsx(
-              "p-0 bg-transparent hover:bg-gray-3",
+              "p-0 bg-transparent min-w-[unset] hover:bg-gray-3",
               sidebarCollapsed ? "size-8" : "size-7"
             )}
+            variant="gray"
             onClick={() => {
               setShowSpaceDialog(true);
             }}
