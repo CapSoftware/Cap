@@ -115,7 +115,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                 width: { type: "tween", duration: 0.2 },
               }}
               className={clsx(
-                "p-2.5 mt-1.5 rounded-xl cursor-pointer bg-gray-3"
+                "p-2.5 mt-2.5 rounded-xl cursor-pointer bg-gray-3"
               )}
             >
               <div
@@ -256,7 +256,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
           {manageNavigation.map((item) => (
             <div
               key={item.name}
-              className="flex relative justify-center items-center mb-1.5 w-full"
+              className="flex relative justify-center items-center w-full mb-2.5"
             >
               {isPathActive(item.href) && (
                 <motion.div

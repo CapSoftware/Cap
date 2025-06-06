@@ -149,7 +149,7 @@ export const SpacesList = () => {
               <div
                 key={space.id}
                 className={clsx(
-                  "relative transition-colors duration-150 rounded-xl mb-1.5",
+                  "relative transition-colors duration-150 rounded-xl mb-2",
                   activeDropTarget === space.id && "ring-2 ring-blue-500",
                   activeSpaceParams(space.id) ? "bg-gray-3" : "bg-transparent"
                 )}
