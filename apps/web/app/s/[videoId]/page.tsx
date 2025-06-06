@@ -277,7 +277,7 @@ export default async function ShareVideoPage(props: Props) {
 
   const userAccess = await userHasAccessToVideo(user, video);
 
-  if (!userAccess) return <p>This video is private</p>;
+  if (userAccess === "private") return <p>This video is private</p>;
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F7F8FA]">
@@ -285,7 +285,9 @@ export default async function ShareVideoPage(props: Props) {
         isOpen={userAccess === "needs-password"}
         videoId={video.id}
       />
-      {userAccess && <AuthorizedContent video={video} user={user} />}
+      {userAccess === "has-access" && (
+        <AuthorizedContent video={video} user={user} />
+      )}
     </div>
   );
 }
