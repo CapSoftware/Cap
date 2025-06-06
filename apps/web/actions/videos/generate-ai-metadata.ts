@@ -207,7 +207,9 @@ ${transcriptText}`;
       .set({ metadata: updatedMetadata })
       .where(eq(videos.id, videoId));
       
-    if (video.name?.startsWith("Cap Recording -") && data.title) {
+    const hasDatePattern = /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(video.name || "");
+    
+    if ((video.name?.startsWith("Cap Recording -") || hasDatePattern) && data.title) {
       await db()
         .update(videos)
         .set({ name: data.title })

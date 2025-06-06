@@ -133,7 +133,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           />
         );
       case "transcript":
-        return <Transcript data={data} onSeek={onSeek} />;
+        return <Transcript data={data} onSeek={onSeek} user={user} />;
       case "settings":
         return <Settings />;
       default:

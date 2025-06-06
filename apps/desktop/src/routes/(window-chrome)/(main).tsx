@@ -143,6 +143,10 @@ function Page() {
         const screenId = rawOptions.captureTarget.id;
         screen =
           screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
+      } else if (rawOptions.captureTarget.variant === "area") {
+        const screenId = rawOptions.captureTarget.screen;
+        screen =
+          screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
       }
 
       return screen;
@@ -191,14 +195,13 @@ function Page() {
   const toggleRecording = createMutation(() => ({
     mutationFn: async () => {
       if (!isRecording()) {
+        console.log("bruh", rawOptions, options.screen());
         await commands.startRecording({
           capture_target: options.target(),
           mode: rawOptions.mode,
           capture_system_audio: rawOptions.captureSystemAudio,
         });
-      } else {
-        await commands.stopRecording();
-      }
+      } else await commands.stopRecording();
     },
   }));
 
@@ -317,6 +320,7 @@ function Page() {
       </div>
       <div>
         <AreaSelectButton
+          screen={options.screen()}
           targetVariant={
             rawOptions.captureTarget.variant === "window"
               ? "other"
@@ -529,7 +533,7 @@ function createUpdateCheck() {
 
 function AreaSelectButton(props: {
   targetVariant: "screen" | "area" | "other";
-  screen?: CaptureScreen;
+  screen: CaptureScreen | undefined;
   onChange(area?: number): void;
 }) {
   const [areaSelection, setAreaSelection] = createStore({ pending: false });
@@ -552,6 +556,7 @@ function AreaSelectButton(props: {
     }
 
     const { screen } = props;
+    console.log({ screen });
     if (!screen) return;
 
     trackEvent("crop_area_enabled", {
