@@ -33,6 +33,8 @@ pub struct GeneralSettingsStore {
     #[serde(default = "true_b")]
     pub haptics_enabled: bool,
     #[serde(default)]
+    pub active_recording_border_color_hex: Option<String>,
+    #[serde(default)]
     pub auto_create_shareable_link: bool,
     #[serde(default = "true_b")]
     pub enable_notifications: bool,
@@ -86,6 +88,7 @@ impl Default for GeneralSettingsStore {
             upload_individual_files: false,
             hide_dock_icon: false,
             haptics_enabled: true,
+            active_recording_border_color_hex: None,
             auto_create_shareable_link: false,
             enable_notifications: true,
             disable_auto_open_links: false,

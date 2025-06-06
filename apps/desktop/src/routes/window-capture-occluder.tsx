@@ -1,8 +1,16 @@
 import { getAllWindows, getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrent } from "@tauri-apps/plugin-deep-link";
 import { type as ostype } from "@tauri-apps/plugin-os";
-import { createResource, Show, Suspense } from "solid-js";
+import {
+  createResource,
+  createSignal,
+  onCleanup,
+  onMount,
+  Show,
+  Suspense,
+} from "solid-js";
 import CropAreaRenderer from "~/components/CropAreaRenderer";
+import { generalSettingsStore } from "~/store";
 import { createCurrentRecordingQuery } from "~/utils/queries";
 
 export default function () {
@@ -25,8 +33,22 @@ export default function () {
     }
   };
 
+  const [scale] = createResource(() => getCurrentWindow().scaleFactor(), {
+    initialValue: 0,
+  });
 
-  const [scale] = createResource(() => getCurrentWindow().scaleFactor(), { initialValue: 0 });
+  const [borderColor, setBorderColor] = createSignal("#4686FF");
+  onMount(async () => {
+    const color = (await generalSettingsStore.get())
+      ?.activeRecordingBorderColorHex;
+    if (color) setBorderColor(color);
+
+    const unlisten = await generalSettingsStore.listen((data) => {
+      const color = data?.activeRecordingBorderColorHex;
+      if (color) setBorderColor(color);
+    });
+    onCleanup(() => unlisten);
+  });
 
   return (
     <Suspense>
@@ -41,13 +63,18 @@ export default function () {
 
           return (
             <CropAreaRenderer
-              bounds={ostype() === "macos" ? bounds() : {
-                x: bounds().x / scale(),
-                y: bounds().y / scale(),
-                width: bounds().width / scale(),
-                height: bounds().height / scale()
-              }}
-            // no border radius as that should be added in editor
+              bounds={
+                ostype() === "macos"
+                  ? bounds()
+                  : {
+                      x: bounds().x / scale(),
+                      y: bounds().y / scale(),
+                      width: bounds().width / scale(),
+                      height: bounds().height / scale(),
+                    }
+              }
+              borderColor={borderColor()}
+              // no border radius as that should be added in editor
             />
           );
         }}
