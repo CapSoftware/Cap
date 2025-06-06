@@ -530,6 +530,46 @@ body.react-draggable-transparent-selection .crosshair {
   display: block;
 }
 
+@keyframes wobble {
+  0% {
+    transform: rotate(-3deg) scale(1.05);
+  }
+  10% {
+    transform: rotate(3deg) scale(1.05);
+  }
+  20% {
+    transform: rotate(-3deg) scale(1.05);
+  }
+  30% {
+    transform: rotate(3deg) scale(1.05);
+  }
+  40% {
+    transform: rotate(-2deg) scale(1.05);
+  }
+  50% {
+    transform: rotate(2deg) scale(1.05);
+  }
+  60% {
+    transform: rotate(-1deg) scale(1.05);
+  }
+  70% {
+    transform: rotate(1deg) scale(1.05);
+  }
+  80% {
+    transform: rotate(-1deg) scale(1.05);
+  }
+  90% {
+    transform: rotate(1deg) scale(1.05);
+  }
+  100% {
+    transform: rotate(-3deg) scale(1.05);
+  }
+}
+
+.wobble {
+  animation: wobble 2.5s infinite linear;
+}
+
 footer ul {
   @apply p-0 list-none;
 }
