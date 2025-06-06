@@ -15,7 +15,7 @@ const buttonVariants = cva(
         primary: "bg-gray-12 text-gray-1 hover:bg-gray-11",
         blue: "bg-blue-600 text-white hover:bg-blue-700 disabled:bg-blue-800",
         destructive:
-          "bg-red-500 text-white hover:bg-red-600 disabled:bg-red-700",
+          "bg-red-500 text-white hover:bg-red-600 disabled:bg-red-200",
         white: "bg-gray-1 text-gray-12 hover:bg-gray-2 disabled:bg-gray-8",
         gray: "bg-gray-4 text-gray-12 hover:bg-gray-5 disabled:bg-gray-1",
         dark: "bg-gray-12 text-gray-1 disabled:cursor-not-allowed hover:bg-gray-11 disabled:text-gray-10 disabled:bg-gray-7 disabled:border-gray-8",
@@ -39,7 +39,6 @@ export interface ButtonProps
     VariantProps<typeof buttonVariants> {
   asChild?: boolean;
   spinner?: boolean;
-  spinnerClass?: string;
   href?: string;
   icon?: React.ReactNode;
 }
@@ -52,7 +51,6 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       size,
       asChild = false,
       spinner = false,
-      spinnerClass,
       href,
       icon,
       ...props
@@ -70,7 +68,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         {spinner && (
           <svg
             xmlns="http://www.w3.org/2000/svg"
-            className={classNames("mr-1 size-5", spinnerClass)}
+            className="mr-1 size-5"
             viewBox="0 0 24 24"
           >
             <style>

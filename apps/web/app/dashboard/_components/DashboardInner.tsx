@@ -32,7 +32,6 @@ import {
   faSignOut,
   faDownload,
 } from "@fortawesome/free-solid-svg-icons";
-import Image from "next/image";
 
 export default function DashboardInner({
   children,
@@ -63,25 +62,9 @@ export default function DashboardInner({
           "bg-gray-1 lg:bg-transparent min-h-16 lg:min-h-10 border-gray-3 lg:border-b-0 lg:pl-0 lg:pr-5 lg:top-0 lg:relative top-[64px] lg:mt-5 lg:h-8"
         )}
       >
-        <div className="flex flex-col gap-0.5">
-          {activeSpace && <span className="text-xs text-gray-11">Space</span>}
-          <div className="flex gap-1.5 items-center">
-            {activeSpace &&
-              (activeSpace.iconUrl ? (
-                <Image
-                  src={activeSpace?.iconUrl}
-                  alt={activeSpace?.name || "Space"}
-                  width={20}
-                  height={20}
-                  className="rounded-full"
-                />
-              ) : (
-                <Avatar
-                  letterClass="text-gray-1 text-xs"
-                  className="relative flex-shrink-0 size-5"
-                  name={activeSpace?.name}
-                />
-              ))}
+        <div className="flex gap-2 items-center">
+          <div className="flex flex-col">
+            {activeSpace && <span className="text-xs text-gray-11">Space</span>}
             <p className="relative text-base truncate md:text-lg text-gray-12 lg:text-2xl">
               {title}
             </p>

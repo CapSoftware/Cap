@@ -28,7 +28,6 @@ export type Space = {
   name: string;
   description: string | null;
   organizationId: string;
-  iconUrl: string | null;
 };
 
 export const dynamic = "force-dynamic";
@@ -103,7 +102,6 @@ export default async function DashboardLayout({
         name: spaces.name,
         description: spaces.description,
         organizationId: spaces.organizationId,
-        iconUrl: spaces.iconUrl,
       })
       .from(spaces)
       .where(eq(spaces.organizationId, activeOrganizationId));
@@ -120,7 +118,6 @@ export default async function DashboardLayout({
         name: `All ${activeOrgInfo.organization.name}`,
         description: `View all content in ${activeOrgInfo.organization.name}`,
         organizationId: activeOrgInfo.organization.id,
-        iconUrl: null,
       };
 
       spacesData = [allSpacesEntry, ...spacesData];

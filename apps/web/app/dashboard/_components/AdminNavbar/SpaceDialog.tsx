@@ -39,7 +39,7 @@ export const SpaceDialog = ({ open, onClose }: SpaceDialogProps) => {
       <DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
         <DialogHeader
           icon={<FontAwesomeIcon icon={faLayerGroup} />}
-          description="A new space for your team to collaborate"
+          description="Create a new space for your team to collaborate"
         >
           <DialogTitle className="text-lg text-gray-12">
             Create New Space
@@ -82,10 +82,7 @@ export interface NewSpaceFormProps {
 
 export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
   const formSchema = z.object({
-    name: z
-      .string()
-      .min(1, "Space name is required")
-      .max(25, "Space name must be at most 25 characters"),
+    name: z.string().min(1, "Space name is required"),
   });
 
   const form = useForm<z.infer<typeof formSchema>>({
@@ -137,7 +134,6 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
               <FormControl>
                 <Input
                   placeholder="Space name"
-                  maxLength={25}
                   {...field}
                   onChange={(e) => {
                     field.onChange(e);
@@ -149,7 +145,7 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
           />
 
           <div className="space-y-1">
-            <Label htmlFor="icon">Space Icon</Label>
+            <Label htmlFor="icon">Space Icon (Optional)</Label>
             <CardDescription className="w-full max-w-[400px]">
               Upload a custom logo or icon for your space.
             </CardDescription>

@@ -57,13 +57,6 @@
       "when": 1748949964461,
       "tag": "0006_melted_paibok",
       "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "5",
-      "when": 1749038954593,
-      "tag": "0007_outgoing_tiger_shark",
-      "breakpoints": true
     }
   ]
 }

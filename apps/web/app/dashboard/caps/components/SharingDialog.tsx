@@ -16,7 +16,7 @@ import clsx from "clsx";
 import { motion } from "framer-motion";
 import { Check, Search } from "lucide-react";
 import Image from "next/image";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { shareCap } from "@/actions/caps/share";
 
@@ -42,7 +42,9 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
   sharedSpaces,
   onSharingUpdated,
 }) => {
-  const { spacesData } = useSharedContext();
+  console.log("sharedSpaces:", sharedSpaces);
+
+  const { spacesData, activeOrganization } = useSharedContext();
   const [selectedSpaces, setSelectedSpaces] = useState<Set<string>>(new Set());
   const [searchTerm, setSearchTerm] = useState("");
   const [initialSelectedSpaces, setInitialSelectedSpaces] = useState<
@@ -50,7 +52,9 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
   >(new Set());
   const [loading, setLoading] = useState(false);
 
-  const sharedSpaceIds = new Set(sharedSpaces?.map((space) => space.id) || []);
+  const sharedOrganizationIds = new Set(
+    sharedSpaces?.map((space) => space.organizationId) || []
+  );
 
   useEffect(() => {
     if (isOpen && sharedSpaces) {
@@ -61,21 +65,20 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
     }
   }, [isOpen, sharedSpaces]);
 
-  const isSpaceSharedViaOrganization = useCallback(
-    (spaceId: string) => {
-      const space = spacesData?.find((s) => s.id === spaceId);
-      if (!space) return false;
-      return sharedSpaceIds.has(space.id);
-    },
-    [spacesData, sharedSpaceIds]
-  );
+  const isSpaceSharedViaOrganization = (spaceId: string) => {
+    const space = spacesData?.find((s) => s.id === spaceId);
+    return space && sharedOrganizationIds.has(space.organizationId);
+  };
 
   const handleToggleSpace = (spaceId: string) => {
+    console.log(`Toggling space: ${spaceId}`);
     setSelectedSpaces((prev) => {
       const newSet = new Set(prev);
       if (newSet.has(spaceId)) {
+        console.log(`Removing space ${spaceId} from selection`);
         newSet.delete(spaceId);
       } else {
+        console.log(`Adding space ${spaceId} to selection`);
         newSet.add(spaceId);
       }
       return newSet;
@@ -84,6 +87,8 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 
   const handleSave = async () => {
     try {
+      console.log("Starting save operation for cap:", capId);
+      console.log("Selected spaces:", Array.from(selectedSpaces));
       setLoading(true);
       const result = await shareCap({
         capId,
@@ -91,6 +96,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
       });
 
       if (!result.success) {
+        console.error("Share operation failed:", result.error);
         throw new Error(result.error || "Failed to update sharing settings");
       }
 
@@ -103,6 +109,9 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
       const removedSpaceIds = initialSpaces.filter(
         (id) => !newSelectedSpaces.includes(id)
       );
+
+      console.log("Added spaces:", addedSpaceIds);
+      console.log("Removed spaces:", removedSpaceIds);
 
       const getSpaceName = (id: string) => {
         const space = spacesData?.find((space) => space.id === id);
@@ -127,6 +136,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
       onSharingUpdated(newSelectedSpaces);
       onClose();
     } catch (error) {
+      console.error("Error updating sharing settings:", error);
       toast.error("Failed to update sharing settings");
     } finally {
       setLoading(false);
@@ -146,12 +156,10 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
           icon={<FontAwesomeIcon icon={faShareNodes} className="size-3.5" />}
           description="Select the spaces you would like to share with"
         >
-          <DialogTitle className="truncate w-full max-w-[320px]">
-            Share {capName}
-          </DialogTitle>
+          <DialogTitle>Share {capName}</DialogTitle>
         </DialogHeader>
         <div className="p-5">
-          <div className="relative mb-3">
+          <div className="relative mb-4">
             <Input
               type="text"
               placeholder="Search..."
@@ -164,7 +172,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
               size={20}
             />
           </div>
-          <div className="grid overflow-y-auto grid-cols-5 gap-3 pt-2 max-h-60">
+          <div className="grid overflow-y-auto grid-cols-4 gap-3 max-h-60">
             {filteredSpaces && filteredSpaces.length > 0 ? (
               filteredSpaces.map((space) => (
                 <SpaceCard
@@ -178,7 +186,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
                 />
               ))
             ) : (
-              <div className="flex col-span-5 gap-2 justify-center items-center text-sm">
+              <div className="flex col-span-4 gap-2 justify-center items-center pt-2 text-sm">
                 <p className="text-gray-12">
                   {spacesData && spacesData.length > 0
                     ? "No spaces match your search"
@@ -194,7 +202,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
           </Button>
           <Button
             spinner={loading}
-            disabled={loading}
+            disabled={loading || selectedSpaces.size === 0}
             size="sm"
             variant="dark"
             onClick={handleSave}
@@ -235,17 +243,16 @@ const SpaceCard = ({
     >
       <div
         className={clsx(
-          "flex items-center relative overflow-visible flex-col justify-center gap-2 border transition-colors bg-gray-1",
-          "duration-200 w-full p-2.5 rounded-xl cursor-pointer",
+          "flex items-center relative flex-col justify-center gap-2 border transition-colors bg-gray-1 duration-200 border-gray-3 w-full p-3 rounded-xl cursor-pointer",
           isSelected
             ? "bg-gray-3 border-green-500"
-            : "hover:bg-gray-3 hover:border-gray-5 border-gray-4",
-          isSharedViaOrganization && "ring-1 ring-inset ring-green-500/30"
+            : "hover:bg-gray-3 hover:border-gray-4",
+          isSharedViaOrganization && "ring-1 ring-inset ring-green-500/20"
         )}
         onClick={() => handleToggleSpace(space.id)}
       >
         {space.iconUrl ? (
-          <div className="overflow-hidden relative flex-shrink-0 rounded-full size-5">
+          <div className="overflow-hidden relative flex-shrink-0 rounded-full size-6">
             <Image
               src={space.iconUrl}
               alt={space.name}
@@ -256,8 +263,8 @@ const SpaceCard = ({
           </div>
         ) : (
           <Avatar
-            letterClass="text-gray-1 text-[11px]"
-            className="relative z-10 flex-shrink-0 size-5"
+            letterClass="text-gray-1 text-xs"
+            className="relative z-10 flex-shrink-0 size-6"
             name={space.name}
           />
         )}
@@ -278,7 +285,12 @@ const SpaceCard = ({
             damping: isSelected ? 20 : undefined,
             duration: !isSelected ? 0.2 : undefined,
           }}
-          className="flex absolute z-10 justify-center items-center rounded-full top-[-6px] right-[-6px] bg-gray-4 size-4 bg-green-500"
+          className={clsx(
+            "flex absolute top-0 right-0 justify-center items-center rounded-full border bg-gray-4 size-5",
+            isSelected
+              ? "bg-green-500 border-transparent"
+              : "bg-gray-4 border-gray-5"
+          )}
         >
           <Check className="text-white" size={10} />
         </motion.div>

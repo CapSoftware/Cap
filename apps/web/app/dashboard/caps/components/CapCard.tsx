@@ -79,6 +79,7 @@ export const CapCard = ({
   const [passwordProtected, setPasswordProtected] = useState(
     cap.hasPassword || false
   );
+  const [, setSharedOrganizations] = useState(cap.sharedOrganizations);
   const [isDateEditing, setIsDateEditing] = useState(false);
   const [copyPressed, setCopyPressed] = useState(false);
   const [dateValue, setDateValue] = useState(
@@ -163,7 +164,7 @@ export const CapCard = ({
   const renderSharedStatus = () => {
     const baseClassName = clsx(
       "text-sm text-gray-10 transition-colors duration-200 flex items-center mb-1",
-      "hover:text-gray-12 cursor-pointer"
+      sharedCapCard ? "cursor-default" : "hover:text-gray-12 cursor-pointer"
     );
     if (isOwner) {
       if (
