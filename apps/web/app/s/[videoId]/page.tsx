@@ -194,14 +194,18 @@ export async function generateMetadata(
           buildEnv.NEXT_PUBLIC_WEB_URL
         ).toString(),
       ],
-      player: new URL(`/s/${videoId}`, buildEnv.NEXT_PUBLIC_WEB_URL).toString(),
-      playerWidth: 1280,
-      playerHeight: 720,
-      playerStream: new URL(
-        `/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
-        buildEnv.NEXT_PUBLIC_WEB_URL
-      ).toString(),
-      playerStreamContentType: "video/mp4",
+      players: {
+        playerUrl: new URL(
+          `/s/${videoId}`,
+          buildEnv.NEXT_PUBLIC_WEB_URL
+        ).toString(),
+        streamUrl: new URL(
+          `/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
+          buildEnv.NEXT_PUBLIC_WEB_URL
+        ).toString(),
+        width: 1280,
+        height: 720,
+      },
     },
     robots: robotsDirective,
   };
