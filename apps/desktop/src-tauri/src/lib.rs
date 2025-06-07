@@ -2,6 +2,7 @@ mod audio;
 mod auth;
 mod camera;
 mod captions;
+mod deeplink_actions;
 mod flags;
 mod general_settings;
 mod hotkeys;

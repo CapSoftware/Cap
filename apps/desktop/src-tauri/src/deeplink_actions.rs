@@ -1,14 +1,7 @@
-use std::sync::Arc;
-
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Url};
-use tokio::sync::RwLock;
 
-use crate::{
-    auth::{AuthState, AuthStore},
-    windows::ShowCapWindow,
-    App,
-};
+use crate::{auth::AuthStore, App};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -20,7 +13,6 @@ pub enum CaptureMode {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeepLinkAction {
-    SignIn(AuthStore),
     StartRecording {
         mode: CaptureMode,
         camera_label: Option<String>,
@@ -88,15 +80,6 @@ impl TryFrom<&Url> for DeepLinkAction {
 impl DeepLinkAction {
     pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
         match self {
-            Self::SignIn(auth) => {
-                let app_state = app.state::<Arc<RwLock<App>>>();
-                let reader_guard = app_state.read().await;
-
-                match &reader_guard.auth_state {
-                    Some(AuthState::Listening) => Ok(AuthStore::set(app, Some(auth))?),
-                    _ => Err("Not listening for OAuth events".into()),
-                }
-            }
             DeepLinkAction::StartRecording {
                 mode,
                 camera_label,
@@ -104,47 +87,48 @@ impl DeepLinkAction {
                 fps,
                 output_resolution,
             } => {
-                use cap_media::sources::ScreenCaptureTarget;
-                let capture_target: ScreenCaptureTarget = match mode {
-                    CaptureMode::Screen(name) => cap_media::sources::list_screens()
-                        .into_iter()
-                        .find(|(s, _)| s.name == name)
-                        .map(|(s, _)| ScreenCaptureTarget::Screen(s))
-                        .ok_or(format!("No screen with name \"{}\"", &name))?,
-                    CaptureMode::Window(name) => cap_media::sources::list_windows()
-                        .into_iter()
-                        .find(|(w, _)| w.name == name)
-                        .map(|(w, _)| ScreenCaptureTarget::Window(w))
-                        .ok_or(format!("No window with name \"{}\"", &name))?,
-                };
+                todo!()
+                // use cap_media::sources::ScreenCaptureTarget;
+                // let capture_target: ScreenCaptureTarget = match mode {
+                //     CaptureMode::Screen(name) => cap_media::sources::list_screens()
+                //         .into_iter()
+                //         .find(|(s, _)| s.name == name)
+                //         .map(|(s, _)| ScreenCaptureTarget::Screen(s))
+                //         .ok_or(format!("No screen with name \"{}\"", &name))?,
+                //     CaptureMode::Window(name) => cap_media::sources::list_windows()
+                //         .into_iter()
+                //         .find(|(w, _)| w.name == name)
+                //         .map(|(w, _)| ScreenCaptureTarget::Window(w))
+                //         .ok_or(format!("No window with name \"{}\"", &name))?,
+                // };
 
-                let state = app.state::<Arc<RwLock<App>>>();
-                crate::set_recording_options(
-                    app.clone().to_owned(),
-                    state,
-                    cap_recording::RecordingOptions {
-                        capture_target,
-                        camera_label,
-                        audio_input_name,
-                        fps: fps.unwrap_or_default(),
-                        output_resolution,
-                    },
-                )
-                .await?;
+                // let state = app.state::<Arc<RwLock<App>>>();
+                // crate::set_recording_options(
+                //     app.clone().to_owned(),
+                //     state,
+                //     cap_recording::RecordingOptions {
+                //         capture_target,
+                //         camera_label,
+                //         audio_input_name,
+                //         fps: fps.unwrap_or_default(),
+                //         output_resolution,
+                //     },
+                // )
+                // .await?;
 
-                crate::recording::start_recording(app.clone(), app.state()).await
+                // crate::recording::start_recording(app.clone(), app.state()).await
             }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
             DeepLinkAction::OpenEditor(id) => {
-                crate::open_editor(app.clone(), id);
+                // crate::open_editor(app.clone(), id);
                 Ok(())
             }
             DeepLinkAction::OpenSettings => {
-                _ = ShowCapWindow::Settings { page: None }
-                    .show(app)
-                    .map_err(|e| format!("Failed to open settings window: {}", e))?;
+                // _ = ShowCapWindow::Settings { page: None }
+                // .show(app)
+                // .map_err(|e| format!("Failed to open settings window: {}", e))?;
                 Ok(())
             }
         }
