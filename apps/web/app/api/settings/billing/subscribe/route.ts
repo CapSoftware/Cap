@@ -4,6 +4,8 @@ import { NextRequest } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@cap/database";
 import { users } from "@cap/database/schema";
+import { serverEnv } from "@cap/env";
+import posthog from "posthog-js";
 
 export async function POST(request: NextRequest) {
   console.log("Starting subscription process");
@@ -34,9 +36,18 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    // Track subscription initiated event
+    if (typeof window !== "undefined") {
+      posthog.capture("subscription_initiated", {
+        price_id: priceId,
+        quantity: quantity,
+        platform: "web",
+      });
+    }
+
     if (!user.stripeCustomerId) {
       console.log("Creating new Stripe customer for user:", user.id);
-      const customer = await stripe.customers.create({
+      const customer = await stripe().customers.create({
         email: user.email,
         metadata: {
           userId: user.id,
@@ -45,7 +56,7 @@ export async function POST(request: NextRequest) {
 
       console.log("Created Stripe customer:", customer.id);
 
-      await db
+      await db()
         .update(users)
         .set({
           stripeCustomerId: customer.id,
@@ -57,12 +68,12 @@ export async function POST(request: NextRequest) {
     }
 
     console.log("Creating checkout session for customer:", customerId);
-    const checkoutSession = await stripe.checkout.sessions.create({
+    const checkoutSession = await stripe().checkout.sessions.create({
       customer: customerId as string,
       line_items: [{ price: priceId, quantity: quantity }],
       mode: "subscription",
-      success_url: `${process.env.NEXT_PUBLIC_URL}/dashboard/caps?upgrade=true`,
-      cancel_url: `${process.env.NEXT_PUBLIC_URL}/pricing`,
+      success_url: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true`,
+      cancel_url: `${serverEnv().WEB_URL}/pricing`,
       allow_promotion_codes: true,
     });
 

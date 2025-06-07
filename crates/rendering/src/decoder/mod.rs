@@ -3,6 +3,7 @@ use std::{
     path::PathBuf,
     sync::{mpsc, Arc},
 };
+use tokio::sync::oneshot;
 
 #[cfg(target_os = "macos")]
 mod avassetreader;
@@ -24,32 +25,41 @@ pub const FRAME_CACHE_SIZE: usize = 100;
 #[derive(Clone)]
 pub struct AsyncVideoDecoderHandle {
     sender: mpsc::Sender<VideoDecoderMessage>,
+    offset: f64,
 }
 
 impl AsyncVideoDecoderHandle {
     pub async fn get_frame(&self, time: f32) -> Option<DecodedFrame> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.sender
-            .send(VideoDecoderMessage::GetFrame(time, tx))
+            .send(VideoDecoderMessage::GetFrame(self.get_time(time), tx))
             .unwrap();
         rx.await.ok()
     }
+
+    pub fn get_time(&self, time: f32) -> f32 {
+        time + self.offset as f32
+    }
 }
 
-pub fn spawn_decoder(name: &'static str, path: PathBuf, fps: u32) -> AsyncVideoDecoderHandle {
+pub async fn spawn_decoder(
+    name: &'static str,
+    path: PathBuf,
+    fps: u32,
+    offset: f64,
+) -> Result<AsyncVideoDecoderHandle, String> {
+    let (ready_tx, ready_rx) = oneshot::channel::<Result<(), String>>();
     let (tx, rx) = mpsc::channel();
 
-    let handle = AsyncVideoDecoderHandle { sender: tx };
+    let handle = AsyncVideoDecoderHandle { sender: tx, offset };
 
-    #[cfg(target_os = "macos")]
-    {
-        avassetreader::AVAssetReaderDecoder::spawn(name, path, fps, rx);
+    if cfg!(target_os = "macos") {
+        #[cfg(target_os = "macos")]
+        avassetreader::AVAssetReaderDecoder::spawn(name, path, fps, rx, ready_tx);
+    } else {
+        ffmpeg::FfmpegDecoder::spawn(name, path, fps, rx, ready_tx)
+            .map_err(|e| format!("'{name}' decoder / {e}"))?;
     }
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        FfmpegDecoder::spawn(name, path, fps, rx);
-    }
-
-    handle
+    ready_rx.await.map_err(|e| e.to_string())?.map(|()| handle)
 }

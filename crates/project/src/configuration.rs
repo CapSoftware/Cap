@@ -23,7 +23,7 @@ pub type Color = [u16; 3];
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum BackgroundSource {
     Wallpaper {
-        id: u16,
+        path: Option<String>,
     },
     Image {
         path: Option<String>,
@@ -45,8 +45,8 @@ fn default_gradient_angle() -> u16 {
 
 impl Default for BackgroundSource {
     fn default() -> Self {
-        BackgroundSource::Color {
-            value: [71, 133, 255],
+        BackgroundSource::Wallpaper {
+            path: Some("sequoia-dark".to_string()),
         }
     }
 }
@@ -137,7 +137,18 @@ impl<T: Div<Output = T> + Copy> Div<T> for XY<T> {
     }
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default)]
+impl<T: Div<Output = T>> Div<XY<T>> for XY<T> {
+    type Output = Self;
+
+    fn div(self, other: XY<T>) -> Self {
+        Self {
+            x: self.x / other.x,
+            y: self.y / other.y,
+        }
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Crop {
     pub position: XY<u32>,
@@ -150,15 +161,41 @@ impl Crop {
     }
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+pub struct ShadowConfiguration {
+    pub size: f32,    // Overall shadow size (0-100)
+    pub opacity: f32, // Shadow opacity (0-100)
+    pub blur: f32,    // Shadow blur amount (0-100)
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct BackgroundConfiguration {
     pub source: BackgroundSource,
-    pub blur: u32,
+    pub blur: f64,
     pub padding: f64,
     pub rounding: f64,
     pub inset: u32,
     pub crop: Option<Crop>,
+    #[serde(default)]
+    pub shadow: f32,
+    #[serde(default)]
+    pub advanced_shadow: Option<ShadowConfiguration>,
+}
+
+impl Default for BackgroundConfiguration {
+    fn default() -> Self {
+        Self {
+            source: BackgroundSource::default(),
+            blur: 0.0,
+            padding: 0.0,
+            rounding: 0.0,
+            inset: 0,
+            crop: None,
+            shadow: 73.6,
+            advanced_shadow: Some(ShadowConfiguration::default()),
+        }
+    }
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
@@ -192,8 +229,22 @@ pub struct Camera {
     pub position: CameraPosition,
     pub size: f32,
     pub zoom_size: Option<f32>,
+    #[serde(default = "Camera::default_rounding")]
     pub rounding: f32,
+    #[serde(default)]
     pub shadow: f32,
+    #[serde(default)]
+    pub advanced_shadow: Option<ShadowConfiguration>,
+}
+
+impl Camera {
+    pub fn default_zoom_size() -> f32 {
+        60.0
+    }
+
+    fn default_rounding() -> f32 {
+        30.0
+    }
 }
 
 impl Default for Camera {
@@ -203,18 +254,60 @@ impl Default for Camera {
             mirror: false,
             position: CameraPosition::default(),
             size: 30.0,
-            zoom_size: None,
-            rounding: 100.0,
-            shadow: 0.0,
+            zoom_size: Some(Self::default_zoom_size()),
+            rounding: Self::default_rounding(),
+            shadow: 62.5,
+            advanced_shadow: Some(ShadowConfiguration {
+                size: 33.9,
+                opacity: 44.2,
+                blur: 10.5,
+            }),
         }
     }
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+impl Default for ShadowConfiguration {
+    fn default() -> Self {
+        Self {
+            size: 14.4,
+            opacity: 68.1,
+            blur: 3.8,
+        }
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum StereoMode {
+    #[default]
+    Stereo,
+    MonoL,
+    MonoR,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioConfiguration {
-    mute: bool,
-    improve: bool,
+    pub mute: bool,
+    pub improve: bool,
+    #[serde(default)]
+    pub mic_volume_db: f32,
+    #[serde(default)]
+    pub mic_stereo_mode: StereoMode,
+    #[serde(default)]
+    pub system_volume_db: f32,
+}
+
+impl Default for AudioConfiguration {
+    fn default() -> Self {
+        Self {
+            mute: false,
+            improve: false,
+            mic_volume_db: 0.0,
+            mic_stereo_mode: StereoMode::default(),
+            system_volume_db: 0.0,
+        }
+    }
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
@@ -237,20 +330,40 @@ pub enum CursorAnimationStyle {
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct CursorConfiguration {
+    #[serde(default)]
+    pub hide: bool,
     hide_when_idle: bool,
     pub size: u32,
     r#type: CursorType,
     pub animation_style: CursorAnimationStyle,
+    pub tension: f32,
+    pub mass: f32,
+    pub friction: f32,
+    #[serde(default = "CursorConfiguration::default_raw")]
+    pub raw: bool,
+    #[serde(default)]
+    pub motion_blur: f32,
 }
 
 impl Default for CursorConfiguration {
     fn default() -> Self {
         Self {
+            hide: false,
             hide_when_idle: false,
             size: 100,
             r#type: CursorType::default(),
             animation_style: CursorAnimationStyle::Regular,
+            tension: 100.0,
+            mass: 1.0,
+            friction: 20.0,
+            raw: false,
+            motion_blur: 0.5,
         }
+    }
+}
+impl CursorConfiguration {
+    fn default_raw() -> bool {
+        true
     }
 }
 
@@ -263,7 +376,8 @@ pub struct HotkeysConfiguration {
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineSegment {
-    pub recording_segment: Option<u32>,
+    #[serde(default)]
+    pub recording_segment: u32,
     pub timescale: f64,
     pub start: f64,
     pub end: f64,
@@ -307,13 +421,13 @@ pub struct TimelineConfiguration {
 }
 
 impl TimelineConfiguration {
-    pub fn get_recording_time(&self, tick_time: f64) -> Option<(f64, Option<u32>)> {
+    pub fn get_segment_time(&self, frame_time: f64) -> Option<(f64, u32)> {
         let mut accum_duration = 0.0;
 
         for segment in self.segments.iter() {
-            if tick_time < accum_duration + segment.duration() {
+            if frame_time < accum_duration + segment.duration() {
                 return segment
-                    .interpolate_time(tick_time - accum_duration)
+                    .interpolate_time(frame_time - accum_duration)
                     .map(|t| (t, segment.recording_segment));
             }
 
@@ -328,6 +442,73 @@ impl TimelineConfiguration {
     }
 }
 
+pub const WALLPAPERS_PATH: &str = "assets/backgrounds/macOS";
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionSegment {
+    pub id: String,
+    pub start: f32,
+    pub end: f32,
+    pub text: String,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionSettings {
+    pub enabled: bool,
+    pub font: String,
+    pub size: u32,
+    pub color: String,
+    #[serde(alias = "backgroundColor")]
+    pub background_color: String,
+    #[serde(alias = "backgroundOpacity")]
+    pub background_opacity: u32,
+    pub position: String,
+    pub bold: bool,
+    pub italic: bool,
+    pub outline: bool,
+    #[serde(alias = "outlineColor")]
+    pub outline_color: String,
+    #[serde(alias = "exportWithSubtitles")]
+    pub export_with_subtitles: bool,
+}
+
+impl Default for CaptionSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            font: "System Sans-Serif".to_string(),
+            size: 24,
+            color: "#FFFFFF".to_string(),
+            background_color: "#000000".to_string(),
+            background_opacity: 80,
+            position: "bottom".to_string(),
+            bold: true,
+            italic: false,
+            outline: true,
+            outline_color: "#000000".to_string(),
+            export_with_subtitles: false,
+        }
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionsData {
+    pub segments: Vec<CaptionSegment>,
+    pub settings: CaptionSettings,
+}
+
+impl Default for CaptionsData {
+    fn default() -> Self {
+        Self {
+            segments: Vec::new(),
+            settings: CaptionSettings::default(),
+        }
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectConfiguration {
@@ -339,13 +520,17 @@ pub struct ProjectConfiguration {
     pub hotkeys: HotkeysConfiguration,
     #[serde(default)]
     pub timeline: Option<TimelineConfiguration>,
-    pub motion_blur: Option<f32>,
+    #[serde(default)]
+    pub captions: Option<CaptionsData>,
 }
 
 impl ProjectConfiguration {
     pub fn load(project_path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
-        std::fs::read_to_string(project_path.as_ref().join("project-config.json"))
-            .map(|s| serde_json::from_str(&s).unwrap_or_default())
+        let config_str =
+            std::fs::read_to_string(project_path.as_ref().join("project-config.json"))?;
+        let mut config: Self = serde_json::from_str(&config_str).unwrap_or_default();
+
+        Ok(config)
     }
 
     pub fn write(&self, project_path: impl AsRef<Path>) -> Result<(), std::io::Error> {
@@ -355,8 +540,11 @@ impl ProjectConfiguration {
         )
     }
 
-    pub fn timeline(&self) -> Option<&TimelineConfiguration> {
-        self.timeline.as_ref()
+    pub fn get_segment_time(&self, frame_time: f64) -> Option<(f64, u32)> {
+        self.timeline
+            .as_ref()
+            .map(|t| t.get_segment_time(frame_time as f64))
+            .unwrap_or(Some((frame_time as f64, 0)))
     }
 }
 
@@ -364,16 +552,13 @@ impl Default for ProjectConfiguration {
     fn default() -> Self {
         ProjectConfiguration {
             aspect_ratio: None,
-            background: BackgroundConfiguration {
-                source: BackgroundSource::default(),
-                ..Default::default()
-            },
+            background: BackgroundConfiguration::default(),
             camera: Camera::default(),
             audio: AudioConfiguration::default(),
             cursor: CursorConfiguration::default(),
             hotkeys: HotkeysConfiguration::default(),
             timeline: None,
-            motion_blur: None,
+            captions: None,
         }
     }
 }

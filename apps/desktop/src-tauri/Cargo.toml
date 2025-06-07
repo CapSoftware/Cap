@@ -1,18 +1,21 @@
 [package]
 name = "cap-desktop"
-version = "0.3.15"
+version = "0.3.49"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2021"
 
+[lints]
+workspace = true
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-name = "desktop_solid_lib"
+name = "cap_desktop"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.0.3", features = [] }
+tauri-build = { version = "2.1.0", features = [] }
 
 [target.'cfg(target_os = "macos")'.build-dependencies]
 swift-rs = { version = "1.0.6", features = ["build"] }
@@ -41,9 +44,11 @@ tauri-plugin-oauth = { git = "https://github.com/FabianLars/tauri-plugin-oauth",
 tauri-plugin-window-state = "2.2.0"
 tauri-plugin-positioner = "2.2.0"
 tauri-plugin-deep-link = "2.2.0"
+tauri-plugin-clipboard-manager = "2.2.1"
+tauri-plugin-opener = "2.2.6"
 
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = "1.0.111"
 specta.workspace = true
 specta-typescript = "0.0.7"
 tokio.workspace = true
@@ -55,10 +60,10 @@ futures-intrusive = "0.5.0"
 anyhow.workspace = true
 futures = "0.3"
 axum = { version = "0.7.5", features = ["ws"] }
-tracing = "0.1.40"
-tempfile = "3.12.0"
+tracing.workspace = true
+tempfile = "3.9.0"
 ffmpeg.workspace = true
-chrono = "0.4.38"
+chrono = { version = "0.4.31", features = ["serde"] }
 rodio = "0.19.0"
 png = "0.17.13"
 device_query = "2.1.0"
@@ -71,6 +76,9 @@ cpal.workspace = true
 keyed_priority_queue = "0.4.2"
 sentry.workspace = true
 clipboard-rs = "0.2.2"
+whisper-rs = "0.11.0"
+lazy_static = "1.4.0"
+log = "0.4.20"
 
 cap-utils = { path = "../../../crates/utils" }
 cap-project = { path = "../../../crates/project" }
@@ -80,15 +88,21 @@ cap-media = { path = "../../../crates/media" }
 cap-flags = { path = "../../../crates/flags" }
 cap-recording = { path = "../../../crates/recording" }
 cap-export = { path = "../../../crates/export" }
+cap-audio = { path = "../../../crates/audio" }
 flume.workspace = true
 tracing-subscriber = "0.3.19"
 tracing-appender = "0.2.3"
 dirs = "6.0.0"
+relative-path = "1.9.3"
+cap-fail = { version = "0.1.0", path = "../../../crates/fail" }
+tokio-stream = { version = "0.1.17", features = ["sync"] }
+md5 = "0.7.0"
+tokio-util = "0.7.15"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"
 core-foundation = "0.10.0"
-objc2-app-kit = { version = "0.2.2", features = [
+objc2-app-kit = { version = "0.3.0", features = [
 	"NSWindow",
 	"NSResponder",
 	"NSHapticFeedback",

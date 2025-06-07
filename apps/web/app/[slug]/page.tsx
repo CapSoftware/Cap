@@ -14,7 +14,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     return {
       title: "Cap — Beautiful screen recordings, owned by you.",
       description:
-        "Cap is the open source alternative to Loom. Lightweight, powerful, and stunning. Record and share in seconds.",
+        "Cap is the open source alternative to Loom. Lightweight, powerful, and cross-platform. Record and share in seconds.",
     };
   }
 

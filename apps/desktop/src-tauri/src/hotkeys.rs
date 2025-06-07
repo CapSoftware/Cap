@@ -48,7 +48,7 @@ pub enum HotkeyAction {
     StartRecording,
     StopRecording,
     RestartRecording,
-    TakeScreenshot,
+    // TakeScreenshot,
 }
 
 #[derive(Serialize, Deserialize, Type, Default)]
@@ -58,7 +58,7 @@ pub struct HotkeysStore {
 
 impl HotkeysStore {
     pub fn get(app: &AppHandle) -> Result<Option<Self>, String> {
-        let Some(Some(store)) = app.get_store("store").map(|s| s.get("hotkeys")) else {
+        let Ok(Some(store)) = app.store("store").map(|s| s.get("hotkeys")) else {
             return Ok(None);
         };
 
@@ -89,10 +89,9 @@ pub fn init(app: &AppHandle) {
                             }
                             HotkeyAction::RestartRecording => {
                                 let _ = RequestRestartRecording.emit(app);
-                            }
-                            HotkeyAction::TakeScreenshot => {
-                                let _ = RequestNewScreenshot.emit(app);
-                            }
+                            } // HotkeyAction::TakeScreenshot => {
+                              //     let _ = RequestNewScreenshot.emit(app);
+                              // }
                         }
                     }
                 }

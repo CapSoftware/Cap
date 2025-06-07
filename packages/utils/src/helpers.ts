@@ -14,7 +14,7 @@ export const uuidFormat = (uuid: string) => {
 };
 
 export const CAP_LOGO_URL =
-  "https://raw.githubusercontent.com/CapSoftware/cap/main/app-icon.png";
+  "https://raw.githubusercontent.com/CapSoftware/cap/main/apps/desktop/src-tauri/icons/Square310x310Logo.png";
 
 export const saveLatestVideoId = (videoId: string) => {
   try {
@@ -58,4 +58,26 @@ export const isUserPro = async () => {
   }
 
   return false;
+};
+
+export const getProgressCircleConfig = () => {
+  const radius = 8;
+  const circumference = 2 * Math.PI * radius;
+  
+  return { radius, circumference };
+};
+
+export const calculateStrokeDashoffset = (progress: number, circumference: number) => {
+  return circumference - (progress / 100) * circumference;
+};
+
+export const getUploadStatus = (uploadProgress?: number) => {
+  if (uploadProgress !== undefined) {
+    return "Uploading";
+  }
+  return "Processing";
+};
+
+export const getDisplayProgress = (uploadProgress?: number, processingProgress: number = 0) => {
+  return uploadProgress !== undefined ? uploadProgress : processingProgress;
 };

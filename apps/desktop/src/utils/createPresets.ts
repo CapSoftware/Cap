@@ -1,8 +1,6 @@
-import { createResource, onCleanup } from "solid-js";
-
-import type { ProjectConfiguration } from "~/utils/tauri";
-import { presetsStore, type PresetsStore } from "~/store";
-import { DEFAULT_PROJECT_CONFIG } from "~/routes/editor/projectConfig";
+import { produce, unwrap } from "solid-js/store";
+import { presetsStore } from "~/store";
+import type { PresetsStore, ProjectConfiguration } from "~/utils/tauri";
 
 export type CreatePreset = {
   name: string;
@@ -11,22 +9,15 @@ export type CreatePreset = {
 };
 
 export function createPresets() {
-  const [query, queryActions] = createResource(async () => {
-    return (await presetsStore.get()) ?? ({ presets: [] } as PresetsStore);
-  });
+  const query = presetsStore.createQuery();
 
-  const [cleanup] = createResource(() =>
-    presetsStore.listen((data) => {
-      if (data) queryActions.mutate(data);
-    })
-  );
-  onCleanup(() => cleanup()?.());
+  async function updatePresets(fn: (prev: PresetsStore) => void) {
+    if (query.isLoading) throw new Error("Presets not loaded");
 
-  async function updatePresets(fn: (prev: PresetsStore) => PresetsStore) {
-    const p = query();
-    if (!p) throw new Error("Presets not loaded");
+    let p = query.data;
+    if (!p) await presetsStore.set((p = { presets: [], default: null }));
 
-    const newValue = fn(p);
+    const newValue = produce(fn)(p);
 
     await presetsStore.set(newValue);
   }
@@ -38,46 +29,26 @@ export function createPresets() {
       // @ts-ignore we reeeally don't want the timeline in the preset
       config.timeline = undefined;
 
-      await updatePresets((prev) => ({
-        presets: [...prev.presets, { name: preset.name, config }],
-        default: preset.default ? prev.presets.length : prev.default,
-      }));
+      await updatePresets((store) => {
+        store.presets.push({ name: preset.name, config });
+        store.default = preset.default ? store.presets.length : store.default;
+      });
     },
     deletePreset: (index: number) =>
-      updatePresets((prev) => {
-        prev.presets.splice(index, 1);
-
-        return {
-          presets: prev.presets,
-          default:
-            index > prev.presets.length - 1
-              ? prev.presets.length - 1
-              : prev.default,
-        };
+      updatePresets((store) => {
+        store.presets.splice(index, 1);
+        store.default =
+          index > store.presets.length - 1
+            ? store.presets.length - 1
+            : store.default;
       }),
-    getDefaultConfig: () => {
-      const p = query();
-      if (!p) return DEFAULT_PROJECT_CONFIG;
-
-      const config = p.presets[p.default ?? 0]?.config;
-      if (!config) return DEFAULT_PROJECT_CONFIG;
-
-      console.log("Config:", config);
-      
-      // @ts-ignore we reeeally don't want the timeline in the preset
-      config.timeline = undefined;
-      return config;
-    },
     setDefault: (index: number) =>
-      updatePresets((prev) => ({
-        presets: [...prev.presets],
-        default: index,
-      })),
+      updatePresets((store) => {
+        store.default = index;
+      }),
     renamePreset: (index: number, name: string) =>
-      updatePresets((prev) => {
-        prev.presets[index].name = name;
-
-        return prev;
+      updatePresets((store) => {
+        store.presets[index].name = name;
       }),
   };
 }

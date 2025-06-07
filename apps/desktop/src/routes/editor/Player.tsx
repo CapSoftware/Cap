@@ -1,479 +1,389 @@
-import { DropdownMenu as KDropdownMenu } from "@kobalte/core/dropdown-menu";
-import { Select as KSelect } from "@kobalte/core/select";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
-import { createEventListener } from "@solid-primitives/event-listener";
 import { createElementBounds } from "@solid-primitives/bounds";
+import { createEventListener } from "@solid-primitives/event-listener";
+import { createEffect, createSignal, Show } from "solid-js";
+
 import { cx } from "cva";
 import {
   For,
-  Show,
   Suspense,
-  createEffect,
   createResource,
-  createSignal,
+  on,
+  onMount,
+  onCleanup,
 } from "solid-js";
-import { reconcile } from "solid-js/store";
-import { useNavigate } from "@solidjs/router";
+import { reconcile, createStore } from "solid-js/store";
 
-import { type AspectRatio, commands } from "~/utils/tauri";
+import Tooltip from "~/components/Tooltip";
+import { commands } from "~/utils/tauri";
 import { FPS, OUTPUT_SIZE, useEditorContext } from "./context";
-import { ASPECT_RATIOS } from "./projectConfig";
-import { authStore } from "~/store";
-import {
-  ComingSoonTooltip,
-  DropdownItem,
-  EditorButton,
-  MenuItem,
-  MenuItemList,
-  PopperContent,
-  dropdownContainerClasses,
-  topLeftAnimateClasses,
-} from "./ui";
+import { ComingSoonTooltip, EditorButton, Slider } from "./ui";
 import { formatTime } from "./utils";
+import { captionsStore } from "~/store/captions";
+import AspectRatioSelect from "./AspectRatioSelect";
 
 export function Player() {
-  const navigate = useNavigate();
-  const [auth] = createResource(() => authStore.get());
   const {
     project,
-    videoId,
     editorInstance,
-    history,
-    latestFrame,
     setDialog,
-    playbackTime,
-    setPlaybackTime,
-    playing,
-    setPlaying,
-    split,
-    setSplit,
+    totalDuration,
+    editorState,
+    setEditorState,
+    zoomOutLimit,
+    setProject,
   } = useEditorContext();
 
-  let canvasRef!: HTMLCanvasElement;
+  // Load captions on mount
+  onMount(async () => {
+    if (editorInstance && editorInstance.path) {
+      // Still load captions into the store since they will be used by the GPU renderer
+      await captionsStore.loadCaptions(editorInstance.path);
 
+      // Synchronize captions settings with project configuration
+      // This ensures the GPU renderer will receive the caption settings
+      if (editorInstance && project) {
+        const updatedProject = { ...project };
+
+        // Add captions data to project configuration if it doesn't exist
+        if (
+          !updatedProject.captions &&
+          captionsStore.state.segments.length > 0
+        ) {
+          updatedProject.captions = {
+            segments: captionsStore.state.segments.map((segment) => ({
+              id: segment.id,
+              start: segment.start,
+              end: segment.end,
+              text: segment.text,
+            })),
+            settings: {
+              enabled: captionsStore.state.settings.enabled,
+              font: captionsStore.state.settings.font,
+              size: captionsStore.state.settings.size,
+              color: captionsStore.state.settings.color,
+              backgroundColor: captionsStore.state.settings.backgroundColor,
+              backgroundOpacity: captionsStore.state.settings.backgroundOpacity,
+              position: captionsStore.state.settings.position,
+              bold: captionsStore.state.settings.bold,
+              italic: captionsStore.state.settings.italic,
+              outline: captionsStore.state.settings.outline,
+              outlineColor: captionsStore.state.settings.outlineColor,
+              exportWithSubtitles:
+                captionsStore.state.settings.exportWithSubtitles,
+            },
+          };
+
+          // Update the project with captions data
+          setProject(updatedProject);
+
+          // Save the updated project configuration
+          await commands.setProjectConfig(updatedProject);
+        }
+      }
+    }
+  });
+
+  // Continue to update current caption when playback time changes
+  // This is still needed for CaptionsTab to highlight the current caption
   createEffect(() => {
-    const frame = latestFrame();
-    if (!frame) return;
-    const ctx = canvasRef.getContext("2d");
-    ctx?.putImageData(frame.data, 0, 0);
+    const time = editorState.playbackTime;
+    // Only update captions if we have a valid time and segments exist
+    if (
+      time !== undefined &&
+      time >= 0 &&
+      captionsStore.state.segments.length > 0
+    ) {
+      captionsStore.updateCurrentCaption(time);
+    }
   });
 
   const [canvasContainerRef, setCanvasContainerRef] =
     createSignal<HTMLDivElement>();
   const containerBounds = createElementBounds(canvasContainerRef);
 
-  const splitButton = () => (
-    <EditorButton<typeof KToggleButton>
-      disabled={!window.FLAGS.split}
-      pressed={split()}
-      onChange={setSplit}
-      as={KToggleButton}
-      variant="danger"
-      leftIcon={<IconCapScissors />}
-    >
-      Split
-    </EditorButton>
-  );
-
-  const totalDuration = () =>
-    project.timeline?.segments.reduce(
-      (acc, s) => acc + (s.end - s.start) / s.timescale,
-      0
-    ) ?? editorInstance.recordingDuration;
-
   const isAtEnd = () => {
     const total = totalDuration();
-    return total > 0 && total - playbackTime() <= 0.1;
+    return total > 0 && total - editorState.playbackTime <= 0.1;
   };
 
   createEffect(() => {
-    if (isAtEnd() && playing()) {
-      commands.stopPlayback(videoId);
-      setPlaying(false);
+    if (isAtEnd() && editorState.playing) {
+      commands.stopPlayback();
+      setEditorState("playing", false);
     }
   });
 
   const handlePlayPauseClick = async () => {
     try {
       if (isAtEnd()) {
-        await commands.stopPlayback(videoId);
-        setPlaybackTime(0);
-        await commands.seekTo(videoId, 0);
-        await commands.startPlayback(videoId, FPS, OUTPUT_SIZE);
-        setPlaying(true);
-      } else if (playing()) {
-        await commands.stopPlayback(videoId);
-        setPlaying(false);
+        await commands.stopPlayback();
+        setEditorState("playbackTime", 0);
+        await commands.seekTo(0);
+        await commands.startPlayback(FPS, OUTPUT_SIZE);
+        setEditorState("playing", true);
+      } else if (editorState.playing) {
+        await commands.stopPlayback();
+        setEditorState("playing", false);
       } else {
-        await commands.startPlayback(videoId, FPS, OUTPUT_SIZE);
-        setPlaying(true);
+        // Ensure we seek to the current playback time before starting playback
+        await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
+        await commands.startPlayback(FPS, OUTPUT_SIZE);
+        setEditorState("playing", true);
       }
+      if (editorState.playing) setEditorState("previewTime", null);
     } catch (error) {
       console.error("Error handling play/pause:", error);
-      setPlaying(false);
+      setEditorState("playing", false);
     }
   };
 
   createEventListener(document, "keydown", async (e: KeyboardEvent) => {
     if (e.code === "Space" && e.target === document.body) {
       e.preventDefault();
+      const prevTime = editorState.previewTime;
+
+      if (!editorState.playing) {
+        if (prevTime !== null) setEditorState("playbackTime", prevTime);
+
+        await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
+      }
+
       await handlePlayPauseClick();
     }
   });
 
   return (
-    <div class="flex flex-col divide-y flex-1">
-      <div class="flex flex-row justify-between font-medium p-[0.75rem] text-[0.875rem] z-10 bg-gray-50">
-        <div class="flex flex-row items-center gap-[0.5rem]">
-          <AspectRatioSelect />
-          <EditorButton
-            leftIcon={<IconCapCrop />}
-            onClick={() => {
-              const display = editorInstance.recordings.segments[0].display;
-              setDialog({
-                open: true,
-                type: "crop",
-                position: {
-                  ...(project.background.crop?.position ?? { x: 0, y: 0 }),
-                },
-                size: {
-                  ...(project.background.crop?.size ?? {
-                    x: display.width,
-                    y: display.height,
-                  }),
-                },
-              });
+    <div class="flex flex-col flex-1 rounded-xl bg-gray-1 dark:bg-gray-2 border border-gray-3">
+      <div class="flex gap-3 justify-center p-3">
+        <AspectRatioSelect />
+        <EditorButton
+          onClick={() => {
+            const display = editorInstance.recordings.segments[0].display;
+            setDialog({
+              open: true,
+              type: "crop",
+              position: {
+                ...(project.background.crop?.position ?? { x: 0, y: 0 }),
+              },
+              size: {
+                ...(project.background.crop?.size ?? {
+                  x: display.width,
+                  y: display.height,
+                }),
+              },
+            });
+          }}
+          leftIcon={<IconCapCrop class="w-5 text-gray-12" />}
+        >
+          Crop
+        </EditorButton>
+      </div>
+      <PreviewCanvas />
+      <div class="flex overflow-hidden z-10 flex-row gap-3 justify-between items-center p-5">
+        <div class="flex-1">
+          <Time
+            class="text-gray-12"
+            seconds={Math.max(
+              editorState.previewTime ?? editorState.playbackTime,
+              0
+            )}
+          />
+          <span class="text-gray-11 text-[0.875rem] tabular-nums"> / </span>
+          <Time seconds={totalDuration()} />
+        </div>
+        <div class="flex flex-row items-center justify-center text-gray-11 gap-8 text-[0.875rem]">
+          <button
+            type="button"
+            class="transition-opacity hover:opacity-70 will-change-[opacity]"
+            onClick={async () => {
+              await commands.stopPlayback();
+              setEditorState("playing", false);
+              setEditorState("playbackTime", 0);
             }}
           >
-            Crop
-          </EditorButton>
-          <PresetsDropdown />
-        </div>
-        <div class="flex flex-row place-items-center gap-2">
-          <EditorButton
-            disabled={!history.canUndo()}
-            leftIcon={<IconCapUndo />}
-            onClick={() => history.undo()}
-          >
-            Undo
-          </EditorButton>
-          <EditorButton
-            disabled={!history.canRedo()}
-            leftIcon={<IconCapRedo />}
-            onClick={() => history.redo()}
-          >
-            Redo
-          </EditorButton>
-        </div>
-      </div>
-      <div ref={setCanvasContainerRef} class="bg-gray-100 flex-1 relative">
-        <Show when={latestFrame()}>
-          {(currentFrame) => {
-            const padding = 16;
-
-            const containerAspect = () => {
-              if (containerBounds.width && containerBounds.height) {
-                return (
-                  (containerBounds.width - padding * 2) /
-                  (containerBounds.height - padding * 2)
-                );
-              }
-
-              return 1;
-            };
-
-            const frameAspect = () =>
-              currentFrame().width / currentFrame().data.height;
-
-            const size = () => {
-              if (frameAspect() < containerAspect()) {
-                const height = (containerBounds.height ?? 0) - padding * 2;
-
-                return {
-                  width: height * frameAspect(),
-                  height,
-                };
-              }
-
-              const width = (containerBounds.width ?? 0) - padding * 2;
-
-              return {
-                width,
-                height: width / frameAspect(),
-              };
-            };
-
-            return (
-              <canvas
-                style={{
-                  left: `${Math.max(
-                    ((containerBounds.width ?? 0) - size().width) / 2,
-                    padding
-                  )}px`,
-                  top: `${Math.max(
-                    ((containerBounds.height ?? 0) - size().height) / 2,
-                    padding
-                  )}px`,
-                  width: `${size().width}px`,
-                  height: `${size().height}px`,
-                }}
-                class="bg-blue-50 absolute rounded"
-                ref={canvasRef}
-                id="canvas"
-                width={currentFrame().width}
-                height={currentFrame().data.height}
-              />
-            );
-          }}
-        </Show>
-      </div>
-      <div class="flex flex-row items-center p-[0.75rem] z-10 bg-gray-50 justify-between">
-        <div class="flex-1 flex items-center">
-          <Show when={!auth()?.plan?.upgraded}>
-            <EditorButton
-              class="bg-gray-200 text-xs"
-              onClick={() => commands.showWindow("Upgrade")}
-            >
-              Remove watermark
-            </EditorButton>
-          </Show>
-        </div>
-        <div class="flex-1 flex flex-row items-center justify-center gap-[0.5rem] text-gray-400 text-[0.875rem]">
-          <span>{formatTime(playbackTime())}</span>
-          <button type="button" disabled>
-            <IconCapFrameFirst class="size-[1.2rem]" />
+            <IconCapPrev class="text-gray-12 size-3" />
           </button>
           <button
             type="button"
             onClick={handlePlayPauseClick}
-            class="hover:text-black transition-colors"
+            class="flex justify-center items-center rounded-full border border-gray-300 transition-colors bg-gray-3 hover:bg-gray-4 hover:text-black size-9"
           >
-            {!playing() || isAtEnd() ? (
-              <IconCapPlayCircle class="size-[1.5rem]" />
+            {!editorState.playing || isAtEnd() ? (
+              <IconCapPlay class="text-gray-12 size-3" />
             ) : (
-              <IconCapStopCircle class="size-[1.5rem]" />
+              <IconCapPause class="text-gray-12 size-3" />
             )}
           </button>
-          <button type="button" disabled>
-            <IconCapFrameLast class="size-[1rem]" />
+          <button
+            type="button"
+            class="transition-opacity hover:opacity-70 will-change-[opacity]"
+            onClick={async () => {
+              await commands.stopPlayback();
+              setEditorState("playing", false);
+              setEditorState("playbackTime", totalDuration());
+            }}
+          >
+            <IconCapNext class="text-gray-12 size-3" />
           </button>
-          <span>{formatTime(totalDuration())}</span>
         </div>
-        <div class="flex-1 flex flex-row justify-end">
-          {window.FLAGS.split ? (
-            splitButton()
-          ) : (
-            <ComingSoonTooltip>{splitButton()}</ComingSoonTooltip>
-          )}
+        <div class="flex flex-row flex-1 gap-4 justify-end items-center">
+          <div class="flex-1" />
+          <EditorButton<typeof KToggleButton>
+            pressed={editorState.timeline.interactMode === "split"}
+            onChange={(v: boolean) =>
+              setEditorState("timeline", "interactMode", v ? "split" : "seek")
+            }
+            as={KToggleButton}
+            variant="danger"
+            leftIcon={
+              <IconCapScissors
+                class={cx(
+                  editorState.timeline.interactMode === "split"
+                    ? "text-white"
+                    : "text-gray-12"
+                )}
+              />
+            }
+          />
+          <div class="w-px h-8 rounded-full bg-gray-4" />
+          <Tooltip content="Zoom out">
+            <IconCapZoomOut
+              onClick={() => {
+                editorState.timeline.transform.updateZoom(
+                  editorState.timeline.transform.zoom * 1.1,
+                  editorState.playbackTime
+                );
+              }}
+              class="text-gray-12 size-5 will-change-[opacity] transition-opacity hover:opacity-70"
+            />
+          </Tooltip>
+          <Tooltip content="Zoom in">
+            <IconCapZoomIn
+              onClick={() => {
+                editorState.timeline.transform.updateZoom(
+                  editorState.timeline.transform.zoom / 1.1,
+                  editorState.playbackTime
+                );
+              }}
+              class="text-gray-12 size-5 will-change-[opacity] transition-opacity hover:opacity-70"
+            />
+          </Tooltip>
+          <Slider
+            class="w-24"
+            minValue={0}
+            maxValue={1}
+            step={0.001}
+            value={[
+              Math.min(
+                Math.max(
+                  1 - editorState.timeline.transform.zoom / zoomOutLimit(),
+                  0
+                ),
+                1
+              ),
+            ]}
+            onChange={([v]) => {
+              editorState.timeline.transform.updateZoom(
+                (1 - v) * zoomOutLimit(),
+                editorState.playbackTime
+              );
+            }}
+            formatTooltip={() =>
+              `${editorState.timeline.transform.zoom.toFixed(
+                0
+              )} seconds visible`
+            }
+          />
         </div>
       </div>
     </div>
   );
 }
 
-function AspectRatioSelect() {
-  const { project, setProject } = useEditorContext();
+function PreviewCanvas() {
+  const { latestFrame } = useEditorContext();
+
+  let canvasRef: HTMLCanvasElement | undefined;
+
+  const [canvasContainerRef, setCanvasContainerRef] =
+    createSignal<HTMLDivElement>();
+  const containerBounds = createElementBounds(canvasContainerRef);
+
+  createEffect(() => {
+    const frame = latestFrame();
+    if (!frame) return;
+    if (!canvasRef) return;
+    const ctx = canvasRef.getContext("2d");
+    ctx?.putImageData(frame.data, 0, 0);
+  });
 
   return (
-    <KSelect<AspectRatio | "auto">
-      value={project.aspectRatio ?? "auto"}
-      onChange={(v) => {
-        if (v === null) return;
-        setProject("aspectRatio", v === "auto" ? null : v);
-      }}
-      defaultValue="auto"
-      options={
-        ["auto", "wide", "vertical", "square", "classic", "tall"] as const
-      }
-      multiple={false}
-      itemComponent={(props) => {
-        const item = () =>
-          props.item.rawValue === "auto"
-            ? null
-            : ASPECT_RATIOS[props.item.rawValue];
-
-        return (
-          <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
-            <KSelect.ItemLabel class="flex-1">
-              {props.item.rawValue === "auto"
-                ? "Auto"
-                : ASPECT_RATIOS[props.item.rawValue].name}
-              <Show when={item()}>
-                {(item) => (
-                  <span class="text-gray-400">
-                    {"⋅"}
-                    {item().ratio[0]}:{item().ratio[1]}
-                  </span>
-                )}
-              </Show>
-            </KSelect.ItemLabel>
-            <KSelect.ItemIndicator class="ml-auto">
-              <IconCapCircleCheck />
-            </KSelect.ItemIndicator>
-          </MenuItem>
-        );
-      }}
-      placement="top-start"
+    <div
+      ref={setCanvasContainerRef}
+      class="relative flex-1 justify-center items-center"
     >
-      <EditorButton<typeof KSelect.Trigger>
-        as={KSelect.Trigger}
-        leftIcon={<IconCapLayout />}
-        rightIcon={
-          <KSelect.Icon>
-            <IconCapChevronDown />
-          </KSelect.Icon>
-        }
-      >
-        <KSelect.Value<AspectRatio | "auto">>
-          {(state) => {
-            const text = () => {
-              const option = state.selectedOption();
-              return option === "auto" ? "Auto" : ASPECT_RATIOS[option].name;
+      <Show when={latestFrame()}>
+        {(currentFrame) => {
+          const padding = 4;
+
+          const containerAspect = () => {
+            if (containerBounds.width && containerBounds.height) {
+              return (
+                (containerBounds.width - padding * 2) /
+                (containerBounds.height - padding * 2)
+              );
+            }
+
+            return 1;
+          };
+
+          const frameAspect = () =>
+            currentFrame().width / currentFrame().data.height;
+
+          const size = () => {
+            if (frameAspect() < containerAspect()) {
+              const height = (containerBounds.height ?? 0) - padding * 1;
+
+              return {
+                width: height * frameAspect(),
+                height,
+              };
+            }
+
+            const width = (containerBounds.width ?? 0) - padding * 2;
+
+            return {
+              width,
+              height: width / frameAspect(),
             };
-            return <>{text()}</>;
-          }}
-        </KSelect.Value>
-      </EditorButton>
-      <KSelect.Portal>
-        <PopperContent<typeof KSelect.Content>
-          as={KSelect.Content}
-          class={topLeftAnimateClasses}
-        >
-          <MenuItemList<typeof KSelect.Listbox>
-            as={KSelect.Listbox}
-            class="w-[12.5rem]"
-          />
-        </PopperContent>
-      </KSelect.Portal>
-    </KSelect>
+          };
+
+          return (
+            <div class="flex overflow-hidden absolute inset-0 justify-center items-center h-full">
+              <canvas
+                style={{
+                  width: `${size().width - padding * 2}px`,
+                  height: `${size().height}px`,
+                }}
+                class="bg-blue-50 rounded"
+                ref={canvasRef}
+                id="canvas"
+                width={currentFrame().width}
+                height={currentFrame().data.height}
+              />
+            </div>
+          );
+        }}
+      </Show>
+    </div>
   );
 }
 
-function PresetsDropdown() {
-  const { setDialog, presets, setProject } = useEditorContext();
-
+function Time(props: { seconds: number; fps?: number; class?: string }) {
   return (
-    <KDropdownMenu gutter={8}>
-      <EditorButton<typeof KDropdownMenu.Trigger>
-        as={KDropdownMenu.Trigger}
-        leftIcon={<IconCapPresets />}
-      >
-        Presets
-      </EditorButton>
-      <KDropdownMenu.Portal>
-        <Suspense>
-          <PopperContent<typeof KDropdownMenu.Content>
-            as={KDropdownMenu.Content}
-            class={cx("w-72 max-h-56", topLeftAnimateClasses)}
-          >
-            <MenuItemList<typeof KDropdownMenu.Group>
-              as={KDropdownMenu.Group}
-              class="flex-1 overflow-y-auto scrollbar-none"
-            >
-              <For
-                each={presets.query()?.presets ?? []}
-                fallback={
-                  <div class="w-full text-sm text-gray-400 text-center py-1">
-                    No Presets
-                  </div>
-                }
-              >
-                {(preset, i) => {
-                  const [showSettings, setShowSettings] = createSignal(false);
-
-                  return (
-                    <KDropdownMenu.Sub gutter={16}>
-                      <MenuItem<typeof KDropdownMenu.SubTrigger>
-                        as={KDropdownMenu.SubTrigger}
-                        onFocusIn={() => setShowSettings(false)}
-                        onClick={() => setShowSettings(false)}
-                      >
-                        <span class="mr-auto">{preset.name}</span>
-                        <Show when={presets.query()?.default === i()}>
-                          <span class="px-[0.375rem] h-[1.25rem] rounded-full bg-gray-100 text-gray-400 text-[0.75rem]">
-                            Default
-                          </span>
-                        </Show>
-                        <button
-                          type="button"
-                          class="text-gray-400 hover:text-[currentColor]"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setShowSettings((s) => !s);
-                          }}
-                          onPointerUp={(e) => {
-                            e.stopPropagation();
-                            e.preventDefault();
-                          }}
-                        >
-                          <IconCapSettings />
-                        </button>
-                      </MenuItem>
-                      <KDropdownMenu.Portal>
-                        {showSettings() && (
-                          <MenuItemList<typeof KDropdownMenu.SubContent>
-                            as={KDropdownMenu.SubContent}
-                            class={cx(
-                              "animate-in fade-in slide-in-from-left-1 w-44",
-                              dropdownContainerClasses
-                            )}
-                          >
-                            <DropdownItem
-                              onSelect={() =>
-                                setProject(reconcile(preset.config))
-                              }
-                            >
-                              Apply
-                            </DropdownItem>
-                            <DropdownItem
-                              onSelect={() => presets.setDefault(i())}
-                            >
-                              Set as default
-                            </DropdownItem>
-                            <DropdownItem
-                              onSelect={() =>
-                                setDialog({
-                                  type: "renamePreset",
-                                  presetIndex: i(),
-                                  open: true,
-                                })
-                              }
-                            >
-                              Rename
-                            </DropdownItem>
-                            <DropdownItem
-                              onClick={() =>
-                                setDialog({
-                                  type: "deletePreset",
-                                  presetIndex: i(),
-                                  open: true,
-                                })
-                              }
-                            >
-                              Delete
-                            </DropdownItem>
-                          </MenuItemList>
-                        )}
-                      </KDropdownMenu.Portal>
-                    </KDropdownMenu.Sub>
-                  );
-                }}
-              </For>
-            </MenuItemList>
-            <MenuItemList<typeof KDropdownMenu.Group>
-              as={KDropdownMenu.Group}
-              class="border-t shrink-0"
-            >
-              <DropdownItem
-                onSelect={() => setDialog({ type: "createPreset", open: true })}
-              >
-                <span>Create new preset</span>
-                <IconCapCirclePlus class="ml-auto" />
-              </DropdownItem>
-            </MenuItemList>
-          </PopperContent>
-        </Suspense>
-      </KDropdownMenu.Portal>
-    </KDropdownMenu>
+    <span class={cx("text-gray-11 text-sm tabular-nums", props.class)}>
+      {formatTime(props.seconds, props.fps ?? FPS)}
+    </span>
   );
 }

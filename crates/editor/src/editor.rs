@@ -1,9 +1,10 @@
 use std::{sync::Arc, time::Instant};
 
 use cap_media::{feeds::RawCameraFrame, frame_ws::WSFrame};
-use cap_project::{BackgroundSource, RecordingMeta, XY};
+use cap_project::{BackgroundSource, CursorEvents, RecordingMeta, StudioRecordingMeta, XY};
 use cap_rendering::{
-    decoder::DecodedFrame, produce_frame, ProjectRecordings, ProjectUniforms, RenderVideoConstants,
+    decoder::DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectRecordings, ProjectUniforms,
+    RenderVideoConstants, RendererLayers,
 };
 use tokio::{
     sync::{mpsc, oneshot},
@@ -12,13 +13,10 @@ use tokio::{
 
 pub enum RendererMessage {
     RenderFrame {
-        screen_frame: DecodedFrame,
-        camera_frame: Option<DecodedFrame>,
-        background: BackgroundSource,
+        segment_frames: DecodedSegmentFrames,
         uniforms: ProjectUniforms,
-        time: f32, // Add this field
         finished: oneshot::Sender<()>,
-        resolution_base: XY<u32>,
+        cursor: Arc<CursorEvents>,
     },
     Stop {
         finished: oneshot::Sender<()>,
@@ -40,14 +38,17 @@ impl Renderer {
     pub fn spawn(
         render_constants: Arc<RenderVideoConstants>,
         frame_tx: flume::Sender<WSFrame>,
-        meta: &RecordingMeta,
-    ) -> RendererHandle {
-        let recordings = ProjectRecordings::new(meta);
+        recording_meta: &RecordingMeta,
+        meta: &StudioRecordingMeta,
+    ) -> Result<RendererHandle, String> {
+        let recordings = Arc::new(ProjectRecordings::new(&recording_meta.project_path, meta)?);
         let mut max_duration = recordings.duration();
 
         // Check camera duration if it exists
-        if let Some(camera_path) = meta.content.camera_path() {
-            if let Ok(camera_duration) = recordings.get_source_duration(&camera_path) {
+        if let Some(camera_path) = meta.camera_path() {
+            if let Ok(camera_duration) =
+                recordings.get_source_duration(&recording_meta.path(&camera_path))
+            {
                 max_duration = max_duration.max(camera_duration);
             }
         }
@@ -65,23 +66,25 @@ impl Renderer {
 
         tokio::spawn(this.run());
 
-        RendererHandle { tx }
+        Ok(RendererHandle { tx })
     }
 
     async fn run(mut self) {
         let mut frame_task: Option<JoinHandle<()>> = None;
 
+        let mut frame_renderer = FrameRenderer::new(&self.render_constants);
+
+        let mut layers =
+            RendererLayers::new(&self.render_constants.device, &self.render_constants.queue);
+
         loop {
             while let Some(msg) = self.rx.recv().await {
                 match msg {
                     RendererMessage::RenderFrame {
-                        screen_frame,
-                        camera_frame,
-                        background,
+                        segment_frames,
                         uniforms,
-                        time,
                         finished,
-                        resolution_base,
+                        cursor,
                     } => {
                         if let Some(task) = frame_task.as_ref() {
                             if task.is_finished() {
@@ -91,43 +94,30 @@ impl Renderer {
                             }
                         }
 
-                        let render_constants = self.render_constants.clone();
                         let frame_tx = self.frame_tx.clone();
-                        let total_frames = self.total_frames;
 
-                        frame_task = Some(tokio::spawn(async move {
-                            let frame = produce_frame(
-                                &render_constants,
-                                &screen_frame,
-                                &camera_frame,
-                                cap_rendering::Background::from(background),
-                                &uniforms,
-                                time,
-                                total_frames,
-                                resolution_base,
-                            )
+                        let output_size = uniforms.output_size;
+
+                        let frame = frame_renderer
+                            .render(segment_frames, uniforms, &cursor, &mut layers)
                             .await
                             .unwrap();
 
-                            frame_tx
-                                .try_send(WSFrame {
-                                    data: frame.data,
-                                    width: uniforms.output_size.0,
-                                    height: uniforms.output_size.1,
-                                    stride: frame.padded_bytes_per_row,
-                                })
-                                .ok();
-                            finished.send(()).ok();
-                        }));
+                        frame_tx
+                            .try_send(WSFrame {
+                                data: frame.data,
+                                width: output_size.0,
+                                height: output_size.1,
+                                stride: frame.padded_bytes_per_row,
+                            })
+                            .ok();
+                        finished.send(()).ok();
                     }
                     RendererMessage::Stop { finished } => {
-                        // Cancel any ongoing frame task
                         if let Some(task) = frame_task.take() {
                             task.abort();
                         }
-                        // Acknowledge the stop
                         let _ = finished.send(());
-                        // Exit the run loop
                         return;
                     }
                 }
@@ -143,23 +133,17 @@ impl RendererHandle {
 
     pub async fn render_frame(
         &self,
-        screen_frame: DecodedFrame,
-        camera_frame: Option<DecodedFrame>,
-        background: BackgroundSource,
+        segment_frames: DecodedSegmentFrames,
         uniforms: ProjectUniforms,
-        time: f32,
-        resolution_base: XY<u32>,
+        cursor: Arc<CursorEvents>,
     ) {
         let (finished_tx, finished_rx) = oneshot::channel();
 
         self.send(RendererMessage::RenderFrame {
-            screen_frame,
-            camera_frame,
-            background,
+            segment_frames,
             uniforms,
-            time, // Pass the time
             finished: finished_tx,
-            resolution_base,
+            cursor,
         })
         .await;
 

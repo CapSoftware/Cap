@@ -1,23 +1,24 @@
 "use client";
 
-import { useState } from "react";
-import { Activity } from "./tabs/Activity";
-import { Transcript } from "./tabs/Transcript";
-import { Settings } from "./tabs/Settings";
-import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { userSelectProps } from "@cap/database/auth/session";
+import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { classNames } from "@cap/utils";
 import { AnimatePresence, motion } from "framer-motion";
+import { useState } from "react";
+import { Activity } from "./tabs/Activity";
+import { Settings } from "./tabs/Settings";
+import { Summary } from "./tabs/Summary";
+import { Transcript } from "./tabs/Transcript";
 
-type TabType = "activity" | "transcript" | "settings";
+type TabType = "activity" | "transcript" | "summary" | "settings";
 
 type CommentType = typeof commentsSchema.$inferSelect & {
   authorName?: string | null;
 };
 
-type VideoWithSpaceInfo = typeof videos.$inferSelect & {
-  spaceMembers?: string[];
-  spaceId?: string;
+type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
+  organizationMembers?: string[];
+  organizationId?: string;
 };
 
 interface Analytics {
@@ -27,12 +28,20 @@ interface Analytics {
 }
 
 interface SidebarProps {
-  data: VideoWithSpaceInfo;
+  data: VideoWithOrganizationInfo;
   user: typeof userSelectProps | null;
   comments: CommentType[];
   analytics: Analytics;
   onSeek?: (time: number) => void;
   videoId: string;
+  aiData?: {
+    title?: string | null;
+    summary?: string | null;
+    chapters?: { title: string; start: number }[] | null;
+    processing?: boolean;
+  } | null;
+  aiGenerationEnabled?: boolean;
+  aiUiEnabled?: boolean;
 }
 
 const TabContent = motion.div;
@@ -66,17 +75,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
   analytics,
   onSeek,
   videoId,
+  aiData,
+  aiGenerationEnabled = false,
+  aiUiEnabled = false,
 }) => {
   const isOwnerOrMember: boolean = Boolean(
     user?.id === data.ownerId ||
-      (data.spaceId && data.spaceMembers?.includes(user?.id ?? ""))
+      (data.organizationId &&
+        data.organizationMembers?.includes(user?.id ?? ""))
   );
 
   const [activeTab, setActiveTab] = useState<TabType>("activity");
   const [[page, direction], setPage] = useState([0, 0]);
 
+  const hasExistingAiData =
+    aiData?.summary || (aiData?.chapters && aiData.chapters.length > 0);
+
   const tabs = [
     { id: "activity", label: "Comments" },
+    ...(aiUiEnabled || hasExistingAiData
+      ? [{ id: "summary", label: "Summary" }]
+      : []),
     { id: "transcript", label: "Transcript" },
   ];
 
@@ -102,8 +121,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
             isOwnerOrMember={isOwnerOrMember}
           />
         );
+      case "summary":
+        return (
+          <Summary
+            videoId={videoId}
+            onSeek={onSeek}
+            initialAiData={aiData || undefined}
+            aiGenerationEnabled={aiGenerationEnabled}
+            aiUiEnabled={aiUiEnabled}
+            user={user}
+          />
+        );
       case "transcript":
-        return <Transcript data={data} onSeek={onSeek} />;
+        return <Transcript data={data} onSeek={onSeek} user={user} />;
       case "settings":
         return <Settings />;
       default:
@@ -122,15 +152,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 paginate(tab.id === activeTab ? 0 : 1, tab.id as TabType)
               }
               className={classNames(
-                "flex-1 px-6 py-3 text-sm font-medium relative transition-colors duration-200",
-                "hover:bg-gray-100",
-                activeTab === tab.id ? "bg-gray-100" : ""
+                "flex-1 px-5 py-3 text-sm font-medium relative transition-colors duration-200",
+                "hover:bg-gray-1",
+                activeTab === tab.id ? "bg-gray-3" : ""
               )}
             >
               <span
                 className={classNames(
-                  "relative z-10",
-                  activeTab === tab.id ? "text-gray-500" : "text-gray-400"
+                  "relative z-10 text-sm",
+                  activeTab === tab.id ? "text-gray-12" : "text-gray-9"
                 )}
               >
                 {tab.label}

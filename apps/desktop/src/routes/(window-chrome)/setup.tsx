@@ -1,23 +1,23 @@
 import { Button } from "@cap/ui-solid";
-import {
-  createEffect,
-  createResource,
-  createSignal,
-  Show,
-  For,
-  startTransition,
-  onCleanup,
-  onMount,
-  Match,
-  Switch,
-} from "solid-js";
 import { createTimer } from "@solid-primitives/timer";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+    createEffect,
+    createResource,
+    createSignal,
+    For,
+    Match,
+    onCleanup,
+    onMount,
+    Show,
+    startTransition,
+    Switch,
+} from "solid-js";
 
-import { commands, OSPermission, type OSPermissionStatus } from "~/utils/tauri";
 import { makePersisted } from "@solid-primitives/storage";
 import { createStore } from "solid-js/store";
-import { setTitlebar } from "~/utils/titlebar-state";
+import ModeSelect from "~/components/ModeSelect";
+import { commands, OSPermission, type OSPermissionStatus } from "~/utils/tauri";
 
 function isPermitted(status?: OSPermissionStatus): boolean {
   return status === "granted" || status === "notNeeded";
@@ -41,6 +41,9 @@ export default function () {
   const [initialCheck, setInitialCheck] = createSignal(true);
   const [check, checkActions] = createResource(() =>
     commands.doPermissionsCheck(initialCheck())
+  );
+  const [currentStep, setCurrentStep] = createSignal<"permissions" | "mode">(
+    "permissions"
   );
 
   createEffect(() => {
@@ -68,12 +71,6 @@ export default function () {
     setInitialCheck(false);
   };
 
-  onMount(() => {
-    setTitlebar("height", "50px");
-    setTitlebar("transparent", true);
-    setTitlebar("border", false);
-  });
-
   const [showStartup, showStartupActions] = createResource(() =>
     generalSettingsStore.get().then((s) => {
       if (s === undefined) return true;
@@ -81,9 +78,16 @@ export default function () {
     })
   );
 
+  const handleContinue = () => {
+    // Just proceed to the main window without saving mode to store
+    commands.showWindow("Main").then(() => {
+      getCurrentWindow().close();
+    });
+  };
+
   return (
     <>
-      <div class="flex flex-col px-[2rem] text-[0.875rem] font-[400] flex-1 bg-gray-50 justify-evenly items-center">
+      <div class="flex flex-col px-[2rem] text-[0.875rem] font-[400] flex-1 bg-gray-1 justify-evenly items-center">
         {showStartup() && (
           <Startup
             onClose={() => {
@@ -91,67 +95,84 @@ export default function () {
             }}
           />
         )}
-        <div class="flex flex-col items-center">
-          <IconCapLogo class="size-18 mb-3" />
-          <h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">
-            Permissions Required
-          </h1>
-          <p class="text-gray-400">Cap needs permissions to run properly.</p>
-        </div>
 
-        <ul class="flex flex-col gap-4 py-8">
-          <For each={permissions}>
-            {(permission) => {
-              const permissionCheck = () => check()?.[permission.key];
+        <Show when={currentStep() === "permissions"}>
+          <div class="flex flex-col items-center">
+            <IconCapLogo class="size-14 mb-3" />
+            <h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">
+              Permissions Required
+            </h1>
+            <p class="text-gray-11">Cap needs permissions to run properly.</p>
+          </div>
 
-              return (
-                <Show when={permissionCheck() !== "notNeeded"}>
-                  <li class="flex flex-row items-center gap-4">
-                    <div class="flex flex-col flex-[2]">
-                      <span class="font-[500] text-[0.875rem] text-[--text-primary]">
-                        {permission.name} Permission
-                      </span>
-                      <span class="text-[--text-secondary]">
-                        {permission.description}
-                      </span>
-                    </div>
-                    <Button
-                      class="flex-1 shrink-0"
-                      onClick={() =>
-                        permissionCheck() !== "denied"
-                          ? requestPermission(permission.key)
-                          : openSettings(permission.key)
-                      }
-                      disabled={isPermitted(permissionCheck())}
-                    >
-                      {permissionCheck() === "granted"
-                        ? "Granted"
-                        : permissionCheck() !== "denied"
-                        ? "Grant Permission"
-                        : "Request Permission"}
-                    </Button>
-                  </li>
-                </Show>
-              );
-            }}
-          </For>
-        </ul>
+          <ul class="flex flex-col gap-4 py-8">
+            <For each={permissions}>
+              {(permission) => {
+                const permissionCheck = () => check()?.[permission.key];
 
-        <Button
-          class="px-12"
-          size="lg"
-          disabled={
-            permissions.find((p) => !isPermitted(check()?.[p.key])) !==
-            undefined
-          }
-          onClick={() => {
-            commands.openMainWindow().then(() => {
-              getCurrentWindow().close();
-            });
-          }}
-        >
-          Continue to Cap
-        </Button>
+                return (
+                  <Show when={permissionCheck() !== "notNeeded"}>
+                    <li class="flex flex-row items-center gap-4">
+                      <div class="flex flex-col flex-[2]">
+                        <span class="font-[500] text-[0.875rem] text-[--text-primary]">
+                          {permission.name} Permission
+                        </span>
+                        <span class="text-[--text-secondary]">
+                          {permission.description}
+                        </span>
+                      </div>
+                      <Button
+                        class="flex-1 shrink-0"
+                        onClick={() =>
+                          permissionCheck() !== "denied"
+                            ? requestPermission(permission.key)
+                            : openSettings(permission.key)
+                        }
+                        disabled={isPermitted(permissionCheck())}
+                      >
+                        {permissionCheck() === "granted"
+                          ? "Granted"
+                          : permissionCheck() !== "denied"
+                          ? "Grant Permission"
+                          : "Request Permission"}
+                      </Button>
+                    </li>
+                  </Show>
+                );
+              }}
+            </For>
+          </ul>
+
+          <Button
+            class="px-12"
+            size="lg"
+            disabled={
+              permissions.find((p) => !isPermitted(check()?.[p.key])) !==
+              undefined
+            }
+            onClick={() => setCurrentStep("mode")}
+          >
+            Continue
+          </Button>
+        </Show>
+
+        <Show when={currentStep() === "mode"}>
+          <div class="flex flex-col items-center">
+            <IconCapLogo class="size-14 mb-3" />
+            <h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">
+              Select Recording Mode
+            </h1>
+            <p class="text-gray-11">Choose how you want to record with Cap.</p>
+          </div>
+
+          <div class="w-full py-4">
+            <ModeSelect />
+          </div>
+
+          <Button class="px-12" size="lg" onClick={handleContinue}>
+            Continue to Cap
+          </Button>
+        </Show>
       </div>
     </>
   );
@@ -161,11 +182,12 @@ import cloud1 from "../../assets/illustrations/cloud-1.png";
 import cloud2 from "../../assets/illustrations/cloud-2.png";
 import cloud3 from "../../assets/illustrations/cloud-3.png";
 
-import startupAudio from "../../assets/tears-and-fireflies-adi-goldstein.mp3";
-import { generalSettingsStore } from "~/store";
-import { Portal } from "solid-js/web";
-import { cx } from "cva";
 import { type as ostype } from "@tauri-apps/plugin-os";
+import { cx } from "cva";
+import { Portal } from "solid-js/web";
+import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import { generalSettingsStore } from "~/store";
+import startupAudio from "../../assets/tears-and-fireflies-adi-goldstein.mp3";
 
 function Startup(props: { onClose: () => void }) {
   const [audioState, setAudioState] = makePersisted(
@@ -270,37 +292,36 @@ function Startup(props: { onClose: () => void }) {
     audio.muted = audioState.isMuted;
   };
 
-  onMount(() => {
-    setTitlebar("transparent", true);
-    setTitlebar("border", false);
-    setTitlebar("height", "50px");
-    setTitlebar(
-      "items",
-      <div
-        dir={ostype() === "windows" ? "rtl" : "rtl"}
-        class="flex mx-4 items-center gap-[0.25rem]"
-      >
-        <button
-          onClick={toggleMute}
-          class={`text-gray-50 hover:text-gray-200 transition-colors ${
-            isExiting() ? "opacity-0" : ""
-          }`}
-        >
-          {audioState.isMuted ? (
-            <IconLucideVolumeX class="w-6 h-6" />
-          ) : (
-            <IconLucideVolume2 class="w-6 h-6" />
-          )}
-        </button>
-      </div>
-    );
-  });
-
-  onCleanup(() => setTitlebar("items", null));
-
   return (
     <Portal>
       <div class="absolute inset-0 z-40">
+        <header
+          class="absolute top-0 inset-x-0 h-12 z-10"
+          data-tauri-drag-region
+        >
+          <div
+            class={cx(
+              "flex justify-between items-center gap-[0.25rem] w-full h-full z-10",
+              ostype() === "windows" ? "flex-row" : "flex-row-reverse"
+            )}
+            data-tauri-drag-region
+          >
+            <button
+              onClick={toggleMute}
+              class={cx(
+                "mx-4 text-solid-white hover:text-[#DDD] transition-colors",
+                isExiting() && "opacity-0"
+              )}
+            >
+              {audioState.isMuted ? (
+                <IconLucideVolumeX class="w-6 h-6" />
+              ) : (
+                <IconLucideVolume2 class="w-6 h-6" />
+              )}
+            </button>
+            {ostype() === "windows" && <CaptionControlsWindows11 />}
+          </div>
+        </header>
         <style>
           {`
           body {
@@ -397,7 +418,7 @@ function Startup(props: { onClose: () => void }) {
         <div
           style={{ "transition-duration": "600ms" }}
           class={cx(
-            "flex flex-col h-screen custom-bg relative overflow-hidden transition-opacity",
+            "flex flex-col h-screen custom-bg relative overflow-hidden transition-opacity text-solid-white",
             isExiting() && "exiting opacity-0"
           )}
         >
@@ -443,7 +464,7 @@ function Startup(props: { onClose: () => void }) {
 
           {/* Main content */}
           <div
-            class={`content-container flex flex-col items-center justify-center flex-1 relative z-10 px-4 ${
+            class={`content-container flex flex-col items-center justify-center flex-1 relative px-4 ${
               isExiting() ? "exiting" : ""
             }`}
           >
@@ -457,10 +478,10 @@ function Startup(props: { onClose: () => void }) {
                   ${isLogoAnimating() ? "logo-bounce" : ""}`}
                 />
               </div>
-              <h1 class="text-5xl md:text-5xl font-bold text-gray-50 mb-4 drop-shadow-[0_0_20px_rgba(0,0,0,0.2)]">
+              <h1 class="text-5xl md:text-5xl font-bold mb-4 drop-shadow-[0_0_20px_rgba(0,0,0,0.2)]">
                 Welcome to Cap
               </h1>
-              <p class="text-2xl text-gray-50 opacity-80 max-w-md mx-auto drop-shadow-[0_0_20px_rgba(0,0,0,0.2)]">
+              <p class="text-2xl opacity-80 max-w-md mx-auto drop-shadow-[0_0_20px_rgba(0,0,0,0.2)]">
                 Beautiful screen recordings, owned by you.
               </p>
             </div>
@@ -482,7 +503,7 @@ function Startup(props: { onClose: () => void }) {
                   size="lg"
                   onClick={async () => {
                     handleStartupCompleted();
-                    await commands.openMainWindow();
+                    await commands.showWindow("Main");
                     getCurrentWindow().close();
                   }}
                 >
@@ -492,7 +513,6 @@ function Startup(props: { onClose: () => void }) {
             </Switch>
           </div>
         </div>
-        props.onClose()
       </div>
     </Portal>
   );

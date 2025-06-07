@@ -3,11 +3,11 @@ resolver = "2"
 members = ["apps/cli", "apps/desktop/src-tauri", "crates/*"]
 
 [workspace.dependencies]
-anyhow = "1.0.86"
+anyhow = { version = "1.0.86" }
 # This includes a currently-unreleased fix that ensures the audio stream is actually
 # stopped and released on drop on macOS
 cpal = { git = "https://github.com/RustAudio/cpal", rev = "f43d36e55494993bbbde3299af0c53e5cdf4d4cf" }
-ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "91b29d09a8c7cb4f5659c38f1f0924b980a30cba" }
+ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "49db1fede112" }
 ffmpeg-sys-next = "7.1.0"
 tokio = { version = "1.39.3", features = [
 	"macros",
@@ -18,15 +18,19 @@ tokio = { version = "1.39.3", features = [
 	"rt-multi-thread",
 	"time",
 ] }
-tauri = { version = "2.2.3", features = ["specta"] }
-specta = { version = "=2.0.0-rc.20", features = ["derive"] }
+tauri = { version = "2.5.0", features = ["specta"] }
+specta = { version = "=2.0.0-rc.20", features = [
+	"derive",
+	"serde_json",
+	"uuid",
+] }
 
-scap = { git = "https://github.com/CapSoftware/scap", rev = "58d4410bf52f" }
-nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "d37141b1883d", features = [
+scap = { git = "https://github.com/CapSoftware/scap", rev = "b914379d787f" }
+nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2", features = [
 	"input-native",
 	"serialize",
 ] }
-nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "d37141b1883d" }
+nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2" }
 wgpu = "22.1.0"
 flume = "0.11.0"
 thiserror = "1.0"
@@ -35,9 +39,18 @@ sentry = { version = "0.34.0", features = [
 	"backtrace",
 	"debug-images",
 ] }
+tracing = "0.1.41"
 
-cidre = { git = "https://github.com/yury/cidre", rev = "3479c18b9ac81dbb15d0acb3a75edd6b42d044b1" }
+cidre = { git = "https://github.com/yury/cidre", rev = "ef04aaabe14ffbbce4a330973a74b6d797d073ff" }
 
 windows = "0.58.0"
 windows-sys = "0.59.0"
-windows-capture = "=1.3.6"
+windows-capture = "1.4.2"
+percent-encoding = "2.3.1"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+
+[patch.crates-io]
+screencapturekit = { git = "https://github.com/CapSoftware/screencapturekit-rs", rev = "7ff1e103742e56c8f6c2e940b5e52684ed0bed69" } # branch = "cap-main"
+wry = { git = "https://github.com/CapSoftware/wry", rev = "293f510" }                                                               # branch = "cap"

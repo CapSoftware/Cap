@@ -1,5 +1,5 @@
 use flume::{Receiver, Sender};
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 use tracing::{error, info};
 
 use crate::{
@@ -12,13 +12,17 @@ use crate::{
 pub struct CameraSource {
     feed_connection: CameraConnection,
     video_info: VideoInfo,
+    output: Sender<(FFVideo, f64)>,
+    start_time: SystemTime,
 }
 
 impl CameraSource {
-    pub fn init(feed: &CameraFeed) -> Self {
+    pub fn init(feed: &CameraFeed, output: Sender<(FFVideo, f64)>, start_time: SystemTime) -> Self {
         Self {
             feed_connection: feed.create_connection(),
             video_info: feed.video_info(),
+            output,
+            start_time,
         }
     }
 
@@ -26,42 +30,29 @@ impl CameraSource {
         self.video_info
     }
 
-    fn process_frame(
-        &self,
-        clock: &mut RealTimeClock<Instant>,
-        output: &Sender<FFVideo>,
-        camera_frame: RawCameraFrame,
-    ) -> Result<(), MediaError> {
-        let RawCameraFrame {
-            mut frame,
-            captured_at,
-        } = camera_frame;
-        match clock.timestamp_for(captured_at) {
-            None => {
-                eprintln!("Clock is currently stopped. Dropping frames.");
-            }
-            Some(timestamp) => {
-                frame.set_pts(Some(timestamp));
-                if let Err(_) = output.send(frame) {
-                    return Err(MediaError::Any("Pipeline is unreachable! Stopping capture"));
-                }
-            }
+    fn process_frame(&self, camera_frame: RawCameraFrame) -> Result<(), MediaError> {
+        let RawCameraFrame { frame, captured_at } = camera_frame;
+        if let Err(_) = self.output.send((
+            frame,
+            captured_at
+                .duration_since(self.start_time)
+                .unwrap()
+                .as_secs_f64(),
+        )) {
+            return Err(MediaError::Any(
+                "Pipeline is unreachable! Stopping capture".into(),
+            ));
         }
 
         Ok(())
     }
 
-    fn pause_and_drain_frames(
-        &self,
-        clock: &mut RealTimeClock<Instant>,
-        output: &Sender<FFVideo>,
-        frames_rx: Receiver<RawCameraFrame>,
-    ) {
+    fn pause_and_drain_frames(&self, frames_rx: Receiver<RawCameraFrame>) {
         let frames: Vec<RawCameraFrame> = frames_rx.drain().collect();
         drop(frames_rx);
 
         for frame in frames {
-            if let Err(error) = self.process_frame(clock, output, frame) {
+            if let Err(error) = self.process_frame(frame) {
                 eprintln!("{error}");
                 break;
             }
@@ -70,44 +61,40 @@ impl CameraSource {
 }
 
 impl PipelineSourceTask for CameraSource {
-    type Output = FFVideo;
-
     type Clock = RealTimeClock<Instant>;
 
     // #[tracing::instrument(skip_all)]
     fn run(
         &mut self,
-        mut clock: Self::Clock,
+        _: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
-        output: Sender<Self::Output>,
     ) {
         let mut frames_rx: Option<Receiver<RawCameraFrame>> = None;
-        ready_signal.send(Ok(())).unwrap();
 
         info!("Camera source ready");
 
+        let frames = frames_rx.get_or_insert_with(|| self.feed_connection.attach());
+
+        ready_signal.send(Ok(())).unwrap();
+
         loop {
             match control_signal.last() {
-                Some(Control::Play) => {
-                    let frames = frames_rx.get_or_insert_with(|| self.feed_connection.attach());
-
-                    match frames.recv() {
-                        Ok(frame) => {
-                            if let Err(error) = self.process_frame(&mut clock, &output, frame) {
-                                eprintln!("{error}");
-                                break;
-                            }
-                        }
-                        Err(_) => {
-                            error!("Lost connection with the camera feed");
+                Some(Control::Play) => match frames.drain().last().or_else(|| frames.recv().ok()) {
+                    Some(frame) => {
+                        if let Err(error) = self.process_frame(frame) {
+                            eprintln!("{error}");
                             break;
                         }
                     }
-                }
+                    None => {
+                        error!("Lost connection with the camera feed");
+                        break;
+                    }
+                },
                 Some(Control::Shutdown) | None => {
                     if let Some(rx) = frames_rx.take() {
-                        self.pause_and_drain_frames(&mut clock, &output, rx);
+                        self.pause_and_drain_frames(rx);
                     }
                     info!("Camera source stopped");
                     break;

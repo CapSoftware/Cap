@@ -2,12 +2,6 @@
 
 import("dotenv").then(({ config }) => config({ path: "../../.env" }));
 
-if (process.env.DB_PLANETSCALE_HOST !== undefined) {
-  throw new Error(
-    "DB_PLANETSCALE_HOST no longer supported. Use DATABASE_URL instead. Must start with mysql:// for local dev, and https:// for production."
-  );
-}
-
 import fs from "fs";
 import path from "path";
 
@@ -27,6 +21,7 @@ const nextConfig = {
     ignoreBuildErrors: true,
   },
   experimental: {
+    instrumentationHook: process.env.DOCKER_BUILD === "true",
     optimizePackageImports: ["@cap/ui", "@cap/utils", "@cap/web-api-contract"],
     serverComponentsExternalPackages: [
       "@react-email/components",
@@ -42,13 +37,39 @@ const nextConfig = {
         port: "",
         pathname: "**",
       },
-    ],
+      {
+        protocol: "https",
+        hostname: "l.cap.so",
+        port: "",
+        pathname: "**",
+      },
+      process.env.NODE_ENV === "development" && {
+        protocol: "http",
+        hostname: "localhost",
+        port: "3902",
+        pathname: "**",
+      },
+    ].filter(Boolean),
   },
   async rewrites() {
     return [
       {
         source: "/r/:path*",
         destination: "https://dub.cap.link/:path*",
+      },
+      {
+        source: "/api/commercial/:path*",
+        destination: "https://l.cap.so/api/commercial/:path*",
+      },
+      {
+        source: "/s/:videoId",
+        destination: "/s/:videoId",
+        has: [
+          {
+            type: "host",
+            value: "(?!cap.so|cap.link).*",
+          },
+        ],
       },
     ];
   },
@@ -80,6 +101,8 @@ const nextConfig = {
   env: {
     appVersion: version,
   },
+  // If the DOCKER_BUILD environment variable is set to true, we are output nextjs to standalone ready for docker deployment
+  output: process.env.DOCKER_BUILD === "true" ? "standalone" : undefined,
 };
 
 export default nextConfig;

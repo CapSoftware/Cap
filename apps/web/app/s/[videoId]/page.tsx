@@ -1,18 +1,31 @@
-import { Share } from "./Share";
 import { db } from "@cap/database";
 import { eq, desc, sql, count } from "drizzle-orm";
+import { Logo } from "@cap/ui";
 import {
   videos,
   comments,
   users,
   sharedVideos,
-  spaceMembers,
-  spaces,
+  organizationMembers,
+  organizations,
 } from "@cap/database/schema";
+import { VideoMetadata } from "@cap/database/types";
 import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
 import type { Metadata, ResolvingMetadata } from "next";
 import { notFound } from "next/navigation";
+import { buildEnv } from "@cap/env";
+import { getVideoAnalytics } from "@/actions/videos/get-analytics";
+import { transcribeVideo } from "@/actions/videos/transcribe";
+import { getScreenshot } from "@/actions/screenshots/get-screenshot";
+import { cookies, headers } from "next/headers";
+import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
+import { isAiGenerationEnabled, isAiUiEnabled } from "@/utils/flags";
+
+import { Share } from "./Share";
+import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { ImageViewer } from "./_components/ImageViewer";
+import { decrypt } from "@cap/database/crypto";
+import { ShareHeader } from "./_components/ShareHeader";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -26,16 +39,15 @@ type CommentWithAuthor = typeof comments.$inferSelect & {
   authorName: string | null;
 };
 
-type VideoWithSpace = typeof videos.$inferSelect & {
-  sharedSpace?: {
-    spaceId: string;
+type VideoWithOrganization = typeof videos.$inferSelect & {
+  sharedOrganization?: {
+    organizationId: string;
   } | null;
-  spaceMembers?: string[];
-  spaceId?: string;
-};
-
-type SpaceMember = {
-  userId: string;
+  organizationMembers?: string[];
+  organizationId?: string;
+  sharedOrganizations?: { id: string; name: string }[];
+  password?: string | null;
+  hasPassword?: boolean;
 };
 
 export async function generateMetadata(
@@ -47,7 +59,7 @@ export async function generateMetadata(
     "[generateMetadata] Fetching video metadata for videoId:",
     videoId
   );
-  const query = await db.select().from(videos).where(eq(videos.id, videoId));
+  const query = await db().select().from(videos).where(eq(videos.id, videoId));
 
   if (query.length === 0) {
     console.log("[generateMetadata] No video found for videoId:", videoId);
@@ -57,40 +69,162 @@ export async function generateMetadata(
   const video = query[0];
 
   if (!video) {
-    console.log(
-      "[generateMetadata] Video object is null for videoId:",
-      videoId
-    );
     return notFound();
   }
 
+  const headersList = headers();
+  const referrer = headersList.get("x-referrer") || "";
+  const userAgent = headersList.get("x-user-agent") || "";
+
+  console.log("[generateMetadata] User Agent:", userAgent);
+
+  const allowedReferrers = [
+    "x.com",
+    "facebook.com",
+    "fb.com",
+    "slack.com",
+    "notion.so",
+    "linkedin.com",
+    "reddit.com",
+    "youtube.com",
+    "quora.com",
+    "t.co",
+  ];
+
+  const allowedBots = ["twitterbot"];
+
+  const isAllowedReferrer = allowedReferrers.some((domain) =>
+    referrer.includes(domain)
+  );
+
+  const userAgentLower = userAgent.toLowerCase();
+  const isAllowedBot = allowedBots.some((bot) =>
+    userAgentLower.includes(bot.toLowerCase())
+  );
+
+  const isTwitterBot = userAgentLower.includes("twitterbot");
+
+  const shouldAllowIndexing = isAllowedReferrer || isAllowedBot || isTwitterBot;
+
+  const robotsDirective = shouldAllowIndexing
+    ? "index, follow"
+    : "noindex, nofollow";
+
+  if (isTwitterBot) {
+    console.log("[generateMetadata] Twitter bot detected, allowing indexing");
+  }
+
   if (video.public === false) {
-    console.log(
-      "[generateMetadata] Video is private, returning private metadata"
-    );
     return {
       title: "Cap: This video is private",
       description: "This video is private and cannot be shared.",
       openGraph: {
         images: [
-          `${process.env.NEXT_PUBLIC_URL}/api/video/og?videoId=${videoId}`,
+          {
+            url: new URL(
+              `/api/video/og?videoId=${videoId}`,
+              buildEnv.NEXT_PUBLIC_WEB_URL
+            ).toString(),
+            width: 1200,
+            height: 630,
+          },
+        ],
+        videos: [
+          {
+            url: new URL(
+              `/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
+              buildEnv.NEXT_PUBLIC_WEB_URL
+            ).toString(),
+            width: 1280,
+            height: 720,
+            type: "video/mp4",
+          },
         ],
       },
+      twitter: {
+        card: "summary_large_image",
+        title: "Cap: This video is private",
+        description: "This video is private and cannot be shared.",
+        images: [
+          new URL(
+            `/api/video/og?videoId=${videoId}`,
+            buildEnv.NEXT_PUBLIC_WEB_URL
+          ).toString(),
+        ],
+      },
+      robots: isTwitterBot ? "index, follow" : "noindex, nofollow",
     };
   }
 
-  console.log(
-    "[generateMetadata] Returning public metadata for video:",
-    video.name
-  );
+  if (video.password !== null) {
+    return {
+      title: "Cap: Password Protected Video",
+      description: "This video is password protected.",
+      openGraph: {
+        images: [
+          {
+            url: new URL(
+              `/api/video/og?videoId=${videoId}`,
+              buildEnv.NEXT_PUBLIC_WEB_URL
+            ).toString(),
+            width: 1200,
+            height: 630,
+          },
+        ],
+      },
+      twitter: {
+        card: "summary_large_image",
+        title: "Cap: Password Protected Video",
+        description: "This video is password protected.",
+        images: [
+          new URL(
+            `/api/video/og?videoId=${videoId}`,
+            buildEnv.NEXT_PUBLIC_WEB_URL
+          ).toString(),
+        ],
+      },
+      robots: "noindex, nofollow",
+    };
+  }
+
   return {
     title: video.name + " | Cap Recording",
     description: "Watch this video on Cap",
     openGraph: {
       images: [
-        `${process.env.NEXT_PUBLIC_URL}/api/video/og?videoId=${videoId}`,
+        {
+          url: new URL(
+            `/api/video/og?videoId=${videoId}`,
+            buildEnv.NEXT_PUBLIC_WEB_URL
+          ).toString(),
+          width: 1200,
+          height: 630,
+        },
+      ],
+      videos: [
+        {
+          url: new URL(
+            `/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
+            buildEnv.NEXT_PUBLIC_WEB_URL
+          ).toString(),
+          width: 1280,
+          height: 720,
+          type: "video/mp4",
+        },
       ],
     },
+    twitter: {
+      card: "summary_large_image",
+      title: video.name + " | Cap Recording",
+      description: "Watch this video on Cap",
+      images: [
+        new URL(
+          `/api/video/og?videoId=${videoId}`,
+          buildEnv.NEXT_PUBLIC_WEB_URL
+        ).toString(),
+      ],
+    },
+    robots: robotsDirective,
   };
 }
 
@@ -103,7 +237,7 @@ export default async function ShareVideoPage(props: Props) {
   const userId = user?.id as string | undefined;
   console.log("[ShareVideoPage] Current user:", userId);
 
-  const videoWithSpace = await db
+  const videoWithOrganization = await db()
     .select({
       id: videos.id,
       name: videos.name,
@@ -123,9 +257,10 @@ export default async function ShareVideoPage(props: Props) {
       isScreenshot: videos.isScreenshot,
       skipProcessing: videos.skipProcessing,
       transcriptionStatus: videos.transcriptionStatus,
+      password: videos.password,
       source: videos.source,
-      sharedSpace: {
-        spaceId: sharedVideos.spaceId,
+      sharedOrganization: {
+        organizationId: sharedVideos.organizationId,
       },
     })
     .from(videos)
@@ -133,28 +268,43 @@ export default async function ShareVideoPage(props: Props) {
     .where(eq(videos.id, videoId))
     .execute();
 
-  const video = videoWithSpace[0];
+  const video = videoWithOrganization[0];
 
   if (!video) {
     console.log("[ShareVideoPage] No video found for videoId:", videoId);
     return <p>No video found</p>;
   }
 
-  if (video.sharedSpace?.spaceId) {
-    const space = await db
+  let aiGenerationEnabled = false;
+  const videoOwnerQuery = await db()
+    .select({
+      email: users.email,
+      stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+    })
+    .from(users)
+    .where(eq(users.id, video.ownerId))
+    .limit(1);
+
+  if (videoOwnerQuery.length > 0 && videoOwnerQuery[0]) {
+    const videoOwner = videoOwnerQuery[0];
+    aiGenerationEnabled = await isAiGenerationEnabled(videoOwner);
+  }
+
+  if (video.sharedOrganization?.organizationId) {
+    const organization = await db()
       .select()
-      .from(spaces)
-      .where(eq(spaces.id, video.sharedSpace.spaceId))
+      .from(organizations)
+      .where(eq(organizations.id, video.sharedOrganization.organizationId))
       .limit(1);
 
-    if (space[0]?.allowedEmailDomain) {
+    if (organization[0]?.allowedEmailDomain) {
       if (
         !user?.email ||
-        !user.email.endsWith(`@${space[0].allowedEmailDomain}`)
+        !user.email.endsWith(`@${organization[0].allowedEmailDomain}`)
       ) {
         console.log(
           "[ShareVideoPage] Access denied - domain restriction:",
-          space[0].allowedEmailDomain
+          organization[0].allowedEmailDomain
         );
         return (
           <div className="flex flex-col items-center justify-center min-h-screen p-4 text-center">
@@ -172,45 +322,100 @@ export default async function ShareVideoPage(props: Props) {
     }
   }
 
-  const videoSource = video.source as (typeof videos.$inferSelect)["source"];
-
   if (
-    video.jobId === null &&
-    video.skipProcessing === false &&
-    videoSource.type === "MediaConvert"
+    video.transcriptionStatus !== "COMPLETE" &&
+    video.transcriptionStatus !== "PROCESSING"
   ) {
-    console.log("[ShareVideoPage] Creating MUX job for video:", videoId);
-    const res = await fetch(
-      `${process.env.NEXT_PUBLIC_URL}/api/upload/mux/create?videoId=${videoId}&userId=${video.ownerId}`,
-      {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-      }
-    );
+    console.log("[ShareVideoPage] Starting transcription for video:", videoId);
+    await transcribeVideo(videoId, video.ownerId, aiGenerationEnabled);
 
-    await res.json();
+    const updatedVideoQuery = await db()
+      .select({
+        id: videos.id,
+        name: videos.name,
+        ownerId: videos.ownerId,
+        createdAt: videos.createdAt,
+        updatedAt: videos.updatedAt,
+        awsRegion: videos.awsRegion,
+        awsBucket: videos.awsBucket,
+        bucket: videos.bucket,
+        metadata: videos.metadata,
+        public: videos.public,
+        videoStartTime: videos.videoStartTime,
+        audioStartTime: videos.audioStartTime,
+        xStreamInfo: videos.xStreamInfo,
+        jobId: videos.jobId,
+        jobStatus: videos.jobStatus,
+        isScreenshot: videos.isScreenshot,
+        skipProcessing: videos.skipProcessing,
+        transcriptionStatus: videos.transcriptionStatus,
+        source: videos.source,
+        sharedOrganization: {
+          organizationId: sharedVideos.organizationId,
+        },
+      })
+      .from(videos)
+      .leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
+      .where(eq(videos.id, videoId))
+      .execute();
+
+    if (updatedVideoQuery[0]) {
+      Object.assign(video, updatedVideoQuery[0]);
+      console.log(
+        "[ShareVideoPage] Updated transcription status:",
+        video.transcriptionStatus
+      );
+    }
   }
 
-  if (video.transcriptionStatus !== "COMPLETE") {
-    console.log("[ShareVideoPage] Starting transcription for video:", videoId);
-    fetch(
-      `${process.env.NEXT_PUBLIC_URL}/api/video/transcribe?videoId=${videoId}&userId=${video.ownerId}`,
-      {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-      }
-    );
+  const currentMetadata = (video.metadata as VideoMetadata) || {};
+  const metadata = currentMetadata;
+  let initialAiData = null;
+
+  if (metadata.summary || metadata.chapters || metadata.aiTitle) {
+    initialAiData = {
+      title: metadata.aiTitle || null,
+      summary: metadata.summary || null,
+      chapters: metadata.chapters || null,
+      processing: metadata.aiProcessing || false,
+    };
+  } else if (metadata.aiProcessing) {
+    initialAiData = {
+      title: null,
+      summary: null,
+      chapters: null,
+      processing: true,
+    };
+  }
+
+  if (
+    video.transcriptionStatus === "COMPLETE" &&
+    !currentMetadata.aiProcessing &&
+    !currentMetadata.summary &&
+    !currentMetadata.chapters &&
+    !currentMetadata.generationError &&
+    aiGenerationEnabled
+  ) {
+    try {
+      generateAiMetadata(videoId, video.ownerId).catch((error) => {
+        console.error(
+          `[ShareVideoPage] Error generating AI metadata for video ${videoId}:`,
+          error
+        );
+      });
+    } catch (error) {
+      console.error(
+        `[ShareVideoPage] Error starting AI metadata generation for video ${videoId}:`,
+        error
+      );
+    }
   }
 
   if (video.public === false && userId !== video.ownerId) {
-    console.log("[ShareVideoPage] Access denied - private video:", videoId);
     return <p>This video is private</p>;
   }
 
-  console.log("[ShareVideoPage] Fetching comments for video:", videoId);
-  const commentsQuery: CommentWithAuthor[] = await db
+  const commentsQuery: CommentWithAuthor[] = await db()
     .select({
       id: comments.id,
       content: comments.content,
@@ -229,92 +434,216 @@ export default async function ShareVideoPage(props: Props) {
 
   let screenshotUrl;
   if (video.isScreenshot === true) {
-    console.log("[ShareVideoPage] Fetching screenshot for video:", videoId);
-    const res = await fetch(
-      `${process.env.NEXT_PUBLIC_URL}/api/screenshot?userId=${video.ownerId}&screenshotId=${videoId}`,
-      {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-      }
-    );
-    const data = await res.json();
-    screenshotUrl = data.url;
+    try {
+      const data = await getScreenshot(video.ownerId, videoId);
+      screenshotUrl = data.url;
 
-    return (
-      <ImageViewer
-        imageSrc={screenshotUrl}
-        data={video}
-        user={user}
-        comments={commentsQuery}
-      />
-    );
+      return (
+        <ImageViewer
+          imageSrc={screenshotUrl}
+          data={video}
+          user={user}
+          comments={commentsQuery}
+        />
+      );
+    } catch (error) {
+      console.error("[ShareVideoPage] Error fetching screenshot:", error);
+      return <p>Failed to load screenshot</p>;
+    }
   }
 
-  let individualFiles: {
-    fileName: string;
-    url: string;
-  }[] = [];
-
-  if (video?.source.type === "desktopMP4") {
-    console.log(
-      "[ShareVideoPage] Fetching individual files for desktop MP4 video:",
-      videoId
-    );
-    const res = await fetch(
-      `${process.env.NEXT_PUBLIC_URL}/api/video/individual?videoId=${videoId}&userId=${video.ownerId}`,
-      {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-      }
-    );
-
-    const data = await res.json();
-    individualFiles = data.files;
-  }
-
-  console.log("[ShareVideoPage] Rendering Share component for video:", videoId);
-
-  const analyticsData = await db
-    .select({
-      id: videos.id,
-      totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
-      totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
-    })
-    .from(videos)
-    .leftJoin(comments, eq(videos.id, comments.videoId))
-    .where(eq(videos.id, videoId))
-    .groupBy(videos.id);
+  const analyticsData = await getVideoAnalytics(videoId);
 
   const initialAnalytics = {
-    views: 0,
-    comments: analyticsData[0]?.totalComments || 0,
-    reactions: analyticsData[0]?.totalReactions || 0,
+    views: analyticsData.count || 0,
+    comments: commentsQuery.filter((c) => c.type === "text").length,
+    reactions: commentsQuery.filter((c) => c.type === "emoji").length,
   };
 
-  const membersList = video.sharedSpace?.spaceId
-    ? await db
+  let customDomain: string | null = null;
+  let domainVerified = false;
+
+  if (video.sharedOrganization?.organizationId) {
+    const organizationData = await db()
+      .select({
+        customDomain: organizations.customDomain,
+        domainVerified: organizations.domainVerified,
+      })
+      .from(organizations)
+      .where(eq(organizations.id, video.sharedOrganization.organizationId))
+      .limit(1);
+
+    if (
+      organizationData.length > 0 &&
+      organizationData[0] &&
+      organizationData[0].customDomain
+    ) {
+      customDomain = organizationData[0].customDomain;
+      if (organizationData[0].domainVerified !== null) {
+        domainVerified = true;
+      }
+    }
+  }
+
+  if (!customDomain && video.ownerId) {
+    const ownerOrganizations = await db()
+      .select({
+        customDomain: organizations.customDomain,
+        domainVerified: organizations.domainVerified,
+      })
+      .from(organizations)
+      .where(eq(organizations.ownerId, video.ownerId))
+      .limit(1);
+
+    if (
+      ownerOrganizations.length > 0 &&
+      ownerOrganizations[0] &&
+      ownerOrganizations[0].customDomain
+    ) {
+      customDomain = ownerOrganizations[0].customDomain;
+      if (ownerOrganizations[0].domainVerified !== null) {
+        domainVerified = true;
+      }
+    }
+  }
+
+  const sharedOrganizationsData = await db()
+    .select({
+      id: sharedVideos.organizationId,
+      name: organizations.name,
+    })
+    .from(sharedVideos)
+    .innerJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
+    .where(eq(sharedVideos.videoId, videoId));
+
+  let userOrganizations: { id: string; name: string }[] = [];
+  if (userId) {
+    const ownedOrganizations = await db()
+      .select({
+        id: organizations.id,
+        name: organizations.name,
+      })
+      .from(organizations)
+      .where(eq(organizations.ownerId, userId));
+
+    const memberOrganizations = await db()
+      .select({
+        id: organizations.id,
+        name: organizations.name,
+      })
+      .from(organizations)
+      .innerJoin(
+        organizationMembers,
+        eq(organizations.id, organizationMembers.organizationId)
+      )
+      .where(eq(organizationMembers.userId, userId));
+
+    const allOrganizations = [...ownedOrganizations, ...memberOrganizations];
+    const uniqueOrganizationIds = new Set();
+    userOrganizations = allOrganizations.filter((organization) => {
+      if (uniqueOrganizationIds.has(organization.id)) return false;
+      uniqueOrganizationIds.add(organization.id);
+      return true;
+    });
+  }
+
+  const membersList = video.sharedOrganization?.organizationId
+    ? await db()
         .select({
-          userId: spaceMembers.userId,
+          userId: organizationMembers.userId,
         })
-        .from(spaceMembers)
-        .where(eq(spaceMembers.spaceId, video.sharedSpace.spaceId))
+        .from(organizationMembers)
+        .where(
+          eq(
+            organizationMembers.organizationId,
+            video.sharedOrganization.organizationId
+          )
+        )
     : [];
 
-  const videoWithSpaceInfo: VideoWithSpace = {
+  const videoWithOrganizationInfo: VideoWithOrganization = {
     ...video,
-    spaceMembers: membersList.map((member) => member.userId),
-    spaceId: video.sharedSpace?.spaceId ?? undefined,
+    organizationMembers: membersList.map((member) => member.userId),
+    organizationId: video.sharedOrganization?.organizationId ?? undefined,
+    sharedOrganizations: sharedOrganizationsData,
+    password: null,
+    hasPassword: video.password !== null,
   };
 
+  let aiUiEnabled = false;
+  if (user?.email) {
+    aiUiEnabled = await isAiUiEnabled({
+      email: user.email,
+      stripeSubscriptionStatus: user.stripeSubscriptionStatus,
+    });
+    console.log(
+      `[ShareVideoPage] AI UI feature flag check for viewer ${user.id}: ${aiUiEnabled} (email: ${user.email})`
+    );
+  }
+
+  const authorized =
+    !videoWithOrganizationInfo.hasPassword ||
+    user?.id === videoWithOrganizationInfo.ownerId ||
+    (await verifyPasswordCookie(video.password ?? ""));
+
   return (
-    <Share
-      data={videoWithSpaceInfo}
-      user={user}
-      comments={commentsQuery}
-      individualFiles={individualFiles}
-      initialAnalytics={initialAnalytics}
-    />
+    <div className="min-h-screen flex flex-col bg-[#F7F8FA]">
+      <PasswordOverlay
+        isOpen={!authorized}
+        videoId={videoWithOrganizationInfo.id}
+      />
+      {authorized && (
+        <>
+          <div className="container flex-1 px-4 py-4 mx-auto">
+            <ShareHeader
+              data={{
+                ...videoWithOrganizationInfo,
+                createdAt: video.metadata?.customCreatedAt
+                  ? new Date(video.metadata.customCreatedAt)
+                  : video.createdAt,
+              }}
+              user={user}
+              customDomain={customDomain}
+              domainVerified={domainVerified}
+              sharedOrganizations={
+                videoWithOrganizationInfo.sharedOrganizations || []
+              }
+              userOrganizations={userOrganizations}
+            />
+
+            <Share
+              data={videoWithOrganizationInfo}
+              user={user}
+              comments={commentsQuery}
+              initialAnalytics={initialAnalytics}
+              customDomain={customDomain}
+              domainVerified={domainVerified}
+              userOrganizations={userOrganizations}
+              initialAiData={initialAiData}
+              aiGenerationEnabled={aiGenerationEnabled}
+              aiUiEnabled={aiUiEnabled}
+            />
+          </div>
+          <div className="py-4 mt-auto">
+            <a
+              target="_blank"
+              href={`/?ref=video_${video.id}`}
+              className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 bg-gray-1 rounded-full new-card-style w-fit"
+            >
+              <span className="text-sm">Recorded with</span>
+              <Logo className="w-14 h-auto" />
+            </a>
+          </div>
+        </>
+      )}
+    </div>
   );
+}
+
+async function verifyPasswordCookie(videoPassword: string) {
+  const password = cookies().get("x-cap-password")?.value;
+  if (!password) return false;
+
+  const decrypted = await decrypt(password).catch(() => "");
+  return decrypted === videoPassword;
 }

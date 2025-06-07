@@ -1,7 +1,7 @@
-import * as React from "react";
 import * as NavigationMenuPrimitive from "@radix-ui/react-navigation-menu";
 import { cva } from "class-variance-authority";
 import { ChevronDown } from "lucide-react";
+import * as React from "react";
 
 import { classNames } from "@cap/utils";
 
@@ -12,7 +12,7 @@ const NavigationMenu = React.forwardRef<
   <NavigationMenuPrimitive.Root
     ref={ref}
     className={classNames(
-      "relative z-10 flex max-w-max flex-1 items-center justify-center",
+      "flex relative z-10 flex-1 justify-center items-center max-w-max",
       className
     )}
     {...props}
@@ -30,7 +30,7 @@ const NavigationMenuList = React.forwardRef<
   <NavigationMenuPrimitive.List
     ref={ref}
     className={classNames(
-      "group flex flex-1 list-none items-center justify-center space-x-1",
+      "flex flex-1 justify-center items-center space-x-1 list-none group",
       className
     )}
     {...props}
@@ -41,23 +41,27 @@ NavigationMenuList.displayName = NavigationMenuPrimitive.List.displayName;
 const NavigationMenuItem = NavigationMenuPrimitive.Item;
 
 const navigationMenuTriggerStyle = cva(
-  "group inline-flex text-black h-10 w-max items-center justify-center rounded-md bg-background px-4 py-2 transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground focus:outline-none disabled:pointer-events-none disabled:opacity-50 data-[active]:bg-accent/50 data-[state=open]:bg-accent/50 hover:underline"
+  "group inline-flex text-black h-10 w-max items-center justify-center rounded-md bg-background px-4 py-2 transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground focus:outline-none disabled:pointer-events-none disabled:opacity-50 data-[active]:bg-accent/50 data-[state=open]:bg-accent/50"
 );
 
 const NavigationMenuTrigger = React.forwardRef<
   React.ElementRef<typeof NavigationMenuPrimitive.Trigger>,
-  React.ComponentPropsWithoutRef<typeof NavigationMenuPrimitive.Trigger>
->(({ className, children, ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof NavigationMenuPrimitive.Trigger> & {
+    caret?: boolean;
+  }
+>(({ className, children, caret, ...props }, ref) => (
   <NavigationMenuPrimitive.Trigger
     ref={ref}
     className={classNames(navigationMenuTriggerStyle(), "group", className)}
     {...props}
   >
     {children}{" "}
-    <ChevronDown
-      className="relative top-[-1px] ml-[1px] h-4 w-4 transition duration-200 group-data-[state=open]:rotate-180"
-      aria-hidden="true"
-    />
+    {caret && (
+      <ChevronDown
+        className="relative top-[-1px] ml-[3px] h-4 w-4 transition duration-200 group-data-[state=open]:rotate-180"
+        aria-hidden="true"
+      />
+    )}
   </NavigationMenuPrimitive.Trigger>
 ));
 NavigationMenuTrigger.displayName = NavigationMenuPrimitive.Trigger.displayName;
@@ -69,7 +73,7 @@ const NavigationMenuContent = React.forwardRef<
   <NavigationMenuPrimitive.Content
     ref={ref}
     className={classNames(
-      "bg-white left-0 top-0 w-full data-[motion^=from-]:animate-in data-[motion^=to-]:animate-out data-[motion^=from-]:fade-in data-[motion^=to-]:fade-out data-[motion=from-end]:slide-in-from-right-52 data-[motion=from-start]:slide-in-from-left-52 data-[motion=to-end]:slide-out-to-right-52 data-[motion=to-start]:slide-out-to-left-52 md:absolute md:w-auto ",
+      "bg-white left-0 top-0 w-full data-[motion^=from-]:animate-in data-[motion^=to-]:animate-out data-[motion^=from-]:fade-in data-[motion^=to-]:fade-out data-[motion=from-end]:slide-in-from-right-52 data-[motion=from-start]:slide-in-from-left-52 data-[motion=to-end]:slide-out-to-right-52 data-[motion=to-start]:slide-out-to-left-52 md:absolute md:w-auto shadow-lg rounded-lg border border-zinc-100/50",
       className
     )}
     {...props}
@@ -83,10 +87,10 @@ const NavigationMenuViewport = React.forwardRef<
   React.ElementRef<typeof NavigationMenuPrimitive.Viewport>,
   React.ComponentPropsWithoutRef<typeof NavigationMenuPrimitive.Viewport>
 >(({ className, ...props }, ref) => (
-  <div className={classNames("absolute left-0 top-full flex justify-center")}>
+  <div className={classNames("flex absolute left-0 top-full justify-center")}>
     <NavigationMenuPrimitive.Viewport
       className={classNames(
-        "origin-top-center relative mt-1.5 h-[var(--radix-navigation-menu-viewport-height)] w-full overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-lg data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-90 md:w-[var(--radix-navigation-menu-viewport-width)]",
+        "origin-top-center relative mt-1.5 h-[var(--radix-navigation-menu-viewport-height)] w-full overflow-hidden rounded-lg border border-zinc-100/50 bg-gray-1/80 backdrop-blur-md text-popover-foreground shadow-lg data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-200 data-[state=open]:duration-200 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 md:w-[var(--radix-navigation-menu-viewport-width)]",
         className
       )}
       ref={ref}
@@ -125,15 +129,15 @@ const ListItem = React.forwardRef<
         <a
           ref={ref}
           className={classNames(
-            "block select-none space-y-1 rounded-md p-3 leading-none no-underline outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground",
+            "block p-3 space-y-1 leading-none no-underline rounded-md transition-all duration-200 outline-none select-none hover:bg-gray-2 hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground",
             className
           )}
           {...props}
         >
-          <div className="text-base font-semibold leading-none text-gray-500">
+          <div className="text-base font-medium leading-none transition-colors duration-200 text-zinc-700 group-hover:text-zinc-900">
             {title}
           </div>
-          <p className="line-clamp-2 text-sm leading-snug text-muted-foreground">
+          <p className="text-sm leading-snug transition-colors duration-200 line-clamp-2 text-zinc-500 group-hover:text-zinc-700">
             {children}
           </p>
         </a>
@@ -144,14 +148,14 @@ const ListItem = React.forwardRef<
 ListItem.displayName = "ListItem";
 
 export {
-  navigationMenuTriggerStyle,
-  NavigationMenu,
-  NavigationMenuList,
-  NavigationMenuItem,
-  NavigationMenuContent,
-  NavigationMenuTrigger,
-  NavigationMenuLink,
-  NavigationMenuIndicator,
-  NavigationMenuViewport,
   ListItem,
+  NavigationMenu,
+  NavigationMenuContent,
+  NavigationMenuIndicator,
+  NavigationMenuItem,
+  NavigationMenuLink,
+  NavigationMenuList,
+  NavigationMenuTrigger,
+  navigationMenuTriggerStyle,
+  NavigationMenuViewport,
 };

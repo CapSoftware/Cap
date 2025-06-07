@@ -1,22 +1,33 @@
 // credit @filleduchaos
 
-use futures::stream;
+use cap_utils::spawn_actor;
+use flume::Receiver;
+use futures::{stream, StreamExt};
 use image::codecs::jpeg::JpegEncoder;
 use image::ImageReader;
 use reqwest::{multipart::Form, StatusCode};
+use std::io::SeekFrom;
 use std::path::PathBuf;
-use tauri::AppHandle;
+use std::sync::Arc;
+use std::time::Duration;
+use tauri::{AppHandle, Manager, Runtime};
+use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_specta::Event;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio::sync::mpsc;
+use tokio::sync::RwLock;
 use tokio::task;
+use tokio::time::sleep;
+use tracing::{info, trace, warn};
 
 use crate::web_api::{self, ManagerExt};
 
-use crate::UploadProgress;
+use crate::{notifications, App, MutableState, RecordingStopped, UploadProgress, VideoUploadInfo};
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-#[derive(Deserialize, Serialize, Clone, Type)]
+#[derive(Deserialize, Serialize, Clone, Type, Debug)]
 pub struct S3UploadMeta {
     id: String,
     user_id: String,
@@ -24,6 +35,8 @@ pub struct S3UploadMeta {
     aws_region: String,
     #[serde(default, deserialize_with = "deserialize_empty_object_as_string")]
     aws_bucket: String,
+    #[serde(default)]
+    aws_endpoint: String,
 }
 
 fn deserialize_empty_object_as_string<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -82,12 +95,23 @@ impl S3UploadMeta {
         &self.aws_bucket
     }
 
-    pub fn new(id: String, user_id: String, aws_region: String, aws_bucket: String) -> Self {
+    pub fn aws_endpoint(&self) -> &str {
+        &self.aws_endpoint
+    }
+
+    pub fn new(
+        id: String,
+        user_id: String,
+        aws_region: String,
+        aws_bucket: String,
+        aws_endpoint: String,
+    ) -> Self {
         Self {
             id,
             user_id,
             aws_region,
             aws_bucket,
+            aws_endpoint,
         }
     }
 
@@ -100,6 +124,10 @@ impl S3UploadMeta {
             self.aws_bucket =
                 std::env::var("NEXT_PUBLIC_CAP_AWS_BUCKET").unwrap_or_else(|_| "capso".to_string());
         }
+        if self.aws_endpoint.is_empty() {
+            self.aws_endpoint = std::env::var("NEXT_PUBLIC_CAP_AWS_ENDPOINT")
+                .unwrap_or_else(|_| "https://s3.amazonaws.com".to_string());
+        }
     }
 }
 
@@ -110,6 +138,7 @@ struct S3UploadBody {
     file_key: String,
     aws_bucket: String,
     aws_region: String,
+    aws_endpoint: String,
 }
 
 #[derive(serde::Serialize)]
@@ -162,8 +191,8 @@ pub async fn upload_video(
     app: &AppHandle,
     video_id: String,
     file_path: PathBuf,
-    is_individual: bool,
     existing_config: Option<S3UploadMeta>,
+    screenshot_path: Option<PathBuf>,
 ) -> Result<UploadedVideo, String> {
     println!("Uploading video {video_id}...");
 
@@ -176,19 +205,15 @@ pub async fn upload_video(
     let client = reqwest::Client::new();
     let s3_config = match existing_config {
         Some(config) => config,
-        None => get_s3_config(app, false, Some(video_id)).await?,
+        None => create_or_get_video(app, false, Some(video_id), None).await?,
     };
 
-    let file_key = if is_individual {
-        format!(
-            "{}/{}/individual/{}",
-            s3_config.user_id(),
-            s3_config.id(),
-            file_name
-        )
-    } else {
-        format!("{}/{}/{}", s3_config.user_id(), s3_config.id(), file_name)
-    };
+    let file_key = format!(
+        "{}/{}/{}",
+        s3_config.user_id(),
+        s3_config.id(),
+        "result.mp4"
+    );
 
     let body = build_video_upload_body(
         &file_path,
@@ -197,72 +222,58 @@ pub async fn upload_video(
             file_key: file_key.clone(),
             aws_bucket: s3_config.aws_bucket().to_string(),
             aws_region: s3_config.aws_region().to_string(),
+            aws_endpoint: s3_config.aws_endpoint().to_string(),
         },
     )?;
 
     let (upload_url, form) = presigned_s3_url(app, body).await?;
 
-    let file_bytes = tokio::fs::read(&file_path)
+    let file = tokio::fs::File::open(&file_path)
         .await
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+        .map_err(|e| format!("Failed to open file: {}", e))?;
 
-    let total_size = file_bytes.len() as f64;
+    let metadata = file
+        .metadata()
+        .await
+        .map_err(|e| format!("Failed to get file metadata: {}", e))?;
 
-    // Wrap file_bytes in an Arc for shared ownership
-    let file_bytes = std::sync::Arc::new(file_bytes);
+    let total_size = metadata.len();
+
+    let reader_stream = tokio_util::io::ReaderStream::new(file);
+
+    let mut bytes_uploaded = 0;
+    let progress_stream = reader_stream.inspect({
+        let app = app.clone();
+        move |chunk| {
+            if bytes_uploaded > 0 {
+                let _ = UploadProgress {
+                    progress: bytes_uploaded as f64 / total_size as f64,
+                }
+                .emit(&app);
+            }
+
+            if let Ok(chunk) = chunk {
+                bytes_uploaded += chunk.len();
+            }
+        }
+    });
 
     // Create a stream that reports progress
-    let file_part =
-        {
-            let progress_counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-            let app_handle = app.clone();
-            let file_bytes = file_bytes.clone();
-
-            let stream = stream::iter((0..file_bytes.len()).step_by(1024 * 1024).map(
-                move |start| {
-                    let end = (start + 1024 * 1024).min(file_bytes.len());
-                    let chunk = file_bytes[start..end].to_vec();
-
-                    let current = progress_counter
-                        .fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::SeqCst)
-                        as f64;
-
-                    // Emit progress every chunk
-                    UploadProgress {
-                        progress: current / total_size,
-                        message: format!("{:.0}%", (current / total_size * 100.0)),
-                    }
-                    .emit(&app_handle)
-                    .ok();
-
-                    Ok::<Vec<u8>, std::io::Error>(chunk)
-                },
-            ));
-
-            reqwest::multipart::Part::stream_with_length(
-                reqwest::Body::wrap_stream(stream),
-                total_size as u64,
-            )
-            .file_name(file_name.clone())
-            .mime_str("video/mp4")
-            .map_err(|e| format!("Error setting MIME type: {}", e))?
-        };
+    let file_part = reqwest::multipart::Part::stream_with_length(
+        reqwest::Body::wrap_stream(progress_stream),
+        total_size as u64,
+    )
+    .file_name(file_name.clone())
+    .mime_str("video/mp4")
+    .map_err(|e| format!("Error setting MIME type: {}", e))?;
 
     let form = form.part("file", file_part);
 
-    // Prepare screenshot upload
-    let screenshot_path = file_path
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("screenshots")
-        .join("display.jpg");
-
-    let screenshot_upload = if screenshot_path.exists() {
-        Some(prepare_screenshot_upload(app, &s3_config, screenshot_path).await?)
-    } else {
-        None
+    let screenshot_upload = match screenshot_path {
+        Some(screenshot_path) if screenshot_path.exists() => {
+            Some(prepare_screenshot_upload(app, &s3_config, screenshot_path).await?)
+        }
+        _ => None,
     };
 
     let (video_upload, screenshot_result): (
@@ -286,14 +297,6 @@ pub async fn upload_video(
         video_upload.map_err(|e| format!("Failed to send upload file request: {}", e))?;
 
     if response.status().is_success() {
-        // Final progress update
-        UploadProgress {
-            progress: 1.0,
-            message: "100%".to_string(),
-        }
-        .emit(app)
-        .ok();
-
         println!("Video uploaded successfully");
 
         if let Some(Ok(screenshot_response)) = screenshot_result {
@@ -308,7 +311,7 @@ pub async fn upload_video(
         }
 
         return Ok(UploadedVideo {
-            link: web_api::make_url(format!("/s/{}", &s3_config.id)),
+            link: app.make_app_url(format!("/s/{}", &s3_config.id)).await,
             id: s3_config.id.clone(),
             config: s3_config,
         });
@@ -338,7 +341,7 @@ pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
         .to_string();
 
     let client = reqwest::Client::new();
-    let s3_config = get_s3_config(app, true, None).await?;
+    let s3_config = create_or_get_video(app, true, None, None).await?;
 
     let file_key = format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name);
 
@@ -350,6 +353,7 @@ pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
             file_key: file_key.clone(),
             aws_bucket: s3_config.aws_bucket,
             aws_region: s3_config.aws_region,
+            aws_endpoint: s3_config.aws_endpoint,
         },
     };
 
@@ -375,7 +379,7 @@ pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
     if response.status().is_success() {
         println!("File uploaded successfully");
         return Ok(UploadedImage {
-            link: web_api::make_url(format!("/s/{}", &s3_config.id)),
+            link: app.make_app_url(format!("/s/{}", &s3_config.id)).await,
             id: s3_config.id,
         });
     }
@@ -404,7 +408,7 @@ pub async fn upload_audio(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
         .to_string();
 
     let client = reqwest::Client::new();
-    let s3_config = get_s3_config(app, false, None).await?;
+    let s3_config = create_or_get_video(app, false, None, None).await?;
 
     let file_key = format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name);
 
@@ -417,6 +421,7 @@ pub async fn upload_audio(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
             file_key: file_key.clone(),
             aws_bucket: s3_config.aws_bucket.clone(),
             aws_region: s3_config.aws_region.clone(),
+            aws_endpoint: s3_config.aws_endpoint.clone(),
         },
     )?;
 
@@ -448,7 +453,7 @@ pub async fn upload_audio(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
     if response.status().is_success() {
         println!("Audio file uploaded successfully");
         return Ok(UploadedAudio {
-            link: web_api::make_url(format!("/s/{}", &s3_config.id)),
+            link: app.make_app_url(format!("/s/{}", &s3_config.id)).await,
             id: s3_config.id.clone(),
             config: s3_config,
         });
@@ -470,31 +475,26 @@ pub async fn upload_audio(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
     ))
 }
 
-pub async fn get_s3_config(
+pub async fn create_or_get_video(
     app: &AppHandle,
     is_screenshot: bool,
     video_id: Option<String>,
+    name: Option<String>,
 ) -> Result<S3UploadMeta, String> {
-    let origin = "http://tauri.localhost";
-    let config_url = web_api::make_url(if let Some(id) = video_id {
-        format!(
-            "/api/desktop/video/create?origin={}&recordingMode=desktopMP4&videoId={}",
-            origin, id
-        )
+    let mut s3_config_url = if let Some(id) = video_id {
+        format!("/api/desktop/video/create?recordingMode=desktopMP4&videoId={id}")
     } else if is_screenshot {
-        format!(
-            "/api/desktop/video/create?origin={}&recordingMode=desktopMP4&isScreenshot=true",
-            origin
-        )
+        "/api/desktop/video/create?recordingMode=desktopMP4&isScreenshot=true".to_string()
     } else {
-        format!(
-            "/api/desktop/video/create?origin={}&recordingMode=desktopMP4",
-            origin
-        )
-    });
+        "/api/desktop/video/create?recordingMode=desktopMP4".to_string()
+    };
+
+    if let Some(name) = name {
+        s3_config_url.push_str(&format!("&name={}", name));
+    }
 
     let response = app
-        .authed_api_request(|client| client.get(config_url))
+        .authed_api_request(s3_config_url, |client, url| client.get(url))
         .await
         .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
 
@@ -523,10 +523,8 @@ async fn presigned_s3_url(
     body: S3VideoUploadBody,
 ) -> Result<(String, Form), String> {
     let response = app
-        .authed_api_request(|client| {
-            client
-                .post(web_api::make_url("/api/upload/signed"))
-                .json(&serde_json::json!(body))
+        .authed_api_request("/api/upload/signed", |client, url| {
+            client.post(url).json(&serde_json::json!(body))
         })
         .await
         .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
@@ -565,10 +563,8 @@ async fn presigned_s3_url_image(
     body: S3ImageUploadBody,
 ) -> Result<(String, Form), String> {
     let response = app
-        .authed_api_request(|client| {
-            client
-                .post(web_api::make_url("/api/upload/signed"))
-                .json(&serde_json::json!(body))
+        .authed_api_request("/api/upload/signed", |client, url| {
+            client.post(url).json(&serde_json::json!(body))
         })
         .await
         .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
@@ -603,10 +599,8 @@ async fn presigned_s3_url_audio(
     body: S3AudioUploadBody,
 ) -> Result<(String, Form), String> {
     let response = app
-        .authed_api_request(|client| {
-            client
-                .post(web_api::make_url("/api/upload/signed"))
-                .json(&serde_json::json!(body))
+        .authed_api_request("/api/upload/signed", |client, url| {
+            client.post(url).json(&serde_json::json!(body))
         })
         .await
         .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
@@ -717,6 +711,7 @@ pub async fn upload_individual_file(
         file_key: file_key.clone(),
         aws_bucket: s3_config.aws_bucket.clone(),
         aws_region: s3_config.aws_region.clone(),
+        aws_endpoint: s3_config.aws_endpoint.clone(),
     };
 
     let (upload_url, mut form) = if is_audio {
@@ -762,7 +757,7 @@ pub async fn upload_individual_file(
     }
 }
 
-async fn prepare_screenshot_upload(
+pub async fn prepare_screenshot_upload(
     app: &AppHandle,
     s3_config: &S3UploadMeta,
     screenshot_path: PathBuf,
@@ -783,6 +778,7 @@ async fn prepare_screenshot_upload(
             file_key: file_key.clone(),
             aws_bucket: s3_config.aws_bucket.clone(),
             aws_region: s3_config.aws_region.clone(),
+            aws_endpoint: s3_config.aws_endpoint.clone(),
         },
     };
 
@@ -826,4 +822,572 @@ async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
     })
     .await
     .map_err(|e| format!("Failed to compress image: {}", e))?
+}
+
+// a typical recommended chunk size is 5MB (AWS min part size).
+const CHUNK_SIZE: u64 = 5 * 1024 * 1024; // 5MB
+const MIN_PART_SIZE: u64 = 5 * 1024 * 1024; // For non-final parts
+
+pub struct InstantMultipartUpload {
+    pub handle: tokio::task::JoinHandle<Result<(), String>>,
+}
+
+impl InstantMultipartUpload {
+    /// starts a progressive (multipart) upload that runs until recording stops
+    /// and the file has stabilized (no additional data is being written).
+    pub fn spawn(
+        app: AppHandle,
+        video_id: String,
+        file_path: PathBuf,
+        pre_created_video: VideoUploadInfo,
+        realtime_upload_done: Option<Receiver<()>>,
+    ) -> Self {
+        Self {
+            handle: spawn_actor(Self::run(
+                app,
+                video_id,
+                file_path,
+                pre_created_video,
+                realtime_upload_done,
+            )),
+        }
+    }
+
+    pub async fn run(
+        app: AppHandle,
+        video_id: String,
+        file_path: PathBuf,
+        pre_created_video: VideoUploadInfo,
+        realtime_video_done: Option<Receiver<()>>,
+    ) -> Result<(), String> {
+        use std::time::Duration;
+        use tokio::sync::mpsc;
+        use tokio::time::sleep;
+
+        // --------------------------------------------
+        // basic constants and info for chunk approach
+        // --------------------------------------------
+        let file_name = "result.mp4";
+        let client = reqwest::Client::new();
+        let s3_config = pre_created_video.config;
+        let file_key = format!("{}/{}/{}", s3_config.user_id(), s3_config.id(), file_name);
+
+        let mut uploaded_parts = Vec::new();
+        let mut part_number = 1;
+        let mut last_uploaded_position: u64 = 0;
+
+        println!("Starting multipart upload for {video_id}...");
+
+        // --------------------------------------------
+        // initiate the multipart upload
+        // --------------------------------------------
+        println!("Initiating multipart upload for {video_id}...");
+        let initiate_response = match app
+            .authed_api_request("/api/upload/multipart/initiate", |c, url| {
+                c.post(url)
+                    .header("Content-Type", "application/json")
+                    .json(&serde_json::json!({
+                        "fileKey": file_key,
+                        "contentType": "video/mp4"
+                    }))
+            })
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(format!("Failed to initiate multipart upload: {}", e));
+            }
+        };
+
+        if !initiate_response.status().is_success() {
+            let status = initiate_response.status();
+            let error_body = initiate_response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<no response body>".to_string());
+            return Err(format!(
+                "Failed to initiate multipart upload. Status: {}. Body: {}",
+                status, error_body
+            ));
+        }
+
+        let initiate_data = match initiate_response.json::<serde_json::Value>().await {
+            Ok(d) => d,
+            Err(e) => {
+                return Err(format!("Failed to parse initiate response: {}", e));
+            }
+        };
+
+        let upload_id = match initiate_data.get("uploadId") {
+            Some(val) => val.as_str().unwrap_or("").to_string(),
+            None => {
+                return Err("No uploadId returned from initiate endpoint".to_string());
+            }
+        };
+        if upload_id.is_empty() {
+            return Err("Empty uploadId returned from initiate endpoint".to_string());
+        }
+
+        println!("Multipart upload initiated with ID: {}", upload_id);
+
+        let mut realtime_is_done = realtime_video_done.as_ref().map(|_| false);
+
+        // --------------------------------------------
+        // Main loop while upload not complete:
+        //   - If we have >= CHUNK_SIZE new data, upload.
+        //   - If recording hasn't stopped, keep waiting.
+        //   - If recording stopped, do leftover final(s).
+        // --------------------------------------------
+        loop {
+            if !realtime_is_done.unwrap_or(true) {
+                if let Some(realtime_video_done) = &realtime_video_done {
+                    match realtime_video_done.try_recv() {
+                        Ok(_) => {
+                            realtime_is_done = Some(true);
+                        }
+                        Err(flume::TryRecvError::Empty) => {}
+                        _ => {
+                            warn!("cancelling upload as realtime generation failed");
+                            return Err(
+                                "cancelling upload as realtime generation failed".to_string()
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Check the file's current size
+            if !file_path.exists() {
+                println!("File no longer exists, aborting upload");
+                return Err("File no longer exists".to_string());
+            }
+
+            let file_size = match tokio::fs::metadata(&file_path).await {
+                Ok(md) => md.len(),
+                Err(e) => {
+                    println!("Failed to get file metadata: {}", e);
+                    sleep(Duration::from_millis(500)).await;
+                    continue;
+                }
+            };
+
+            let new_data_size = file_size - last_uploaded_position;
+
+            if ((new_data_size >= CHUNK_SIZE)
+                || new_data_size > 0 && realtime_is_done.unwrap_or(false))
+                || (realtime_is_done.is_none() && new_data_size > 0)
+            {
+                // We have a full chunk to send
+                match Self::upload_chunk(
+                    &app,
+                    &client,
+                    &file_path,
+                    &file_key,
+                    &upload_id,
+                    &mut part_number,
+                    &mut last_uploaded_position,
+                    new_data_size.min(CHUNK_SIZE),
+                )
+                .await
+                {
+                    Ok(part) => {
+                        uploaded_parts.push(part);
+                    }
+                    Err(e) => {
+                        println!(
+                            "Error uploading chunk (part {}): {}. Retrying in 1s...",
+                            part_number, e
+                        );
+                        sleep(Duration::from_secs(1)).await;
+                    }
+                }
+            } else if new_data_size == 0 && realtime_is_done.unwrap_or(true) {
+                if realtime_is_done.unwrap_or(false) {
+                    info!("realtime video done, uploading header chunk");
+
+                    match Self::upload_chunk(
+                        &app,
+                        &client,
+                        &file_path,
+                        &file_key,
+                        &upload_id,
+                        &mut 1,
+                        &mut 0,
+                        uploaded_parts[0].size as u64,
+                    )
+                    .await
+                    {
+                        Ok(part) => {
+                            uploaded_parts[0] = part;
+                            println!("Successfully re-uploaded first chunk",);
+                        }
+                        Err(e) => {
+                            return Err(format!("Failed to re-upload first chunk"));
+                        }
+                    }
+                }
+
+                // All leftover chunks are now uploaded. We finalize.
+                println!(
+                    "Completing multipart upload with {} parts",
+                    uploaded_parts.len()
+                );
+                Self::finalize_upload(
+                    &app,
+                    &file_path,
+                    &file_key,
+                    &upload_id,
+                    &uploaded_parts,
+                    &video_id,
+                )
+                .await?;
+
+                break;
+            } else {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+
+        // Copy link to clipboard early
+        let _ = app.clipboard().write_text(pre_created_video.link.clone());
+
+        Ok(())
+    }
+
+    /// Upload a single chunk from the file at `last_uploaded_position` for `chunk_size` bytes.
+    /// Advances `last_uploaded_position` accordingly. Returns JSON { PartNumber, ETag, Size }.
+    async fn upload_chunk(
+        app: &AppHandle,
+        client: &reqwest::Client,
+        file_path: &PathBuf,
+        file_key: &str,
+        upload_id: &str,
+        part_number: &mut i32,
+        last_uploaded_position: &mut u64,
+        chunk_size: u64,
+    ) -> Result<UploadedPart, String> {
+        let file_size = match tokio::fs::metadata(file_path).await {
+            Ok(metadata) => metadata.len(),
+            Err(e) => return Err(format!("Failed to get file metadata: {}", e)),
+        };
+
+        // Check if we're at the end of the file
+        if *last_uploaded_position >= file_size {
+            return Err("No more data to read - already at end of file".to_string());
+        }
+
+        // Calculate how much we can actually read
+        let remaining = file_size - *last_uploaded_position;
+        let bytes_to_read = std::cmp::min(chunk_size, remaining);
+
+        let mut file = tokio::fs::File::open(file_path)
+            .await
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+
+        // Log before seeking
+        println!(
+            "Seeking to offset {} for part {} (file size: {}, remaining: {})",
+            *last_uploaded_position, *part_number, file_size, remaining
+        );
+
+        // Seek to the position we left off
+        if let Err(e) = file
+            .seek(std::io::SeekFrom::Start(*last_uploaded_position))
+            .await
+        {
+            return Err(format!("Failed to seek in file: {}", e));
+        }
+
+        // Read exactly bytes_to_read
+        let mut chunk = vec![0u8; bytes_to_read as usize];
+        let mut total_read = 0;
+
+        while total_read < bytes_to_read as usize {
+            match file.read(&mut chunk[total_read..]).await {
+                Ok(0) => break, // EOF
+                Ok(n) => {
+                    total_read += n;
+                    println!(
+                        "Read {} bytes, total so far: {}/{}",
+                        n, total_read, bytes_to_read
+                    );
+                }
+                Err(e) => return Err(format!("Failed to read chunk from file: {}", e)),
+            }
+        }
+
+        if total_read == 0 {
+            return Err("No data to upload for this part.".to_string());
+        }
+
+        // Truncate the buffer to the actual bytes read
+        chunk.truncate(total_read);
+
+        // Basic content‑MD5 for data integrity
+        let md5_sum = {
+            let digest = md5::compute(&chunk);
+            base64::encode(digest.0)
+        };
+
+        // Verify file position to ensure we're not experiencing file handle issues
+        let pos_after_read = file
+            .seek(std::io::SeekFrom::Current(0))
+            .await
+            .map_err(|e| format!("Failed to get current file position: {}", e))?;
+
+        let expected_pos = *last_uploaded_position + total_read as u64;
+        if pos_after_read != expected_pos {
+            println!(
+                "WARNING: File position after read ({}) doesn't match expected position ({})",
+                pos_after_read, expected_pos
+            );
+        }
+
+        let file_size = tokio::fs::metadata(file_path)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let remaining = file_size - *last_uploaded_position;
+
+        println!(
+            "File size: {}, Last uploaded: {}, Remaining: {}, chunk_size: {}, part: {}",
+            file_size, *last_uploaded_position, remaining, chunk_size, *part_number
+        );
+        println!(
+            "Uploading part {} ({} bytes), MD5: {}",
+            *part_number, total_read, md5_sum
+        );
+
+        // Request presigned URL for this part
+        let presign_response = match app
+            .authed_api_request("/api/upload/multipart/presign-part", |c, url| {
+                c.post(url)
+                    .header("Content-Type", "application/json")
+                    .json(&serde_json::json!({
+                        "fileKey": file_key,
+                        "uploadId": upload_id,
+                        "partNumber": *part_number,
+                        "md5Sum": &md5_sum
+                    }))
+            })
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(format!(
+                    "Failed to request presigned URL for part {}: {}",
+                    *part_number, e
+                ))
+            }
+        };
+
+        if !presign_response.status().is_success() {
+            let status = presign_response.status();
+            let error_body = presign_response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<no response body>".to_string());
+            return Err(format!(
+                "Presign-part failed for part {}: status={}, body={}",
+                *part_number, status, error_body
+            ));
+        }
+
+        let presign_data = match presign_response.json::<serde_json::Value>().await {
+            Ok(d) => d,
+            Err(e) => return Err(format!("Failed to parse presigned URL response: {}", e)),
+        };
+
+        let presigned_url = presign_data
+            .get("presignedUrl")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if presigned_url.is_empty() {
+            return Err(format!("Empty presignedUrl for part {}", *part_number));
+        }
+
+        // Upload the chunk with retry
+        let mut retry_count = 0;
+        let max_retries = 3;
+        let mut etag: Option<String> = None;
+
+        while retry_count < max_retries && etag.is_none() {
+            println!(
+                "Sending part {} (attempt {}/{}): {} bytes",
+                *part_number,
+                retry_count + 1,
+                max_retries,
+                total_read
+            );
+
+            match client
+                .put(&presigned_url)
+                .header("Content-MD5", &md5_sum)
+                .timeout(Duration::from_secs(120))
+                .body(chunk.clone())
+                .send()
+                .await
+            {
+                Ok(upload_response) => {
+                    if upload_response.status().is_success() {
+                        if let Some(etag_val) = upload_response.headers().get("ETag") {
+                            let e = etag_val
+                                .to_str()
+                                .unwrap_or("")
+                                .trim_matches('"')
+                                .to_string();
+                            println!("Received ETag {} for part {}", e, *part_number);
+                            etag = Some(e);
+                        } else {
+                            println!("No ETag in response for part {}", *part_number);
+                            retry_count += 1;
+                            sleep(Duration::from_secs(2)).await;
+                        }
+                    } else {
+                        println!(
+                            "Failed part {} (status {}). Will retry if possible.",
+                            *part_number,
+                            upload_response.status()
+                        );
+                        if let Ok(body) = upload_response.text().await {
+                            println!("Error response: {}", body);
+                        }
+                        retry_count += 1;
+                        sleep(Duration::from_secs(2)).await;
+                    }
+                }
+                Err(e) => {
+                    println!(
+                        "Part {} upload error (attempt {}/{}): {}",
+                        *part_number,
+                        retry_count + 1,
+                        max_retries,
+                        e
+                    );
+                    retry_count += 1;
+                    sleep(Duration::from_secs(2)).await;
+                }
+            }
+        }
+
+        let etag = match etag {
+            Some(e) => e,
+            None => {
+                return Err(format!(
+                    "Failed to upload part {} after {} attempts",
+                    *part_number, max_retries
+                ))
+            }
+        };
+
+        // Advance the global progress
+        *last_uploaded_position += total_read as u64;
+        println!(
+            "After upload: new last_uploaded_position is {} ({}% of file)",
+            *last_uploaded_position,
+            (*last_uploaded_position as f64 / file_size as f64 * 100.0) as u32
+        );
+
+        let part = UploadedPart {
+            part_number: *part_number,
+            etag,
+            size: total_read,
+        };
+        *part_number += 1;
+        Ok(part)
+    }
+
+    /// Completes the multipart upload with the stored parts.
+    /// Logs a final location if the complete call is successful.
+    async fn finalize_upload(
+        app: &AppHandle,
+        file_path: &PathBuf,
+        file_key: &str,
+        upload_id: &str,
+        uploaded_parts: &[UploadedPart],
+        video_id: &str,
+    ) -> Result<(), String> {
+        println!(
+            "Completing multipart upload with {} parts",
+            uploaded_parts.len()
+        );
+
+        if uploaded_parts.is_empty() {
+            return Err("No parts uploaded before finalizing.".to_string());
+        }
+
+        let mut total_bytes_in_parts = 0;
+        for part in uploaded_parts {
+            let pn = part.part_number;
+            let size = part.size;
+            let etag = &part.etag;
+            total_bytes_in_parts += part.size;
+            println!("Part {}: {} bytes (ETag: {})", pn, size, etag);
+        }
+
+        let file_final_size = tokio::fs::metadata(file_path)
+            .await
+            .map(|md| md.len())
+            .unwrap_or(0);
+
+        println!("Sum of all parts: {} bytes", total_bytes_in_parts);
+        println!("File size on disk: {} bytes", file_final_size);
+        println!("Proceeding with multipart upload completion...");
+
+        let complete_response = match app
+            .authed_api_request("/api/upload/multipart/complete", |c, url| {
+                c.post(url)
+                    .header("Content-Type", "application/json")
+                    .json(&serde_json::json!({
+                        "fileKey": file_key,
+                        "uploadId": upload_id,
+                        "parts": uploaded_parts
+                    }))
+            })
+            .await
+        {
+            Ok(response) => response,
+            Err(e) => {
+                return Err(format!("Failed to complete multipart upload: {}", e));
+            }
+        };
+
+        if !complete_response.status().is_success() {
+            let status = complete_response.status();
+            let error_body = complete_response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<no response body>".to_string());
+            return Err(format!(
+                "Failed to complete multipart upload. Status: {}. Body: {}",
+                status, error_body
+            ));
+        }
+
+        let complete_data = match complete_response.json::<serde_json::Value>().await {
+            Ok(d) => d,
+            Err(e) => {
+                return Err(format!("Failed to parse completion response: {}", e));
+            }
+        };
+
+        if let Some(location) = complete_data.get("location") {
+            println!("Multipart upload complete. Final S3 location: {location}");
+        } else {
+            println!("Multipart upload complete. No 'location' in response.");
+        }
+
+        println!("Multipart upload complete for {video_id}.");
+        Ok(())
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadedPart {
+    part_number: i32,
+    etag: String,
+    size: usize,
 }

@@ -6,6 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   typecheck:
     name: Typecheck
@@ -33,23 +37,101 @@ jobs:
 
   clippy:
     name: Clippy
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     permissions:
       contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.settings.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.settings.target }}
+
       - uses: ./.github/actions/setup-js
 
-      - uses: ./.github/actions/setup-rust
-        with:
-          target: x86_64-unknown-linux-gnu
+      - name: Create .env file in root
+        run: |
+          echo "VITE_ENVIRONMENT=production" >> .env
+          echo "CAP_DESKTOP_SENTRY_URL=https://6a3b6a09e6ae976c2ad6fff710e88748@o4506859771527168.ingest.us.sentry.io/4508330917101568" >> .env
+          echo "NEXT_PUBLIC_WEB_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}" >> .env
+          echo 'NEXTAUTH_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
+          echo 'NEXT_PUBLIC_POSTHOG_KEY=${{ secrets.NEXT_PUBLIC_POSTHOG_KEY }}' >> .env
+          echo 'NEXT_PUBLIC_POSTHOG_HOST=${{ secrets.NEXT_PUBLIC_POSTHOG_HOST }}' >> .env
+          echo 'VITE_POSTHOG_KEY=${{ secrets.NEXT_PUBLIC_POSTHOG_KEY }}' >> .env
+          echo 'VITE_POSTHOG_HOST=${{ secrets.NEXT_PUBLIC_POSTHOG_HOST }}' >> .env
+          echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
+          echo "NEXT_PUBLIC_CAP_AWS_REGION=${{ secrets.NEXT_PUBLIC_CAP_AWS_REGION }}" >> .env
+          echo "NEXT_PUBLIC_CAP_AWS_BUCKET=${{ secrets.NEXT_PUBLIC_CAP_AWS_BUCKET }}" >> .env
 
-      - name: Install desktop deps
-        uses: ./.github/actions/install-desktop-deps
+          cat .env >> $GITHUB_ENV
+
+      - name: Run setup
+        run: |
+          pnpm cap-setup
 
       - name: Run Clippy
         uses: actions-rs-plus/clippy-check@v2
         with:
           args: --workspace --all-features --locked
+
+  build-desktop:
+    name: Build Desktop
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+    runs-on: ${{ matrix.settings.runner }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.settings.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.settings.target }}
+
+      - uses: ./.github/actions/setup-js
+
+      - name: Create .env file in root
+        run: |
+          echo "VITE_ENVIRONMENT=production" >> .env
+          echo "CAP_DESKTOP_SENTRY_URL=https://6a3b6a09e6ae976c2ad6fff710e88748@o4506859771527168.ingest.us.sentry.io/4508330917101568" >> .env
+          echo "NEXT_PUBLIC_WEB_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}" >> .env
+          echo 'NEXTAUTH_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
+          echo 'NEXT_PUBLIC_POSTHOG_KEY=${{ secrets.NEXT_PUBLIC_POSTHOG_KEY }}' >> .env
+          echo 'NEXT_PUBLIC_POSTHOG_HOST=${{ secrets.NEXT_PUBLIC_POSTHOG_HOST }}' >> .env
+          echo 'VITE_POSTHOG_KEY=${{ secrets.NEXT_PUBLIC_POSTHOG_KEY }}' >> .env
+          echo 'VITE_POSTHOG_HOST=${{ secrets.NEXT_PUBLIC_POSTHOG_HOST }}' >> .env
+          echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
+          echo "NEXT_PUBLIC_CAP_AWS_REGION=${{ secrets.NEXT_PUBLIC_CAP_AWS_REGION }}" >> .env
+          echo "NEXT_PUBLIC_CAP_AWS_BUCKET=${{ secrets.NEXT_PUBLIC_CAP_AWS_BUCKET }}" >> .env
+
+      - name: Copy .env to apps/desktop
+        run: cp .env apps/desktop/.env
+
+      - name: Output .env file
+        run: cat apps/desktop/.env
+
+      - name: Build app
+        working-directory: apps/desktop
+        run: |
+          pnpm -w cap-setup
+          pnpm tauri build --debug --target ${{ matrix.settings.target }} --no-bundle
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}

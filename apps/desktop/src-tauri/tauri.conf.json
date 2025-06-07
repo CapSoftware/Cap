@@ -7,28 +7,20 @@
     "beforeDevCommand": "pnpm localdev",
     "devUrl": "http://localhost:3001",
     "beforeBuildCommand": "pnpm turbo build --filter @cap/desktop",
-    "beforeBundleCommand": "node scripts/stripDebugSymbols.js",
     "frontendDist": "../.output/public"
   },
   "app": {
     "macOSPrivateApi": true,
     "security": {
-      "csp": null,
+      "csp": "default-src 'self' ws: ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data:; media-src 'self' asset: http://asset.localhost; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'",
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA/**"]
+        "scope": ["$APPDATA/**", "**/*.jpg", "**/*.webp", "$RESOURCE/**", "**/*.riv", "$HOME/**"]
       }
     }
   },
   "plugins": {
-    "updater": {
-      "active": false,
-      "endpoints": [
-        "https://cdn.crabnebula.app/update/cap/cap/{{target}}-{{arch}}/{{current_version}}"
-      ],
-      "dialog": true,
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUyOTAzOTdFNzJFQkRFOTMKUldTVDN1dHlmam1RNHFXb1VYTXlrQk1iMFFkcjN0YitqZlA5WnZNY0ZtQ1dvM1dxK211M3VIYUQK"
-    },
+    "updater": { "active": false, "pubkey": "" },
     "deep-link": {
       "desktop": {
         "schemes": ["cap-desktop"]
@@ -37,8 +29,8 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
     "createUpdaterArtifacts": true,
+    "targets": "all",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -46,6 +38,14 @@
       "icons/macos/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": {
+      "assets/backgrounds/macOS/*": "assets/backgrounds/macOS/",
+      "assets/backgrounds/blue/*": "assets/backgrounds/blue/",
+      "assets/backgrounds/dark/*": "assets/backgrounds/dark/",
+      "assets/backgrounds/orange/*": "assets/backgrounds/orange/",
+      "assets/backgrounds/purple/*": "assets/backgrounds/purple/",
+      "../src/assets/rive/*.riv": "assets/rive/"
+    },
     "macOS": {
       "dmg": {
         "background": "assets/dmg-background.png",
@@ -71,6 +71,14 @@
         "bannerPath": "assets/wix-banner.bmp",
         "dialogImagePath": "assets/wix-dialog.bmp"
       }
-    }
+    },
+    "fileAssociations": [
+      {
+        "ext": ["cap"],
+        "name": "Cap Project",
+        "mimeType": "application/x-cap-project",
+        "role": "Editor"
+      }
+    ]
   }
 }

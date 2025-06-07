@@ -1,26 +1,25 @@
 use either::Either;
+use relative_path::RelativePathBuf;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
     collections::HashMap,
-    fs::File,
     path::{Path, PathBuf},
 };
+use tracing::{debug, info, warn};
+// use tracing::{debug, warn};
 
-use crate::{CursorData, CursorEvents, CursorImages, ProjectConfiguration};
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct Display {
-    pub path: PathBuf,
-    #[serde(default = "legacy_static_video_fps")]
-    pub fps: u32,
-}
+use crate::{CaptionsData, CursorEvents, CursorImage, CursorImages, ProjectConfiguration, XY};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct CameraMeta {
-    pub path: PathBuf,
+pub struct VideoMeta {
+    #[specta(type = String)]
+    pub path: RelativePathBuf,
     #[serde(default = "legacy_static_video_fps")]
     pub fps: u32,
+    /// unix time of the first frame
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_time: Option<f64>,
 }
 
 fn legacy_static_video_fps() -> u32 {
@@ -29,7 +28,11 @@ fn legacy_static_video_fps() -> u32 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct AudioMeta {
-    pub path: PathBuf,
+    #[specta(type = String)]
+    pub path: RelativePathBuf,
+    /// unix time of the first frame
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_time: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -39,7 +42,24 @@ pub struct SharingMeta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub enum Platform {
+    MacOS,
+    Windows,
+}
+
+impl Default for Platform {
+    fn default() -> Self {
+        #[cfg(windows)]
+        return Self::Windows;
+
+        #[cfg(target_os = "macos")]
+        return Self::MacOS;
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct RecordingMeta {
+    pub platform: Option<Platform>,
     // this field is just for convenience, it shouldn't be persisted
     #[serde(skip_serializing, default)]
     pub project_path: PathBuf,
@@ -47,10 +67,28 @@ pub struct RecordingMeta {
     #[serde(default)]
     pub sharing: Option<SharingMeta>,
     #[serde(flatten)]
-    pub content: Content,
+    pub inner: RecordingMetaInner,
+}
+
+impl specta::Flatten for RecordingMetaInner {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(untagged, rename_all = "camelCase")]
+pub enum RecordingMetaInner {
+    Studio(StudioRecordingMeta),
+    Instant(InstantRecordingMeta),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct InstantRecordingMeta {
+    pub fps: u32,
+    pub sample_rate: Option<u32>,
 }
 
 impl RecordingMeta {
+    pub fn path(&self, relative: &RelativePathBuf) -> PathBuf {
+        relative.to_path(&self.project_path)
+    }
     pub fn load_for_project(project_path: &PathBuf) -> Result<Self, String> {
         let meta_path = project_path.join("recording-meta.json");
         let mut meta: Self =
@@ -69,32 +107,67 @@ impl RecordingMeta {
     }
 
     pub fn project_config(&self) -> ProjectConfiguration {
-        ProjectConfiguration::load(&self.project_path).unwrap_or_default()
+        let mut config = ProjectConfiguration::load(&self.project_path).unwrap_or_default();
+
+        // Try to load captions from captions.json if it exists
+        let captions_path = self.project_path.join("captions.json");
+        debug!("Checking for captions at: {:?}", captions_path);
+
+        if let Ok(captions_str) = std::fs::read_to_string(&captions_path) {
+            debug!("Found captions.json, attempting to parse");
+            if let Ok(captions_data) = serde_json::from_str::<CaptionsData>(&captions_str) {
+                info!(
+                    "Successfully loaded captions with {} segments",
+                    captions_data.segments.len()
+                );
+                config.captions = Some(captions_data);
+            } else {
+                warn!("Failed to parse captions.json");
+            }
+        } else {
+            debug!("No captions.json found");
+        }
+
+        config
     }
 
     pub fn output_path(&self) -> PathBuf {
-        self.project_path.join("output").join("result.mp4")
+        match &self.inner {
+            RecordingMetaInner::Instant(_) => self.project_path.join("content/output.mp4"),
+            RecordingMetaInner::Studio(_) => self.project_path.join("output").join("result.mp4"),
+        }
+    }
+
+    pub fn studio_meta(&self) -> Option<&StudioRecordingMeta> {
+        match &self.inner {
+            RecordingMetaInner::Studio(meta) => Some(&meta),
+            _ => None,
+        }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(untagged)]
-pub enum Content {
+#[serde(untagged, rename_all = "camelCase")]
+pub enum StudioRecordingMeta {
     SingleSegment {
         #[serde(flatten)]
+        #[specta(flatten)]
         segment: SingleSegment,
     },
     MultipleSegments {
         #[serde(flatten)]
+        #[specta(flatten)]
         inner: MultipleSegments,
     },
 }
 
-impl Content {
-    pub fn camera_path(&self) -> Option<PathBuf> {
+impl StudioRecordingMeta {
+    pub fn camera_path(&self) -> Option<RelativePathBuf> {
         match self {
-            Content::SingleSegment { segment } => segment.camera.as_ref().map(|c| c.path.clone()),
-            Content::MultipleSegments { inner } => inner
+            StudioRecordingMeta::SingleSegment { segment } => {
+                segment.camera.as_ref().map(|c| c.path.clone())
+            }
+            StudioRecordingMeta::MultipleSegments { inner, .. } => inner
                 .segments
                 .first()
                 .and_then(|s| s.camera.as_ref().map(|c| c.path.clone())),
@@ -103,8 +176,8 @@ impl Content {
 
     pub fn min_fps(&self) -> u32 {
         match self {
-            Content::SingleSegment { segment } => segment.display.fps,
-            Content::MultipleSegments { inner } => {
+            StudioRecordingMeta::SingleSegment { segment } => segment.display.fps,
+            StudioRecordingMeta::MultipleSegments { inner, .. } => {
                 inner.segments.iter().map(|s| s.display.fps).min().unwrap()
             }
         }
@@ -112,8 +185,8 @@ impl Content {
 
     pub fn max_fps(&self) -> u32 {
         match self {
-            Content::SingleSegment { segment } => segment.display.fps,
-            Content::MultipleSegments { inner } => {
+            StudioRecordingMeta::SingleSegment { segment } => segment.display.fps,
+            StudioRecordingMeta::MultipleSegments { inner, .. } => {
                 inner.segments.iter().map(|s| s.display.fps).max().unwrap()
             }
         }
@@ -121,75 +194,55 @@ impl Content {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
 pub struct SingleSegment {
-    pub display: Display,
+    pub display: VideoMeta,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub camera: Option<CameraMeta>,
+    pub camera: Option<VideoMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio: Option<AudioMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<PathBuf>,
+    #[specta(type = Option<String>)]
+    pub cursor: Option<RelativePathBuf>,
 }
 
-impl SingleSegment {
-    pub fn path(&self, meta: &RecordingMeta, path: impl AsRef<Path>) -> PathBuf {
-        meta.project_path.join(path)
-    }
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MultipleSegments {
+    pub segments: Vec<MultipleSegment>,
+    #[serde(default, skip_serializing_if = "Cursors::is_empty")]
+    pub cursors: Cursors,
+}
 
-    pub fn cursor_data(&self, meta: &RecordingMeta) -> CursorData {
-        let Some(cursor_path) = &self.cursor else {
-            return CursorData::default();
-        };
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(untagged, rename_all = "camelCase")]
+pub enum Cursors {
+    // needed for backwards compat as i wasn't strict enough with feature flagging 🤦
+    Old(HashMap<String, String>),
+    Correct(HashMap<String, CursorMeta>),
+}
 
-        let full_path = self.path(meta, cursor_path);
-        println!("Loading cursor data from: {:?}", full_path);
-
-        // Try to load the cursor data
-        let mut data = match CursorData::load_from_file(&full_path) {
-            Ok(data) => data,
-            Err(e) => {
-                eprintln!("Failed to load cursor data: {}", e);
-                return CursorData::default();
-            }
-        };
-
-        // If cursor_images is empty but cursor files exist, populate it
-        let cursors_dir = self.path(meta, "cursors");
-        if data.cursor_images.0.is_empty() && cursors_dir.exists() {
-            println!("Scanning cursors directory: {:?}", cursors_dir);
-            if let Ok(entries) = std::fs::read_dir(&cursors_dir) {
-                for entry in entries {
-                    let Ok(entry) = entry else {
-                        continue;
-                    };
-
-                    let filename = entry.file_name();
-                    let filename_str = filename.to_string_lossy();
-                    if filename_str.starts_with("cursor_") && filename_str.ends_with(".png") {
-                        // Extract cursor ID from filename (cursor_X.png -> X)
-                        if let Some(id) = filename_str
-                            .strip_prefix("cursor_")
-                            .and_then(|s| s.strip_suffix(".png"))
-                        {
-                            println!("Found cursor image: {} -> {}", id, filename_str);
-                            data.cursor_images
-                                .0
-                                .insert(id.to_string(), filename.to_string_lossy().into_owned());
-                        }
-                    }
-                }
-            }
-            println!("Found {} cursor images", data.cursor_images.0.len());
+impl Cursors {
+    fn is_empty(&self) -> bool {
+        match self {
+            Cursors::Old(map) => map.is_empty(),
+            Cursors::Correct(map) => map.is_empty(),
         }
-        data
+    }
+}
+
+impl Default for Cursors {
+    fn default() -> Self {
+        Self::Correct(Default::default())
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct MultipleSegments {
-    pub segments: Vec<MultipleSegment>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub cursors: HashMap<String, PathBuf>,
+#[serde(rename_all = "camelCase")]
+pub struct CursorMeta {
+    #[specta(type = String)]
+    pub image_path: RelativePathBuf,
+    pub hotspot: XY<f64>,
 }
 
 impl MultipleSegments {
@@ -197,53 +250,37 @@ impl MultipleSegments {
         meta.project_path.join(path)
     }
 
-    pub fn cursor_images(&self, meta: &RecordingMeta) -> Result<CursorImages, String> {
-        let file = File::open(self.path(meta, "content/cursors.json"))
-            .map_err(|e| format!("Failed to open cursor file: {}", e))?;
-        let cursor_images: CursorImages = serde_json::from_reader(file)
-            .map_err(|e| format!("Failed to parse cursor data: {}", e))?;
-
-        // let cursors_dir = self.path(meta, "content/cursors");
-        // if cursor_images.0.is_empty() && cursors_dir.exists() {
-        //     println!("Scanning cursors directory: {:?}", cursors_dir);
-        //     if let Ok(entries) = std::fs::read_dir(&cursors_dir) {
-        //         for entry in entries {
-        //             let Ok(entry) = entry else {
-        //                 continue;
-        //             };
-
-        //             let filename = entry.file_name();
-        //             let filename_str = filename.to_string_lossy();
-        //             if filename_str.starts_with("cursor_") && filename_str.ends_with(".png") {
-        //                 // Extract cursor ID from filename (cursor_X.png -> X)
-        //                 if let Some(id) = filename_str
-        //                     .strip_prefix("cursor_")
-        //                     .and_then(|s| s.strip_suffix(".png"))
-        //                 {
-        //                     println!("Found cursor image: {} -> {}", id, filename_str);
-        //                     cursor_images
-        //                         .0
-        //                         .insert(id.to_string(), filename.to_string_lossy().into_owned());
-        //                 }
-        //             }
-        //         }
-        //     }
-        //     println!("Found {} cursor images", cursor_images.0.len());
-        // }
-
-        Ok(cursor_images)
+    pub fn cursor_images(&self, meta: &RecordingMeta) -> Result<CursorImages, CursorImage> {
+        Ok(CursorImages(match &self.cursors {
+            Cursors::Old(_) => Default::default(),
+            Cursors::Correct(map) => map
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        CursorImage {
+                            path: meta.path(&v.image_path),
+                            hotspot: v.hotspot,
+                        },
+                    )
+                })
+                .collect::<_>(),
+        }))
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct MultipleSegment {
-    pub display: Display,
+    pub display: VideoMeta,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub camera: Option<CameraMeta>,
+    pub camera: Option<VideoMeta>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "audio")]
+    pub mic: Option<AudioMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub audio: Option<AudioMeta>,
+    pub system_audio: Option<AudioMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<PathBuf>,
+    #[specta(type = Option<String>)]
+    pub cursor: Option<RelativePathBuf>,
 }
 
 impl MultipleSegment {
@@ -256,7 +293,7 @@ impl MultipleSegment {
             return CursorEvents::default();
         };
 
-        let full_path = self.path(meta, cursor_path);
+        let full_path = meta.path(cursor_path);
         println!("Loading cursor data from: {:?}", full_path);
 
         // Try to load the cursor data
@@ -267,6 +304,24 @@ impl MultipleSegment {
                 CursorEvents::default()
             }
         }
+    }
+
+    pub fn latest_start_time(&self) -> Option<f64> {
+        let mut value = self.display.start_time?;
+
+        if let Some(camera) = &self.camera {
+            value = value.max(camera.start_time?);
+        }
+
+        if let Some(mic) = &self.mic {
+            value = value.max(mic.start_time?);
+        }
+
+        if let Some(system_audio) = &self.system_audio {
+            value = value.max(system_audio.start_time?);
+        }
+
+        Some(value)
     }
 }
 

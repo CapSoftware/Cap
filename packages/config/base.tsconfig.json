@@ -6,7 +6,7 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
 
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,

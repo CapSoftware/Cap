@@ -3,12 +3,15 @@ name = "cap-rendering"
 version = "0.1.0"
 edition = "2021"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow.workspace = true
 bytemuck = { version = "1.7", features = ["derive"] }
 cap-flags = { path = "../flags" }
 cap-project = { path = "../project" }
-cap-recording = { path = "../recording" }
+cap-video-decode = { path = "../video-decode" }
 ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }
 tokio.workspace = true
 ffmpeg.workspace = true
@@ -22,6 +25,9 @@ specta.workspace = true
 thiserror.workspace = true
 wgpu.workspace = true
 bezier_easing = "0.1.1"
+reactive_graph = "0.1.5"
+glyphon = "0.6.0"
+tracing.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre.workspace = true

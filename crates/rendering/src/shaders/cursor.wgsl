@@ -4,15 +4,12 @@ struct VertexOutput {
 };
 
 struct Uniforms {
-    position: vec4<f32>,
-    size: vec4<f32>,
+    position: vec2<f32>,
+    size: vec2<f32>,
     output_size: vec4<f32>,
     screen_bounds: vec4<f32>,
-    cursor_size: f32,
-    last_click_time: f32,
     velocity: vec2<f32>,
     motion_blur_amount: f32,
-    _alignment: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -27,10 +24,10 @@ var s_cursor: sampler;
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     var positions = array<vec2<f32>, 4>(
-        vec2<f32>(-0.5, 0.5),
-        vec2<f32>(-0.5, -0.5),
-        vec2<f32>(0.5, 0.5),
-        vec2<f32>(0.5, -0.5)
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(0.0, -1.0),
+        vec2<f32>(1.0, 0.0),
+        vec2<f32>(1.0, -1.0)
     );
 
     var uvs = array<vec2<f32>, 4>(
@@ -41,22 +38,14 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     );
 
     let pos = positions[vertex_index];
-    let size = uniforms.size.xy;
     let screen_pos = uniforms.position.xy;
-    
-    // Calculate click animation scale factor
-    let time_since_click = uniforms.last_click_time;
-    let click_scale = 1.0 - (0.2 * smoothstep(0.0, 0.25, time_since_click) * (1.0 - smoothstep(0.25, 0.5, time_since_click)));
-    
-    // Apply cursor size scaling with click animation
-    let scaled_size = size * uniforms.cursor_size * click_scale;
-    
+
     // Calculate final position - centered around cursor position
     // Flip the Y coordinate by subtracting from output height
     var adjusted_pos = screen_pos;
     adjusted_pos.y = uniforms.output_size.y - adjusted_pos.y;  // Flip Y coordinate
-    
-    let final_pos = ((pos * scaled_size) + adjusted_pos) / uniforms.output_size.xy * 2.0 - 1.0;
+
+    let final_pos = ((pos * uniforms.size) + adjusted_pos) / uniforms.output_size.xy * 2.0 - 1.0;
 
     var output: VertexOutput;
     output.position = vec4<f32>(final_pos, 0.0, 1.0);
@@ -67,45 +56,38 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Increase samples for higher quality blur
-    let num_samples = 16;
+    let num_samples = 20;
     var color_sum = vec4<f32>(0.0);
     var weight_sum = 0.0;
-    
+
     // Calculate velocity magnitude for adaptive blur strength
     let velocity_mag = length(uniforms.velocity);
     let adaptive_blur = uniforms.motion_blur_amount * smoothstep(0.0, 50.0, velocity_mag);
-    
+
     // Calculate blur direction from velocity
-    var blur_dir = vec2<f32>(0.0);
-    if (velocity_mag > 0.0) {
-        blur_dir = uniforms.velocity / velocity_mag;
-    }
-    
+    var blur_dir = uniforms.velocity;
+
     // Enhanced blur trail
     let max_blur_offset = 3.0 * adaptive_blur;
-    
+
     for (var i = 0; i < num_samples; i++) {
         // Non-linear sampling for better blur distribution
-        let t = pow(f32(i) / f32(num_samples - 1), 1.5) * 2.0 - 1.0;
-        
-        // Gaussian-like weight distribution
-        let weight = exp(-3.0 * t * t);
-        
+        let t = i / num_samples;
+
         // Calculate sample offset with velocity-based scaling
-        let offset = blur_dir * max_blur_offset * t;
+        let offset = blur_dir * max_blur_offset * (f32(i) / f32(num_samples));
         let sample_uv = input.uv + offset / uniforms.output_size.xy;
-        
+
         // Sample with bilinear filtering
         let sample = textureSample(t_cursor, s_cursor, sample_uv);
-        
+
         // Accumulate weighted sample
-        color_sum += sample * weight;
-        weight_sum += weight;
+        color_sum += sample;
     }
-    
+
     // Normalize the result
-    var final_color = color_sum / weight_sum;
-    
+    var final_color = color_sum / f32(num_samples);
+
     // Enhance contrast slightly for fast movements
     if (velocity_mag > 30.0) {
         // Create new color with enhanced contrast instead of modifying components
@@ -116,6 +98,6 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             final_color.a
         );
     }
-    
-    return final_color;
+
+    return final_color * vec4<f32>(1.0, 1.0, 1.0, 1.0 - uniforms.motion_blur_amount * 0.2);
 }

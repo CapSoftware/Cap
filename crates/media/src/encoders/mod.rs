@@ -1,17 +1,15 @@
-use std::path::PathBuf;
-
+mod aac;
+mod audio;
 mod h264;
-#[cfg(target_os = "macos")]
-mod h264_avassetwriter;
-mod mp3;
 mod mp4;
-
-pub use h264::*;
 #[cfg(target_os = "macos")]
-pub use h264_avassetwriter::*;
-pub use mp3::*;
-pub use mp4::*;
+mod mp4_avassetwriter;
+mod opus;
 
-pub enum Output {
-    File(PathBuf),
-}
+pub use aac::*;
+pub use audio::*;
+pub use h264::*;
+pub use mp4::*;
+#[cfg(target_os = "macos")]
+pub use mp4_avassetwriter::*;
+pub use opus::*;

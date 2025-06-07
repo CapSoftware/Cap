@@ -30,8 +30,8 @@ function drawHandles({
   ctx.strokeStyle = selected
     ? "rgba(255, 255, 255, 1)"
     : highlighted
-      ? "rgba(60, 150, 280, 1)"
-      : "rgba(255, 255, 255, 0.8)";
+    ? "rgba(60, 150, 280, 1)"
+    : "rgba(255, 255, 255, 0.8)";
 
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -94,11 +94,11 @@ function drawHandles({
   // bottom center
   ctx.moveTo(
     centerX - handleLength / 2,
-    bounds.y + bounds.height + sideHandleDistance,
+    bounds.y + bounds.height + sideHandleDistance
   );
   ctx.lineTo(
     centerX + handleLength / 2,
-    bounds.y + bounds.height + sideHandleDistance,
+    bounds.y + bounds.height + sideHandleDistance
   );
 
   // left center
@@ -108,11 +108,11 @@ function drawHandles({
   // right center
   ctx.moveTo(
     bounds.x + bounds.width + sideHandleDistance,
-    centerY - handleLength / 2,
+    centerY - handleLength / 2
   );
   ctx.lineTo(
     bounds.x + bounds.width + sideHandleDistance,
-    centerY + handleLength / 2,
+    centerY + handleLength / 2
   );
 
   ctx.stroke();
@@ -171,7 +171,7 @@ function draw(
   showHandles: boolean,
   highlighted: boolean,
   selected: boolean,
-  prefersDark: boolean,
+  prefersDark: boolean
 ) {
   if (bounds.width <= 0 || bounds.height <= 0) return;
   const drawContext: DrawContext = {
@@ -219,7 +219,7 @@ export default function CropAreaRenderer(
     borderRadius?: number;
     highlighted?: boolean;
     selected?: boolean;
-  }>,
+  }>
 ) {
   let canvasRef: HTMLCanvasElement | undefined;
   const [prefersDarkScheme, setPrefersDarkScheme] = createSignal(false);
@@ -245,8 +245,8 @@ export default function CropAreaRenderer(
         props.handles || false,
         props.highlighted || false,
         props.selected || false,
-        prefersDarkScheme(),
-      ),
+        prefersDarkScheme()
+      )
     );
     const ctx = hidpiCanvas?.ctx;
     if (!ctx) return;
@@ -256,7 +256,8 @@ export default function CropAreaRenderer(
       if (lastAnimationFrameId) cancelAnimationFrame(lastAnimationFrameId);
 
       const { x, y, width, height } = props.bounds;
-      const { guideLines, handles, borderRadius, highlighted, selected } = props;
+      const { guideLines, handles, borderRadius, highlighted, selected } =
+        props;
 
       const prefersDark = prefersDarkScheme();
       lastAnimationFrameId = requestAnimationFrame(() =>
@@ -268,8 +269,8 @@ export default function CropAreaRenderer(
           handles || false,
           highlighted || false,
           selected || false,
-          prefersDark,
-        ),
+          prefersDark
+        )
       );
     });
 
@@ -281,7 +282,7 @@ export default function CropAreaRenderer(
   });
 
   return (
-    <div class="*:h-full *:w-full">
+    <div class="*:h-full *:w-full animate-in fade-in">
       <canvas ref={canvasRef} class="pointer-events-none absolute" />
       <div>{props.children}</div>
     </div>

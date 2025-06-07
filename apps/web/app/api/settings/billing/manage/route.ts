@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@cap/database";
 import { users } from "@cap/database/schema";
+import { serverEnv } from "@cap/env";
 
 export async function POST(request: NextRequest) {
   const user = await getCurrentUser();
@@ -16,14 +17,14 @@ export async function POST(request: NextRequest) {
   }
 
   if (!user.stripeCustomerId) {
-    const customer = await stripe.customers.create({
+    const customer = await stripe().customers.create({
       email: user.email,
       metadata: {
         userId: user.id,
       },
     });
 
-    await db
+    await db()
       .update(users)
       .set({
         stripeCustomerId: customer.id,
@@ -33,9 +34,9 @@ export async function POST(request: NextRequest) {
     customerId = customer.id;
   }
 
-  const { url } = await stripe.billingPortal.sessions.create({
+  const { url } = await stripe().billingPortal.sessions.create({
     customer: customerId as string,
-    return_url: `${process.env.NEXT_PUBLIC_URL}/dashboard/settings/workspace`,
+    return_url: `${serverEnv().WEB_URL}/dashboard/settings/organization`,
   });
   return NextResponse.json(url);
 }

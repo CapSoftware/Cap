@@ -1,4 +1,7 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
+import { makePersisted } from "@solid-primitives/storage";
+import { type CheckMenuItemOptions, Menu } from "@tauri-apps/api/menu";
+import { type as ostype } from "@tauri-apps/plugin-os";
 import {
   type ParentProps,
   batch,
@@ -13,15 +16,12 @@ import {
   onMount,
   Show,
 } from "solid-js";
-import CropAreaRenderer from "./CropAreaRenderer";
-import Box from "~/utils/box";
-import { type XY, type Crop, commands } from "~/utils/tauri";
 import { createStore } from "solid-js/store";
-import { type as ostype } from "@tauri-apps/plugin-os";
-import { generalSettingsStore } from "~/store";
-import { type CheckMenuItemOptions, Menu } from "@tauri-apps/api/menu";
-import { makePersisted } from "@solid-primitives/storage";
 import { Transition } from "solid-transition-group";
+import { generalSettingsStore } from "~/store";
+import Box from "~/utils/box";
+import { type Crop, type XY, commands } from "~/utils/tauri";
+import CropAreaRenderer from "./CropAreaRenderer";
 
 type Direction = "n" | "e" | "s" | "w" | "nw" | "ne" | "se" | "sw";
 type HandleSide = {
@@ -44,7 +44,12 @@ const HANDLES: HandleSide[] = [
 
 type Ratio = [number, number];
 const COMMON_RATIOS: Ratio[] = [
-  [1, 1], [4, 3], [3, 2], [16, 9], [2, 1], [21, 9]
+  [1, 1],
+  [4, 3],
+  [3, 2],
+  [16, 9],
+  [2, 1],
+  [21, 9],
 ];
 
 const KEY_MAPPINGS = new Map([
@@ -81,7 +86,7 @@ export function cropToFloor(value: Crop): Crop {
 
 export default function Cropper(
   props: ParentProps<{
-    class?: string,
+    class?: string;
     onCropChange: (value: Crop) => void;
     value: Crop;
     mappedSize?: XY<number>;
@@ -89,7 +94,7 @@ export default function Cropper(
     initialSize?: XY<number>;
     aspectRatio?: number;
     showGuideLines?: boolean;
-  }>,
+  }>
 ) {
   const crop = props.value;
 
@@ -150,7 +155,7 @@ export default function Cropper(
 
     const box = Box.from(
       { x: (mapped.x - width) / 2, y: (mapped.y - height) / 2 },
-      { x: width, y: height },
+      { x: width, y: height }
     );
     box.constrainAll(box, containerSize(), ORIGIN_CENTER, props.aspectRatio);
 
@@ -172,8 +177,8 @@ export default function Cropper(
         box.constrainToRatio(props.aspectRatio, ORIGIN_CENTER);
         box.constrainToBoundary(mappedSize().x, mappedSize().y, ORIGIN_CENTER);
         setCrop(box.toBounds());
-      },
-    ),
+      }
+    )
   );
 
   const [snapToRatioEnabled, setSnapToRatioEnabled] = makePersisted(
@@ -216,7 +221,7 @@ export default function Cropper(
 
             box.move(
               clamp(box.x + dx, 0, mapped.x - box.width),
-              clamp(box.y + dy, 0, mapped.y - box.height),
+              clamp(box.y + dy, 0, mapped.y - box.height)
             );
 
             const newBox = box;
@@ -244,7 +249,7 @@ export default function Cropper(
       box.resize(
         clamp(box.width * scale, minSize().x, mapped.x),
         clamp(box.height * scale, minSize().y, mapped.y),
-        ORIGIN_CENTER,
+        ORIGIN_CENTER
       );
       box.constrainAll(box, mapped, ORIGIN_CENTER, props.aspectRatio);
       setTimeout(() => setGestureState("isTrackpadGesture", false), 100);
@@ -257,7 +262,7 @@ export default function Cropper(
 
       box.move(
         clamp(box.x + dx, 0, mapped.x - box.width),
-        clamp(box.y + dy, 0, mapped.y - box.height),
+        clamp(box.y + dy, 0, mapped.y - box.height)
       );
     }
 
@@ -307,7 +312,7 @@ export default function Cropper(
       let newWidth = clamp(
         gestureState.initialSize.width * scale,
         minSize().x,
-        mapped.x,
+        mapped.x
       );
       let newHeight = newWidth / currentRatio;
 
@@ -331,7 +336,7 @@ export default function Cropper(
 
         box.move(
           clamp(box.x + dx, 0, mapped.x - box.width),
-          clamp(box.y + dy, 0, mapped.y - box.height),
+          clamp(box.y + dy, 0, mapped.y - box.height)
         );
       }
 
@@ -353,7 +358,7 @@ export default function Cropper(
 
         box.move(
           clamp(box.x + dx, 0, mapped.x - box.width),
-          clamp(box.y + dy, 0, mapped.y - box.height),
+          clamp(box.y + dy, 0, mapped.y - box.height)
         );
       }
 
@@ -387,7 +392,7 @@ export default function Cropper(
   function findClosestRatio(
     width: number,
     height: number,
-    threshold = 0.01,
+    threshold = 0.01
   ): Ratio | null {
     if (props.aspectRatio) return null;
     const currentRatio = width / height;
@@ -424,20 +429,22 @@ export default function Cropper(
           }),
         mousemove: (e) =>
           requestAnimationFrame(() =>
-            handleResizeMove(e.clientX, e.clientY, e.altKey),
+            handleResizeMove(e.clientX, e.clientY, e.altKey)
           ),
       });
     });
 
-    const [hapticsEnabled, hapticsEnabledOptions] = createResource(async () =>
-      (await generalSettingsStore.get())?.hapticsEnabled && ostype() === "macos"
+    const [hapticsEnabled, hapticsEnabledOptions] = createResource(
+      async () =>
+        (await generalSettingsStore.get())?.hapticsEnabled &&
+        ostype() === "macos"
     );
     generalSettingsStore.listen(() => hapticsEnabledOptions.refetch());
 
     function handleResizeMove(
       moveX: number,
       moveY: number,
-      centerOrigin = false,
+      centerOrigin = false
     ) {
       const dx = (moveX - lastValidPos.x) / scaleFactors.x;
       const dy = (moveY - lastValidPos.y) / scaleFactors.y;
@@ -448,23 +455,23 @@ export default function Cropper(
       let newWidth =
         dir.includes("e") || dir.includes("w")
           ? clamp(
-            dir.includes("w")
-              ? currentBox.size.x - dx * scaleMultiplier
-              : currentBox.size.x + dx * scaleMultiplier,
-            minSize().x,
-            mapped.x,
-          )
+              dir.includes("w")
+                ? currentBox.size.x - dx * scaleMultiplier
+                : currentBox.size.x + dx * scaleMultiplier,
+              minSize().x,
+              mapped.x
+            )
           : currentBox.size.x;
 
       let newHeight =
         dir.includes("n") || dir.includes("s")
           ? clamp(
-            dir.includes("n")
-              ? currentBox.size.y - dy * scaleMultiplier
-              : currentBox.size.y + dy * scaleMultiplier,
-            minSize().y,
-            mapped.y,
-          )
+              dir.includes("n")
+                ? currentBox.size.y - dy * scaleMultiplier
+                : currentBox.size.y + dy * scaleMultiplier,
+              minSize().y,
+              mapped.y
+            )
           : currentBox.size.y;
 
       const closest = findClosestRatio(newWidth, newHeight);
@@ -490,7 +497,7 @@ export default function Cropper(
         box.constrainToRatio(
           props.aspectRatio,
           newOrigin,
-          dir.includes("n") || dir.includes("s") ? "width" : "height",
+          dir.includes("n") || dir.includes("s") ? "width" : "height"
         );
       }
       box.constrainToBoundary(mapped.x, mapped.y, newOrigin);
@@ -552,7 +559,7 @@ export default function Cropper(
                 ? currentBox.size.x - moveDelta * scaleMultiplier
                 : currentBox.size.x + moveDelta * scaleMultiplier,
               minSize().x,
-              mapped.x,
+              mapped.x
             );
           }
 
@@ -562,7 +569,7 @@ export default function Cropper(
                 ? currentBox.size.y - moveDelta * scaleMultiplier
                 : currentBox.size.y + moveDelta * scaleMultiplier,
               minSize().y,
-              mapped.y,
+              mapped.y
             );
           }
 
@@ -576,7 +583,7 @@ export default function Cropper(
 
           box.move(
             clamp(box.x + dx, 0, mapped.x - box.width),
-            clamp(box.y + dy, 0, mapped.y - box.height),
+            clamp(box.y + dy, 0, mapped.y - box.height)
           );
         }
       }
@@ -613,8 +620,8 @@ export default function Cropper(
               action: () => {
                 setSnapToRatioEnabled((v) => !v);
               },
-            } satisfies CheckMenuItemOptions
-          ]
+            } satisfies CheckMenuItemOptions,
+          ],
         });
         menu.popup();
       }}
@@ -650,12 +657,12 @@ export default function Cropper(
             onEnter={(el, done) => {
               const animation = el.animate(
                 [
-                  { opacity: 0, transform: 'translateY(-8px)' },
-                  { opacity: 0.65, transform: 'translateY(0)' }
+                  { opacity: 0, transform: "translateY(-8px)" },
+                  { opacity: 0.65, transform: "translateY(0)" },
                 ],
                 {
                   duration: 100,
-                  easing: 'ease-out',
+                  easing: "ease-out",
                 }
               );
               animation.finished.then(done);
@@ -663,19 +670,19 @@ export default function Cropper(
             onExit={(el, done) => {
               const animation = el.animate(
                 [
-                  { opacity: 0.65, transform: 'translateY(0)' },
-                  { opacity: 0, transform: 'translateY(-8px)' }
+                  { opacity: 0.65, transform: "translateY(0)" },
+                  { opacity: 0, transform: "translateY(-8px)" },
                 ],
                 {
                   duration: 100,
-                  easing: 'ease-in',
+                  easing: "ease-in",
                 }
               );
               animation.finished.then(done);
             }}
           >
             <Show when={snappedRatio() !== null}>
-              <div class="absolute left-0 right-0 mx-auto top-2 bg-gray-200 opacity-80 h-6 w-10 rounded-[7px] text-center text-blue-400 text-sm border border-gray-50 dark:border-gray-300 outline outline-1 outline-[#dedede] dark:outline-[#000]">
+              <div class="absolute left-0 right-0 mx-auto top-2 bg-gray-3 opacity-80 h-6 w-10 rounded-[7px] text-center text-blue-9 text-sm border border-blue-9 outline outline-1 outline-[#dedede] dark:outline-[#000]">
                 {snappedRatio()![0]}:{snappedRatio()![1]}
               </div>
             </Show>
@@ -693,13 +700,13 @@ export default function Cropper(
                   ...(handle.x === "l"
                     ? { left: "-12px" }
                     : handle.x === "r"
-                      ? { right: "-12px" }
-                      : { left: "50%", transform: "translateX(-50%)" }),
+                    ? { right: "-12px" }
+                    : { left: "50%", transform: "translateX(-50%)" }),
                   ...(handle.y === "t"
                     ? { top: "-12px" }
                     : handle.y === "b"
-                      ? { bottom: "-12px" }
-                      : { top: "50%", transform: "translateY(-50%)" }),
+                    ? { bottom: "-12px" }
+                    : { top: "50%", transform: "translateY(-50%)" }),
                   cursor: dragging() ? "grabbing" : `${handle.cursor}-resize`,
                 }}
                 onMouseDown={(e) => {
@@ -717,30 +724,30 @@ export default function Cropper(
                 style={{
                   ...(handle.x === "l"
                     ? {
-                      left: "0",
-                      width: "16px",
-                      transform: "translateX(-50%)",
-                    }
+                        left: "0",
+                        width: "16px",
+                        transform: "translateX(-50%)",
+                      }
                     : handle.x === "r"
-                      ? {
+                    ? {
                         right: "0",
                         width: "16px",
                         transform: "translateX(50%)",
                       }
-                      : {
+                    : {
                         left: "0",
                         right: "0",
                         transform: "translateY(50%)",
                       }),
                   ...(handle.y === "t"
                     ? {
-                      top: "0",
-                      height: "16px",
-                      transform: "translateY(-50%)",
-                    }
+                        top: "0",
+                        height: "16px",
+                        transform: "translateY(-50%)",
+                      }
                     : handle.y === "b"
-                      ? { bottom: "0", height: "16px" }
-                      : { top: "0", bottom: "0" }),
+                    ? { bottom: "0", height: "16px" }
+                    : { top: "0", bottom: "0" }),
                   cursor: `${handle.cursor}-resize`,
                 }}
                 onMouseDown={(e) => {

@@ -12,40 +12,52 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const __root = path.resolve(path.join(__dirname, ".."));
-const targetDir = `${__root}/target`;
+const targetDir = path.join(__root, "target");
 
-const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
+const arch =
+  process.env.RUST_TARGET_TRIPLE?.split("-")[0] ??
+  (process.arch === "arm64" ? "aarch64" : "x86_64");
+
+const BASE_CARGO_TOML = `[env]
+FFMPEG_DIR = { relative = true, force = true, value = "target/native-deps" }
+`;
 
 async function main() {
+  await fs.mkdir(targetDir, { recursive: true });
+
+  let cargoConfigContents = BASE_CARGO_TOML;
+
   if (process.platform === "darwin") {
-    const NATIVE_DEPS_URL =
-      "https://github.com/spacedriveapp/native-deps/releases/latest/download";
+    const NATIVE_DEPS_VERSION = "v0.25";
+    const NATIVE_DEPS_URL = `https://github.com/spacedriveapp/native-deps/releases/download/${NATIVE_DEPS_VERSION}`;
 
     const NATIVE_DEPS_ASSETS = {
       x86_64: "native-deps-x86_64-darwin-apple.tar.xz",
       aarch64: "native-deps-aarch64-darwin-apple.tar.xz",
     };
 
-    await fs.mkdir(targetDir, { recursive: true });
+    const nativeDepsTar = NATIVE_DEPS_ASSETS[arch];
+    const nativeDepsTarPath = path.join(targetDir, nativeDepsTar);
+    let downloadedNativeDeps = false;
 
-    const nativeDepsTar = `${targetDir}/native-deps.tar.xz`;
-    if (!(await fileExists(nativeDepsTar))) {
-      const nativeDepsBytes = await fetch(
-        `${NATIVE_DEPS_URL}/${NATIVE_DEPS_ASSETS[arch]}`
-      )
+    if (!(await fileExists(nativeDepsTarPath))) {
+      console.log(`Downloading ${nativeDepsTar}`);
+      const nativeDepsBytes = await fetch(`${NATIVE_DEPS_URL}/${nativeDepsTar}`)
         .then((r) => r.blob())
         .then((b) => b.arrayBuffer());
-      await fs.writeFile(nativeDepsTar, Buffer.from(nativeDepsBytes));
+      await fs.writeFile(nativeDepsTarPath, Buffer.from(nativeDepsBytes));
       console.log("Downloaded native deps");
-    } else console.log("Using cached native-deps.tar.xz");
+      downloadedNativeDeps = true;
+    } else console.log(`Using cached ${nativeDepsTar}`);
 
-    const nativeDepsDir = `${targetDir}/native-deps`;
+    const nativeDepsFolder = `native-deps`;
+    const nativeDepsDir = path.join(targetDir, nativeDepsFolder);
     const frameworkDir = path.join(nativeDepsDir, "Spacedrive.framework");
-    if (!(await fileExists(nativeDepsDir))) {
+    if (downloadedNativeDeps || !(await fileExists(nativeDepsDir))) {
       await fs.mkdir(nativeDepsDir, { recursive: true });
-      await exec(`tar xf ${targetDir}/native-deps.tar.xz -C ${nativeDepsDir}`);
-      console.log("Extracted native-deps");
-    } else console.log("Using cached native-deps");
+      await exec(`tar xf ${nativeDepsTarPath} -C ${nativeDepsDir}`);
+      console.log(`Extracted ${nativeDepsFolder}`);
+    } else console.log(`Using cached ${nativeDepsFolder}`);
 
     await trimMacOSFramework(frameworkDir);
     console.log("Trimmed .framework");
@@ -54,63 +66,106 @@ async function main() {
     await signMacOSFrameworkLibs(frameworkDir);
     console.log("Signed .framework libraries");
 
-    const frameworkTargetDir = `${targetDir}/Frameworks/Spacedrive.framework`;
+    const frameworkTargetDir = path.join(
+      targetDir,
+      "Frameworks",
+      "Spacedrive.framework"
+    );
     await fs.rm(frameworkTargetDir, { recursive: true }).catch(() => {});
-    await fs.cp(frameworkDir, `${targetDir}/Frameworks/Spacedrive.framework`, {
-      recursive: true,
-    });
+    await fs.cp(
+      frameworkDir,
+      path.join(targetDir, "Frameworks", "Spacedrive.framework"),
+      { recursive: true }
+    );
 
     // alternative to specifying dylibs as linker args
-    await fs.mkdir(`${targetDir}/debug`, { recursive: true });
-    for (const name of await fs.readdir(`${nativeDepsDir}/lib`)) {
+    await fs.mkdir(path.join(targetDir, "/debug"), { recursive: true });
+    for (const name of await fs.readdir(path.join(nativeDepsDir, "lib"))) {
       await fs.copyFile(
-        `${nativeDepsDir}/lib/${name}`,
-        `${targetDir}/debug/${name}`
+        path.join(nativeDepsDir, "lib", name),
+        path.join(targetDir, "debug", name)
       );
     }
-    console.log("Copied ffmepg dylibs to target/debug");
+    console.log("Copied ffmpeg dylibs to target/debug");
   } else if (process.platform === "win32") {
-    const FFMPEG_ZIP_NAME = "ffmpeg-7.1-full_build-shared";
-    const FFMPEG_ZIP_URL = `https://github.com/GyanD/codexffmpeg/releases/download/7.1/${FFMPEG_ZIP_NAME}.zip`;
+    const FFMPEG_VERSION = "7.1";
+    const FFMPEG_ZIP_NAME = `ffmpeg-${FFMPEG_VERSION}-full_build-shared`;
+    const FFMPEG_ZIP_URL = `https://github.com/GyanD/codexffmpeg/releases/download/${FFMPEG_VERSION}/${FFMPEG_ZIP_NAME}.zip`;
 
-    const ffmpegZip = `${targetDir}/ffmpeg.zip`;
-    if (!(await fileExists(ffmpegZip))) {
+    await fs.mkdir(targetDir, { recursive: true });
+
+    let downloadedFfmpeg = false;
+    const ffmpegZip = `ffmpeg-${FFMPEG_VERSION}.zip`;
+    const ffmpegZipPath = path.join(targetDir, ffmpegZip);
+    if (!(await fileExists(ffmpegZipPath))) {
       const ffmpegZipBytes = await fetch(FFMPEG_ZIP_URL)
         .then((r) => r.blob())
         .then((b) => b.arrayBuffer());
-      await fs.writeFile(ffmpegZip, Buffer.from(ffmpegZipBytes));
-      console.log("Downloaded ffmpeg.zip");
-    } else console.log("Using cached ffmpeg.zip");
+      await fs.writeFile(ffmpegZipPath, Buffer.from(ffmpegZipBytes));
+      console.log(`Downloaded ${ffmpegZip}`);
+      downloadedFfmpeg = true;
+    } else console.log(`Using cached ${ffmpegZip}`);
 
-    const ffmpegDir = `${targetDir}/ffmepg`;
-    if (!(await fileExists(ffmpegDir))) {
-      await exec(`tar xf ${ffmpegZip} -C ${targetDir}`);
-      await fs.rename(`${targetDir}/${FFMPEG_ZIP_NAME}`, ffmpegDir);
+    const ffmpegDir = path.join(targetDir, "ffmpeg");
+    if (!(await fileExists(ffmpegDir)) || downloadedFfmpeg) {
+      await exec(`tar xf ${ffmpegZipPath} -C ${targetDir}`);
+      await fs.rm(ffmpegDir, { recursive: true, force: true }).catch(() => {});
+      await fs.rename(path.join(targetDir, FFMPEG_ZIP_NAME), ffmpegDir);
       console.log("Extracted ffmpeg");
     } else console.log("Using cached ffmpeg");
 
     // alternative to adding ffmpeg/bin to PATH
-    for (const name of await fs.readdir(`${ffmpegDir}/bin`)) {
+    await fs.mkdir(path.join(targetDir, "debug"), { recursive: true });
+    for (const name of await fs.readdir(path.join(ffmpegDir, "bin"))) {
       await fs.copyFile(
-        `${ffmpegDir}/bin/${name}`,
-        `${targetDir}/debug/${name}`
+        path.join(ffmpegDir, "bin", name),
+        path.join(targetDir, "debug", name)
       );
     }
-    console.log("Copied ffmepg dylibs to target/debug");
+    console.log("Copied ffmpeg dylibs to target/debug");
 
-    if (!(await fileExists(`${targetDir}/native-deps`)))
-      await fs.mkdir(`${targetDir}/native-deps`, { recursive: true });
+    if (!(await fileExists(path.join(targetDir, "native-deps"))))
+      await fs.mkdir(path.join(targetDir, "native-deps"), { recursive: true });
 
-    await fs.cp(`${ffmpegDir}/lib`, `${targetDir}/native-deps/lib`, {
-      recursive: true,
-      force: true,
-    });
-    await fs.cp(`${ffmpegDir}/include`, `${targetDir}/native-deps/include`, {
-      recursive: true,
-      force: true,
-    });
+    await fs.cp(
+      path.join(ffmpegDir, "lib"),
+      path.join(targetDir, "native-deps", "lib"),
+      {
+        recursive: true,
+        force: true,
+      }
+    );
+    await fs.cp(
+      path.join(ffmpegDir, "include"),
+      path.join(targetDir, "native-deps", "include"),
+      {
+        recursive: true,
+        force: true,
+      }
+    );
     console.log("Copied ffmpeg/lib and ffmpeg/include to target/native-deps");
+
+    const { stdout: vcInstallDir } = await exec(
+      '$(& "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath)',
+      { shell: "powershell.exe" }
+    );
+
+    const libclangPath = path.join(
+      vcInstallDir.trim(),
+      "VC/Tools/LLVM/x64/bin/libclang.dll"
+    );
+
+    cargoConfigContents += `LIBCLANG_PATH = "${libclangPath.replaceAll(
+      "\\",
+      "/"
+    )}"\n`;
   }
+
+  await fs.mkdir(path.join(__root, ".cargo"), { recursive: true });
+  await fs.writeFile(
+    path.join(__root, ".cargo/config.toml"),
+    cargoConfigContents
+  );
 }
 
 main();

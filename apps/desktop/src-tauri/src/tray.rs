@@ -3,6 +3,7 @@ use crate::{
     RecordingStarted, RecordingStopped, RequestNewScreenshot, RequestOpenSettings,
     RequestStartRecording, RequestStopRecording,
 };
+use cap_fail::fail;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::menu::{MenuId, PredefinedMenuItem};
@@ -16,7 +17,6 @@ use tauri_specta::Event;
 
 pub enum TrayItem {
     OpenCap,
-    StartNewRecording,
     TakeScreenshot,
     PreviousRecordings,
     PreviousScreenshots,
@@ -28,7 +28,6 @@ impl From<TrayItem> for MenuId {
     fn from(value: TrayItem) -> Self {
         match value {
             TrayItem::OpenCap => "open_cap",
-            TrayItem::StartNewRecording => "new_recording",
             TrayItem::TakeScreenshot => "take_screenshot",
             TrayItem::PreviousRecordings => "previous_recordings",
             TrayItem::PreviousScreenshots => "previous_screenshots",
@@ -45,7 +44,6 @@ impl TryFrom<MenuId> for TrayItem {
     fn try_from(value: MenuId) -> Result<Self, Self::Error> {
         match value.0.as_str() {
             "open_cap" => Ok(TrayItem::OpenCap),
-            "new_recording" => Ok(TrayItem::StartNewRecording),
             "take_screenshot" => Ok(TrayItem::TakeScreenshot),
             "previous_recordings" => Ok(TrayItem::PreviousRecordings),
             "previous_screenshots" => Ok(TrayItem::PreviousScreenshots),
@@ -60,29 +58,15 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     let menu = Menu::with_items(
         app,
         &[
-            &MenuItem::with_id(
-                app,
-                "version",
-                format!("Cap v{}", env!("CARGO_PKG_VERSION")),
-                false,
-                None::<&str>,
-            )?,
-            &MenuItem::with_id(app, TrayItem::OpenCap, "Open Cap", true, None::<&str>)?,
+            &MenuItem::with_id(app, TrayItem::OpenCap, "New Recording", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(
-                app,
-                TrayItem::StartNewRecording,
-                "Start New Recording",
-                true,
-                None::<&str>,
-            )?,
-            &MenuItem::with_id(
-                app,
-                TrayItem::TakeScreenshot,
-                "Take Screenshot",
-                true,
-                None::<&str>,
-            )?,
+            // &MenuItem::with_id(
+            //     app,
+            //     TrayItem::TakeScreenshot,
+            //     "Take Screenshot",
+            //     true,
+            //     None::<&str>,
+            // )?,
             &MenuItem::with_id(
                 app,
                 TrayItem::PreviousRecordings,
@@ -90,15 +74,15 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 true,
                 None::<&str>,
             )?,
+            &MenuItem::with_id(app, TrayItem::OpenSettings, "Settings", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(
                 app,
-                TrayItem::PreviousScreenshots,
-                "Previous Screenshots",
-                true,
+                "version",
+                format!("Cap v{}", env!("CARGO_PKG_VERSION")),
+                false,
                 None::<&str>,
             )?,
-            &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(app, TrayItem::OpenSettings, "Settings", true, None::<&str>)?,
             &MenuItem::with_id(app, TrayItem::Quit, "Quit Cap", true, None::<&str>)?,
         ],
     )?;
@@ -114,10 +98,8 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             let app_handle = app.clone();
             move |app: &AppHandle, event| match TrayItem::try_from(event.id) {
                 Ok(TrayItem::OpenCap) => {
-                    ShowCapWindow::Main.show(&app_handle).ok();
-                }
-                Ok(TrayItem::StartNewRecording) => {
-                    let _ = RequestStartRecording.emit(&app_handle);
+                    let app = app.clone();
+                    tokio::spawn(async move { ShowCapWindow::Main.show(&app).await });
                 }
                 Ok(TrayItem::TakeScreenshot) => {
                     let _ = RequestNewScreenshot.emit(&app_handle);
@@ -135,9 +117,10 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                     .emit(&app_handle);
                 }
                 Ok(TrayItem::OpenSettings) => {
-                    ShowCapWindow::Settings { page: None }
-                        .show(&app_handle)
-                        .ok();
+                    let app = app.clone();
+                    tokio::spawn(
+                        async move { ShowCapWindow::Settings { page: None }.show(&app).await },
+                    );
                 }
                 Ok(TrayItem::Quit) => {
                     app.exit(0);

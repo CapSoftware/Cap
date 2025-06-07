@@ -2,24 +2,26 @@ import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { type NextRequest } from "next/server";
 import { ReadonlyHeaders } from "next/dist/server/web/spec-extension/adapters/headers";
+import { buildEnv, serverEnv } from "@cap/env";
 
 export function classNames(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+// Base allowed origins
 export const allowedOrigins = [
-  process.env.NEXT_PUBLIC_URL,
+  buildEnv.NEXT_PUBLIC_WEB_URL,
   "https://cap.link",
   "cap.link",
 ];
 
 export function getHeaders(origin: string) {
+  // Allow "*" for custom domains or allowedOrigins for main domains
   return {
-    "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
-      ? origin
-      : "null",
+    "Access-Control-Allow-Origin": origin || "*",
     "Access-Control-Allow-Credentials": "true",
     "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
   };
 }
 
@@ -62,7 +64,7 @@ export function rateLimitMiddleware(
 }
 
 export const CACHE_CONTROL_HEADERS = {
-  'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
-  'Pragma': 'no-cache',
-  'Expires': '0',
+  "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+  Pragma: "no-cache",
+  Expires: "0",
 };

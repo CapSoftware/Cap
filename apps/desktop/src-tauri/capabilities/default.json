@@ -4,6 +4,24 @@
   "description": "Capability for the main window",
   "windows": ["*"],
   "permissions": [
+    "fs:default",
+    "fs:allow-resource-read",
+    "fs:allow-resource-read-recursive",
+    "fs:write-all",
+    "fs:read-all",
+    "fs:allow-appdata-read",
+    "fs:allow-appdata-write",
+    "fs:allow-picture-read-recursive",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        { "path": "$APPDATA/**" },
+        { "path": "$HOME/**" },
+        { "path": "$RESOURCE/**" }
+      ]
+    },
+    "core:path:allow-resolve-directory",
+    "core:path:default",
     "core:event:default",
     "core:menu:default",
     "core:window:default",
@@ -22,6 +40,7 @@
     "core:window:allow-set-position",
     "core:window:allow-set-theme",
     "core:window:allow-set-progress-bar",
+    "core:window:allow-set-effects",
     "core:webview:default",
     "core:webview:allow-create-webview-window",
     "core:app:allow-version",
@@ -36,9 +55,12 @@
     {
       "identifier": "http:default",
       "allow": [
-        { "url": "https://cap.so" },
-        { "url": "http://localhost:3000/*" }
+        { "url": "http://*" },
+        { "url": "https://*" },
+        { "url": "http://localhost:*" }
       ]
-    }
+    },
+    "clipboard-manager:allow-write-text",
+    "opener:allow-reveal-item-in-dir"
   ]
 }

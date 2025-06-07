@@ -1,30 +1,166 @@
-use std::{sync::Arc, time::Instant};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 
 use crate::{
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
-    export::export_video,
-    general_settings::GeneralSettingsStore,
-    list_recordings, notifications, open_editor, open_external_link, platform,
-    upload::get_s3_config,
-    upload_exported_video, web_api,
+    general_settings::{
+        GeneralSettingsStore, MainWindowRecordingStartBehaviour, PostStudioRecordingBehaviour,
+    },
+    open_external_link,
+    presets::PresetsStore,
+    upload::{
+        create_or_get_video, prepare_screenshot_upload, upload_video, InstantMultipartUpload,
+    },
+    web_api::{self, ManagerExt},
     windows::{CapWindowId, ShowCapWindow},
-    App, CurrentRecordingChanged, MutableState, NewRecordingAdded, PreCreatedVideo,
-    RecordingStarted, RecordingStopped, UploadMode,
+    App, CurrentRecordingChanged, DynLoggingLayer, MutableState, NewStudioRecordingAdded,
+    RecordingStarted, RecordingStopped, VideoUploadInfo,
 };
-use cap_flags::FLAGS;
-use cap_media::feeds::CameraFeed;
-use cap_media::sources::{CaptureScreen, CaptureWindow};
+use base64::{prelude::BASE64_STANDARD, Engine};
+use cap_fail::fail;
+use cap_media::{feeds::CameraFeed, platform::display_for_window, sources::ScreenCaptureTarget};
+use cap_media::{
+    platform::Bounds,
+    sources::{CaptureScreen, CaptureWindow},
+};
 use cap_project::{
-    Content, ProjectConfiguration, TimelineConfiguration, TimelineSegment, ZoomSegment, XY,
+    Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta,
+    StudioRecordingMeta, TimelineConfiguration, TimelineSegment, ZoomSegment,
 };
-use cap_recording::CompletedRecording;
+use cap_recording::{
+    instant_recording::{CompletedInstantRecording, InstantRecordingHandle},
+    CompletedStudioRecording, RecordingError, RecordingMode, RecordingOptions,
+    StudioRecordingHandle,
+};
 use cap_rendering::ProjectRecordings;
-use cap_utils::spawn_actor;
-use clipboard_rs::{Clipboard, ClipboardContext};
+use cap_utils::{ensure_dir, spawn_actor};
+use scap::Target;
+use serde::Deserialize;
+use specta::Type;
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
+use tracing::{error, info};
+
+pub enum InProgressRecording {
+    Instant {
+        target_name: String,
+        handle: InstantRecordingHandle,
+        progressive_upload: Option<InstantMultipartUpload>,
+        video_upload_info: VideoUploadInfo,
+        inputs: StartRecordingInputs,
+    },
+    Studio {
+        target_name: String,
+        handle: StudioRecordingHandle,
+        inputs: StartRecordingInputs,
+    },
+}
+
+impl InProgressRecording {
+    pub fn capture_target(&self) -> &ScreenCaptureTarget {
+        match self {
+            Self::Instant { handle, .. } => &handle.capture_target,
+            Self::Studio { handle, .. } => &handle.capture_target,
+        }
+    }
+
+    pub fn inputs(&self) -> &StartRecordingInputs {
+        match self {
+            Self::Instant { inputs, .. } => inputs,
+            Self::Studio { inputs, .. } => inputs,
+        }
+    }
+
+    pub async fn pause(&self) -> Result<(), RecordingError> {
+        match self {
+            Self::Instant { handle, .. } => handle.pause().await,
+            Self::Studio { handle, .. } => handle.pause().await,
+        }
+    }
+
+    pub async fn resume(&self) -> Result<(), RecordingError> {
+        match self {
+            Self::Instant { handle, .. } => handle.resume().await,
+            Self::Studio { handle, .. } => handle.resume().await,
+        }
+    }
+
+    pub async fn stop(self) -> Result<CompletedRecording, RecordingError> {
+        Ok(match self {
+            Self::Instant {
+                handle,
+                progressive_upload,
+                video_upload_info,
+                target_name,
+                ..
+            } => CompletedRecording::Instant {
+                recording: handle.stop().await?,
+                progressive_upload,
+                video_upload_info,
+                target_name,
+            },
+            Self::Studio {
+                handle,
+                target_name,
+                ..
+            } => CompletedRecording::Studio {
+                recording: handle.stop().await?,
+                target_name,
+            },
+        })
+    }
+
+    pub async fn cancel(self) -> Result<(), RecordingError> {
+        match self {
+            Self::Instant { handle, .. } => handle.cancel().await,
+            Self::Studio { handle, .. } => handle.cancel().await,
+        }
+    }
+
+    pub fn bounds(&self) -> &Bounds {
+        match self {
+            Self::Instant { handle, .. } => &handle.bounds,
+            Self::Studio { handle, .. } => &handle.bounds,
+        }
+    }
+}
+
+pub enum CompletedRecording {
+    Instant {
+        recording: CompletedInstantRecording,
+        target_name: String,
+        progressive_upload: Option<InstantMultipartUpload>,
+        video_upload_info: VideoUploadInfo,
+    },
+    Studio {
+        recording: CompletedStudioRecording,
+        target_name: String,
+    },
+}
+
+impl CompletedRecording {
+    pub fn id(&self) -> &String {
+        match self {
+            Self::Instant { recording, .. } => &recording.id,
+            Self::Studio { recording, .. } => &recording.id,
+        }
+    }
+
+    pub fn project_path(&self) -> &PathBuf {
+        match self {
+            Self::Instant { recording, .. } => &recording.project_path,
+            Self::Studio { recording, .. } => &recording.project_path,
+        }
+    }
+
+    pub fn target_name(&self) -> &String {
+        match self {
+            Self::Instant { target_name, .. } => target_name,
+            Self::Studio { target_name, .. } => target_name,
+        }
+    }
+}
 
 #[tauri::command(async)]
 #[specta::specta]
@@ -50,22 +186,22 @@ pub fn list_cameras() -> Vec<String> {
     CameraFeed::list_cameras()
 }
 
+#[derive(Deserialize, Type, Clone)]
+pub struct StartRecordingInputs {
+    pub capture_target: ScreenCaptureTarget,
+    #[serde(default)]
+    pub capture_system_audio: bool,
+    pub mode: RecordingMode,
+}
+
 #[tauri::command]
 #[specta::specta]
+#[tracing::instrument(name = "recording", skip_all)]
 pub async fn start_recording(
     app: AppHandle,
     state_mtx: MutableState<'_, App>,
+    inputs: StartRecordingInputs,
 ) -> Result<(), String> {
-    let mut state = state_mtx.write().await;
-
-    // Get the recording config
-    let config = GeneralSettingsStore::get(&app)?
-        .and_then(|s| s.recording_config)
-        .unwrap_or_default();
-
-    // Update the recording options with the configured FPS
-    state.start_recording_options.fps = config.fps;
-
     let id = uuid::Uuid::new_v4().to_string();
 
     let recording_dir = app
@@ -75,71 +211,246 @@ pub async fn start_recording(
         .join("recordings")
         .join(format!("{id}.cap"));
 
-    // Check if auto_create_shareable_link is true and user is upgraded
-    let general_settings = GeneralSettingsStore::get(&app)?;
-    let auto_create_shareable_link = general_settings
-        .map(|settings| settings.auto_create_shareable_link)
-        .unwrap_or(false);
+    ensure_dir(&recording_dir).map_err(|e| format!("Failed to create recording directory: {e}"))?;
+    let logfile = std::fs::File::create(recording_dir.join("recording-logs.log"))
+        .map_err(|e| format!("Failed to create logfile: {e}"))?;
 
-    if auto_create_shareable_link {
-        sentry::configure_scope(|scope| {
-            scope.set_tag("task", "auto_create_shareable_link");
-        });
+    state_mtx
+        .write()
+        .await
+        .recording_logging_handle
+        .reload(Some(Box::new(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_target(true)
+                .with_writer(logfile),
+        ) as DynLoggingLayer))
+        .map_err(|e| format!("Failed to reload logging layer: {e}"))?;
 
-        if let Ok(Some(auth)) = AuthStore::get(&app) {
-            if auth.is_upgraded() {
-                // Pre-create the video and get the shareable link
-                if let Ok(s3_config) = get_s3_config(&app, false, None).await {
-                    let link = web_api::make_url(format!("/s/{}", s3_config.id()));
+    let target_name = {
+        let title = inputs.capture_target.get_title();
 
-                    state.pre_created_video = Some(PreCreatedVideo {
-                        id: s3_config.id().to_string(),
-                        link: link.clone(),
-                        config: s3_config,
-                    });
+        match inputs.capture_target {
+            ScreenCaptureTarget::Area { .. } => "Area".to_string(),
+            ScreenCaptureTarget::Window { id, .. } => {
+                let platform_windows: HashMap<u32, cap_media::platform::Window> =
+                    cap_media::platform::get_on_screen_windows()
+                        .into_iter()
+                        .map(|window| (window.window_id, window))
+                        .collect();
 
-                    println!("Pre-created shareable link: {}", link);
-                };
+                platform_windows
+                    .get(&id)
+                    .map(|v| v.owner_name.to_string())
+                    .unwrap_or_else(|| "Window".to_string())
+            }
+            ScreenCaptureTarget::Screen { .. } => title.unwrap_or_else(|| "Screen".to_string()),
+        }
+    };
+
+    if let Some(window) = CapWindowId::Camera.get(&app) {
+        let _ = window.set_content_protected(matches!(inputs.mode, RecordingMode::Studio));
+    }
+
+    let video_upload_info = match inputs.mode {
+        RecordingMode::Instant => {
+            match AuthStore::get(&app).ok().flatten() {
+                Some(_) => {
+                    // Pre-create the video and get the shareable link
+                    if let Ok(s3_config) = create_or_get_video(
+                        &app,
+                        false,
+                        None,
+                        Some(format!(
+                            "{target_name} {}",
+                            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+                        )),
+                    )
+                    .await
+                    {
+                        let link = app.make_app_url(format!("/s/{}", s3_config.id())).await;
+                        info!("Pre-created shareable link: {}", link);
+
+                        Some(VideoUploadInfo {
+                            id: s3_config.id().to_string(),
+                            link: link.clone(),
+                            config: s3_config,
+                        })
+                    } else {
+                        None
+                    }
+                }
+                // Allow the recording to proceed without error for any signed-in user
+                _ => {
+                    // User is not signed in
+                    return Err("Please sign in to use instant recording".to_string());
+                }
             }
         }
-    }
-    let (actor, actor_done_rx) = cap_recording::spawn_recording_actor(
-        id,
-        recording_dir,
-        state.start_recording_options.clone(),
-        state.camera_feed.clone(),
-        state.audio_input_feed.clone(),
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+        RecordingMode::Studio => None,
+    };
 
-    state.set_current_recording(actor);
-    drop(state);
+    match &inputs.capture_target {
+        ScreenCaptureTarget::Window { id } => {
+            #[cfg(target_os = "macos")]
+            let display = display_for_window(*id).unwrap().id;
+
+            #[cfg(windows)]
+            let display = {
+                let Target::Window(target) = inputs.capture_target.get_target().unwrap() else {
+                    unreachable!();
+                };
+                display_for_window(target.raw_handle).unwrap().0 as u32
+            };
+
+            let _ = ShowCapWindow::WindowCaptureOccluder { screen_id: display }
+                .show(&app)
+                .await;
+        }
+        ScreenCaptureTarget::Area { screen, .. } => {
+            let _ = ShowCapWindow::WindowCaptureOccluder { screen_id: *screen }
+                .show(&app)
+                .await;
+        }
+        _ => {}
+    }
+
+    let (finish_upload_tx, finish_upload_rx) = flume::bounded(1);
+    let progressive_upload = video_upload_info
+        .as_ref()
+        .filter(|_| matches!(inputs.mode, RecordingMode::Instant))
+        .map(|video_upload_info| {
+            InstantMultipartUpload::spawn(
+                app.clone(),
+                id.clone(),
+                recording_dir.join("content/output.mp4"),
+                video_upload_info.clone(),
+                Some(finish_upload_rx),
+            )
+        });
+
+    println!("spawning actor");
+
+    // done in spawn to catch panics just in case
+    let actor_done_rx = spawn_actor({
+        let state_mtx = Arc::clone(&state_mtx);
+        let app = app.clone();
+        async move {
+            fail!("recording::spawn_actor");
+            let mut state = state_mtx.write().await;
+
+            let base_inputs = cap_recording::RecordingBaseInputs {
+                capture_target: inputs.capture_target,
+                capture_system_audio: inputs.capture_system_audio,
+                mic_feed: &state.mic_feed,
+            };
+
+            let (actor, actor_done_rx) = match inputs.mode {
+                RecordingMode::Studio => {
+                    let (handle, actor_done_rx) = cap_recording::spawn_studio_recording_actor(
+                        id.clone(),
+                        recording_dir.clone(),
+                        base_inputs,
+                        state.camera_feed.clone(),
+                        GeneralSettingsStore::get(&app)
+                            .ok()
+                            .flatten()
+                            .map(|s| s.custom_cursor_capture)
+                            .unwrap_or_default(),
+                    )
+                    .await
+                    .map_err(|e| {
+                        error!("Failed to spawn studio recording actor: {e}");
+                        e.to_string()
+                    })?;
+
+                    (
+                        InProgressRecording::Studio {
+                            handle,
+                            target_name,
+                            inputs,
+                        },
+                        actor_done_rx,
+                    )
+                }
+                RecordingMode::Instant => {
+                    let Some(video_upload_info) = video_upload_info.clone() else {
+                        return Err("Video upload info not found".to_string());
+                    };
+
+                    let (handle, actor_done_rx) =
+                        cap_recording::instant_recording::spawn_instant_recording_actor(
+                            id.clone(),
+                            recording_dir.clone(),
+                            base_inputs,
+                        )
+                        .await
+                        .map_err(|e| {
+                            error!("Failed to spawn studio recording actor: {e}");
+                            e.to_string()
+                        })?;
+
+                    (
+                        InProgressRecording::Instant {
+                            handle,
+                            progressive_upload,
+                            video_upload_info,
+                            target_name,
+                            inputs,
+                        },
+                        actor_done_rx,
+                    )
+                }
+            };
+
+            state.set_current_recording(actor);
+
+            Ok::<_, String>(actor_done_rx)
+        }
+    })
+    .await
+    .map_err(|e| format!("Failed to spawn recording actor: {}", e))??;
 
     spawn_actor({
         let app = app.clone();
         let state_mtx = Arc::clone(&state_mtx);
         async move {
-            actor_done_rx.await.ok();
+            fail!("recording::wait_actor_done");
+            let Ok(_) = actor_done_rx.await else {
+                return;
+            };
+
+            let _ = finish_upload_tx.send(());
 
             let mut state = state_mtx.write().await;
 
             // this clears the current recording for us
-            handle_recording_finished(app, None, &mut state).await.ok();
+            handle_recording_end(app, None, &mut state).await.ok();
         }
     });
 
     if let Some(window) = CapWindowId::Main.get(&app) {
-        window.minimize().ok();
+        match GeneralSettingsStore::get(&app)
+            .ok()
+            .flatten()
+            .map(|s| s.main_window_recording_start_behaviour)
+            .unwrap_or_default()
+        {
+            MainWindowRecordingStartBehaviour::Close => {
+                let _ = window.close();
+            }
+            MainWindowRecordingStartBehaviour::Minimise => {
+                let _ = window.minimize();
+            }
+        }
     }
 
     if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
-        window.eval("window.location.reload()").unwrap();
-        window.show().unwrap();
+        window.eval("window.location.reload()").ok();
     } else {
-        ShowCapWindow::InProgressRecording { position: None }
+        let _ = ShowCapWindow::InProgressRecording { position: None }
             .show(&app)
-            .ok();
+            .await;
     }
 
     AppSounds::StartRecording.play();
@@ -183,175 +494,257 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
 
     let completed_recording = current_recording.stop().await.map_err(|e| e.to_string())?;
 
-    handle_recording_finished(app, Some(completed_recording), &mut state).await?;
+    handle_recording_end(app, Some(completed_recording), &mut state).await?;
 
     Ok(())
 }
 
-async fn handle_recording_finished(
-    app: AppHandle,
-    completed_recording: Option<cap_recording::CompletedRecording>,
-    state: &mut App,
+// runs when a recording ends, whether from success or failure
+async fn handle_recording_end(
+    handle: AppHandle,
+    recording: Option<CompletedRecording>,
+    app: &mut App,
 ) -> Result<(), String> {
     // Clear current recording, just in case :)
-    state.current_recording.take();
+    app.current_recording.take();
 
-    if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
-        window.hide().unwrap();
+    if let Some(recording) = recording {
+        handle_recording_finish(&handle, recording).await?;
+    };
+
+    let _ = app.recording_logging_handle.reload(None);
+
+    if let Some(window) = CapWindowId::InProgressRecording.get(&handle) {
+        let _ = window.close();
     }
 
-    if let Some(window) = CapWindowId::Main.get(&app) {
+    if let Some(window) = CapWindowId::Main.get(&handle) {
         window.unminimize().ok();
+    } else {
+        CapWindowId::Camera.get(&handle).map(|v| {
+            let _ = v.close();
+        });
+        app.camera_feed.take();
+        app.mic_feed.take();
     }
 
-    if let Some(completed_recording) = completed_recording {
-        let screenshots_dir = completed_recording.recording_dir.join("screenshots");
-        std::fs::create_dir_all(&screenshots_dir).ok();
+    // Play sound to indicate recording has stopped
+    AppSounds::StopRecording.play();
 
-        let display_output_path = match &completed_recording.meta.content {
-            Content::SingleSegment { segment } => {
-                segment.path(&completed_recording.meta, &segment.display.path)
+    CurrentRecordingChanged.emit(&handle).ok();
+
+    Ok(())
+}
+
+// runs when a recording successfully finishes
+async fn handle_recording_finish(
+    app: &AppHandle,
+    completed_recording: CompletedRecording,
+) -> Result<(), String> {
+    let recording_dir = completed_recording.project_path().clone();
+    let id = completed_recording.id().clone();
+
+    let screenshots_dir = recording_dir.join("screenshots");
+    std::fs::create_dir_all(&screenshots_dir).ok();
+
+    let display_output_path = match &completed_recording {
+        CompletedRecording::Studio { recording, .. } => match &recording.meta {
+            StudioRecordingMeta::SingleSegment { segment } => {
+                segment.display.path.to_path(&recording_dir)
             }
-            Content::MultipleSegments { inner } => {
-                inner.path(&completed_recording.meta, &inner.segments[0].display.path)
+            StudioRecordingMeta::MultipleSegments { inner, .. } => {
+                inner.segments[0].display.path.to_path(&recording_dir)
             }
-        };
-
-        let display_screenshot = screenshots_dir.join("display.jpg");
-        create_screenshot(display_output_path, display_screenshot.clone(), None).await?;
-
-        let recording_dir = completed_recording.recording_dir.clone();
-
-        ShowCapWindow::PrevRecordings.show(&app).ok();
-
-        NewRecordingAdded {
-            path: recording_dir.clone(),
+        },
+        CompletedRecording::Instant { recording, .. } => {
+            recording.project_path.join("./content/output.mp4")
         }
-        .emit(&app)
-        .ok();
+    };
 
-        RecordingStopped {
-            path: recording_dir,
+    let display_screenshot = screenshots_dir.join("display.jpg");
+    let screenshot_task = tokio::spawn(create_screenshot(
+        display_output_path,
+        display_screenshot.clone(),
+        None,
+    ));
+
+    let target_name = completed_recording.target_name().clone();
+
+    let (meta_inner, sharing) = match completed_recording {
+        CompletedRecording::Studio { recording, .. } => {
+            let recordings = ProjectRecordings::new(&recording_dir, &recording.meta)?;
+
+            let config = project_config_from_recording(
+                &recording,
+                &recordings,
+                PresetsStore::get_default_preset(&app)?.map(|p| p.config),
+            );
+
+            config.write(&recording_dir).map_err(|e| e.to_string())?;
+
+            (RecordingMetaInner::Studio(recording.meta), None)
         }
-        .emit(&app)
-        .ok();
+        CompletedRecording::Instant {
+            recording,
+            progressive_upload,
+            video_upload_info,
+            ..
+        } => {
+            // shareable_link = Some(video_upload_info.link.clone());
+            let app = app.clone();
+            let output_path = recording_dir.join("content/output.mp4");
 
-        let recordings = ProjectRecordings::new(&completed_recording.meta);
+            let _ = open_external_link(app.clone(), video_upload_info.link.clone());
 
-        let config = project_config_from_recording(&completed_recording, &recordings);
-
-        config
-            .write(&completed_recording.recording_dir)
-            .map_err(|e| e.to_string())?;
-
-        if let Some(pre_created_video) = state.pre_created_video.take() {
             spawn_actor({
-                let app = app.clone();
+                let video_upload_info = video_upload_info.clone();
+
                 async move {
-                    if let Some((settings, auth)) = GeneralSettingsStore::get(&app)
-                        .ok()
-                        .flatten()
-                        .zip(AuthStore::get(&app).ok().flatten())
-                    {
-                        if auth.is_upgraded() && settings.auto_create_shareable_link {
-                            // Copy link to clipboard
-                            let _ = app
-                                .state::<MutableState<'_, ClipboardContext>>()
-                                .write()
-                                .await
-                                .set_text(pre_created_video.link.clone());
+                    if let Some(progressive_upload) = progressive_upload {
+                        let video_upload_succeeded = match progressive_upload
+                            .handle
+                            .await
+                            .map_err(|e| e.to_string())
+                            .and_then(|r| r)
+                        {
+                            Ok(()) => {
+                                info!("Not attempting instant recording upload as progressive upload succeeded");
+                                true
+                            }
+                            Err(e) => {
+                                error!("Progressive upload failed: {}", e);
+                                false
+                            }
+                        };
 
-                            // Send notification for shareable link
-                            notifications::send_notification(
+                        let _ = screenshot_task.await;
+
+                        if video_upload_succeeded {
+                            let (screenshot_url, screenshot_form) = match prepare_screenshot_upload(
                                 &app,
-                                notifications::NotificationType::ShareableLinkCopied,
-                            );
-
-                            // Open the pre-created shareable link
-                            open_external_link(app.clone(), pre_created_video.link.clone()).ok();
-
-                            // Start the upload process in the background with retry mechanism
-                            let app = app.clone();
-
-                            tauri::async_runtime::spawn(async move {
-                                let max_retries = 3;
-                                let mut retry_count = 0;
-
-                                export_video(
-                                    app.clone(),
-                                    completed_recording.id.clone(),
-                                    config,
-                                    tauri::ipc::Channel::new(|_| Ok(())),
-                                    true,
-                                    completed_recording.meta.content.max_fps(),
-                                    XY::new(1920, 1080),
-                                )
-                                .await
-                                .ok();
-
-                                while retry_count < max_retries {
-                                    match upload_exported_video(
-                                        app.clone(),
-                                        completed_recording.id.clone(),
-                                        UploadMode::Initial {
-                                            pre_created_video: Some(pre_created_video.clone()),
-                                        },
-                                    )
-                                    .await
-                                    {
-                                        Ok(_) => {
-                                            println!("Video uploaded successfully");
-                                            // Don't send notification here since we already did it above
-                                            break;
-                                        }
-                                        Err(e) => {
-                                            retry_count += 1;
-                                            println!(
-                                                "Error during auto-upload (attempt {}/{}): {}",
-                                                retry_count, max_retries, e
-                                            );
-
-                                            if retry_count < max_retries {
-                                                tokio::time::sleep(std::time::Duration::from_secs(
-                                                    5,
-                                                ))
-                                                .await;
-                                            } else {
-                                                println!("Max retries reached. Upload failed.");
-                                                notifications::send_notification(
-                                                    &app,
-                                                    notifications::NotificationType::UploadFailed,
-                                                );
-                                            }
-                                        }
-                                    }
+                                &video_upload_info.config.clone(),
+                                display_screenshot,
+                            )
+                            .await
+                            {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    error!("Failed to prepare screenshot upload: {e}");
+                                    return;
                                 }
-                            });
-                        } else if settings.open_editor_after_recording {
-                            open_editor(app.clone(), completed_recording.id);
+                            };
+
+                            let resp = reqwest::Client::new()
+                                .post(screenshot_url)
+                                .multipart(screenshot_form)
+                                .send()
+                                .await;
+
+                            match resp {
+                                Ok(r)
+                                    if r.status().as_u16() >= 200 && r.status().as_u16() < 300 =>
+                                {
+                                    info!("Screenshot uploaded successfully");
+                                }
+                                Ok(r) => {
+                                    error!("Failed to upload screenshot: {}", r.status());
+                                }
+                                Err(e) => {
+                                    error!("Failed to upload screenshot: {e}");
+                                }
+                            }
+                        } else {
+                            // The upload_video function handles screenshot upload, so we can pass it along
+                            match upload_video(
+                                &app,
+                                video_upload_info.id.clone(),
+                                output_path,
+                                Some(video_upload_info.config.clone()),
+                                Some(display_screenshot.clone()),
+                            )
+                            .await
+                            {
+                                Ok(_) => {
+                                    info!(
+                                        "Final video upload with screenshot completed successfully"
+                                    )
+                                }
+                                Err(e) => {
+                                    error!("Error in final upload with screenshot: {}", e)
+                                }
+                            }
                         }
                     }
                 }
             });
+
+            (
+                RecordingMetaInner::Instant(recording.meta),
+                Some(SharingMeta {
+                    link: video_upload_info.link,
+                    id: video_upload_info.id,
+                }),
+            )
         }
     };
 
-    AppSounds::StopRecording.play();
+    let _ = RecordingStopped {
+        path: recording_dir.clone(),
+    }
+    .emit(app);
 
-    CurrentRecordingChanged.emit(&app).ok();
+    let meta = RecordingMeta {
+        platform: Some(Platform::default()),
+        project_path: recording_dir.clone(),
+        sharing,
+        pretty_name: format!(
+            "{target_name} {}",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+        ),
+        inner: meta_inner,
+    };
+
+    meta.save_for_project()
+        .map_err(|e| format!("Failed to save recording meta: {e}"))?;
+
+    if let RecordingMetaInner::Studio(_) = meta.inner {
+        match GeneralSettingsStore::get(&app)
+            .ok()
+            .flatten()
+            .map(|v| v.post_studio_recording_behaviour)
+            .unwrap_or(PostStudioRecordingBehaviour::OpenEditor)
+        {
+            PostStudioRecordingBehaviour::OpenEditor => {
+                let _ = ShowCapWindow::Editor {
+                    project_path: recording_dir,
+                }
+                .show(&app)
+                .await;
+            }
+            PostStudioRecordingBehaviour::ShowOverlay => {
+                let _ = ShowCapWindow::RecordingsOverlay.show(&app).await;
+
+                let app = AppHandle::clone(app);
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+                    let _ = NewStudioRecordingAdded {
+                        path: recording_dir.clone(),
+                    }
+                    .emit(&app);
+                });
+            }
+        };
+    }
 
     Ok(())
 }
 
 fn generate_zoom_segments_from_clicks(
-    recording: &CompletedRecording,
+    recording: &CompletedStudioRecording,
     recordings: &ProjectRecordings,
 ) -> Vec<ZoomSegment> {
     let mut segments = vec![];
-
-    if !FLAGS.zoom {
-        return vec![];
-    };
 
     let max_duration = recordings.duration();
 
@@ -392,8 +785,9 @@ fn generate_zoom_segments_from_clicks(
 }
 
 fn project_config_from_recording(
-    completed_recording: &CompletedRecording,
+    completed_recording: &CompletedStudioRecording,
     recordings: &ProjectRecordings,
+    default_config: Option<ProjectConfiguration>,
 ) -> ProjectConfiguration {
     ProjectConfiguration {
         timeline: Some(TimelineConfiguration {
@@ -402,7 +796,7 @@ fn project_config_from_recording(
                 .iter()
                 .enumerate()
                 .map(|(i, segment)| TimelineSegment {
-                    recording_segment: Some(i as u32),
+                    recording_segment: i as u32,
                     start: 0.0,
                     end: segment.duration(),
                     timescale: 1.0,
@@ -410,6 +804,6 @@ fn project_config_from_recording(
                 .collect(),
             zoom_segments: generate_zoom_segments_from_clicks(&completed_recording, &recordings),
         }),
-        ..Default::default()
+        ..default_config.unwrap_or_default()
     }
 }

@@ -1,64 +1,207 @@
 "use client";
 
-import { Button, LogoBadge } from "@cap/ui";
+import {
+  getDownloadButtonText,
+  getDownloadUrl,
+  getPlatformIcon,
+  getVersionText,
+  PlatformIcons,
+} from "@/utils/platform";
+import { Button } from "@cap/ui";
+import { useDetectPlatform } from "hooks/useDetectPlatform";
 import { useState } from "react";
 
 export const DownloadPage = () => {
-  const [loading, setLoading] = useState(false);
-  const [showOtherOptions, setShowOtherOptions] = useState(false);
-
-  const releaseFetch = async () => {
-    setLoading(true);
-    const response = await fetch("/api/releases/macos");
-    const data = await response.json();
-
-    if (data.url) {
-      window.location.href = data.url;
-    }
-
-    setLoading(false);
-  };
+  const { platform, isIntel } = useDetectPlatform();
+  const [showDebug, setShowDebug] = useState(false);
+  const loading = platform === null;
 
   return (
-    <div className="wrapper wrapper-sm py-16 md:py-32">
-      <div className="text-center space-y-4">
-        <h1 className="fade-in-down animate-delay-1 text-2xl md:text-4xl">
+    <div className="pt-32 pb-16 wrapper wrapper-sm md:py-32">
+      <div className="space-y-4 text-center">
+        {/* Debug toggle button in top-right corner */}
+        <button
+          onClick={() => setShowDebug(!showDebug)}
+          className="absolute top-4 right-4 px-2 py-1 text-xs text-gray-8 bg-gray-800 rounded hover:text-gray-300"
+        >
+          {showDebug ? "Hide Debug" : "Debug"}
+        </button>
+
+        {/* Debug panel */}
+        {showDebug && (
+          <div className="fixed right-4 top-10 z-50 p-3 text-left bg-gray-800 rounded shadow-lg">
+            <div className="mb-2 text-xs text-gray-300">Platform Simulator</div>
+            <div className="space-y-2">
+              <button
+                className={`text-xs px-2 py-1 rounded w-full text-left ${
+                  platform === "windows"
+                    ? "bg-blue-600"
+                    : "bg-gray-700 hover:bg-gray-600"
+                }`}
+              >
+                Windows (Beta)
+              </button>
+              <button
+                className={`text-xs px-2 py-1 rounded w-full text-left ${
+                  platform === "macos" && isIntel
+                    ? "bg-blue-600"
+                    : "bg-gray-700 hover:bg-gray-600"
+                }`}
+              >
+                macOS (Intel)
+              </button>
+              <button
+                className={`text-xs px-2 py-1 rounded w-full text-left ${
+                  platform === "macos" && !isIntel
+                    ? "bg-blue-600"
+                    : "bg-gray-700 hover:bg-gray-600"
+                }`}
+              >
+                macOS (Apple Silicon)
+              </button>
+              <div className="mt-2 text-xs text-gray-8">
+                Current: {platform}{" "}
+                {platform === "macos" &&
+                  (isIntel ? "(Intel)" : "(Apple Silicon)")}
+              </div>
+            </div>
+          </div>
+        )}
+
+        <h1 className="text-2xl fade-in-down animate-delay-1 md:text-4xl">
           Download Cap
         </h1>
-        <p className="fade-in-down animate-delay-2 text-sm md:text-base px-4 md:px-0">
+        <p className="px-4 text-sm fade-in-down animate-delay-2 md:text-base md:px-0">
           The quickest way to share your screen. Pin to your dock and record in
           seconds.
         </p>
-        <div className="flex flex-col md:flex-row items-center justify-center space-y-2 md:space-y-0 md:space-x-2 fade-in-up animate-delay-2">
-          <Button
-            spinner={loading}
-            size="lg"
-            href="https://solitary-art-7d28.brendonovich.workers.dev/desktop/latest/platform/dmg-aarch64"
-            className="w-full md:w-auto"
-          >
-            Download for Apple Silicon
-          </Button>
-          {showOtherOptions && (
+        <div className="flex flex-col justify-center items-center space-y-4 fade-in-up animate-delay-2">
+          <div className="flex flex-col items-center space-y-4">
             <Button
+              variant="radialblue"
               size="lg"
-              href="https://solitary-art-7d28.brendonovich.workers.dev/desktop/latest/platform/dmg-x86_64"
-              className="w-full md:w-auto"
+              href={getDownloadUrl(platform, isIntel)}
+              className="flex justify-center items-center py-6 font-medium text-white"
             >
-              Download for Intel
+              {!loading && getPlatformIcon(platform)}
+              {getDownloadButtonText(platform, loading, isIntel)}
             </Button>
-          )}
+
+            <div className="text-sm text-gray-8">
+              {getVersionText(platform)}
+            </div>
+
+            {/* Windows SmartScreen video and instructions */}
+            {platform === "windows" && (
+              <div className="mt-4 max-w-md">
+                <video
+                  src="/windows-smartscreen.mp4"
+                  autoPlay
+                  loop
+                  muted
+                  playsInline
+                  className="mx-auto w-full rounded-md shadow-md"
+                  style={{ maxWidth: "300px" }}
+                />
+                <p className="mt-2 text-sm text-gray-8">
+                  Whilst Cap for Windows is in early beta, after downloading and
+                  running the app, follow the steps above to whitelist Cap on
+                  your PC.
+                </p>
+              </div>
+            )}
+          </div>
         </div>
-        <div className="fade-in-up animate-delay-2">
-          <p className="text-xs">macOS 13+ or later recommended.</p>
+
+        <PlatformIcons />
+
+        <div className="pb-4 mt-6 fade-in-up animate-delay-2">
+          <h3 className="mb-2 text-sm font-medium text-gray-8">
+            Other download options:
+          </h3>
+          <div className="flex flex-col gap-3 justify-center items-center md:flex-row">
+            {platform !== "windows" && (
+              <a
+                href="/download/windows"
+                className="text-sm text-gray-8 transition-all hover:underline"
+              >
+                Windows (Beta)
+              </a>
+            )}
+            {platform === "macos" && isIntel && (
+              <a
+                href="/download/apple-silicon"
+                className="text-sm text-gray-8 transition-all hover:underline"
+              >
+                Apple Silicon
+              </a>
+            )}
+            {platform === "macos" && !isIntel && (
+              <a
+                href="/download/apple-intel"
+                className="text-sm text-gray-8 transition-all hover:underline"
+              >
+                Apple Intel
+              </a>
+            )}
+            {platform !== "macos" && (
+              <>
+                <a
+                  href="/download/apple-silicon"
+                  className="text-sm text-gray-8 transition-all hover:underline"
+                >
+                  Apple Silicon
+                </a>
+                <a
+                  href="/download/apple-intel"
+                  className="text-sm text-gray-8 transition-all hover:underline"
+                >
+                  Apple Intel
+                </a>
+              </>
+            )}
+          </div>
         </div>
-        {!showOtherOptions && (
-          <button
-            onClick={() => setShowOtherOptions(true)}
-            className="mt-2 underline text-sm text-gray-400 fade-in-up animate-delay-2"
-          >
-            See other options
-          </button>
-        )}
+
+        {/* Discreet SEO Links */}
+        <div className="pt-8 mt-32 text-xs text-gray-1 border-t border-gray-200 opacity-70">
+          <div className="flex flex-wrap gap-y-2 gap-x-4 justify-center mx-auto max-w-lg">
+            <a
+              href="/screen-recorder"
+              className="text-xs hover:text-gray-8 hover:underline"
+            >
+              Screen Recorder
+            </a>
+            <span className="hidden md:inline">•</span>
+            <a
+              href="/free-screen-recorder"
+              className="text-xs hover:text-gray-8 hover:underline"
+            >
+              Free Screen Recorder
+            </a>
+            <span className="hidden md:inline">•</span>
+            <a
+              href="/screen-recorder-mac"
+              className="text-xs hover:text-gray-8 hover:underline"
+            >
+              Mac Screen Recorder
+            </a>
+            <span className="hidden md:inline">•</span>
+            <a
+              href="/screen-recorder-windows"
+              className="text-xs hover:text-gray-8 hover:underline"
+            >
+              Windows Screen Recorder
+            </a>
+            <span className="hidden md:inline">•</span>
+            <a
+              href="/screen-recording-software"
+              className="text-xs hover:text-gray-8 hover:underline"
+            >
+              Recording Software
+            </a>
+          </div>
+        </div>
       </div>
     </div>
   );

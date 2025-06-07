@@ -1,16 +1,24 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
-use crate::{fake_window, general_settings::AppTheme};
+use crate::{fake_window, general_settings::AppTheme, permissions, App, ArcLock};
 use cap_flags::FLAGS;
-use cap_media::sources::CaptureScreen;
+use cap_media::{platform::logical_monitor_bounds, sources::CaptureScreen};
+use futures::pin_mut;
 use serde::Deserialize;
 use specta::Type;
-use std::{path::PathBuf, str::FromStr};
+use std::{
+    ops::Deref,
+    path::PathBuf,
+    str::FromStr,
+    sync::{atomic::AtomicU32, Arc, Mutex},
+};
 use tauri::{
     AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder, Wry,
 };
+use tokio::sync::RwLock;
+use tracing::debug;
 
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
@@ -21,14 +29,15 @@ pub enum CapWindowId {
     Setup,
     Main,
     Settings,
-    Editor { project_id: String },
+    Editor { id: u32 },
     RecordingsOverlay,
-    WindowCaptureOccluder,
+    WindowCaptureOccluder { screen_id: u32 },
     CaptureArea,
     Camera,
     InProgressRecording,
     Upgrade,
-    SignIn,
+    ModeSelect,
+    Debug,
 }
 
 impl FromStr for CapWindowId {
@@ -40,14 +49,23 @@ impl FromStr for CapWindowId {
             "main" => Self::Main,
             "settings" => Self::Settings,
             "camera" => Self::Camera,
-            "window-capture-occluder" => Self::WindowCaptureOccluder,
             "capture-area" => Self::CaptureArea,
             "in-progress-recording" => Self::InProgressRecording,
             "recordings-overlay" => Self::RecordingsOverlay,
             "upgrade" => Self::Upgrade,
-            "signin" => Self::SignIn,
+            "mode-select" => Self::ModeSelect,
+            "debug" => Self::Debug,
             s if s.starts_with("editor-") => Self::Editor {
-                project_id: s.replace("editor-", ""),
+                id: s
+                    .replace("editor-", "")
+                    .parse::<u32>()
+                    .map_err(|e| e.to_string())?,
+            },
+            s if s.starts_with("window-capture-occluder-") => Self::WindowCaptureOccluder {
+                screen_id: s
+                    .replace("window-capture-occluder-", "")
+                    .parse::<u32>()
+                    .map_err(|e| e.to_string())?,
             },
             _ => return Err(format!("unknown window label: {}", s)),
         })
@@ -61,13 +79,16 @@ impl std::fmt::Display for CapWindowId {
             Self::Main => write!(f, "main"),
             Self::Settings => write!(f, "settings"),
             Self::Camera => write!(f, "camera"),
-            Self::WindowCaptureOccluder => write!(f, "window-capture-occluder"),
+            Self::WindowCaptureOccluder { screen_id } => {
+                write!(f, "window-capture-occluder-{screen_id}")
+            }
             Self::CaptureArea => write!(f, "capture-area"),
             Self::InProgressRecording => write!(f, "in-progress-recording"),
             Self::RecordingsOverlay => write!(f, "recordings-overlay"),
             Self::Upgrade => write!(f, "upgrade"),
-            Self::SignIn => write!(f, "signin"),
-            Self::Editor { project_id } => write!(f, "editor-{}", project_id),
+            Self::ModeSelect => write!(f, "mode-select"),
+            Self::Editor { id } => write!(f, "editor-{id}"),
+            Self::Debug => write!(f, "debug"),
         }
     }
 }
@@ -81,11 +102,13 @@ impl CapWindowId {
         match self {
             Self::Setup => "Cap Setup".to_string(),
             Self::Settings => "Cap Settings".to_string(),
-            Self::WindowCaptureOccluder => "Cap Window Capture Occluder".to_string(),
+            Self::WindowCaptureOccluder { .. } => "Cap Window Capture Occluder".to_string(),
             Self::CaptureArea => "Cap Capture Area".to_string(),
             Self::InProgressRecording => "Cap In Progress Recording".to_string(),
             Self::Editor { .. } => "Cap Editor".to_string(),
-            Self::SignIn => "Cap Sign In".to_string(),
+            Self::ModeSelect => "Cap Mode Selection".to_string(),
+            Self::Camera => "Cap Camera".to_string(),
+            Self::RecordingsOverlay => "Cap Recordings Overlay".to_string(),
             _ => "Cap".to_string(),
         }
     }
@@ -98,7 +121,7 @@ impl CapWindowId {
                 | Self::Editor { .. }
                 | Self::Settings
                 | Self::Upgrade
-                | Self::SignIn
+                | Self::ModeSelect
         )
     }
 
@@ -110,11 +133,10 @@ impl CapWindowId {
     #[cfg(target_os = "macos")]
     pub fn traffic_lights_position(&self) -> Option<Option<LogicalPosition<f64>>> {
         match self {
-            Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 40.0))),
-            Self::Setup => Some(Some(LogicalPosition::new(14.0, 24.0))),
+            Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 32.0))),
             Self::InProgressRecording => Some(Some(LogicalPosition::new(-100.0, -100.0))),
             Self::Camera
-            | Self::WindowCaptureOccluder
+            | Self::WindowCaptureOccluder { .. }
             | Self::CaptureArea
             | Self::RecordingsOverlay => None,
             _ => Some(None),
@@ -125,10 +147,11 @@ impl CapWindowId {
         Some(match self {
             Self::Setup => (600.0, 600.0),
             Self::Main => (300.0, 360.0),
-            Self::SignIn => (300.0, 360.0),
-            Self::Editor { .. } => (900.0, 800.0),
+            Self::Editor { .. } => (1275.0, 800.0),
             Self::Settings => (600.0, 450.0),
             Self::Camera => (460.0, 920.0),
+            Self::Upgrade => (950.0, 850.0),
+            Self::ModeSelect => (900.0, 500.0),
             _ => return None,
         })
     }
@@ -139,24 +162,37 @@ pub enum ShowCapWindow {
     Setup,
     Main,
     Settings { page: Option<String> },
-    Editor { project_id: String },
-    PrevRecordings,
-    WindowCaptureOccluder,
-    CaptureArea { screen: CaptureScreen },
-    Camera { ws_port: u16 },
+    Editor { project_path: PathBuf },
+    RecordingsOverlay,
+    WindowCaptureOccluder { screen_id: u32 },
+    CaptureArea { screen_id: u32 },
+    Camera,
     InProgressRecording { position: Option<(f64, f64)> },
     Upgrade,
-    SignIn,
+    ModeSelect,
 }
 
 impl ShowCapWindow {
-    pub fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
-        if let Some(window) = self.id().get(app) {
+    pub async fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
+        if let Self::Editor { project_path } = self {
+            let state = app.state::<EditorWindowIds>();
+            let mut s = state.ids.lock().unwrap();
+            if s.iter().find(|(path, _)| path == project_path).is_none() {
+                s.push((
+                    project_path.clone(),
+                    state
+                        .counter
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+                ));
+            }
+        }
+
+        if let Some(window) = self.id(app).get(app) {
             window.set_focus().ok();
             return Ok(window);
         }
 
-        let id = self.id();
+        let id = self.id(app);
         let monitor = app.primary_monitor()?.unwrap();
 
         let window = match self {
@@ -169,20 +205,20 @@ impl ShowCapWindow {
                 .maximizable(false)
                 .shadow(true)
                 .build()?,
-            Self::Main => self
-                .window_builder(app, "/")
-                .resizable(false)
-                .maximized(false)
-                .maximizable(false)
-                .center()
-                .build()?,
-            Self::SignIn => self
-                .window_builder(app, "/signin")
-                .resizable(false)
-                .maximized(false)
-                .maximizable(false)
-                .center()
-                .build()?,
+            Self::Main => {
+                if permissions::do_permissions_check(false).necessary_granted() {
+                    self.window_builder(app, "/")
+                        .resizable(false)
+                        .maximized(false)
+                        .maximizable(false)
+                        .always_on_top(true)
+                        .visible_on_all_workspaces(true)
+                        .center()
+                        .build()?
+                } else {
+                    Box::pin(Self::Setup.show(app)).await?
+                }
+            }
             Self::Settings { page } => self
                 .window_builder(
                     app,
@@ -192,24 +228,43 @@ impl ShowCapWindow {
                 .maximized(false)
                 .center()
                 .build()?,
-            Self::Editor { project_id } => self
-                .window_builder(app, format!("/editor?id={project_id}"))
-                .inner_size(1150.0, 800.0)
-                .maximizable(true)
-                .center()
-                .build()?,
+            Self::Editor { .. } => {
+                if let Some(main) = CapWindowId::Main.get(app) {
+                    let _ = main.close();
+                };
+
+                let window = self
+                    .window_builder(app, "/editor")
+                    .maximizable(true)
+                    .inner_size(1240.0, 800.0)
+                    .center()
+                    .build()?;
+
+                window
+            }
             Self::Upgrade => self
                 .window_builder(app, "/upgrade")
-                .inner_size(800.0, 800.0)
                 .resizable(false)
                 .focused(true)
                 .always_on_top(true)
                 .maximized(false)
+                .shadow(true)
                 .transparent(true)
                 .center()
                 .build()?,
-            Self::Camera { ws_port } => {
+            Self::ModeSelect => self
+                .window_builder(app, "/mode-select")
+                .resizable(false)
+                .maximized(false)
+                .maximizable(false)
+                .center()
+                .focused(true)
+                .shadow(true)
+                .build()?,
+            Self::Camera => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
+
+                let port = app.state::<Arc<RwLock<App>>>().read().await.camera_ws_port;
 
                 let mut window_builder = self
                     .window_builder(app, "/camera")
@@ -218,7 +273,6 @@ impl ShowCapWindow {
                     .shadow(false)
                     .fullscreen(false)
                     .always_on_top(true)
-                    .content_protected(true)
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)
                     .position(
@@ -230,14 +284,33 @@ impl ShowCapWindow {
                     .initialization_script(&format!(
                         "
 			                window.__CAP__ = window.__CAP__ ?? {{}};
-			                window.__CAP__.cameraWsPort = {ws_port};
+			                window.__CAP__.cameraWsPort = {port};
 		                ",
                     ))
                     .transparent(true);
 
-                window_builder.build()?
+                let window = window_builder.build()?;
+
+                #[cfg(target_os = "macos")]
+                {
+                    _ = window.run_on_main_thread({
+                        let window = window.as_ref().window();
+                        move || unsafe {
+                            let win = window.ns_window().unwrap() as *const objc2_app_kit::NSWindow;
+                            (*win).setCollectionBehavior(
+                            		(*win).collectionBehavior() | objc2_app_kit::NSWindowCollectionBehavior::FullScreenAuxiliary,
+                            );
+                        }
+                    });
+                }
+
+                window
             }
-            Self::WindowCaptureOccluder => {
+            Self::WindowCaptureOccluder { screen_id } => {
+                let Some(bounds) = logical_monitor_bounds(*screen_id) else {
+                    return Err(tauri::Error::WindowNotFound);
+                };
+
                 let mut window_builder = self
                     .window_builder(app, "/window-capture-occluder")
                     .maximized(false)
@@ -248,11 +321,8 @@ impl ShowCapWindow {
                     .visible_on_all_workspaces(true)
                     .content_protected(true)
                     .skip_taskbar(true)
-                    .inner_size(
-                        (monitor.size().width as f64) / monitor.scale_factor(),
-                        (monitor.size().height as f64) / monitor.scale_factor(),
-                    )
-                    .position(0.0, 0.0)
+                    .inner_size(bounds.size.width, bounds.size.height)
+                    .position(bounds.position.x, bounds.position.y)
                     .transparent(true);
 
                 let window = window_builder.build()?;
@@ -261,15 +331,12 @@ impl ShowCapWindow {
 
                 #[cfg(target_os = "macos")]
                 {
-                    crate::platform::set_window_level(
-                        window.as_ref().window(),
-                        objc2_app_kit::NSScreenSaverWindowLevel,
-                    );
+                    crate::platform::set_window_level(window.as_ref().window(), 900);
                 }
 
                 window
             }
-            Self::CaptureArea { screen } => {
+            Self::CaptureArea { screen_id } => {
                 let mut window_builder = self
                     .window_builder(app, "/capture-area")
                     .maximized(false)
@@ -282,7 +349,7 @@ impl ShowCapWindow {
                     .decorations(false)
                     .transparent(true);
 
-                let screen_bounds = cap_media::platform::monitor_bounds(screen.id);
+                let screen_bounds = cap_media::platform::monitor_bounds(*screen_id);
                 let target_monitor = app
                     .monitor_from_point(screen_bounds.x, screen_bounds.y)
                     .ok()
@@ -323,13 +390,12 @@ impl ShowCapWindow {
             Self::InProgressRecording {
                 position: _position,
             } => {
-                let mut width = 180.0;
-                if FLAGS.pause_resume {
-                    width += 32.0;
-                }
+                let mut width = 180.0 + 32.0;
+
                 let height = 40.0;
 
-                self.window_builder(app, "/in-progress-recording")
+                let window = self
+                    .window_builder(app, "/in-progress-recording")
                     .maximized(false)
                     .resizable(false)
                     .fullscreen(false)
@@ -344,9 +410,16 @@ impl ShowCapWindow {
                         (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
                     )
                     .skip_taskbar(true)
-                    .build()?
+                    .build()?;
+
+                #[cfg(target_os = "macos")]
+                {
+                    crate::platform::set_window_level(window.as_ref().window(), 1000);
+                }
+
+                window
             }
-            Self::PrevRecordings => {
+            Self::RecordingsOverlay => {
                 let window = self
                     .window_builder(app, "/recordings-overlay")
                     .maximized(false)
@@ -369,31 +442,30 @@ impl ShowCapWindow {
                 #[cfg(target_os = "macos")]
                 {
                     app.run_on_main_thread({
-		                    let window = window.clone();
-		                    move || {
-		                        use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-		                        use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
+                        let window = window.clone();
+                        move || {
+                            use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+                            use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
 
-		                        let panel = window.to_panel().unwrap();
+                            let panel = window.to_panel().unwrap();
 
-		                        panel.set_level(cocoa::appkit::NSMainMenuWindowLevel);
+                            panel.set_level(cocoa::appkit::NSMainMenuWindowLevel);
 
-		                        panel.set_collection_behaviour(
-		                            NSWindowCollectionBehavior::NSWindowCollectionBehaviorTransient
-		                                | NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace
-		                                | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
-		                                | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle,
-		                        );
+                            panel.set_collection_behaviour(
+                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorTransient
+                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace
+                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+                                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle,
+                            );
 
-		                        // seems like this doesn't work properly -_-
-		                        #[allow(non_upper_case_globals)]
-		                        const NSWindowStyleMaskNonActivatingPanel: i32 = 1 << 7;
-		                        panel.set_style_mask(NSWindowStyleMaskNonActivatingPanel);
-		                    }
-		                }).ok();
+                            // seems like this doesn't work properly -_-
+                            #[allow(non_upper_case_globals)]
+                            const NSWindowStyleMaskNonActivatingPanel: i32 = 1 << 7;
+                            panel.set_style_mask(NSWindowStyleMaskNonActivatingPanel);
+                        }
+                    })
+                    .ok();
                 }
-
-                println!("about to spawn fake window listener");
 
                 fake_window::spawn_fake_window_listener(app.clone(), window.clone());
 
@@ -401,7 +473,8 @@ impl ShowCapWindow {
             }
         };
 
-        window.hide().ok();
+        // removing this for now as it causes windows to just stay hidden sometimes -_-
+        // window.hide().ok();
 
         #[cfg(target_os = "macos")]
         if let Some(position) = id.traffic_lights_position() {
@@ -416,7 +489,7 @@ impl ShowCapWindow {
         app: &'a AppHandle<Wry>,
         url: impl Into<PathBuf>,
     ) -> WebviewWindowBuilder<'a, Wry, AppHandle<Wry>> {
-        let id = self.id();
+        let id = self.id(app);
 
         let mut builder = WebviewWindow::builder(app, id.label(), WebviewUrl::App(url.into()))
             .title(id.title())
@@ -449,21 +522,28 @@ impl ShowCapWindow {
         builder
     }
 
-    pub fn id(&self) -> CapWindowId {
+    pub fn id(&self, app: &AppHandle) -> CapWindowId {
         match self {
             ShowCapWindow::Setup => CapWindowId::Setup,
             ShowCapWindow::Main => CapWindowId::Main,
             ShowCapWindow::Settings { .. } => CapWindowId::Settings,
-            ShowCapWindow::Editor { project_id } => CapWindowId::Editor {
-                project_id: project_id.clone(),
-            },
-            ShowCapWindow::PrevRecordings => CapWindowId::RecordingsOverlay,
-            ShowCapWindow::WindowCaptureOccluder => CapWindowId::WindowCaptureOccluder,
+            ShowCapWindow::Editor { project_path } => {
+                let state = app.state::<EditorWindowIds>();
+                let s = state.ids.lock().unwrap();
+                let id = s.iter().find(|(path, _)| path == project_path).unwrap().1;
+                CapWindowId::Editor { id }
+            }
+            ShowCapWindow::RecordingsOverlay => CapWindowId::RecordingsOverlay,
+            ShowCapWindow::WindowCaptureOccluder { screen_id } => {
+                CapWindowId::WindowCaptureOccluder {
+                    screen_id: *screen_id,
+                }
+            }
             ShowCapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
             ShowCapWindow::Camera { .. } => CapWindowId::Camera,
             ShowCapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
             ShowCapWindow::Upgrade => CapWindowId::Upgrade,
-            ShowCapWindow::SignIn => CapWindowId::SignIn,
+            ShowCapWindow::ModeSelect => CapWindowId::ModeSelect,
         }
     }
 }
@@ -572,5 +652,33 @@ impl MonitorExt for Monitor {
         ]
         .into_iter()
         .any(|(x, y)| x >= left && x < right && y >= top && y < bottom)
+    }
+}
+
+#[specta::specta]
+#[tauri::command(async)]
+pub fn set_window_transparent(window: tauri::Window, value: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        let ns_win = window
+            .ns_window()
+            .expect("Failed to get native window handle")
+            as *const objc2_app_kit::NSWindow;
+
+        unsafe {
+            (*ns_win).setOpaque(!value);
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct EditorWindowIds {
+    pub ids: Arc<Mutex<Vec<(PathBuf, u32)>>>,
+    pub counter: Arc<AtomicU32>,
+}
+
+impl EditorWindowIds {
+    pub fn get(app: &AppHandle) -> Self {
+        app.state::<EditorWindowIds>().deref().clone()
     }
 }

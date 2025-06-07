@@ -5,6 +5,9 @@ description = "A modular multimedia processing library"
 edition = "2021"
 rust-version = "1.80"
 
+[lints]
+workspace = true
+
 [features]
 default = []
 debug-logging = [] # Feature flag to control debug logging
@@ -13,6 +16,7 @@ debug-logging = [] # Feature flag to control debug logging
 cap-project = { path = "../project" }
 cap-flags = { path = "../flags" }
 cap-gpu-converters = { path = "../gpu-converters" }
+cap-audio = { path = "../audio" }
 cpal.workspace = true
 ffmpeg.workspace = true
 ffmpeg-sys-next.workspace = true
@@ -26,10 +30,11 @@ serde = { version = "1", features = ["derive"] }
 specta.workspace = true
 tempfile = "3.12.0"
 thiserror.workspace = true
-tracing = { version = "0.1", features = ["release_max_level_info"] }
+tracing = { workspace = true }
 futures = "0.3.31"
 axum = { version = "0.7.9", features = ["macros", "ws"] }
 tokio.workspace = true
+cap-fail = { version = "0.1.0", path = "../fail" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true, default-features = false, features = [
@@ -52,7 +57,7 @@ objc = "0.2.7"
 objc-foundation = "0.1.1"
 objc2-foundation = { version = "0.2.2", features = ["NSValue"] }
 nokhwa-bindings-macos.workspace = true
-screencapturekit = "0.2.8"
+screencapturekit = "0.3.5"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [

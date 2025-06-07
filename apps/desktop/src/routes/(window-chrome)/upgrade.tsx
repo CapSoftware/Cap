@@ -1,55 +1,117 @@
-import { createSignal, onCleanup, onMount } from "solid-js";
+import { createRive } from "@aerofoil/rive-solid-canvas";
 import { Button } from "@cap/ui-solid";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-
-import { authStore } from "../../store";
+import { action, useAction } from "@solidjs/router";
+import { createMutation, useQueryClient } from "@tanstack/solid-query";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow, Window } from "@tauri-apps/api/window";
+import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
+import * as shell from "@tauri-apps/plugin-shell";
+import { Accessor, createSignal, onCleanup, onMount, Show } from "solid-js";
+import { generalSettingsStore } from "~/store";
+import { identifyUser, trackEvent } from "~/utils/analytics";
+import { clientEnv } from "~/utils/env";
 import { getProPlanId } from "~/utils/plans";
+import { createLicenseQuery } from "~/utils/queries";
 import { commands } from "~/utils/tauri";
-import { apiClient, protectedHeaders } from "~/utils/web-api";
+import { apiClient, licenseApiClient, protectedHeaders } from "~/utils/web-api";
+import PricingRive from "../../assets/rive/pricing.riv";
+import { authStore } from "../../store";
+
+import { Dialog, DialogContent, Input } from "../editor/ui";
+import callbackTemplate from "./callback.template";
+
+const proFeatures = [
+  "Commercial License Included",
+  "Unlimited cloud storage & Shareable links",
+  "Connect custom S3 storage bucket",
+  "Advanced teams features",
+  "Unlimited views",
+  "Password protected videos",
+  "Advanced analytics",
+  "Priority support",
+];
+
+import { RuntimeLoader } from "@rive-app/canvas";
+import riveWASMResource from "@rive-app/canvas/rive.wasm?url";
+import { createSignInMutation } from "~/utils/auth";
+
+RuntimeLoader.setWasmUrl(riveWASMResource);
 
 export default function Page() {
-  const proFeatures = [
-    "Remove watermark from recordings",
-    "Unlimited cloud storage & Shareable links",
-    "Connect custom S3 storage bucket",
-    "Advanced teams features",
-    "Unlimited views",
-    "Password protected videos",
-    "Advanced analytics",
-    "Priority support",
-  ];
-
-  const [isAnnual, setIsAnnual] = createSignal(true);
+  const [isProAnnual, setIsProAnnual] = createSignal(true);
+  const [isCommercialAnnual, setIsCommercialAnnual] = createSignal(true);
   const [upgradeComplete, setUpgradeComplete] = createSignal(false);
   const [loading, setLoading] = createSignal(false);
+  const signIn = createSignInMutation();
+  const license = createLicenseQuery();
+  const [openLicenseDialog, setOpenLicenseDialog] = createSignal(false);
 
-  const togglePricing = () => {
-    setIsAnnual(!isAnnual());
-  };
+  const resetLicense = createMutation(() => ({
+    mutationFn: async () => {
+      const generalSettings = await generalSettingsStore.get();
+      if (
+        !generalSettings?.instanceId ||
+        !license.data ||
+        license.data.type !== "commercial"
+      ) {
+        throw new Error("No instance ID or valid commercial license found");
+      }
+
+      const resp = await licenseApiClient.activateCommercialLicense({
+        headers: {
+          licensekey: license.data.licenseKey,
+          instanceid: generalSettings.instanceId,
+        },
+        body: { reset: true },
+      });
+
+      if (resp.status !== 200) {
+        if (
+          typeof resp.body === "object" &&
+          resp.body &&
+          "message" in resp.body
+        )
+          throw resp.body.message;
+        throw new Error((resp.body as any).toString());
+      }
+    },
+    onSuccess: async () => {
+      await generalSettingsStore.set({
+        commercialLicense: undefined,
+      });
+      license.refetch();
+    },
+  }));
 
   const openCheckoutInExternalBrowser = async () => {
+    console.log("Opening checkout in external browser");
     setLoading(true);
-    const planId = getProPlanId(isAnnual() ? "yearly" : "monthly");
 
     try {
       const auth = await authStore.get();
 
+      console.log({ auth });
       if (!auth) {
-        console.error("User not authenticated");
-        const window = getCurrentWindow();
-        window.close();
-        return;
+        console.log("No auth found, starting sign in flow");
+        await signIn.mutateAsync(new AbortController());
       }
 
+      const planId = getProPlanId(isProAnnual() ? "yearly" : "monthly");
+      console.log("Getting checkout URL for plan:", planId);
       const response = await apiClient.desktop.getProSubscribeURL({
         body: { priceId: planId },
         headers: await protectedHeaders(),
       });
 
       if (response.status === 200) {
+        console.log("Opening checkout URL in external browser");
         commands.openExternalLink(response.body.url);
+        console.log("Minimizing upgrade window");
+        const window = await Window.getByLabel("upgrade");
+        if (window) await window.minimize();
       } else {
-        console.error("Failed to get checkout URL");
+        console.error("Failed to get checkout URL, status:", response.status);
       }
     } catch (error) {
       console.error("Error getting checkout URL:", error);
@@ -58,31 +120,156 @@ export default function Page() {
     }
   };
 
-  const checkUpgradeStatus = async () => {
-    const result = await commands.checkUpgradedAndUpdate();
-    if (result) {
-      setUpgradeComplete(true);
-    }
-  };
+  const openCommercialCheckout = createMutation(() => ({
+    mutationFn: async () => {
+      const resp = await licenseApiClient.createCommercialCheckoutUrl({
+        body: { type: isCommercialAnnual() ? "yearly" : "lifetime" },
+      });
 
-  onMount(() => {
-    const interval = setInterval(checkUpgradeStatus, 5000);
-    onCleanup(() => clearInterval(interval));
-  });
+      if (resp.status === 200) {
+        console.log("Opening checkout URL in external browser");
+        commands.openExternalLink(resp.body.url);
+        console.log("Minimizing upgrade window");
+        const window = await Window.getByLabel("upgrade");
+        if (window) {
+          await window.minimize();
+        }
+      } else {
+        throw resp.body;
+      }
+    },
+  }));
+
+  // onMount(async () => {
+  //   console.log("Component mounted");
+  //   const unsubscribeDeepLink = await onOpenUrl(async (urls) => {
+  //     console.log("Deep link received:", urls);
+  //     const isDevMode = import.meta.env.VITE_ENVIRONMENT === "development";
+  //     if (isDevMode) {
+  //       console.log("In dev mode, ignoring deep link");
+  //       return;
+  //     }
+
+  //     for (const url of urls) {
+  //       if (!url.includes("token=")) {
+  //         console.log("URL does not contain token, skipping");
+  //         return;
+  //       }
+
+  //       console.log("Processing auth URL");
+  //       const urlObject = new URL(url);
+  //       const token = urlObject.searchParams.get("token");
+  //       const user_id = urlObject.searchParams.get("user_id");
+  //       const expires = Number(urlObject.searchParams.get("expires"));
+
+  //       if (!token || !expires || !user_id) {
+  //         console.error("Invalid signin params");
+  //         throw new Error("Invalid signin params");
+  //       }
+
+  //       console.log("Setting auth store with new credentials");
+  //       const existingAuth = await authStore.get();
+  //       await authStore.set({
+  //         token,
+  //         user_id,
+  //         expires,
+  //         intercom_hash: existingAuth?.intercom_hash ?? "",
+  //         plan: {
+  //           upgraded: false,
+  //           last_checked: 0,
+  //           manual: existingAuth?.plan?.manual ?? false,
+  //         },
+  //       });
+
+  //       console.log("Identifying user in analytics");
+  //       identifyUser(user_id);
+  //       console.log("Tracking sign in event");
+  //       trackEvent("user_signed_in", { platform: "desktop" });
+
+  //       console.log("Reopening upgrade window");
+  //       await commands.showWindow("Upgrade");
+
+  //       console.log("Waiting for window to be ready");
+  //       await new Promise((resolve) => setTimeout(resolve, 500));
+
+  //       console.log("Getting upgrade window reference");
+  //       const upgradeWindow = await Window.getByLabel("upgrade");
+  //       if (upgradeWindow) {
+  //         try {
+  //           console.log("Setting focus on upgrade window");
+  //           await upgradeWindow.show();
+  //           await upgradeWindow.setFocus();
+  //         } catch (e) {
+  //           console.error("Failed to focus upgrade window:", e);
+  //         }
+  //       }
+
+  //       console.log("Getting checkout URL");
+  //       const planId = getProPlanId(isProAnnual() ? "yearly" : "monthly");
+  //       const response = await apiClient.desktop.getProSubscribeURL({
+  //         body: { priceId: planId },
+  //         headers: await protectedHeaders(),
+  //       });
+
+  //       if (response.status === 200) {
+  //         console.log("Opening checkout URL in external browser");
+  //         commands.openExternalLink(response.body.url);
+  //         console.log("Minimizing upgrade window");
+  //         if (upgradeWindow) {
+  //           await upgradeWindow.minimize();
+  //         }
+  //       }
+  //     }
+  //   });
+
+  //   onCleanup(() => {
+  //     console.log("Cleaning up deep link listener");
+  //     unsubscribeDeepLink();
+  //   });
+
+  //   console.log("Setting up upgrade status check interval");
+  //   const interval = setInterval(async () => {
+  //     console.log("Checking upgrade status");
+  //     const result = await commands.checkUpgradedAndUpdate();
+  //     if (result) {
+  //       console.log("Upgrade complete");
+  //       setUpgradeComplete(true);
+  //     }
+  //   }, 5000);
+  //   onCleanup(() => {
+  //     console.log("Cleaning up upgrade status check interval");
+  //     clearInterval(interval);
+  //   });
+  // });
+
+  const { rive: CommercialRive, RiveComponent: Commercial } = createRive(
+    () => ({
+      src: PricingRive,
+      autoplay: true,
+      artboard: "commercial",
+      animations: ["card-stack"],
+    })
+  );
+
+  const { rive: ProRive, RiveComponent: Pro } = createRive(() => ({
+    src: PricingRive,
+    autoplay: true,
+    artboard: "pro",
+    animations: ["items-coming-in"],
+  }));
+
   return (
-    <div
-      class={`py-5 max-w-[700px] mx-auto relative ${
-        upgradeComplete() ? "h-full" : ""
-      }`}
-    >
+    <div class="flex relative flex-col justify-center items-center p-5 mx-auto w-full h-full">
       {upgradeComplete() && (
-        <div class="h-full flex items-center justify-center bg-gray-800 bg-opacity-75">
-          <div class="bg-white p-6 rounded-lg shadow-lg text-center relative z-10">
-            <h2 class="text-2xl font-bold mb-4">
-              Upgrade complete - Welcome to Cap Pro!
-            </h2>
+        <div class="flex justify-center items-center h-full bg-opacity-75">
+          <div class="relative z-10 p-6 text-center bg-white rounded-lg shadow-lg">
+            <h2 class="mb-4 text-2xl font-bold">Upgrade complete</h2>
+            <p class="mb-4 text-sm text-gray-10">
+              You can now close this window - thank you for upgrading!
+            </p>
             <Button
               onClick={() => {
+                console.log("Closing window after upgrade");
                 const window = getCurrentWindow();
                 window.close();
               }}
@@ -96,89 +283,142 @@ export default function Page() {
       )}
       {!upgradeComplete() && (
         <>
-          <div class="text-center">
-            <h1 class="text-4xl md:text-4xl mb-3 tracking-[-.05em] font-medium text-[--text-primary]">
-              Upgrade to Cap Pro
-            </h1>
-            <p class="text-base font-normal leading-6 text-gray-400">
-              Cap is currently in public beta, and we're offering special early
-              adopter pricing to our first users.{" "}
-              <span class="text-gray-500">
-                This pricing will be locked in for the lifetime of your
-                subscription.
-              </span>
-            </p>
-          </div>
-          <div class="flex flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] flex-1 bg-gray-100">
-            <div class="border text-card-foreground shadow-sm bg-blue-300 p-3 md:p-3 rounded-xl flex-grow border-blue-500/20">
-              <div class="space-y-3">
-                <div class="flex flex-col space-y-1.5 pt-6 px-6 pb-3">
-                  <h3 class="font-medium tracking-tight text-2xl text-gray-50">
-                    Cap Pro — Early Adopter Pricing
-                  </h3>
-                  <p class="text-[0.875rem] leading-[1.25rem] text-gray-50">
-                    For professional use and teams.
+          {license.data?.type === "commercial" ? (
+            <div class="p-8 mx-auto w-full max-w-[700px] rounded-xl border shadow-sm bg-gray-2 border-gray-3">
+              <div class="space-y-6">
+                <div class="flex flex-col items-center mb-6 text-center">
+                  <h3 class="text-2xl font-medium">Commercial License</h3>
+                  <p class="text-sm text-gray-11">
+                    Your license details for Cap commercial use
                   </p>
+                </div>
+
+                <div class="space-y-6">
                   <div>
-                    <div class="flex items-center space-x-3">
-                      <h3 class="text-4xl text-gray-50">
-                        {isAnnual() ? "$6/mo" : "$9/mo"}
-                      </h3>
-                      <div>
-                        <p class="text-sm font-medium text-gray-50">
-                          {isAnnual()
-                            ? "per user, billed annually."
-                            : "per user, billed monthly."}
+                    <label class="block mb-2 text-sm text-gray-12">
+                      License Key
+                    </label>
+                    <p class="overflow-x-auto p-3 font-mono text-xs whitespace-pre-wrap break-all rounded-lg border border-gray-4 text-gray-9 bg-gray-3">
+                      {license.data.licenseKey}
+                    </p>
+                  </div>
+
+                  <Show when={license.data.expiryDate}>
+                    {(expiryDate) => (
+                      <div class="space-y-1">
+                        <label class="text-sm text-gray-12">
+                          Expires
+                        </label>
+                        <p class="text-gray-10">
+                          {new Date(expiryDate()).toLocaleDateString(
+                            undefined,
+                            {
+                              year: "numeric",
+                              month: "long",
+                              day: "numeric",
+                            }
+                          )}
                         </p>
-                        {isAnnual() && (
-                          <p class="text-sm text-gray-50">
-                            or, $9/month, billed monthly.
+                      </div>
+                    )}
+                  </Show>
+
+                  <div class="flex flex-col items-center pt-6 border-t border-gray-3">
+                    <Button
+                      variant="destructive"
+                      disabled={resetLicense.isPending}
+                      onClick={() => {
+                        resetLicense.mutate();
+                      }}
+                    >
+                      {resetLicense.isPending
+                        ? "Deactivating..."
+                        : "Deactivate License"}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div class="text-center">
+                <h1 class="text-4xl md:text-4xl mb-6 tracking-[-.05em] font-medium text-[--text-primary]">
+                  Early Adopter Pricing
+                </h1>
+              </div>
+              <div class="flex gap-4 w-full">
+                <div
+                  onMouseEnter={() => {
+                    const riveInstance = CommercialRive();
+                    if (riveInstance) {
+                      // Stop any current animations first
+                      riveInstance.stop();
+                      // Play the enter animation
+                      riveInstance.play("cards");
+                    }
+                  }}
+                  onMouseLeave={() => {
+                    const riveInstance = CommercialRive();
+                    if (riveInstance) {
+                      // Stop any current animations first
+                      riveInstance.stop();
+                      // Play the leave animation
+                      riveInstance.play("card-stack");
+                    }
+                  }}
+                  class="flex flex-col flex-1 justify-between p-3 h-[700px ] bg-gray-3 rounded-2xl border border-gray-3 shadow-sm text-card-foreground md:p-3"
+                >
+                  <div class="space-y-5">
+                    <div class="flex flex-col gap-6 items-center">
+                      <Commercial class="w-[250px]" />
+                      <div class="space-y-1 text-center">
+                        <h3 class="text-2xl font-medium tracking-tight leading-5">
+                          Commercial License
+                        </h3>
+                        <p class="mt-2 text-sm text-[--text-tertiary]">
+                          For commercial use
+                        </p>
+                      </div>
+                      <div class="flex flex-col justify-center items-center">
+                        <h3 class="text-4xl leading-6">
+                          {isCommercialAnnual() ? "$29" : "$58"}
+                          <span class="text-gray-11 text-[16px]">.00 /</span>
+                        </h3>
+                        {isCommercialAnnual() && (
+                          <p class="text-[16px] font-medium text-gray-11">
+                            billed annually
+                          </p>
+                        )}
+                        {!isCommercialAnnual() && (
+                          <p class="text-[16px] font-medium text-gray-11">
+                            one-time payment
                           </p>
                         )}
                       </div>
-                    </div>
-                  </div>
-                </div>
-                <div class="mt-3 px-3 md:px-8">
-                  <div class="flex items-center mt-3 pt-4 pb-1 border-t-2 border-gray-50/20">
-                    <span class="text-xs text-gray-50 mr-2">
-                      Switch to {isAnnual() ? "monthly" : "annually"}
-                    </span>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={isAnnual()}
-                      data-state={isAnnual() ? "unchecked" : "checked"}
-                      value={isAnnual() ? "on" : "off"}
-                      class="peer inline-flex h-4 w-8 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 bg-[--blue-400]"
-                      onClick={togglePricing}
-                    >
-                      <span
-                        data-state={isAnnual() ? "unchecked" : "checked"}
-                        class="pointer-events-none block h-4 w-4 rounded-full bg-[--gray-50] shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0"
-                      />
-                    </button>
-                  </div>
-                </div>
-                <div class="px-6 pb-4 pt-0">
-                  <button
-                    onClick={openCheckoutInExternalBrowser}
-                    class="flex items-center justify-center rounded-full bg-[--gray-50] hover:bg-[--gray-200] disabled:bg-[--gray-100] border border-[--gray-300] font-medium text-lg px-6 h-12 w-full no-underline"
-                    disabled={loading()}
-                  >
-                    {loading() ? "Loading..." : "Upgrade to Cap Pro"}
-                  </button>
-                </div>
-                <div class="flex items-center px-6 pb-6 pt-0">
-                  <div class="space-y-6">
-                    <div>
-                      <ul class="list-none p-0 space-y-3">
-                        {proFeatures.map((feature) => (
-                          <li class="flex items-center justify-start">
-                            <div class="w-6 h-6 m-0 p-0 flex items-center border-[2px] border-white justify-center rounded-full">
-                              <IconLucideCheck class="w-4 h-4 stroke-[4px] text-[--gray-50]" />
+                      <div
+                        onClick={() => setIsCommercialAnnual((v) => !v)}
+                        class="px-3 py-2 text-center rounded-full border border-transparent transition-all duration-200 cursor-pointer bg-gray-5 hover:border-gray-400"
+                      >
+                        <p class="text-xs text-gray-12">
+                          Switch to{" "}
+                          {isCommercialAnnual() ? "lifetime" : "yearly"}:{" "}
+                          <span class="font-medium">
+                            {isCommercialAnnual() ? "$58" : "$29"}
+                          </span>
+                        </p>
+                      </div>
+                      <ul class="flex flex-col gap-2 justify-center list-none">
+                        {[
+                          "Commercial Use of Cap Recorder + Editor",
+                          "Community Support",
+                          "Local-only features",
+                          "Perpetual license option",
+                        ].map((feature) => (
+                          <li class="flex justify-start items-center">
+                            <div class="flex justify-center items-center p-0 m-0 w-6 h-6">
+                              <IconLucideCheck class="w-4 h-4 text-[--text-primary]" />
                             </div>
-                            <span class="ml-2 text-[0.9rem] text-gray-50">
+                            <span class="ml-1 text-[0.9rem] text-[--text-primary]">
                               {feature}
                             </span>
                           </li>
@@ -186,12 +426,187 @@ export default function Page() {
                       </ul>
                     </div>
                   </div>
+                  <ActivateLicenseDialog
+                    open={openLicenseDialog}
+                    onOpenChange={setOpenLicenseDialog}
+                  />
+                  <div class="flex flex-col gap-4 items-center">
+                    <Button
+                      onClick={() => openCommercialCheckout.mutate()}
+                      disabled={openCommercialCheckout.isPending}
+                      variant="lightdark"
+                      class="w-full !rounded-full !h-[48px] text-lg font-medium"
+                      size="lg"
+                    >
+                      {openCommercialCheckout.isPending
+                        ? "Loading..."
+                        : "Purchase License"}
+                    </Button>
+                    <p
+                      onClick={() => setOpenLicenseDialog(true)}
+                      class="mb-2 text-sm transition-colors cursor-pointer text-gray-11 hover:text-gray-12"
+                    >
+                      Already have a license key?
+                    </p>
+                  </div>
+                </div>
+
+                {/* Cap Pro */}
+                <div
+                  onMouseEnter={() => {
+                    const riveInstance = ProRive();
+                    if (riveInstance) {
+                      // Stop any current animations first
+                      riveInstance.stop();
+                      // Play the enter animation
+                      riveInstance.play("items-coming-out");
+                    }
+                  }}
+                  onMouseLeave={() => {
+                    const riveInstance = ProRive();
+                    if (riveInstance) {
+                      // Stop any current animations first
+                      riveInstance.stop();
+                      // Play the leave animation
+                      riveInstance.play("items-coming-in");
+                    }
+                  }}
+                  class="flex-grow p-3 h-[700px] flex-1 bg-gray-12 rounded-2xl border shadow-sm text-card-foreground md:p-3"
+                >
+                  <div class="flex flex-col justify-between space-y-5 h-full">
+                    <div class="flex flex-col gap-6 items-center px-6">
+                      <Pro class="w-[250px]" />
+                      <div class="space-y-1 text-center">
+                        <h3 class="text-2xl font-medium tracking-tight leading-5 text-gray-1">
+                          Cap Pro
+                        </h3>
+                        <p class="text-[0.875rem] text-gray-9">
+                          For professional use and teams.
+                        </p>
+                      </div>
+                      <div class="flex flex-col justify-center items-center">
+                        <h3 class="text-4xl leading-6 text-gray-1">
+                          {isProAnnual() ? "$6" : "$9"}
+                          <span class="text-gray-10 text-[16px]">.00 /</span>
+                        </h3>
+                        {isProAnnual() && (
+                          <p class="text-[16px] font-medium text-gray-9">
+                            per user, billed annually
+                          </p>
+                        )}
+                        {!isProAnnual() && (
+                          <p class="text-[16px] font-medium text-gray-9">
+                            per user, billed monthly
+                          </p>
+                        )}
+                      </div>
+                      <div
+                        onClick={() => setIsProAnnual((v) => !v)}
+                        class="px-3 py-2 text-center rounded-full border border-transparent transition-all duration-200 cursor-pointer bg-blue-9 hover:border-blue-400"
+                      >
+                        <p class="text-xs text-solid-white">
+                          Switch to {isProAnnual() ? "monthly" : "yearly"}:{" "}
+                          <span class="font-medium">
+                            {isProAnnual()
+                              ? "$9 per user, billed monthly"
+                              : "$6 per user, billed annually"}
+                          </span>
+                        </p>
+                      </div>
+                      <ul class="flex flex-col gap-2 justify-center list-none">
+                        {proFeatures.map((feature) => (
+                          <li class="flex justify-start items-center text-gray-1">
+                            <div class="flex justify-center items-center p-0 m-0 size-4">
+                              <IconLucideCheck class="size-4" />
+                            </div>
+                            <span class="ml-2 text-[0.9rem]">{feature}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                    <Button
+                      variant="primary"
+                      class="!rounded-full !text-lg w-full mx-auto"
+                      onClick={openCheckoutInExternalBrowser}
+                    >
+                      {loading() ? "Loading..." : "Upgrade to Cap Pro"}
+                    </Button>
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>
+            </>
+          )}
         </>
       )}
     </div>
   );
 }
+
+interface Props {
+  open: Accessor<boolean>;
+  onOpenChange: (open: boolean) => void;
+}
+
+const ActivateLicenseDialog = ({ open, onOpenChange }: Props) => {
+  const [licenseKey, setLicenseKey] = createSignal("");
+  const queryClient = useQueryClient();
+
+  const activateLicenseKey = createMutation(() => ({
+    mutationFn: async (vars: { licenseKey: string }) => {
+      const generalSettings = await generalSettingsStore.get();
+      if (!generalSettings?.instanceId) {
+        throw new Error("No instance ID found");
+      }
+      const resp = await licenseApiClient.activateCommercialLicense({
+        headers: {
+          licensekey: vars.licenseKey,
+          instanceid: generalSettings.instanceId,
+        },
+        body: { reset: false },
+      });
+
+      if (resp.status === 200)
+        return { ...resp.body, licenseKey: vars.licenseKey };
+      if (typeof resp.body === "object" && resp.body && "message" in resp.body)
+        throw resp.body.message;
+      throw new Error((resp.body as any).toString());
+    },
+    onSuccess: async (value) => {
+      await generalSettingsStore.set({
+        commercialLicense: {
+          activatedOn: Date.now(),
+          expiryDate: value.expiryDate ?? null,
+          refresh: value.refresh,
+          licenseKey: value.licenseKey,
+        },
+      });
+      await queryClient.refetchQueries({ queryKey: ["bruh"] });
+    },
+  }));
+  return (
+    <Dialog.Root open={open()} onOpenChange={onOpenChange}>
+      <DialogContent
+        title="Activate License"
+        confirm={
+          <Dialog.ConfirmButton
+            disabled={activateLicenseKey.isPending}
+            onClick={() =>
+              activateLicenseKey.mutate({
+                licenseKey: licenseKey(),
+              })
+            }
+          >
+            Activate
+          </Dialog.ConfirmButton>
+        }
+      >
+        <Input
+          class="mt-2"
+          placeholder="Enter license key..."
+          value={licenseKey()}
+          onInput={(e) => setLicenseKey(e.currentTarget.value)}
+        />
+      </DialogContent>
+    </Dialog.Root>
+  );
+};

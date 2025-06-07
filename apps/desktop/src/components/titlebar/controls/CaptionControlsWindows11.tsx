@@ -1,26 +1,40 @@
-import { type ComponentProps, createSignal, type JSX, onCleanup, onMount, Show, splitProps } from "solid-js";
-import { WindowControlButton as ControlButton } from "./WindowControlButton";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import titlebarState from "~/utils/titlebar-state";
 import { cx } from "cva";
+import {
+  type ComponentProps,
+  createSignal,
+  type JSX,
+  onCleanup,
+  onMount,
+  Show,
+  splitProps,
+} from "solid-js";
+import titlebarState from "~/utils/titlebar-state";
+import { WindowControlButton as ControlButton } from "./WindowControlButton";
 
-export default function (props: ComponentProps<"div">) {
+export default function (
+  props: ComponentProps<"div"> & { maximizable?: boolean }
+) {
   const [local, otherProps] = splitProps(props, ["class"]);
   const currentWindow = getCurrentWindow();
   const [focused, setFocus] = createSignal(true);
 
   let unlisten: () => void | undefined;
   onMount(async () => {
-    unlisten = await currentWindow.onFocusChanged(({ payload: focused }) => setFocus(focused));
+    unlisten = await currentWindow.onFocusChanged(({ payload: focused }) =>
+      setFocus(focused)
+    );
   });
   onCleanup(() => unlisten?.());
 
   return (
     <div
       class={cx(
-        "h-full align-baseline cursor-default rounded-none select-none *:outline-none *:transition-all *:duration-200",
+        "flex flex-row items-stretch h-full align-baseline cursor-default rounded-none select-none *:outline-none *:transition-all *:duration-200",
         local.class,
-        focused() ? "*:text-black-transparent-80" : "*:text-black-transparent-40"
+        focused()
+          ? "*:text-black-transparent-80"
+          : "*:text-black-transparent-40"
       )}
       {...otherProps}
     >
@@ -30,14 +44,20 @@ export default function (props: ComponentProps<"div">) {
         class={cx(
           "max-h-20 w-[46px] rounded-none bg-transparent",
           "hover:bg-[#0000000D] dark:hover:bg-[#FFFFFF0D] active:bg-[#00000008] dark:active:bg-[#e9e9e908]",
-          "disabled:hover:bg-transparent dark:disabled:hover:bg-transparent disabled:text-black-transparent-40",
+          "disabled:hover:bg-transparent dark:disabled:hover:bg-transparent disabled:text-black-transparent-40"
         )}
       >
         <icons.minimizeWin />
       </ControlButton>
-      <Show when={titlebarState.maximizable || !titlebarState.hideMaximize}>
+      <Show
+        when={
+          titlebarState.maximizable ||
+          !titlebarState.hideMaximize ||
+          props.maximizable
+        }
+      >
         <ControlButton
-          disabled={!titlebarState.maximizable}
+          disabled={!titlebarState.maximizable || props.maximizable === false}
           onClick={
             titlebarState.maximizable
               ? titlebarState.maximized
@@ -48,7 +68,7 @@ export default function (props: ComponentProps<"div">) {
           class={cx(
             "max-h-20 w-[46px] rounded-none bg-transparent",
             "hover:bg-[#0000000D] dark:hover:bg-[#FFFFFF0D] active:bg-[#00000008] dark:active:bg-[#e9e9e908]",
-            "disabled:hover:bg-transparent dark:disabled:hover:bg-transparent disabled:text-black-transparent-40",
+            "disabled:hover:bg-transparent dark:disabled:hover:bg-transparent disabled:text-black-transparent-40"
           )}
         >
           {titlebarState.maximized ? (
@@ -62,9 +82,9 @@ export default function (props: ComponentProps<"div">) {
         onClick={titlebarState.closable ? currentWindow.close : undefined}
         disabled={!titlebarState.closable}
         class={cx(
-          "max-h-20 w-[46px] rounded-none bg-transparent hover:text-gray-50",
+          "max-h-20 w-[46px] rounded-none bg-transparent hover:text-gray-1",
           "hover:bg-[#c42b1c] dark:hover:bg-[#c42b1c active:bg-[#c42b1c]/90 dark:active:bg-[#c42b1c]/90",
-          "disabled:hover:bg-transparent dark:disabled:hover:bg-transparent disabled:text-black-transparent-40",
+          "disabled:hover:bg-transparent dark:disabled:hover:bg-transparent disabled:text-black-transparent-40"
         )}
       >
         <icons.closeWin />

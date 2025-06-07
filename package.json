@@ -2,34 +2,38 @@
   "type": "module",
   "scripts": {
     "build": "dotenv -e .env -- turbo run build",
-    "dev": "(cd apps/web && docker compose up -d && cd ../..) && dotenv -e .env -- pnpm --dir packages/database db:generate && dotenv -e .env -- pnpm --dir packages/database db:push && dotenv -e .env -- turbo run dev --filter=!@cap/storybook --no-cache --concurrency 12",
-    "dev:manual": "dotenv -e .env -- turbo run dev --filter=!@cap/storybook --no-cache --concurrency 1",
-    "lint": "turbo run lint",
-    "format": "prettier --write \"**/*.{ts,tsx,md}\"",
-    "db:push": "dotenv -e .env -- pnpm --dir packages/database db:push",
+    "build:web": "turbo run build:web",
+    "build:web:docker": "pnpm run --filter=@cap/web build:web:docker",
+    "cap-setup": "dotenv -e .env -- node scripts/setup.js",
     "db:generate": "dotenv -e .env -- pnpm --dir packages/database db:generate",
+    "db:push": "dotenv -e .env -- pnpm --dir packages/database db:push",
     "db:studio": "dotenv -e .env -- pnpm --dir packages/database db:studio",
+    "dev": "(pnpm run docker:up > /dev/null &) && sleep 5 && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
+    "dev:desktop": "pnpm run --filter=@cap/desktop dev",
+    "dev:manual": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/storybook --no-cache --concurrency 1",
+    "dev:web": "pnpm dev --filter=!@cap/desktop",
+    "dev:windows": "start /b cmd /c \"pnpm run docker:up > nul\" && timeout /t 5 /nobreak > nul && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
+    "docker:clean": "turbo run docker:clean",
+    "docker:stop": "turbo run docker:stop",
+    "docker:up": "turbo run docker:up",
+    "format": "prettier --write \"**/*.{ts,tsx,md}\"",
+    "lint": "turbo run lint",
     "tauri:build": "dotenv -e .env -- pnpm --dir apps/desktop tauri build --verbose",
     "typecheck": "pnpm tsc -b",
-    "cap-setup": "node scripts/setup.js"
+    "web": "pnpm run --filter=@cap/web",
+    "env-setup": "node scripts/env-cli.js",
+    "clean": "find . -name node_modules -o -name .next -o -name .output -o -name .turbo -o -name dist -type d -prune | xargs rm -rf"
   },
   "devDependencies": {
-    "@turbo/gen": "^1.9.7",
+    "@clack/prompts": "^0.10.0",
     "dotenv-cli": "latest",
-    "eslint": "^7.32.0",
-    "extract-zip": "^2.0.1",
     "prettier": "^2.5.1",
-    "turbo": "^1.10.16",
-    "typescript": "^5.7.2"
+    "turbo": "^2.3.4",
+    "typescript": "^5.8.3"
   },
-  "packageManager": "pnpm@9.8.0",
+  "packageManager": "pnpm@10.5.2",
   "name": "cap",
   "engines": {
     "node": "20"
-  },
-  "pnpm": {
-    "patchedDependencies": {
-      "@kobalte/core@0.13.7": "patches/@kobalte__core@0.13.7.patch"
-    }
   }
 }

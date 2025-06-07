@@ -9,16 +9,10 @@ export default createHandler(() => (
           <meta charset="utf-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1" />
           <link rel="icon" type="image/svg+xml" href="/assets/logo.svg" />
-          <script
-            src="https://cdn.usefathom.com/script.js"
-            data-spa="auto"
-            data-site="IYNNVDNT"
-            defer
-          ></script>
           {assets}
         </head>
-        <body class="w-screen h-screen select-none cursor-default">
-          <div id="app" class="h-full">
+        <body class="w-screen h-screen cursor-default select-none">
+          <div id="app" class="h-full text-[--text-primary]">
             {children}
           </div>
           {scripts}

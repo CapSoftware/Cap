@@ -109,7 +109,7 @@ impl AudioInfo {
         })
     }
 
-    pub fn from_stream_config(config: &SupportedStreamConfig) -> Result<Self, AudioInfoError> {
+    pub fn from_stream_config(config: &SupportedStreamConfig) -> Self {
         let sample_format = ffmpeg_sample_format_for(config.sample_format()).unwrap();
         let buffer_size = match config.buffer_size() {
             SupportedBufferSize::Range { max, .. } => *max,
@@ -119,14 +119,14 @@ impl AudioInfo {
 
         let channels = config.channels().clamp(1, MAX_AUDIO_CHANNELS);
 
-        Ok(Self {
+        Self {
             sample_format,
             sample_rate: config.sample_rate().0,
             // we do this here and only here bc we know it's cpal-related
             channels: channels.into(),
             time_base: FFRational(1, 1_000_000),
             buffer_size,
-        })
+        }
     }
 
     pub fn from_decoder(decoder: &ffmpeg::codec::decoder::Audio) -> Result<Self, AudioInfoError> {
@@ -181,7 +181,7 @@ impl AudioInfo {
 
         match self.channels {
             0 => unreachable!(),
-            1 => frame.plane_data_mut(0)[0..data.len()].copy_from_slice(data),
+            1 | _ if frame.is_packed() => frame.data_mut(0)[0..data.len()].copy_from_slice(data),
             // cpal *always* returns interleaved data (i.e. the first sample from every channel, followed
             // by the second sample from every channel, et cetera). Many audio codecs work better/primarily
             // with planar data, so we de-interleave it here if there is more than one channel.
@@ -210,6 +210,10 @@ pub unsafe fn cast_f32_slice_to_bytes(slice: &[f32]) -> &[u8] {
     std::slice::from_raw_parts(slice.as_ptr() as *const u8, slice.len() * f32::BYTE_SIZE)
 }
 
+pub unsafe fn cast_bytes_to_f32_slice(slice: &[u8]) -> &[f32] {
+    std::slice::from_raw_parts(slice.as_ptr() as *const f32, slice.len() / f32::BYTE_SIZE)
+}
+
 #[derive(Debug, Copy, Clone)]
 pub struct VideoInfo {
     pub pixel_format: Pixel,
@@ -235,7 +239,7 @@ impl VideoInfo {
             width,
             height,
             time_base: FFRational(1, 1_000_000),
-            frame_rate: FFRational(fps.try_into().unwrap(), 1),
+            frame_rate: FFRational(fps as i32, 1),
         }
     }
 
@@ -245,8 +249,12 @@ impl VideoInfo {
             width,
             height,
             time_base: FFRational(1, 1_000_000),
-            frame_rate: FFRational(fps.try_into().unwrap(), 1),
+            frame_rate: FFRational(fps as i32, 1),
         }
+    }
+
+    pub fn fps(&self) -> u32 {
+        self.frame_rate.0 as u32
     }
 
     pub fn scaled(&self, width: u32, fps: u32) -> Self {

@@ -21,9 +21,40 @@ export interface SeoPageContent {
   video: {
     url: string;
     thumbnail: string;
+    alt?: string;
   };
   cta: {
     title: string;
     buttonText: string;
   };
-} 
+  comparisonTitle?: string;
+  comparisonDescription?: string;
+  comparison?: {
+    title: string;
+    description: string;
+  }[];
+  comparisonTable?: {
+    title: string;
+    headers: string[];
+    rows: string[][];
+  };
+  testimonials?: {
+    title: string;
+    items: {
+      quote: string;
+      author: string;
+    }[];
+  };
+  migrationGuide?: {
+    title: string;
+    steps: string[];
+  };
+  recordingModes?: {
+    title: string;
+    description: string;
+    modes: {
+      title: string;
+      description: string;
+    }[];
+  };
+}

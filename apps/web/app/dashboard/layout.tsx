@@ -1,25 +1,28 @@
 import DynamicSharedLayout from "@/app/dashboard/_components/DynamicSharedLayout";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { redirect } from "next/navigation";
 import { DashboardTemplate } from "@/components/templates/DashboardTemplate";
 import { db } from "@cap/database";
+import { getCurrentUser } from "@cap/database/auth/session";
 import {
-  spaceMembers,
-  spaces,
-  spaceInvites,
+  organizationInvites,
+  organizationMembers,
+  organizations,
   users,
 } from "@cap/database/schema";
-import { eq, inArray, or, and, count, sql } from "drizzle-orm";
+import { count, eq, inArray, or, sql } from "drizzle-orm";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 
-export type Space = {
-  space: typeof spaces.$inferSelect;
-  members: (typeof spaceMembers.$inferSelect & {
+export type Organization = {
+  organization: typeof organizations.$inferSelect;
+  members: (typeof organizationMembers.$inferSelect & {
     user: Pick<typeof users.$inferSelect, "id" | "name" | "email" | "lastName">;
   })[];
-  invites: (typeof spaceInvites.$inferSelect)[];
+  invites: (typeof organizationInvites.$inferSelect)[];
   inviteQuota: number;
   totalInvites: number;
 };
+
+export const dynamic = "force-dynamic";
 
 export default async function DashboardLayout({
   children,
@@ -36,10 +39,10 @@ export default async function DashboardLayout({
     redirect("/onboarding");
   }
 
-  const spacesWithMembers = await db
+  const organizationsWithMembers = await db()
     .select({
-      space: spaces,
-      member: spaceMembers,
+      organization: organizations,
+      member: organizationMembers,
       user: {
         id: users.id,
         name: users.name,
@@ -48,34 +51,46 @@ export default async function DashboardLayout({
         inviteQuota: users.inviteQuota,
       },
     })
-    .from(spaces)
-    .leftJoin(spaceMembers, eq(spaces.id, spaceMembers.spaceId))
-    .leftJoin(users, eq(spaceMembers.userId, users.id))
-    .where(or(eq(spaces.ownerId, user.id), eq(spaceMembers.userId, user.id)));
+    .from(organizations)
+    .leftJoin(
+      organizationMembers,
+      eq(organizations.id, organizationMembers.organizationId)
+    )
+    .leftJoin(users, eq(organizationMembers.userId, users.id))
+    .where(
+      or(
+        eq(organizations.ownerId, user.id),
+        eq(organizationMembers.userId, user.id)
+      )
+    );
 
-  const spaceIds = spacesWithMembers.map((row) => row.space.id);
+  const organizationIds = organizationsWithMembers.map(
+    (row) => row.organization.id
+  );
 
-  let spaceInvitesData: (typeof spaceInvites.$inferSelect)[] = [];
-  if (spaceIds.length > 0) {
-    spaceInvitesData = await db
+  let organizationInvitesData: (typeof organizationInvites.$inferSelect)[] = [];
+  if (organizationIds.length > 0) {
+    organizationInvitesData = await db()
       .select()
-      .from(spaceInvites)
-      .where(inArray(spaceInvites.spaceId, spaceIds));
+      .from(organizationInvites)
+      .where(inArray(organizationInvites.organizationId, organizationIds));
   }
 
-  const spaceSelect: Space[] = await Promise.all(
-    spacesWithMembers
-      .reduce((acc: (typeof spaces.$inferSelect)[], row) => {
-        const existingSpace = acc.find((s) => s.id === row.space.id);
-        if (!existingSpace) {
-          acc.push(row.space);
+  const organizationSelect: Organization[] = await Promise.all(
+    organizationsWithMembers
+      .reduce((acc: (typeof organizations.$inferSelect)[], row) => {
+        const existingOrganization = acc.find(
+          (o) => o.id === row.organization.id
+        );
+        if (!existingOrganization) {
+          acc.push(row.organization);
         }
         return acc;
       }, [])
-      .map(async (space) => {
-        const allMembers = await db
+      .map(async (organization) => {
+        const allMembers = await db()
           .select({
-            member: spaceMembers,
+            member: organizationMembers,
             user: {
               id: users.id,
               name: users.name,
@@ -83,36 +98,44 @@ export default async function DashboardLayout({
               email: users.email,
             },
           })
-          .from(spaceMembers)
-          .leftJoin(users, eq(spaceMembers.userId, users.id))
-          .where(eq(spaceMembers.spaceId, space.id));
+          .from(organizationMembers)
+          .leftJoin(users, eq(organizationMembers.userId, users.id))
+          .where(eq(organizationMembers.organizationId, organization.id));
 
-        const owner = await db
+        const owner = await db()
           .select({
             inviteQuota: users.inviteQuota,
           })
           .from(users)
-          .where(eq(users.id, space.ownerId))
+          .where(eq(users.id, organization.ownerId))
           .then((result) => result[0]);
 
-        const totalInvitesResult = await db
+        const totalInvitesResult = await db()
           .select({
             value: sql<number>`
-              ${count(spaceMembers.id)} + ${count(spaceInvites.id)}
+              ${count(organizationMembers.id)} + ${count(
+              organizationInvites.id
+            )}
             `,
           })
-          .from(spaces)
-          .leftJoin(spaceMembers, eq(spaces.id, spaceMembers.spaceId))
-          .leftJoin(spaceInvites, eq(spaces.id, spaceInvites.spaceId))
-          .where(eq(spaces.ownerId, space.ownerId));
+          .from(organizations)
+          .leftJoin(
+            organizationMembers,
+            eq(organizations.id, organizationMembers.organizationId)
+          )
+          .leftJoin(
+            organizationInvites,
+            eq(organizations.id, organizationInvites.organizationId)
+          )
+          .where(eq(organizations.ownerId, organization.ownerId));
 
         const totalInvites = totalInvitesResult[0]?.value || 0;
 
         return {
-          space,
+          organization,
           members: allMembers.map((m) => ({ ...m.member, user: m.user! })),
-          invites: spaceInvitesData.filter(
-            (invite) => invite.spaceId === space.id
+          invites: organizationInvitesData.filter(
+            (invite) => invite.organizationId === organization.id
           ),
           inviteQuota: owner?.inviteQuota || 1,
           totalInvites,
@@ -120,12 +143,12 @@ export default async function DashboardLayout({
       })
   );
 
-  let findActiveSpace = spaceSelect.find(
-    (space) => space.space.id === user.activeSpaceId
+  let findActiveOrganization = organizationSelect.find(
+    (organization) => organization.organization.id === user.activeOrganizationId
   );
 
-  if (!findActiveSpace && spaceSelect.length > 0) {
-    findActiveSpace = spaceSelect[0];
+  if (!findActiveOrganization && organizationSelect.length > 0) {
+    findActiveOrganization = organizationSelect[0];
   }
 
   const isSubscribed =
@@ -133,16 +156,19 @@ export default async function DashboardLayout({
       user.stripeSubscriptionStatus !== "cancelled") ||
     !!user.thirdPartyStripeSubscriptionId;
 
+  const theme = cookies().get("theme")?.value ?? "light";
+  const sidebar = cookies().get("sidebarCollapsed")?.value ?? "false";
+
   return (
     <DynamicSharedLayout
-      spaceData={spaceSelect}
-      activeSpace={findActiveSpace || null}
+      organizationData={organizationSelect}
+      activeOrganization={findActiveOrganization || null}
       user={user}
       isSubscribed={isSubscribed}
+      initialTheme={theme as "light" | "dark"}
+      initialSidebarCollapsed={sidebar === "true"}
     >
-      <div className="full-layout">
-        <DashboardTemplate>{children}</DashboardTemplate>
-      </div>
+      <DashboardTemplate>{children}</DashboardTemplate>
     </DynamicSharedLayout>
   );
 }

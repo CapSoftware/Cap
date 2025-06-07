@@ -44,7 +44,11 @@ const protectedContract = c.router(
       method: "POST",
       path: "/desktop/feedback",
       contentType: "application/x-www-form-urlencoded",
-      body: z.object({ feedback: z.string() }),
+      body: z.object({
+        feedback: z.string(),
+        os: z.union([z.literal("macos"), z.literal("windows")]),
+        version: z.string(),
+      }),
       responses: {
         200: z.object({ success: z.boolean() }),
       },
@@ -53,7 +57,7 @@ const protectedContract = c.router(
       method: "GET",
       path: "/desktop/plan",
       responses: {
-        200: z.object({ 
+        200: z.object({
           upgraded: z.boolean(),
           stripeSubscriptionStatus: z.string().nullable(),
         }),
@@ -66,11 +70,11 @@ const protectedContract = c.router(
         200: z.object({
           config: z.custom<{
             provider: string;
-            accessKeyId: string | null;
-            secretAccessKey: string | null;
-            endpoint: string | null;
-            bucketName: string | null;
-            region: string | null;
+            accessKeyId: string;
+            secretAccessKey: string;
+            endpoint: string;
+            bucketName: string;
+            region: string;
           }>(),
         }),
       },

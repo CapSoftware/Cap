@@ -1,3 +1,4 @@
+use cidre::cv;
 use cocoa::{base::id, foundation::NSDictionary};
 use core_foundation::{
     array::CFArrayGetCount,
@@ -8,7 +9,7 @@ use core_foundation::{
 };
 use core_graphics::{
     base::boolean_t,
-    display::{CFArrayGetValueAtIndex, CFDictionaryRef, CGRect},
+    display::{CFArrayGetValueAtIndex, CFDictionaryRef, CGDisplay, CGDisplayBounds, CGRect},
     window::{
         kCGNullWindowID, kCGWindowBounds, kCGWindowLayer, kCGWindowListExcludeDesktopElements,
         kCGWindowListOptionOnScreenOnly, kCGWindowName, kCGWindowNumber, kCGWindowOwnerName,
@@ -18,7 +19,9 @@ use core_graphics::{
 pub use nokhwa_bindings_macos::{AVAuthorizationStatus, AVMediaType};
 use std::{collections::HashMap, ffi::c_void};
 
-use crate::platform::{Bounds, Window};
+use crate::platform::{Bounds, LogicalPosition, LogicalSize, Window};
+
+use super::LogicalBounds;
 
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
@@ -332,15 +335,31 @@ pub fn monitor_bounds(id: u32) -> Bounds {
 
 pub fn get_display_refresh_rate(
     display_id: core_graphics::display::CGDirectDisplayID,
-) -> Option<u32> {
+) -> Result<u32, String> {
     use core_graphics::display::CGDisplay;
 
-    Some(
-        CGDisplay::new(display_id)
-            .display_mode()?
-            .refresh_rate()
-            .round() as u32,
-    )
+    let display = CGDisplay::new(display_id);
+    let rate = display
+        .display_mode()
+        .ok_or_else(|| "no display_mode")?
+        .refresh_rate()
+        .round() as u32;
+
+    if rate == 0 {
+        // adapted from https://github.com/mpv-player/mpv/commit/eacf22e42a6bbce8a32e64f5563ac431122c1186
+        let link = cv::DisplayLink::with_cg_display(display.id)
+            .map_err(|e| format!("with_cg_display / {e}"))?;
+
+        let t = link.nominal_output_video_refresh_period();
+
+        if !t.flags.contains(cv::TimeFlags::IS_INDEFINITE) {
+            Ok((t.scale as f64 / t.value as f64).round() as u32)
+        } else {
+            Err("refresh rate is indefinite".to_string())
+        }
+    } else {
+        Ok(rate)
+    }
 }
 
 pub fn display_for_window(
@@ -369,4 +388,113 @@ pub fn display_for_window(
     }
 
     None
+}
+
+pub fn primary_monitor_bounds() -> Bounds {
+    let display = CGDisplay::main();
+    let height = display.pixels_high();
+    let width = display.pixels_wide();
+    let bounds = unsafe { CGDisplayBounds(display.id) };
+
+    Bounds {
+        x: bounds.origin.x,
+        y: bounds.origin.y,
+        width: width as f64,
+        height: height as f64,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MonitorHandle(pub u32);
+
+impl MonitorHandle {
+    pub fn primary() -> Self {
+        let display = CGDisplay::main();
+        Self(display.id)
+    }
+
+    pub fn list_all() -> Vec<Self> {
+        use cocoa::appkit::NSScreen;
+        use cocoa::base::nil;
+        use cocoa::foundation::{NSArray, NSDictionary, NSString};
+
+        let mut ret = vec![];
+
+        unsafe {
+            let screens = NSScreen::screens(nil);
+            let screen_count = NSArray::count(screens);
+
+            for i in 0..screen_count {
+                let screen: *mut objc::runtime::Object = screens.objectAtIndex(i);
+
+                let device_description = NSScreen::deviceDescription(screen);
+                let num = NSDictionary::valueForKey_(
+                    device_description,
+                    NSString::alloc(nil).init_str("NSScreenNumber"),
+                ) as id;
+                let num: *const objc2_foundation::NSNumber = num.cast();
+                let num = { &*num };
+                let num = num.as_u32();
+
+                ret.push(Self(num));
+            }
+
+            ret
+        }
+    }
+}
+
+pub fn logical_monitor_bounds(monitor_id: u32) -> Option<LogicalBounds> {
+    use cocoa::appkit::NSScreen;
+    use cocoa::base::nil;
+    use cocoa::foundation::{NSArray, NSDictionary, NSString};
+
+    unsafe {
+        let screens = NSScreen::screens(nil);
+        let screen_count = NSArray::count(screens);
+
+        for i in 0..screen_count {
+            let screen: *mut objc::runtime::Object = screens.objectAtIndex(i);
+
+            let device_description = NSScreen::deviceDescription(screen);
+            let num = NSDictionary::valueForKey_(
+                device_description,
+                NSString::alloc(nil).init_str("NSScreenNumber"),
+            ) as id;
+            let num: *const objc2_foundation::NSNumber = num.cast();
+            let num = { &*num };
+            let num = num.as_u32();
+
+            if num == monitor_id {
+                let frame = NSScreen::frame(screen);
+
+                return Some(LogicalBounds {
+                    position: LogicalPosition {
+                        x: frame.origin.x,
+                        y: frame.origin.y
+                            + (CGDisplay::main().pixels_high() as f64 - frame.size.height),
+                    },
+                    size: LogicalSize {
+                        width: frame.size.width,
+                        height: frame.size.height,
+                    },
+                });
+            }
+        }
+
+        None
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn bruh() {
+        dbg!(MonitorHandle::list_all()
+            .into_iter()
+            .map(|v| logical_monitor_bounds(v.0))
+            .collect::<Vec<_>>());
+    }
 }

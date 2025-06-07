@@ -3,15 +3,14 @@ use std::collections::VecDeque;
 use ffmpeg::encoder;
 pub use ffmpeg::util::frame::Audio as FFAudio;
 
-use crate::data::{AudioInfo, PlanarData};
-use cap_project::TimelineConfiguration;
+use crate::data::{cast_bytes_to_f32_slice, AudioInfo, PlanarData};
 
 #[derive(Debug)]
 pub struct AudioBuffer {
-    current_pts: i64,
-    data: Vec<VecDeque<u8>>,
-    frame_size: usize,
+    pub data: Vec<VecDeque<f32>>,
+    pub frame_size: usize,
     config: AudioInfo,
+    frame: FFAudio,
 }
 
 impl AudioBuffer {
@@ -19,11 +18,17 @@ impl AudioBuffer {
         let sample_size = config.sample_size();
         let frame_buffer_size = usize::try_from(config.buffer_size).unwrap() * sample_size;
 
+        let frame_size = encoder.frame_size() as usize;
+
         Self {
-            current_pts: 0,
             data: vec![VecDeque::with_capacity(frame_buffer_size); config.channels],
-            frame_size: encoder.frame_size().try_into().unwrap(),
+            frame_size,
             config,
+            frame: FFAudio::new(
+                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+                frame_size,
+                ffmpeg::ChannelLayout::default(config.channels as i32),
+            ),
         }
     }
 
@@ -35,62 +40,60 @@ impl AudioBuffer {
         self.data[0].len()
     }
 
-    pub fn consume(&mut self, frame: FFAudio) {
-        if let Some(pts) = frame.pts() {
-            self.current_pts = pts;
+    pub fn consume(&mut self, frame: &FFAudio) {
+        if frame.samples() == 0 {
+            return;
         }
-        for channel in 0..self.config.channels {
-            self.data[channel].extend(frame.plane_data(channel));
+
+        if frame.is_planar() {
+            for channel in 0..self.config.channels {
+                self.data[channel]
+                    .extend(unsafe { cast_bytes_to_f32_slice(frame.plane_data(channel)) });
+            }
+        } else {
+            self.data[0].extend(unsafe {
+                cast_bytes_to_f32_slice(
+                    &frame.data(0)[0..frame.samples() * frame.channels() as usize],
+                )
+            });
         }
     }
 
-    pub fn next_frame(&mut self) -> Option<FFAudio> {
+    pub fn next_frame(&mut self, drain: bool) -> Option<&FFAudio> {
         if self.is_empty() {
             return None;
         }
 
-        let frame_size = self.frame_size * self.config.sample_size();
-
-        if self.len() < frame_size {
+        if !drain && self.len() < self.frame_size * self.config.channels {
             return None;
         }
 
-        let mut frame = self.config.empty_frame(self.frame_size);
-        frame.set_pts(Some(self.current_pts));
+        let actual_samples_per_channel = if drain {
+            (self.len() / self.config.channels).min(self.frame_size)
+        } else {
+            self.frame_size
+        };
 
-        for channel in 0..self.config.channels {
-            for (index, byte) in self.data[channel].drain(0..frame_size).enumerate() {
-                frame.plane_data_mut(channel)[index] = byte;
+        if self.frame.is_planar() {
+            for channel in 0..self.config.channels {
+                for (index, byte) in self.data[channel]
+                    .drain(0..actual_samples_per_channel)
+                    .enumerate()
+                {
+                    self.frame.plane_data_mut(channel)[index * 4..(index + 1) * 4]
+                        .copy_from_slice(&byte.to_ne_bytes());
+                }
+            }
+        } else {
+            for (index, byte) in self.data[0]
+                .drain(0..actual_samples_per_channel * self.config.channels)
+                .enumerate()
+            {
+                self.frame.plane_data_mut(0)[index * 4..(index + 1) * 4]
+                    .copy_from_slice(&byte.to_ne_bytes());
             }
         }
 
-        self.current_pts += i64::try_from(self.frame_size).unwrap();
-        Some(frame)
-    }
-
-    pub fn next_frame_data(
-        &mut self,
-        samples: usize,
-        timeline: Option<&TimelineConfiguration>,
-    ) -> Option<(f64, Vec<u8>)> {
-        if self.is_empty() {
-            return None;
-        }
-
-        let frame_size = samples * self.config.sample_size();
-
-        if self.len() < frame_size {
-            return None;
-        }
-
-        let mut frame_data = Vec::with_capacity(frame_size * self.config.channels);
-        for channel in 0..self.config.channels {
-            frame_data.extend(self.data[channel].drain(0..frame_size));
-        }
-
-        let current_time = self.current_pts as f64 / f64::from(self.config.sample_rate);
-        self.current_pts += i64::try_from(samples).unwrap();
-
-        Some((current_time, frame_data))
+        Some(&self.frame)
     }
 }

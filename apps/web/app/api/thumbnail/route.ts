@@ -6,6 +6,8 @@ import { eq } from "drizzle-orm";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { S3_BUCKET_URL } from "@cap/utils";
+import { serverEnv } from "@cap/env";
 
 export const revalidate = 0;
 
@@ -28,7 +30,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const query = await db
+  const query = await db()
     .select({
       video: videos,
       bucket: s3Buckets,
@@ -63,8 +65,8 @@ export async function GET(request: NextRequest) {
 
   let thumbnailUrl: string;
 
-  if (!result.bucket || video.awsBucket === process.env.NEXT_PUBLIC_CAP_AWS_BUCKET) {
-    thumbnailUrl = `https://v.cap.so/${prefix}screenshot/screen-capture.jpg`;
+  if (!result.bucket || video.awsBucket === serverEnv().CAP_AWS_BUCKET) {
+    thumbnailUrl = `${S3_BUCKET_URL}/${prefix}screenshot/screen-capture.jpg`;
     return new Response(JSON.stringify({ screen: thumbnailUrl }), {
       status: 200,
       headers: getHeaders(origin),
@@ -72,7 +74,7 @@ export async function GET(request: NextRequest) {
   }
 
   const Bucket = await getS3Bucket(result.bucket);
-  const s3Client = await createS3Client(result.bucket);
+  const [s3ClientInstance] = await createS3Client(result.bucket);
 
   try {
     const listCommand = new ListObjectsV2Command({
@@ -80,10 +82,10 @@ export async function GET(request: NextRequest) {
       Prefix: prefix,
     });
 
-    const listResponse = await s3Client.send(listCommand);
+    const listResponse = await s3ClientInstance.send(listCommand);
     const contents = listResponse.Contents || [];
 
-    const thumbnailKey = contents.find((item) => 
+    const thumbnailKey = contents.find((item: any) =>
       item.Key?.endsWith("screen-capture.jpg")
     )?.Key;
 
@@ -101,10 +103,10 @@ export async function GET(request: NextRequest) {
     }
 
     thumbnailUrl = await getSignedUrl(
-      s3Client,
+      s3ClientInstance,
       new GetObjectCommand({
         Bucket,
-        Key: thumbnailKey
+        Key: thumbnailKey,
       }),
       { expiresIn: 3600 }
     );
