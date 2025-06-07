@@ -69,7 +69,7 @@ export async function GET(request: NextRequest) {
       .where(eq(users.id, video.ownerId))
       .limit(1);
 
-    if (videoOwnerQuery.length === 0 || !videoOwnerQuery[0] || !isAiGenerationEnabled(videoOwnerQuery[0])) {
+    if (videoOwnerQuery.length === 0 || !videoOwnerQuery[0] || !(await isAiGenerationEnabled(videoOwnerQuery[0]))) {
       const videoOwner = videoOwnerQuery[0];
       return Response.json({ 
         processing: false,

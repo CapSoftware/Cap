@@ -32,11 +32,14 @@ app.get(
     const secret = serverEnv().NEXTAUTH_SECRET;
 
     const url = new URL(c.req.url);
-    const loginRedirectUrl = `${
-      serverEnv().VERCEL_BRANCH_URL ?? serverEnv().WEB_URL
-    }/login?next=${serverEnv().VERCEL_BRANCH_URL ?? serverEnv().WEB_URL}${
-      url.pathname
-    }${url.search}`;
+
+    let redirectOrigin = getDeploymentOrigin();
+
+    const loginRedirectUrl = new URL(`${redirectOrigin}/login`);
+    loginRedirectUrl.searchParams.set(
+      "next",
+      new URL(`${redirectOrigin}${url.pathname}${url.search}`).toString()
+    );
 
     const session = await getServerSession(authOptions());
     if (!session) return c.redirect(loginRedirectUrl);
@@ -77,3 +80,21 @@ app.get(
     return Response.redirect(returnUrl.href);
   }
 );
+
+function getDeploymentOrigin() {
+  const vercelEnv = serverEnv().VERCEL_ENV;
+  if (!vercelEnv) return serverEnv().WEB_URL;
+
+  const vercelHosts = {
+    prod: serverEnv().VERCEL_PROJECT_PRODUCTION_URL_HOST,
+    branch: serverEnv().VERCEL_BRANCH_URL_HOST,
+  };
+
+  if (vercelEnv === "production" && vercelHosts.prod)
+    return `https://${vercelHosts.prod}`;
+
+  if (vercelEnv === "preview" && vercelHosts.branch)
+    return `https://${vercelHosts.branch}`;
+
+  return serverEnv().WEB_URL;
+}

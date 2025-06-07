@@ -1,6 +1,6 @@
-import { Share } from "./Share";
 import { db } from "@cap/database";
 import { eq, desc, sql, count } from "drizzle-orm";
+import { Logo } from "@cap/ui";
 import {
   videos,
   comments,
@@ -13,7 +13,6 @@ import { VideoMetadata } from "@cap/database/types";
 import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
 import type { Metadata, ResolvingMetadata } from "next";
 import { notFound } from "next/navigation";
-import { ImageViewer } from "./_components/ImageViewer";
 import { buildEnv } from "@cap/env";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { transcribeVideo } from "@/actions/videos/transcribe";
@@ -21,8 +20,12 @@ import { getScreenshot } from "@/actions/screenshots/get-screenshot";
 import { cookies, headers } from "next/headers";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
 import { isAiGenerationEnabled, isAiUiEnabled } from "@/utils/flags";
+
+import { Share } from "./Share";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
+import { ImageViewer } from "./_components/ImageViewer";
 import { decrypt } from "@cap/database/crypto";
+import { ShareHeader } from "./_components/ShareHeader";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -244,7 +247,7 @@ export default async function ShareVideoPage(props: Props) {
 
   if (videoOwnerQuery.length > 0 && videoOwnerQuery[0]) {
     const videoOwner = videoOwnerQuery[0];
-    aiGenerationEnabled = isAiGenerationEnabled(videoOwner);
+    aiGenerationEnabled = await isAiGenerationEnabled(videoOwner);
   }
 
   if (video.sharedOrganization?.organizationId) {
@@ -529,7 +532,7 @@ export default async function ShareVideoPage(props: Props) {
 
   let aiUiEnabled = false;
   if (user?.email) {
-    aiUiEnabled = isAiUiEnabled({
+    aiUiEnabled = await isAiUiEnabled({
       email: user.email,
       stripeSubscriptionStatus: user.stripeSubscriptionStatus,
     });
@@ -550,18 +553,48 @@ export default async function ShareVideoPage(props: Props) {
         videoId={videoWithOrganizationInfo.id}
       />
       {authorized && (
-        <Share
-          data={videoWithOrganizationInfo}
-          user={user}
-          comments={commentsQuery}
-          initialAnalytics={initialAnalytics}
-          customDomain={customDomain}
-          domainVerified={domainVerified}
-          userOrganizations={userOrganizations}
-          initialAiData={initialAiData}
-          aiGenerationEnabled={aiGenerationEnabled}
-          aiUiEnabled={aiUiEnabled}
-        />
+        <>
+          <div className="container flex-1 px-4 py-4 mx-auto">
+            <ShareHeader
+              data={{
+                ...videoWithOrganizationInfo,
+                createdAt: video.metadata?.customCreatedAt
+                  ? new Date(video.metadata.customCreatedAt)
+                  : video.createdAt,
+              }}
+              user={user}
+              customDomain={customDomain}
+              domainVerified={domainVerified}
+              sharedOrganizations={
+                videoWithOrganizationInfo.sharedOrganizations || []
+              }
+              userOrganizations={userOrganizations}
+            />
+
+            <Share
+              data={videoWithOrganizationInfo}
+              user={user}
+              comments={commentsQuery}
+              initialAnalytics={initialAnalytics}
+              customDomain={customDomain}
+              domainVerified={domainVerified}
+              userOrganizations={userOrganizations}
+              initialAiData={initialAiData}
+              aiGenerationEnabled={aiGenerationEnabled}
+              aiUiEnabled={aiUiEnabled}
+            />
+          </div>
+          <div className="py-4 mt-auto">
+            <a
+              target="_blank"
+              href={`/?ref=video_${video.id}`}
+              className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 bg-gray-1 rounded-full new-card-style w-fit"
+            >
+              <span className="text-sm">Recorded with</span>
+              <Logo className="w-14 h-auto" />
+            </a>
+          </div>
+        </>
       )}
     </div>
   );
