@@ -1,47 +1,19 @@
 {
-  "version": "7",
+  "version": "5",
   "dialect": "mysql",
   "entries": [
     {
       "idx": 0,
       "version": "5",
-      "when": 1745976420272,
+      "when": 1743020179593,
       "tag": "0000_brown_sunfire",
       "breakpoints": true
     },
     {
       "idx": 1,
       "version": "5",
-      "when": 1745977344716,
-      "tag": "0001_eager_the_order",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "5",
-      "when": 1746691677509,
-      "tag": "0002_powerful_scourge",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "5",
-      "when": 1747912232644,
-      "tag": "0003_small_chamber",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "5",
-      "when": 1747923172570,
-      "tag": "0004_good_microbe",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "5",
-      "when": 1748207569898,
-      "tag": "0005_jazzy_brood",
+      "when": 1749268354138,
+      "tag": "0001_white_young_avengers",
       "breakpoints": true
     }
   ]

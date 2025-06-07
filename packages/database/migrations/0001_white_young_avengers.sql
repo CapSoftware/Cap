@@ -1,3 +1,11 @@
+CREATE TABLE `auth_api_keys` (
+	`id` varchar(36) NOT NULL,
+	`userId` varchar(15) NOT NULL,
+	`createdAt` timestamp NOT NULL DEFAULT (now()),
+	CONSTRAINT `auth_api_keys_id` PRIMARY KEY(`id`),
+	CONSTRAINT `auth_api_keys_id_unique` UNIQUE(`id`)
+);
+--> statement-breakpoint
 RENAME TABLE `space_invites` TO `organization_invites`;--> statement-breakpoint
 RENAME TABLE `space_members` TO `organization_members`;--> statement-breakpoint
 RENAME TABLE `spaces` TO `organizations`;--> statement-breakpoint
@@ -19,6 +27,8 @@ ALTER TABLE `organizations` DROP PRIMARY KEY;--> statement-breakpoint
 ALTER TABLE `organization_invites` ADD PRIMARY KEY(`id`);--> statement-breakpoint
 ALTER TABLE `organization_members` ADD PRIMARY KEY(`id`);--> statement-breakpoint
 ALTER TABLE `organizations` ADD PRIMARY KEY(`id`);--> statement-breakpoint
+ALTER TABLE `organizations` ADD `iconUrl` varchar(1024);--> statement-breakpoint
+ALTER TABLE `videos` ADD `password` text;--> statement-breakpoint
 ALTER TABLE `organization_invites` ADD CONSTRAINT `organization_invites_id_unique` UNIQUE(`id`);--> statement-breakpoint
 ALTER TABLE `organization_members` ADD CONSTRAINT `organization_members_id_unique` UNIQUE(`id`);--> statement-breakpoint
 ALTER TABLE `organizations` ADD CONSTRAINT `organizations_id_unique` UNIQUE(`id`);--> statement-breakpoint
