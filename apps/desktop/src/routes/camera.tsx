@@ -28,7 +28,7 @@ import {
 
 namespace CameraWindow {
   export type Size = "sm" | "lg";
-  export type Shape = "round" | "square";
+  export type Shape = "round" | "square" | "full";
   export type State = {
     size: Size;
     shape: Shape;
@@ -114,21 +114,34 @@ function Page() {
   });
 
   const [windowSize] = createResource(
-    () => state.size,
-    async (size) => {
+    () => [state.size, state.shape, latestFrame()?.data.width, latestFrame()?.data.height] as const,
+    async ([size, shape, frameWidth, frameHeight]) => {
       const monitor = await currentMonitor();
 
-      const windowSize = size === "sm" ? 230 : 400;
-      const windowHeight = windowSize + BAR_HEIGHT;
+      const base = size === "sm" ? 230 : 400;
+      const aspect = frameWidth && frameHeight ? frameWidth / frameHeight : 1;
+      const windowWidth =
+        shape === "full"
+          ? aspect >= 1
+            ? base * aspect
+            : base
+          : base;
+      const windowHeight =
+        shape === "full"
+          ? aspect >= 1
+            ? base
+            : base / aspect
+          : base;
+      const totalHeight = windowHeight + BAR_HEIGHT;
 
       if (!monitor) return;
 
       const scalingFactor = monitor.scaleFactor;
-      const width = monitor.size.width / scalingFactor - windowSize - 100;
-      const height = monitor.size.height / scalingFactor - windowHeight - 100;
+      const width = monitor.size.width / scalingFactor - windowWidth - 100;
+      const height = monitor.size.height / scalingFactor - totalHeight - 100;
 
       const currentWindow = getCurrentWindow();
-      currentWindow.setSize(new LogicalSize(windowSize, windowHeight));
+      currentWindow.setSize(new LogicalSize(windowWidth, totalHeight));
       currentWindow.setPosition(
         new LogicalPosition(
           width + monitor.position.toLogical(scalingFactor).x,
@@ -136,7 +149,7 @@ function Page() {
         )
       );
 
-      return { width, height, size: windowSize };
+      return { width, height, size: base, windowWidth, windowHeight };
     }
   );
 
@@ -175,9 +188,11 @@ function Page() {
               <IconCapEnlarge class="size-5.5" />
             </ControlButton>
             <ControlButton
-              pressed={state.shape === "square"}
+              pressed={state.shape !== "round"}
               onClick={() =>
-                setState("shape", (s) => (s === "round" ? "square" : "round"))
+                setState("shape", (s) =>
+                  s === "round" ? "square" : s === "square" ? "full" : "round"
+                )
               }
             >
               <IconCapSquare class="size-5.5" />
@@ -205,25 +220,33 @@ function Page() {
                 const aspectRatio =
                   latestFrame().data.width / latestFrame().data.height;
 
-                const windowWidth = windowSize.latest?.size ?? 0;
+                const base = windowSize.latest?.size ?? 0;
+                const winWidth = windowSize.latest?.windowWidth ?? base;
+                const winHeight = windowSize.latest?.windowHeight ?? base;
+
+                if (state.shape === "full") {
+                  return {
+                    width: `${winWidth}px`,
+                    height: `${winHeight}px`,
+                    transform: state.mirrored ? "scaleX(-1)" : "scaleX(1)",
+                  };
+                }
 
                 const size = (() => {
                   if (aspectRatio > 1)
                     return {
-                      width: windowWidth * aspectRatio,
-                      height: windowWidth,
+                      width: base * aspectRatio,
+                      height: base,
                     };
                   else
                     return {
-                      width: windowWidth,
-                      height: windowWidth * aspectRatio,
+                      width: base,
+                      height: base * aspectRatio,
                     };
                 })();
 
-                const left =
-                  aspectRatio > 1 ? (size.width - windowWidth) / 2 : 0;
-                const top =
-                  aspectRatio > 1 ? 0 : (windowWidth - size.height) / 2;
+                const left = aspectRatio > 1 ? (size.width - base) / 2 : 0;
+                const top = aspectRatio > 1 ? 0 : (base - size.height) / 2;
 
                 return {
                   width: `${size.width}px`,
