@@ -43,10 +43,10 @@ import {
   ScreenCaptureTarget,
 } from "~/utils/tauri";
 
-function getWindowSize(systemAudioRecording: boolean) {
+function getWindowSize() {
   return {
     width: 300,
-    height: 290 + (systemAudioRecording ? 50 : 0),
+    height: 340,
   };
 }
 
@@ -97,9 +97,7 @@ function Page() {
     const unlistenFocus = currentWindow.onFocusChanged(
       ({ payload: focused }) => {
         if (focused) {
-          const size = getWindowSize(
-            generalSettings.data?.systemAudioCapture ?? false
-          );
+          const size = getWindowSize();
 
           currentWindow.setSize(new LogicalSize(size.width, size.height));
         }
@@ -108,9 +106,7 @@ function Page() {
 
     // Listen for resize events
     const unlistenResize = currentWindow.onResized(() => {
-      const size = getWindowSize(
-        generalSettings.data?.systemAudioCapture ?? false
-      );
+      const size = getWindowSize();
 
       currentWindow.setSize(new LogicalSize(size.width, size.height));
     });
@@ -122,9 +118,7 @@ function Page() {
   });
 
   createEffect(() => {
-    const size = getWindowSize(
-      generalSettings.data?.systemAudioCapture ?? false
-    );
+    const size = getWindowSize();
     getCurrentWindow().setSize(new LogicalSize(size.width, size.height));
   });
 
@@ -427,7 +421,7 @@ function Page() {
         value={mics.isPending ? rawOptions.micName : options.micName() ?? null}
         onChange={(v) => setMicInput.mutate(v)}
       />
-      {generalSettings.data?.systemAudioCapture && <SystemAudio />}
+      <SystemAudio />
       <div class="flex items-center space-x-1 w-full">
         {rawOptions.mode === "instant" && !auth.data ? (
           <SignInButton>
