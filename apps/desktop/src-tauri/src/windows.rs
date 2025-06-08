@@ -293,6 +293,7 @@ impl ShowCapWindow {
                 let mut builder = self
                     .window_builder(app, "/mode-select")
                     .inner_size(900.0, 500.0)
+                    .min_inner_size(900.0, 500.0)
                     .resizable(false)
                     .maximized(false)
                     .maximizable(false)
