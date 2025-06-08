@@ -24,9 +24,9 @@ import { cx } from "cva";
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
-import { Toggle } from "~/components/Toggle";
 import { TextInput } from "~/routes/editor/TextInput";
 import { Setting, ToggleSetting } from "./Setting";
+import Tooltip from "~/components/Tooltip";
 
 export default function GeneralSettings() {
   const [store] = createResource(() => generalSettingsStore.get());
@@ -158,6 +158,15 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
               />
             </>
           )}
+          <HexInputSetting
+            label="Active recording area border color"
+            description="Changes the border color around the active recording area"
+            defaultColor="#4686FF"
+            value={settings.activeRecordingBorderColorHex}
+            onChange={(newColor) =>
+              handleChange("activeRecordingBorderColorHex", newColor)
+            }
+          />
           <ToggleSetting
             label="Enable system notifications"
             description="Show system notifications for events like copying to clipboard, saving files, and more. You may need to manually allow Cap access via your system's notification settings."
@@ -301,6 +310,73 @@ function ServerURLSetting(props: {
         >
           Update
         </Button>
+      </div>
+    </Setting>
+  );
+}
+
+function HexInputSetting(props: {
+  label: string;
+  description?: string;
+  defaultColor: string;
+  value?: string | null;
+  onChange(v: string): void;
+}) {
+  const [text, setText] = createWritableMemo(
+    () => props.value || props.defaultColor
+  );
+  let prevHex = props.value;
+
+  let colorInput!: HTMLInputElement;
+
+  return (
+    <Setting {...props}>
+      <div class="flex flex-row items-center gap-[0.75rem] relative h-full">
+        <button
+          type="button"
+          class="size-[2rem] rounded-[0.5rem]"
+          style={{
+            "background-color": props.value || props.defaultColor,
+          }}
+          onClick={() => colorInput.click()}
+        />
+        <input
+          ref={colorInput}
+          type="color"
+          class="absolute left-0 bottom-0 w-[2.1rem] opacity-0 cursor-pointer"
+          onChange={(e) => props.onChange(e.target.value)}
+        />
+        <div class="w-[6.70rem] border rounded-[0.5rem] bg-gray-1 outline-none focus:ring-1 transition-shadows duration-200 group-focus-within:ring-gray-500 group-focus-within:ring-offset-1 group-focus-within:ring-offset-gray-200 flex items-center">
+          <TextInput
+            class="w-[4.60rem] p-[0.375rem] text-gray-12 text-[13px] border-none bg-transparent outline-none"
+            value={text()}
+            onFocus={() => {
+              prevHex = props.value || props.defaultColor;
+            }}
+            onInput={(e) => {
+              setText(e.currentTarget.value);
+
+              const value = e.target.value;
+              if (value) props.onChange(value);
+            }}
+            onBlur={(e) => {
+              const value = e.target.value;
+              if (value) props.onChange(value);
+              else {
+                setText(prevHex || props.defaultColor);
+                props.onChange(text());
+              }
+            }}
+          />
+          <Tooltip content={<span>Reset</span>}>
+            <button
+              class="m-1 size-6 inline-flex items-center justify-center bg-gray-3 text-gray-11 rounded-[0.3rem]"
+              onClick={() => props.onChange(props.defaultColor)}
+            >
+              <IconCapRestart class="size-4" />
+            </button>
+          </Tooltip>
+        </div>
       </div>
     </Setting>
   );

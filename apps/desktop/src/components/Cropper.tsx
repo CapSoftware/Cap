@@ -1,13 +1,18 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { makePersisted } from "@solid-primitives/storage";
-import { type CheckMenuItemOptions, Menu } from "@tauri-apps/api/menu";
+import {
+  type CheckMenuItemOptions,
+  Menu,
+  PredefinedMenuItemOptions,
+  SubmenuOptions,
+} from "@tauri-apps/api/menu";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import {
   type ParentProps,
   batch,
+  createComputed,
   createEffect,
   createMemo,
-  createResource,
   createRoot,
   createSignal,
   For,
@@ -22,24 +27,25 @@ import { generalSettingsStore } from "~/store";
 import Box from "~/utils/box";
 import { type Crop, type XY, commands } from "~/utils/tauri";
 import CropAreaRenderer from "./CropAreaRenderer";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 type Direction = "n" | "e" | "s" | "w" | "nw" | "ne" | "se" | "sw";
 type HandleSide = {
   x: "l" | "r" | "c";
   y: "t" | "b" | "c";
   direction: Direction;
-  cursor: "ew" | "ns" | "nesw" | "nwse";
+  cursor: `${"ew" | "ns" | "nesw" | "nwse"}-resize`;
 };
 
 const HANDLES: HandleSide[] = [
-  { x: "l", y: "t", direction: "nw", cursor: "nwse" },
-  { x: "r", y: "t", direction: "ne", cursor: "nesw" },
-  { x: "l", y: "b", direction: "sw", cursor: "nesw" },
-  { x: "r", y: "b", direction: "se", cursor: "nwse" },
-  { x: "c", y: "t", direction: "n", cursor: "ns" },
-  { x: "c", y: "b", direction: "s", cursor: "ns" },
-  { x: "l", y: "c", direction: "w", cursor: "ew" },
-  { x: "r", y: "c", direction: "e", cursor: "ew" },
+  { x: "l", y: "t", direction: "nw", cursor: "nwse-resize" },
+  { x: "r", y: "t", direction: "ne", cursor: "nesw-resize" },
+  { x: "l", y: "b", direction: "sw", cursor: "nesw-resize" },
+  { x: "r", y: "b", direction: "se", cursor: "nwse-resize" },
+  { x: "c", y: "t", direction: "n", cursor: "ns-resize" },
+  { x: "c", y: "b", direction: "s", cursor: "ns-resize" },
+  { x: "l", y: "c", direction: "w", cursor: "ew-resize" },
+  { x: "r", y: "c", direction: "e", cursor: "ew-resize" },
 ];
 
 type Ratio = [number, number];
@@ -51,6 +57,7 @@ const COMMON_RATIOS: Ratio[] = [
   [2, 1],
   [21, 9],
 ];
+const SNAP_RATIO_EL_WIDTH_PX = 40;
 
 const KEY_MAPPINGS = new Map([
   ["ArrowRight", "e"],
@@ -71,7 +78,7 @@ function distanceOf(firstPoint: Touch, secondPoint: Touch): number {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
-export function cropToFloor(value: Crop): Crop {
+export function calcCropFloor(value: Crop): Crop {
   return {
     size: {
       x: Math.floor(value.size.x),
@@ -97,40 +104,59 @@ export default function Cropper(
   }>
 ) {
   const crop = props.value;
+  function setCrop(value: Crop) {
+    props.onCropChange(value);
+  }
 
   const [containerSize, setContainerSize] = createSignal({ x: 0, y: 0 });
-  const mappedSize = createMemo(() => props.mappedSize || containerSize());
+  const [aspectRatio, setAspectRatio] = createSignal<number | null>(
+    props.aspectRatio ?? null
+  );
+  createEffect(() => {
+    if (props.aspectRatio) setAspectRatio(props.aspectRatio);
+  });
+
+  const logicalSize = createMemo(() => props.mappedSize || containerSize());
   const minSize = createMemo(() => {
-    const mapped = mappedSize();
+    const logical = logicalSize();
     return {
-      x: Math.min(100, mapped.x * 0.1),
-      y: Math.min(100, mapped.y * 0.1),
+      x: Math.min(100, logical.x * 0.1),
+      y: Math.min(100, logical.y * 0.1),
     };
   });
 
-  const containerToMappedSizeScale = createMemo(() => {
+  const logicalScale = createMemo(() => {
     const container = containerSize();
-    const mapped = mappedSize();
+    const logical = logicalSize();
     return {
-      x: container.x / mapped.x,
-      y: container.y / mapped.y,
+      x: container.x / logical.x,
+      y: container.y / logical.y,
     };
   });
 
-  const displayScaledCrop = createMemo(() => {
-    const mapped = mappedSize();
+  const [scaledCrop, setScaledCrop] = createSignal(crop);
+  createComputed(() => {
+    const logical = logicalSize();
     const container = containerSize();
-    return {
-      x: (crop.position.x / mapped.x) * container.x,
-      y: (crop.position.y / mapped.y) * container.y,
-      width: (crop.size.x / mapped.x) * container.x,
-      height: (crop.size.y / mapped.y) * container.y,
-    };
+    const cpos = crop.position;
+    const csize = crop.size;
+    setScaledCrop({
+      position: {
+        x: (cpos.x / logical.x) * container.x,
+        y: (cpos.y / logical.y) * container.y,
+      },
+      size: {
+        x: (csize.x / logical.x) * container.x,
+        y: (csize.y / logical.y) * container.y,
+      },
+    });
   });
 
   let containerRef: HTMLDivElement | undefined;
-  onMount(() => {
-    if (!containerRef) return;
+  let selAreaRef: HTMLDivElement | undefined;
+  let snapRatioEl: HTMLDivElement | undefined;
+  onMount(async () => {
+    if (!containerRef || !selAreaRef) return;
 
     const updateContainerSize = () => {
       setContainerSize({
@@ -142,40 +168,57 @@ export default function Cropper(
     updateContainerSize();
     const resizeObserver = new ResizeObserver(updateContainerSize);
     resizeObserver.observe(containerRef);
-    onCleanup(() => resizeObserver.disconnect());
 
-    const mapped = mappedSize();
+    let unlistenScaleFactor = await getCurrentWindow().onScaleChanged(
+      () => updateContainerSize
+    );
+
+    onCleanup(() => {
+      resizeObserver.disconnect();
+      unlistenScaleFactor();
+    });
+
+    const logical = logicalSize();
     const initial = props.initialSize || {
-      x: mapped.x / 2,
-      y: mapped.y / 2,
+      x: logical.x / 2,
+      y: logical.y / 2,
     };
 
-    let width = clamp(initial.x, minSize().x, mapped.x);
-    let height = clamp(initial.y, minSize().y, mapped.y);
+    let width = clamp(initial.x, minSize().x, logical.x);
+    let height = clamp(initial.y, minSize().y, logical.y);
 
     const box = Box.from(
-      { x: (mapped.x - width) / 2, y: (mapped.y - height) / 2 },
+      { x: (logical.x - width) / 2, y: (logical.y - height) / 2 },
       { x: width, y: height }
     );
-    box.constrainAll(box, containerSize(), ORIGIN_CENTER, props.aspectRatio);
+    box.constrainAll(
+      box,
+      containerSize(),
+      ORIGIN_CENTER,
+      aspectRatio() ?? undefined
+    );
 
     setCrop({
-      size: { x: width, y: height },
+      size: { x: box.width, y: box.height },
       position: {
-        x: (mapped.x - width) / 2,
-        y: (mapped.y - height) / 2,
+        x: (logical.x - box.width) / 2,
+        y: (logical.y - box.height) / 2,
       },
     });
   });
 
   createEffect(
     on(
-      () => props.aspectRatio,
-      () => {
-        if (!props.aspectRatio) return;
+      () => aspectRatio(),
+      (ratio) => {
+        if (!ratio) return;
         const box = Box.from(crop.position, crop.size);
-        box.constrainToRatio(props.aspectRatio, ORIGIN_CENTER);
-        box.constrainToBoundary(mappedSize().x, mappedSize().y, ORIGIN_CENTER);
+        box.constrainToRatio(ratio, ORIGIN_CENTER);
+        box.constrainToBoundary(
+          logicalSize().x,
+          logicalSize().y,
+          ORIGIN_CENTER
+        );
         setCrop(box.toBounds());
       }
     )
@@ -185,33 +228,66 @@ export default function Cropper(
     createSignal(true),
     { name: "cropSnapsToRatio" }
   );
+  const [selectedAspect, setSelectedAspect] = createSignal<Ratio | null>(null);
+  createEffect(() => {
+    const ratio = selectedAspect();
+    if (!ratio) {
+      setAspectRatio(null);
+      return;
+    }
+    setAspectRatio(ratio[0] / ratio[1]);
+  });
   const [snappedRatio, setSnappedRatio] = createSignal<Ratio | null>(null);
   const [dragging, setDragging] = createSignal(false);
-  const [gestureState, setGestureState] = createStore<{
-    isTrackpadGesture: boolean;
-    lastTouchCenter: XY<number> | null;
-    initialPinchDistance: number;
-    initialSize: { width: number; height: number };
-  }>({
+  const [resizing, setResizing] = createSignal(false);
+  const [cursorStyle, setCursorStyle] = createSignal<string | null>(null);
+
+  const [gestureState, setGestureState] = createStore({
     isTrackpadGesture: false,
-    lastTouchCenter: null,
+    lastTouchCenter: null as XY<number> | null,
     initialPinchDistance: 0,
     initialSize: { width: 0, height: 0 },
+  });
+
+  createEffect(() => {
+    if (resizing()) return;
+    const selArea = selAreaRef;
+    if (!selArea) return;
+    const crop = scaledCrop();
+    selArea.style.top = `${crop.position.y}px`;
+    selArea.style.left = `${crop.position.x}px`;
+    selArea.style.width = `${crop.size.x}px`;
+    selArea.style.height = `${crop.size.y}px`;
+    selArea.style.cursor = dragging() ? "grabbing" : "grab";
+  });
+
+  createEffect(() => {
+    if (!resizing()) return;
+    const crop = scaledCrop();
+    const snapEl = snapRatioEl;
+    if (!snapEl) return;
+
+    snapEl.style.top = `${crop.position.y + 10}px`;
+    snapEl.style.left = `${
+      crop.position.x + crop.size.x / 2 - SNAP_RATIO_EL_WIDTH_PX / 2
+    }px`;
   });
 
   function handleDragStart(event: MouseEvent) {
     if (gestureState.isTrackpadGesture) return; // Don't start drag if we're in a trackpad gesture
     event.stopPropagation();
     setDragging(true);
+    setCursorStyle("grabbing");
     let lastValidPos = { x: event.clientX, y: event.clientY };
     const box = Box.from(crop.position, crop.size);
-    const scaleFactors = containerToMappedSizeScale();
+    const scaleFactors = logicalScale();
 
     createRoot((dispose) => {
-      const mapped = mappedSize();
+      const logical = logicalSize();
       createEventListenerMap(window, {
         mouseup: () => {
           setDragging(false);
+          setCursorStyle(null);
           dispose();
         },
         mousemove: (e) => {
@@ -220,8 +296,8 @@ export default function Cropper(
             const dy = (e.clientY - lastValidPos.y) / scaleFactors.y;
 
             box.move(
-              clamp(box.x + dx, 0, mapped.x - box.width),
-              clamp(box.y + dy, 0, mapped.y - box.height)
+              clamp(box.x + dx, 0, logical.x - box.width),
+              clamp(box.y + dy, 0, logical.y - box.height)
             );
 
             const newBox = box;
@@ -238,7 +314,7 @@ export default function Cropper(
   function handleWheel(event: WheelEvent) {
     event.preventDefault();
     const box = Box.from(crop.position, crop.size);
-    const mapped = mappedSize();
+    const logical = logicalSize();
 
     if (event.ctrlKey) {
       setGestureState("isTrackpadGesture", true);
@@ -247,22 +323,22 @@ export default function Cropper(
       const scale = 1 - event.deltaY * velocity;
 
       box.resize(
-        clamp(box.width * scale, minSize().x, mapped.x),
-        clamp(box.height * scale, minSize().y, mapped.y),
+        clamp(box.width * scale, minSize().x, logical.x),
+        clamp(box.height * scale, minSize().y, logical.y),
         ORIGIN_CENTER
       );
-      box.constrainAll(box, mapped, ORIGIN_CENTER, props.aspectRatio);
+      box.constrainAll(box, logical, ORIGIN_CENTER, props.aspectRatio);
       setTimeout(() => setGestureState("isTrackpadGesture", false), 100);
       setSnappedRatio(null);
     } else {
       const velocity = Math.max(1, Math.abs(event.deltaY) * 0.01);
-      const scaleFactors = containerToMappedSizeScale();
+      const scaleFactors = logicalScale();
       const dx = (-event.deltaX * velocity) / scaleFactors.x;
       const dy = (-event.deltaY * velocity) / scaleFactors.y;
 
       box.move(
-        clamp(box.x + dx, 0, mapped.x - box.width),
-        clamp(box.y + dy, 0, mapped.y - box.height)
+        clamp(box.x + dx, 0, logical.x - box.width),
+        clamp(box.y + dy, 0, logical.y - box.height)
       );
     }
 
@@ -305,20 +381,20 @@ export default function Cropper(
       const scale = currentDistance / gestureState.initialPinchDistance;
 
       const box = Box.from(crop.position, crop.size);
-      const mapped = mappedSize();
+      const logical = logicalSize();
 
       // Calculate new dimensions while maintaining aspect ratio
       const currentRatio = crop.size.x / crop.size.y;
       let newWidth = clamp(
         gestureState.initialSize.width * scale,
         minSize().x,
-        mapped.x
+        logical.x
       );
       let newHeight = newWidth / currentRatio;
 
       // Adjust if height exceeds bounds
-      if (newHeight < minSize().y || newHeight > mapped.y) {
-        newHeight = clamp(newHeight, minSize().y, mapped.y);
+      if (newHeight < minSize().y || newHeight > logical.y) {
+        newHeight = clamp(newHeight, minSize().y, logical.y);
         newWidth = newHeight * currentRatio;
       }
 
@@ -330,13 +406,13 @@ export default function Cropper(
       const centerY = (event.touches[0].clientY + event.touches[1].clientY) / 2;
 
       if (gestureState.lastTouchCenter) {
-        const scaleFactors = containerToMappedSizeScale();
+        const scaleFactors = logicalScale();
         const dx = (centerX - gestureState.lastTouchCenter.x) / scaleFactors.x;
         const dy = (centerY - gestureState.lastTouchCenter.y) / scaleFactors.y;
 
         box.move(
-          clamp(box.x + dx, 0, mapped.x - box.width),
-          clamp(box.y + dy, 0, mapped.y - box.height)
+          clamp(box.x + dx, 0, logical.x - box.width),
+          clamp(box.y + dy, 0, logical.y - box.height)
         );
       }
 
@@ -345,8 +421,8 @@ export default function Cropper(
     } else if (event.touches.length === 1 && dragging()) {
       // Handle single touch drag
       const box = Box.from(crop.position, crop.size);
-      const scaleFactors = containerToMappedSizeScale();
-      const mapped = mappedSize();
+      const scaleFactors = logicalScale();
+      const logical = logicalSize();
 
       if (gestureState.lastTouchCenter) {
         const dx =
@@ -357,8 +433,8 @@ export default function Cropper(
           scaleFactors.y;
 
         box.move(
-          clamp(box.x + dx, 0, mapped.x - box.width),
-          clamp(box.y + dy, 0, mapped.y - box.height)
+          clamp(box.x + dx, 0, logical.x - box.width),
+          clamp(box.y + dy, 0, logical.y - box.height)
         );
       }
 
@@ -394,7 +470,7 @@ export default function Cropper(
     height: number,
     threshold = 0.01
   ): Ratio | null {
-    if (props.aspectRatio) return null;
+    if (aspectRatio()) return null;
     const currentRatio = width / height;
     for (const ratio of COMMON_RATIOS) {
       if (Math.abs(currentRatio - ratio[0] / ratio[1]) < threshold) {
@@ -407,7 +483,15 @@ export default function Cropper(
     return null;
   }
 
+  const [hapticsEnabled, setHapticsEnabled] = createSignal(false);
+  if (ostype() === "macos") {
+    generalSettingsStore
+      .get()
+      .then((s) => setHapticsEnabled(s?.hapticsEnabled || false));
+  }
+
   function handleResizeStart(clientX: number, clientY: number, dir: Direction) {
+    setResizing(true);
     const origin: XY<number> = {
       x: dir.includes("w") ? 1 : 0,
       y: dir.includes("n") ? 1 : 0,
@@ -415,31 +499,40 @@ export default function Cropper(
 
     let lastValidPos = { x: clientX, y: clientY };
     const box = Box.from(crop.position, crop.size);
-    const scaleFactors = containerToMappedSizeScale();
-    const mapped = mappedSize();
+    const scaleFactors = logicalScale();
+    const logical = logicalSize();
 
+    let rafId: number | null = null;
     createRoot((dispose) => {
+      const cleanup = () => {
+        rafId = null;
+        setResizing(false);
+        setCursorStyle(null);
+        dispose();
+      };
+
       createEventListenerMap(window, {
-        mouseup: dispose,
-        touchend: dispose,
-        touchmove: (e) =>
-          requestAnimationFrame(() => {
-            if (e.touches.length !== 1) return;
-            handleResizeMove(e.touches[0].clientX, e.touches[0].clientY);
-          }),
-        mousemove: (e) =>
-          requestAnimationFrame(() =>
-            handleResizeMove(e.clientX, e.clientY, e.altKey)
-          ),
+        mouseup: cleanup,
+        touchend: cleanup,
+        touchmove: (e) => {
+          if (!rafId) {
+            rafId = requestAnimationFrame(() => {
+              rafId = null;
+              if (e.touches.length !== 1) return;
+              handleResizeMove(e.touches[0].clientX, e.touches[0].clientY);
+            });
+          }
+        },
+        mousemove: (e) => {
+          if (!rafId) {
+            rafId = requestAnimationFrame(() => {
+              handleResizeMove(e.clientX, e.clientY, e.altKey);
+              rafId = null;
+            });
+          }
+        },
       });
     });
-
-    const [hapticsEnabled, hapticsEnabledOptions] = createResource(
-      async () =>
-        (await generalSettingsStore.get())?.hapticsEnabled &&
-        ostype() === "macos"
-    );
-    generalSettingsStore.listen(() => hapticsEnabledOptions.refetch());
 
     function handleResizeMove(
       moveX: number,
@@ -459,7 +552,7 @@ export default function Cropper(
                 ? currentBox.size.x - dx * scaleMultiplier
                 : currentBox.size.x + dx * scaleMultiplier,
               minSize().x,
-              mapped.x
+              logical.x
             )
           : currentBox.size.x;
 
@@ -470,7 +563,7 @@ export default function Cropper(
                 ? currentBox.size.y - dy * scaleMultiplier
                 : currentBox.size.y + dy * scaleMultiplier,
               minSize().y,
-              mapped.y
+              logical.y
             )
           : currentBox.size.y;
 
@@ -493,14 +586,14 @@ export default function Cropper(
       const newOrigin = centerOrigin ? ORIGIN_CENTER : origin;
       box.resize(newWidth, newHeight, newOrigin);
 
-      if (props.aspectRatio) {
+      if (aspectRatio()) {
         box.constrainToRatio(
-          props.aspectRatio,
+          aspectRatio()!,
           newOrigin,
           dir.includes("n") || dir.includes("s") ? "width" : "height"
         );
       }
-      box.constrainToBoundary(mapped.x, mapped.y, newOrigin);
+      box.constrainToBoundary(logical.x, logical.y, newOrigin);
 
       const newBox = box.toBounds();
       if (
@@ -510,13 +603,9 @@ export default function Cropper(
         newBox.position.y !== crop.position.y
       ) {
         lastValidPos = { x: moveX, y: moveY };
-        props.onCropChange(newBox);
+        setCrop(newBox);
       }
     }
-  }
-
-  function setCrop(value: Crop) {
-    props.onCropChange(value);
   }
 
   let pressedKeys = new Set<string>([]);
@@ -531,8 +620,8 @@ export default function Cropper(
     if (lastKeyHandleFrame) return;
     lastKeyHandleFrame = requestAnimationFrame(() => {
       const box = Box.from(crop.position, crop.size);
-      const mapped = mappedSize();
-      const scaleFactors = containerToMappedSizeScale();
+      const logical = logicalSize();
+      const scaleFactors = logicalScale();
 
       const moveDelta = event.shiftKey ? 20 : 5;
       const origin = event.altKey ? ORIGIN_CENTER : { x: 0, y: 0 };
@@ -559,7 +648,7 @@ export default function Cropper(
                 ? currentBox.size.x - moveDelta * scaleMultiplier
                 : currentBox.size.x + moveDelta * scaleMultiplier,
               minSize().x,
-              mapped.x
+              logical.x
             );
           }
 
@@ -569,7 +658,7 @@ export default function Cropper(
                 ? currentBox.size.y - moveDelta * scaleMultiplier
                 : currentBox.size.y + moveDelta * scaleMultiplier,
               minSize().y,
-              mapped.y
+              logical.y
             );
           }
 
@@ -582,14 +671,14 @@ export default function Cropper(
             (isDownKey ? moveDelta : isUpKey ? -moveDelta : 0) / scaleFactors.y;
 
           box.move(
-            clamp(box.x + dx, 0, mapped.x - box.width),
-            clamp(box.y + dy, 0, mapped.y - box.height)
+            clamp(box.x + dx, 0, logical.x - box.width),
+            clamp(box.y + dy, 0, logical.y - box.height)
           );
         }
       }
 
-      if (props.aspectRatio) box.constrainToRatio(props.aspectRatio, origin);
-      box.constrainToBoundary(mapped.x, mapped.y, origin);
+      if (aspectRatio()) box.constrainToRatio(aspectRatio()!, origin);
+      box.constrainToBoundary(logical.x, logical.y, origin);
       setCrop(box.toBounds());
 
       pressedKeys.clear();
@@ -597,11 +686,58 @@ export default function Cropper(
     });
   }
 
+  async function menu() {
+    const aspects = {
+      id: "crop-options-aspect",
+      text: "Aspect",
+      enabled: !props.aspectRatio,
+      items: [
+        {
+          id: "crop-options-aspect-none",
+          text: "None",
+          checked: !selectedAspect(),
+          action: () => setSelectedAspect(null),
+        } satisfies CheckMenuItemOptions,
+        ...COMMON_RATIOS.map((ratio) => {
+          return {
+            id: `crop-options-aspect-${ratio[0]}-${ratio[1]}`,
+            text: `${ratio[0]}:${ratio[1]}`,
+            checked: selectedAspect() == ratio,
+            action: () => setSelectedAspect(ratio),
+          } satisfies CheckMenuItemOptions;
+        }),
+      ],
+    } satisfies SubmenuOptions;
+
+    const menu = await Menu.new({
+      id: "crop-options",
+      items: [
+        {
+          id: "enableRatioSnap",
+          text: "Snap to aspect ratios",
+          checked: snapToRatioEnabled(),
+          action: () => {
+            setSnapToRatioEnabled((v) => !v);
+          },
+        } satisfies CheckMenuItemOptions,
+        {
+          item: "Separator",
+        } satisfies PredefinedMenuItemOptions,
+        aspects,
+      ],
+    });
+
+    menu.popup();
+  }
+
   return (
     <div
       aria-label="Crop area"
       ref={containerRef}
       class={`relative h-full w-full overflow-hidden overscroll-contain *:overscroll-none ${props.class}`}
+      style={{
+        cursor: cursorStyle() ?? "auto",
+      }}
       onWheel={handleWheel}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
@@ -610,30 +746,18 @@ export default function Cropper(
       tabIndex={0}
       onContextMenu={async (e) => {
         e.preventDefault();
-        const menu = await Menu.new({
-          id: "crop-options",
-          items: [
-            {
-              id: "enableRatioSnap",
-              text: "Snap to aspect ratios",
-              checked: snapToRatioEnabled(),
-              action: () => {
-                setSnapToRatioEnabled((v) => !v);
-              },
-            } satisfies CheckMenuItemOptions,
-          ],
-        });
-        menu.popup();
+        e.stopPropagation();
+        menu();
       }}
     >
       <CropAreaRenderer
         bounds={{
-          x: displayScaledCrop().x,
-          y: displayScaledCrop().y,
-          width: displayScaledCrop().width,
-          height: displayScaledCrop().height,
+          x: scaledCrop().position.x,
+          y: scaledCrop().position.y,
+          width: scaledCrop().size.x,
+          height: scaledCrop().size.y,
         }}
-        borderRadius={9}
+        borderRadius={5}
         guideLines={props.showGuideLines}
         handles={true}
         highlighted={snappedRatio() !== null}
@@ -641,53 +765,13 @@ export default function Cropper(
         {props.children}
       </CropAreaRenderer>
       <div
+        ref={selAreaRef}
         class="absolute"
         style={{
-          top: `${displayScaledCrop().y}px`,
-          left: `${displayScaledCrop().x}px`,
-          width: `${displayScaledCrop().width}px`,
-          height: `${displayScaledCrop().height}px`,
-          cursor: dragging() ? "grabbing" : "grab",
+          visibility: resizing() ? "hidden" : "visible",
         }}
         onMouseDown={handleDragStart}
       >
-        <div class="relative w-full">
-          <Transition
-            name="slide"
-            onEnter={(el, done) => {
-              const animation = el.animate(
-                [
-                  { opacity: 0, transform: "translateY(-8px)" },
-                  { opacity: 0.65, transform: "translateY(0)" },
-                ],
-                {
-                  duration: 100,
-                  easing: "ease-out",
-                }
-              );
-              animation.finished.then(done);
-            }}
-            onExit={(el, done) => {
-              const animation = el.animate(
-                [
-                  { opacity: 0.65, transform: "translateY(0)" },
-                  { opacity: 0, transform: "translateY(-8px)" },
-                ],
-                {
-                  duration: 100,
-                  easing: "ease-in",
-                }
-              );
-              animation.finished.then(done);
-            }}
-          >
-            <Show when={snappedRatio() !== null}>
-              <div class="absolute left-0 right-0 mx-auto top-2 bg-gray-3 opacity-80 h-6 w-10 rounded-[7px] text-center text-blue-9 text-sm border border-blue-9 outline outline-1 outline-[#dedede] dark:outline-[#000]">
-                {snappedRatio()![0]}:{snappedRatio()![1]}
-              </div>
-            </Show>
-          </Transition>
-        </div>
         <For each={HANDLES}>
           {(handle) => {
             const isCorner = handle.x !== "c" && handle.y !== "c";
@@ -707,11 +791,12 @@ export default function Cropper(
                     : handle.y === "b"
                     ? { bottom: "-12px" }
                     : { top: "50%", transform: "translateY(-50%)" }),
-                  cursor: dragging() ? "grabbing" : `${handle.cursor}-resize`,
+                  cursor: dragging() ? "grabbing" : handle.cursor,
                 }}
                 onMouseDown={(e) => {
                   e.stopPropagation();
                   handleResizeStart(e.clientX, e.clientY, handle.direction);
+                  setCursorStyle(handle.cursor);
                 }}
                 onTouchStart={(e) =>
                   handleResizeStartTouch(e, handle.direction)
@@ -748,11 +833,12 @@ export default function Cropper(
                     : handle.y === "b"
                     ? { bottom: "0", height: "16px" }
                     : { top: "0", bottom: "0" }),
-                  cursor: `${handle.cursor}-resize`,
+                  cursor: handle.cursor,
                 }}
                 onMouseDown={(e) => {
                   e.stopPropagation();
                   handleResizeStart(e.clientX, e.clientY, handle.direction);
+                  setCursorStyle(handle.cursor);
                 }}
                 onTouchStart={(e) =>
                   handleResizeStartTouch(e, handle.direction)
@@ -762,6 +848,51 @@ export default function Cropper(
           }}
         </For>
       </div>
+      <Transition
+        name="slide"
+        onEnter={(el, done) => {
+          const animation = el.animate(
+            [
+              { opacity: 0, transform: "translateY(-8px)" },
+              { opacity: 0.65, transform: "translateY(0)" },
+            ],
+            {
+              duration: 150,
+              easing: "cubic-bezier(0.65, 0, 0.35, 1)",
+            }
+          );
+          animation.finished.then(done);
+        }}
+        onExit={(el, done) => {
+          const animation = el.animate(
+            [
+              { opacity: 0.65, transform: "translateY(0)" },
+              { opacity: 0, transform: "translateY(-8px)" },
+            ],
+            {
+              duration: 150,
+              easing: "ease-in",
+            }
+          );
+          animation.finished.then(done);
+        }}
+      >
+        <Show when={snappedRatio() !== null && !dragging()}>
+          <div
+            ref={snapRatioEl}
+            style={{
+              width: `${SNAP_RATIO_EL_WIDTH_PX}px`,
+              top: `${crop.position.y + 10}px`,
+              left: `${
+                crop.position.x + crop.size.x / 2 - SNAP_RATIO_EL_WIDTH_PX / 2
+              }px`,
+            }}
+            class="absolute bg-gray-3 opacity-90 h-6 rounded-[7px] text-center text-blue-11 text-sm border border-blue-9 outline-[#dedede] dark:outline-[#000]"
+          >
+            {snappedRatio()![0]}:{snappedRatio()![1]}
+          </div>
+        </Show>
+      </Transition>
     </div>
   );
 }

@@ -17,7 +17,7 @@ import {
 import { createStore } from "solid-js/store";
 
 import { cx } from "cva";
-import Cropper, { cropToFloor } from "~/components/Cropper";
+import Cropper, { calcCropFloor } from "~/components/Cropper";
 import { Toggle } from "~/components/Toggle";
 import Tooltip from "~/components/Tooltip";
 import { events, type Crop } from "~/utils/tauri";
@@ -34,13 +34,7 @@ import { ExportDialog } from "./ExportDialog";
 import { Header } from "./Header";
 import { Player } from "./Player";
 import { Timeline } from "./Timeline";
-import {
-  Dialog,
-  DialogContent,
-  EditorButton,
-  Input,
-  Subfield,
-} from "./ui";
+import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
 
 export function Editor() {
   return (
@@ -314,7 +308,7 @@ function Dialogs() {
 
                 const display = editorInstance.recordings.segments[0].display;
 
-                const adjustedCrop = createMemo(() => cropToFloor(crop));
+                const adjustedCrop = createMemo(() => calcCropFloor(crop));
 
                 return (
                   <>

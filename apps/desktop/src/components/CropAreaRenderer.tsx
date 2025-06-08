@@ -1,10 +1,11 @@
 import type { Bounds } from "~/utils/tauri";
 import {
+  type ParentProps,
   onMount,
   onCleanup,
   createEffect,
-  type ParentProps,
   createSignal,
+  createMemo,
 } from "solid-js";
 import { createHiDPICanvasContext } from "~/utils/canvas";
 
@@ -171,7 +172,8 @@ function draw(
   showHandles: boolean,
   highlighted: boolean,
   selected: boolean,
-  prefersDark: boolean
+  prefersDark: boolean,
+  borderColor?: string
 ) {
   if (bounds.width <= 0 || bounds.height <= 0) return;
   const drawContext: DrawContext = {
@@ -186,13 +188,13 @@ function draw(
   ctx.save();
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
-  ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
+  ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
   ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
   // Shadow
   ctx.save();
-  ctx.shadowColor = "rgba(0, 0, 0, 0.8)";
-  ctx.shadowBlur = 200;
+  ctx.shadowColor = "rgba(0, 0, 0, 0.4)";
+  ctx.shadowBlur = 80;
   ctx.shadowOffsetY = 25;
   ctx.beginPath();
   ctx.roundRect(bounds.x, bounds.y, bounds.width, bounds.height, radius);
@@ -208,7 +210,21 @@ function draw(
 
   if (guideLines) drawGuideLines(drawContext);
 
+  if (borderColor) {
+    ctx.beginPath();
+    ctx.roundRect(bounds.x, bounds.y, bounds.width, bounds.height, radius);
+    ctx.strokeStyle = borderColor;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
   ctx.restore();
+}
+
+function hexToRgb(hex: string): [number, number, number] | null {
+  const match = hex.match(/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i);
+  if (!match) return null;
+  return match.slice(1).map((c) => Number.parseInt(c, 16)) as any;
 }
 
 export default function CropAreaRenderer(
@@ -219,10 +235,18 @@ export default function CropAreaRenderer(
     borderRadius?: number;
     highlighted?: boolean;
     selected?: boolean;
+    borderColor?: string;
   }>
 ) {
   let canvasRef: HTMLCanvasElement | undefined;
   const [prefersDarkScheme, setPrefersDarkScheme] = createSignal(false);
+  const borderColorRgba = createMemo(() => {
+    if (!props.borderColor) return;
+    const rgb = hexToRgb(props.borderColor);
+    if (!rgb) return "rgba(70, 134, 255, 0.5)";
+    // prettier-ignore
+    return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.5)`;
+  });
 
   onMount(() => {
     if (!canvasRef) {
@@ -245,39 +269,41 @@ export default function CropAreaRenderer(
         props.handles || false,
         props.highlighted || false,
         props.selected || false,
-        prefersDarkScheme()
+        prefersDarkScheme(),
+        borderColorRgba()
       )
     );
     const ctx = hidpiCanvas?.ctx;
-    if (!ctx) return;
 
-    let lastAnimationFrameId: number | undefined;
+    let lastFrameId: number | null = null;
+
     createEffect(() => {
-      if (lastAnimationFrameId) cancelAnimationFrame(lastAnimationFrameId);
+      if (lastFrameId !== null) cancelAnimationFrame(lastFrameId);
 
       const { x, y, width, height } = props.bounds;
       const { guideLines, handles, borderRadius, highlighted, selected } =
         props;
+      const borderColor = borderColorRgba();
 
-      const prefersDark = prefersDarkScheme();
-      lastAnimationFrameId = requestAnimationFrame(() =>
+      lastFrameId = requestAnimationFrame(() => {
         draw(
-          ctx,
+          ctx!,
           { x, y, width, height },
           borderRadius || 0,
           guideLines || false,
           handles || false,
           highlighted || false,
           selected || false,
-          prefersDark
-        )
-      );
+          prefersDarkScheme(),
+          borderColor
+        );
+      });
     });
 
     onCleanup(() => {
-      if (lastAnimationFrameId) cancelAnimationFrame(lastAnimationFrameId);
-      hidpiCanvas.cleanup();
+      if (lastFrameId !== null) cancelAnimationFrame(lastFrameId);
       colorSchemeQuery.removeEventListener("change", handleChange);
+      hidpiCanvas?.cleanup();
     });
   });
 
