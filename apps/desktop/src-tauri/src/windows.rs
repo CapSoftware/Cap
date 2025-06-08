@@ -294,7 +294,7 @@ impl ShowCapWindow {
                     .window_builder(app, "/mode-select")
                     .inner_size(900.0, 500.0)
                     .min_inner_size(900.0, 500.0)
-                    .resizable(false)
+                    .resizable(true)
                     .maximized(false)
                     .maximizable(false)
                     .center()
