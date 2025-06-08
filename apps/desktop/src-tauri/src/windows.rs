@@ -134,7 +134,7 @@ impl CapWindowId {
     pub fn should_have_decorations(&self) -> bool {
         matches!(
             self,
-            Self::Setup | Self::Settings | Self::Editor { .. } | Self::Upgrade | Self::ModeSelect
+            Self::Setup | Self::Settings | Self::Editor { .. } | Self::ModeSelect
         )
     }
 
@@ -290,14 +290,28 @@ impl ShowCapWindow {
                     let _ = main.hide();
                 }
                 
-                self.window_builder(app, "/mode-select")
+                let mut builder = self
+                    .window_builder(app, "/mode-select")
+                    .inner_size(900.0, 500.0)
                     .resizable(false)
                     .maximized(false)
                     .maximizable(false)
                     .center()
                     .focused(true)
-                    .shadow(true)
-                    .build()?
+                    .shadow(true);
+
+                #[cfg(target_os = "windows")]
+                {
+                    if !id.should_have_decorations() {
+                        builder = builder.transparent(true);
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    builder = builder.transparent(true);
+                }
+
+                builder.build()?
             }
             Self::Camera => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
