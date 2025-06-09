@@ -36,7 +36,8 @@ export async function middleware(request: NextRequest) {
         path.startsWith("/invite") ||
         path.startsWith("/self-hosting") ||
         path.startsWith("/terms")
-      )
+      ) &&
+      process.env.NODE_ENV !== "development"
     )
       return NextResponse.redirect(new URL("/login", url.origin));
     else return NextResponse.next();

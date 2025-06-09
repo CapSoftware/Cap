@@ -259,16 +259,19 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
           <ServerURLSetting
             value={settings.serverUrl ?? "https://cap.so"}
             onChange={async (v) => {
+              const url = new URL(v);
+              const origin = url.origin;
+
               if (
                 !(await confirm(
-                  `Are you sure you want to change the server URL to '${v}'? You will need to sign in again.`
+                  `Are you sure you want to change the server URL to '${origin}'? You will need to sign in again.`
                 ))
               )
                 return;
 
               await authStore.set(undefined);
-              await commands.setServerUrl(v);
-              handleChange("serverUrl", v);
+              await commands.setServerUrl(origin);
+              handleChange("serverUrl", origin);
             }}
           />
         </div>

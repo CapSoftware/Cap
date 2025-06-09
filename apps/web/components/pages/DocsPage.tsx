@@ -30,7 +30,7 @@ export const DocsPage = () => {
                 </div>
               )}
               <div className="p-10 space-y-4">
-                <h2 className="text-xl text-gray-1 md:text-4xl">
+                <h2 className="text-xl text-gray-12 md:text-4xl">
                   {doc.metadata.title}
                 </h2>
                 <p className="text-gray-600">{doc.metadata.summary}</p>
@@ -39,7 +39,7 @@ export const DocsPage = () => {
                     doc.metadata.tags.split(", ").map((tag) => (
                       <p
                         key={tag}
-                        className="rounded-md bg-gray-200 font-medium px-2 py-0.5 text-sm text-gray-1"
+                        className="rounded-md bg-gray-4 font-medium px-2 py-0.5 text-sm text-gray-11"
                       >
                         {tag}
                       </p>
