@@ -27,7 +27,7 @@ jobs:
       - name: Create .env file
         run: |
           echo "WEB_URL=http://localhost:3000" > .env
-          echo "DOCKER_BUILD=true" >> .env
+          echo "NEXT_PUBLIC_DOCKER_BUILD=true" >> .env
           echo "NEXT_PUBLIC_CAP_AWS_BUCKET=capso" >> .env
           echo "NEXT_PUBLIC_CAP_AWS_REGION=us-east-1" >> .env
           cat .env
