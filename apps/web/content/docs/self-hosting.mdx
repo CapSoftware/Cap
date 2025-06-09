@@ -4,8 +4,8 @@ summary: "How to deploy Cap Web on your own infrastructure"
 tags: "Deployment, Self-hosting"
 ---
 
-Cap Web is our web application for uploading and sharing Caps.
-It can be used on its own or be connected to Cap Desktop.
+Cap Web is our web application for uploading and sharing Caps - it's what runs right here on [cap.so](https://cap.so).
+You can upload videos to it from the dashboard or from Cap Desktop.
 
 This guide describes our two supported deployment methods, how to connect Cap Desktop,
 and how to configure email login links.
@@ -23,6 +23,8 @@ and [MinIO](https://min.io) for storing videos.
 
 Once deployed, login email links will be available in Railway’s Deploy Logs.
 
+<video src="https://cap.so/api/playlist/?videoId=6s8mpx2t4epkwrm" controls />
+
 ### Custom Deployment with Docker
 
 The [Cap Web Docker image](https://github.com/CapSoftware/Cap/pkgs/container/cap-web)
@@ -37,6 +39,8 @@ Copy the URL of your Cap Web deployment, and set the 'Cap Server URL'
 in Cap Desktop's settings page to this URL.
 Uploads from Cap Desktop will now be sent to your Cap Web deployment.
 
+<video src="https://cap.so/api/playlist/?videoId=sh5ch60pbs02eec" controls />
+
 ## Email Login Links
 
 If the `RESEND_API_KEY` and `RESEND_FROM_DOMAIN` environment variables are not set,
@@ -47,7 +51,10 @@ To send login links via email, you'll need to configure [Resend](https://resend.
 2. Connect a domain and set it as `RESEND_FROM_DOMAIN`
 3. Generate an API key and set it as `RESEND_API_KEY`
 
+<video src="https://cap.so/api/playlist/?videoId=xyz74j90rr4br3a" controls />
+
 ## Support
 
-If you encounter a problem with the Docker image, or think this documentation is lacking, please [open an issue](https://github.com/CapSoftware/Cap/issues/new).
+If you encounter a problem with the Docker image or think this documentation is lacking,
+please [open an issue](https://github.com/CapSoftware/Cap/issues/new).
 We do not offer support services for self-hosted deployments.
