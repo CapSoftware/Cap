@@ -37,13 +37,13 @@ export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
             variant="primary"
           >
             <FontAwesomeIcon
-              className="text-gray-1 size-3.5"
+              className="text-white size-3.5"
               icon={faDownload}
             />
             Download Cap
           </Button>
           <p className="text-sm text-gray-10">or</p>
-          <UploadCapButton grey={true} />
+          <UploadCapButton dark={true} />
         </div>
       </div>
     </div>

@@ -23,13 +23,13 @@ export const UploadCapButton = ({
   onProgress,
   onComplete,
   size = "md",
-  grey = false,
+  dark = false,
 }: {
   onStart?: (id: string, thumbnail?: string) => void;
   onProgress?: (id: string, progress: number, uploadProgress?: number) => void;
   onComplete?: (id: string) => void;
   size?: "sm" | "lg" | "md";
-  grey?: boolean;
+  dark?: boolean;
 }) => {
   const { user, isSubscribed } = useSharedContext();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -405,7 +405,7 @@ export const UploadCapButton = ({
       <Button
         onClick={handleClick}
         disabled={uploading}
-        variant={grey ? "gray" : "primary"}
+        variant={dark ? "dark" : "primary"}
         size={size}
       >
         {uploading ? (
@@ -420,7 +420,7 @@ export const UploadCapButton = ({
                 strokeWidth="3"
                 fill="none"
                 className={clsx(
-                  grey ? "text-black/30" : "text-white/30",
+                  dark ? "text-black/30" : "text-white/30",
                   "transition-all duration-200 ease-out"
                 )}
               />
@@ -433,7 +433,7 @@ export const UploadCapButton = ({
                 fill="none"
                 strokeLinecap="round"
                 className={clsx(
-                  grey ? "text-black" : "text-white",
+                  dark ? "text-black" : "text-white",
                   "transition-all duration-200 ease-out"
                 )}
                 style={{
@@ -445,10 +445,7 @@ export const UploadCapButton = ({
           </div>
         ) : (
           <div className="flex gap-2 items-center">
-            <FontAwesomeIcon
-              className={clsx("text-white", "size-3.5")}
-              icon={faUpload}
-            />
+            <FontAwesomeIcon className="size-3.5 text-gray-1" icon={faUpload} />
             Upload Video
           </div>
         )}

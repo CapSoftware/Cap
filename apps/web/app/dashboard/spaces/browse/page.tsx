@@ -29,7 +29,7 @@ export default function BrowseSpacesPage() {
           size="sm"
           variant="primary"
         >
-          <FontAwesomeIcon className="size-3" icon={faPlus} />
+          <FontAwesomeIcon className="size-2.5" icon={faPlus} />
           Create Space
         </Button>
         <div className="flex relative w-full max-w-md">
