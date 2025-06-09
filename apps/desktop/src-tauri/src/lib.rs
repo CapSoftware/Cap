@@ -2048,7 +2048,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 
                                 tokio::spawn(EditorInstances::remove(window.clone()));
                             }
-                            CapWindowId::Settings | CapWindowId::Upgrade | CapWindowId::ModeSelect => {
+                            CapWindowId::Settings
+                            | CapWindowId::Upgrade
+                            | CapWindowId::ModeSelect => {
                                 if let Some(window) = CapWindowId::Main.get(&app) {
                                     let _ = window.show();
                                 }
