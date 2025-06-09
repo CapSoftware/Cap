@@ -5,7 +5,7 @@ import { faCloudUpload, faSpinner } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 export interface FileInputProps {
@@ -214,14 +214,16 @@ export const FileInput: React.FC<FileInputProps> = ({
             <Button
               variant="destructive"
               size="xs"
+              spinner={isLoading}
               disabled={isLoading || disabled}
               onClick={handleRemove}
+              style={
+                {
+                  "--gradient-border-radius": "8px",
+                } as React.CSSProperties
+              }
             >
-              {isLoading ? (
-                <FontAwesomeIcon icon={faSpinner} className="animate-spin" />
-              ) : (
-                <>Remove</>
-              )}
+              Remove
             </Button>
           </div>
         ) : (

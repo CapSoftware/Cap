@@ -2,6 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
+import React from "react";
 import {
   Dialog,
   DialogContent,
@@ -24,38 +25,61 @@ import { FileInput } from "@/components/FileInput";
 import { createSpace } from "./server";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faLayerGroup } from "@fortawesome/free-solid-svg-icons";
-import {
-  MemberSelect,
-  TagOption,
-} from "../../spaces/[spaceId]/components/MemberSelect";
+import { updateSpace } from "@/actions/organization/update-space";
+import { MemberSelect } from "../../spaces/[spaceId]/components/MemberSelect";
 
 interface SpaceDialogProps {
   open: boolean;
   onClose: () => void;
+  edit?: boolean;
+  space?: {
+    id: string;
+    name: string;
+    members: string[];
+    icon?: string;
+  } | null;
+  onSpaceUpdated?: () => void;
 }
 
-export const SpaceDialog = ({ open, onClose }: SpaceDialogProps) => {
+export const SpaceDialog = ({
+  open,
+  onClose,
+  edit = false,
+  space,
+  onSpaceUpdated,
+}: SpaceDialogProps) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const formRef = useRef<HTMLFormElement | null>(null);
-  const [spaceName, setSpaceName] = useState("");
+  const [spaceName, setSpaceName] = useState(space?.name || "");
+
+  // Reset spaceName when dialog opens or space changes
+  React.useEffect(() => {
+    setSpaceName(space?.name || "");
+  }, [space, open]);
 
   return (
     <Dialog open={open} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
         <DialogHeader
           icon={<FontAwesomeIcon icon={faLayerGroup} />}
-          description="A new space for your team to collaborate"
+          description={
+            edit
+              ? "Edit your space details"
+              : "A new space for your team to collaborate"
+          }
         >
           <DialogTitle className="text-lg text-gray-12">
-            Create New Space
+            {edit ? "Edit Space" : "Create New Space"}
           </DialogTitle>
         </DialogHeader>
         <div className="p-5">
           <NewSpaceForm
             formRef={formRef}
             setCreateLoading={setIsSubmitting}
-            onSpaceCreated={onClose}
+            onSpaceCreated={onSpaceUpdated || onClose}
             onNameChange={setSpaceName}
+            edit={edit}
+            space={space}
           />
         </div>
         <DialogFooter>
@@ -70,7 +94,13 @@ export const SpaceDialog = ({ open, onClose }: SpaceDialogProps) => {
             onClick={() => formRef.current?.requestSubmit()}
             type="submit"
           >
-            {isSubmitting ? "Creating..." : "Create"}
+            {isSubmitting
+              ? edit
+                ? "Saving..."
+                : "Creating..."
+              : edit
+              ? "Save"
+              : "Create"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -83,24 +113,48 @@ export interface NewSpaceFormProps {
   formRef?: React.RefObject<HTMLFormElement>;
   setCreateLoading?: React.Dispatch<React.SetStateAction<boolean>>;
   onNameChange?: (name: string) => void;
+  edit?: boolean;
+  space?: {
+    id: string;
+    name: string;
+    members: string[];
+    icon?: string;
+  } | null;
 }
 
 export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
+  const { edit = false, space } = props;
   const formSchema = z.object({
     name: z
       .string()
       .min(1, "Space name is required")
       .max(25, "Space name must be at most 25 characters"),
-    members: z.array(z.string().email("Invalid email address")).optional(),
+    members: z.array(z.string()).optional(),
   });
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      name: "",
-      members: [],
+      name: space?.name || "",
+      members: space?.members || [],
     },
+    values: {
+      name: space?.name || "",
+      members: space?.members || [],
+    },
+    mode: "onChange",
   });
+
+  React.useEffect(() => {
+    if (space) {
+      form.reset({
+        name: space.name,
+        members: space.members,
+      });
+    } else {
+      form.reset({ name: "", members: [] });
+    }
+  }, [space, form]);
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -126,22 +180,32 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
             }
 
             if (values.members && values.members.length > 0) {
-              values.members.forEach((email) => {
-                formData.append("members[]", email);
+              values.members.forEach((id) => {
+                formData.append("members[]", id);
               });
             }
 
-            await createSpace(formData);
+            if (edit && space?.id) {
+              formData.append("id", space.id);
+              await updateSpace(formData);
+              toast.success("Space updated successfully");
+            } else {
+              await createSpace(formData);
+              toast.success("Space created successfully");
+            }
 
-            toast.success("Space created successfully");
             form.reset();
             setSelectedFile(null);
             props.onSpaceCreated();
-            //TODO: create a type that can be imported
           } catch (error: any) {
-            console.error("Error creating space:", error);
+            console.error(
+              edit ? "Error updating space:" : "Error creating space:",
+              error
+            );
             toast.error(
-              error?.message || error?.error || "Failed to create space"
+              error?.message ||
+                error?.error ||
+                (edit ? "Failed to update space" : "Failed to create space")
             );
           } finally {
             setIsUploading(false);
@@ -183,20 +247,14 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
                 <FormControl>
                   <MemberSelect
                     placeholder="Add member..."
+                    showEmptyIfNoMembers
                     disabled={isUploading}
-                    options={
-                      activeOrganization?.members?.map((m) => ({
-                        value: m.user.id,
-                        label: m.user.name || m.user.email,
-                        avatarUrl: m.user.image || undefined,
-                      })) ?? []
-                    }
                     selected={(activeOrganization?.members ?? [])
                       .filter((m) => (field.value ?? []).includes(m.user.id))
                       .map((m) => ({
                         value: m.user.id,
                         label: m.user.name || m.user.email,
-                        avatarUrl: m.user.image || undefined,
+                        image: m.user.image || undefined,
                       }))}
                     onSelect={(selected) =>
                       field.onChange(selected.map((opt) => opt.value))

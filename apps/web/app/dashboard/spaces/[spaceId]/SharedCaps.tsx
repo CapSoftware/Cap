@@ -62,6 +62,10 @@ export const SharedCaps = ({
 
   const isSpaceOwner = spaceData?.createdById === currentUserId;
 
+  const spaceMemberCount = isSpaceOwner
+    ? spaceMembers?.filter((m) => m.userId !== currentUserId).length || 0
+    : spaceMembers?.length || 0;
+
   useEffect(() => {
     const fetchAnalytics = async () => {
       const analyticsData: Record<string, number> = {};
@@ -94,7 +98,7 @@ export const SharedCaps = ({
       <div className="flex relative flex-col w-full h-full">
         {spaceData && spaceMembers && (
           <MembersIndicator
-            memberCount={spaceMembers.length}
+            memberCount={spaceMemberCount}
             members={spaceMembers}
             organizationMembers={organizationMembers || []}
             spaceId={spaceData.id}
@@ -121,7 +125,7 @@ export const SharedCaps = ({
       )}
       {spaceData && spaceMembers && (
         <MembersIndicator
-          memberCount={spaceMembers.length}
+          memberCount={spaceMemberCount}
           members={spaceMembers}
           organizationMembers={organizationMembers || []}
           spaceId={spaceData.id}

@@ -18,11 +18,11 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faUserGroup } from "@fortawesome/free-solid-svg-icons";
 import { MemberSelect } from "./MemberSelect";
 import { setSpaceMembers } from "@/app/dashboard/spaces/[spaceId]/actions";
-import clsx from "clsx";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { toast } from "sonner";
+import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 
 type SpaceMemberData = {
   id: string;
@@ -46,6 +46,7 @@ export const MembersIndicator = ({
   spaceId,
   canManageMembers,
 }: MembersIndicatorProps) => {
+  const { user } = useSharedContext();
   const [open, setOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -124,10 +125,8 @@ export const MembersIndicator = ({
                         <MemberSelect
                           placeholder="Add member..."
                           disabled={!canManageMembers}
-                          options={organizationMembers.map((m) => ({
-                            value: m.userId,
-                            label: m.name || m.email,
-                          }))}
+                          emptyMessage="No members have been added to this space"
+                          showEmptyIfNoMembers
                           selected={organizationMembers
                             .filter((m) =>
                               (field.value ?? []).includes(m.userId)
@@ -135,6 +134,7 @@ export const MembersIndicator = ({
                             .map((m) => ({
                               value: m.userId,
                               label: m.name || m.email,
+                              image: m.image || undefined,
                             }))}
                           onSelect={(selected) =>
                             field.onChange(selected.map((opt) => opt.value))
@@ -153,7 +153,7 @@ export const MembersIndicator = ({
           <Button variant="gray" size="sm" onClick={() => setOpen(false)}>
             Close
           </Button>
-          {canManageMembers && (
+          {canManageMembers && memberCount > 0 && (
             <Button
               onClick={() => handleSaveMembers(form.getValues("members") ?? [])}
               disabled={isLoading}

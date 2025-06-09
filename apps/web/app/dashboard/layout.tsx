@@ -16,7 +16,10 @@ import { redirect } from "next/navigation";
 export type Organization = {
   organization: typeof organizations.$inferSelect;
   members: (typeof organizationMembers.$inferSelect & {
-    user: Pick<typeof users.$inferSelect, "id" | "name" | "email" | "lastName">;
+    user: Pick<
+      typeof users.$inferSelect,
+      "id" | "name" | "email" | "lastName" | "image"
+    >;
   })[];
   invites: (typeof organizationInvites.$inferSelect)[];
   inviteQuota: number;
@@ -58,6 +61,7 @@ export default async function DashboardLayout({
         lastName: users.lastName,
         email: users.email,
         inviteQuota: users.inviteQuota,
+        image: users.image,
       },
     })
     .from(organizations)
@@ -108,7 +112,7 @@ export default async function DashboardLayout({
         createdById: spaces.createdById,
         iconUrl: spaces.iconUrl,
         memberCount: sql<number>`(
-          SELECT COUNT(*) FROM space_members WHERE space_members.spaceId = spaces.id
+          SELECT COUNT(*) FROM space_members WHERE space_members.spaceId = spaces.id AND space_members.userId != ${user.id}
         )`,
         videoCount: sql<number>`(
           SELECT COUNT(*) FROM space_videos WHERE space_videos.spaceId = spaces.id
@@ -161,6 +165,7 @@ export default async function DashboardLayout({
               name: users.name,
               lastName: users.lastName,
               email: users.email,
+              image: users.image,
             },
           })
           .from(organizationMembers)
