@@ -8,12 +8,26 @@ import {
   DropdownMenuTrigger,
   DropdownMenuItem,
 } from "@cap/ui";
-import { ChevronDown, X } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import clsx from "clsx";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faXmark } from "@fortawesome/free-solid-svg-icons";
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 import Image from "next/image";
+import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
+
+// Define types for organization member objects
+type UserObject = {
+  id: string;
+  email: string;
+  name: string | null;
+  image: string | null;
+};
+
+type OrganizationMember = {
+  id: string;
+  user: UserObject;
+};
 
 export interface TagOption {
   value: string;
@@ -22,26 +36,47 @@ export interface TagOption {
 }
 
 interface MemberSelectProps {
-  value: TagOption[];
-  onChange: (value: TagOption[]) => void;
-  options: TagOption[];
+  options?: TagOption[];
   placeholder?: string;
   disabled?: boolean;
   className?: string;
+  selected: TagOption[];
+  onSelect: (selected: TagOption[]) => void;
 }
 
 export const MemberSelect: React.FC<MemberSelectProps> = ({
-  value,
-  onChange,
-  options,
+  options: externalOptions,
   disabled = false,
   className = "",
+  placeholder = "Add Member...",
+  selected = [],
+  onSelect,
 }) => {
   const [inputValue, setInputValue] = useState("");
   const [isOpen, setIsOpen] = useState(false);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerWidth = useRef<number>(0);
   const triggerRef = useRef<HTMLDivElement>(null);
+  const { activeOrganization } = useSharedContext();
+
+  // Generate options from organization members if no external options provided
+  const orgMemberOptions =
+    activeOrganization?.members
+      .filter((m) => m.user?.email)
+      .map((m) => {
+        // Cast to our known type for proper type safety
+        const member = m as unknown as OrganizationMember;
+        const user = member.user;
+        return {
+          value: user.id,
+          label: user.name || user.email,
+          avatarUrl: user.image || undefined,
+        };
+      }) || [];
+
+  // Use provided options or fall back to organization members
+  const options = externalOptions || orgMemberOptions;
 
   useEffect(() => {
     if (triggerRef.current) {
@@ -55,61 +90,26 @@ export const MemberSelect: React.FC<MemberSelectProps> = ({
       (!inputValue ||
         opt.label.toLowerCase().includes(inputValue.toLowerCase()) ||
         opt.value.toLowerCase().includes(inputValue.toLowerCase())) &&
-      !value.some((tag) => tag.value === opt.value)
+      !(selected ?? []).some((tag) => tag.value === opt.value)
   );
 
-  // Handle outside click
-  useEffect(() => {
-    if (!isOpen) return;
-    function handleClick(e: MouseEvent) {
-      if (
-        containerRef.current &&
-        !containerRef.current.contains(e.target as Node)
-      ) {
-        setIsOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [isOpen]);
-
-  const handleInputFocus = () => setIsOpen(true);
-
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setInputValue(e.target.value);
-    setIsOpen(true);
-  };
-
-  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter" && filteredOptions.length > 0) {
-      // Select the first filtered option
-      const firstOption = filteredOptions[0];
-      if (firstOption) {
-        handleSelect(firstOption);
-        e.preventDefault();
-      }
-    } else if (e.key === "Backspace" && !inputValue && value.length > 0) {
-      onChange(value.slice(0, -1));
-    }
-  };
-
   const handleSelect = (option: TagOption) => {
-    if (!value.some((tag) => tag.value === option.value)) {
-      onChange([...value, option]);
+    if (!(selected ?? []).some((tag) => tag.value === option.value)) {
+      onSelect([...(selected ?? []), option]);
       setInputValue("");
       setIsOpen(true);
     }
   };
 
   const handleRemove = (tag: TagOption) => {
-    onChange(value.filter((t) => t.value !== tag.value));
+    onSelect((selected ?? []).filter((t) => t.value !== tag.value));
   };
 
   return (
     <div
       ref={containerRef}
       className={clsx(
-        "relative flex flex-col flex-wrap p-2 items-center h-full flex-grow border border-gray-5 rounded-2xl bg-gray-1",
+        "relative flex flex-col flex-wrap p-2 items-center h-[52px] flex-grow border border-gray-5 rounded-2xl bg-gray-1",
         className,
         disabled && "opacity-50 pointer-events-none"
       )}
@@ -127,7 +127,7 @@ export const MemberSelect: React.FC<MemberSelectProps> = ({
                   onClick={() => setIsOpen(true)}
                   className="flex flex-1 justify-between items-center p-0 h-full bg-transparent border-0 placeholder:text-gray-10 w-fit group-hover:placeholder:text-gray-12"
                 >
-                  <p className="text-[13px] text-gray-12">Add Member...</p>
+                  <p className="text-[13px] text-gray-12">{placeholder}</p>
                   <ChevronDown
                     className={clsx(
                       "ml-1 transition-transform duration-150 text-gray-9",
@@ -176,14 +176,14 @@ export const MemberSelect: React.FC<MemberSelectProps> = ({
           </DropdownMenu>
         </div>
       )}
-      {value.length > 0 && (
+      {selected.length > 0 && (
         <div
           className={clsx(
             "flex flex-wrap gap-2 justify-start w-full",
             filteredOptions.length > 0 ? "mt-2" : "mt-0"
           )}
         >
-          {value.map((tag) => (
+          {selected.map((tag) => (
             <div
               key={tag.value}
               className="flex gap-4 items-center hover:scale-[1.02] transition-transform h-full px-2 py-1.5 min-h-full text-xs rounded-xl bg-gray-3 text-gray-11 wobble"

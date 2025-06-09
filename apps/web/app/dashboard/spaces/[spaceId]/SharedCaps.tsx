@@ -31,7 +31,6 @@ type SpaceData = {
 type SpaceMemberData = {
   id: string;
   userId: string;
-  role: string;
   name: string | null;
   email: string;
 };

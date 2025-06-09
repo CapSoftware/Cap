@@ -438,6 +438,7 @@ export const spaceMembers = mysqlTable(
     id: nanoId("id").notNull().primaryKey().unique(),
     spaceId: nanoId("spaceId").notNull(),
     userId: nanoId("userId").notNull(),
+    role: varchar("role", { length: 255 }).notNull().default("member"),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
   },

@@ -179,63 +179,28 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
             control={form.control}
             name="members"
             render={({ field }) => {
-              // Fake test members for development
-              const fakeMemberOptions: TagOption[] = [
-                {
-                  value: "john.doe@example.com",
-                  label: "John",
-                  avatarUrl: "https://i.pravatar.cc/150?u=john",
-                },
-                {
-                  value: "jane.smith@example.com",
-                  label: "Jane",
-                  avatarUrl: "https://i.pravatar.cc/150?u=jane",
-                },
-                {
-                  value: "alex.wong@example.com",
-                  label: "Alex",
-                  avatarUrl: "https://i.pravatar.cc/150?u=alex",
-                },
-                {
-                  value: "sarah.johnson@example.com",
-                  label: "Sarah",
-                  avatarUrl: "https://i.pravatar.cc/150?u=sarah",
-                },
-              ];
-
-              // Real members from organization
-              const realMemberOptions: TagOption[] = (
-                activeOrganization?.members || []
-              )
-                .filter((m) => m.user?.email)
-                .map((m) => ({
-                  value: m.user.email,
-                  label: m.user.name || m.user.email,
-                  avatarUrl: (m.user as any).avatarUrl || undefined,
-                }));
-
-              // Combine real and fake members, removing duplicates by email
-              const memberOptions: TagOption[] = [
-                ...realMemberOptions,
-                ...fakeMemberOptions.filter(
-                  (fake) =>
-                    !realMemberOptions.some((real) => real.value === fake.value)
-                ),
-              ];
-              // Convert selected emails to TagOption[] for TagsInput
-              const selectedTags = memberOptions.filter((opt) =>
-                field.value?.includes(opt.value)
-              );
               return (
                 <FormControl>
                   <MemberSelect
-                    value={selectedTags}
-                    onChange={(tags) =>
-                      field.onChange(tags.map((t) => t.value))
-                    }
-                    options={memberOptions}
                     placeholder="Add member..."
                     disabled={isUploading}
+                    options={
+                      activeOrganization?.members?.map((m) => ({
+                        value: m.user.id,
+                        label: m.user.name || m.user.email,
+                        avatarUrl: m.user.image || undefined,
+                      })) ?? []
+                    }
+                    selected={(activeOrganization?.members ?? [])
+                      .filter((m) => (field.value ?? []).includes(m.user.id))
+                      .map((m) => ({
+                        value: m.user.id,
+                        label: m.user.name || m.user.email,
+                        avatarUrl: m.user.image || undefined,
+                      }))}
+                    onSelect={(selected) =>
+                      field.onChange(selected.map((opt) => opt.value))
+                    }
                   />
                 </FormControl>
               );

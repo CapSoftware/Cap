@@ -11,7 +11,7 @@ import {
   spaceMembers,
   spaceVideos,
 } from "@cap/database/schema";
-import { count, desc, eq, sql, and, isNull } from "drizzle-orm";
+import { count, desc, eq, sql, and } from "drizzle-orm";
 import { Metadata } from "next";
 import { SharedCaps } from "./SharedCaps";
 import { notFound } from "next/navigation";
@@ -74,7 +74,6 @@ async function fetchSpaceMembers(spaceId: string) {
     .select({
       id: spaceMembers.id,
       userId: spaceMembers.userId,
-      role: spaceMembers.role,
       name: users.name,
       email: users.email,
     })

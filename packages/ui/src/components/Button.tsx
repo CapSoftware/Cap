@@ -1,6 +1,7 @@
 import { classNames } from "@cap/utils";
 import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
+import clsx from "clsx";
 import * as React from "react";
 
 const buttonVariants = cva(
@@ -45,6 +46,7 @@ export interface ButtonProps
   spinner?: boolean;
   href?: string;
   icon?: React.ReactNode;
+  spinnerClass?: string;
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
@@ -55,6 +57,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       size,
       asChild = false,
       spinner = false,
+      spinnerClass,
       href,
       icon,
       ...props
@@ -84,7 +87,10 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
               opacity={0.25}
             />
             <path
-              className="transition-colors duration-200 ease-in-out dark:fill-gray-12 light:fill-gray-1"
+              className={clsx(
+                "transition-colors duration-200 ease-in-out dark:fill-gray-12 light:fill-gray-1",
+                spinnerClass
+              )}
               d="M10.14 1.16a11 11 0 0 0-9 8.92A1.59 1.59 0 0 0 2.46 12a1.52 1.52 0 0 0 1.65-1.3 8 8 0 0 1 6.66-6.61A1.42 1.42 0 0 0 12 2.69a1.57 1.57 0 0 0-1.86-1.53Z"
               style={{
                 transformOrigin: "center",

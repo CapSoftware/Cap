@@ -44,7 +44,7 @@ export const MembersDialog = ({
                 <Avatar
                   letterClass="text-md"
                   name={member.user?.name || "User"}
-                  className="size-8 text-gray-12 mr-3"
+                  className="mr-3 size-8 text-gray-12"
                 />
                 <div className="flex flex-col">
                   <span className="text-sm font-medium text-gray-12">
@@ -54,11 +54,6 @@ export const MembersDialog = ({
                     {member.user?.email || ""}
                   </span>
                 </div>
-                {member.role === "ADMIN" && (
-                  <span className="ml-auto text-xs font-medium px-2 py-0.5 rounded-full bg-gray-4 text-gray-11">
-                    Admin
-                  </span>
-                )}
               </div>
             ))}
           </div>

@@ -9,14 +9,8 @@ import { Input } from "@cap/ui";
 import { useRouter } from "next/navigation";
 import { Button } from "@cap/ui";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import {
-  faEdit,
-  faEllipsis,
-  faPlus,
-  faTrash,
-} from "@fortawesome/free-solid-svg-icons";
+import { faEdit, faPlus, faTrash } from "@fortawesome/free-solid-svg-icons";
 import SpaceDialog from "../../_components/AdminNavbar/SpaceDialog";
-import { spaces } from "@cap/database/schema";
 import { Spaces } from "../../layout";
 
 export default function BrowseSpacesPage() {
@@ -115,21 +109,8 @@ export default function BrowseSpacesPage() {
                       {space.videoCount === 1 ? "" : "s"}
                     </td>
                     <td className="px-6 py-3 text-sm text-gray-12">
-                      {space.createdById === user?.id ? "Owner" : "Member"}
+                      {space.createdById === user?.id ? "Admin" : "Member"}
                     </td>
-                    {isOwner && (
-                      <td
-                        onClick={(e) => e.stopPropagation()}
-                        className="flex relative z-10 items-center px-6 py-3 space-x-3 text-sm text-gray-12"
-                      >
-                        <div className="flex justify-center items-center rounded-full transition-colors cursor-pointer size-8 bg-gray-3 hover:bg-gray-4">
-                          <FontAwesomeIcon className="size-3" icon={faEdit} />
-                        </div>
-                        <div className="flex justify-center items-center rounded-full transition-colors cursor-pointer size-8 bg-gray-3 hover:bg-gray-4">
-                          <FontAwesomeIcon className="size-3" icon={faTrash} />
-                        </div>
-                      </td>
-                    )}
                   </tr>
                 );
               })}
