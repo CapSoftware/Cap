@@ -419,9 +419,6 @@ export const spaces = mysqlTable(
     organizationId: nanoId("organizationId").notNull(),
     createdById: nanoId("createdById").notNull(),
     iconUrl: varchar("iconUrl", { length: 255 }),
-    role: varchar("role", { length: 255, enum: ["Owner", "Member"] })
-      .notNull()
-      .default("Owner"),
     description: varchar("description", { length: 1000 }),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
@@ -441,7 +438,6 @@ export const spaceMembers = mysqlTable(
     id: nanoId("id").notNull().primaryKey().unique(),
     spaceId: nanoId("spaceId").notNull(),
     userId: nanoId("userId").notNull(),
-    role: varchar("role", { length: 255 }).notNull(),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
   },

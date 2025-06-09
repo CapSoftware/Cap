@@ -149,7 +149,6 @@ export async function createSpace(
         organizationId: user.activeOrganizationId,
         createdById: user.id,
         iconUrl,
-        role: "Owner",
         description: iconUrl ? `Space with custom icon: ${iconUrl}` : null,
         createdAt: new Date(),
         updatedAt: new Date(),

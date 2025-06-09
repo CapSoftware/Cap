@@ -23,17 +23,12 @@ export type Organization = {
   totalInvites: number;
 };
 
-export type Space = {
-  id: string;
-  name: string;
-  role: "Owner" | "Member" | null;
-  description: string | null;
-  organizationId: string;
-  iconUrl: string | null;
+export type Spaces = Omit<
+  typeof spaces.$inferSelect,
+  "createdAt" | "updatedAt"
+> & {
   memberCount: number;
   videoCount: number;
-  primary: boolean;
-  privacy: "Public" | "Private";
 };
 
 export const dynamic = "force-dynamic";
@@ -100,7 +95,7 @@ export default async function DashboardLayout({
   }
 
   // Only fetch spaces for the active organization
-  let spacesData: Space[] = [];
+  let spacesData: Spaces[] = [];
   if (activeOrganizationId) {
     spacesData = await db()
       .select({
@@ -108,9 +103,9 @@ export default async function DashboardLayout({
         primary: spaces.primary,
         privacy: spaces.privacy,
         name: spaces.name,
-        role: spaces.role,
         description: spaces.description,
         organizationId: spaces.organizationId,
+        createdById: spaces.createdById,
         iconUrl: spaces.iconUrl,
         memberCount: sql<number>`(
           SELECT COUNT(*) FROM space_members WHERE space_members.spaceId = spaces.id
@@ -132,15 +127,15 @@ export default async function DashboardLayout({
       const allSpacesEntry = {
         id: activeOrgInfo.organization.id,
         primary: true,
-        privacy: "Public" as Space["privacy"],
+        privacy: "Public",
         name: `All ${activeOrgInfo.organization.name}`,
         description: `View all content in ${activeOrgInfo.organization.name}`,
         organizationId: activeOrgInfo.organization.id,
         iconUrl: null,
         memberCount: 0,
-        role: "Owner" as Space["role"],
+        createdById: activeOrgInfo.organization.ownerId,
         videoCount: 0,
-      };
+      } as const;
 
       spacesData = [allSpacesEntry, ...spacesData];
     }

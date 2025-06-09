@@ -1,7 +1,6 @@
 "use client";
 import { useState } from "react";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { Space } from "../../layout";
 import Image from "next/image";
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 
@@ -10,14 +9,22 @@ import { Input } from "@cap/ui";
 import { useRouter } from "next/navigation";
 import { Button } from "@cap/ui";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faPlus } from "@fortawesome/free-solid-svg-icons";
+import {
+  faEdit,
+  faEllipsis,
+  faPlus,
+  faTrash,
+} from "@fortawesome/free-solid-svg-icons";
 import SpaceDialog from "../../_components/AdminNavbar/SpaceDialog";
+import { spaces } from "@cap/database/schema";
+import { Spaces } from "../../layout";
 
 export default function BrowseSpacesPage() {
-  const { spacesData } = useSharedContext();
+  const { spacesData, user } = useSharedContext();
   const [searchQuery, setSearchQuery] = useState("");
   const [showSpaceDialog, setShowSpaceDialog] = useState(false);
-  const filteredSpaces = spacesData?.filter((space: Space) =>
+
+  const filteredSpaces = spacesData?.filter((space: Spaces) =>
     space.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
   const router = useRouter();
@@ -71,44 +78,61 @@ export default function BrowseSpacesPage() {
               </tr>
             )}
             {filteredSpaces &&
-              filteredSpaces.map((space: Space) => (
-                <tr
-                  key={space.id}
-                  onClick={() => router.push(`/dashboard/spaces/${space.id}`)}
-                  className="border-t transition-colors cursor-pointer hover:bg-gray-2 border-gray-3"
-                >
-                  <td className="flex gap-3 items-center px-6 py-3">
-                    {space.iconUrl ? (
-                      <Image
-                        src={space.iconUrl}
-                        alt={space.name}
-                        width={24}
-                        height={24}
-                        className="object-cover w-7 h-7 rounded-full"
-                      />
-                    ) : (
-                      <Avatar
-                        className="relative flex-shrink-0 size-7"
-                        letterClass="text-sm"
-                        name={space.name}
-                      />
+              filteredSpaces.map((space: Spaces) => {
+                const isOwner = user?.id === space.createdById;
+                return (
+                  <tr
+                    key={space.id}
+                    onClick={() => router.push(`/dashboard/spaces/${space.id}`)}
+                    className="border-t transition-colors cursor-pointer hover:bg-gray-2 border-gray-3"
+                  >
+                    <td className="flex gap-3 items-center px-6 py-3">
+                      {space.iconUrl ? (
+                        <Image
+                          src={space.iconUrl}
+                          alt={space.name}
+                          width={24}
+                          height={24}
+                          className="object-cover w-7 h-7 rounded-full"
+                        />
+                      ) : (
+                        <Avatar
+                          className="relative flex-shrink-0 size-7"
+                          letterClass="text-sm"
+                          name={space.name}
+                        />
+                      )}
+                      <span className="text-sm font-semibold text-gray-12">
+                        {space.name}
+                      </span>
+                    </td>
+                    <td className="px-6 py-3 text-sm text-gray-12">
+                      {space.memberCount} member
+                      {space.memberCount === 1 ? "" : "s"}
+                    </td>
+                    <td className="px-6 py-3 text-sm text-gray-12">
+                      {space.videoCount} video
+                      {space.videoCount === 1 ? "" : "s"}
+                    </td>
+                    <td className="px-6 py-3 text-sm text-gray-12">
+                      {space.createdById === user?.id ? "Owner" : "Member"}
+                    </td>
+                    {isOwner && (
+                      <td
+                        onClick={(e) => e.stopPropagation()}
+                        className="flex relative z-10 items-center px-6 py-3 space-x-3 text-sm text-gray-12"
+                      >
+                        <div className="flex justify-center items-center rounded-full transition-colors cursor-pointer size-8 bg-gray-3 hover:bg-gray-4">
+                          <FontAwesomeIcon className="size-3" icon={faEdit} />
+                        </div>
+                        <div className="flex justify-center items-center rounded-full transition-colors cursor-pointer size-8 bg-gray-3 hover:bg-gray-4">
+                          <FontAwesomeIcon className="size-3" icon={faTrash} />
+                        </div>
+                      </td>
                     )}
-                    <span className="text-sm font-semibold text-gray-12">
-                      {space.name}
-                    </span>
-                  </td>
-                  <td className="px-6 py-3 text-sm text-gray-12">
-                    {space.memberCount} member
-                    {space.memberCount === 1 ? "" : "s"}
-                  </td>
-                  <td className="px-6 py-3 text-sm text-gray-12">
-                    {space.videoCount} video{space.videoCount === 1 ? "" : "s"}
-                  </td>
-                  <td className="px-6 py-3 text-sm text-gray-12">
-                    {space.role}
-                  </td>
-                </tr>
-              ))}
+                  </tr>
+                );
+              })}
           </tbody>
         </table>
       </div>
