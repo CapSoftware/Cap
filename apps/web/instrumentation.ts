@@ -2,11 +2,11 @@
 // It is not suitable (a.k.a DEADLY) for serverless environments where the server will be restarted on each request.
 
 import { serverEnv } from "@cap/env";
-import { createS3Client } from "./utils/s3";
 import {
   BucketAlreadyOwnedByYou,
   CreateBucketCommand,
   PutBucketPolicyCommand,
+  S3Client,
 } from "@aws-sdk/client-s3";
 
 export async function register() {
@@ -61,7 +61,15 @@ export async function register() {
 }
 
 async function createS3Bucket() {
-  const [s3Client] = await createS3Client();
+  const s3Client = new S3Client({
+    endpoint: serverEnv().CAP_AWS_ENDPOINT,
+    region: serverEnv().CAP_AWS_REGION,
+    credentials: {
+      accessKeyId: serverEnv().CAP_AWS_ACCESS_KEY ?? "",
+      secretAccessKey: serverEnv().CAP_AWS_SECRET_KEY ?? "",
+    },
+    forcePathStyle: serverEnv().S3_PATH_STYLE,
+  });
 
   await s3Client
     .send(new CreateBucketCommand({ Bucket: serverEnv().CAP_AWS_BUCKET }))

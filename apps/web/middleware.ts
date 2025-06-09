@@ -25,20 +25,21 @@ export async function middleware(request: NextRequest) {
   const hostname = url.hostname;
   const path = url.pathname;
 
-  if (
-    buildEnv.NEXT_PUBLIC_IS_CAP !== "true" &&
-    !(
-      path.startsWith("/s/") ||
-      path.startsWith("/dashboard") ||
-      path.startsWith("/onboarding") ||
-      path.startsWith("/api") ||
-      path.startsWith("/login") ||
-      path.startsWith("/invite") ||
-      path.startsWith("/self-hosting") ||
-      path.startsWith("/terms")
+  if (buildEnv.NEXT_PUBLIC_IS_CAP !== "true") {
+    if (
+      !(
+        path.startsWith("/s/") ||
+        path.startsWith("/dashboard") ||
+        path.startsWith("/onboarding") ||
+        path.startsWith("/api") ||
+        path.startsWith("/login") ||
+        path.startsWith("/invite") ||
+        path.startsWith("/self-hosting") ||
+        path.startsWith("/terms")
+      )
     )
-  ) {
-    return NextResponse.redirect(new URL("/login", url.origin));
+      return NextResponse.redirect(new URL("/login", url.origin));
+    else return NextResponse.next();
   }
 
   if (mainOrigins.some((d) => url.origin.startsWith(d))) {
@@ -54,7 +55,6 @@ export async function middleware(request: NextRequest) {
     if (!path.startsWith("/s/")) {
       const url = new URL(request.url);
       url.hostname = webUrl;
-      console.log({ url });
       return NextResponse.redirect(url);
     }
 
