@@ -232,7 +232,7 @@ impl ShowCapWindow {
                 if let Some(main) = CapWindowId::Main.get(app) {
                     let _ = main.hide();
                 }
-                
+
                 self.window_builder(
                     app,
                     format!("/settings/{}", page.clone().unwrap_or_default()),
@@ -289,7 +289,7 @@ impl ShowCapWindow {
                 if let Some(main) = CapWindowId::Main.get(app) {
                     let _ = main.hide();
                 }
-                
+
                 let mut builder = self
                     .window_builder(app, "/mode-select")
                     .inner_size(900.0, 500.0)
