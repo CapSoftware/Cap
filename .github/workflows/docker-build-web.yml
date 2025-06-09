@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag for the Docker image'
+        description: "Tag for the Docker image"
         required: false
-        default: 'latest'
+        default: "latest"
         type: string
 
 jobs:
@@ -23,10 +23,11 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        
+
       - name: Create .env file
         run: |
           echo "WEB_URL=http://localhost:3000" > .env
+          echo "DOCKER_BUILD=true" >> .env
           echo "NEXT_PUBLIC_CAP_AWS_BUCKET=capso" >> .env
           echo "NEXT_PUBLIC_CAP_AWS_REGION=us-east-1" >> .env
           cat .env

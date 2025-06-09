@@ -6,6 +6,7 @@ import {
 } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { buildEnv } from "@cap/env";
 import {
   Command,
   CommandGroup,
@@ -95,8 +96,10 @@ const User = () => {
       />
       <Popover open={menuOpen} onOpenChange={setMenuOpen}>
         <PopoverTrigger asChild>
-          <div data-state={menuOpen ? "open" : "closed"}
-            className="flex gap-2 justify-between  items-center p-2 rounded-xl border data-[state=open]:border-gray-5 data-[state=open]:bg-gray-3 border-transparent transition-colors cursor-pointer group lg:gap-6 hover:border-gray-4">
+          <div
+            data-state={menuOpen ? "open" : "closed"}
+            className="flex gap-2 justify-between  items-center p-2 rounded-xl border data-[state=open]:border-gray-5 data-[state=open]:bg-gray-3 border-transparent transition-colors cursor-pointer group lg:gap-6 hover:border-gray-4"
+          >
             <div className="flex items-center">
               <Avatar
                 letterClass="text-xs lg:text-md"
@@ -107,7 +110,10 @@ const User = () => {
                 {user.name ?? "User"}
               </span>
             </div>
-            <MoreVertical data-state={menuOpen ? "open" : "closed"} className="w-5 h-5 data-[state=open]:text-gray-12 transition-colors text-gray-10 group-hover:text-gray-12" />
+            <MoreVertical
+              data-state={menuOpen ? "open" : "closed"}
+              className="w-5 h-5 data-[state=open]:text-gray-12 transition-colors text-gray-10 group-hover:text-gray-12"
+            />
           </div>
         </PopoverTrigger>
         <PopoverContent className="p-1 w-48">
@@ -129,7 +135,7 @@ const User = () => {
                   </span>
                 </CommandItem>
               </Link>
-              {!isSubscribed && (
+              {!isSubscribed && buildEnv.NEXT_PUBLIC_IS_CAP && (
                 <CommandItem
                   className="px-2 py-1.5 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-5 group"
                   onSelect={() => {

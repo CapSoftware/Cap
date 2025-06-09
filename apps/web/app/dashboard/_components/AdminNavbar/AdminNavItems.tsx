@@ -14,7 +14,7 @@ import {
   DialogTrigger,
   Popover,
   PopoverContent,
-  PopoverTrigger
+  PopoverTrigger,
 } from "@cap/ui";
 import { classNames } from "@cap/utils";
 import { Check, ChevronDown, Plus } from "lucide-react";
@@ -38,7 +38,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import Image from "next/image";
-  
+
 import { useRef, useState } from "react";
 import { updateActiveOrganization } from "./server";
 
@@ -50,8 +50,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [hoveredItem, setHoveredItem] = useState<string | null>(null);
-  const { user, sidebarCollapsed } =
-    useSharedContext();
+  const { user, sidebarCollapsed } = useSharedContext();
 
   const manageNavigation = [
     {
@@ -94,8 +93,11 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
     "flex items-center justify-start px-3 rounded-xl outline-none tracking-tight overflow-hidden";
 
   const [dialogOpen, setDialogOpen] = useState(false);
-  const { organizationData: orgData, activeOrganization: activeOrg, isSubscribed: userIsSubscribed } =
-    useSharedContext();
+  const {
+    organizationData: orgData,
+    activeOrganization: activeOrg,
+    isSubscribed: userIsSubscribed,
+  } = useSharedContext();
   const formRef = useRef<HTMLFormElement | null>(null);
   const [createLoading, setCreateLoading] = useState(false);
   const [organizationName, setOrganizationName] = useState("");
@@ -106,9 +108,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
         <Tooltip
           disable={open || sidebarCollapsed === false}
           position="right"
-          content={
-            activeOrg?.organization.name ?? "No organization found"
-          }
+          content={activeOrg?.organization.name ?? "No organization found"}
         >
           <PopoverTrigger asChild>
             <motion.div
@@ -123,11 +123,9 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                 bounce: 0.2,
                 width: { type: "tween", duration: 0.2 },
               }}
-              className={
-                clsx(
-                  "p-2.5 mt-2.5 rounded-xl border cursor-pointer bg-gradient-to-t from-gray-4 to-gray-2 border-gray-4",
-                )
-              }
+              className={clsx(
+                "p-2.5 mt-2.5 rounded-xl border cursor-pointer bg-gradient-to-t from-gray-4 to-gray-2 border-gray-4"
+              )}
             >
               <div
                 className="flex justify-between items-center cursor-pointer"
@@ -140,7 +138,9 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                       <div className="overflow-hidden relative flex-shrink-0 rounded-full size-[18px]">
                         <Image
                           src={activeOrg.organization.iconUrl}
-                          alt={activeOrg.organization.name || "Organization icon"}
+                          alt={
+                            activeOrg.organization.name || "Organization icon"
+                          }
                           fill
                           className="object-cover"
                         />
@@ -156,12 +156,14 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                       />
                     )}
                     <p className="ml-2.5 text-sm text-gray-12 truncate">
-                      {activeOrg?.organization.name ??
-                        "No organization found"}
+                      {activeOrg?.organization.name ?? "No organization found"}
                     </p>
                   </div>
                   {!sidebarCollapsed && (
-                    <ChevronDown data-state={open ? "open" : "closed"} className="w-5 h-auto transition-transform duration-200 text-gray-8 data-[state=open]:rotate-180" />
+                    <ChevronDown
+                      data-state={open ? "open" : "closed"}
+                      className="w-5 h-auto transition-transform duration-200 text-gray-8 data-[state=open]:rotate-180"
+                    />
                   )}
                 </div>
               </div>
@@ -183,7 +185,9 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                         <CommandItem
                           className={clsx(
                             "rounded-lg transition-colors duration-300 group",
-                            isSelected ? "pointer-events-none":"text-gray-10 hover:text-gray-12 hover:bg-gray-6"
+                            isSelected
+                              ? "pointer-events-none"
+                              : "text-gray-10 hover:text-gray-12 hover:bg-gray-6"
                           )}
                           key={organization.organization.name + "-organization"}
                           onSelect={async () => {
@@ -198,7 +202,10 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                               <div className="overflow-hidden relative flex-shrink-0 rounded-full size-5">
                                 <Image
                                   src={organization.organization.iconUrl}
-                                  alt={organization.organization.name || "Organization icon"}
+                                  alt={
+                                    organization.organization.name ||
+                                    "Organization icon"
+                                  }
                                   fill
                                   className="object-cover"
                                 />
@@ -210,7 +217,14 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                                 name={organization.organization.name}
                               />
                             )}
-                            <p className={clsx("flex-1 text-sm transition-colors duration-200 group-hover:text-gray-12", isSelected ? "text-gray-12":"text-gray-10")}>{organization.organization.name}</p>
+                            <p
+                              className={clsx(
+                                "flex-1 text-sm transition-colors duration-200 group-hover:text-gray-12",
+                                isSelected ? "text-gray-12" : "text-gray-10"
+                              )}
+                            >
+                              {organization.organization.name}
+                            </p>
                           </div>
                           {isSelected && (
                             <Check
@@ -243,10 +257,16 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
         aria-label="Sidebar"
       >
         <div
-          className={clsx("mt-8", sidebarCollapsed ? "flex flex-col justify-center items-center" : "")}
+          className={clsx(
+            "mt-8",
+            sidebarCollapsed ? "flex flex-col justify-center items-center" : ""
+          )}
         >
           {manageNavigation.map((item) => (
-            <div key={item.name} className="flex relative justify-center items-center w-full mb-2.5">
+            <div
+              key={item.name}
+              className="flex relative justify-center items-center w-full mb-2.5"
+            >
               {/* Active indicator - always visible for active items */}
               {pathname.includes(item.href) && (
                 <motion.div
@@ -268,18 +288,22 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                   id="underline"
                   className={clsx(
                     "absolute rounded-xl border bg-gray-3 border-gray-4",
-                    sidebarCollapsed ? "inset-0 right-0 left-0 mx-auto w-9 h-9" : "inset-0 ml-[2px]"
+                    sidebarCollapsed
+                      ? "inset-0 right-0 left-0 mx-auto w-9 h-9"
+                      : "inset-0 ml-[2px]"
                   )}
                 />
               )}
-              
+
               {/* Hover indicator - only visible when hovering non-active items */}
               {hoveredItem === item.name && !pathname.includes(item.href) && (
                 <motion.div
                   layoutId="hoverIndicator"
                   className={clsx(
                     "absolute bg-transparent rounded-xl border-gray-4 border-[1px]",
-                    sidebarCollapsed ? "inset-0 right-0 left-0 mx-auto w-9 h-9" : "inset-0 ml-[2px]"
+                    sidebarCollapsed
+                      ? "inset-0 right-0 left-0 mx-auto w-9 h-9"
+                      : "inset-0 ml-[2px]"
                   )}
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
@@ -305,7 +329,9 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                   href={item.href}
                   className={classNames(
                     "relative border border-transparent transition-opacity duration-200 z-3",
-                    sidebarCollapsed ? "flex justify-center items-center w-full h-9" : "py-2 w-full",
+                    sidebarCollapsed
+                      ? "flex justify-center items-center w-full h-9"
+                      : "py-2 w-full",
                     navItemClass
                   )}
                 >
@@ -317,7 +343,12 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                     )}
                     aria-hidden="true"
                   />
-                  <p className={clsx("text-sm text-gray-12 truncate", sidebarCollapsed ? "hidden" : "ml-2.5")}>
+                  <p
+                    className={clsx(
+                      "text-sm text-gray-12 truncate",
+                      sidebarCollapsed ? "hidden" : "ml-2.5"
+                    )}
+                  >
                     {item.name}
                   </p>
                 </Link>
@@ -326,23 +357,28 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
           ))}
         </div>
         <div className="pb-0 w-full lg:pb-5">
-          <UsageButton
-            toggleMobileNav={() => 
-              toggleMobileNav?.()
-            }
-            subscribed={userIsSubscribed}
-          />
+          {buildEnv.NEXT_PUBLIC_IS_CAP && (
+            <UsageButton
+              toggleMobileNav={() => toggleMobileNav?.()}
+              subscribed={userIsSubscribed}
+            />
+          )}
           <p className="mt-4 text-xs text-center truncate text-gray-10">
             Cap Software, Inc. {new Date().getFullYear()}.
           </p>
         </div>
       </nav>
       <DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
-        <DialogHeader icon={<FontAwesomeIcon icon={faBuilding} />} description="A new organization to share caps with your team">
-          <DialogTitle className="text-lg text-gray-12">Create New Organization</DialogTitle>
+        <DialogHeader
+          icon={<FontAwesomeIcon icon={faBuilding} />}
+          description="A new organization to share caps with your team"
+        >
+          <DialogTitle className="text-lg text-gray-12">
+            Create New Organization
+          </DialogTitle>
         </DialogHeader>
         <div className="p-5">
-          <NewOrganization 
+          <NewOrganization
             setCreateLoading={setCreateLoading}
             onOrganizationCreated={() => setDialogOpen(false)}
             formRef={formRef}
@@ -350,16 +386,12 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
           />
         </div>
         <DialogFooter>
-          <Button 
-            variant="gray" 
-            size="sm" 
-            onClick={() => setDialogOpen(false)}
-          >
+          <Button variant="gray" size="sm" onClick={() => setDialogOpen(false)}>
             Cancel
           </Button>
-          <Button 
-            variant="dark" 
-            size="sm" 
+          <Button
+            variant="dark"
+            size="sm"
             disabled={createLoading || !organizationName.trim().length}
             spinner={createLoading}
             onClick={() => formRef.current?.requestSubmit()}
