@@ -406,49 +406,15 @@ export const UploadCapButton = ({
         onClick={handleClick}
         disabled={uploading}
         variant={dark ? "dark" : "primary"}
+        className="flex gap-2 items-center"
         size={size}
+        spinner={uploading}
       >
-        {uploading ? (
-          <div className="flex gap-2 items-center">
-            {status}
-            <svg className="w-4 h-4 transform -rotate-90" viewBox="0 0 20 20">
-              <circle
-                cx="10"
-                cy="10"
-                r="8"
-                stroke="currentColor"
-                strokeWidth="3"
-                fill="none"
-                className={clsx(
-                  dark ? "text-black/30" : "text-white/30",
-                  "transition-all duration-200 ease-out"
-                )}
-              />
-              <circle
-                cx="10"
-                cy="10"
-                r="8"
-                stroke="currentColor"
-                strokeWidth="3"
-                fill="none"
-                strokeLinecap="round"
-                className={clsx(
-                  dark ? "text-black" : "text-white",
-                  "transition-all duration-200 ease-out"
-                )}
-                style={{
-                  strokeDasharray: `${circumference} ${circumference}`,
-                  strokeDashoffset: `${strokeDashoffset}`,
-                }}
-              />
-            </svg>
-          </div>
-        ) : (
-          <div className="flex gap-2 items-center">
-            <FontAwesomeIcon className="size-3.5 text-white" icon={faUpload} />
-            Upload Video
-          </div>
-        )}
+        <FontAwesomeIcon
+          className={clsx(dark ? "text-gray-1" : "text-white", "size-3.5")}
+          icon={faUpload}
+        />
+        Upload Video
       </Button>
       <input
         ref={inputRef}
