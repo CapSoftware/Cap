@@ -122,7 +122,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
       } else if (addedSpaceIds.length > 0 && removedSpaceIds.length > 0) {
         toast.success(`Sharing settings updated`);
       } else {
-        toast.success("No changes to sharing settings");
+        toast.info("No changes to sharing settings");
       }
       onSharingUpdated(newSelectedSpaces);
       onClose();

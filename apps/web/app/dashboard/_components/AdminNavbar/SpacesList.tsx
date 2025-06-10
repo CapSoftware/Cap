@@ -24,7 +24,7 @@ import { useMemo } from "react";
 import Image from "next/image";
 
 import { navItemClass } from "./AdminNavItems";
-import { Spaces } from "../../layout";
+import { Spaces } from "../../dashboard-data";
 
 export const SpacesList = ({
   toggleMobileNav,
@@ -227,11 +227,10 @@ export const SpacesList = ({
               >
                 <div
                   className={clsx(
-                    "relative transition-colors overflow-visible duration-150 rounded-xl mb-1.5",
+                    "relative transition-colors border border-transparent overflow-visible duration-150 rounded-xl mb-1.5",
                     activeSpaceParams(space.id)
                       ? "hover:bg-gray-3 cursor-default"
-                      : "cursor-pointer",
-                    activeDropTarget === space.id && "ring-2 ring-blue-500"
+                      : "cursor-pointer"
                   )}
                   onDragOver={(e) => handleDragOver(e, space.id)}
                   onDragLeave={handleDragLeave}
@@ -256,7 +255,7 @@ export const SpacesList = ({
                     />
                   )}
                   {activeDropTarget === space.id && (
-                    <div className="absolute inset-0 z-10 rounded-xl pointer-events-none bg-blue-500/10" />
+                    <div className="absolute inset-0 z-10 rounded-xl border pointer-events-none border-gray-5 bg-gray-4" />
                   )}
                   <Link
                     href={`/dashboard/spaces/${space.id}`}

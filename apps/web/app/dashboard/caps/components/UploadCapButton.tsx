@@ -445,7 +445,7 @@ export const UploadCapButton = ({
           </div>
         ) : (
           <div className="flex gap-2 items-center">
-            <FontAwesomeIcon className="size-3.5 text-gray-1" icon={faUpload} />
+            <FontAwesomeIcon className="size-3.5 text-white" icon={faUpload} />
             Upload Video
           </div>
         )}
