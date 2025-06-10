@@ -138,6 +138,7 @@ export const SharedCaps = ({
           <SharedCapCard
             key={cap.id}
             cap={cap}
+            hideSharedStatus
             analytics={analytics[cap.id] || 0}
             organizationName={activeOrganization?.organization.name || ""}
             userId={currentUserId}

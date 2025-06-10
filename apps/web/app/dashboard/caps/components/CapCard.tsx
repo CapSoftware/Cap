@@ -54,6 +54,7 @@ interface Props extends PropsWithChildren {
   sharedCapCard?: boolean;
   isSelected?: boolean;
   onSelectToggle?: () => void;
+  hideSharedStatus?: boolean;
   anyCapSelected?: boolean;
 }
 
@@ -64,6 +65,7 @@ export const CapCard = ({
   onDelete,
   userId,
   sharedCapCard = false,
+  hideSharedStatus = false,
   isSelected = false,
   onSelectToggle,
   anyCapSelected = false,
@@ -163,9 +165,10 @@ export const CapCard = ({
   const renderSharedStatus = () => {
     const baseClassName = clsx(
       "text-sm text-gray-10 transition-colors duration-200 flex items-center mb-1",
-      "hover:text-gray-12 cursor-pointer"
+      "hover:text-gray-12",
+      hideSharedStatus ? "pointer-events-none" : "cursor-pointer"
     );
-    if (isOwner) {
+    if (isOwner && !hideSharedStatus) {
       if (
         (cap.sharedOrganizations?.length === 0 || !cap.sharedOrganizations) &&
         (cap.sharedSpaces?.length === 0 || !cap.sharedSpaces)
