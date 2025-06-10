@@ -90,6 +90,7 @@ async function fetchOrganizationMembers(orgId: string) {
       role: organizationMembers.role,
       name: users.name,
       email: users.email,
+      image: users.image,
     })
     .from(organizationMembers)
     .innerJoin(users, eq(organizationMembers.userId, users.id))

@@ -89,6 +89,7 @@ export const MembersIndicator = ({
       toast.error("Failed to update members");
     } finally {
       setIsLoading(false);
+      setOpen(false);
     }
   };
 
@@ -136,9 +137,9 @@ export const MembersIndicator = ({
                               label: m.name || m.email,
                               image: m.image || undefined,
                             }))}
-                          onSelect={(selected) =>
-                            field.onChange(selected.map((opt) => opt.value))
-                          }
+                          onSelect={(selected) => {
+                            field.onChange(selected.map((opt) => opt.value));
+                          }}
                         />
                       </FormControl>
                     );
@@ -153,7 +154,7 @@ export const MembersIndicator = ({
           <Button variant="gray" size="sm" onClick={() => setOpen(false)}>
             Close
           </Button>
-          {canManageMembers && memberCount > 0 && (
+          {canManageMembers && (
             <Button
               onClick={() => handleSaveMembers(form.getValues("members") ?? [])}
               disabled={isLoading}

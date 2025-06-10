@@ -71,6 +71,7 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
     const orgMemberOptions =
       activeOrganization?.members
         .filter((m) => m.user?.id !== user?.id)
+        .filter((m) => !selected.some((s) => s.value === m.user?.id))
         .map((m) => {
           // Cast to our known type for proper type safety
           const member = m as unknown as OrganizationMember;
@@ -111,7 +112,9 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
         aria-disabled={disabled}
         {...props}
       >
-        {showEmptyIfNoMembers && orgMemberOptions.length === 0 ? (
+        {showEmptyIfNoMembers &&
+        selected.length === 0 &&
+        orgMemberOptions.length === 0 ? (
           <div className="flex flex-1 justify-center items-center h-full">
             <p className="text-sm text-center text-gray-10">{emptyMessage}</p>
           </div>
@@ -180,51 +183,54 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
                 </DropdownMenu>
               </div>
             )}
-            {(!showEmptyIfNoMembers || orgMemberOptions.length > 0) &&
-              selected.length > 0 && (
+            {!showEmptyIfNoMembers ||
+              orgMemberOptions.length > 0 ||
+              (selected.length > 0 && (
                 <div
                   className={clsx(
                     "flex flex-wrap gap-2 justify-start w-full",
                     orgMemberOptions.length > 0 ? "mt-2" : "mt-0"
                   )}
                 >
-                  {selected.map((tag) => (
-                    <div
-                      key={tag.value}
-                      className="flex gap-4 items-center hover:scale-[1.02] transition-transform h-full px-2 py-1.5 min-h-full text-xs rounded-xl bg-gray-3 text-gray-11 wobble"
-                    >
-                      <div className="flex gap-2 items-center">
-                        {tag.image ? (
-                          <Image
-                            src={tag.image}
-                            alt={tag.label}
-                            width={20}
-                            height={20}
-                            className="w-5 h-5 rounded-full"
-                          />
-                        ) : (
-                          <Avatar name={tag.label} className="w-5 h-5" />
-                        )}
-                        <p className="truncate text-[13px] text-gray-12">
-                          {tag.label}
-                        </p>
-                      </div>
-                      {tag.value !== user?.id && (
-                        <div
-                          onClick={() => handleRemove(tag)}
-                          className="flex justify-center items-center rounded-full transition-colors cursor-pointer size-6 bg-gray-6 hover:bg-gray-7"
-                          aria-label={`Remove ${tag.label}`}
-                        >
-                          <FontAwesomeIcon
-                            className="text-gray-12 size-3"
-                            icon={faXmark}
-                          />
+                  {selected
+                    .filter((tag) => tag.value !== user?.id)
+                    .map((tag) => (
+                      <div
+                        key={tag.value}
+                        className="flex gap-4 items-center hover:scale-[1.02] transition-transform h-full px-2 py-1.5 min-h-full text-xs rounded-xl bg-gray-3 text-gray-11 wobble"
+                      >
+                        <div className="flex gap-2 items-center">
+                          {tag.image ? (
+                            <Image
+                              src={tag.image}
+                              alt={tag.label}
+                              width={20}
+                              height={20}
+                              className="w-5 h-5 rounded-full"
+                            />
+                          ) : (
+                            <Avatar name={tag.label} className="w-5 h-5" />
+                          )}
+                          <p className="truncate text-[13px] text-gray-12">
+                            {tag.label}
+                          </p>
                         </div>
-                      )}
-                    </div>
-                  ))}
+                        {tag.value !== user?.id && (
+                          <div
+                            onClick={() => handleRemove(tag)}
+                            className="flex justify-center items-center rounded-full transition-colors cursor-pointer size-6 bg-gray-6 hover:bg-gray-7"
+                            aria-label={`Remove ${tag.label}`}
+                          >
+                            <FontAwesomeIcon
+                              className="text-gray-12 size-3"
+                              icon={faXmark}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    ))}
                 </div>
-              )}
+              ))}
           </>
         )}
       </div>
