@@ -149,7 +149,7 @@ export default function BrowseSpacesPage() {
                     <td className="px-6 py-4 text-sm text-gray-12">
                       {space.createdById === user?.id ? "Admin" : "Member"}
                     </td>
-                    <td>
+                    <td className="px-6">
                       {space.createdById === user?.id && !space.primary ? (
                         <div className="flex gap-2">
                           <Button

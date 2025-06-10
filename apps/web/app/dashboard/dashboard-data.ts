@@ -1,4 +1,5 @@
 import { db } from "@cap/database";
+import { userSelectProps } from "@cap/database/auth/session";
 import {
   organizationInvites,
   organizationMembers,
@@ -30,7 +31,7 @@ export type Spaces = Omit<
   videoCount: number;
 };
 
-export async function getDashboardData(userId: string) {
+export async function getDashboardData(user: typeof userSelectProps) {
   try {
     const organizationsWithMembers = await db()
       .select({
@@ -53,8 +54,8 @@ export async function getDashboardData(userId: string) {
       .leftJoin(users, eq(organizationMembers.userId, users.id))
       .where(
         or(
-          eq(organizations.ownerId, userId),
-          eq(organizationMembers.userId, userId)
+          eq(organizations.ownerId, user.id),
+          eq(organizationMembers.userId, user.id)
         )
       );
 
@@ -71,12 +72,19 @@ export async function getDashboardData(userId: string) {
         .where(inArray(organizationInvites.organizationId, organizationIds));
     }
 
-    // Find active organization ID
-    // (leave this to layout, or pass all orgs)
-
-    // Only fetch spaces for the first organization (can be customized)
     let spacesData: Spaces[] = [];
-    let activeOrganizationId = organizationIds[0];
+
+    // Find active organization ID
+
+    let activeOrganizationId = organizationIds.find(
+      (orgId) => orgId === user.activeOrganizationId
+    );
+
+    if (!activeOrganizationId && organizationIds.length > 0) {
+      activeOrganizationId = organizationIds[0];
+    }
+    // Only fetch spaces for the active organization
+
     if (activeOrganizationId) {
       spacesData = await db()
         .select({
@@ -89,7 +97,7 @@ export async function getDashboardData(userId: string) {
           createdById: spaces.createdById,
           iconUrl: spaces.iconUrl,
           memberCount: sql<number>`(
-            SELECT COUNT(*) FROM space_members WHERE space_members.spaceId = spaces.id AND space_members.userId != ${userId}
+            SELECT COUNT(*) FROM space_members WHERE space_members.spaceId = spaces.id AND space_members.userId != ${user.id}
           )`,
           videoCount: sql<number>`(
             SELECT COUNT(*) FROM space_videos WHERE space_videos.spaceId = spaces.id
@@ -98,25 +106,32 @@ export async function getDashboardData(userId: string) {
         .from(spaces)
         .where(eq(spaces.organizationId, activeOrganizationId));
 
-      // Get organization name for the "All spaces" entry
+      // Add a single 'All spaces' entry for the active organization
       const activeOrgInfo = organizationsWithMembers.find(
         (row) => row.organization.id === activeOrganizationId
       );
-
       if (activeOrgInfo) {
-        // Add "All spaces" entry for the active organization
         // Count all members in the organization
         const orgMemberCountResult = await db()
           .select({ value: sql<number>`COUNT(*)` })
           .from(organizationMembers)
-          .where(eq(organizationMembers.organizationId, activeOrgInfo.organization.id));
+          .where(
+            eq(
+              organizationMembers.organizationId,
+              activeOrgInfo.organization.id
+            )
+          );
         const orgMemberCount = orgMemberCountResult[0]?.value || 0;
 
         // Count all videos shared with the organization (via sharedVideos table)
         const orgVideoCountResult = await db()
-          .select({ value: sql<number>`COUNT(DISTINCT ${sharedVideos.videoId})` })
+          .select({
+            value: sql<number>`COUNT(DISTINCT ${sharedVideos.videoId})`,
+          })
           .from(sharedVideos)
-          .where(eq(sharedVideos.organizationId, activeOrgInfo.organization.id));
+          .where(
+            eq(sharedVideos.organizationId, activeOrgInfo.organization.id)
+          );
         const orgVideoCount = orgVideoCountResult[0]?.value || 0;
 
         const allSpacesEntry = {
@@ -131,7 +146,6 @@ export async function getDashboardData(userId: string) {
           createdById: activeOrgInfo.organization.ownerId,
           videoCount: orgVideoCount,
         } as const;
-
         spacesData = [allSpacesEntry, ...spacesData];
       }
     }

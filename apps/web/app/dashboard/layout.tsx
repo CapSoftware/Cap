@@ -25,11 +25,11 @@ export default async function DashboardLayout({
   let organizationSelect: Organization[] = [];
   let spacesData: Spaces[] = [];
   try {
-    const dashboardData = await getDashboardData(user.id);
+    const dashboardData = await getDashboardData(user);
     organizationSelect = dashboardData.organizationSelect;
     spacesData = dashboardData.spacesData;
   } catch (error) {
-    console.error('Failed to load dashboard data', error);
+    console.error("Failed to load dashboard data", error);
     organizationSelect = [];
     spacesData = [];
   }
