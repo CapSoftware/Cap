@@ -183,6 +183,10 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 
             if (edit && space?.id) {
               formData.append("id", space.id);
+              // If the user removed the icon, send a removeIcon flag
+              if (selectedFile === null && space.iconUrl) {
+                formData.append("removeIcon", "true");
+              }
               await updateSpace(formData);
               toast.success("Space updated successfully");
             } else {

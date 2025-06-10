@@ -22,7 +22,6 @@ export default function BrowseSpacesPage() {
   const [showSpaceDialog, setShowSpaceDialog] = useState(false);
   const [editSpace, setEditSpace] = useState<any | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [isDeleting, setIsDeleting] = useState(false);
 
   const filteredSpaces = spacesData?.filter((space: Spaces) =>
     space.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -113,21 +112,20 @@ export default function BrowseSpacesPage() {
             )}
             {filteredSpaces &&
               filteredSpaces.map((space: Spaces) => {
-                const isOwner = user?.id === space.createdById;
                 return (
                   <tr
                     key={space.id}
                     onClick={() => router.push(`/dashboard/spaces/${space.id}`)}
                     className="border-t transition-colors cursor-pointer hover:bg-gray-2 border-gray-3"
                   >
-                    <td className="flex gap-3 items-center px-6 py-3">
+                    <td className="flex gap-3 items-center px-6 py-4">
                       {space.iconUrl ? (
                         <Image
                           src={space.iconUrl}
                           alt={space.name}
                           width={24}
                           height={24}
-                          className="object-cover w-7 h-7 rounded-full"
+                          className="object-cover flex-shrink-0 w-7 h-7 rounded-full"
                         />
                       ) : (
                         <Avatar
@@ -140,20 +138,20 @@ export default function BrowseSpacesPage() {
                         {space.name}
                       </span>
                     </td>
-                    <td className="px-6 py-3 text-sm text-gray-12">
+                    <td className="px-6 py-4 text-sm text-gray-12">
                       {space.memberCount} member
                       {space.memberCount === 1 ? "" : "s"}
                     </td>
-                    <td className="px-6 py-3 text-sm text-gray-12">
+                    <td className="px-6 py-4 text-sm text-gray-12">
                       {space.videoCount} video
                       {space.videoCount === 1 ? "" : "s"}
                     </td>
-                    <td className="px-6 py-3 text-sm text-gray-12">
+                    <td className="px-6 py-4 text-sm text-gray-12">
                       {space.createdById === user?.id ? "Admin" : "Member"}
                     </td>
-                    <td className="flex gap-3 px-6 py-3 text-right">
+                    <td>
                       {space.createdById === user?.id && !space.primary ? (
-                        <>
+                        <div className="flex gap-2">
                           <Button
                             variant="gray"
                             className="size-8 p-0 min-w-[unset]"
@@ -187,7 +185,7 @@ export default function BrowseSpacesPage() {
                               className="size-3"
                             />
                           </Button>
-                        </>
+                        </div>
                       ) : (
                         <div>
                           <p>...</p>
@@ -202,7 +200,6 @@ export default function BrowseSpacesPage() {
       </div>
       <SpaceDialog
         open={showSpaceDialog}
-        excludeCurrentUser
         onClose={() => {
           setShowSpaceDialog(false);
           setEditSpace(null);
