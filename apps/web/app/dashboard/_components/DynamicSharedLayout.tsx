@@ -1,6 +1,6 @@
 "use client";
 import AdminMobileNav from "@/app/dashboard/_components/AdminNavbar/AdminMobileNav";
-import { Organization, Space } from "@/app/dashboard/layout";
+import { Organization, Spaces } from "@/app/dashboard/layout";
 import { users } from "@cap/database/schema";
 import Cookies from "js-cookie";
 import { createContext, useContext, useEffect, useState } from "react";
@@ -11,10 +11,10 @@ import { usePathname } from "next/navigation";
 type SharedContext = {
   organizationData: Organization[] | null;
   activeOrganization: Organization | null;
-  spacesData: Space[] | null;
-  userSpaces: Space[] | null;
-  sharedSpaces: Space[] | null;
-  activeSpace: Space | null;
+  spacesData: Spaces[] | null;
+  userSpaces: Spaces[] | null;
+  sharedSpaces: Spaces[] | null;
+  activeSpace: Spaces | null;
   user: typeof users.$inferSelect;
   isSubscribed: boolean;
   toggleSidebarCollapsed: () => void;
@@ -86,7 +86,7 @@ export default function DynamicSharedLayout({
     ) || null;
 
   // Get activeSpace from URL if on a space page
-  const [activeSpace, setActiveSpace] = useState<Space | null>(null);
+  const [activeSpace, setActiveSpace] = useState<Spaces | null>(null);
 
   useEffect(() => {
     const spaceIdMatch = pathname.match(/\/dashboard\/spaces\/([^\/]+)/);

@@ -187,7 +187,7 @@ export default function BrowseSpacesPage() {
                           </Button>
                         </div>
                       ) : (
-                        <div>
+                        <div className="h-[32px]">
                           <p>...</p>
                         </div>
                       )}
