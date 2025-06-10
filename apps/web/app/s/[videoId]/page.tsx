@@ -50,10 +50,7 @@ type VideoWithOrganization = typeof videos.$inferSelect & {
   hasPassword?: boolean;
 };
 
-export async function generateMetadata(
-  { params }: Props,
-  parent: ResolvingMetadata
-): Promise<Metadata> {
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const videoId = params.videoId as string;
   console.log(
     "[generateMetadata] Fetching video metadata for videoId:",
@@ -625,7 +622,7 @@ async function AuthorizedContent({
         <a
           target="_blank"
           href={`/?ref=video_${video.id}`}
-          className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 bg-gray-1 rounded-full new-card-style w-fit"
+          className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 rounded-full bg-gray-1 new-card-style w-fit"
         >
           <span className="text-sm">Recorded with</span>
           <Logo className="w-14 h-auto" />

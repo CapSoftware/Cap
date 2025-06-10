@@ -107,6 +107,7 @@ export const SharedCaps = ({
         )}
         <EmptySharedCapState
           organizationName={activeOrganization?.organization.name || ""}
+          type="space"
         />
       </div>
     );

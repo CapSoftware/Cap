@@ -3,10 +3,12 @@ import { useTheme } from "../../../_components/DynamicSharedLayout";
 
 interface EmptySharedCapStateProps {
   organizationName: string;
+  type?: "space" | "organization";
 }
 
 export const EmptySharedCapState: React.FC<EmptySharedCapStateProps> = ({
   organizationName,
+  type = "organization",
 }) => {
   const { theme } = useTheme();
   const { RiveComponent: EmptyCap } = useRive({
@@ -28,7 +30,7 @@ export const EmptySharedCapState: React.FC<EmptySharedCapStateProps> = ({
         </p>
         <p className="max-w-md text-md text-gray-10">
           There are no Caps shared with {organizationName} yet. Ask your team
-          members to share their Caps with this organization.
+          members to share their Caps with this {type}.
         </p>
       </div>
     </div>
