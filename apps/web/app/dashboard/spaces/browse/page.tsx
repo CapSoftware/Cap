@@ -12,7 +12,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faEdit, faPlus, faTrash } from "@fortawesome/free-solid-svg-icons";
 import SpaceDialog from "../../_components/AdminNavbar/SpaceDialog";
 
-import { Spaces } from "../../layout";
+import { Spaces } from "../../dashboard-data";
 import { deleteSpace } from "@/actions/organization/delete-space";
 import { toast } from "sonner";
 import { useParams } from "next/navigation";
@@ -163,7 +163,9 @@ export default function BrowseSpacesPage() {
                                 name: space.name,
                                 members: (
                                   activeOrganization?.members || []
-                                ).map((m) => m.user.id),
+                                ).map(
+                                  (m: { user: { id: string } }) => m.user.id
+                                ),
                                 iconUrl: space.iconUrl,
                               });
                               setShowSpaceDialog(true);
