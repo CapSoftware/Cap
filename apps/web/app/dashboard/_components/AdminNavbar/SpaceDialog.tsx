@@ -36,7 +36,7 @@ interface SpaceDialogProps {
     id: string;
     name: string;
     members: string[];
-    icon?: string;
+    iconUrl?: string;
   } | null;
   onSpaceUpdated?: () => void;
 }
@@ -118,7 +118,7 @@ export interface NewSpaceFormProps {
     id: string;
     name: string;
     members: string[];
-    icon?: string;
+    iconUrl?: string;
   } | null;
 }
 
@@ -135,10 +135,6 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      name: space?.name || "",
-      members: space?.members || [],
-    },
-    values: {
       name: space?.name || "",
       members: space?.members || [],
     },
@@ -276,6 +272,7 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
             <FileInput
               id="icon"
               name="icon"
+              initialPreviewUrl={space?.iconUrl || null}
               notDraggingClassName="hover:bg-gray-3"
               onChange={setSelectedFile}
               disabled={isUploading}

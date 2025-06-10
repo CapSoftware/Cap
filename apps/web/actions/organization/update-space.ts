@@ -5,13 +5,14 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { spaces, spaceMembers } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { uploadIcon } from "./upload-icon";
+import { uploadSpaceIcon } from "./upload-space-icon";
 import { v4 as uuidv4 } from "uuid";
 import { nanoIdLength } from "@cap/database/helpers";
 
 export async function updateSpace(formData: FormData) {
   const user = await getCurrentUser();
   if (!user) return { success: false, error: "Unauthorized" };
+
   const id = formData.get("id") as string;
   const name = formData.get("name") as string;
   const members = formData.getAll("members[]") as string[];
@@ -36,7 +37,7 @@ export async function updateSpace(formData: FormData) {
 
   // Update icon if provided
   if (iconFile && iconFile.size > 0) {
-    await uploadIcon(id, iconFile);
+    await uploadSpaceIcon(formData, id);
   }
 
   revalidatePath("/dashboard");

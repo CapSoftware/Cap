@@ -166,7 +166,7 @@ export default function BrowseSpacesPage() {
                                 members: (
                                   activeOrganization?.members || []
                                 ).map((m) => m.user.id),
-                                icon: space.iconUrl,
+                                iconUrl: space.iconUrl,
                               });
                               setShowSpaceDialog(true);
                             }}
