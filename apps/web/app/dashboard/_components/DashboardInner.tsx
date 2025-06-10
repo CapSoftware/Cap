@@ -6,6 +6,7 @@ import {
 } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { buildEnv } from "@cap/env";
 import {
   Command,
   CommandGroup,
@@ -173,7 +174,7 @@ const User = () => {
                   </span>
                 </CommandItem>
               </Link>
-              {!isSubscribed && (
+              {!isSubscribed && buildEnv.NEXT_PUBLIC_IS_CAP && (
                 <CommandItem
                   className="px-2 py-1.5 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-5 group"
                   onSelect={() => {

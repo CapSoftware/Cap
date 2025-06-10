@@ -2,6 +2,7 @@ mod audio;
 mod auth;
 mod camera;
 mod captions;
+mod deeplink_actions;
 mod flags;
 mod general_settings;
 mod hotkeys;
@@ -67,6 +68,7 @@ use std::{
 };
 use tauri::Window;
 use tauri::{AppHandle, Manager, State, WindowEvent};
+use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_opener::OpenerExt;
@@ -2016,6 +2018,14 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 .await;
             });
 
+            // Registering deep links at runtime is not possible on macOS,
+            // so deep links can only be tested on the bundled application,
+            // which must be installed in the /Applications directory.
+            let app_handle = app.clone();
+            app.deep_link().on_open_url(move |event| {
+                deeplink_actions::handle(&app_handle, event.urls());
+            });
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -2048,7 +2058,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 
                                 tokio::spawn(EditorInstances::remove(window.clone()));
                             }
-                            CapWindowId::Settings | CapWindowId::Upgrade => {
+                            CapWindowId::Settings
+                            | CapWindowId::Upgrade
+                            | CapWindowId::ModeSelect => {
                                 if let Some(window) = CapWindowId::Main.get(&app) {
                                     let _ = window.show();
                                 }

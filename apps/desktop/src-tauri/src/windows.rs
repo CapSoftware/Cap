@@ -130,6 +130,14 @@ impl CapWindowId {
         app.get_webview_window(&label)
     }
 
+    #[cfg(target_os = "windows")]
+    pub fn should_have_decorations(&self) -> bool {
+        matches!(
+            self,
+            Self::Setup | Self::Settings | Self::Editor { .. } | Self::ModeSelect
+        )
+    }
+
     #[cfg(target_os = "macos")]
     pub fn traffic_lights_position(&self) -> Option<Option<LogicalPosition<f64>>> {
         match self {
@@ -219,15 +227,21 @@ impl ShowCapWindow {
                     Box::pin(Self::Setup.show(app)).await?
                 }
             }
-            Self::Settings { page } => self
-                .window_builder(
+            Self::Settings { page } => {
+                // Hide main window when settings window opens
+                if let Some(main) = CapWindowId::Main.get(app) {
+                    let _ = main.hide();
+                }
+
+                self.window_builder(
                     app,
                     format!("/settings/{}", page.clone().unwrap_or_default()),
                 )
                 .resizable(true)
                 .maximized(false)
                 .center()
-                .build()?,
+                .build()?
+            }
             Self::Editor { .. } => {
                 if let Some(main) = CapWindowId::Main.get(app) {
                     let _ = main.close();
@@ -242,25 +256,64 @@ impl ShowCapWindow {
 
                 window
             }
-            Self::Upgrade => self
-                .window_builder(app, "/upgrade")
-                .resizable(false)
-                .focused(true)
-                .always_on_top(true)
-                .maximized(false)
-                .shadow(true)
-                .transparent(true)
-                .center()
-                .build()?,
-            Self::ModeSelect => self
-                .window_builder(app, "/mode-select")
-                .resizable(false)
-                .maximized(false)
-                .maximizable(false)
-                .center()
-                .focused(true)
-                .shadow(true)
-                .build()?,
+            Self::Upgrade => {
+                // Hide main window when upgrade window opens
+                if let Some(main) = CapWindowId::Main.get(app) {
+                    let _ = main.hide();
+                }
+
+                let mut builder = self
+                    .window_builder(app, "/upgrade")
+                    .resizable(false)
+                    .focused(true)
+                    .always_on_top(true)
+                    .maximized(false)
+                    .shadow(true)
+                    .center();
+
+                #[cfg(target_os = "windows")]
+                {
+                    if !id.should_have_decorations() {
+                        builder = builder.transparent(true);
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    builder = builder.transparent(true);
+                }
+
+                builder.build()?
+            }
+            Self::ModeSelect => {
+                // Hide main window when mode select window opens
+                if let Some(main) = CapWindowId::Main.get(app) {
+                    let _ = main.hide();
+                }
+
+                let mut builder = self
+                    .window_builder(app, "/mode-select")
+                    .inner_size(900.0, 500.0)
+                    .min_inner_size(900.0, 500.0)
+                    .resizable(true)
+                    .maximized(false)
+                    .maximizable(false)
+                    .center()
+                    .focused(true)
+                    .shadow(true);
+
+                #[cfg(target_os = "windows")]
+                {
+                    if !id.should_have_decorations() {
+                        builder = builder.transparent(true);
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    builder = builder.transparent(true);
+                }
+
+                builder.build()?
+            }
             Self::Camera => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
 
@@ -516,7 +569,9 @@ impl ShowCapWindow {
 
         #[cfg(target_os = "windows")]
         {
-            builder = builder.decorations(false);
+            if !id.should_have_decorations() {
+                builder = builder.decorations(false);
+            }
         }
 
         builder

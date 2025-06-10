@@ -1,12 +1,13 @@
 "use client";
 import AdminMobileNav from "@/app/dashboard/_components/AdminNavbar/AdminMobileNav";
-import { Organization, Spaces } from "@/app/dashboard/layout";
 import { users } from "@cap/database/schema";
 import Cookies from "js-cookie";
 import { createContext, useContext, useEffect, useState } from "react";
 import AdminDesktopNav from "./AdminNavbar/AdminDesktopNav";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { usePathname } from "next/navigation";
+import { buildEnv } from "@cap/env";
+import { Organization, Spaces } from "../dashboard-data";
 
 type SharedContext = {
   organizationData: Organization[] | null;
@@ -157,10 +158,12 @@ export default function DynamicSharedLayout({
           </div>
 
           {/* Global upgrade modal that persists regardless of navigation state */}
-          <UpgradeModal
-            open={upgradeModalOpen}
-            onOpenChange={setUpgradeModalOpen}
-          />
+          {buildEnv.NEXT_PUBLIC_IS_CAP && (
+            <UpgradeModal
+              open={upgradeModalOpen}
+              onOpenChange={setUpgradeModalOpen}
+            />
+          )}
         </div>
       </Context.Provider>
     </ThemeContext.Provider>

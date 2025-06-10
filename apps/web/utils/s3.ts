@@ -9,7 +9,7 @@ import {
 import type { s3Buckets } from "@cap/database/schema";
 import type { InferSelectModel } from "drizzle-orm";
 import { decrypt } from "@cap/database/crypto";
-import { buildEnv, serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 import * as S3Presigner from "@aws-sdk/s3-request-presigner";
 import * as CloudFrontPresigner from "@aws-sdk/cloudfront-signer";
 import { S3_BUCKET_URL } from "@cap/utils";
