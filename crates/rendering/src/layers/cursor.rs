@@ -219,15 +219,19 @@ impl CursorLayer {
             let cursor_texture_size_aspect =
                 cursor_texture_size.width as f32 / cursor_texture_size.height as f32;
 
+            let screen_size = constants.options.screen_size;
             let cursor_size_percentage = if uniforms.cursor_size <= 0.0 {
                 100.0
             } else {
                 uniforms.cursor_size / 100.0
             };
 
+            let factor =
+                STANDARD_CURSOR_HEIGHT / screen_size.y as f32 * uniforms.output_size.1 as f32;
+
             XY::new(
-                STANDARD_CURSOR_HEIGHT * cursor_texture_size_aspect * cursor_size_percentage,
-                STANDARD_CURSOR_HEIGHT * cursor_size_percentage,
+                factor * cursor_texture_size_aspect * cursor_size_percentage,
+                factor * cursor_size_percentage,
             )
         };
 
