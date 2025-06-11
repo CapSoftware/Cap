@@ -66,8 +66,6 @@ function Page() {
     width: number;
     data: ImageData;
   } | null>();
-  const [isLoading, setIsLoading] = createSignal(true);
-  const [error, setError] = createSignal<string | null>(null);
 
   const [ws, isConnected] = createImageDataWS(
     `ws://localhost:${cameraWsPort}`,
@@ -75,24 +73,15 @@ function Page() {
       setLatestFrame(imageData);
       const ctx = cameraCanvasRef?.getContext("2d");
       ctx?.putImageData(imageData.data, 0, 0);
-      setIsLoading(false);
     }
   );
-
-  createEffect(() => {
-    if (!isConnected()) {
-      setIsLoading(true);
-      setError("Failed to connect to the camera. Please try again.");
-    } else {
-      setError(null);
-    }
-  });
 
   // Attempt to reconnect every 5 seconds if not connected
   const reconnectInterval = setInterval(() => {
     if (!isConnected()) {
       console.log("Attempting to reconnect...");
       ws.close();
+
       // Create a new WebSocket connection
       const newWs = createImageDataWS(
         `ws://localhost:${cameraWsPort}`,
@@ -100,7 +89,6 @@ function Page() {
           setLatestFrame(imageData);
           const ctx = cameraCanvasRef?.getContext("2d");
           ctx?.putImageData(imageData.data, 0, 0);
-          setIsLoading(false);
         }
       );
       // Update the ws reference
