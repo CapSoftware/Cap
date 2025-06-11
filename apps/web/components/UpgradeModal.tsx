@@ -1,5 +1,6 @@
 "use client";
 
+import { buildEnv } from "@cap/env";
 import { Button, Dialog, DialogContent, DialogTitle, Switch } from "@cap/ui";
 import { getProPlanId } from "@cap/utils";
 import NumberFlow from "@number-flow/react";
@@ -57,6 +58,8 @@ const modalVariants = {
 };
 
 export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
+  if (buildEnv.NEXT_PUBLIC_IS_CAP !== "true") return;
+
   const [proLoading, setProLoading] = useState(false);
   const [isAnnual, setIsAnnual] = useState(true);
   const [proQuantity, setProQuantity] = useState(1);
@@ -166,7 +169,7 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="sm:max-w-[1100px] w-[calc(100%-20px)] custom-scroll bg-gray-2 border 
+        className="sm:max-w-[1100px] w-[calc(100%-20px)] custom-scroll bg-gray-2 border
       border-gray-4 overflow-y-auto md:overflow-hidden max-h-[90vh] p-0"
       >
         <DialogTitle className="sr-only">Upgrade to Cap Pro</DialogTitle>

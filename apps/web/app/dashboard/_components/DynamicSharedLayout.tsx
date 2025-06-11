@@ -6,6 +6,7 @@ import { users } from "@cap/database/schema";
 import Cookies from "js-cookie";
 import { createContext, useContext, useEffect, useState } from "react";
 import AdminDesktopNav from "./AdminNavbar/AdminDesktopNav";
+import { buildEnv } from "@cap/env";
 
 type SharedContext = {
   organizationData: Organization[] | null;
@@ -107,10 +108,12 @@ export default function DynamicSharedLayout({
           </div>
 
           {/* Global upgrade modal that persists regardless of navigation state */}
-          <UpgradeModal
-            open={upgradeModalOpen}
-            onOpenChange={setUpgradeModalOpen}
-          />
+          {buildEnv.NEXT_PUBLIC_IS_CAP && (
+            <UpgradeModal
+              open={upgradeModalOpen}
+              onOpenChange={setUpgradeModalOpen}
+            />
+          )}
         </div>
       </Context.Provider>
     </ThemeContext.Provider>
