@@ -4,7 +4,6 @@ import {
   useSharedContext,
   useTheme,
 } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { buildEnv } from "@cap/env";
 import {
@@ -14,6 +13,7 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
+  Avatar,
 } from "@cap/ui";
 import { MembersDialog } from "@/app/dashboard/spaces/[spaceId]/components/MembersDialog";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -79,7 +79,7 @@ export default function DashboardInner({
                 />
               ) : (
                 <Avatar
-                  letterClass="text-gray-1 text-xs"
+                  letterClass="text-xs"
                   className="relative flex-shrink-0 size-5"
                   name={activeSpace?.name}
                 />

@@ -6,12 +6,12 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
   DropdownMenuItem,
+  Avatar,
 } from "@cap/ui";
 import { ChevronDown } from "lucide-react";
 import clsx from "clsx";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faXmark } from "@fortawesome/free-solid-svg-icons";
-import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 import Image from "next/image";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 

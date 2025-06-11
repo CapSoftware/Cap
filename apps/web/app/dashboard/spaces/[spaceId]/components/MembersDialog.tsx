@@ -1,5 +1,10 @@
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@cap/ui";
-import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  Avatar,
+} from "@cap/ui";
 
 interface OrganizationMember {
   id: string;

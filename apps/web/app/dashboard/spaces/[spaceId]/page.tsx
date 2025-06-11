@@ -35,10 +35,11 @@ type OrganizationData = {
   ownerId: string;
 };
 
-type SpaceMemberData = {
+export type SpaceMemberData = {
   id: string;
   userId: string;
   role: string;
+  image?: string | null;
   name: string | null;
   email: string;
 };

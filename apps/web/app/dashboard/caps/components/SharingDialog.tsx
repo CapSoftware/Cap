@@ -1,4 +1,3 @@
-import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Tooltip } from "@/components/Tooltip";
 import {
@@ -9,6 +8,7 @@ import {
   DialogHeader,
   DialogTitle,
   Input,
+  Avatar,
 } from "@cap/ui";
 import { faShareNodes } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -256,7 +256,7 @@ const SpaceCard = ({
           </div>
         ) : (
           <Avatar
-            letterClass="text-gray-1 text-[11px]"
+            letterClass="text-[11px]"
             className="relative z-10 flex-shrink-0 size-5"
             name={space.name}
           />

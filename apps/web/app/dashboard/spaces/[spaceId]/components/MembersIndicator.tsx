@@ -23,13 +23,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { toast } from "sonner";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-
-type SpaceMemberData = {
-  id: string;
-  userId: string;
-  name: string | null;
-  email: string;
-};
+import { SpaceMemberData } from "../page";
 
 type MembersIndicatorProps = {
   memberCount: number;
@@ -98,7 +92,7 @@ export const MembersIndicator = ({
       <DialogTrigger asChild>
         <div className="relative mb-4">
           <Button variant="gray" size="sm" className="z-10">
-            <Avatar className="mr-1 w-5 h-5" name="Members" />
+            <FontAwesomeIcon className="mr-1 size-4" icon={faUserGroup} />
             {memberCount} members
           </Button>
         </div>

@@ -15,6 +15,7 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
+  Avatar,
 } from "@cap/ui";
 import { classNames } from "@cap/utils";
 import { Check, ChevronDown, Plus } from "lucide-react";
@@ -22,7 +23,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 import { NewOrganization } from "@/components/forms/NewOrganization";
 import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
@@ -142,8 +142,13 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                       </div>
                     ) : (
                       <Avatar
-                        letterClass="text-gray-1 text-[10px]"
-                        className="relative flex-shrink-0 mx-auto size-[18px]"
+                        letterClass={clsx(
+                          sidebarCollapsed ? "text-sm" : "text-[11px]"
+                        )}
+                        className={clsx(
+                          "relative flex-shrink-0 mx-auto",
+                          sidebarCollapsed ? "size-6" : "size-5"
+                        )}
                         name={
                           activeOrg?.organization.name ??
                           "No organization found"
@@ -210,7 +215,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                               </div>
                             ) : (
                               <Avatar
-                                letterClass="text-gray-1 text-xs"
+                                letterClass="text-xs"
                                 className="relative flex-shrink-0 size-5"
                                 name={organization.organization.name}
                               />
@@ -397,5 +402,3 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
     </Dialog>
   );
 };
-
-export default AdminNavItems;

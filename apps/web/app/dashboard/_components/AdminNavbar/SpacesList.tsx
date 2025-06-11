@@ -11,10 +11,9 @@ import {
   faXmark,
 } from "@fortawesome/free-solid-svg-icons";
 import { deleteSpace } from "@/actions/organization/delete-space";
-import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 import clsx from "clsx";
 import { SpaceDialog } from "./SpaceDialog";
-import { Button } from "@cap/ui";
+import { Button, Avatar } from "@cap/ui";
 import { shareCap } from "@/actions/caps/share";
 import { toast } from "sonner";
 import { useParams, usePathname, useRouter } from "next/navigation";
@@ -279,7 +278,6 @@ export const SpacesList = ({
                     ) : (
                       <Avatar
                         letterClass={clsx(
-                          "text-gray-1",
                           sidebarCollapsed ? "text-sm" : "text-[11px]"
                         )}
                         className={clsx(

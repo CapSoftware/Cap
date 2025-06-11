@@ -9,6 +9,7 @@ import { CapPagination } from "../../caps/components/CapPagination";
 import { EmptySharedCapState } from "./components/EmptySharedCapState";
 import { SharedCapCard } from "./components/SharedCapCard";
 import { MembersIndicator } from "./components/MembersIndicator";
+import { SpaceMemberData } from "./page";
 
 type SharedVideoData = {
   id: string;
@@ -28,18 +29,10 @@ type SpaceData = {
   createdById: string;
 };
 
-type SpaceMemberData = {
-  id: string;
-  userId: string;
-  name: string | null;
-  email: string;
-};
-
 export const SharedCaps = ({
   data,
   count,
   spaceData,
-  hideSharedWith,
   spaceMembers,
   organizationMembers,
   currentUserId,

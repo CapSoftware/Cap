@@ -2,12 +2,11 @@
 import { useState } from "react";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import Image from "next/image";
-import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 
 import { Search } from "lucide-react";
 import { Input } from "@cap/ui";
 import { useRouter } from "next/navigation";
-import { Button } from "@cap/ui";
+import { Button, Avatar } from "@cap/ui";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faEdit, faPlus, faTrash } from "@fortawesome/free-solid-svg-icons";
 import SpaceDialog from "../../_components/AdminNavbar/SpaceDialog";
