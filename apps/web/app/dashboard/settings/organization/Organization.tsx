@@ -23,6 +23,9 @@ export const Organization = () => {
   const [isInviteDialogOpen, setIsInviteDialogOpen] = useState(false);
   const ownerToastShown = useRef(false);
   const [saveLoading, setSaveLoading] = useState(false);
+  const [showCapBranding, setShowCapBranding] = useState(
+    activeOrganization?.organization.showCapBranding ?? true
+  );
 
   const showOwnerToast = useCallback(() => {
     if (!ownerToastShown.current) {
@@ -52,6 +55,7 @@ export const Organization = () => {
         await updateOrganizationDetails(
           organizationName,
           allowedEmailDomain,
+          showCapBranding,
           activeOrganization?.organization.id as string
         );
         toast.success("Settings updated successfully");
@@ -63,7 +67,13 @@ export const Organization = () => {
         setSaveLoading(false);
       }
     },
-    [isOwner, showOwnerToast, activeOrganization?.organization.id, router]
+    [
+      isOwner,
+      showOwnerToast,
+      activeOrganization?.organization.id,
+      router,
+      showCapBranding,
+    ]
   );
 
   const handleManageBilling = useCallback(async () => {
@@ -102,6 +112,8 @@ export const Organization = () => {
           saveLoading={saveLoading}
           showOwnerToast={showOwnerToast}
           organizationName={organizationName}
+          showCapBranding={showCapBranding}
+          setShowCapBranding={setShowCapBranding}
         />
         <CustomDomainIconCard
           isOwner={isOwner}

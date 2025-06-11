@@ -141,6 +141,7 @@ export const organizations = mysqlTable(
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
     workosOrganizationId: varchar("workosOrganizationId", { length: 255 }),
     workosConnectionId: varchar("workosConnectionId", { length: 255 }),
+    showCapBranding: boolean("showCapBranding").notNull().default(true),
   },
   (table) => ({
     ownerIdIndex: index("owner_id_idx").on(table.ownerId),

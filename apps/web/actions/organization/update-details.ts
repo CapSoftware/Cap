@@ -9,6 +9,7 @@ import { revalidatePath } from "next/cache";
 export async function updateOrganizationDetails(
   organizationName: string,
   allowedEmailDomain: string,
+  showCapBranding: boolean,
   organizationId: string
 ) {
   const user = await getCurrentUser();
@@ -35,6 +36,7 @@ export async function updateOrganizationDetails(
     .set({
       name: organizationName,
       allowedEmailDomain: allowedEmailDomain || null,
+      showCapBranding,
     })
     .where(eq(organizations.id, organizationId));
 

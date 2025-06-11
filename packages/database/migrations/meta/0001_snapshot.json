@@ -610,6 +610,14 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
+        },
+        "showCapBranding": {
+          "name": "showCapBranding",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "true"
         }
       },
       "indexes": {
