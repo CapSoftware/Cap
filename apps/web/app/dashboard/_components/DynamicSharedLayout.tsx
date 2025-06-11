@@ -106,9 +106,6 @@ export default function DynamicSharedLayout({
     Cookies.set("theme", newTheme, {
       expires: 365,
     });
-    // Add the theme-transition class to body for smoother background transitions
-    document.body.classList.add("theme-transition");
-    document.body.className = `${newTheme} theme-transition`;
   };
   useEffect(() => {
     if (Cookies.get("theme")) {
