@@ -4,6 +4,7 @@ import {
   useSharedContext,
   useTheme,
 } from "@/app/dashboard/_components/DynamicSharedLayout";
+import { useEffect } from "react";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { buildEnv } from "@cap/env";
 import {
@@ -92,12 +93,18 @@ export default function DashboardInner({
         <div className="flex gap-4 items-center">
           <div
             onClick={() => {
-              setThemeHandler(theme === "light" ? "dark" : "light");
+              if (document.startViewTransition) {
+                document.startViewTransition(() => {
+                  setThemeHandler(theme === "light" ? "dark" : "light");
+                });
+              } else {
+                setThemeHandler(theme === "light" ? "dark" : "light");
+              }
             }}
             className="hidden justify-center items-center rounded-full transition-colors cursor-pointer bg-gray-3 lg:flex hover:bg-gray-5 size-9"
           >
             <FontAwesomeIcon
-              className="text-gray-12 size-3.5"
+              className="text-gray-12 size-3.5 view-transition-theme-icon"
               icon={theme === "dark" ? faMoon : faSun}
             />
           </div>
