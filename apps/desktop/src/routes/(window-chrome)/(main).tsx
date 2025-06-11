@@ -409,13 +409,12 @@ function Page() {
         </div>
       </div>
       <CameraSelect
-        disabled={setCamera.isPending}
         options={cameras}
         value={options.cameraLabel() ?? null}
         onChange={(v) => setCamera.mutate(v)}
       />
       <MicrophoneSelect
-        disabled={mics.isPending || setMicInput.isPending}
+        disabled={mics.isPending}
         options={mics.data ?? []}
         // this prevents options.micName() from suspending on initial load
         value={mics.isPending ? rawOptions.micName : options.micName() ?? null}

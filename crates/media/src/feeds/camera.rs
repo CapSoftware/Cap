@@ -3,9 +3,11 @@ use ffmpeg::format::Pixel;
 use flume::{Receiver, Sender, TryRecvError, TrySendError};
 use nokhwa::{pixel_format::RgbAFormat, utils::*, Camera};
 use std::{
+    sync::Arc,
     thread::{self},
     time::SystemTime,
 };
+use tokio::sync::Mutex;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
@@ -66,10 +68,25 @@ impl CameraFeed {
             camera_info,
             video_info,
             control,
-            // join_handle,
         };
 
         Ok(camera_feed)
+    }
+
+    /// Initialize camera asynchronously, returning a receiver immediately.
+    /// The actual initialization happens in a background task.
+    /// Dropping the receiver cancels the initialization.
+    pub fn init_async(selected_camera: &str) -> flume::Receiver<Result<CameraFeed, MediaError>> {
+        let (tx, rx) = flume::bounded(1);
+        let selected_camera = selected_camera.to_string();
+
+        tokio::spawn(async move {
+            let result = Self::init(&selected_camera).await;
+            // Only send if receiver still exists
+            let _ = tx.send(result);
+        });
+
+        rx
     }
 
     pub fn list_cameras() -> Vec<String> {

@@ -48,6 +48,7 @@ use notifications::NotificationType;
 use png::{ColorType, Encoder};
 use recording::InProgressRecording;
 use relative_path::RelativePathBuf;
+
 use scap::capturer::Capturer;
 use scap::frame::Frame;
 use scap::frame::VideoFrame;
@@ -187,33 +188,65 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
 #[tauri::command]
 #[specta::specta]
 async fn set_camera_input(
-    app_handle: AppHandle,
     state: MutableState<'_, App>,
     label: Option<String>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let mut app = state.write().await;
 
-    let res = match (&label, app.camera_feed.as_ref()) {
-        (Some(label), Some(camera_feed)) => camera_feed
-            .lock()
-            .await
-            .switch_cameras(label)
-            .await
-            .map_err(|e| e.to_string()),
-        (Some(label), None) => CameraFeed::init(label)
-            .await
-            .map(|feed| {
-                feed.attach(app.camera_tx.clone());
-                app.camera_feed = Some(Arc::new(Mutex::new(feed)));
-            })
-            .map_err(|e| e.to_string()),
-        (None, _) => {
-            app.camera_feed.take();
-            Ok(())
+    match (&label, app.camera_feed.as_ref()) {
+        (Some(label), Some(camera_feed)) => {
+            // Try to switch cameras on existing feed
+            camera_feed
+                .lock()
+                .await
+                .switch_cameras(label)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(true)
         }
-    };
+        (Some(label), None) => {
+            let camera_tx = app.camera_tx.clone();
+            drop(app);
 
-    res
+            let init_rx = CameraFeed::init_async(label);
+
+            loop {
+                tokio::select! {
+                    result = init_rx.recv_async() => {
+                        match result {
+                            Ok(Ok(feed)) => {
+                                let mut app = state.write().await;
+                                // Only attach if camera is still None
+                                if app.camera_feed.is_none() {
+                                    feed.attach(camera_tx);
+                                    app.camera_feed = Some(Arc::new(Mutex::new(feed)));
+                                    return Ok(true);
+                                } else {
+                                    // Camera state changed while we were initializing
+                                    return Ok(false);
+                                }
+                            }
+                            Ok(Err(e)) => return Err(e.to_string()),
+                            Err(_) => return Ok(false), // Channel closed
+                        }
+                    }
+                    // Periodically check if we should abandon this initialization
+                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
+                        let app = state.read().await;
+
+                        if app.camera_feed.is_some() {
+                            return Ok(false);
+                        }
+                    }
+                }
+            }
+        }
+        (None, _) => {
+            // User wants no camera
+            app.camera_feed.take();
+            Ok(true)
+        }
+    }
 }
 
 #[derive(specta::Type, Serialize, tauri_specta::Event, Clone)]
