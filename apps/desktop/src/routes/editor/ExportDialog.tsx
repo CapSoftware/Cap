@@ -710,7 +710,7 @@ export function ExportDialog() {
                                   <IconLucideCheck class="text-gray-1 size-5" />
                                 </div>
                                 <div class="flex flex-col gap-1 items-center">
-                                  <h1 class="text-xl font-medium text-gray-600">
+                                  <h1 class="text-xl font-medium text-gray-12">
                                     Export Completed
                                   </h1>
                                   <p class="text-sm text-gray-11">
