@@ -1900,6 +1900,14 @@ function ClipSegmentConfig(props: {
 }) {
   const { setProject, setEditorState, project } = useEditorContext();
 
+  // Local state for the input field
+  const [inputValue, setInputValue] = createSignal(props.segment.timescale.toString());
+
+  // Update input value when timescale changes externally (e.g., from slider or buttons)
+  createEffect(() => {
+    setInputValue(props.segment.timescale.toString());
+  });
+
   return (
     <>
       <div class="flex flex-row justify-between items-center">
@@ -1961,23 +1969,30 @@ function ClipSegmentConfig(props: {
             <div class="flex items-center gap-1">
               <TextInput
                 type="number"
-                value={props.segment.timescale.toFixed(2)}
+                value={inputValue()}
                 onInput={(e) => {
-                  const value = parseFloat(e.currentTarget.value);
-                  if (!isNaN(value) && value > 0 && value <= 10) {
+                  const value = e.currentTarget.value;
+                  setInputValue(value);
+
+                  const numValue = parseFloat(value);
+                  if (!isNaN(numValue) && numValue > 0 && numValue <= 10) {
                     setProject(
                       "timeline",
                       "segments",
                       props.segmentIndex,
                       "timescale",
-                      value
+                      numValue
                     );
                   }
+                }}
+                onFocus={(e) => {
+                  // Select all text on focus for easy replacement
+                  e.currentTarget.select();
                 }}
                 onBlur={(e) => {
                   const value = parseFloat(e.currentTarget.value);
                   if (isNaN(value) || value <= 0) {
-                    e.currentTarget.value = props.segment.timescale.toFixed(2);
+                    setInputValue(props.segment.timescale.toFixed(2));
                   } else if (value > 10) {
                     setProject(
                       "timeline",
@@ -1986,7 +2001,10 @@ function ClipSegmentConfig(props: {
                       "timescale",
                       10
                     );
-                    e.currentTarget.value = "10.00";
+                    setInputValue("10.00");
+                  } else {
+                    // Format to 2 decimal places on blur
+                    setInputValue(value.toFixed(2));
                   }
                 }}
                 class="w-16 px-2 py-1 text-xs text-center border rounded-md bg-gray-2 text-gray-12"
