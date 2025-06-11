@@ -1940,23 +1940,78 @@ function ClipSegmentConfig(props: {
       </div>
       <Field name="Speed" icon={<IconLucideFastForward class="size-4" />}>
         <div class="flex flex-col gap-2">
-          <Slider
-            value={[props.segment.timescale]}
-            onChange={(v) =>
-              setProject(
-                "timeline",
-                "segments",
-                props.segmentIndex,
-                "timescale",
-                v[0]
-              )
-            }
-            minValue={0.25}
-            maxValue={4}
-            step={0.25}
-            formatTooltip={(v) => `${v}x`}
-          />
+          <div class="flex gap-2 items-center">
+            <Slider
+              value={[props.segment.timescale]}
+              onChange={(v) =>
+                setProject(
+                  "timeline",
+                  "segments",
+                  props.segmentIndex,
+                  "timescale",
+                  v[0]
+                )
+              }
+              minValue={0.1}
+              maxValue={10}
+              step={0.01}
+              formatTooltip={(v) => `${v.toFixed(2)}x`}
+              class="flex-1"
+            />
+            <div class="flex items-center gap-1">
+              <TextInput
+                type="number"
+                value={props.segment.timescale.toFixed(2)}
+                onInput={(e) => {
+                  const value = parseFloat(e.currentTarget.value);
+                  if (!isNaN(value) && value > 0 && value <= 10) {
+                    setProject(
+                      "timeline",
+                      "segments",
+                      props.segmentIndex,
+                      "timescale",
+                      value
+                    );
+                  }
+                }}
+                onBlur={(e) => {
+                  const value = parseFloat(e.currentTarget.value);
+                  if (isNaN(value) || value <= 0) {
+                    e.currentTarget.value = props.segment.timescale.toFixed(2);
+                  } else if (value > 10) {
+                    setProject(
+                      "timeline",
+                      "segments",
+                      props.segmentIndex,
+                      "timescale",
+                      10
+                    );
+                    e.currentTarget.value = "10.00";
+                  }
+                }}
+                class="w-16 px-2 py-1 text-xs text-center border rounded-md bg-gray-2 text-gray-12"
+                min="0.01"
+                max="10"
+                step="0.01"
+              />
+              <span class="text-xs text-gray-11">x</span>
+            </div>
+          </div>
           <div class="flex gap-2 text-xs">
+            <button
+              onClick={() =>
+                setProject(
+                  "timeline",
+                  "segments",
+                  props.segmentIndex,
+                  "timescale",
+                  0.25
+                )
+              }
+              class="px-2 py-1 rounded-md bg-gray-3 hover:bg-gray-4 transition-colors"
+            >
+              0.25x
+            </button>
             <button
               onClick={() =>
                 setProject(
@@ -1992,12 +2047,12 @@ function ClipSegmentConfig(props: {
                   "segments",
                   props.segmentIndex,
                   "timescale",
-                  1.5
+                  2
                 )
               }
               class="px-2 py-1 rounded-md bg-gray-3 hover:bg-gray-4 transition-colors"
             >
-              1.5x
+              2x
             </button>
             <button
               onClick={() =>
@@ -2006,12 +2061,12 @@ function ClipSegmentConfig(props: {
                   "segments",
                   props.segmentIndex,
                   "timescale",
-                  2
+                  4
                 )
               }
               class="px-2 py-1 rounded-md bg-gray-3 hover:bg-gray-4 transition-colors"
             >
-              2x
+              4x
             </button>
           </div>
         </div>

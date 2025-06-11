@@ -123,8 +123,8 @@ export function Slider(
               ? typeof props.formatTooltip === "string"
                 ? `${props.value[0].toFixed(1)}${props.formatTooltip}`
                 : props.formatTooltip
-                ? props.formatTooltip(props.value[0])
-                : props.value[0].toFixed(1)
+                  ? props.formatTooltip(props.value[0])
+                  : props.value[0].toFixed(1)
               : undefined
           }
         >
