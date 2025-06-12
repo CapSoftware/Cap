@@ -122,6 +122,7 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
               <EmptyMessage
                 message="No members in your organization"
                 showUpgradeButton={true}
+                onButtonClick={() => setIsOpen(false)}
               />
             </div>
           ) : // Case 2: Has org members but none selected for this space
@@ -129,6 +130,7 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
             <EmptyMessage
               message="No members have been added to this space"
               showUpgradeButton={false}
+              onButtonClick={() => setIsOpen(false)}
             />
           ) : (
             <>
@@ -250,12 +252,16 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
   }
 );
 
-const EmptyMessage = ({
-  message,
-  showUpgradeButton = false,
-}: {
+interface EmptyMessageProps {
   message: string;
   showUpgradeButton?: boolean;
+  onButtonClick?: () => void;
+}
+
+const EmptyMessage: React.FC<EmptyMessageProps> = ({
+  message,
+  showUpgradeButton = false,
+  onButtonClick,
 }) => (
   <div className="flex flex-col gap-3 justify-center items-center h-full">
     <p className="text-sm text-center text-gray-10">{message}</p>
@@ -263,10 +269,8 @@ const EmptyMessage = ({
       <Button
         href="/dashboard/settings/organization"
         variant="primary"
-        size="xs"
-        onClick={() => {
-          setIsOpen(false);
-        }}
+        size="sm"
+        onClick={onButtonClick}
       >
         Invite Members
       </Button>
