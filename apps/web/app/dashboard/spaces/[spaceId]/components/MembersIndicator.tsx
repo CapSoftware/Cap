@@ -87,7 +87,7 @@ export const MembersIndicator = ({
   };
 
   const OrgMembers = useCallback(
-    (field: { value: string[] }) => {
+    (field: { value?: string[] }) => {
       return organizationMembers
         .filter(
           (m) => (field.value ?? []).includes(m.userId) && m.userId !== user.id
