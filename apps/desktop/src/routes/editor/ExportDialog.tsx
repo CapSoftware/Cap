@@ -714,7 +714,7 @@ export function ExportDialog() {
                                     Export Completed
                                   </h1>
                                   <p class="text-sm text-gray-11">
-                                    Your video has been successfully exported
+                                    Your video has successfully been exported
                                   </p>
                                 </div>
                               </div>
