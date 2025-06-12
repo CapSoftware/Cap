@@ -8,7 +8,7 @@ export const commands = {
 async setMicInput(label: string | null) : Promise<null> {
     return await TAURI_INVOKE("set_mic_input", { label });
 },
-async setCameraInput(label: string | null) : Promise<null> {
+async setCameraInput(label: string | null) : Promise<boolean> {
     return await TAURI_INVOKE("set_camera_input", { label });
 },
 async startRecording(inputs: StartRecordingInputs) : Promise<null> {

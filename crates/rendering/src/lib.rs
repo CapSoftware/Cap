@@ -564,10 +564,12 @@ impl ProjectUniforms {
     ) -> (u32, u32) {
         let crop = Self::get_crop(options, project);
         let crop_aspect = crop.aspect_ratio();
-        let padding = Self::get_padding(options, project) * 2.0;
 
         let (base_width, base_height) = match &project.aspect_ratio {
             None => {
+                let padding_basis = u32::max(crop.size.x, crop.size.y) as f64;
+                let padding =
+                    padding_basis * project.background.padding / 100.0 * SCREEN_MAX_PADDING * 2.0;
                 let width = ((crop.size.x as f64 + padding) as u32 + 1) & !1;
                 let height = ((crop.size.y as f64 + padding) as u32 + 1) & !1;
                 (width, height)
@@ -644,7 +646,13 @@ impl ProjectUniforms {
 
         let cropped_aspect = cropped_size.x / cropped_size.y;
 
-        let padding = Self::get_padding(options, project);
+        let padding = {
+            let padding_factor = project.background.padding / 100.0 * SCREEN_MAX_PADDING;
+
+            f64::max(output_size.x, output_size.y) * padding_factor
+        };
+
+        // let padding = Self::get_padding(options, project);
         let is_height_constrained = cropped_aspect <= output_aspect;
 
         let available_size = output_size - 2.0 * padding;
