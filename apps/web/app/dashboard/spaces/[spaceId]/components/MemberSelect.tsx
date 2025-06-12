@@ -263,7 +263,7 @@ const EmptyMessage = ({
       <Button
         href="/dashboard/settings/organization"
         variant="primary"
-        size="sm"
+        size="xs"
         onClick={() => {
           setIsOpen(false);
         }}
