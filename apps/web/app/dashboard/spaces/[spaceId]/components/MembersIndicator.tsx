@@ -134,11 +134,6 @@ export const MembersIndicator = ({
                         <MemberSelect
                           placeholder="Add member..."
                           disabled={!canManageMembers}
-                          emptyMessage={
-                            OrgMembers(field).length === 0
-                              ? "No members in your organization"
-                              : "No members have been added to this space"
-                          }
                           showEmptyIfNoMembers
                           selected={OrgMembers(field)}
                           onSelect={(selected) => {
