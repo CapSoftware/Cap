@@ -122,15 +122,16 @@ export interface NewSpaceFormProps {
   } | null;
 }
 
+const formSchema = z.object({
+  name: z
+    .string()
+    .min(1, "Space name is required")
+    .max(25, "Space name must be at most 25 characters"),
+  members: z.array(z.string()).optional(),
+});
+
 export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
   const { edit = false, space } = props;
-  const formSchema = z.object({
-    name: z
-      .string()
-      .min(1, "Space name is required")
-      .max(25, "Space name must be at most 25 characters"),
-    members: z.array(z.string()).optional(),
-  });
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),

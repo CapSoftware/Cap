@@ -75,8 +75,10 @@ async function fetchSpaceMembers(spaceId: string) {
     .select({
       id: spaceMembers.id,
       userId: spaceMembers.userId,
+      role: sql<string>`'member'`,
       name: users.name,
       email: users.email,
+      image: users.image,
     })
     .from(spaceMembers)
     .innerJoin(users, eq(spaceMembers.userId, users.id))
@@ -326,8 +328,18 @@ export default async function SharedCapsPage({
       };
     });
 
+    // Fetch organization members
+    const organizationMembersData = await fetchOrganizationMembers(id);
+
     return (
-      <SharedCaps data={processedVideoData} count={totalCount} hideSharedWith />
+      <SharedCaps
+        data={processedVideoData}
+        count={totalCount}
+        hideSharedWith
+        organizationData={organization}
+        organizationMembers={organizationMembersData}
+        currentUserId={userId}
+      />
     );
   }
 }

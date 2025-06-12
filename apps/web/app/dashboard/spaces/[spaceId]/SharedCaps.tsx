@@ -3,12 +3,18 @@
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { VideoMetadata } from "@cap/database/types";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { CapPagination } from "../../caps/components/CapPagination";
 import { EmptySharedCapState } from "./components/EmptySharedCapState";
 import { SharedCapCard } from "./components/SharedCapCard";
 import { MembersIndicator } from "./components/MembersIndicator";
+import { AddVideosDialog } from "./components/AddVideosDialog";
+import {
+  OrganizationIndicator,
+  OrganizationMemberData,
+} from "./components/OrganizationIndicator";
+import { AddVideosToOrganizationDialog } from "./components/AddVideosToOrganizationDialog";
 import { SpaceMemberData } from "./page";
 
 type SharedVideoData = {
@@ -36,28 +42,44 @@ export const SharedCaps = ({
   spaceMembers,
   organizationMembers,
   currentUserId,
+  organizationData,
+  hideSharedWith,
 }: {
   data: SharedVideoData;
   count: number;
   spaceData?: SpaceData;
   hideSharedWith?: boolean;
   spaceMembers?: SpaceMemberData[];
-  organizationMembers?: SpaceMemberData[];
+  organizationMembers?: OrganizationMemberData[];
   currentUserId?: string;
+  organizationData?: {
+    id: string;
+    name: string;
+    ownerId: string;
+  };
 }) => {
   const params = useSearchParams();
+  const router = useRouter();
   const page = Number(params.get("page")) || 1;
   const [analytics, setAnalytics] = useState<Record<string, number>>({});
   const { activeOrganization } = useSharedContext();
   const limit = 15;
   const totalPages = Math.ceil(count / limit);
   const [isDraggingCap, setIsDraggingCap] = useState(false);
+  const [isAddVideosDialogOpen, setIsAddVideosDialogOpen] = useState(false);
+  const [
+    isAddOrganizationVideosDialogOpen,
+    setIsAddOrganizationVideosDialogOpen,
+  ] = useState(false);
 
   const isSpaceOwner = spaceData?.createdById === currentUserId;
+  const isOrgOwner = organizationData?.ownerId === currentUserId;
 
   const spaceMemberCount = isSpaceOwner
     ? spaceMembers?.filter((m) => m.userId !== currentUserId).length || 0
     : spaceMembers?.length || 0;
+
+  const organizationMemberCount = organizationMembers?.length || 0;
 
   useEffect(() => {
     const fetchAnalytics = async () => {
@@ -86,23 +108,65 @@ export const SharedCaps = ({
     };
   }, []);
 
+  const handleVideosAdded = () => {
+    router.refresh();
+  };
+
   if (data.length === 0) {
     return (
-      <div className="flex relative flex-col w-full h-full">
-        {spaceData && spaceMembers && (
-          <MembersIndicator
-            memberCount={spaceMemberCount}
-            members={spaceMembers}
-            organizationMembers={organizationMembers || []}
+      <>
+        <div className="flex relative flex-col w-full h-full">
+          {spaceData && spaceMembers && (
+            <MembersIndicator
+              memberCount={spaceMemberCount}
+              members={spaceMembers}
+              organizationMembers={organizationMembers || []}
+              spaceId={spaceData.id}
+              canManageMembers={isSpaceOwner}
+              onAddVideos={() => setIsAddVideosDialogOpen(true)}
+            />
+          )}
+          {organizationData && organizationMembers && !spaceData && (
+            <OrganizationIndicator
+              memberCount={organizationMemberCount}
+              members={organizationMembers}
+              organizationId={organizationData.id}
+              organizationName={organizationData.name}
+              canManageMembers={isOrgOwner}
+              onAddVideos={() => setIsAddOrganizationVideosDialogOpen(true)}
+            />
+          )}
+          <EmptySharedCapState
+            organizationName={activeOrganization?.organization.name || ""}
+            type={spaceData ? "space" : "organization"}
+            spaceData={spaceData}
+            currentUserId={currentUserId}
+            onAddVideos={
+              spaceData
+                ? () => setIsAddVideosDialogOpen(true)
+                : () => setIsAddOrganizationVideosDialogOpen(true)
+            }
+          />
+        </div>
+        {spaceData && (
+          <AddVideosDialog
+            open={isAddVideosDialogOpen}
+            onClose={() => setIsAddVideosDialogOpen(false)}
             spaceId={spaceData.id}
-            canManageMembers={isSpaceOwner}
+            spaceName={spaceData.name}
+            onVideosAdded={handleVideosAdded}
           />
         )}
-        <EmptySharedCapState
-          organizationName={activeOrganization?.organization.name || ""}
-          type="space"
-        />
-      </div>
+        {organizationData && (
+          <AddVideosToOrganizationDialog
+            open={isAddOrganizationVideosDialogOpen}
+            onClose={() => setIsAddOrganizationVideosDialogOpen(false)}
+            organizationId={organizationData.id}
+            organizationName={organizationData.name}
+            onVideosAdded={handleVideosAdded}
+          />
+        )}
+      </>
     );
   }
 
@@ -124,6 +188,35 @@ export const SharedCaps = ({
           organizationMembers={organizationMembers || []}
           spaceId={spaceData.id}
           canManageMembers={isSpaceOwner}
+          onAddVideos={() => setIsAddVideosDialogOpen(true)}
+        />
+      )}
+      {organizationData && organizationMembers && !spaceData && (
+        <OrganizationIndicator
+          memberCount={organizationMemberCount}
+          members={organizationMembers}
+          organizationId={organizationData.id}
+          organizationName={organizationData.name}
+          canManageMembers={isOrgOwner}
+          onAddVideos={() => setIsAddOrganizationVideosDialogOpen(true)}
+        />
+      )}
+      {spaceData && (
+        <AddVideosDialog
+          open={isAddVideosDialogOpen}
+          onClose={() => setIsAddVideosDialogOpen(false)}
+          spaceId={spaceData.id}
+          spaceName={spaceData.name}
+          onVideosAdded={handleVideosAdded}
+        />
+      )}
+      {organizationData && (
+        <AddVideosToOrganizationDialog
+          open={isAddOrganizationVideosDialogOpen}
+          onClose={() => setIsAddOrganizationVideosDialogOpen(false)}
+          organizationId={organizationData.id}
+          organizationName={organizationData.name}
+          onVideosAdded={handleVideosAdded}
         />
       )}
       <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">

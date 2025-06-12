@@ -272,7 +272,7 @@ const EmptyMessage: React.FC<EmptyMessageProps> = ({
         size="sm"
         onClick={onButtonClick}
       >
-        Invite Members
+        Invite members
       </Button>
     )}
   </div>
