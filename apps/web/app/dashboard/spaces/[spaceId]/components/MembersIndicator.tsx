@@ -87,6 +87,17 @@ export const MembersIndicator = ({
     }
   };
 
+  const orgMembers = (field: z.infer<typeof formSchema>) =>
+    organizationMembers
+      .filter(
+        (m) => (field.value ?? []).includes(m.userId) && m.userId !== user.id
+      )
+      .map((m) => ({
+        value: m.userId,
+        label: m.name || m.email,
+        image: m.image || undefined,
+      }));
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -120,22 +131,14 @@ export const MembersIndicator = ({
                         <MemberSelect
                           placeholder="Add member..."
                           disabled={!canManageMembers}
-                          emptyMessage="No members have been added to this space"
+                          emptyMessage={
+                            orgMembers(field).length === 0
+                              ? "No members in your organization"
+                              : "No members have been added to this space"
+                          }
                           showEmptyIfNoMembers
-                          selected={organizationMembers
-                            .filter(
-                              (m) =>
-                                (field.value ?? []).includes(m.userId) &&
-                                m.userId !== user.id
-                            )
-                            .map((m) => ({
-                              value: m.userId,
-                              label: m.name || m.email,
-                              image: m.image || undefined,
-                            }))}
-                          onSelect={(selected) => {
-                            field.onChange(selected.map((opt) => opt.value));
-                          }}
+                          selected={orgMembers(field)}
+                          onSelect={field.onChange}
                         />
                       </FormControl>
                     );
