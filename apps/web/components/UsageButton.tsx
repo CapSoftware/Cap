@@ -32,7 +32,7 @@ export const UsageButton = memo(
                   ? "p-0 w-10 h-10 rounded-full min-w-10"
                   : "w-full"
               )}
-              variant="blue"
+              variant="primary"
             >
               <FontAwesomeIcon
                 className={clsx(

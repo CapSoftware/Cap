@@ -12,7 +12,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { deleteSpace } from "@/actions/organization/delete-space";
 import clsx from "clsx";
-import { SpaceDialog } from "./SpaceDialog";
+import SpaceDialog from "./SpaceDialog";
 import { Button, Avatar } from "@cap/ui";
 import { shareCap } from "@/actions/caps/share";
 import { toast } from "sonner";
@@ -25,11 +25,7 @@ import Image from "next/image";
 import { navItemClass } from "./AdminNavItems";
 import { Spaces } from "../../dashboard-data";
 
-export const SpacesList = ({
-  toggleMobileNav,
-}: {
-  toggleMobileNav?: () => void;
-}) => {
+const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
   const { spacesData, sidebarCollapsed, user } = useSharedContext();
   const [showSpaceDialog, setShowSpaceDialog] = useState(false);
 

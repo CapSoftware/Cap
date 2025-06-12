@@ -8,7 +8,7 @@ import { ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { useEffect } from "react";
 import { useSharedContext } from "../DynamicSharedLayout";
-import { AdminNavItems } from "./AdminNavItems";
+import AdminNavItems from "./AdminNavItems";
 
 export const AdminDesktopNav = () => {
   const { toggleSidebarCollapsed, sidebarCollapsed } = useSharedContext();

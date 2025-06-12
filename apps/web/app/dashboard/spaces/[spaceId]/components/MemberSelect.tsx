@@ -113,8 +113,8 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
         {...props}
       >
         {showEmptyIfNoMembers &&
-        selected.length === 0 &&
-        orgMemberOptions.length === 0 ? (
+        (activeOrganization?.members.length === 0 ||
+          (selected.length === 0 && orgMemberOptions.length === 0)) ? (
           <div className="flex flex-1 justify-center items-center h-full">
             <p className="text-sm text-center text-gray-10">{emptyMessage}</p>
           </div>

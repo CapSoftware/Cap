@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
+import { Avatar } from "@cap/ui";
 import {
   Button,
   Dialog,
@@ -123,8 +123,10 @@ export const MembersIndicator = ({
                           emptyMessage="No members have been added to this space"
                           showEmptyIfNoMembers
                           selected={organizationMembers
-                            .filter((m) =>
-                              (field.value ?? []).includes(m.userId)
+                            .filter(
+                              (m) =>
+                                (field.value ?? []).includes(m.userId) &&
+                                m.userId !== user.id
                             )
                             .map((m) => ({
                               value: m.userId,

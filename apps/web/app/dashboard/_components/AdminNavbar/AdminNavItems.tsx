@@ -50,7 +50,7 @@ interface Props {
 export const navItemClass =
   "flex items-center justify-start rounded-xl outline-none tracking-tight overflow-hidden";
 
-export const AdminNavItems = ({ toggleMobileNav }: Props) => {
+const AdminNavItems = ({ toggleMobileNav }: Props) => {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [hoveredItem, setHoveredItem] = useState<string | null>(null);
@@ -402,3 +402,5 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
     </Dialog>
   );
 };
+
+export default AdminNavItems;

@@ -41,7 +41,7 @@ interface SpaceDialogProps {
   onSpaceUpdated?: () => void;
 }
 
-export const SpaceDialog = ({
+const SpaceDialog = ({
   open,
   onClose,
   edit = false,
