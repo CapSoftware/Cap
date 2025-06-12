@@ -51,7 +51,7 @@ impl Default for BackgroundSource {
     }
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct XY<T> {
     pub x: T,
@@ -151,13 +151,20 @@ impl<T: Div<Output = T>> Div<XY<T>> for XY<T> {
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Crop {
-    pub position: XY<u32>,
-    pub size: XY<u32>,
+    pub position: crate::XY<u32>,
+    pub size: crate::XY<u32>,
 }
 
 impl Crop {
     pub fn aspect_ratio(&self) -> f32 {
         self.size.x as f32 / self.size.y as f32
+    }
+
+    pub fn with_size(width: u32, height: u32) -> Self {
+        Self {
+            position: crate::XY::new(0, 0),
+            size: crate::XY::new(width, height),
+        }
     }
 }
 
@@ -528,7 +535,7 @@ impl ProjectConfiguration {
     pub fn load(project_path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
         let config_str =
             std::fs::read_to_string(project_path.as_ref().join("project-config.json"))?;
-        let mut config: Self = serde_json::from_str(&config_str).unwrap_or_default();
+        let config: Self = serde_json::from_str(&config_str).unwrap_or_default();
 
         Ok(config)
     }

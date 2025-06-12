@@ -243,6 +243,8 @@ pub struct CursorMeta {
     #[specta(type = String)]
     pub image_path: RelativePathBuf,
     pub hotspot: XY<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shape: Option<crate::CursorShape>,
 }
 
 impl MultipleSegments {
@@ -261,6 +263,7 @@ impl MultipleSegments {
                         CursorImage {
                             path: meta.path(&v.image_path),
                             hotspot: v.hotspot,
+                            shape: v.shape,
                         },
                     )
                 })

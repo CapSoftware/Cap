@@ -311,7 +311,110 @@ export type CurrentRecordingChanged = null
 export type CurrentRecordingTarget = { window: { id: number; bounds: Bounds } } | { screen: { id: number } } | { area: { screen: number; bounds: Bounds } }
 export type CursorAnimationStyle = "regular" | "slow" | "fast"
 export type CursorConfiguration = { hide?: boolean; hideWhenIdle: boolean; size: number; type: CursorType; animationStyle: CursorAnimationStyle; tension: number; mass: number; friction: number; raw?: boolean; motionBlur?: number }
-export type CursorMeta = { imagePath: string; hotspot: XY<number> }
+export type CursorMeta = { imagePath: string; hotspot: XY<number>; shape?: CursorShape | null }
+export type CursorShape = 
+/**
+ * Windows: IDC_ARROW
+ */
+"Arrow" | 
+/**
+ * Windows: IDC_IBEAM
+ */
+"IBeam" | 
+/**
+ * Windows: IDC_CROSS
+ */
+"Crosshair" | 
+/**
+ * macOS Only. Windows not supported.
+ */
+"ClosedHand" | 
+/**
+ * macOS Only. Windows not supported.
+ */
+"OpenHand" | 
+/**
+ * macOS Only. Windows not supported.
+ */
+"PointingHand" | 
+/**
+ * macOS Only. Windows not supported.
+ */
+"ResizeLeft" | 
+/**
+ * macOS Only. Windows not supported.
+ */
+"ResizeRight" | 
+/**
+ * Windows: IDC_SIZEWE
+ */
+"ResizeLeftRight" | 
+/**
+ * Windows: IDC_UPARROW
+ */
+"ResizeUp" | 
+/**
+ * macOS Only. Windows not supported.
+ */
+"ResizeDown" | 
+/**
+ * Windows: IDC_SIZENS
+ */
+"ResizeUpDown" | 
+/**
+ * Windows: IDC_SIZENWSE
+ * 
+ * Windows only. macOS not supported.
+ */
+"ResizeUpLeftAndDownRight" | 
+/**
+ * Windows: IDC_SIZENESW
+ * 
+ * Windows only. macOS not supported.
+ */
+"ResizeUpRightAndDownLeft" | 
+/**
+ * Windows: IDC_SIZEALL
+ * 
+ * Windows only. macOS not supported.
+ */
+"ResizeAll" | 
+/**
+ * macOS Only. Windows not supported.
+ */
+"DisappearingItem" | 
+/**
+ * macOS Only. Windows not supported.
+ */
+"VerticalIBeam" | 
+/**
+ * Windows: IDC_NO
+ */
+"NotAllowed" | 
+/**
+ * macOS Only. Windows not supported.
+ */
+"DragLink" | 
+/**
+ * macOS Only. Windows not supported.
+ */
+"DragCopy" | 
+/**
+ * macOS Only. Windows not supported.
+ */
+"ContextualMenu" | 
+/**
+ * Windows only. macOS not supported.
+ */
+"Appstarting" | 
+/**
+ * Windows: IDC_WAIT
+ */
+"Wait" | 
+/**
+ * Windows: IDC_HELP
+ */
+"Help" | "Hidden" | "Unknown"
 export type CursorType = "pointer" | "circle"
 export type Cursors = { [key in string]: string } | { [key in string]: CursorMeta }
 export type DownloadProgress = { progress: number; message: string }

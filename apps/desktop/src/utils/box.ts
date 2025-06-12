@@ -1,9 +1,9 @@
 // Attribution to area-selection (MIT License) by 7anshuai
 // https://github.com/7anshuai/area-selection
 
-type XY = { x: number; y: number };
+import { XY } from "./tauri";
 
-export type Bounds = { size: XY; position: XY };
+export type Bounds = { size: XY<number>; position: XY<number> };
 
 export default class Box {
   x: number;
@@ -18,7 +18,7 @@ export default class Box {
     this.height = height;
   }
 
-  static from(position: XY, size: XY): Box {
+  static from(position: XY<number>, size: XY<number>): Box {
     return new Box(position.x, position.y, size.x, size.y);
   }
 
@@ -29,7 +29,7 @@ export default class Box {
     };
   }
 
-  resize(newWidth: number, newHeight: number, origin: XY): Box {
+  resize(newWidth: number, newHeight: number, origin: XY<number>): Box {
     const fromX = this.x + this.width * origin.x;
     const fromY = this.y + this.height * origin.y;
 
@@ -41,7 +41,7 @@ export default class Box {
     return this;
   }
 
-  scale(factor: number, origin: XY): Box {
+  scale(factor: number, origin: XY<number>): Box {
     const newWidth = this.width * factor;
     const newHeight = this.height * factor;
     return this.resize(newWidth, newHeight, origin);
@@ -57,14 +57,14 @@ export default class Box {
     return this;
   }
 
-  getAbsolutePoint(point: XY): XY {
+  getAbsolutePoint(point: XY<number>): XY<number> {
     return {
       x: this.x + this.width * point.x,
       y: this.y + this.height * point.y,
     };
   }
 
-  constrainAll(box: Box, mapped: XY, origin: XY, aspectRatio?: number) {
+  constrainAll(box: Box, mapped: XY<number>, origin: XY<number>, aspectRatio?: number) {
     if (aspectRatio) this.constrainToRatio(aspectRatio, origin);
     this.constrainToBoundary(mapped.x, mapped.y, origin);
     return box;
@@ -72,7 +72,7 @@ export default class Box {
 
   constrainToRatio(
     ratio: number,
-    origin: XY,
+    origin: XY<number>,
     grow: "width" | "height" = "height"
   ): Box {
     if (!ratio) return this;
@@ -90,7 +90,7 @@ export default class Box {
   constrainToBoundary(
     boundaryWidth: number,
     boundaryHeight: number,
-    origin: XY
+    origin: XY<number>
   ): Box {
     const originPoint = this.getAbsolutePoint(origin);
 
@@ -145,7 +145,7 @@ export default class Box {
     maxHeight: number | null,
     minWidth: number | null,
     minHeight: number | null,
-    origin: XY,
+    origin: XY<number>,
     ratio: number | null = null
   ): Box {
     if (ratio) {

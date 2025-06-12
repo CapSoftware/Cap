@@ -19,6 +19,7 @@ pub struct Cursor {
     pub file_name: String,
     pub id: u32,
     pub hotspot: XY<f64>,
+    pub shape: Option<cap_project::CursorShape>,
 }
 
 pub type Cursors = HashMap<u64, Cursor>;
@@ -85,12 +86,21 @@ pub fn spawn_cursor_recorder(
 
                 let cursor_data = get_cursor_image_data();
                 let cursor_id = if let Some(data) = cursor_data {
+                    debug!(
+                        "Recording loop: Got cursor data with shape: {:?}",
+                        data.shape
+                    );
+
                     let mut hasher = DefaultHasher::default();
                     data.image.hash(&mut hasher);
                     let id = hasher.finish();
 
                     // Check if we've seen this cursor data before
                     if let Some(existing_id) = response.cursors.get(&id) {
+                        debug!(
+                            "Recording loop: Using existing cursor {} with shape: {:?}",
+                            existing_id.id, existing_id.shape
+                        );
                         existing_id.id.to_string()
                     } else {
                         // New cursor data - save it
@@ -105,13 +115,17 @@ pub fn spawn_cursor_recorder(
                             if let Err(e) = rgba_image.save(&cursor_path) {
                                 error!("Failed to save cursor image: {}", e);
                             } else {
-                                info!("Saved cursor {cursor_id} image to: {:?}", file_name);
+                                info!(
+                                    "Recording loop: Saved NEW cursor {} with shape {:?} to: {:?}",
+                                    cursor_id, data.shape, file_name
+                                );
                                 response.cursors.insert(
                                     id,
                                     Cursor {
                                         file_name,
                                         id: response.next_cursor_id,
                                         hotspot: data.hotspot,
+                                        shape: data.shape,
                                     },
                                 );
                                 response.next_cursor_id += 1;
@@ -121,6 +135,7 @@ pub fn spawn_cursor_recorder(
                         cursor_id
                     }
                 } else {
+                    debug!("Recording loop: No cursor data available, using default");
                     "default".to_string()
                 };
 
@@ -232,6 +247,193 @@ pub fn spawn_cursor_recorder(
 struct CursorData {
     image: Vec<u8>,
     hotspot: XY<f64>,
+    shape: Option<cap_project::CursorShape>,
+}
+
+#[cfg(target_os = "macos")]
+fn get_cursor_shape() -> cap_project::CursorShape {
+    use cocoa::base::{id, nil};
+    use objc::*;
+
+    unsafe {
+        let nscursor_class = match objc::runtime::Class::get("NSCursor") {
+            Some(cls) => cls,
+            None => {
+                debug!("Failed to get NSCursor class");
+                return cap_project::CursorShape::Unknown;
+            }
+        };
+
+        // Use currentCursor instead of currentSystemCursor for more accurate detection
+        let current_cursor: id = msg_send![nscursor_class, currentCursor];
+        if current_cursor == nil {
+            debug!("Current cursor is nil");
+            return cap_project::CursorShape::Unknown;
+        }
+
+        debug!("Current cursor pointer: {:p}", current_cursor);
+
+        // Get the cursor image for analysis
+        let cursor_image: id = msg_send![current_cursor, image];
+        if cursor_image == nil {
+            debug!("Cursor image is nil, defaulting to arrow");
+            return cap_project::CursorShape::Arrow;
+        }
+
+        let cursor_size: cocoa::foundation::NSSize = msg_send![cursor_image, size];
+        let cursor_hotspot: cocoa::foundation::NSPoint = msg_send![current_cursor, hotSpot];
+
+        debug!(
+            "Cursor size: {}x{}, hotspot: ({}, {})",
+            cursor_size.width, cursor_size.height, cursor_hotspot.x, cursor_hotspot.y
+        );
+
+        // Try isEqual comparisons first as a fast path, but don't rely on them exclusively
+        let arrow_cursor: id = msg_send![nscursor_class, arrowCursor];
+        let ibeam_cursor: id = msg_send![nscursor_class, IBeamCursor];
+        let crosshair_cursor: id = msg_send![nscursor_class, crosshairCursor];
+        let closed_hand_cursor: id = msg_send![nscursor_class, closedHandCursor];
+        let open_hand_cursor: id = msg_send![nscursor_class, openHandCursor];
+        let pointing_hand_cursor: id = msg_send![nscursor_class, pointingHandCursor];
+
+        // Quick isEqual checks (but don't rely on them exclusively)
+        let is_equal_arrow: bool = msg_send![current_cursor, isEqual: arrow_cursor];
+        if is_equal_arrow {
+            debug!("Detected arrow cursor via isEqual");
+            return cap_project::CursorShape::Arrow;
+        }
+
+        let is_equal_ibeam: bool = msg_send![current_cursor, isEqual: ibeam_cursor];
+        if is_equal_ibeam {
+            debug!("Detected I-beam cursor via isEqual");
+            return cap_project::CursorShape::IBeam;
+        }
+
+        let is_equal_crosshair: bool = msg_send![current_cursor, isEqual: crosshair_cursor];
+        if is_equal_crosshair {
+            debug!("Detected crosshair cursor via isEqual");
+            return cap_project::CursorShape::Crosshair;
+        }
+
+        let is_equal_closed_hand: bool = msg_send![current_cursor, isEqual: closed_hand_cursor];
+        if is_equal_closed_hand {
+            debug!("Detected closed hand cursor via isEqual");
+            return cap_project::CursorShape::ClosedHand;
+        }
+
+        let is_equal_open_hand: bool = msg_send![current_cursor, isEqual: open_hand_cursor];
+        if is_equal_open_hand {
+            debug!("Detected open hand cursor via isEqual");
+            return cap_project::CursorShape::OpenHand;
+        }
+
+        let is_equal_pointing_hand: bool = msg_send![current_cursor, isEqual: pointing_hand_cursor];
+        if is_equal_pointing_hand {
+            debug!("Detected pointing hand cursor via isEqual");
+            return cap_project::CursorShape::PointingHand;
+        }
+
+        // Since isEqual comparisons are unreliable, use enhanced heuristics based on cursor properties
+
+        // Check for hidden cursor
+        if cursor_size.width <= 1.0 || cursor_size.height <= 1.0 {
+            debug!("Cursor appears to be hidden based on size");
+            return cap_project::CursorShape::Hidden;
+        }
+
+        // Analyze cursor dimensions and hotspot for better detection
+        let width = cursor_size.width;
+        let height = cursor_size.height;
+        let aspect_ratio = width / height;
+        let hotspot_x_ratio = cursor_hotspot.x / width;
+        let hotspot_y_ratio = cursor_hotspot.y / height;
+
+        debug!(
+            "Cursor analysis - aspect_ratio: {:.2}, hotspot_ratios: ({:.2}, {:.2})",
+            aspect_ratio, hotspot_x_ratio, hotspot_y_ratio
+        );
+
+        // I-beam cursor: tall and narrow with centered hotspot
+        if width <= 20.0 && height >= 20.0 && aspect_ratio <= 0.5 {
+            debug!("Detected I-beam cursor based on dimensions");
+            return cap_project::CursorShape::IBeam;
+        }
+
+        // Crosshair: typically square with centered hotspot
+        if (width - height).abs() <= 4.0
+            && width >= 15.0
+            && width <= 40.0
+            && hotspot_x_ratio >= 0.4
+            && hotspot_x_ratio <= 0.6
+            && hotspot_y_ratio >= 0.4
+            && hotspot_y_ratio <= 0.6
+        {
+            debug!("Detected crosshair cursor based on dimensions and hotspot");
+            return cap_project::CursorShape::Crosshair;
+        }
+
+        // Hand cursors: typically have hotspot in the finger area
+        if width >= 20.0 && width <= 40.0 && height >= 20.0 && height <= 40.0 {
+            // Pointing hand: hotspot usually in the finger tip area (top-left-ish)
+            if hotspot_x_ratio <= 0.5 && hotspot_y_ratio <= 0.4 {
+                debug!("Detected pointing hand cursor based on hotspot position");
+                return cap_project::CursorShape::PointingHand;
+            }
+            // Open/closed hand: hotspot usually more centered
+            else if hotspot_x_ratio >= 0.3
+                && hotspot_x_ratio <= 0.7
+                && hotspot_y_ratio >= 0.3
+                && hotspot_y_ratio <= 0.7
+            {
+                debug!("Detected hand cursor (open/closed) based on hotspot position");
+                return cap_project::CursorShape::OpenHand; // Default to open hand
+            }
+        }
+
+        // Resize cursors: often have distinctive aspect ratios and sizes
+        if width >= 15.0 && height >= 15.0 {
+            // Horizontal resize (left-right): wider than tall
+            if aspect_ratio >= 1.5 && height <= 25.0 {
+                debug!("Detected horizontal resize cursor based on aspect ratio");
+                return cap_project::CursorShape::ResizeLeftRight;
+            }
+            // Vertical resize (up-down): taller than wide
+            else if aspect_ratio <= 0.67 && width <= 25.0 {
+                debug!("Detected vertical resize cursor based on aspect ratio");
+                return cap_project::CursorShape::ResizeUpDown;
+            }
+        }
+
+        // Wait/spinning cursor: often circular or square with larger size
+        if width >= 30.0 && height >= 30.0 && (width - height).abs() <= 8.0 {
+            debug!("Detected wait cursor based on large square dimensions");
+            return cap_project::CursorShape::Wait;
+        }
+
+        // Not allowed cursor: often circular with centered hotspot
+        if width >= 20.0
+            && width <= 35.0
+            && (width - height).abs() <= 5.0
+            && hotspot_x_ratio >= 0.4
+            && hotspot_x_ratio <= 0.6
+            && hotspot_y_ratio >= 0.4
+            && hotspot_y_ratio <= 0.6
+        {
+            debug!("Detected not-allowed cursor based on circular dimensions");
+            return cap_project::CursorShape::NotAllowed;
+        }
+
+        // Arrow cursor: typically has hotspot at top-left corner
+        if hotspot_x_ratio <= 0.2 && hotspot_y_ratio <= 0.2 {
+            debug!("Detected arrow cursor based on top-left hotspot");
+            return cap_project::CursorShape::Arrow;
+        }
+
+        // Default fallback for unknown cursors
+        debug!("Could not determine cursor type, defaulting to arrow. Size: {}x{}, hotspot: ({:.2}, {:.2})", 
+               width, height, hotspot_x_ratio, hotspot_y_ratio);
+        cap_project::CursorShape::Arrow
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -245,28 +447,46 @@ fn get_cursor_image_data() -> Option<CursorData> {
     autoreleasepool(|| {
         let nscursor_class = match Class::get("NSCursor") {
             Some(cls) => cls,
-            None => return None,
+            None => {
+                debug!("Failed to get NSCursor class in get_cursor_image_data");
+                return None;
+            }
         };
 
         unsafe {
-            // Get the current system cursor
-            let current_cursor: id = msg_send![nscursor_class, currentSystemCursor];
+            // Get cursor shape first
+            let cursor_shape = get_cursor_shape();
+            debug!(
+                "get_cursor_image_data: Detected cursor shape: {:?}",
+                cursor_shape
+            );
+
+            // Use currentCursor (same as get_cursor_shape) instead of currentSystemCursor
+            let current_cursor: id = msg_send![nscursor_class, currentCursor];
             if current_cursor == nil {
+                debug!("get_cursor_image_data: Current cursor is nil");
                 return None;
             }
 
             // Get the image of the cursor
             let cursor_image: id = msg_send![current_cursor, image];
             if cursor_image == nil {
+                debug!("get_cursor_image_data: Cursor image is nil");
                 return None;
             }
 
             let cursor_size: NSSize = msg_send![cursor_image, size];
             let cursor_hotspot: NSPoint = msg_send![current_cursor, hotSpot];
 
+            debug!(
+                "get_cursor_image_data: Cursor size: {}x{}, hotspot: ({}, {})",
+                cursor_size.width, cursor_size.height, cursor_hotspot.x, cursor_hotspot.y
+            );
+
             // Get the TIFF representation of the image
             let image_data: id = msg_send![cursor_image, TIFFRepresentation];
             if image_data == nil {
+                debug!("get_cursor_image_data: Failed to get TIFF representation");
                 return None;
             }
 
@@ -280,13 +500,17 @@ fn get_cursor_image_data() -> Option<CursorData> {
             let slice = std::slice::from_raw_parts(bytes, length as usize);
             let data = slice.to_vec();
 
-            Some(CursorData {
+            let cursor_data = CursorData {
                 image: data,
                 hotspot: XY::new(
                     cursor_hotspot.x / cursor_size.width,
                     cursor_hotspot.y / cursor_size.height,
                 ),
-            })
+                shape: Some(cursor_shape),
+            };
+            debug!("get_cursor_image_data: Created cursor data with shape: {:?}, hotspot: ({:.3}, {:.3})", 
+                   cursor_data.shape, cursor_data.hotspot.x, cursor_data.hotspot.y);
+            Some(cursor_data)
         }
     })
 }
@@ -302,6 +526,10 @@ fn get_cursor_image_data() -> Option<CursorData> {
     use windows::Win32::UI::WindowsAndMessaging::{GetCursorInfo, CURSORINFO, CURSORINFO_FLAGS};
 
     unsafe {
+        // Get cursor shape first
+        let default_cursors = cap_media::platform::win::DefaultCursors::default();
+        let cursor_shape = cap_media::platform::win::get_cursor_shape(&default_cursors);
+
         // Get cursor info
         let mut cursor_info = CURSORINFO {
             cbSize: std::mem::size_of::<CURSORINFO>() as u32,
@@ -352,41 +580,21 @@ fn get_cursor_image_data() -> Option<CursorData> {
         let screen_dc = GetDC(HWND::default());
         let mem_dc = CreateCompatibleDC(screen_dc);
 
-        // Get cursor dimensions
+        if mem_dc.is_invalid() {
+            ReleaseDC(HWND::default(), screen_dc);
+            if !icon_info.hbmColor.is_invalid() {
+                DeleteObject(icon_info.hbmColor);
+            }
+            if !icon_info.hbmMask.is_invalid() {
+                DeleteObject(icon_info.hbmMask);
+            }
+            return None;
+        }
+
         let width = bitmap.bmWidth;
-        let height = if icon_info.hbmColor.is_invalid() && bitmap.bmHeight > 0 {
-            // For mask cursors, the height is doubled (AND mask + XOR mask)
-            bitmap.bmHeight / 2
-        } else {
-            bitmap.bmHeight
-        };
+        let height = bitmap.bmHeight;
 
-        // Create bitmap info header for 32-bit RGBA
-        let bi = BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: width,
-            biHeight: -height, // Negative for top-down DIB
-            biPlanes: 1,
-            biBitCount: 32, // 32-bit RGBA
-            biCompression: 0,
-            biSizeImage: 0,
-            biXPelsPerMeter: 0,
-            biYPelsPerMeter: 0,
-            biClrUsed: 0,
-            biClrImportant: 0,
-        };
-
-        let bitmap_info = BITMAPINFO {
-            bmiHeader: bi,
-            bmiColors: [Default::default()],
-        };
-
-        // Create DIB section
-        let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
-        let dib = CreateDIBSection(mem_dc, &bitmap_info, DIB_RGB_COLORS, &mut bits, None, 0);
-
-        if dib.is_err() {
-            // Clean up
+        if width <= 0 || height <= 0 || width > 256 || height > 256 {
             DeleteDC(mem_dc);
             ReleaseDC(HWND::default(), screen_dc);
             if !icon_info.hbmColor.is_invalid() {
@@ -398,27 +606,57 @@ fn get_cursor_image_data() -> Option<CursorData> {
             return None;
         }
 
-        let dib = dib.unwrap();
+        // Prepare DIB
+        let mut bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width,
+                biHeight: -height, // Top-down DIB
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: 0, // BI_RGB
+                biSizeImage: 0,
+                biXPelsPerMeter: 0,
+                biYPelsPerMeter: 0,
+                biClrUsed: 0,
+                biClrImportant: 0,
+            },
+            bmiColors: [std::mem::zeroed(); 1],
+        };
 
-        // Select DIB into DC
+        let mut dib_bits: *mut std::ffi::c_void = std::ptr::null_mut();
+        let dib = CreateDIBSection(mem_dc, &bmi, DIB_RGB_COLORS, &mut dib_bits, None, 0);
+
+        if dib.is_invalid() || dib_bits.is_null() {
+            DeleteDC(mem_dc);
+            ReleaseDC(HWND::default(), screen_dc);
+            if !icon_info.hbmColor.is_invalid() {
+                DeleteObject(icon_info.hbmColor);
+            }
+            if !icon_info.hbmMask.is_invalid() {
+                DeleteObject(icon_info.hbmMask);
+            }
+            return None;
+        }
+
         let old_bitmap = SelectObject(mem_dc, dib);
 
-        // Draw the cursor onto our bitmap with transparency
-        if DrawIconEx(
+        // Draw cursor
+        let draw_result = DrawIconEx(
             mem_dc,
             0,
             0,
             cursor_info.hCursor,
-            0, // Use actual size
-            0, // Use actual size
+            width,
+            height,
             0,
             None,
             DI_NORMAL,
-        )
-        .is_err()
-        {
-            // Clean up
-            SelectObject(mem_dc, old_bitmap);
+        );
+
+        SelectObject(mem_dc, old_bitmap);
+
+        if !draw_result.as_bool() {
             DeleteObject(dib);
             DeleteDC(mem_dc);
             ReleaseDC(HWND::default(), screen_dc);
@@ -431,26 +669,12 @@ fn get_cursor_image_data() -> Option<CursorData> {
             return None;
         }
 
-        // Get image data
+        // Copy image data
         let size = (width * height * 4) as usize;
         let mut image_data = vec![0u8; size];
-        std::ptr::copy_nonoverlapping(bits, image_data.as_mut_ptr() as *mut _, size);
+        std::ptr::copy_nonoverlapping(dib_bits as *const u8, image_data.as_mut_ptr(), size);
 
-        // Calculate hotspot
-        let mut hotspot_x = if icon_info.fIcon.as_bool() == false {
-            icon_info.xHotspot as f64 / width as f64
-        } else {
-            0.5
-        };
-
-        let mut hotspot_y = if icon_info.fIcon.as_bool() == false {
-            icon_info.yHotspot as f64 / height as f64
-        } else {
-            0.5
-        };
-
-        // Cleanup
-        SelectObject(mem_dc, old_bitmap);
+        // Clean up
         DeleteObject(dib);
         DeleteDC(mem_dc);
         ReleaseDC(HWND::default(), screen_dc);
@@ -461,7 +685,11 @@ fn get_cursor_image_data() -> Option<CursorData> {
             DeleteObject(icon_info.hbmMask);
         }
 
-        // Process the image data to ensure proper alpha channel
+        // Calculate hotspot relative to cursor size
+        let hotspot_x = icon_info.xHotspot as f64 / width as f64;
+        let hotspot_y = icon_info.yHotspot as f64 / height as f64;
+
+        // BGRA to RGBA conversion and premultiply alpha
         for i in (0..size).step_by(4) {
             // Windows DIB format is BGRA, we need to:
             // 1. Swap B and R channels
@@ -482,113 +710,57 @@ fn get_cursor_image_data() -> Option<CursorData> {
 
         if is_text_cursor {
             // Add a subtle shadow/outline to make it visible on white backgrounds
+            let mut enhanced_image = image::RgbaImage::new(width as u32, height as u32);
+
             for y in 0..height as u32 {
                 for x in 0..width as u32 {
                     let pixel = rgba_image.get_pixel(x, y);
-                    // If this is a solid pixel of the cursor
-                    if pixel[3] > 200 {
-                        // If alpha is high (visible pixel)
-                        // Add shadow pixels around it
-                        for dx in [-1, 0, 1].iter() {
-                            for dy in [-1, 0, 1].iter() {
-                                let nx = x as i32 + dx;
-                                let ny = y as i32 + dy;
+                    enhanced_image.put_pixel(x, y, *pixel);
 
-                                // Skip if out of bounds or same pixel
-                                if nx < 0
-                                    || ny < 0
-                                    || nx >= width as i32
-                                    || ny >= height as i32
-                                    || (*dx == 0 && *dy == 0)
-                                {
+                    // If this pixel has alpha > 0, add shadow around it
+                    if pixel[3] > 0 {
+                        // Add shadow pixels in a 1-pixel radius
+                        for dy in -1..=1 {
+                            for dx in -1..=1 {
+                                if dx == 0 && dy == 0 {
                                     continue;
                                 }
-
-                                let nx = nx as u32;
-                                let ny = ny as u32;
-
-                                let shadow_pixel = rgba_image.get_pixel(nx, ny);
-                                // Only add shadow where there isn't already content
-                                if shadow_pixel[3] < 100 {
-                                    rgba_image.put_pixel(nx, ny, image::Rgba([0, 0, 0, 100]));
+                                let nx = (x as i32 + dx) as u32;
+                                let ny = (y as i32 + dy) as u32;
+                                if nx < width as u32 && ny < height as u32 {
+                                    let existing = enhanced_image.get_pixel(nx, ny);
+                                    if existing[3] == 0 {
+                                        // Add a semi-transparent black shadow
+                                        enhanced_image.put_pixel(
+                                            nx,
+                                            ny,
+                                            image::Rgba([0, 0, 0, 128]),
+                                        );
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
+            rgba_image = enhanced_image;
         }
 
-        // Find the bounds of non-transparent pixels to trim whitespace
-        let mut min_x = width as u32;
-        let mut min_y = height as u32;
-        let mut max_x = 0u32;
-        let mut max_y = 0u32;
-
-        let mut has_content = false;
-
-        for y in 0..height as u32 {
-            for x in 0..width as u32 {
-                let pixel = rgba_image.get_pixel(x, y);
-                if pixel[3] > 0 {
-                    // If pixel has any opacity
-                    has_content = true;
-                    min_x = min_x.min(x);
-                    min_y = min_y.min(y);
-                    max_x = max_x.max(x);
-                    max_y = max_y.max(y);
-                }
-            }
-        }
-
-        // Only trim if we found content and there's actually whitespace to trim
-        let trimmed_image = if has_content
-            && (min_x > 0 || min_y > 0 || max_x < width as u32 - 1 || max_y < height as u32 - 1)
-        {
-            // Add a small padding (2 pixels) around the content
-            let padding = 2u32;
-            let trim_min_x = min_x.saturating_sub(padding);
-            let trim_min_y = min_y.saturating_sub(padding);
-            let trim_max_x = (max_x + padding).min(width as u32 - 1);
-            let trim_max_y = (max_y + padding).min(height as u32 - 1);
-
-            let trim_width = trim_max_x - trim_min_x + 1;
-            let trim_height = trim_max_y - trim_min_y + 1;
-
-            // Create a new image with the trimmed dimensions
-            let mut trimmed = image::RgbaImage::new(trim_width, trim_height);
-
-            // Copy the content to the new image
-            for y in 0..trim_height {
-                for x in 0..trim_width {
-                    let src_x = trim_min_x + x;
-                    let src_y = trim_min_y + y;
-                    let pixel = rgba_image.get_pixel(src_x, src_y);
-                    trimmed.put_pixel(x, y, *pixel);
-                }
-            }
-
-            // Adjust hotspot coordinates for the trimmed image
-            hotspot_x = (hotspot_x * width as f64 - trim_min_x as f64) / trim_width as f64;
-            hotspot_y = (hotspot_y * height as f64 - trim_min_y as f64) / trim_height as f64;
-
-            trimmed
-        } else {
-            rgba_image
-        };
-
-        // Convert to PNG format
         let mut png_data = Vec::new();
-        trimmed_image
+        if rgba_image
             .write_to(
                 &mut std::io::Cursor::new(&mut png_data),
                 image::ImageFormat::Png,
             )
-            .ok()?;
+            .is_err()
+        {
+            return None;
+        }
 
         Some(CursorData {
             image: png_data,
             hotspot: XY::new(hotspot_x, hotspot_y),
+            shape: Some(cursor_shape),
         })
     }
 }

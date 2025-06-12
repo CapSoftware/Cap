@@ -33,33 +33,35 @@ pub fn bring_window_to_focus(window_id: u32) {
     let _ = unsafe { SetForegroundWindow(HWND(window_id as *mut c_void)) };
 }
 
-pub fn get_cursor_shape(cursors: &DefaultCursors) -> CursorShape {
+pub fn get_cursor_shape(cursors: &DefaultCursors) -> cap_project::CursorShape {
     let mut cursor_info = CURSORINFO {
         cbSize: std::mem::size_of::<CURSORINFO>() as u32,
         ..Default::default()
     };
     match unsafe { GetCursorInfo(&mut cursor_info) } {
         Ok(_) => match cursor_info.hCursor.0 {
-            ptr if ptr == cursors.arrow => CursorShape::Arrow,
-            ptr if ptr == cursors.ibeam => CursorShape::IBeam,
-            ptr if ptr == cursors.wait => CursorShape::Wait,
-            ptr if ptr == cursors.cross => CursorShape::Crosshair,
-            ptr if ptr == cursors.up_arrow => CursorShape::ResizeUp,
-            ptr if ptr == cursors.size_we => CursorShape::ResizeLeftRight,
-            ptr if ptr == cursors.size_ns => CursorShape::ResizeUpDown,
-            ptr if ptr == cursors.size_nwse => CursorShape::ResizeUpLeftAndDownRight,
-            ptr if ptr == cursors.size_nesw => CursorShape::ResizeUpRightAndDownLeft,
-            ptr if ptr == cursors.size_all => CursorShape::ResizeAll,
-            ptr if ptr == cursors.hand => CursorShape::OpenHand,
-            ptr if ptr == cursors.no => CursorShape::NotAllowed,
-            ptr if ptr == cursors.appstarting => CursorShape::Appstarting,
-            ptr if ptr == cursors.help => CursorShape::Help,
-            ptr if ptr == cursors.pin || ptr == cursors.person => CursorShape::OpenHand,
+            ptr if ptr == cursors.arrow => cap_project::CursorShape::Arrow,
+            ptr if ptr == cursors.ibeam => cap_project::CursorShape::IBeam,
+            ptr if ptr == cursors.wait => cap_project::CursorShape::Wait,
+            ptr if ptr == cursors.cross => cap_project::CursorShape::Crosshair,
+            ptr if ptr == cursors.up_arrow => cap_project::CursorShape::ResizeUp,
+            ptr if ptr == cursors.size_we => cap_project::CursorShape::ResizeLeftRight,
+            ptr if ptr == cursors.size_ns => cap_project::CursorShape::ResizeUpDown,
+            ptr if ptr == cursors.size_nwse => cap_project::CursorShape::ResizeUpLeftAndDownRight,
+            ptr if ptr == cursors.size_nesw => cap_project::CursorShape::ResizeUpRightAndDownLeft,
+            ptr if ptr == cursors.size_all => cap_project::CursorShape::ResizeAll,
+            ptr if ptr == cursors.hand => cap_project::CursorShape::OpenHand,
+            ptr if ptr == cursors.no => cap_project::CursorShape::NotAllowed,
+            ptr if ptr == cursors.appstarting => cap_project::CursorShape::Appstarting,
+            ptr if ptr == cursors.help => cap_project::CursorShape::Help,
+            ptr if ptr == cursors.pin || ptr == cursors.person => {
+                cap_project::CursorShape::OpenHand
+            }
             // Usually 0, meaning the cursor is hidden. On Windows 8+, a value of 2 means the cursor is supressed
             // as the user is using touch input instead.
-            _ => CursorShape::Hidden,
+            _ => cap_project::CursorShape::Hidden,
         },
-        Err(_) => CursorShape::Unknown,
+        Err(_) => cap_project::CursorShape::Unknown,
     }
 }
 

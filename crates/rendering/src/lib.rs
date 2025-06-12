@@ -1,7 +1,7 @@
 use anyhow::Result;
 use cap_project::{
-    AspectRatio, CameraXPosition, CameraYPosition, Crop, CursorEvents, ProjectConfiguration,
-    RecordingMeta, StudioRecordingMeta, XY,
+    AspectRatio, CameraXPosition, CameraYPosition, Crop, CursorEvents, CursorShape,
+    ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY,
 };
 use composite_frame::{CompositeVideoFramePipeline, CompositeVideoFrameUniforms};
 use core::f64;
@@ -23,6 +23,7 @@ use tracing::subscriber::DefaultGuard;
 use image::GenericImageView;
 use log::{debug, info, warn};
 use std::{path::PathBuf, time::Instant};
+use tracing::warn as tracing_warn;
 
 mod composite_frame;
 mod coord;
@@ -424,20 +425,168 @@ impl RenderVideoConstants {
         recording_meta: &RecordingMeta,
         meta: &StudioRecordingMeta,
     ) -> HashMap<String, CursorTexture> {
+        use tracing::{debug, error, info, warn};
         let mut textures = HashMap::new();
 
+        info!("Loading bundled high-quality SVG cursors");
+        let bundled_cursors = Self::load_bundled_svg_cursors(device, queue);
+
         let cursor_images = match &meta {
-            StudioRecordingMeta::SingleSegment { .. } => Default::default(),
+            StudioRecordingMeta::SingleSegment { .. } => {
+                info!("StudioRecordingMeta is SingleSegment, using default cursor images");
+                Default::default()
+            }
             StudioRecordingMeta::MultipleSegments { inner, .. } => {
+                info!(
+                    "StudioRecordingMeta is MultipleSegments, loading cursor images from segments"
+                );
                 inner.cursor_images(recording_meta).unwrap_or_default()
             }
         };
 
+        debug!("Found {} cursor images", cursor_images.0.len());
+
         for (cursor_id, cursor) in &cursor_images.0 {
             if !cursor.path.exists() {
+                warn!(
+                    "Cursor image path does not exist: {} (id: {})",
+                    cursor.path.display(),
+                    cursor_id
+                );
                 continue;
             }
 
+            if let Some(shape) = &cursor.shape {
+                // For Unknown cursors from older recordings, default to Arrow which has bundled support
+                let effective_shape = if *shape == cap_project::CursorShape::Unknown {
+                    info!(
+                        "Mapping Unknown cursor (id: {}) to Arrow for bundled cursor support",
+                        cursor_id
+                    );
+                    cap_project::CursorShape::Arrow
+                } else {
+                    *shape
+                };
+
+                if let Some(bundled_texture_data) = bundled_cursors.get(&effective_shape) {
+                    info!(
+                        "Using bundled high-quality cursor for shape: {:?} (id: {})",
+                        effective_shape, cursor_id
+                    );
+                    let texture = device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some(&format!("Bundled Cursor Texture {}", cursor_id)),
+                        size: wgpu::Extent3d {
+                            width: bundled_texture_data.width,
+                            height: bundled_texture_data.height,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                        view_formats: &[],
+                    });
+
+                    queue.write_texture(
+                        wgpu::ImageCopyTexture {
+                            texture: &texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        &bundled_texture_data.rgba_data,
+                        wgpu::ImageDataLayout {
+                            offset: 0,
+                            bytes_per_row: Some(4 * bundled_texture_data.width),
+                            rows_per_image: None,
+                        },
+                        wgpu::Extent3d {
+                            width: bundled_texture_data.width,
+                            height: bundled_texture_data.height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+
+                    textures.insert(
+                        cursor_id.clone(),
+                        CursorTexture {
+                            inner: texture,
+                            hotspot: Self::get_cursor_hotspot(&effective_shape),
+                        },
+                    );
+                    println!("Successfully loaded bundled cursor texture: {}", cursor_id);
+                    continue;
+                } else {
+                    tracing_warn!(
+                        "Bundled cursor not found for shape: {:?} (id: {})",
+                        effective_shape,
+                        cursor_id
+                    );
+                }
+            } else {
+                // For cursors with no shape information, also default to Arrow
+                info!("Cursor has no shape information (id: {}), mapping to Arrow for bundled cursor support", cursor_id);
+                if let Some(bundled_texture_data) =
+                    bundled_cursors.get(&cap_project::CursorShape::Arrow)
+                {
+                    info!(
+                        "Using bundled high-quality arrow cursor for untyped cursor (id: {})",
+                        cursor_id
+                    );
+                    let texture = device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some(&format!("Bundled Cursor Texture {}", cursor_id)),
+                        size: wgpu::Extent3d {
+                            width: bundled_texture_data.width,
+                            height: bundled_texture_data.height,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                        view_formats: &[],
+                    });
+
+                    queue.write_texture(
+                        wgpu::ImageCopyTexture {
+                            texture: &texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        &bundled_texture_data.rgba_data,
+                        wgpu::ImageDataLayout {
+                            offset: 0,
+                            bytes_per_row: Some(4 * bundled_texture_data.width),
+                            rows_per_image: None,
+                        },
+                        wgpu::Extent3d {
+                            width: bundled_texture_data.width,
+                            height: bundled_texture_data.height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+
+                    textures.insert(
+                        cursor_id.clone(),
+                        CursorTexture {
+                            inner: texture,
+                            hotspot: Self::get_cursor_hotspot(&cap_project::CursorShape::Arrow),
+                        },
+                    );
+                    println!("Successfully loaded bundled cursor texture: {}", cursor_id);
+                    continue;
+                } else {
+                    tracing_warn!(
+                        "Cursor image has no shape information (id: {}), falling back to recorded PNG",
+                        cursor_id
+                    );
+                }
+            }
+
+            // Fall back to loading the recorded PNG
             match image::open(&cursor.path) {
                 Ok(img) => {
                     let dimensions = img.dimensions();
@@ -509,6 +658,272 @@ impl RenderVideoConstants {
     }
 }
 
+struct BundledTextureData {
+    rgba_data: Vec<u8>,
+    width: u32,
+    height: u32,
+}
+
+impl RenderVideoConstants {
+    fn load_bundled_svg_cursors(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> HashMap<cap_project::CursorShape, BundledTextureData> {
+        use cap_project::CursorShape;
+
+        let mut cursors = HashMap::new();
+        let svg_size = 256; // Render SVGs at 256x256 for high quality
+
+        // Map of cursor shapes to their SVG content with platform-specific paths
+        #[cfg(target_os = "macos")]
+        let svg_assets = vec![
+            (
+                CursorShape::Arrow,
+                include_str!("../assets/cursors/macos/arrow.svg"),
+            ),
+            (
+                CursorShape::IBeam,
+                include_str!("../assets/cursors/macos/i_beam.svg"),
+            ),
+            (
+                CursorShape::Crosshair,
+                include_str!("../assets/cursors/macos/crosshair.svg"),
+            ),
+            (
+                CursorShape::PointingHand,
+                include_str!("../assets/cursors/macos/pointing_hand.svg"),
+            ),
+            (
+                CursorShape::ResizeLeftRight,
+                include_str!("../assets/cursors/macos/resize_left_right.svg"),
+            ),
+            (
+                CursorShape::ResizeUpDown,
+                include_str!("../assets/cursors/macos/resize_up_down.svg"),
+            ),
+            (
+                CursorShape::NotAllowed,
+                include_str!("../assets/cursors/macos/not_allowed.svg"),
+            ),
+            (
+                CursorShape::OpenHand,
+                include_str!("../assets/cursors/macos/open_hand.svg"),
+            ),
+            (
+                CursorShape::ClosedHand,
+                include_str!("../assets/cursors/macos/closed_hand.svg"),
+            ),
+            (
+                CursorShape::Help,
+                include_str!("../assets/cursors/macos/help.svg"),
+            ),
+            (
+                CursorShape::Wait,
+                include_str!("../assets/cursors/macos/wait.svg"),
+            ),
+            (
+                CursorShape::VerticalIBeam,
+                include_str!("../assets/cursors/macos/vertical_i_beam.svg"),
+            ),
+            (
+                CursorShape::ContextualMenu,
+                include_str!("../assets/cursors/macos/contextual_menu.svg"),
+            ),
+            (
+                CursorShape::ResizeAll,
+                include_str!("../assets/cursors/macos/resize_all.svg"),
+            ),
+            (
+                CursorShape::ResizeLeft,
+                include_str!("../assets/cursors/macos/resize_left.svg"),
+            ),
+            (
+                CursorShape::ResizeRight,
+                include_str!("../assets/cursors/macos/resize_right.svg"),
+            ),
+            (
+                CursorShape::ResizeUp,
+                include_str!("../assets/cursors/macos/resize_up.svg"),
+            ),
+            (
+                CursorShape::ResizeDown,
+                include_str!("../assets/cursors/macos/resize_down.svg"),
+            ),
+            (
+                CursorShape::DragCopy,
+                include_str!("../assets/cursors/macos/drag_copy.svg"),
+            ),
+            (
+                CursorShape::DragLink,
+                include_str!("../assets/cursors/macos/drag_link.svg"),
+            ),
+        ];
+
+        #[cfg(target_os = "windows")]
+        let svg_assets = vec![
+            (
+                CursorShape::Arrow,
+                include_str!("../assets/cursors/windows/arrow.svg"),
+            ),
+            (
+                CursorShape::IBeam,
+                include_str!("../assets/cursors/windows/i_beam.svg"),
+            ),
+            (
+                CursorShape::Crosshair,
+                include_str!("../assets/cursors/windows/crosshair.svg"),
+            ),
+            (
+                CursorShape::ResizeLeftRight,
+                include_str!("../assets/cursors/windows/resize_left_right.svg"),
+            ),
+            (
+                CursorShape::ResizeUpDown,
+                include_str!("../assets/cursors/windows/resize_up_down.svg"),
+            ),
+            (
+                CursorShape::NotAllowed,
+                include_str!("../assets/cursors/windows/not_allowed.svg"),
+            ),
+            (
+                CursorShape::Help,
+                include_str!("../assets/cursors/windows/help.svg"),
+            ),
+            (
+                CursorShape::Wait,
+                include_str!("../assets/cursors/windows/wait.svg"),
+            ),
+            (
+                CursorShape::OpenHand,
+                include_str!("../assets/cursors/windows/open_hand.svg"),
+            ),
+            (
+                CursorShape::ResizeUpLeftAndDownRight,
+                include_str!("../assets/cursors/windows/resize_up_left_and_down_right.svg"),
+            ),
+            (
+                CursorShape::ResizeUpRightAndDownLeft,
+                include_str!("../assets/cursors/windows/resize_up_right_and_down_left.svg"),
+            ),
+            (
+                CursorShape::ResizeAll,
+                include_str!("../assets/cursors/windows/resize_all.svg"),
+            ),
+            (
+                CursorShape::Appstarting,
+                include_str!("../assets/cursors/windows/appstarting.svg"),
+            ),
+        ];
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let svg_assets = vec![
+            (
+                CursorShape::Arrow,
+                include_str!("../assets/cursors/macos/arrow.svg"),
+            ),
+            (
+                CursorShape::IBeam,
+                include_str!("../assets/cursors/macos/i_beam.svg"),
+            ),
+            (
+                CursorShape::Crosshair,
+                include_str!("../assets/cursors/macos/crosshair.svg"),
+            ),
+            (
+                CursorShape::NotAllowed,
+                include_str!("../assets/cursors/macos/not_allowed.svg"),
+            ),
+        ];
+
+        for (shape, svg_content) in svg_assets {
+            if let Some(texture_data) = Self::rasterize_svg_cursor(svg_content, svg_size) {
+                cursors.insert(shape, texture_data);
+                println!("Successfully rasterized bundled cursor: {:?}", shape);
+            } else {
+                println!("Failed to rasterize bundled cursor: {:?}", shape);
+            }
+        }
+
+        cursors
+    }
+
+    fn rasterize_svg_cursor(svg_content: &str, size: u32) -> Option<BundledTextureData> {
+        use usvg::Transform;
+
+        // Parse SVG
+        let options = usvg::Options::default();
+        let tree = match usvg::Tree::from_str(svg_content, &options) {
+            Ok(tree) => tree,
+            Err(e) => {
+                println!("Failed to parse SVG: {}", e);
+                return None;
+            }
+        };
+
+        // Create pixmap
+        let mut pixmap = tiny_skia::Pixmap::new(size, size)?;
+
+        // Calculate scale to fit the SVG in our desired size
+        let svg_size = tree.size();
+        let scale_x = size as f32 / svg_size.width();
+        let scale_y = size as f32 / svg_size.height();
+        let scale = scale_x.min(scale_y);
+
+        // Center the SVG
+        let translate_x = (size as f32 - svg_size.width() * scale) / 2.0;
+        let translate_y = (size as f32 - svg_size.height() * scale) / 2.0;
+
+        let transform = Transform::from_translate(translate_x, translate_y).pre_scale(scale, scale);
+
+        // Render SVG to pixmap
+        resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+        // Convert pixmap to RGBA bytes
+        let rgba_data = pixmap.data().to_vec();
+
+        Some(BundledTextureData {
+            rgba_data,
+            width: size,
+            height: size,
+        })
+    }
+
+    fn get_cursor_hotspot(shape: &cap_project::CursorShape) -> XY<f32> {
+        use cap_project::CursorShape;
+
+        // Hotspot coordinates as a fraction of cursor size (0.0 to 1.0)
+        // These match typical OS cursor hotspots
+        match shape {
+            CursorShape::Arrow => XY::new(0.0, 0.0), // Top-left corner
+            CursorShape::IBeam => XY::new(0.5, 0.5), // Center
+            CursorShape::Crosshair => XY::new(0.5, 0.5), // Center
+            CursorShape::PointingHand => XY::new(0.3, 0.1), // Finger tip
+            CursorShape::ResizeLeftRight => XY::new(0.5, 0.5), // Center
+            CursorShape::ResizeUpDown => XY::new(0.5, 0.5), // Center
+            CursorShape::ResizeLeft => XY::new(0.5, 0.5), // Center
+            CursorShape::ResizeRight => XY::new(0.5, 0.5), // Center
+            CursorShape::ResizeUp => XY::new(0.5, 0.5), // Center
+            CursorShape::ResizeDown => XY::new(0.5, 0.5), // Center
+            CursorShape::ResizeUpLeftAndDownRight => XY::new(0.5, 0.5), // Center
+            CursorShape::ResizeUpRightAndDownLeft => XY::new(0.5, 0.5), // Center
+            CursorShape::ResizeAll => XY::new(0.5, 0.5), // Center
+            CursorShape::NotAllowed => XY::new(0.5, 0.5), // Center
+            CursorShape::Wait => XY::new(0.5, 0.5),  // Center
+            CursorShape::Help => XY::new(0.0, 0.0),  // Top-left like arrow
+            CursorShape::OpenHand => XY::new(0.5, 0.5), // Center
+            CursorShape::ClosedHand => XY::new(0.5, 0.5), // Center
+            CursorShape::DisappearingItem => XY::new(0.5, 0.5), // Center
+            CursorShape::VerticalIBeam => XY::new(0.5, 0.5), // Center
+            CursorShape::DragLink => XY::new(0.3, 0.1), // Like pointing hand
+            CursorShape::DragCopy => XY::new(0.3, 0.1), // Like pointing hand
+            CursorShape::ContextualMenu => XY::new(0.0, 0.0), // Top-left like arrow
+            CursorShape::Appstarting => XY::new(0.0, 0.0), // Top-left like arrow
+            CursorShape::Hidden => XY::new(0.5, 0.5), // Center (shouldn't be used)
+            CursorShape::Unknown => XY::new(0.5, 0.5), // Center (shouldn't be used)
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ProjectUniforms {
     pub output_size: (u32, u32),
@@ -539,13 +954,12 @@ const SCREEN_MAX_PADDING: f64 = 0.4;
 
 impl ProjectUniforms {
     fn get_crop(options: &RenderOptions, project: &ProjectConfiguration) -> Crop {
-        project.background.crop.as_ref().cloned().unwrap_or(Crop {
-            position: XY { x: 0, y: 0 },
-            size: XY {
-                x: options.screen_size.x,
-                y: options.screen_size.y,
-            },
-        })
+        project
+            .background
+            .crop
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| Crop::with_size(options.screen_size.x, options.screen_size.y))
     }
 
     fn get_padding(options: &RenderOptions, project: &ProjectConfiguration) -> f64 {
@@ -618,9 +1032,7 @@ impl ProjectUniforms {
 
         let scaled_width = ((base_width as f32 * scale) as u32 + 1) & !1;
         let scaled_height = ((base_height as f32 * scale) as u32 + 1) & !1;
-        return (scaled_width, scaled_height);
-
-        // ((base_width + 1) & !1, (base_height + 1) & !1)
+        (scaled_width, scaled_height)
     }
 
     pub fn display_offset(
@@ -725,18 +1137,10 @@ impl ProjectUniforms {
                     .map(|t| t.zoom_segments.as_slice())
                     .unwrap_or(&[]),
             ),
-            interpolate_cursor(
-                cursor_events,
-                (segment_frames.recording_time - 0.2).max(0.0),
-                (!project.cursor.raw).then(|| SpringMassDamperSimulationConfig {
-                    tension: project.cursor.tension,
-                    mass: project.cursor.mass,
-                    friction: project.cursor.friction,
-                }),
-            )
-            .as_ref()
-            .map(|i| i.position)
-            .unwrap_or_else(|| Coord::new(XY::new(0.5, 0.5))),
+            interpolated_cursor
+                .as_ref()
+                .map(|i| i.position)
+                .unwrap_or_else(|| Coord::new(XY::new(0.5, 0.5))),
         );
 
         let display = {
@@ -1035,15 +1439,6 @@ impl RendererLayers {
             );
         }
 
-        // if let Some(captions) = &uniforms.project.captions {
-        //     self.captions.prepare(
-        //         uniforms,
-        //         segment_frames,
-        //         uniforms.resolution_base,
-        //         constants,
-        //     );
-        // }
-
         Ok(())
     }
 
@@ -1102,11 +1497,6 @@ impl RendererLayers {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.camera.render(&mut pass);
         }
-
-        // {
-        //     let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
-        //     self.captions.render(&mut pass);
-        // }
     }
 }
 
@@ -1205,8 +1595,6 @@ impl RenderSession {
     }
 }
 
-// TODO: reuse as many resources as possible
-// https://github.com/gfx-rs/wgpu/wiki/Encapsulating-Graphics-Work
 async fn produce_frame(
     constants: &RenderVideoConstants,
     segment_frames: DecodedSegmentFrames,
@@ -1237,7 +1625,6 @@ async fn produce_frame(
     .await?)
 }
 
-// Helper function to parse color components from hex strings
 fn parse_color_component(hex_color: &str, index: usize) -> f32 {
     // Remove # prefix if present
     let color = hex_color.trim_start_matches('#');

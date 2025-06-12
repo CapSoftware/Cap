@@ -44,6 +44,8 @@ pub struct CursorImages(pub HashMap<String, CursorImage>);
 pub struct CursorImage {
     pub path: PathBuf,
     pub hotspot: XY<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shape: Option<crate::CursorShape>,
 }
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone)]

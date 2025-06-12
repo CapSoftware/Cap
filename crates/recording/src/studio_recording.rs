@@ -478,6 +478,7 @@ async fn stop_recording(
                                 image_path: RelativePathBuf::from("content/cursors")
                                     .join(&cursor.file_name),
                                 hotspot: cursor.hotspot,
+                                shape: cursor.shape,
                             },
                         )
                     })
