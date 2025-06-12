@@ -260,11 +260,16 @@ const EmptyMessage = ({
   <div className="flex flex-col gap-3 justify-center items-center h-full">
     <p className="text-sm text-center text-gray-10">{message}</p>
     {showUpgradeButton && (
-      <Link href="/dashboard/settings/organization">
-        <Button variant="primary" size="sm">
-          Invite Members
-        </Button>
-      </Link>
+      <Button
+        href="/dashboard/settings/organization"
+        variant="primary"
+        size="sm"
+        onClick={() => {
+          setIsOpen(false);
+        }}
+      >
+        Invite Members
+      </Button>
     )}
   </div>
 );
