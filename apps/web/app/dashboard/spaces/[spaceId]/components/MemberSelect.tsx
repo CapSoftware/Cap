@@ -7,12 +7,14 @@ import {
   DropdownMenuTrigger,
   DropdownMenuItem,
   Avatar,
+  Button,
 } from "@cap/ui";
 import { ChevronDown } from "lucide-react";
 import clsx from "clsx";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faXmark } from "@fortawesome/free-solid-svg-icons";
 import Image from "next/image";
+import Link from "next/link";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 
 // Define types for organization member objects
@@ -116,10 +118,18 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
           // Case 1: No org members at all (except current user)
           (activeOrganization?.members.filter((m) => m.user?.id !== user?.id)
             .length === 0 ? (
-            <EmptyMessage message="No members in your organization" />
+            <div className="py-3">
+              <EmptyMessage
+                message="No members in your organization"
+                showUpgradeButton={true}
+              />
+            </div>
           ) : // Case 2: Has org members but none selected for this space
           selected.length === 0 && orgMemberOptions.length === 0 ? (
-            <EmptyMessage message="No members have been added to this space" />
+            <EmptyMessage
+              message="No members have been added to this space"
+              showUpgradeButton={false}
+            />
           ) : (
             <>
               {orgMemberOptions.length > 0 && (
@@ -240,8 +250,21 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
   }
 );
 
-const EmptyMessage = ({ message }: { message: string }) => (
-  <div className="flex flex-1 justify-center items-center h-full">
+const EmptyMessage = ({
+  message,
+  showUpgradeButton = false,
+}: {
+  message: string;
+  showUpgradeButton?: boolean;
+}) => (
+  <div className="flex flex-col gap-3 justify-center items-center h-full">
     <p className="text-sm text-center text-gray-10">{message}</p>
+    {showUpgradeButton && (
+      <Link href="/dashboard/settings/organization">
+        <Button variant="primary" size="sm">
+          Invite Members
+        </Button>
+      </Link>
+    )}
   </div>
 );
