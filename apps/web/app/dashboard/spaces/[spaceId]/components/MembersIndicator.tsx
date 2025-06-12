@@ -1,7 +1,6 @@
 "use client";
 
-import { useState } from "react";
-import { Avatar } from "@cap/ui";
+import { useState, useCallback } from "react";
 import {
   Button,
   Dialog,
@@ -87,16 +86,20 @@ export const MembersIndicator = ({
     }
   };
 
-  const orgMembers = (field: z.infer<typeof formSchema>) =>
-    organizationMembers
-      .filter(
-        (m) => (field.value ?? []).includes(m.userId) && m.userId !== user.id
-      )
-      .map((m) => ({
-        value: m.userId,
-        label: m.name || m.email,
-        image: m.image || undefined,
-      }));
+  const OrgMembers = useCallback(
+    (field: { value: string[] }) => {
+      return organizationMembers
+        .filter(
+          (m) => (field.value ?? []).includes(m.userId) && m.userId !== user.id
+        )
+        .map((m) => ({
+          value: m.userId,
+          label: m.name || m.email,
+          image: m.image || undefined,
+        }));
+    },
+    [organizationMembers, user]
+  );
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -132,13 +135,15 @@ export const MembersIndicator = ({
                           placeholder="Add member..."
                           disabled={!canManageMembers}
                           emptyMessage={
-                            orgMembers(field).length === 0
+                            OrgMembers(field).length === 0
                               ? "No members in your organization"
                               : "No members have been added to this space"
                           }
                           showEmptyIfNoMembers
-                          selected={orgMembers(field)}
-                          onSelect={field.onChange}
+                          selected={OrgMembers(field)}
+                          onSelect={(selected) => {
+                            field.onChange(selected.map((opt) => opt.value));
+                          }}
                         />
                       </FormControl>
                     );
