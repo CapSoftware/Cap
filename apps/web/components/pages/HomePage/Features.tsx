@@ -1,6 +1,7 @@
+import { classNames } from "@cap/utils";
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
+import clsx from "clsx";
 import { memo } from "react";
-
 
 type Feature = {
   title: string;
@@ -11,99 +12,94 @@ type Feature = {
     bottom?: number;
     left?: number;
     right?: number;
-  }
+  };
 };
 
-
 const VideoCaptureArt = memo(() => {
-  const {RiveComponent: VideoCaptureRive} = useRive({
+  const { RiveComponent: VideoCaptureRive } = useRive({
     src: "/rive/bento.riv",
     artboard: "videocapture",
     animations: ["in"],
     autoplay: true,
     layout: new Layout({
-      fit: Fit.Contain
+      fit: Fit.Contain,
     }),
   });
   return (
     <VideoCaptureRive className="w-full max-w-[420px] mx-auto h-[244px]" />
-  )
-})
+  );
+});
 
 const StorageOptionsArt = memo(() => {
-  const {RiveComponent: StorageOptionsRive} = useRive({
+  const { RiveComponent: StorageOptionsRive } = useRive({
     src: "/rive/bento.riv",
     artboard: "storageoptions",
     animations: ["in"],
     autoplay: true,
     layout: new Layout({
-      fit: Fit.Contain
+      fit: Fit.Contain,
     }),
   });
   return (
     <StorageOptionsRive className="w-full max-w-[350px] mx-auto h-[275px]" />
-  )
-})
+  );
+});
 
 const CollabArt = memo(() => {
-  const {RiveComponent: CollabRive} = useRive({
+  const { RiveComponent: CollabRive } = useRive({
     src: "/rive/bento.riv",
     artboard: "collab",
     animations: ["in"],
     autoplay: true,
     layout: new Layout({
-      fit: Fit.Contain
+      fit: Fit.Contain,
     }),
   });
-  return (
-    <CollabRive className="w-full max-w-[500px] mx-auto h-[280px]" />
-  )
-})
+  return <CollabRive className="w-full max-w-[500px] mx-auto h-[280px]" />;
+});
 
 const PrivacyFirstArt = memo(() => {
-  const {RiveComponent: PrivacyFirstRive} = useRive({
+  const { RiveComponent: PrivacyFirstRive } = useRive({
     src: "/rive/bento.riv",
     artboard: "privacyfirst",
     animations: ["in"],
     autoplay: true,
     layout: new Layout({
-      fit: Fit.Contain
+      fit: Fit.Contain,
     }),
   });
   return (
     <PrivacyFirstRive className="w-full max-w-[560px] mx-auto h-[250px]" />
-  )
-})
+  );
+});
 
 const PlatformSupportArt = memo(() => {
-  const {RiveComponent: PlatformSupportRive} = useRive({
+  const { RiveComponent: PlatformSupportRive } = useRive({
     src: "/rive/bento.riv",
     artboard: "platformsupport",
     animations: ["in"],
     autoplay: true,
     layout: new Layout({
-      fit: Fit.Contain
+      fit: Fit.Contain,
     }),
   });
   return (
-    <PlatformSupportRive className="w-full max-w-[600px] mx-auto h-[280px]" />
-  )
-})
+    <PlatformSupportRive className="w-full max-w-[500px] mx-auto h-[280px]" />
+  );
+});
 
 const EveryoneArt = memo(() => {
-  const {RiveComponent: EveryoneRive} = useRive({
+  const { RiveComponent: EveryoneRive } = useRive({
     src: "/rive/bento.riv",
     artboard: "everyone",
     animations: ["in"],
     autoplay: true,
     layout: new Layout({
-      fit: Fit.Contain
+      fit: Fit.Contain,
     }),
   });
-  return (
-    <EveryoneRive className="w-full max-w-[500px] mx-auto h-[250px]" />
-  )
-})
+  return <EveryoneRive className="w-full max-w-[500px] mx-auto h-[250px]" />;
+});
 
 const features: Feature[] = [
   {
@@ -145,6 +141,12 @@ const features: Feature[] = [
     description:
       "For creators, teams, and educators alike, this screen recorder is designed to adapt to different needs and workflows—whether you’re capturing lessons, product demos, or quick updates. It’s a simple, customizable tool that makes screen recording accessible to everyone.",
   },
+  {
+    title: "Cap AI",
+    rive: undefined,
+    description:
+      "Cap AI is a powerful tool that uses advanced AI to help you create better content. With features like automatic transcription, video editing, and content optimization, Cap AI makes it easy to create engaging and effective content for your audience.",
+  },
 ];
 
 const Features = () => {
@@ -156,57 +158,96 @@ const Features = () => {
         complicated. Cap is crafted to streamline your workflow, so you can
         record, edit, and share without jumping through hoops.
       </p>
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 mt-[52px]">
-        {features.map((feature) => (
-          <FeatureCard
-            key={feature.title}
-            title={feature.title}
-            description={feature.description}
-            rive={feature.rive}
-            imageAlt={feature.title}
-            relative={feature.relative}
-          />
-        ))}
+      <div className="flex flex-col gap-4 mt-[52px]">
+        {/* Second row - 2 features */}
+        <div className="grid grid-cols-1 gap-4 mx-auto w-full md:grid-cols-2">
+          {features.slice(3, 5).map((feature) => (
+            <FeatureCard
+              key={feature.title}
+              title={feature.title}
+              className="flex-1 min-w-full"
+              description={feature.description}
+              rive={feature.rive}
+              imageAlt={feature.title}
+              relative={feature.relative}
+            />
+          ))}
+        </div>
+
+        {/* First row - 3 features */}
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          {features.slice(0, 3).map((feature) => (
+            <FeatureCard
+              key={feature.title}
+              title={feature.title}
+              description={feature.description}
+              rive={feature.rive}
+              imageAlt={feature.title}
+              relative={feature.relative}
+            />
+          ))}
+        </div>
+
+        {/* Third row - 2 features */}
+        <div className="grid grid-cols-1 gap-4 mx-auto w-full md:grid-cols-2">
+          {features.slice(5, 7).map((feature) => (
+            <FeatureCard
+              key={feature.title}
+              title={feature.title}
+              description={feature.description}
+              rive={feature.rive}
+              imageAlt={feature.title}
+              relative={feature.relative}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );
 };
-
 
 const FeatureCard = ({
   title,
   description,
   rive,
   relative,
+  className,
 }: {
-    title: string;
-    description: string;
-    rive?: JSX.Element;
-    img?: string;
-    imageAlt: string;
-    imageClass?: string;
-    relative?: {
-      top?: number;
-      bottom?: number;
-      left?: number;
-      right?: number;
-    }
+  title: string;
+  description: string;
+  rive?: JSX.Element;
+  img?: string;
+  className?: string;
+  imageAlt: string;
+  imageClass?: string;
+  relative?: {
+    top?: number;
+    bottom?: number;
+    left?: number;
+    right?: number;
+  };
 }) => {
   return (
-    <div className="flex flex-col gap-10 justify-evenly p-6 text-left rounded-xl border md:p-8 bg-gray-1 border-gray-5">
-      <div 
-      style={{
-        top: relative?.top,
-        bottom: relative?.bottom,
-        left: relative?.left,
-        right: relative?.right,
-      }}
-      className="relative flex-1 flex-grow justify-center content-center">
-      {rive}
+    <div
+      className={clsx(
+        "flex flex-col gap-10 justify-evenly p-6 text-left rounded-xl border md:p-8 bg-gray-1 border-gray-5",
+        className
+      )}
+    >
+      <div
+        style={{
+          top: relative?.top,
+          bottom: relative?.bottom,
+          left: relative?.left,
+          right: relative?.right,
+        }}
+        className="relative flex-1 flex-grow justify-center content-center"
+      >
+        {rive}
       </div>
       <div className="flex flex-col gap-2 justify-end h-fit">
-      <h3 className="text-lg font-medium">{title}</h3>
-      <p className="text-base text-gray-10">{description}</p>
+        <h3 className="text-lg font-medium">{title}</h3>
+        <p className="text-base text-gray-10">{description}</p>
       </div>
     </div>
   );
