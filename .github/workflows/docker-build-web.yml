@@ -43,7 +43,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/capsoftware/cap-web
+          images: ghcr.io/AkashRajpurohit/cap-web
           tags: |
             type=raw,value=${{ inputs.tag || 'latest' }}
 
