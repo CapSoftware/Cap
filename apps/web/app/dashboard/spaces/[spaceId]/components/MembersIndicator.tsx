@@ -104,7 +104,7 @@ export const MembersIndicator = ({
   );
 
   return (
-    <div className="flex items-center gap-3 mb-4">
+    <div className="flex gap-3 items-center mb-4">
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogTrigger asChild>
           <Button variant="gray" size="sm" className="z-10">
@@ -173,7 +173,7 @@ export const MembersIndicator = ({
 
       {onAddVideos && (
         <Button variant="dark" size="sm" onClick={onAddVideos}>
-          <FontAwesomeIcon className="mr-1 size-4" icon={faPlus} />
+          <FontAwesomeIcon className="size-3" icon={faPlus} />
           Add videos
         </Button>
       )}

@@ -10,14 +10,12 @@ import {
   DialogTrigger,
   DialogFooter,
 } from "@cap/ui";
+import Image from "next/image";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import {
-  faUserGroup,
-  faPlus,
-  faBuilding,
-} from "@fortawesome/free-solid-svg-icons";
+import { faPlus, faBuilding } from "@fortawesome/free-solid-svg-icons";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Avatar } from "@cap/ui";
+import clsx from "clsx";
 
 export type OrganizationMemberData = {
   id: string;
@@ -31,7 +29,6 @@ export type OrganizationMemberData = {
 type OrganizationIndicatorProps = {
   memberCount: number;
   members: OrganizationMemberData[];
-  organizationId: string;
   organizationName: string;
   canManageMembers: boolean;
   onAddVideos?: () => void;
@@ -40,7 +37,6 @@ type OrganizationIndicatorProps = {
 export const OrganizationIndicator = ({
   memberCount,
   members,
-  organizationId,
   organizationName,
   canManageMembers,
   onAddVideos,
@@ -49,7 +45,7 @@ export const OrganizationIndicator = ({
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="flex items-center gap-3 mb-4">
+    <div className="flex gap-3 items-center mb-4">
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogTrigger asChild>
           <Button variant="gray" size="sm" className="z-10">
@@ -69,38 +65,49 @@ export const OrganizationIndicator = ({
 
           <div className="p-5">
             <div className="flex flex-col">
-              <div className="space-y-3 max-h-[320px] overflow-y-auto">
-                {members.map((member) => (
-                  <div
-                    key={member.id}
-                    className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-3 transition-colors"
-                  >
-                    <Avatar
-                      src={member.image || undefined}
-                      alt={member.name || member.email}
-                      size="sm"
-                      fallback={(member.name || member.email)
-                        .split(" ")
-                        .map((n) => n[0])
-                        .join("")
-                        .toUpperCase()
-                        .slice(0, 2)}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-12 truncate">
-                        {member.name || member.email}
-                      </p>
-                      {member.name && (
-                        <p className="text-xs text-gray-10 truncate">
-                          {member.email}
-                        </p>
+              <div className="space-y-3 max-h-[320px] custom-scroll overflow-y-auto">
+                {members
+                  .sort((a, b) => b.role.localeCompare(a.role))
+                  .map((member) => (
+                    <div
+                      key={member.id}
+                      className="flex gap-3 items-center px-3 py-2 rounded-lg transition-colors hover:bg-gray-3"
+                    >
+                      {member.image ? (
+                        <Image
+                          src={member.image}
+                          alt={member.name || member.email}
+                          width={36}
+                          height={36}
+                          className="rounded-full"
+                        />
+                      ) : (
+                        <Avatar
+                          letterClass="text-md"
+                          name={member.name || member.email}
+                          className="mr-3 size-9 text-gray-12"
+                        />
                       )}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate text-gray-12">
+                          {member.name || member.email}
+                        </p>
+                        {member.name && (
+                          <p className="text-xs truncate text-gray-10">
+                            {member.email}
+                          </p>
+                        )}
+                      </div>
+                      <p
+                        className={clsx(
+                          "px-2.5 py-1.5 text-xs font-medium capitalize text-white rounded-full",
+                          member.role == "owner" ? "bg-blue-500" : "bg-gray-7"
+                        )}
+                      >
+                        {member.role}
+                      </p>
                     </div>
-                    <span className="text-xs text-gray-10 capitalize">
-                      {member.role}
-                    </span>
-                  </div>
-                ))}
+                  ))}
               </div>
             </div>
           </div>
@@ -109,11 +116,11 @@ export const OrganizationIndicator = ({
             <div className="flex justify-between w-full">
               {canManageMembers && (
                 <Button
-                  variant="primary"
+                  variant="dark"
                   size="sm"
                   href="/dashboard/settings/organization"
                 >
-                  <FontAwesomeIcon className="mr-1 size-4" icon={faPlus} />
+                  <FontAwesomeIcon className="size-3" icon={faPlus} />
                   Invite members
                 </Button>
               )}
@@ -127,7 +134,7 @@ export const OrganizationIndicator = ({
 
       {onAddVideos && (
         <Button variant="dark" size="sm" onClick={onAddVideos}>
-          <FontAwesomeIcon className="mr-1 size-4" icon={faPlus} />
+          <FontAwesomeIcon className="size-3" icon={faPlus} />
           Add videos
         </Button>
       )}

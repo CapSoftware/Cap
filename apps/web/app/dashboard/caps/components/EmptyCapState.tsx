@@ -43,7 +43,7 @@ export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
             Download Cap
           </Button>
           <p className="text-sm text-gray-10">or</p>
-          <UploadCapButton dark={true} />
+          <UploadCapButton />
         </div>
       </div>
     </div>

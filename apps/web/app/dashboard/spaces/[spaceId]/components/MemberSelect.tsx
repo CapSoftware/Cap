@@ -12,9 +12,8 @@ import {
 import { ChevronDown } from "lucide-react";
 import clsx from "clsx";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faXmark } from "@fortawesome/free-solid-svg-icons";
+import { faPlus, faXmark } from "@fortawesome/free-solid-svg-icons";
 import Image from "next/image";
-import Link from "next/link";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 
 // Define types for organization member objects
@@ -268,10 +267,11 @@ const EmptyMessage: React.FC<EmptyMessageProps> = ({
     {showUpgradeButton && (
       <Button
         href="/dashboard/settings/organization"
-        variant="primary"
+        variant="dark"
         size="sm"
         onClick={onButtonClick}
       >
+        <FontAwesomeIcon className="size-3" icon={faPlus} />
         Invite members
       </Button>
     )}

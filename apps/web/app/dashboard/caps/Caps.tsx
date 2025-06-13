@@ -282,7 +282,6 @@ export const Caps = ({
         <UploadCapButton
           onStart={handleUploadStart}
           size="sm"
-          dark={false}
           onProgress={handleUploadProgress}
           onComplete={handleUploadComplete}
         />

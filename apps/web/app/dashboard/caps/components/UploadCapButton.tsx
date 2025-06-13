@@ -16,20 +16,17 @@ import {
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faUpload } from "@fortawesome/free-solid-svg-icons";
-import clsx from "clsx";
 
 export const UploadCapButton = ({
   onStart,
   onProgress,
   onComplete,
   size = "md",
-  dark = false,
 }: {
   onStart?: (id: string, thumbnail?: string) => void;
   onProgress?: (id: string, progress: number, uploadProgress?: number) => void;
   onComplete?: (id: string) => void;
   size?: "sm" | "lg" | "md";
-  dark?: boolean;
 }) => {
   const { user, isSubscribed } = useSharedContext();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -405,15 +402,12 @@ export const UploadCapButton = ({
       <Button
         onClick={handleClick}
         disabled={uploading}
-        variant={dark ? "dark" : "primary"}
+        variant="dark"
         className="flex gap-2 items-center"
         size={size}
         spinner={uploading}
       >
-        <FontAwesomeIcon
-          className={clsx(dark ? "text-gray-1" : "text-white", "size-3.5")}
-          icon={faUpload}
-        />
+        <FontAwesomeIcon className="size-3.5" icon={faUpload} />
         Upload Video
       </Button>
       <input
