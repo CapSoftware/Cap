@@ -2,7 +2,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { exec as execCb } from "node:child_process";
+import { exec as execCb, execFile } from "node:child_process";
 import { env } from "node:process";
 import { promisify } from "node:util";
 
@@ -108,7 +108,7 @@ async function main() {
 
     const ffmpegDir = path.join(targetDir, "ffmpeg");
     if (!(await fileExists(ffmpegDir)) || downloadedFfmpeg) {
-      await exec(`tar xf ${ffmpegZipPath} -C ${targetDir}`);
+      await execFile("tar", ["xf", ffmpegZipPath, "-C", targetDir]);
       await fs.rm(ffmpegDir, { recursive: true, force: true }).catch(() => {});
       await fs.rename(path.join(targetDir, FFMPEG_ZIP_NAME), ffmpegDir);
       console.log("Extracted ffmpeg");
