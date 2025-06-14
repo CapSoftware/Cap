@@ -263,7 +263,7 @@ export function ConfigSidebar() {
                 class={cx(
                   "flex justify-center relative border-transparent border z-10 items-center rounded-md size-9 transition will-change-transform",
                   state.selectedTab !== item.id &&
-                    "group-hover:border-gray-300 group-disabled:border-none"
+                  "group-hover:border-gray-300 group-disabled:border-none"
                 )}
               >
                 <Dynamic component={item.icon} />
@@ -940,17 +940,13 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                 ref={setBackgroundRef}
                 class="flex overflow-x-auto overscroll-contain relative z-40 flex-row gap-2 items-center mb-3 text-xs hide-scroll"
                 style={{
-                  "-webkit-mask-image": `linear-gradient(to right, transparent, black ${
-                    scrollX() > 0 ? "24px" : "0"
-                  }, black calc(100% - ${
-                    reachedEndOfScroll() ? "0px" : "24px"
-                  }), transparent)`,
+                  "-webkit-mask-image": `linear-gradient(to right, transparent, black ${scrollX() > 0 ? "24px" : "0"
+                    }, black calc(100% - ${reachedEndOfScroll() ? "0px" : "24px"
+                    }), transparent)`,
 
-                  "mask-image": `linear-gradient(to right, transparent, black ${
-                    scrollX() > 0 ? "24px" : "0"
-                  }, black calc(100% - ${
-                    reachedEndOfScroll() ? "0px" : "24px"
-                  }), transparent);`,
+                  "mask-image": `linear-gradient(to right, transparent, black ${scrollX() > 0 ? "24px" : "0"
+                    }, black calc(100% - ${reachedEndOfScroll() ? "0px" : "24px"
+                    }), transparent);`,
                 }}
               >
                 <For each={Object.entries(BACKGROUND_THEMES)}>
@@ -977,10 +973,10 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
               value={
                 project.background.source.type === "wallpaper"
                   ? wallpapers()?.find((w) =>
-                      (
-                        project.background.source as { path?: string }
-                      ).path?.includes(w.id)
-                    )?.url ?? undefined
+                    (
+                      project.background.source as { path?: string }
+                    ).path?.includes(w.id)
+                  )?.url ?? undefined
                   : undefined
               }
               onChange={(photoUrl) => {
@@ -1271,7 +1267,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                                   const rawNewAngle =
                                     Math.round(
                                       start +
-                                        (downEvent.clientY - moveEvent.clientY)
+                                      (downEvent.clientY - moveEvent.clientY)
                                     ) % max;
                                   const newAngle = moveEvent.shiftKey
                                     ? rawNewAngle
@@ -1281,7 +1277,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                                     !moveEvent.shiftKey &&
                                     hapticsEnabled() &&
                                     project.background.source.type ===
-                                      "gradient" &&
+                                    "gradient" &&
                                     project.background.source.angle !== newAngle
                                   ) {
                                     commands.performHapticFeedback(
@@ -1494,8 +1490,8 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
                         item.x === "left"
                           ? "left-2"
                           : item.x === "right"
-                          ? "right-2"
-                          : "left-1/2 transform -translate-x-1/2",
+                            ? "right-2"
+                            : "left-1/2 transform -translate-x-1/2",
                         item.y === "top" ? "top-2" : "bottom-2"
                       )}
                       onClick={() => setProject("camera", "position", item)}
@@ -1752,8 +1748,7 @@ function ZoomSegmentConfig(props: {
                 createEffect(() => {
                   video.src = convertFileSrc(
                     // TODO: this shouldn't be so hardcoded
-                    `${
-                      editorInstance.path
+                    `${editorInstance.path
                     }/content/segments/segment-${segmentIndex()}/display.mp4`
                   );
                 });
@@ -1850,7 +1845,7 @@ function ZoomSegmentConfig(props: {
                                 x: Math.max(
                                   Math.min(
                                     (moveEvent.clientX - bounds.left) /
-                                      bounds.width,
+                                    bounds.width,
                                     1
                                   ),
                                   0
@@ -1858,7 +1853,7 @@ function ZoomSegmentConfig(props: {
                                 y: Math.max(
                                   Math.min(
                                     (moveEvent.clientY - bounds.top) /
-                                      bounds.height,
+                                    bounds.height,
                                     1
                                   ),
                                   0
@@ -1873,12 +1868,10 @@ function ZoomSegmentConfig(props: {
                     <div
                       class="absolute z-10 w-6 h-6 rounded-full border border-gray-400 -translate-x-1/2 -translate-y-1/2 bg-gray-1"
                       style={{
-                        left: `calc(${mode().x * 100}% + ${
-                          2 + mode().x * -6
-                        }px)`,
-                        top: `calc(${mode().y * 100}% + ${
-                          2 + mode().y * -6
-                        }px)`,
+                        left: `calc(${mode().x * 100}% + ${2 + mode().x * -6
+                          }px)`,
+                        top: `calc(${mode().y * 100}% + ${2 + mode().y * -6
+                          }px)`,
                       }}
                     />
                     <div class="overflow-hidden rounded-lg border border-gray-3 bg-gray-2">
@@ -1906,6 +1899,14 @@ function ClipSegmentConfig(props: {
   segment: TimelineSegment;
 }) {
   const { setProject, setEditorState, project } = useEditorContext();
+
+  // Local state for the input field
+  const [inputValue, setInputValue] = createSignal(props.segment.timescale.toString());
+
+  // Update input value when timescale changes externally (e.g., from slider or buttons)
+  createEffect(() => {
+    setInputValue(props.segment.timescale.toString());
+  });
 
   return (
     <>
@@ -1945,6 +1946,149 @@ function ClipSegmentConfig(props: {
           Delete
         </EditorButton>
       </div>
+      <Field name="Speed" icon={<IconLucideFastForward class="size-4" />}>
+        <div class="flex flex-col gap-2">
+          <div class="flex gap-2 items-center">
+            <Slider
+              value={[props.segment.timescale]}
+              onChange={(v) =>
+                setProject(
+                  "timeline",
+                  "segments",
+                  props.segmentIndex,
+                  "timescale",
+                  v[0]
+                )
+              }
+              minValue={0.1}
+              maxValue={10}
+              step={0.01}
+              formatTooltip={(v) => `${v.toFixed(2)}x`}
+              class="flex-1"
+            />
+            <div class="flex items-center gap-1">
+              <TextInput
+                type="number"
+                value={inputValue()}
+                onInput={(e) => {
+                  const value = e.currentTarget.value;
+                  setInputValue(value);
+
+                  const numValue = parseFloat(value);
+                  if (!isNaN(numValue) && numValue > 0 && numValue <= 10) {
+                    setProject(
+                      "timeline",
+                      "segments",
+                      props.segmentIndex,
+                      "timescale",
+                      numValue
+                    );
+                  }
+                }}
+                onFocus={(e) => {
+                  // Select all text on focus for easy replacement
+                  e.currentTarget.select();
+                }}
+                onBlur={(e) => {
+                  const value = parseFloat(e.currentTarget.value);
+                  if (isNaN(value) || value <= 0) {
+                    setInputValue(props.segment.timescale.toFixed(2));
+                  } else if (value > 10) {
+                    setProject(
+                      "timeline",
+                      "segments",
+                      props.segmentIndex,
+                      "timescale",
+                      10
+                    );
+                    setInputValue("10.00");
+                  } else {
+                    // Format to 2 decimal places on blur
+                    setInputValue(value.toFixed(2));
+                  }
+                }}
+                class="w-16 px-2 py-1 text-xs text-center border rounded-md bg-gray-2 text-gray-12"
+                min="0.01"
+                max="10"
+                step="0.01"
+              />
+              <span class="text-xs text-gray-11">x</span>
+            </div>
+          </div>
+          <div class="flex gap-2 text-xs">
+            <button
+              onClick={() =>
+                setProject(
+                  "timeline",
+                  "segments",
+                  props.segmentIndex,
+                  "timescale",
+                  0.25
+                )
+              }
+              class="px-2 py-1 rounded-md bg-gray-3 hover:bg-gray-4 transition-colors"
+            >
+              0.25x
+            </button>
+            <button
+              onClick={() =>
+                setProject(
+                  "timeline",
+                  "segments",
+                  props.segmentIndex,
+                  "timescale",
+                  0.5
+                )
+              }
+              class="px-2 py-1 rounded-md bg-gray-3 hover:bg-gray-4 transition-colors"
+            >
+              0.5x
+            </button>
+            <button
+              onClick={() =>
+                setProject(
+                  "timeline",
+                  "segments",
+                  props.segmentIndex,
+                  "timescale",
+                  1
+                )
+              }
+              class="px-2 py-1 rounded-md bg-gray-3 hover:bg-gray-4 transition-colors"
+            >
+              1x
+            </button>
+            <button
+              onClick={() =>
+                setProject(
+                  "timeline",
+                  "segments",
+                  props.segmentIndex,
+                  "timescale",
+                  2
+                )
+              }
+              class="px-2 py-1 rounded-md bg-gray-3 hover:bg-gray-4 transition-colors"
+            >
+              2x
+            </button>
+            <button
+              onClick={() =>
+                setProject(
+                  "timeline",
+                  "segments",
+                  props.segmentIndex,
+                  "timescale",
+                  4
+                )
+              }
+              class="px-2 py-1 rounded-md bg-gray-3 hover:bg-gray-4 transition-colors"
+            >
+              4x
+            </button>
+          </div>
+        </div>
+      </Field>
       <ComingSoonTooltip>
         <Field name="Hide Cursor" disabled value={<Toggle disabled />} />
       </ComingSoonTooltip>
