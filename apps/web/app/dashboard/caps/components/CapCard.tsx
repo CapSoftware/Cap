@@ -16,6 +16,7 @@ import {
   faTrash,
   faLock,
   faUnlock,
+  faPen,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
@@ -333,6 +334,17 @@ export const CapCard = ({
                     <path d="M20 6 9 17l-5-5" />
                   </svg>
                 )}
+              </Button>
+            </Tooltip>
+            <Tooltip content="Edit Cap">
+              <Button
+                href={`/dashboard/caps/${cap.id}/edit`}
+                className="!size-8 delay-25 hover:opacity-80 rounded-full min-w-fit !p-0"
+                variant="white"
+                size="sm"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <FontAwesomeIcon className="text-gray-12 size-3" icon={faPen} />
               </Button>
             </Tooltip>
             <Tooltip
