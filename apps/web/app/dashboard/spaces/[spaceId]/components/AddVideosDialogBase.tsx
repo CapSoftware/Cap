@@ -140,7 +140,7 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="p-0 w-full max-w-2xl rounded-xl border bg-gray-2 border-gray-4 max-h-[90vh] sm:max-h-[85vh] flex flex-col">
+      <DialogContent className="p-0 w-full max-w-2xl rounded-xl border bg-gray-2 border-gray-4 max-h-[600px] flex flex-col">
         <DialogHeader
           icon={<FontAwesomeIcon icon={faVideo} />}
           description={

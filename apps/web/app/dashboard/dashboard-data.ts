@@ -7,8 +7,9 @@ import {
   users,
   spaces,
   sharedVideos,
+  spaceMembers,
 } from "@cap/database/schema";
-import { count, eq, inArray, or, sql } from "drizzle-orm";
+import { and, count, eq, inArray, or, sql } from "drizzle-orm";
 
 export type Organization = {
   organization: typeof organizations.$inferSelect;
@@ -104,7 +105,21 @@ export async function getDashboardData(user: typeof userSelectProps) {
           )`,
         })
         .from(spaces)
-        .where(eq(spaces.organizationId, activeOrganizationId));
+        .leftJoin(spaceMembers, eq(spaces.id, spaceMembers.spaceId))
+        .where(
+          and(
+            eq(spaces.organizationId, activeOrganizationId),
+            or(
+              // User is the space creator
+              eq(spaces.createdById, user.id),
+              // User is a member of the space
+              eq(spaceMembers.userId, user.id),
+              // Space is public within the organization
+              eq(spaces.privacy, "Public")
+            )
+          )
+        )
+        .groupBy(spaces.id);
 
       // Add a single 'All spaces' entry for the active organization
       const activeOrgInfo = organizationsWithMembers.find(
