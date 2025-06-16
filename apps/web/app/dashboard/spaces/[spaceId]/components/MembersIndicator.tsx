@@ -13,6 +13,7 @@ import {
   FormField,
   FormControl,
 } from "@cap/ui";
+import Image from "next/image";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faUserGroup, faPlus } from "@fortawesome/free-solid-svg-icons";
 import { MemberSelect } from "./MemberSelect";
@@ -124,29 +125,62 @@ export const MembersIndicator = ({
 
           <div className="p-5">
             <div className="flex flex-col">
-              <Form {...form}>
-                <div className="space-y-2 max-h-[320px] overflow-y-auto">
-                  <FormField
-                    control={form.control}
-                    name="members"
-                    render={({ field }) => {
-                      return (
-                        <FormControl>
-                          <MemberSelect
-                            placeholder="Add member..."
-                            disabled={!canManageMembers}
-                            showEmptyIfNoMembers
-                            selected={OrgMembers(field)}
-                            onSelect={(selected) => {
-                              field.onChange(selected.map((opt) => opt.value));
-                            }}
-                          />
-                        </FormControl>
-                      );
-                    }}
-                  />
+              {canManageMembers ? (
+                <Form {...form}>
+                  <div className="space-y-2 max-h-[320px] overflow-y-auto">
+                    <FormField
+                      control={form.control}
+                      name="members"
+                      render={({ field }) => {
+                        return (
+                          <FormControl>
+                            <MemberSelect
+                              placeholder="Add member..."
+                              disabled={false}
+                              canManageMembers={true}
+                              showEmptyIfNoMembers={false}
+                              selected={OrgMembers(field)}
+                              onSelect={(selected) => {
+                                field.onChange(
+                                  selected.map((opt) => opt.value)
+                                );
+                              }}
+                            />
+                          </FormControl>
+                        );
+                      }}
+                    />
+                  </div>
+                </Form>
+              ) : (
+                <div className="space-y-2 max-h-[320px] custom-scroll overflow-y-auto">
+                  {/* Just display the list of members for non-managers */}
+                  {members.map((member) => (
+                    <div
+                      key={member.userId}
+                      className="flex gap-2 items-center px-3 py-2 rounded-lg bg-gray-3"
+                    >
+                      {member.image ? (
+                        <Image
+                          src={member.image}
+                          alt={member.name || member.email}
+                          width={24}
+                          height={24}
+                          className="w-6 h-6 rounded-full"
+                        />
+                      ) : (
+                        <Avatar
+                          name={member.name || member.email}
+                          className="w-6 h-6"
+                        />
+                      )}
+                      <span className="text-sm text-gray-12">
+                        {member.name || member.email}
+                      </span>
+                    </div>
+                  ))}
                 </div>
-              </Form>
+              )}
             </div>
           </div>
 

@@ -75,9 +75,7 @@ export const SharedCaps = ({
   const isSpaceOwner = spaceData?.createdById === currentUserId;
   const isOrgOwner = organizationData?.ownerId === currentUserId;
 
-  const spaceMemberCount = isSpaceOwner
-    ? spaceMembers?.filter((m) => m.userId !== currentUserId).length || 0
-    : spaceMembers?.length || 0;
+  const spaceMemberCount = spaceMembers?.length || 0;
 
   const organizationMemberCount = organizationMembers?.length || 0;
 
@@ -130,7 +128,6 @@ export const SharedCaps = ({
             <OrganizationIndicator
               memberCount={organizationMemberCount}
               members={organizationMembers}
-              organizationId={organizationData.id}
               organizationName={organizationData.name}
               canManageMembers={isOrgOwner}
               onAddVideos={() => setIsAddOrganizationVideosDialogOpen(true)}
@@ -195,7 +192,6 @@ export const SharedCaps = ({
         <OrganizationIndicator
           memberCount={organizationMemberCount}
           members={organizationMembers}
-          organizationId={organizationData.id}
           organizationName={organizationData.name}
           canManageMembers={isOrgOwner}
           onAddVideos={() => setIsAddOrganizationVideosDialogOpen(true)}

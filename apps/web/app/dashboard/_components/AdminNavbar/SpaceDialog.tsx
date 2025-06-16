@@ -248,8 +248,9 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
                 <FormControl>
                   <MemberSelect
                     placeholder="Add member..."
-                    showEmptyIfNoMembers
+                    showEmptyIfNoMembers={false}
                     disabled={isUploading}
+                    canManageMembers={true}
                     selected={(activeOrganization?.members ?? [])
                       .filter((m) => (field.value ?? []).includes(m.user.id))
                       .map((m) => ({
