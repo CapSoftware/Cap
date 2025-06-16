@@ -499,12 +499,14 @@ async function AuthorizedContent({
 
   let customDomain: string | null = null;
   let domainVerified = false;
+  let showCapBranding = true;
 
   if (video.sharedOrganization?.organizationId) {
     const organizationData = await db()
       .select({
         customDomain: organizations.customDomain,
         domainVerified: organizations.domainVerified,
+        showCapBranding: organizations.showCapBranding,
       })
       .from(organizations)
       .where(eq(organizations.id, video.sharedOrganization.organizationId))
@@ -519,6 +521,7 @@ async function AuthorizedContent({
       if (organizationData[0].domainVerified !== null) {
         domainVerified = true;
       }
+      showCapBranding = organizationData[0].showCapBranding;
     }
   }
 
@@ -527,6 +530,7 @@ async function AuthorizedContent({
       .select({
         customDomain: organizations.customDomain,
         domainVerified: organizations.domainVerified,
+        showCapBranding: organizations.showCapBranding,
       })
       .from(organizations)
       .where(eq(organizations.ownerId, video.ownerId))
@@ -541,6 +545,7 @@ async function AuthorizedContent({
       if (ownerOrganizations[0].domainVerified !== null) {
         domainVerified = true;
       }
+      showCapBranding = ownerOrganizations[0].showCapBranding;
     }
   }
 
@@ -650,16 +655,18 @@ async function AuthorizedContent({
           aiUiEnabled={aiUiEnabled}
         />
       </div>
-      <div className="py-4 mt-auto">
-        <a
-          target="_blank"
-          href={`/?ref=video_${video.id}`}
-          className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 bg-gray-1 rounded-full new-card-style w-fit"
-        >
-          <span className="text-sm">Recorded with</span>
-          <Logo className="w-14 h-auto" />
-        </a>
-      </div>
+      {showCapBranding && (
+        <div className="py-4 mt-auto">
+          <a
+            target="_blank"
+            href={`/?ref=video_${video.id}`}
+            className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 bg-gray-1 rounded-full new-card-style w-fit"
+          >
+            <span className="text-sm">Recorded with</span>
+            <Logo className="w-14 h-auto" />
+          </a>
+        </div>
+      )}
     </>
   );
 }

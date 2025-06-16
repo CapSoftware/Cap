@@ -1,25 +1,24 @@
 "use client";
 
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import {
-  Button,
-  Card,
-  Input,
-  Label
-} from "@cap/ui";
+import { Button, Card, Input, Label, Switch } from "@cap/ui";
 
 interface OrganizationDetailsCardProps {
   isOwner: boolean;
   saveLoading: boolean;
   showOwnerToast: () => void;
   organizationName: string | undefined;
+  showCapBranding: boolean;
+  setShowCapBranding: (value: boolean) => void;
 }
 
 export const OrganizationDetailsCard = ({
   isOwner,
   saveLoading,
   showOwnerToast,
-  organizationName
+  organizationName,
+  showCapBranding,
+  setShowCapBranding,
 }: OrganizationDetailsCardProps) => {
   const { activeOrganization } = useSharedContext();
 
@@ -68,6 +67,21 @@ export const OrganizationDetailsCard = ({
               if (!isOwner) showOwnerToast();
             }}
           />
+          <div className="flex items-center gap-2 mt-4">
+            <Switch
+              id="showCapBranding"
+              checked={showCapBranding}
+              disabled={!isOwner}
+              onCheckedChange={(checked) => {
+                if (!isOwner) {
+                  showOwnerToast();
+                  return;
+                }
+                setShowCapBranding(checked);
+              }}
+            />
+            <Label htmlFor="showCapBranding">Show "Recorded with Cap" link</Label>
+          </div>
         </div>
       </div>
       <Button
