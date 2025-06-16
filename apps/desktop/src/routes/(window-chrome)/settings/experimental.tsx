@@ -2,8 +2,9 @@ import { createResource, Show } from "solid-js";
 import { createStore } from "solid-js/store";
 
 import { generalSettingsStore } from "~/store";
-import { type GeneralSettingsStore } from "~/utils/tauri";
+import { type GeneralSettingsStore, commands } from "~/utils/tauri";
 import { ToggleSetting } from "./Setting";
+import { Button } from "@cap/ui-solid";
 
 export default function ExperimentalSettings() {
   const [store] = createResource(() => generalSettingsStore.get());
@@ -57,6 +58,23 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
             onChange={(value) => handleChange("customCursorCapture", value)}
           />
 
+          <div class="py-4">
+            <div class="flex items-center justify-between">
+              <div class="flex-1">
+                <h3 class="text-gray-12 text-sm font-medium">Teleprompter</h3>
+                <p class="text-gray-11 text-xs mt-1">
+                  Open a teleprompter window that stays on top and can be made
+                  transparent for use during recordings.
+                </p>
+              </div>
+              <Button
+                onClick={() => commands.showWindow("Teleprompter")}
+                class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
+              >
+                Open Teleprompter
+              </Button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
