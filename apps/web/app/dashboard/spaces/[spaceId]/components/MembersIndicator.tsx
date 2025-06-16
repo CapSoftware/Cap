@@ -9,6 +9,7 @@ import {
   DialogTitle,
   DialogTrigger,
   DialogFooter,
+  Avatar,
   Form,
   FormField,
   FormControl,
