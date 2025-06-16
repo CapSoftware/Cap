@@ -22,6 +22,8 @@ import { Check } from "lucide-react";
 import moment from "moment";
 import clsx from "clsx";
 import { motion } from "framer-motion";
+import { Tooltip } from "@/components/Tooltip";
+
 interface AddVideosDialogBaseProps {
   open: boolean;
   onClose: () => void;
@@ -140,7 +142,7 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="p-0 w-full max-w-2xl rounded-xl border bg-gray-2 border-gray-4 max-h-[600px] flex flex-col">
+      <DialogContent className="flex flex-col p-0 w-full max-w-2xl rounded-xl border bg-gray-2 border-gray-4">
         <DialogHeader
           icon={<FontAwesomeIcon icon={faVideo} />}
           description={
@@ -187,7 +189,7 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
                 </p>
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 max-h-[400px] overflow-y-auto custom-scroll p-1">
                 {filteredVideos.map((video) => (
                   <VideoCard
                     key={video.id}
@@ -268,7 +270,7 @@ const VideoCard: React.FC<VideoCardProps> = ({
     <div
       onClick={isAlreadyInEntity ? undefined : onToggle}
       className={clsx(
-        "flex gap-4 items-center p-3 mx-1 rounded-xl border transition-all duration-200 group",
+        "flex flex-col p-3 h-full rounded-xl border transition-all duration-200 group",
         isAlreadyInEntity
           ? "cursor-not-allowed bg-gray-3 border-gray-6"
           : isSelected
@@ -276,7 +278,8 @@ const VideoCard: React.FC<VideoCardProps> = ({
           : "bg-transparent cursor-pointer hover:bg-gray-3 hover:border-gray-5 border-gray-4"
       )}
     >
-      <div className="relative flex-shrink-0">
+      {/* Thumbnail First */}
+      <div className="relative mb-2 w-full">
         {!isAlreadyInEntity && (
           <motion.div
             key={video.id}
@@ -292,16 +295,18 @@ const VideoCard: React.FC<VideoCardProps> = ({
               damping: isSelected ? 20 : undefined,
               duration: !isSelected ? 0.2 : undefined,
             }}
-            className="flex absolute z-10 justify-center items-center rounded-full top-[-6px] right-[-6px] bg-gray-4 size-4 bg-green-500"
+            className="flex absolute -top-2 -right-2 z-10 justify-center items-center bg-green-500 rounded-full bg-gray-4 size-5"
           >
-            <Check className="text-white" size={10} />
+            <Check className="text-white" size={12} />
           </motion.div>
         )}
 
         <div
           className={clsx(
-            "overflow-hidden relative w-32 h-20 rounded-lg border transition-colors bg-gray-3",
-            isSelected ? "border-green-500" : "border-transparent"
+            "overflow-visible relative w-full h-32 rounded-lg border transition-colors bg-gray-3",
+            isSelected || isAlreadyInEntity
+              ? "border-green-500"
+              : "border-transparent"
           )}
         >
           <VideoThumbnail
@@ -312,11 +317,17 @@ const VideoCard: React.FC<VideoCardProps> = ({
             objectFit="cover"
             containerClass="min-h-full !rounded-lg !border-b-0"
           />
+          {isAlreadyInEntity && (
+            <span className="absolute right-0 left-0 -bottom-2 z-10 flex-shrink-0 px-2 py-1 mx-auto text-xs font-medium text-white bg-green-600 rounded-full w-fit">
+              Added
+            </span>
+          )}
         </div>
       </div>
 
-      <div className="flex-1 min-w-0">
-        <div className="flex gap-2 items-center mb-1">
+      <div className={clsx("space-y-1", isAlreadyInEntity && "mt-3")}>
+        {/* Title Second */}
+        <Tooltip content={video.name}>
           <h3
             className={clsx(
               "text-sm font-medium leading-tight truncate",
@@ -325,22 +336,11 @@ const VideoCard: React.FC<VideoCardProps> = ({
           >
             {video.name}
           </h3>
-          {isAlreadyInEntity && (
-            <span className="flex-shrink-0 px-2 py-1 text-xs font-medium text-white bg-green-600 rounded-full">
-              Added
-            </span>
-          )}
-        </div>
-        <div
-          className={clsx(
-            "flex items-center space-x-2",
-            isAlreadyInEntity ? "text-gray-9" : "text-gray-9"
-          )}
-        >
-          <p className="text-xs text-gray-9">
-            {moment(effectiveDate).format("MMM D, YYYY")}
-          </p>
-        </div>
+        </Tooltip>
+
+        <p className="text-xs text-gray-9">
+          {moment(effectiveDate).format("MMM D, YYYY")}
+        </p>
       </div>
     </div>
   );

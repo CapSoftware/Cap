@@ -278,7 +278,7 @@ const SpaceCard = ({
             damping: isSelected ? 20 : undefined,
             duration: !isSelected ? 0.2 : undefined,
           }}
-          className="flex absolute z-10 justify-center items-center rounded-full top-[-6px] right-[-6px] bg-gray-4 size-4 bg-green-500"
+          className="flex absolute -top-2 -right-2 z-10 justify-center items-center bg-green-500 rounded-full bg-gray-4 size-4"
         >
           <Check className="text-white" size={10} />
         </motion.div>
