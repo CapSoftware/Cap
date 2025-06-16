@@ -22,6 +22,8 @@ import { Check } from "lucide-react";
 import moment from "moment";
 import clsx from "clsx";
 import { motion } from "framer-motion";
+import { Tooltip } from "@/components/Tooltip";
+
 interface AddVideosDialogBaseProps {
   open: boolean;
   onClose: () => void;
@@ -301,8 +303,10 @@ const VideoCard: React.FC<VideoCardProps> = ({
 
         <div
           className={clsx(
-            "overflow-hidden relative w-full h-32 rounded-lg border transition-colors bg-gray-3",
-            isSelected ? "border-green-500" : "border-transparent"
+            "overflow-visible relative w-full h-32 rounded-lg border transition-colors bg-gray-3",
+            isSelected || isAlreadyInEntity
+              ? "border-green-500"
+              : "border-transparent"
           )}
         >
           <VideoThumbnail
@@ -313,28 +317,27 @@ const VideoCard: React.FC<VideoCardProps> = ({
             objectFit="cover"
             containerClass="min-h-full !rounded-lg !border-b-0"
           />
+          {isAlreadyInEntity && (
+            <span className="absolute right-0 left-0 -bottom-2 z-10 flex-shrink-0 px-2 py-1 mx-auto text-xs font-medium text-white bg-green-600 rounded-full w-fit">
+              Added
+            </span>
+          )}
         </div>
       </div>
 
-      {/* Title Second */}
-      <div className="flex gap-2 items-center mb-1">
-        <h3
-          className={clsx(
-            "text-sm font-medium leading-tight truncate",
-            isAlreadyInEntity ? "text-gray-11" : "text-gray-12"
-          )}
-        >
-          {video.name}
-        </h3>
-        {isAlreadyInEntity && (
-          <span className="flex-shrink-0 px-2 py-1 text-xs font-medium text-white bg-green-600 rounded-full">
-            Added
-          </span>
-        )}
-      </div>
+      <div className={clsx("space-y-1", isAlreadyInEntity && "mt-3")}>
+        {/* Title Second */}
+        <Tooltip content={video.name}>
+          <h3
+            className={clsx(
+              "text-sm font-medium leading-tight truncate",
+              isAlreadyInEntity ? "text-gray-11" : "text-gray-12"
+            )}
+          >
+            {video.name}
+          </h3>
+        </Tooltip>
 
-      {/* Date Third */}
-      <div className="flex items-center">
         <p className="text-xs text-gray-9">
           {moment(effectiveDate).format("MMM D, YYYY")}
         </p>
