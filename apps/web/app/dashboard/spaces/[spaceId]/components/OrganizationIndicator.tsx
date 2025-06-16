@@ -71,7 +71,7 @@ export const OrganizationIndicator = ({
                   .map((member) => (
                     <div
                       key={member.id}
-                      className="flex gap-3 items-center px-3 py-2 rounded-lg transition-colors hover:bg-gray-3"
+                      className="flex gap-3 items-center px-3 py-2 rounded-lg border transition-colors bg-gray-3 border-gray-4"
                     >
                       {member.image ? (
                         <Image
@@ -101,7 +101,7 @@ export const OrganizationIndicator = ({
                       <p
                         className={clsx(
                           "px-2.5 py-1.5 text-xs font-medium capitalize text-white rounded-full",
-                          member.role == "owner" ? "bg-blue-500" : "bg-gray-7"
+                          member.role == "owner" ? "bg-blue-500" : "bg-gray-10"
                         )}
                       >
                         {member.role}

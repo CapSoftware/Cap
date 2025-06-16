@@ -117,7 +117,11 @@ export const MembersIndicator = ({
         <DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
           <DialogHeader
             icon={<FontAwesomeIcon icon={faUserGroup} />}
-            description="View and manage members of this space"
+            description={
+              canManageMembers
+                ? "View and manage members of this space"
+                : "View members of this space"
+            }
           >
             <DialogTitle className="text-lg text-gray-12">
               Space Members: {memberCount}
@@ -159,7 +163,7 @@ export const MembersIndicator = ({
                   {members.map((member) => (
                     <div
                       key={member.userId}
-                      className="flex gap-2 items-center px-3 py-2 rounded-lg bg-gray-3"
+                      className="flex gap-2 items-center p-3 rounded-lg border bg-gray-3 border-gray-4"
                     >
                       {member.image ? (
                         <Image
@@ -167,12 +171,12 @@ export const MembersIndicator = ({
                           alt={member.name || member.email}
                           width={24}
                           height={24}
-                          className="w-6 h-6 rounded-full"
+                          className="rounded-full size-8"
                         />
                       ) : (
                         <Avatar
                           name={member.name || member.email}
-                          className="w-6 h-6"
+                          className="size-8"
                         />
                       )}
                       <span className="text-sm text-gray-12">
