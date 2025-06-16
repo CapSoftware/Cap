@@ -79,6 +79,7 @@ export default async function PostPage({ params }: PostProps) {
               src={post.metadata.image}
               alt={post.metadata.title}
               fill
+              quality={100}
               priority
             />
           </div>

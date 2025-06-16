@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { eq, desc, sql, count } from "drizzle-orm";
+import { eq, desc, sql, count, InferSelectModel } from "drizzle-orm";
 import { Logo } from "@cap/ui";
 import {
   videos,
@@ -24,8 +24,8 @@ import { isAiGenerationEnabled, isAiUiEnabled } from "@/utils/flags";
 import { Share } from "./Share";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { ImageViewer } from "./_components/ImageViewer";
-import { decrypt } from "@cap/database/crypto";
 import { ShareHeader } from "./_components/ShareHeader";
+import { userHasAccessToVideo } from "@/utils/auth";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -214,7 +214,7 @@ export async function generateMetadata(
       ],
     },
     twitter: {
-      card: "summary_large_image",
+      card: "player",
       title: video.name + " | Cap Recording",
       description: "Watch this video on Cap",
       images: [
@@ -223,6 +223,18 @@ export async function generateMetadata(
           buildEnv.NEXT_PUBLIC_WEB_URL
         ).toString(),
       ],
+      players: {
+        playerUrl: new URL(
+          `/s/${videoId}`,
+          buildEnv.NEXT_PUBLIC_WEB_URL
+        ).toString(),
+        streamUrl: new URL(
+          `/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
+          buildEnv.NEXT_PUBLIC_WEB_URL
+        ).toString(),
+        width: 1280,
+        height: 720,
+      },
     },
     robots: robotsDirective,
   };
@@ -233,7 +245,7 @@ export default async function ShareVideoPage(props: Props) {
   const videoId = params.videoId as string;
   console.log("[ShareVideoPage] Starting page load for videoId:", videoId);
 
-  const user = (await getCurrentUser()) as typeof userSelectProps | null;
+  const user = await getCurrentUser();
   const userId = user?.id as string | undefined;
   console.log("[ShareVideoPage] Current user:", userId);
 
@@ -274,6 +286,35 @@ export default async function ShareVideoPage(props: Props) {
     console.log("[ShareVideoPage] No video found for videoId:", videoId);
     return <p>No video found</p>;
   }
+
+  const userAccess = await userHasAccessToVideo(user, video);
+
+  if (userAccess === "private") return <p>This video is private</p>;
+
+  return (
+    <div className="min-h-screen flex flex-col bg-[#F7F8FA]">
+      <PasswordOverlay
+        isOpen={userAccess === "needs-password"}
+        videoId={video.id}
+      />
+      {userAccess === "has-access" && (
+        <AuthorizedContent video={video} user={user} />
+      )}
+    </div>
+  );
+}
+
+async function AuthorizedContent({
+  video,
+  user,
+}: {
+  video: InferSelectModel<typeof videos> & {
+    sharedOrganization: { organizationId: string } | null;
+  };
+  user: InferSelectModel<typeof users> | null;
+}) {
+  const videoId = video.id;
+  const userId = user?.id;
 
   let aiGenerationEnabled = false;
   const videoOwnerQuery = await db()
@@ -409,10 +450,6 @@ export default async function ShareVideoPage(props: Props) {
         error
       );
     }
-  }
-
-  if (video.public === false && userId !== video.ownerId) {
-    return <p>This video is private</p>;
   }
 
   const commentsQuery: CommentWithAuthor[] = await db()
@@ -581,69 +618,48 @@ export default async function ShareVideoPage(props: Props) {
     );
   }
 
-  const authorized =
-    !videoWithOrganizationInfo.hasPassword ||
-    user?.id === videoWithOrganizationInfo.ownerId ||
-    (await verifyPasswordCookie(video.password ?? ""));
-
   return (
-    <div className="min-h-screen flex flex-col bg-[#F7F8FA]">
-      <PasswordOverlay
-        isOpen={!authorized}
-        videoId={videoWithOrganizationInfo.id}
-      />
-      {authorized && (
-        <>
-          <div className="container flex-1 px-4 py-4 mx-auto">
-            <ShareHeader
-              data={{
-                ...videoWithOrganizationInfo,
-                createdAt: video.metadata?.customCreatedAt
-                  ? new Date(video.metadata.customCreatedAt)
-                  : video.createdAt,
-              }}
-              user={user}
-              customDomain={customDomain}
-              domainVerified={domainVerified}
-              sharedOrganizations={
-                videoWithOrganizationInfo.sharedOrganizations || []
-              }
-              userOrganizations={userOrganizations}
-            />
+    <>
+      <div className="container flex-1 px-4 py-4 mx-auto">
+        <ShareHeader
+          data={{
+            ...videoWithOrganizationInfo,
+            createdAt: video.metadata?.customCreatedAt
+              ? new Date(video.metadata.customCreatedAt)
+              : video.createdAt,
+          }}
+          user={user}
+          customDomain={customDomain}
+          domainVerified={domainVerified}
+          sharedOrganizations={
+            videoWithOrganizationInfo.sharedOrganizations || []
+          }
+          userOrganizations={userOrganizations}
+        />
 
-            <Share
-              data={videoWithOrganizationInfo}
-              user={user}
-              comments={commentsQuery}
-              initialAnalytics={initialAnalytics}
-              customDomain={customDomain}
-              domainVerified={domainVerified}
-              userOrganizations={userOrganizations}
-              initialAiData={initialAiData}
-              aiGenerationEnabled={aiGenerationEnabled}
-              aiUiEnabled={aiUiEnabled}
-            />
-          </div>
-          <div className="py-4 mt-auto">
-            <a
-              target="_blank"
-              href={`/?ref=video_${video.id}`}
-              className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 bg-gray-1 rounded-full new-card-style w-fit"
-            >
-              <span className="text-sm">Recorded with</span>
-              <Logo className="w-14 h-auto" />
-            </a>
-          </div>
-        </>
-      )}
-    </div>
+        <Share
+          data={videoWithOrganizationInfo}
+          user={user}
+          comments={commentsQuery}
+          initialAnalytics={initialAnalytics}
+          customDomain={customDomain}
+          domainVerified={domainVerified}
+          userOrganizations={userOrganizations}
+          initialAiData={initialAiData}
+          aiGenerationEnabled={aiGenerationEnabled}
+          aiUiEnabled={aiUiEnabled}
+        />
+      </div>
+      <div className="py-4 mt-auto">
+        <a
+          target="_blank"
+          href={`/?ref=video_${video.id}`}
+          className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 bg-gray-1 rounded-full new-card-style w-fit"
+        >
+          <span className="text-sm">Recorded with</span>
+          <Logo className="w-14 h-auto" />
+        </a>
+      </div>
+    </>
   );
-}
-
-async function verifyPasswordCookie(videoPassword: string) {
-  const password = cookies().get("x-cap-password")?.value;
-  if (!password) return false;
-
-  const decrypted = await decrypt(password).catch(() => "");
-  return decrypted === videoPassword;
 }

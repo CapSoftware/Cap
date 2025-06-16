@@ -8,18 +8,16 @@ import {
   CreateInvalidationCommand,
 } from "@aws-sdk/client-cloudfront";
 import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
 import { s3Buckets } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
-import { cookies } from "next/headers";
-import type { NextRequest } from "next/server";
 import { serverEnv } from "@cap/env";
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { handle } from "hono/vercel";
 
-import { corsMiddleware, withAuth } from "../../utils";
+import { withAuth } from "../../utils";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
 
 export const app = new Hono().use(withAuth);
 
@@ -34,12 +32,20 @@ app.post(
       resolution: z.string().optional(),
       videoCodec: z.string().optional(),
       audioCodec: z.string().optional(),
+      method: z.union([z.literal("post"), z.literal("put")]).default("post"),
     })
   ),
   async (c) => {
     const user = c.get("user");
-    const { fileKey, duration, bandwidth, resolution, videoCodec, audioCodec } =
-      c.req.valid("json");
+    const {
+      fileKey,
+      duration,
+      bandwidth,
+      resolution,
+      videoCodec,
+      audioCodec,
+      method,
+    } = c.req.valid("json");
 
     try {
       const [bucket] = await db()
@@ -116,33 +122,48 @@ app.post(
         ? "application/x-mpegURL"
         : "video/mp2t";
 
-      const Fields = {
-        "Content-Type": contentType,
-        "x-amz-meta-userid": user.id,
-        "x-amz-meta-duration": duration ?? "",
-        "x-amz-meta-bandwidth": bandwidth ?? "",
-        "x-amz-meta-resolution": resolution ?? "",
-        "x-amz-meta-videocodec": videoCodec ?? "",
-        "x-amz-meta-audiocodec": audioCodec ?? "",
-      };
-
       const bucketName = await getS3Bucket(bucket);
 
-      const presignedPostData: PresignedPost = await createPresignedPost(
-        s3Client,
-        { Bucket: bucketName, Key: fileKey, Fields, Expires: 1800 }
-      );
+      let data;
+      if (method === "post") {
+        const Fields = {
+          "Content-Type": contentType,
+          "x-amz-meta-userid": user.id,
+          "x-amz-meta-duration": duration ?? "",
+          "x-amz-meta-bandwidth": bandwidth ?? "",
+          "x-amz-meta-resolution": resolution ?? "",
+          "x-amz-meta-videocodec": videoCodec ?? "",
+          "x-amz-meta-audiocodec": audioCodec ?? "",
+        };
 
-      // When not using aws s3, we need to transform the url to the local endpoint
-      if (
-        serverEnv().CAP_AWS_BUCKET_URL &&
-        !serverEnv().CAP_AWS_ENDPOINT?.endsWith("s3-accelerate.amazonaws.com")
-      ) {
-        const endpoint = serverEnv().CAP_AWS_ENDPOINT;
-        const bucket = serverEnv().CAP_AWS_BUCKET;
-        const newUrl = `${endpoint}/${bucket}/`;
-        presignedPostData.url = newUrl;
+        data = await createPresignedPost(s3Client, {
+          Bucket: bucketName,
+          Key: fileKey,
+          Fields,
+          Expires: 1800,
+        });
+      } else if (method === "put") {
+        const presignedUrl = await getSignedUrl(
+          s3Client,
+          new PutObjectCommand({
+            Bucket: bucketName,
+            Key: fileKey,
+            ContentType: contentType,
+            Metadata: {
+              userid: user.id,
+              duration: duration ?? "",
+              bandwidth: bandwidth ?? "",
+              resolution: resolution ?? "",
+              videocodec: videoCodec ?? "",
+              audiocodec: audioCodec ?? "",
+            },
+          }),
+          { expiresIn: 1800 }
+        );
+
+        data = { url: presignedUrl, fields: {} };
       }
+      console.log({ data });
 
       console.log("Presigned URL created successfully");
 
@@ -162,7 +183,8 @@ app.post(
         }
       }
 
-      return c.json({ presignedPostData });
+      if (method === "post") return c.json({ presignedPostData: data });
+      else return c.json({ presignedPutData: data });
     } catch (s3Error) {
       console.error("S3 operation failed:", s3Error);
       throw new Error(

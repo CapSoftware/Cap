@@ -12,6 +12,7 @@ import { commands, RecordingMode, ScreenCaptureTarget } from "./tauri";
 import { createQueryInvalidate } from "./events";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export const listWindows = queryOptions({
   queryKey: ["capture", "windows"] as const,
@@ -138,9 +139,12 @@ export function createCameraMutation() {
 
   const setCameraInput = createMutation(() => ({
     mutationFn: async (label: string | null) => {
-      await commands.setCameraInput(label);
       setOptions("cameraLabel", label);
-      await commands.showWindow("Camera");
+      if (label) {
+        await commands.showWindow("Camera");
+        getCurrentWindow().setFocus();
+      }
+      await commands.setCameraInput(label);
     },
   }));
 

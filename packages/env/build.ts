@@ -15,6 +15,7 @@ export const buildEnv = createEnv({
     NEXT_PUBLIC_CAP_AWS_REGION: z.string(),
     NEXT_PUBLIC_CAP_AWS_ENDPOINT: z.string().optional(),
     NEXT_PUBLIC_CAP_AWS_BUCKET_URL: z.string().optional(),
+    NEXT_PUBLIC_DOCKER_BUILD: z.string().optional(),
   },
   runtimeEnv: {
     NEXT_PUBLIC_IS_CAP: process.env.NEXT_PUBLIC_IS_CAP,
@@ -29,5 +30,6 @@ export const buildEnv = createEnv({
       process.env.CAP_AWS_ENDPOINT ?? process.env.NEXT_PUBLIC_CAP_AWS_ENDPOINT,
     NEXT_PUBLIC_CAP_AWS_BUCKET_URL:
       process.env.CAP_AWS_URL ?? process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL,
+    NEXT_PUBLIC_DOCKER_BUILD: process.env.NEXT_PUBLIC_DOCKER_BUILD,
   },
 });

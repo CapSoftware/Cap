@@ -152,7 +152,7 @@ export default async function DocPage(props: DocProps) {
                           {doc.metadata.tags.split(", ").map((tag) => (
                             <span
                               key={tag}
-                              className="px-2 py-1 text-xs text-gray-600 bg-gray-1 rounded-full dark:bg-gray-800 dark:text-gray-8"
+                              className="px-2 py-1 text-xs text-gray-600 rounded-full bg-gray-1 dark:bg-gray-800 dark:text-gray-8"
                             >
                               {tag}
                             </span>
@@ -185,6 +185,7 @@ export default async function DocPage(props: DocProps) {
             src={doc.metadata.image}
             alt={doc.metadata.title}
             fill
+            quality={100}
             priority
             sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
           />

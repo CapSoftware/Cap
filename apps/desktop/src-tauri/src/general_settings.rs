@@ -57,8 +57,6 @@ pub struct GeneralSettingsStore {
     pub main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour,
     #[serde(default)]
     pub custom_cursor_capture: bool,
-    #[serde(default)]
-    pub system_audio_capture: bool,
     #[serde(default = "default_server_url")]
     pub server_url: String,
     #[serde(default, alias = "open_editor_after_recording")]
@@ -100,7 +98,6 @@ impl Default for GeneralSettingsStore {
             post_studio_recording_behaviour: PostStudioRecordingBehaviour::OpenEditor,
             main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour::Close,
             custom_cursor_capture: false,
-            system_audio_capture: false,
             server_url: default_server_url(),
             _open_editor_after_recording: false,
         }
