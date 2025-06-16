@@ -14,17 +14,19 @@ import {
   isUserOnProPlan,
 } from "@cap/utils";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faUpload } from "@fortawesome/free-solid-svg-icons";
 
 export const UploadCapButton = ({
   onStart,
   onProgress,
   onComplete,
-  grey = false,
+  size = "md",
 }: {
   onStart?: (id: string, thumbnail?: string) => void;
   onProgress?: (id: string, progress: number, uploadProgress?: number) => void;
   onComplete?: (id: string) => void;
-  grey?: boolean;
+  size?: "sm" | "lg" | "md";
 }) => {
   const { user, isSubscribed } = useSharedContext();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -400,43 +402,13 @@ export const UploadCapButton = ({
       <Button
         onClick={handleClick}
         disabled={uploading}
-        variant={grey ? "gray" : "primary"}
-        size="sm"
+        variant="dark"
+        className="flex gap-2 items-center"
+        size={size}
+        spinner={uploading}
       >
-        {uploading ? (
-          <div className="flex items-center gap-2">
-            {status}
-            <svg className="w-4 h-4 transform -rotate-90" viewBox="0 0 20 20">
-              <circle
-                cx="10"
-                cy="10"
-                r="8"
-                stroke="currentColor"
-                strokeWidth="3"
-                fill="none"
-                className={grey ? "text-black/30" : "text-white/30"}
-              />
-              <circle
-                cx="10"
-                cy="10"
-                r="8"
-                stroke="currentColor"
-                strokeWidth="3"
-                fill="none"
-                strokeLinecap="round"
-                className={`${
-                  grey ? "text-black" : "text-white"
-                } transition-all duration-200 ease-out`}
-                style={{
-                  strokeDasharray: `${circumference} ${circumference}`,
-                  strokeDashoffset: `${strokeDashoffset}`,
-                }}
-              />
-            </svg>
-          </div>
-        ) : (
-          "Upload Video"
-        )}
+        <FontAwesomeIcon className="size-3.5" icon={faUpload} />
+        Upload Video
       </Button>
       <input
         ref={inputRef}

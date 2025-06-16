@@ -50,10 +50,7 @@ type VideoWithOrganization = typeof videos.$inferSelect & {
   hasPassword?: boolean;
 };
 
-export async function generateMetadata(
-  { params }: Props,
-  parent: ResolvingMetadata
-): Promise<Metadata> {
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const videoId = params.videoId as string;
   console.log(
     "[generateMetadata] Fetching video metadata for videoId:",
@@ -72,47 +69,29 @@ export async function generateMetadata(
     return notFound();
   }
 
+  // Get the headers from the middleware
   const headersList = headers();
   const referrer = headersList.get("x-referrer") || "";
-  const userAgent = headersList.get("x-user-agent") || "";
 
-  console.log("[generateMetadata] User Agent:", userAgent);
-
+  // Check if referrer is from allowed platforms
   const allowedReferrers = [
     "x.com",
+    "twitter.com",
     "facebook.com",
     "fb.com",
     "slack.com",
     "notion.so",
     "linkedin.com",
-    "reddit.com",
-    "youtube.com",
-    "quora.com",
-    "t.co",
   ];
-
-  const allowedBots = ["twitterbot"];
 
   const isAllowedReferrer = allowedReferrers.some((domain) =>
     referrer.includes(domain)
   );
 
-  const userAgentLower = userAgent.toLowerCase();
-  const isAllowedBot = allowedBots.some((bot) =>
-    userAgentLower.includes(bot.toLowerCase())
-  );
-
-  const isTwitterBot = userAgentLower.includes("twitterbot");
-
-  const shouldAllowIndexing = isAllowedReferrer || isAllowedBot || isTwitterBot;
-
-  const robotsDirective = shouldAllowIndexing
+  // Set robots metadata based on referrer and video publicity
+  const robotsDirective = isAllowedReferrer
     ? "index, follow"
     : "noindex, nofollow";
-
-  if (isTwitterBot) {
-    console.log("[generateMetadata] Twitter bot detected, allowing indexing");
-  }
 
   if (video.public === false) {
     return {
@@ -141,18 +120,7 @@ export async function generateMetadata(
           },
         ],
       },
-      twitter: {
-        card: "summary_large_image",
-        title: "Cap: This video is private",
-        description: "This video is private and cannot be shared.",
-        images: [
-          new URL(
-            `/api/video/og?videoId=${videoId}`,
-            buildEnv.NEXT_PUBLIC_WEB_URL
-          ).toString(),
-        ],
-      },
-      robots: isTwitterBot ? "index, follow" : "noindex, nofollow",
+      robots: "noindex, nofollow",
     };
   }
 
@@ -348,9 +316,9 @@ async function AuthorizedContent({
           organization[0].allowedEmailDomain
         );
         return (
-          <div className="flex flex-col items-center justify-center min-h-screen p-4 text-center">
-            <h1 className="text-2xl font-bold mb-4">Access Restricted</h1>
-            <p className="text-gray-600 mb-2">
+          <div className="flex flex-col justify-center items-center p-4 min-h-screen text-center">
+            <h1 className="mb-4 text-2xl font-bold">Access Restricted</h1>
+            <p className="mb-2 text-gray-10">
               This video is only accessible to members of this organization.
             </p>
             <p className="text-gray-600">
@@ -654,7 +622,7 @@ async function AuthorizedContent({
         <a
           target="_blank"
           href={`/?ref=video_${video.id}`}
-          className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 bg-gray-1 rounded-full new-card-style w-fit"
+          className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 rounded-full bg-gray-1 new-card-style w-fit"
         >
           <span className="text-sm">Recorded with</span>
           <Logo className="w-14 h-auto" />

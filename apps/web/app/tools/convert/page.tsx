@@ -87,7 +87,7 @@ export default function ConvertToolsPage() {
           </Link>
         </div>
 
-        <h1 className="text-3xl font-bold tracking-tight text-gray-900 mb-8">
+        <h1 className="text-3xl font-medium tracking-tight text-gray-900 mb-8">
           File Conversion Tools
         </h1>
         <p className="mb-12 text-lg text-gray-600">

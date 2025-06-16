@@ -8,7 +8,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Menu, X } from "lucide-react";
 import Link from "next/link";
 import { MutableRefObject, useState } from "react";
-import { AdminNavItems } from "./AdminNavItems";
+import AdminNavItems from "./AdminNavItems";
 
 export const AdminMobileNav = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);

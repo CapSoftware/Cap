@@ -350,6 +350,69 @@ label {
   );
 }
 
+.theme-transition {
+  transition: background-color 0.5s ease-in-out;
+}
+
+/* View Transitions for theme switching */
+/* Icon animations */
+@keyframes rotate-sun {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes rotate-moon {
+  from { transform: rotate(-360deg); }
+  to { transform: rotate(0deg); }
+}
+
+::view-transition-old(theme-icon) {
+  animation: 0.5s cubic-bezier(0.4, 0, 0.2, 1) both fade-out,
+            0.5s cubic-bezier(0.4, 0, 0.2, 1) both rotate-sun;
+}
+
+::view-transition-new(theme-icon) {
+  animation: 0.5s cubic-bezier(0.4, 0, 0.2, 1) 0.1s both fade-in,
+            0.5s cubic-bezier(0.4, 0, 0.2, 1) both rotate-moon;
+}
+
+/* Wipe effect for the entire theme change */
+@keyframes wipe-in-right {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+
+@keyframes wipe-out-left {
+  from { clip-path: inset(0 0 0 0); }
+  to { clip-path: inset(0 0 0 100%); }
+}
+
+::view-transition-old(root) {
+  animation: 0.7s cubic-bezier(0.4, 0, 0.2, 1) both wipe-out-left;
+}
+
+::view-transition-new(root) {
+  animation: 0.7s cubic-bezier(0.4, 0, 0.2, 1) both wipe-in-right;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+.view-transition-theme-icon {
+  view-transition-name: theme-icon;
+}
+
+::view-transition-group(root) {
+  animation-duration: 0.7s;
+}
+
 .styled-links a {
   @apply font-semibold underline;
 }
@@ -526,6 +589,46 @@ slot:not(.dashboard-layout slot) {
 
 body.react-draggable-transparent-selection .crosshair {
   display: block;
+}
+
+@keyframes wobble {
+  0% {
+    transform: rotate(-3deg) scale(1.05);
+  }
+  10% {
+    transform: rotate(3deg) scale(1.05);
+  }
+  20% {
+    transform: rotate(-3deg) scale(1.05);
+  }
+  30% {
+    transform: rotate(3deg) scale(1.05);
+  }
+  40% {
+    transform: rotate(-2deg) scale(1.05);
+  }
+  50% {
+    transform: rotate(2deg) scale(1.05);
+  }
+  60% {
+    transform: rotate(-1deg) scale(1.05);
+  }
+  70% {
+    transform: rotate(1deg) scale(1.05);
+  }
+  80% {
+    transform: rotate(-1deg) scale(1.05);
+  }
+  90% {
+    transform: rotate(1deg) scale(1.05);
+  }
+  100% {
+    transform: rotate(-3deg) scale(1.05);
+  }
+}
+
+.wobble {
+  animation: wobble 2.5s infinite linear;
 }
 
 footer ul {

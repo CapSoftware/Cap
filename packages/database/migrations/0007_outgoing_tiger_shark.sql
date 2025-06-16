@@ -1,0 +1,1 @@
+ALTER TABLE `spaces` ADD `iconUrl` varchar(255);
