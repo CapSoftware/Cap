@@ -60,6 +60,12 @@ export const FPS_OPTIONS = [
   { label: "60 FPS", value: 60 },
 ] satisfies Array<{ label: string; value: number }>;
 
+export const GIF_FPS_OPTIONS = [
+  { label: "10 FPS", value: 10 },
+  { label: "15 FPS", value: 15 },
+  { label: "30 FPS", value: 30 },
+] satisfies Array<{ label: string; value: number }>;
+
 export const EXPORT_TO_OPTIONS = [
   {
     label: "File",
@@ -80,7 +86,7 @@ export const EXPORT_TO_OPTIONS = [
 
 export const FORMAT_OPTIONS = [
   { label: "MP4", value: "mp4" },
-  { label: "GIF", value: "gif", disabled: true },
+  { label: "GIF", value: "gif" },
 ] as { label: string; value: string; disabled?: boolean }[];
 
 type ExportToOption = (typeof EXPORT_TO_OPTIONS)[number]["value"];
@@ -107,6 +113,25 @@ export function ExportDialog() {
     { name: "export_settings" }
   );
 
+  // Update FPS when format changes
+  createEffect(() => {
+    if (settings.format === "gif" && ![10, 15, 30].includes(settings.fps)) {
+      setSettings("fps", 10);
+    } else if (
+      settings.format === "mp4" &&
+      ![15, 30, 60].includes(settings.fps)
+    ) {
+      setSettings("fps", 30);
+    }
+  });
+
+  // Update resolution when format changes to GIF
+  createEffect(() => {
+    if (settings.format === "gif" && settings.resolution.value !== "720p") {
+      setSettings("resolution", RESOLUTION_OPTIONS._720p);
+    }
+  });
+
   // just a wrapper of exportVideo that provides the current settings
   const exportWithSettings = (onProgress: (progress: FramesRendered) => void) =>
     exportVideo(
@@ -118,6 +143,7 @@ export function ExportDialog() {
           y: settings.resolution.height,
         },
         compression: settings.compression,
+        format: settings.format === "mp4" ? "MP4" : "GIF",
       },
       onProgress
     );
@@ -195,9 +221,15 @@ export function ExportDialog() {
     mutationFn: async () => {
       if (exportState.type !== "idle") return;
 
+      const extension = settings.format === "gif" ? "gif" : "mp4";
       const savePath = await saveDialog({
-        filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
-        defaultPath: `~/Desktop/${meta().prettyName}.mp4`,
+        filters: [
+          {
+            name: `${extension.toUpperCase()} filter`,
+            extensions: [extension],
+          },
+        ],
+        defaultPath: `~/Desktop/${meta().prettyName}.${extension}`,
       });
       if (!savePath) {
         setExportState(reconcile({ type: "idle" }));
@@ -428,41 +460,20 @@ export function ExportDialog() {
                 <h3 class="text-gray-12">Format</h3>
                 <div class="flex flex-row gap-2">
                   <For each={FORMAT_OPTIONS}>
-                    {(option) =>
-                      option.disabled ? (
-                        <Tooltip content={"Coming soon"}>
-                          <Button
-                            variant="secondary"
-                            onClick={() =>
-                              setSettings(
-                                "format",
-                                option.value as "mp4" | "gif"
-                              )
-                            }
-                            disabled={option.disabled}
-                            autofocus={false}
-                            class={cx(
-                              settings.format === option.value && selectedStyle
-                            )}
-                          >
-                            {option.label}
-                          </Button>
-                        </Tooltip>
-                      ) : (
-                        <Button
-                          variant="secondary"
-                          onClick={() =>
-                            setSettings("format", option.value as "mp4")
-                          }
-                          autofocus={false}
-                          class={cx(
-                            settings.format === option.value && selectedStyle
-                          )}
-                        >
-                          {option.label}
-                        </Button>
-                      )
-                    }
+                    {(option) => (
+                      <Button
+                        variant="secondary"
+                        onClick={() =>
+                          setSettings("format", option.value as "mp4" | "gif")
+                        }
+                        autofocus={false}
+                        class={cx(
+                          settings.format === option.value && selectedStyle
+                        )}
+                      >
+                        {option.label}
+                      </Button>
+                    )}
                   </For>
                 </div>
               </div>
@@ -472,13 +483,19 @@ export function ExportDialog() {
               <div class="flex flex-col gap-3">
                 <h3 class="text-gray-12">Frame rate</h3>
                 <KSelect
-                  options={FPS_OPTIONS}
+                  options={
+                    settings.format === "gif" ? GIF_FPS_OPTIONS : FPS_OPTIONS
+                  }
                   optionValue="value"
                   optionTextValue="label"
                   placeholder="Select FPS"
-                  value={FPS_OPTIONS.find((opt) => opt.value === settings.fps)}
+                  value={(settings.format === "gif"
+                    ? GIF_FPS_OPTIONS
+                    : FPS_OPTIONS
+                  ).find((opt) => opt.value === settings.fps)}
                   onChange={(option) => {
-                    const value = option?.value ?? 30;
+                    const value =
+                      option?.value ?? (settings.format === "gif" ? 10 : 30);
                     trackEvent("export_fps_changed", {
                       fps: value,
                     });
@@ -579,11 +596,15 @@ export function ExportDialog() {
                 <h3 class="text-gray-12">Resolution</h3>
                 <div class="flex gap-2">
                   <For
-                    each={[
-                      RESOLUTION_OPTIONS._720p,
-                      RESOLUTION_OPTIONS._1080p,
-                      RESOLUTION_OPTIONS._4k,
-                    ]}
+                    each={
+                      settings.format === "gif"
+                        ? [RESOLUTION_OPTIONS._720p]
+                        : [
+                            RESOLUTION_OPTIONS._720p,
+                            RESOLUTION_OPTIONS._1080p,
+                            RESOLUTION_OPTIONS._4k,
+                          ]
+                    }
                   >
                     {(option) => (
                       <Button

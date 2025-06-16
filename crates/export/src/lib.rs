@@ -1,7 +1,7 @@
 use cap_editor::{get_audio_segments, Segment};
 use cap_media::{
     data::{AudioInfo, RawVideoFormat, VideoInfo},
-    encoders::{AACEncoder, AudioEncoder, H264Encoder, MP4Input, OpusEncoder},
+    encoders::{AACEncoder, AudioEncoder, GifEncoderWrapper, H264Encoder, MP4Input, OpusEncoder},
     feeds::{AudioRenderer, AudioSegment, AudioSegmentTrack},
     MediaError,
 };
@@ -63,6 +63,7 @@ pub struct ExportSettings {
     pub fps: u32,
     pub resolution_base: XY<u32>,
     pub compression: ExportCompression,
+    pub format: ExportFormat,
 }
 
 #[derive(Deserialize, Clone, Copy, Debug, Type)]
@@ -71,6 +72,12 @@ pub enum ExportCompression {
     Social,
     Web,
     Potato,
+}
+
+#[derive(Deserialize, Clone, Copy, Debug, Type)]
+pub enum ExportFormat {
+    MP4,
+    GIF,
 }
 
 impl ExportCompression {
@@ -156,13 +163,20 @@ where
         })
     }
 
-    pub async fn export_with_custom_muxer(mut self) -> Result<PathBuf, ExportError> {
+    pub async fn export_with_custom_muxer(self) -> Result<PathBuf, ExportError> {
+        match self.settings.format {
+            ExportFormat::MP4 => self.export_mp4().await,
+            ExportFormat::GIF => self.export_gif().await,
+        }
+    }
+
+    async fn export_mp4(mut self) -> Result<PathBuf, ExportError> {
         let meta = match &self.recording_meta.inner {
             RecordingMetaInner::Studio(meta) => meta,
             _ => panic!("Not a studio recording"),
         };
 
-        println!("Exporting with custom muxer");
+        println!("Exporting MP4 with custom muxer");
 
         let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(RenderedFrame, u32)>(4);
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<MP4Input>(4);
@@ -318,6 +332,88 @@ where
         .then(|f| async { f.map_err(Into::into) });
 
         let (output_path, _, _) = tokio::try_join!(encoder_thread, render_video_task, render_task)?;
+
+        Ok(output_path)
+    }
+
+    async fn export_gif(mut self) -> Result<PathBuf, ExportError> {
+        let meta = match &self.recording_meta.inner {
+            RecordingMetaInner::Studio(meta) => meta,
+            _ => panic!("Not a studio recording"),
+        };
+
+        println!(
+            "Exporting GIF with settings: fps={}, output_size={}x{}",
+            self.settings.fps, self.output_size.0, self.output_size.1
+        );
+
+        let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(RenderedFrame, u32)>(4);
+
+        // Ensure the output path has .gif extension
+        let mut gif_output_path = self.output_path.clone();
+        if gif_output_path.extension() != Some(std::ffi::OsStr::new("gif")) {
+            gif_output_path.set_extension("gif");
+        }
+
+        println!("Creating GIF encoder at path: {:?}", gif_output_path);
+        let mut gif_encoder = GifEncoderWrapper::new(
+            &gif_output_path,
+            self.output_size.0,
+            self.output_size.1,
+            self.settings.fps,
+        )
+        .map_err(|e| {
+            eprintln!("Failed to create GIF encoder: {}", e);
+            ExportError::Other(format!("Failed to create GIF encoder: {}", e))
+        })?;
+        println!("GIF encoder created successfully");
+
+        let encoder_thread = tokio::task::spawn_blocking(move || {
+            println!("Starting GIF encoding thread");
+            let mut frame_count = 0;
+
+            while let Some((frame, _frame_number)) = video_rx.blocking_recv() {
+                println!("Processing frame {} for GIF", frame_count);
+                (self.on_progress)(frame_count);
+
+                if let Err(e) =
+                    gif_encoder.add_frame(&frame.data, frame.padded_bytes_per_row as usize)
+                {
+                    eprintln!("Failed to add frame to GIF: {}", e);
+                    return Err(ExportError::Other(format!(
+                        "Failed to add frame to GIF: {}",
+                        e
+                    )));
+                }
+
+                frame_count += 1;
+            }
+
+            println!("Finished processing {} frames, finalizing GIF", frame_count);
+            if let Err(e) = gif_encoder.finish() {
+                eprintln!("Failed to finish GIF: {}", e);
+                return Err(ExportError::Other(format!("Failed to finish GIF: {}", e)));
+            }
+
+            println!("GIF export completed successfully: {:?}", gif_output_path);
+            Ok(gif_output_path)
+        })
+        .then(|f| async { f.map_err(Into::into).and_then(|v| v) });
+
+        let render_video_task = cap_rendering::render_video_to_channel(
+            self.render_constants.options,
+            self.project,
+            tx_image_data,
+            &self.recording_meta,
+            meta,
+            self.render_segments,
+            self.settings.fps,
+            self.settings.resolution_base,
+            &self.recordings,
+        )
+        .then(|f| async { f.map_err(Into::into) });
+
+        let (output_path, _) = tokio::try_join!(encoder_thread, render_video_task)?;
 
         Ok(output_path)
     }
