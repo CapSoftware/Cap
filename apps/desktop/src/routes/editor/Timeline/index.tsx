@@ -24,6 +24,7 @@ export function Timeline() {
     setEditorState,
     totalDuration,
     editorState,
+    projectActions,
   } = useEditorContext();
 
   const duration = () => editorInstance.recordingDuration;
@@ -86,43 +87,20 @@ export function Timeline() {
   }
 
   createEventListener(window, "keydown", (e) => {
-    if (e.code === "Backspace" || e.code === "Delete") {
+    const hasNoModifiers = !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey;
+
+    if (e.code === "Backspace" || (e.code === "Delete" && hasNoModifiers)) {
       const selection = editorState.timeline.selection;
       if (!selection) return;
 
-      if (selection.type === "zoom") {
-        batch(() => {
-          setProject(
-            produce((project) => {
-              project.timeline?.zoomSegments.splice(selection.index, 1);
-            })
-          );
-        });
-      } else if (selection.type === "clip") {
-        const selectedSegment = project.timeline?.segments.find(
-          (_, i) => i === selection.index
-        );
-        if (!selectedSegment || selectedSegment.recordingSegment === undefined)
-          return;
+      if (selection.type === "zoom")
+        projectActions.deleteZoomSegment(selection.index);
+      else if (selection.type === "clip")
+        projectActions.deleteClipSegment(selection.index);
+    } else if (e.code === "KeyC" && hasNoModifiers) {
+      if (!editorState.previewTime) return;
 
-        const timeline = project.timeline;
-        if (!timeline) return;
-
-        if (
-          timeline.segments.filter(
-            (s) => s.recordingSegment === selectedSegment.recordingSegment
-          ).length < 2
-        )
-          return;
-
-        batch(() => {
-          setProject(
-            produce((project) => {
-              project.timeline?.segments.splice(selection.index, 1);
-            })
-          );
-        });
-      }
+      projectActions.splitClipSegment(editorState.previewTime);
     }
   });
 
