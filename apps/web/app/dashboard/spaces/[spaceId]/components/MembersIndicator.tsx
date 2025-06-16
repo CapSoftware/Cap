@@ -5,6 +5,7 @@ import {
   Button,
   Dialog,
   DialogContent,
+  Avatar,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
