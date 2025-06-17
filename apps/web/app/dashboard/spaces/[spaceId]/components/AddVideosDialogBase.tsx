@@ -206,7 +206,7 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
           </div>
         </div>
 
-        <div className="flex flex-shrink-0 justify-between items-center px-4 py-4 border-t sm:px-8 sm:py-6 border-gray-4 bg-gray-3">
+        <div className="flex flex-shrink-0 justify-between items-center px-4 py-4 rounded-b-xl border-t sm:px-8 sm:py-6 border-gray-4 bg-gray-3">
           <div className="text-xs sm:text-sm text-gray-11">
             {selectedVideos.length > 0 && (
               <span>
@@ -274,7 +274,7 @@ const VideoCard: React.FC<VideoCardProps> = ({
         isAlreadyInEntity
           ? "cursor-not-allowed bg-gray-3 border-gray-6"
           : isSelected
-          ? "cursor-pointer bg-gray-3 border-gray-5"
+          ? "border-green-500 cursor-pointer bg-gray-3"
           : "bg-transparent cursor-pointer hover:bg-gray-3 hover:border-gray-5 border-gray-4"
       )}
     >
