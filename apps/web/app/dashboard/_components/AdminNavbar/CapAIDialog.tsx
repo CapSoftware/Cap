@@ -24,7 +24,7 @@ const CapAIDialog = ({ setOpen }: { setOpen: (open: boolean) => void }) => {
   return (
     <DialogContent
       onOpenAutoFocus={(e) => e.preventDefault()}
-      className="max-w-[500px] p-0"
+      className="w-[calc(100%-20px)] max-w-[500px]"
     >
       <DialogHeader icon={<FontAwesomeIcon icon={faInfoCircle} />}>
         <DialogTitle className="text-lg font-medium text-gray-12">
@@ -42,7 +42,7 @@ const CapAIDialog = ({ setOpen }: { setOpen: (open: boolean) => void }) => {
       <DialogFooter>
         <Button
           autoFocus={false}
-          className="min-w-[100px]"
+          className="min-w-[100px] max-w-fit ml-auto"
           variant="primary"
           onClick={() => setOpen(false)}
         >

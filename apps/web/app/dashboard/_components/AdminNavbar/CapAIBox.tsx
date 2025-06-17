@@ -26,11 +26,9 @@ const CapAIBox = ({
           onMouseLeave={() => setHovered(false)}
           className="p-3 mb-6 w-full rounded-xl border transition-colors cursor-pointer hover:bg-gray-2 h-fit border-gray-3"
         >
-          <div>
-            <div className="flex justify-between items-center p-3 w-full">
-              <h3 className="text-sm font-medium text-gray-12">Cap AI</h3>
-              <p className="text-xs text-gray-10">Coming soon</p>
-            </div>
+          <div className="flex justify-between items-center px-3 pb-3 w-full">
+            <h3 className="text-sm font-medium text-gray-12">Cap AI</h3>
+            <p className="text-xs text-gray-10">Coming soon</p>
           </div>
           <CapAIArt />
           <div
