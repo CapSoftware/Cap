@@ -218,7 +218,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
                   size={20}
                 />
               </div>
-              <div className="grid overflow-y-auto grid-cols-5 gap-3 max-h-60">
+              <div className="grid overflow-y-auto grid-cols-4 gap-3 pt-2 max-h-60">
                 {filteredSpaces && filteredSpaces.length > 0 ? (
                   filteredSpaces.map((space) => (
                     <SpaceCard
@@ -254,11 +254,11 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
                 </code>
               </div>
               <Button
-                className="w-full"
+                className="w-full font-medium"
                 variant="dark"
                 onClick={handleCopyEmbedCode}
               >
-                <FontAwesomeIcon icon={faCopy} className="size-3.5 mr-2" />
+                <FontAwesomeIcon icon={faCopy} className="size-3.5 mr-1" />
                 Copy embed code
               </Button>
             </div>
