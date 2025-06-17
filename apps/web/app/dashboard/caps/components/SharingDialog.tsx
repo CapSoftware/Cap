@@ -10,7 +10,7 @@ import {
   Input,
   Avatar,
 } from "@cap/ui";
-import { faShareNodes } from "@fortawesome/free-solid-svg-icons";
+import { faShareNodes, faCopy } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { motion } from "framer-motion";
@@ -49,6 +49,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
     Set<string>
   >(new Set());
   const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<"share" | "embed">("share");
 
   const sharedSpaceIds = new Set(sharedSpaces?.map((space) => space.id) || []);
 
@@ -58,6 +59,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
       setSelectedSpaces(spaceIds);
       setInitialSelectedSpaces(spaceIds);
       setSearchTerm("");
+      setActiveTab("share");
     }
   }, [isOpen, sharedSpaces]);
 
@@ -133,6 +135,21 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
     }
   };
 
+  const handleCopyEmbedCode = async () => {
+    const embedCode = `<div style="position: relative; padding-bottom: 56.25%; height: 0;"><iframe src="${
+      process.env.NODE_ENV === "development"
+        ? "http://localhost:3000"
+        : "https://cap.so"
+    }/embed/${capId}" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></iframe></div>`;
+
+    try {
+      await navigator.clipboard.writeText(embedCode);
+      toast.success("Embed code copied to clipboard");
+    } catch (error) {
+      toast.error("Failed to copy embed code");
+    }
+  };
+
   const filteredSpaces = searchTerm
     ? spacesData?.filter((space) =>
         space.name.toLowerCase().includes(searchTerm.toLowerCase())
@@ -144,64 +161,131 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
       <DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
         <DialogHeader
           icon={<FontAwesomeIcon icon={faShareNodes} className="size-3.5" />}
-          description="Select the spaces you would like to share with"
+          description={
+            activeTab === "share"
+              ? "Select the spaces you would like to share with"
+              : "Copy the embed code to share your cap"
+          }
         >
           <DialogTitle className="truncate w-full max-w-[320px]">
-            Share {capName}
+            {activeTab === "share" ? `Share ${capName}` : `Embed ${capName}`}
           </DialogTitle>
         </DialogHeader>
-        <div className="p-5">
-          <div className="relative mb-3">
-            <Input
-              type="text"
-              placeholder="Search..."
-              value={searchTerm}
-              className="pr-8"
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-            <Search
-              className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-10"
-              size={20}
-            />
-          </div>
-          <div className="grid overflow-y-auto grid-cols-5 gap-3 pt-2 max-h-60">
-            {filteredSpaces && filteredSpaces.length > 0 ? (
-              filteredSpaces.map((space) => (
-                <SpaceCard
-                  key={space.id}
-                  space={space}
-                  selectedSpaces={selectedSpaces}
-                  handleToggleSpace={handleToggleSpace}
-                  isSharedViaOrganization={isSpaceSharedViaOrganization(
-                    space.id
-                  )}
-                />
-              ))
-            ) : (
-              <div className="flex col-span-5 gap-2 justify-center items-center text-sm">
-                <p className="text-gray-12">
-                  {spacesData && spacesData.length > 0
-                    ? "No spaces match your search"
-                    : "No spaces available"}
-                </p>
-              </div>
-            )}
+
+        <div className="px-5">
+          <div className="flex border-b border-gray-4">
+            <button
+              className={clsx(
+                "flex-1 py-3 text-sm font-medium transition-colors",
+                activeTab === "share"
+                  ? "text-gray-12 border-b-2 border-blue-500"
+                  : "text-gray-11 hover:text-gray-12"
+              )}
+              onClick={() => setActiveTab("share")}
+            >
+              Share to space
+            </button>
+            <button
+              className={clsx(
+                "flex-1 py-3 text-sm font-medium transition-colors",
+                activeTab === "embed"
+                  ? "text-gray-12 border-b-2 border-blue-500"
+                  : "text-gray-11 hover:text-gray-12"
+              )}
+              onClick={() => setActiveTab("embed")}
+            >
+              Embed
+            </button>
           </div>
         </div>
-        <DialogFooter className="p-5 border-t border-gray-4">
-          <Button size="sm" variant="gray" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            spinner={loading}
-            disabled={loading}
-            size="sm"
-            variant="dark"
-            onClick={handleSave}
-          >
-            {loading ? "Saving..." : "Save"}
-          </Button>
-        </DialogFooter>
+
+        <div className="p-5">
+          {activeTab === "share" ? (
+            <>
+              <div className="relative mb-3">
+                <Input
+                  type="text"
+                  placeholder="Search..."
+                  value={searchTerm}
+                  className="pr-8"
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+                <Search
+                  className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-10"
+                  size={20}
+                />
+              </div>
+              <div className="grid overflow-y-auto grid-cols-5 gap-3 pt-2 max-h-60">
+                {filteredSpaces && filteredSpaces.length > 0 ? (
+                  filteredSpaces.map((space) => (
+                    <SpaceCard
+                      key={space.id}
+                      space={space}
+                      selectedSpaces={selectedSpaces}
+                      handleToggleSpace={handleToggleSpace}
+                      isSharedViaOrganization={isSpaceSharedViaOrganization(
+                        space.id
+                      )}
+                    />
+                  ))
+                ) : (
+                  <div className="flex col-span-5 gap-2 justify-center items-center text-sm">
+                    <p className="text-gray-12">
+                      {spacesData && spacesData.length > 0
+                        ? "No spaces match your search"
+                        : "No spaces available"}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="space-y-4">
+              <div className="p-3 rounded-lg bg-gray-3 border border-gray-4">
+                <code className="text-xs text-gray-11 break-all font-mono">
+                  {`<div style="position: relative; padding-bottom: 56.25%; height: 0;"><iframe src="${
+                    process.env.NODE_ENV === "development"
+                      ? "http://localhost:3000"
+                      : "https://cap.so"
+                  }/embed/${capId}" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></iframe></div>`}
+                </code>
+              </div>
+              <Button
+                className="w-full"
+                variant="dark"
+                onClick={handleCopyEmbedCode}
+              >
+                <FontAwesomeIcon icon={faCopy} className="size-3.5 mr-2" />
+                Copy embed code
+              </Button>
+            </div>
+          )}
+        </div>
+
+        {activeTab === "share" && (
+          <DialogFooter className="p-5 border-t border-gray-4">
+            <Button size="sm" variant="gray" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button
+              spinner={loading}
+              disabled={loading}
+              size="sm"
+              variant="dark"
+              onClick={handleSave}
+            >
+              {loading ? "Saving..." : "Save"}
+            </Button>
+          </DialogFooter>
+        )}
+
+        {activeTab === "embed" && (
+          <DialogFooter className="p-5 border-t border-gray-4">
+            <Button size="sm" variant="gray" onClick={onClose}>
+              Close
+            </Button>
+          </DialogFooter>
+        )}
       </DialogContent>
     </Dialog>
   );
