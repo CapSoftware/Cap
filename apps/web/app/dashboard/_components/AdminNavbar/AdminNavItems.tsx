@@ -29,9 +29,7 @@ import { UsageButton } from "@/components/UsageButton";
 import { buildEnv } from "@cap/env";
 import {
   faBuilding,
-  faDownload,
   faRecordVinyl,
-  faShareNodes,
   IconDefinition,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -42,6 +40,7 @@ import Image from "next/image";
 import { useRef, useState } from "react";
 import { updateActiveOrganization } from "./server";
 import SpacesList from "./SpacesList";
+import CapAIBox from "./CapAIBox";
 
 interface Props {
   toggleMobileNav?: () => void;
@@ -90,6 +89,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
   const formRef = useRef<HTMLFormElement | null>(null);
   const [createLoading, setCreateLoading] = useState(false);
   const [organizationName, setOrganizationName] = useState("");
+  const [openAIDialog, setOpenAIDialog] = useState(false);
 
   const isPathActive = (path: string) => pathname.includes(path);
 
@@ -357,6 +357,10 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
           <SpacesList toggleMobileNav={() => toggleMobileNav?.()} />
         </div>
         <div className="pb-4 mt-auto w-full">
+          <CapAIBox
+            openAIDialog={openAIDialog}
+            setOpenAIDialog={setOpenAIDialog}
+          />
           <UsageButton
             toggleMobileNav={() => toggleMobileNav?.()}
             subscribed={userIsSubscribed}
