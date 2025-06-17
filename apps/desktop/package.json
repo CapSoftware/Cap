@@ -28,6 +28,7 @@
     "@solid-primitives/event-listener": "^2.3.3",
     "@solid-primitives/history": "^0.1.5",
     "@solid-primitives/memo": "^1.4.2",
+    "@solid-primitives/mouse": "^2.1.2",
     "@solid-primitives/refs": "^1.0.8",
     "@solid-primitives/resize-observer": "^2.0.26",
     "@solid-primitives/scheduled": "^1.4.3",

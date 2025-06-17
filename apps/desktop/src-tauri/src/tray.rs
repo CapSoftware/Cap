@@ -4,6 +4,7 @@ use crate::{
     RequestStartRecording, RequestStopRecording,
 };
 use cap_fail::fail;
+use cap_flags::FLAGS;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::menu::{MenuId, PredefinedMenuItem};
@@ -99,7 +100,14 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             move |app: &AppHandle, event| match TrayItem::try_from(event.id) {
                 Ok(TrayItem::OpenCap) => {
                     let app = app.clone();
-                    tokio::spawn(async move { ShowCapWindow::Main.show(&app).await });
+                    tokio::spawn(async move {
+                        if FLAGS.new_recording_flow {
+                            let _ = ShowCapWindow::NewMain.show(&app).await;
+                        } else {
+                            let _ = ShowCapWindow::Main.show(&app).await;
+                        }
+                        // ShowCapWindow::Main.show(&app).await
+                    });
                 }
                 Ok(TrayItem::TakeScreenshot) => {
                     let _ = RequestNewScreenshot.emit(&app_handle);

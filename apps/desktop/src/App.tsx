@@ -27,6 +27,9 @@ import { CapErrorBoundary } from "./components/CapErrorBoundary";
 
 const queryClient = new QueryClient({
   defaultOptions: {
+    queries: {
+      experimental_prefetchInRender: true,
+    },
     mutations: {
       onError: (e) => {
         message(`Error\n${e}`);

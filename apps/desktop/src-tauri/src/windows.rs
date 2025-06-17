@@ -28,10 +28,12 @@ pub enum CapWindowId {
     // Contains onboarding + permissions
     Setup,
     Main,
+    NewMain,
     Settings,
     Editor { id: u32 },
     RecordingsOverlay,
     WindowCaptureOccluder { screen_id: u32 },
+    StartRecordingOverlay,
     CaptureArea,
     Camera,
     InProgressRecording,
@@ -47,11 +49,13 @@ impl FromStr for CapWindowId {
         Ok(match s {
             "setup" => Self::Setup,
             "main" => Self::Main,
+            "new-main" => Self::NewMain,
             "settings" => Self::Settings,
             "camera" => Self::Camera,
             "capture-area" => Self::CaptureArea,
             "in-progress-recording" => Self::InProgressRecording,
             "recordings-overlay" => Self::RecordingsOverlay,
+            "start-recording-overlay" => Self::StartRecordingOverlay,
             "upgrade" => Self::Upgrade,
             "mode-select" => Self::ModeSelect,
             "debug" => Self::Debug,
@@ -77,12 +81,14 @@ impl std::fmt::Display for CapWindowId {
         match self {
             Self::Setup => write!(f, "setup"),
             Self::Main => write!(f, "main"),
+            Self::NewMain => write!(f, "new-main"),
             Self::Settings => write!(f, "settings"),
             Self::Camera => write!(f, "camera"),
             Self::WindowCaptureOccluder { screen_id } => {
                 write!(f, "window-capture-occluder-{screen_id}")
             }
             Self::CaptureArea => write!(f, "capture-area"),
+            Self::StartRecordingOverlay => write!(f, "start-recording-overlay"),
             Self::InProgressRecording => write!(f, "in-progress-recording"),
             Self::RecordingsOverlay => write!(f, "recordings-overlay"),
             Self::Upgrade => write!(f, "upgrade"),
@@ -146,7 +152,8 @@ impl CapWindowId {
             Self::Camera
             | Self::WindowCaptureOccluder { .. }
             | Self::CaptureArea
-            | Self::RecordingsOverlay => None,
+            | Self::RecordingsOverlay
+            | Self::StartRecordingOverlay => None,
             _ => Some(None),
         }
     }
@@ -169,10 +176,12 @@ impl CapWindowId {
 pub enum ShowCapWindow {
     Setup,
     Main,
+    NewMain,
     Settings { page: Option<String> },
     Editor { project_path: PathBuf },
     RecordingsOverlay,
     WindowCaptureOccluder { screen_id: u32 },
+    StartRecordingOverlay,
     CaptureArea { screen_id: u32 },
     Camera,
     InProgressRecording { position: Option<(f64, f64)> },
@@ -226,6 +235,57 @@ impl ShowCapWindow {
                 } else {
                     Box::pin(Self::Setup.show(app)).await?
                 }
+            }
+            Self::NewMain => {
+                if permissions::do_permissions_check(false).necessary_granted() {
+                    let window = self
+                        .window_builder(app, "/new-main")
+                        .resizable(false)
+                        .maximized(false)
+                        .maximizable(false)
+                        .always_on_top(true)
+                        .visible_on_all_workspaces(true)
+                        .center()
+                        .build()?;
+
+                    #[cfg(target_os = "macos")]
+                    {
+                        crate::platform::set_window_level(window.as_ref().window(), 50);
+                    }
+
+                    window
+                } else {
+                    Box::pin(Self::Setup.show(app)).await?
+                }
+            }
+            Self::StartRecordingOverlay => {
+                let Some(bounds) = logical_monitor_bounds(1) else {
+                    return Err(tauri::Error::WindowNotFound);
+                };
+
+                let mut window_builder = self
+                    .window_builder(app, "/start-recording-overlay")
+                    .maximized(false)
+                    .resizable(false)
+                    .fullscreen(false)
+                    .shadow(false)
+                    .always_on_top(true)
+                    .visible_on_all_workspaces(true)
+                    .skip_taskbar(true)
+                    .inner_size(bounds.size.width, bounds.size.height)
+                    .position(bounds.position.x, bounds.position.y)
+                    .transparent(true);
+
+                let window = window_builder.build()?;
+
+                window.set_ignore_cursor_events(true).unwrap();
+
+                #[cfg(target_os = "macos")]
+                {
+                    crate::platform::set_window_level(window.as_ref().window(), 45);
+                }
+
+                window
             }
             Self::Settings { page } => {
                 // Hide main window when settings window opens
@@ -581,6 +641,7 @@ impl ShowCapWindow {
         match self {
             ShowCapWindow::Setup => CapWindowId::Setup,
             ShowCapWindow::Main => CapWindowId::Main,
+            ShowCapWindow::NewMain => CapWindowId::NewMain,
             ShowCapWindow::Settings { .. } => CapWindowId::Settings,
             ShowCapWindow::Editor { project_path } => {
                 let state = app.state::<EditorWindowIds>();
@@ -589,6 +650,7 @@ impl ShowCapWindow {
                 CapWindowId::Editor { id }
             }
             ShowCapWindow::RecordingsOverlay => CapWindowId::RecordingsOverlay,
+            ShowCapWindow::StartRecordingOverlay => CapWindowId::StartRecordingOverlay,
             ShowCapWindow::WindowCaptureOccluder { screen_id } => {
                 CapWindowId::WindowCaptureOccluder {
                     screen_id: *screen_id,

@@ -27,6 +27,7 @@ use auth::{AuthStore, AuthenticationInvalid, Plan};
 use camera::create_camera_preview_ws;
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
+use cap_flags::FLAGS;
 use cap_media::feeds::RawCameraFrame;
 use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::platform::Bounds;
@@ -1915,6 +1916,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 .with_denylist(&[
                     CapWindowId::Setup.label().as_str(),
                     "window-capture-occluder",
+                    "start-recording-overlay",
                     // CapWindowId::WindowCaptureOccluder.label().as_str(),
                     CapWindowId::CaptureArea.label().as_str(),
                     CapWindowId::Camera.label().as_str(),
@@ -1926,6 +1928,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     label if label.starts_with("editor-") => "editor",
                     label if label.starts_with("window-capture-occluder-") => {
                         "window-capture-occluder"
+                    }
+                    label if label.starts_with("start-recording-overlay") => {
+                        "start-recording-overlay"
                     }
                     _ => label,
                 })
@@ -1997,7 +2002,11 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     } else {
                         println!("Permissions granted, showing main window");
 
-                        let _ = ShowCapWindow::Main.show(&app).await;
+                        if FLAGS.new_recording_flow {
+                            let _ = ShowCapWindow::NewMain.show(&app).await;
+                        } else {
+                            let _ = ShowCapWindow::Main.show(&app).await;
+                        }
                     }
                 }
             });
@@ -2163,7 +2172,13 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     }
                 } else {
                     let handle = handle.clone();
-                    let _ = tokio::spawn(async move { ShowCapWindow::Main.show(&handle).await });
+                    let _ = tokio::spawn(async move {
+                        if FLAGS.new_recording_flow {
+                            let _ = ShowCapWindow::NewMain.show(&handle).await;
+                        } else {
+                            let _ = ShowCapWindow::Main.show(&handle).await;
+                        }
+                    });
                 }
             }
             tauri::RunEvent::ExitRequested { code, api, .. } => {

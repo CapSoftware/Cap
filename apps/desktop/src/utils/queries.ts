@@ -49,18 +49,6 @@ const listVideoDevices = queryOptions({
   initialData: [],
 });
 
-export function createVideoDevicesQuery() {
-  const query = createQuery(() => listVideoDevices);
-
-  const [videoDevicesStore, setVideoDevices] = createStore<string[]>([]);
-
-  createMemo(() => {
-    setVideoDevices(reconcile(query.data ?? []));
-  });
-
-  return videoDevicesStore;
-}
-
 export const listAudioDevices = queryOptions({
   queryKey: ["audioDevices"] as const,
   queryFn: () => commands.listAudioDevices(),
@@ -85,6 +73,7 @@ export function createOptionsQuery() {
       cameraLabel: string | null;
       mode: RecordingMode;
       captureSystemAudio?: boolean;
+      targetMode?: "screen" | "window" | "area";
     }>({
       captureTarget: { variant: "screen", id: 0 },
       micName: null,
