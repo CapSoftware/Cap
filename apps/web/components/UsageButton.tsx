@@ -77,7 +77,9 @@ const ProRiveButton = memo(
     });
 
     return (
-      <div
+      <Button
+        variant="blue"
+        size="lg"
         onMouseEnter={() => {
           if (rive) {
             rive.stop();
@@ -92,7 +94,7 @@ const ProRiveButton = memo(
         }}
         className={clsx(
           "flex overflow-visible relative gap-3 justify-evenly items-center cursor-pointer",
-          "mx-auto bg-blue-600 rounded-full transition-colors hover:bg-blue-700",
+          "mx-auto",
           sidebarCollapsed ? "py-0 h-[45px] min-w-[unset]" : "py-3 w-full h-fit"
         )}
         onClick={() => {
@@ -113,7 +115,7 @@ const ProRiveButton = memo(
             Upgrade to Pro
           </p>
         ) : null}
-      </div>
+      </Button>
     );
   }
 );

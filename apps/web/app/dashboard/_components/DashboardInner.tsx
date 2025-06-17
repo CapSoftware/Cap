@@ -4,7 +4,6 @@ import {
   useSharedContext,
   useTheme,
 } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { useEffect } from "react";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { buildEnv } from "@cap/env";
 import {
@@ -147,11 +146,21 @@ const User = () => {
             className="flex gap-2 justify-between  items-center p-2 rounded-xl border data-[state=open]:border-gray-3 data-[state=open]:bg-gray-3 border-transparent transition-colors cursor-pointer group lg:gap-6 hover:border-gray-3"
           >
             <div className="flex items-center">
-              <Avatar
-                letterClass="text-xs lg:text-md"
-                name={user.name ?? "User"}
-                className="size-[24px] text-gray-12"
-              />
+              {user?.image ? (
+                <Image
+                  src={user?.image}
+                  alt={user?.name ?? "User"}
+                  width={24}
+                  height={24}
+                  className="rounded-full"
+                />
+              ) : (
+                <Avatar
+                  letterClass="text-xs lg:text-md"
+                  name={user.name ?? "User"}
+                  className="size-[24px] text-gray-12"
+                />
+              )}
               <span className="ml-2 text-sm lg:ml-2 lg:text-md text-gray-12">
                 {user.name ?? "User"}
               </span>

@@ -278,7 +278,7 @@ export const Caps = ({
           </div>
         </div>
       )}
-      <div className="flex justify-end mb-4">
+      <div className="flex justify-start mb-4">
         <UploadCapButton
           onStart={handleUploadStart}
           size="sm"
