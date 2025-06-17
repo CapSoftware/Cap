@@ -49,7 +49,9 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
     Set<string>
   >(new Set());
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<"share" | "embed">("share");
+  const tabs = ["Share to space", "Embed"] as const;
+  const [activeTab, setActiveTab] =
+    useState<(typeof tabs)[number]>("Share to space");
 
   const sharedSpaceIds = new Set(sharedSpaces?.map((space) => space.id) || []);
 
@@ -59,7 +61,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
       setSelectedSpaces(spaceIds);
       setInitialSelectedSpaces(spaceIds);
       setSearchTerm("");
-      setActiveTab("share");
+      setActiveTab(tabs[0]);
     }
   }, [isOpen, sharedSpaces]);
 
@@ -162,45 +164,46 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
         <DialogHeader
           icon={<FontAwesomeIcon icon={faShareNodes} className="size-3.5" />}
           description={
-            activeTab === "share"
+            activeTab === "Share to space"
               ? "Select the spaces you would like to share with"
               : "Copy the embed code to share your cap"
           }
         >
           <DialogTitle className="truncate w-full max-w-[320px]">
-            {activeTab === "share" ? `Share ${capName}` : `Embed ${capName}`}
+            {activeTab === "Share to space"
+              ? `Share ${capName}`
+              : `Embed ${capName}`}
           </DialogTitle>
         </DialogHeader>
 
-        <div className="px-5">
-          <div className="flex border-b border-gray-4">
-            <button
+        <div className="flex w-full h-12 border-b border-gray-4">
+          {tabs.map((tab) => (
+            <div
+              key={tab}
               className={clsx(
-                "flex-1 py-3 text-sm font-medium transition-colors",
-                activeTab === "share"
-                  ? "text-gray-12 border-b-2 border-blue-500"
-                  : "text-gray-11 hover:text-gray-12"
+                "flex relative flex-1 justify-center items-center w-full min-w-0 text-sm font-medium transition-colors",
+                activeTab === tab
+                  ? "cursor-not-allowed bg-gray-3"
+                  : "cursor-pointer"
               )}
-              onClick={() => setActiveTab("share")}
+              onClick={() => setActiveTab(tab)}
             >
-              Share to space
-            </button>
-            <button
-              className={clsx(
-                "flex-1 py-3 text-sm font-medium transition-colors",
-                activeTab === "embed"
-                  ? "text-gray-12 border-b-2 border-blue-500"
-                  : "text-gray-11 hover:text-gray-12"
-              )}
-              onClick={() => setActiveTab("embed")}
-            >
-              Embed
-            </button>
-          </div>
+              <p
+                className={clsx(
+                  activeTab === tab
+                    ? "text-gray-12 font-medium"
+                    : "text-gray-10",
+                  "text-sm"
+                )}
+              >
+                {tab}
+              </p>
+            </div>
+          ))}
         </div>
 
         <div className="p-5">
-          {activeTab === "share" ? (
+          {activeTab === "Share to space" ? (
             <>
               <div className="relative mb-3">
                 <Input
@@ -215,7 +218,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
                   size={20}
                 />
               </div>
-              <div className="grid overflow-y-auto grid-cols-5 gap-3 pt-2 max-h-60">
+              <div className="grid overflow-y-auto grid-cols-5 gap-3 max-h-60">
                 {filteredSpaces && filteredSpaces.length > 0 ? (
                   filteredSpaces.map((space) => (
                     <SpaceCard
@@ -241,8 +244,8 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
             </>
           ) : (
             <div className="space-y-4">
-              <div className="p-3 rounded-lg bg-gray-3 border border-gray-4">
-                <code className="text-xs text-gray-11 break-all font-mono">
+              <div className="p-3 rounded-lg border bg-gray-3 border-gray-4">
+                <code className="font-mono text-xs break-all text-gray-11">
                   {`<div style="position: relative; padding-bottom: 56.25%; height: 0;"><iframe src="${
                     process.env.NODE_ENV === "development"
                       ? "http://localhost:3000"
@@ -262,30 +265,28 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
           )}
         </div>
 
-        {activeTab === "share" && (
-          <DialogFooter className="p-5 border-t border-gray-4">
-            <Button size="sm" variant="gray" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button
-              spinner={loading}
-              disabled={loading}
-              size="sm"
-              variant="dark"
-              onClick={handleSave}
-            >
-              {loading ? "Saving..." : "Save"}
-            </Button>
-          </DialogFooter>
-        )}
-
-        {activeTab === "embed" && (
-          <DialogFooter className="p-5 border-t border-gray-4">
+        <DialogFooter className="p-5 border-t border-gray-4">
+          {activeTab === "Share to space" ? (
+            <>
+              <Button size="sm" variant="gray" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button
+                spinner={loading}
+                disabled={loading}
+                size="sm"
+                variant="dark"
+                onClick={handleSave}
+              >
+                {loading ? "Saving..." : "Save"}
+              </Button>
+            </>
+          ) : (
             <Button size="sm" variant="gray" onClick={onClose}>
               Close
             </Button>
-          </DialogFooter>
-        )}
+          )}
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
