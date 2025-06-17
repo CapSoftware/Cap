@@ -67,31 +67,59 @@ function Page() {
     data: ImageData;
   } | null>();
 
+  const [frameDimensions, setFrameDimensions] = createSignal<{
+    width: number;
+    height: number;
+  } | null>(null);
+
   const [ws, isConnected] = createImageDataWS(
     `ws://localhost:${cameraWsPort}`,
     (imageData) => {
       setLatestFrame(imageData);
+
+      const currentDimensions = frameDimensions();
+      if (
+        !currentDimensions ||
+        currentDimensions.width !== imageData.data.width ||
+        currentDimensions.height !== imageData.data.height
+      ) {
+        setFrameDimensions({
+          width: imageData.data.width,
+          height: imageData.data.height,
+        });
+      }
+
       const ctx = cameraCanvasRef?.getContext("2d");
       ctx?.putImageData(imageData.data, 0, 0);
     }
   );
 
-  // Attempt to reconnect every 5 seconds if not connected
   const reconnectInterval = setInterval(() => {
     if (!isConnected()) {
       console.log("Attempting to reconnect...");
       ws.close();
 
-      // Create a new WebSocket connection
       const newWs = createImageDataWS(
         `ws://localhost:${cameraWsPort}`,
         (imageData) => {
           setLatestFrame(imageData);
+
+          const currentDimensions = frameDimensions();
+          if (
+            !currentDimensions ||
+            currentDimensions.width !== imageData.data.width ||
+            currentDimensions.height !== imageData.data.height
+          ) {
+            setFrameDimensions({
+              width: imageData.data.width,
+              height: imageData.data.height,
+            });
+          }
+
           const ctx = cameraCanvasRef?.getContext("2d");
           ctx?.putImageData(imageData.data, 0, 0);
         }
       );
-      // Update the ws reference
       Object.assign(ws, newWs[0]);
     }
   }, 5000);
@@ -102,24 +130,22 @@ function Page() {
   });
 
   const [windowSize] = createResource(
-    () => [state.size, state.shape, latestFrame()?.data.width, latestFrame()?.data.height] as const,
+    () =>
+      [
+        state.size,
+        state.shape,
+        frameDimensions()?.width,
+        frameDimensions()?.height,
+      ] as const,
     async ([size, shape, frameWidth, frameHeight]) => {
       const monitor = await currentMonitor();
 
       const base = size === "sm" ? 230 : 400;
       const aspect = frameWidth && frameHeight ? frameWidth / frameHeight : 1;
       const windowWidth =
-        shape === "full"
-          ? aspect >= 1
-            ? base * aspect
-            : base
-          : base;
+        shape === "full" ? (aspect >= 1 ? base * aspect : base) : base;
       const windowHeight =
-        shape === "full"
-          ? aspect >= 1
-            ? base
-            : base / aspect
-          : base;
+        shape === "full" ? (aspect >= 1 ? base : base / aspect) : base;
       const totalHeight = windowHeight + BAR_HEIGHT;
 
       if (!monitor) return;
@@ -183,7 +209,11 @@ function Page() {
                 )
               }
             >
-              <IconCapSquare class="size-5.5" />
+              {state.shape === "round" && <IconCapCircle class="size-5.5" />}
+              {state.shape === "square" && <IconCapSquare class="size-5.5" />}
+              {state.shape === "full" && (
+                <IconLucideRectangleHorizontal class="size-5.5" />
+              )}
             </ControlButton>
             <ControlButton
               pressed={state.mirrored}
