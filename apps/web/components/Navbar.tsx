@@ -101,9 +101,11 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
   if (
     pathname === "/login" ||
     pathname === "/s" ||
+    pathname === "/embed" ||
     pathname.includes("/dashboard") ||
     pathname.includes("/invite") ||
     pathname.includes("/s/") ||
+    pathname.includes("/embed/") ||
     pathname.includes("/onboarding") ||
     (typeof window !== "undefined" && window.location.href.includes("cap.link"))
   )
