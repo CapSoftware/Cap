@@ -131,6 +131,8 @@ export const Transcript: React.FC<TranscriptProps> = ({
   const [editText, setEditText] = useState<string>("");
   const [isSaving, setIsSaving] = useState(false);
   const [isCopying, setIsCopying] = useState(false);
+  const [copyPressed, setCopyPressed] = useState(false);
+  const [downloadPressed, setDownloadPressed] = useState(false);
 
   const {
     data: transcriptContent,
@@ -323,6 +325,10 @@ export const Transcript: React.FC<TranscriptProps> = ({
     try {
       const formattedTranscript = formatTranscriptForClipboard(transcriptData);
       await navigator.clipboard.writeText(formattedTranscript);
+      setCopyPressed(true);
+      setTimeout(() => {
+        setCopyPressed(false);
+      }, 2000);
     } catch (error) {
       console.error("Failed to copy transcript:", error);
     } finally {
@@ -345,6 +351,11 @@ export const Transcript: React.FC<TranscriptProps> = ({
     document.body.removeChild(link);
 
     URL.revokeObjectURL(url);
+
+    setDownloadPressed(true);
+    setTimeout(() => {
+      setDownloadPressed(false);
+    }, 2000);
   };
 
   const canEdit = user?.id === data.ownerId;
@@ -436,8 +447,25 @@ export const Transcript: React.FC<TranscriptProps> = ({
             size="xs"
             spinner={isCopying}
           >
-            <Copy className="w-3 h-3 mr-1" />
-            Copy Transcript
+            {!copyPressed ? (
+              <Copy className="w-3 h-3 mr-1" />
+            ) : (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="w-3 h-3 mr-1 svgpathanimation"
+              >
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+            )}
+            {copyPressed ? "Copied" : "Copy Transcript"}
           </Button>
           <Button
             onClick={downloadTranscriptFile}
@@ -445,8 +473,25 @@ export const Transcript: React.FC<TranscriptProps> = ({
             variant="white"
             size="xs"
           >
-            <Download className="w-3 h-3 mr-1" />
-            Download
+            {!downloadPressed ? (
+              <Download className="w-3 h-3 mr-1" />
+            ) : (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="w-3 h-3 mr-1 svgpathanimation"
+              >
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+            )}
+            {downloadPressed ? "Downloaded" : "Download"}
           </Button>
         </div>
       </div>
