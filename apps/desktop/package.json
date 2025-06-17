@@ -76,7 +76,7 @@
     "@types/dom-webcodecs": "^0.1.11",
     "@types/uuid": "^9.0.8",
     "cross-env": "^7.0.3",
-    "typescript": "^5.7.2",
+    "typescript": "^5.8.3",
     "vite": "^6.3.5",
     "vite-tsconfig-paths": "^5.0.1"
   }

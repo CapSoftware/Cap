@@ -43,10 +43,10 @@ import {
   ScreenCaptureTarget,
 } from "~/utils/tauri";
 
-function getWindowSize(systemAudioRecording: boolean) {
+function getWindowSize() {
   return {
     width: 300,
-    height: 290 + (systemAudioRecording ? 50 : 0),
+    height: 340,
   };
 }
 
@@ -97,9 +97,7 @@ function Page() {
     const unlistenFocus = currentWindow.onFocusChanged(
       ({ payload: focused }) => {
         if (focused) {
-          const size = getWindowSize(
-            generalSettings.data?.systemAudioCapture ?? false
-          );
+          const size = getWindowSize();
 
           currentWindow.setSize(new LogicalSize(size.width, size.height));
         }
@@ -108,9 +106,7 @@ function Page() {
 
     // Listen for resize events
     const unlistenResize = currentWindow.onResized(() => {
-      const size = getWindowSize(
-        generalSettings.data?.systemAudioCapture ?? false
-      );
+      const size = getWindowSize();
 
       currentWindow.setSize(new LogicalSize(size.width, size.height));
     });
@@ -122,9 +118,7 @@ function Page() {
   });
 
   createEffect(() => {
-    const size = getWindowSize(
-      generalSettings.data?.systemAudioCapture ?? false
-    );
+    const size = getWindowSize();
     getCurrentWindow().setSize(new LogicalSize(size.width, size.height));
   });
 
@@ -141,6 +135,10 @@ function Page() {
 
       if (rawOptions.captureTarget.variant === "screen") {
         const screenId = rawOptions.captureTarget.id;
+        screen =
+          screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
+      } else if (rawOptions.captureTarget.variant === "area") {
+        const screenId = rawOptions.captureTarget.screen;
         screen =
           screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
       }
@@ -191,14 +189,13 @@ function Page() {
   const toggleRecording = createMutation(() => ({
     mutationFn: async () => {
       if (!isRecording()) {
+        console.log("bruh", rawOptions, options.screen());
         await commands.startRecording({
           capture_target: options.target(),
           mode: rawOptions.mode,
           capture_system_audio: rawOptions.captureSystemAudio,
         });
-      } else {
-        await commands.stopRecording();
-      }
+      } else await commands.stopRecording();
     },
   }));
 
@@ -317,6 +314,7 @@ function Page() {
       </div>
       <div>
         <AreaSelectButton
+          screen={options.screen()}
           targetVariant={
             rawOptions.captureTarget.variant === "window"
               ? "other"
@@ -411,19 +409,18 @@ function Page() {
         </div>
       </div>
       <CameraSelect
-        disabled={setCamera.isPending}
         options={cameras}
         value={options.cameraLabel() ?? null}
         onChange={(v) => setCamera.mutate(v)}
       />
       <MicrophoneSelect
-        disabled={mics.isPending || setMicInput.isPending}
+        disabled={mics.isPending}
         options={mics.data ?? []}
         // this prevents options.micName() from suspending on initial load
         value={mics.isPending ? rawOptions.micName : options.micName() ?? null}
         onChange={(v) => setMicInput.mutate(v)}
       />
-      {generalSettings.data?.systemAudioCapture && <SystemAudio />}
+      <SystemAudio />
       <div class="flex items-center space-x-1 w-full">
         {rawOptions.mode === "instant" && !auth.data ? (
           <SignInButton>
@@ -528,7 +525,7 @@ function createUpdateCheck() {
 
 function AreaSelectButton(props: {
   targetVariant: "screen" | "area" | "other";
-  screen?: CaptureScreen;
+  screen: CaptureScreen | undefined;
   onChange(area?: number): void;
 }) {
   const [areaSelection, setAreaSelection] = createStore({ pending: false });
@@ -551,6 +548,7 @@ function AreaSelectButton(props: {
     }
 
     const { screen } = props;
+    console.log({ screen });
     if (!screen) return;
 
     trackEvent("crop_area_enabled", {

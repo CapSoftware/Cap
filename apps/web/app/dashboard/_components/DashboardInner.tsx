@@ -4,8 +4,9 @@ import {
   useSharedContext,
   useTheme,
 } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
+import { useEffect } from "react";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { buildEnv } from "@cap/env";
 import {
   Command,
   CommandGroup,
@@ -13,6 +14,7 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
+  Avatar,
 } from "@cap/ui";
 import { MembersDialog } from "@/app/dashboard/spaces/[spaceId]/components/MembersDialog";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -32,6 +34,7 @@ import {
   faSignOut,
   faDownload,
 } from "@fortawesome/free-solid-svg-icons";
+import Image from "next/image";
 
 export default function DashboardInner({
   children,
@@ -48,6 +51,7 @@ export default function DashboardInner({
     "/dashboard/settings/organization": "Organization Settings",
     "/dashboard/settings/account": "Account Settings",
     "/dashboard/spaces": "Spaces",
+    "/dashboard/spaces/browse": "Browse Spaces",
   };
 
   const title = activeSpace ? activeSpace.name : titles[pathname] || "";
@@ -62,21 +66,45 @@ export default function DashboardInner({
           "bg-gray-1 lg:bg-transparent min-h-16 lg:min-h-10 border-gray-3 lg:border-b-0 lg:pl-0 lg:pr-5 lg:top-0 lg:relative top-[64px] lg:mt-5 lg:h-8"
         )}
       >
-        <div className="flex gap-2 items-center">
-          <div className="flex flex-col">
-            {activeSpace && <span className="text-xs text-gray-11">Space</span>}
-            <p className="relative text-xl text-gray-12 lg:text-2xl">{title}</p>
+        <div className="flex flex-col gap-0.5">
+          {activeSpace && <span className="text-xs text-gray-11">Space</span>}
+          <div className="flex gap-1.5 items-center">
+            {activeSpace &&
+              (activeSpace.iconUrl ? (
+                <Image
+                  src={activeSpace?.iconUrl}
+                  alt={activeSpace?.name || "Space"}
+                  width={20}
+                  height={20}
+                  className="rounded-full"
+                />
+              ) : (
+                <Avatar
+                  letterClass="text-xs"
+                  className="relative flex-shrink-0 size-5"
+                  name={activeSpace?.name}
+                />
+              ))}
+            <p className="relative text-base truncate md:text-lg text-gray-12 lg:text-2xl">
+              {title}
+            </p>
           </div>
         </div>
         <div className="flex gap-4 items-center">
           <div
             onClick={() => {
-              setThemeHandler(theme === "light" ? "dark" : "light");
+              if (document.startViewTransition) {
+                document.startViewTransition(() => {
+                  setThemeHandler(theme === "light" ? "dark" : "light");
+                });
+              } else {
+                setThemeHandler(theme === "light" ? "dark" : "light");
+              }
             }}
             className="hidden justify-center items-center rounded-full transition-colors cursor-pointer bg-gray-3 lg:flex hover:bg-gray-5 size-9"
           >
             <FontAwesomeIcon
-              className="text-gray-12 size-3.5"
+              className="text-gray-12 size-3.5 view-transition-theme-icon"
               icon={theme === "dark" ? faMoon : faSun}
             />
           </div>
@@ -153,7 +181,7 @@ const User = () => {
                   </span>
                 </CommandItem>
               </Link>
-              {!isSubscribed && (
+              {!isSubscribed && buildEnv.NEXT_PUBLIC_IS_CAP && (
                 <CommandItem
                   className="px-2 py-1.5 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-5 group"
                   onSelect={() => {

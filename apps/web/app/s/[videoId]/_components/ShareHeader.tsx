@@ -1,3 +1,5 @@
+"use client";
+
 import { Button } from "@cap/ui";
 import { videos } from "@cap/database/schema";
 import moment from "moment";
@@ -33,8 +35,8 @@ export const ShareHeader = ({
 }: {
   data: typeof videos.$inferSelect;
   user: typeof userSelectProps | null;
-  customDomain: string | null;
-  domainVerified: boolean;
+  customDomain?: string | null;
+  domainVerified?: boolean;
   sharedOrganizations?: { id: string; name: string }[];
   userOrganizations?: { id: string; name: string }[];
   sharedSpaces?: {
@@ -62,7 +64,7 @@ export const ShareHeader = ({
   const contextSharedSpaces = contextData?.sharedSpaces || null;
   const effectiveSharedSpaces = contextSharedSpaces || sharedSpaces;
 
-  const isOwner = user !== null && user.id.toString() === data.ownerId;
+  const isOwner = user && user.id.toString() === data.ownerId;
 
   const { webUrl } = usePublicEnv();
 
@@ -180,10 +182,7 @@ export const ShareHeader = ({
                   <h1
                     className="text-xl sm:text-2xl"
                     onClick={() => {
-                      if (
-                        user !== null &&
-                        user.id.toString() === data.ownerId
-                      ) {
+                      if (user && user.id.toString() === data.ownerId) {
                         setIsEditing(true);
                       }
                     }}

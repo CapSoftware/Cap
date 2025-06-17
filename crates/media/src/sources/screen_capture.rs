@@ -89,7 +89,16 @@ impl ScreenCaptureTarget {
         match target {
             None => None,
             Some(scap::Target::Window(window)) => Some(window.title.clone()),
-            Some(scap::Target::Display(screen)) => Some(screen.title.clone()),
+            Some(scap::Target::Display(screen)) => {
+                let names = crate::platform::display_names();
+
+                Some(
+                    names
+                        .get(&screen.id)
+                        .cloned()
+                        .unwrap_or_else(|| screen.title.clone()),
+                )
+            }
         }
     }
 }

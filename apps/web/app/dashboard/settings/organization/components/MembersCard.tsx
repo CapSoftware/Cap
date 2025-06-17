@@ -75,7 +75,7 @@ export const MembersCard = ({
             <Button
               type="button"
               size="sm"
-              variant="blue"
+              variant="primary"
               className="px-6 min-w-auto"
               spinner={loading}
               disabled={!isOwner || loading}

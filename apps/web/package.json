@@ -15,6 +15,7 @@
     "@aws-sdk/client-cloudfront": "^3.565.0",
     "@aws-sdk/client-mediaconvert": "^3.565.0",
     "@aws-sdk/client-s3": "^3.485.0",
+    "@aws-sdk/cloudfront-signer": "^3.821.0",
     "@aws-sdk/s3-presigned-post": "^3.485.0",
     "@aws-sdk/s3-request-presigner": "^3.485.0",
     "@cap/database": "workspace:*",
@@ -107,7 +108,7 @@
     "eslint-config-next": "14.1.0",
     "postcss": "^8.4.23",
     "tailwindcss": "^3",
-    "typescript": "^5.7.2"
+    "typescript": "^5.8.3"
   },
   "engines": {
     "node": "20"

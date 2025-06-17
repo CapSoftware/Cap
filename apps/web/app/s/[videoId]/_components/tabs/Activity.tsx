@@ -4,8 +4,7 @@ import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { CapCardAnalytics } from "@/app/dashboard/caps/components/CapCardAnalytics";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema } from "@cap/database/schema";
-import { Button } from "@cap/ui";
-import clsx from "clsx";
+import { Button, Avatar } from "@cap/ui";
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import { Tooltip } from "react-tooltip";
@@ -27,28 +26,6 @@ interface ActivityProps {
   videoId: string;
   isOwnerOrMember?: boolean;
 }
-
-export const Avatar: React.FC<{
-  name: string | null | undefined;
-  className?: string;
-  letterClass?: string;
-}> = ({ name, className = "", letterClass = "text-xs" }) => {
-  const initial = name?.[0]?.toUpperCase() || "A";
-  const bgColor = name ? "bg-gray-12" : "bg-gray-6";
-  const textColor = name ? "text-gray-1" : "text-gray-12";
-
-  return (
-    <div
-      className={clsx(
-        "flex justify-center items-center rounded-full size-4",
-        bgColor,
-        className
-      )}
-    >
-      <span className={clsx(letterClass, textColor)}>{initial}</span>
-    </div>
-  );
-};
 
 interface CommentInputProps {
   onSubmit: (content: string) => void;

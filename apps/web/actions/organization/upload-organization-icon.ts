@@ -1,4 +1,4 @@
-'use server';
+"use server";
 
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizations } from "@cap/database/schema";
@@ -32,14 +32,14 @@ export async function uploadOrganizationIcon(
     throw new Error("Only the owner can update organization icon");
   }
 
-  const file = formData.get('file') as File;
-  
+  const file = formData.get("file") as File;
+
   if (!file) {
     throw new Error("No file provided");
   }
 
   // Validate file type
-  if (!file.type.startsWith('image/')) {
+  if (!file.type.startsWith("image/")) {
     throw new Error("File must be an image");
   }
 
@@ -49,7 +49,7 @@ export async function uploadOrganizationIcon(
   }
 
   // Create a unique file key
-  const fileExtension = file.name.split('.').pop();
+  const fileExtension = file.name.split(".").pop();
   const fileKey = `organizations/${organizationId}/icon-${Date.now()}.${fileExtension}`;
 
   try {
@@ -62,7 +62,7 @@ export async function uploadOrganizationIcon(
       Bucket: bucketName,
       Key: fileKey,
       Fields: {
-        'Content-Type': file.type,
+        "Content-Type": file.type,
       },
       Expires: 600, // 10 minutes
     });
@@ -72,10 +72,10 @@ export async function uploadOrganizationIcon(
     Object.entries(presignedPostData.fields).forEach(([key, value]) => {
       formDataForS3.append(key, value as string);
     });
-    formDataForS3.append('file', file);
+    formDataForS3.append("file", file);
 
     const uploadResponse = await fetch(presignedPostData.url, {
-      method: 'POST',
+      method: "POST",
       body: formDataForS3,
     });
 
@@ -93,7 +93,9 @@ export async function uploadOrganizationIcon(
       iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucketName}/${fileKey}`;
     } else {
       // Default AWS S3 URL format
-      iconUrl = `https://${bucketName}.s3.${serverEnv().CAP_AWS_REGION || 'us-east-1'}.amazonaws.com/${fileKey}`;
+      iconUrl = `https://${bucketName}.s3.${
+        serverEnv().CAP_AWS_REGION || "us-east-1"
+      }.amazonaws.com/${fileKey}`;
     }
 
     // Update organization with new icon URL

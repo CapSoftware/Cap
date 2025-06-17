@@ -8,6 +8,8 @@ interface VideoThumbnailProps {
   videoId: string;
   alt: string;
   imageClass?: string;
+  objectFit?: string;
+  containerClass?: string;
 }
 
 function generateRandomGrayScaleColor() {
@@ -20,7 +22,14 @@ function generateRandomGrayScaleColor() {
 }
 
 export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
-  ({ userId, videoId, alt, imageClass }) => {
+  ({
+    userId,
+    videoId,
+    alt,
+    imageClass,
+    objectFit = "cover",
+    containerClass,
+  }) => {
     const [imageUrls, setImageUrls] = useState({ screen: "" });
     const [loading, setLoading] = useState(true);
     const [failed, setFailed] = useState(false);
@@ -49,7 +58,10 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 
     return (
       <div
-        className={`overflow-hidden relative mx-auto w-full bg-black rounded-t-xl border-b border-gray-3 max-h-[175px] aspect-video`}
+        className={clsx(
+          `overflow-hidden relative mx-auto w-full bg-black rounded-t-xl border-b border-gray-3 max-h-[175px] aspect-video`,
+          containerClass
+        )}
       >
         <div className="flex absolute top-0 left-0 z-10 justify-center items-center w-full h-full">
           {failed ? (
@@ -68,7 +80,7 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
             src={imageUrls.screen}
             layout="fill"
             alt={alt}
-            objectFit="cover"
+            objectFit={objectFit}
             className={clsx("w-full h-full", imageClass)}
             onLoad={() => setLoading(false)}
             onError={() => {

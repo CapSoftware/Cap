@@ -1,6 +1,6 @@
 "use client";
 import { Tooltip } from "@/components/Tooltip";
-import { Logo } from "@cap/ui";
+import { Button, Logo } from "@cap/ui";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
@@ -8,7 +8,7 @@ import { ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { useEffect } from "react";
 import { useSharedContext } from "../DynamicSharedLayout";
-import { AdminNavItems } from "./AdminNavItems";
+import AdminNavItems from "./AdminNavItems";
 
 export const AdminDesktopNav = () => {
   const { toggleSidebarCollapsed, sidebarCollapsed } = useSharedContext();
@@ -60,7 +60,7 @@ export const AdminDesktopNav = () => {
             </Link>
           </div>
 
-          <div className="flex flex-col flex-grow overflow-y-auto">
+          <div className="flex overflow-y-auto flex-col flex-grow">
             <div className="flex flex-col px-3 h-full">
               <AdminNavItems />
             </div>
@@ -71,18 +71,19 @@ export const AdminDesktopNav = () => {
             position="right"
             content="Toggle collapse"
           >
-            <button
+            <Button
+              variant="dark"
               onClick={toggleSidebarCollapsed}
-              className="absolute right-[-12px] hover:border-gray-3 hover:bg-gray-2 top-[50%] transform -translate-y-1/2 rounded-full p-1 border bg-gray-1 border-gray-3 transition-colors z-10"
+              className="absolute right-[-12px] size-7 p-0 min-w-[unset] hover:border-gray-3 hover:bg-gray-2 top-[50%] transform -translate-y-1/2 rounded-full border bg-gray-1 border-gray-3 transition-colors z-10"
             >
               <ChevronRight
-                size={16}
+                size={14}
                 className={clsx(
                   "transition-transform duration-200 text-gray-12",
                   sidebarCollapsed ? "rotate-180" : ""
                 )}
               />
-            </button>
+            </Button>
           </Tooltip>
         </div>
       </motion.div>

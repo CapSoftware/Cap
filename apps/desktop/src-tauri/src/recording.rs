@@ -620,25 +620,12 @@ async fn handle_recording_finish(
                         let _ = screenshot_task.await;
 
                         if video_upload_succeeded {
-                            let (screenshot_url, screenshot_form) = match prepare_screenshot_upload(
+                            let resp = prepare_screenshot_upload(
                                 &app,
                                 &video_upload_info.config.clone(),
                                 display_screenshot,
                             )
-                            .await
-                            {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    error!("Failed to prepare screenshot upload: {e}");
-                                    return;
-                                }
-                            };
-
-                            let resp = reqwest::Client::new()
-                                .post(screenshot_url)
-                                .multipart(screenshot_form)
-                                .send()
-                                .await;
+                            .await;
 
                             match resp {
                                 Ok(r)

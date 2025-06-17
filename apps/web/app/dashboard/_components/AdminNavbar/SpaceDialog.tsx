@@ -2,6 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
+import React from "react";
 import {
   Dialog,
   DialogContent,
@@ -18,39 +19,67 @@ import {
 } from "@cap/ui";
 import { useForm } from "react-hook-form";
 import { useState, useRef } from "react";
+import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { toast } from "sonner";
 import { FileInput } from "@/components/FileInput";
 import { createSpace } from "./server";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faLayerGroup } from "@fortawesome/free-solid-svg-icons";
+import { updateSpace } from "@/actions/organization/update-space";
+import { MemberSelect } from "../../spaces/[spaceId]/components/MemberSelect";
 
 interface SpaceDialogProps {
   open: boolean;
   onClose: () => void;
+  edit?: boolean;
+  space?: {
+    id: string;
+    name: string;
+    members: string[];
+    iconUrl?: string;
+  } | null;
+  onSpaceUpdated?: () => void;
 }
 
-export const SpaceDialog = ({ open, onClose }: SpaceDialogProps) => {
+const SpaceDialog = ({
+  open,
+  onClose,
+  edit = false,
+  space,
+  onSpaceUpdated,
+}: SpaceDialogProps) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const formRef = useRef<HTMLFormElement | null>(null);
-  const [spaceName, setSpaceName] = useState("");
+  const [spaceName, setSpaceName] = useState(space?.name || "");
+
+  // Reset spaceName when dialog opens or space changes
+  React.useEffect(() => {
+    setSpaceName(space?.name || "");
+  }, [space, open]);
 
   return (
     <Dialog open={open} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
         <DialogHeader
           icon={<FontAwesomeIcon icon={faLayerGroup} />}
-          description="Create a new space for your team to collaborate"
+          description={
+            edit
+              ? "Edit your space details"
+              : "A new space for your team to collaborate"
+          }
         >
           <DialogTitle className="text-lg text-gray-12">
-            Create New Space
+            {edit ? "Edit Space" : "Create New Space"}
           </DialogTitle>
         </DialogHeader>
         <div className="p-5">
           <NewSpaceForm
             formRef={formRef}
             setCreateLoading={setIsSubmitting}
-            onSpaceCreated={onClose}
+            onSpaceCreated={onSpaceUpdated || onClose}
             onNameChange={setSpaceName}
+            edit={edit}
+            space={space}
           />
         </div>
         <DialogFooter>
@@ -65,7 +94,13 @@ export const SpaceDialog = ({ open, onClose }: SpaceDialogProps) => {
             onClick={() => formRef.current?.requestSubmit()}
             type="submit"
           >
-            {isSubmitting ? "Creating..." : "Create"}
+            {isSubmitting
+              ? edit
+                ? "Saving..."
+                : "Creating..."
+              : edit
+              ? "Save"
+              : "Create"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -78,22 +113,49 @@ export interface NewSpaceFormProps {
   formRef?: React.RefObject<HTMLFormElement>;
   setCreateLoading?: React.Dispatch<React.SetStateAction<boolean>>;
   onNameChange?: (name: string) => void;
+  edit?: boolean;
+  space?: {
+    id: string;
+    name: string;
+    members: string[];
+    iconUrl?: string;
+  } | null;
 }
 
+const formSchema = z.object({
+  name: z
+    .string()
+    .min(1, "Space name is required")
+    .max(25, "Space name must be at most 25 characters"),
+  members: z.array(z.string()).optional(),
+});
+
 export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
-  const formSchema = z.object({
-    name: z.string().min(1, "Space name is required"),
-  });
+  const { edit = false, space } = props;
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      name: "",
+      name: space?.name || "",
+      members: space?.members || [],
     },
+    mode: "onChange",
   });
+
+  React.useEffect(() => {
+    if (space) {
+      form.reset({
+        name: space.name,
+        members: space.members,
+      });
+    } else {
+      form.reset({ name: "", members: [] });
+    }
+  }, [space, form]);
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const { activeOrganization } = useSharedContext();
 
   return (
     <Form {...form}>
@@ -102,7 +164,9 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
         ref={props.formRef}
         onSubmit={form.handleSubmit(async (values) => {
           try {
-            setIsUploading(true);
+            if (selectedFile) {
+              setIsUploading(true);
+            }
             props.setCreateLoading?.(true);
 
             const formData = new FormData();
@@ -112,14 +176,38 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
               formData.append("icon", selectedFile);
             }
 
-            await createSpace(formData);
-            toast.success("Space created successfully");
+            if (values.members && values.members.length > 0) {
+              values.members.forEach((id) => {
+                formData.append("members[]", id);
+              });
+            }
+
+            if (edit && space?.id) {
+              formData.append("id", space.id);
+              // If the user removed the icon, send a removeIcon flag
+              if (selectedFile === null && space.iconUrl) {
+                formData.append("removeIcon", "true");
+              }
+              await updateSpace(formData);
+              toast.success("Space updated successfully");
+            } else {
+              await createSpace(formData);
+              toast.success("Space created successfully");
+            }
+
             form.reset();
             setSelectedFile(null);
             props.onSpaceCreated();
-          } catch (error) {
-            console.error("Error creating space:", error);
-            toast.error("Failed to create space");
+          } catch (error: any) {
+            console.error(
+              edit ? "Error updating space:" : "Error creating space:",
+              error
+            );
+            toast.error(
+              error?.message ||
+                error?.error ||
+                (edit ? "Failed to update space" : "Failed to create space")
+            );
           } finally {
             setIsUploading(false);
             props.setCreateLoading?.(false);
@@ -134,6 +222,7 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
               <FormControl>
                 <Input
                   placeholder="Space name"
+                  maxLength={25}
                   {...field}
                   onChange={(e) => {
                     field.onChange(e);
@@ -144,8 +233,42 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
             )}
           />
 
+          {/* Space Members Input */}
           <div className="space-y-1">
-            <Label htmlFor="icon">Space Icon (Optional)</Label>
+            <Label htmlFor="members">Members</Label>
+            <CardDescription className="w-full max-w-[400px]">
+              Add team members to this space.
+            </CardDescription>
+          </div>
+          <FormField
+            control={form.control}
+            name="members"
+            render={({ field }) => {
+              return (
+                <FormControl>
+                  <MemberSelect
+                    placeholder="Add member..."
+                    showEmptyIfNoMembers={false}
+                    disabled={isUploading}
+                    canManageMembers={true}
+                    selected={(activeOrganization?.members ?? [])
+                      .filter((m) => (field.value ?? []).includes(m.user.id))
+                      .map((m) => ({
+                        value: m.user.id,
+                        label: m.user.name || m.user.email,
+                        image: m.user.image || undefined,
+                      }))}
+                    onSelect={(selected) =>
+                      field.onChange(selected.map((opt) => opt.value))
+                    }
+                  />
+                </FormControl>
+              );
+            }}
+          />
+
+          <div className="space-y-1">
+            <Label htmlFor="icon">Space Icon</Label>
             <CardDescription className="w-full max-w-[400px]">
               Upload a custom logo or icon for your space.
             </CardDescription>
@@ -155,6 +278,8 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
             <FileInput
               id="icon"
               name="icon"
+              initialPreviewUrl={space?.iconUrl || null}
+              notDraggingClassName="hover:bg-gray-3"
               onChange={setSelectedFile}
               disabled={isUploading}
               isLoading={isUploading}

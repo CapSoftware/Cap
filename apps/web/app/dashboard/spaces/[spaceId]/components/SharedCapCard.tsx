@@ -17,6 +17,7 @@ interface SharedCapCardProps {
   analytics: number;
   organizationName: string;
   userId?: string;
+  hideSharedStatus?: boolean;
 }
 
 export const SharedCapCard: React.FC<SharedCapCardProps> = ({
@@ -24,14 +25,22 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
   analytics,
   organizationName,
   userId,
+  hideSharedStatus,
 }) => {
   const displayCount =
     analytics === 0
       ? Math.max(cap.totalComments, cap.totalReactions)
       : analytics;
+  const isOwner = userId === cap.ownerId;
 
   return (
-    <CapCard cap={cap} analytics={displayCount} sharedCapCard userId={userId}>
+    <CapCard
+      hideSharedStatus={hideSharedStatus}
+      cap={cap}
+      analytics={displayCount}
+      sharedCapCard
+      userId={userId}
+    >
       <div className="mb-2 space-y-1">
         {cap.ownerName && (
           <div className="flex gap-2 items-center">
@@ -39,18 +48,20 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
             <span className="text-sm text-gray-10">{cap.ownerName}</span>
           </div>
         )}
-        <div className="flex gap-2 items-center">
-          <FontAwesomeIcon
-            icon={faBuilding}
-            className="text-gray-10 size-2.5"
-          />
-          <p className="text-sm pointer-events-none text-gray-10">
-            Shared with{" "}
-            <span className="text-sm font-medium text-gray-12">
-              {organizationName}
-            </span>
-          </p>
-        </div>
+        {isOwner && (
+          <div className="flex gap-2 items-center">
+            <FontAwesomeIcon
+              icon={faBuilding}
+              className="text-gray-10 size-2.5"
+            />
+            <p className="text-sm pointer-events-none text-gray-10">
+              Shared with{"  "}
+              <span className="text-sm font-medium text-gray-12">
+                {organizationName}
+              </span>
+            </p>
+          </div>
+        )}
       </div>
     </CapCard>
   );

@@ -330,16 +330,19 @@ export const s3BucketsRelations = relations(s3Buckets, ({ one }) => ({
   }),
 }));
 
-export const organizationsRelations = relations(organizations, ({ one, many }) => ({
-  owner: one(users, {
-    fields: [organizations.ownerId],
-    references: [users.id],
-  }),
-  organizationMembers: many(organizationMembers),
-  sharedVideos: many(sharedVideos),
-  organizationInvites: many(organizationInvites),
-  spaces: many(spaces),
-}));
+export const organizationsRelations = relations(
+  organizations,
+  ({ one, many }) => ({
+    owner: one(users, {
+      fields: [organizations.ownerId],
+      references: [users.id],
+    }),
+    organizationMembers: many(organizationMembers),
+    sharedVideos: many(sharedVideos),
+    organizationInvites: many(organizationInvites),
+    spaces: many(spaces),
+  })
+);
 
 export const sessionsRelations = relations(sessions, ({ one }) => ({
   user: one(users, {
@@ -411,12 +414,17 @@ export const spaces = mysqlTable(
   "spaces",
   {
     id: nanoId("id").notNull().primaryKey().unique(),
+    primary: boolean("primary").notNull().default(false),
     name: varchar("name", { length: 255 }).notNull(),
     organizationId: nanoId("organizationId").notNull(),
     createdById: nanoId("createdById").notNull(),
+    iconUrl: varchar("iconUrl", { length: 255 }),
     description: varchar("description", { length: 1000 }),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+    privacy: varchar("privacy", { length: 255, enum: ["Public", "Private"] })
+      .notNull()
+      .default("Private"),
   },
   (table) => ({
     organizationIdIndex: index("organization_id_idx").on(table.organizationId),
@@ -430,7 +438,7 @@ export const spaceMembers = mysqlTable(
     id: nanoId("id").notNull().primaryKey().unique(),
     spaceId: nanoId("spaceId").notNull(),
     userId: nanoId("userId").notNull(),
-    role: varchar("role", { length: 255 }).notNull(),
+    role: varchar("role", { length: 255 }).notNull().default("member"),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
   },

@@ -1,20 +1,21 @@
 "use client";
 import AdminMobileNav from "@/app/dashboard/_components/AdminNavbar/AdminMobileNav";
-import { Organization, Space } from "@/app/dashboard/layout";
 import { users } from "@cap/database/schema";
 import Cookies from "js-cookie";
 import { createContext, useContext, useEffect, useState } from "react";
 import AdminDesktopNav from "./AdminNavbar/AdminDesktopNav";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { usePathname } from "next/navigation";
+import { buildEnv } from "@cap/env";
+import { Organization, Spaces } from "../dashboard-data";
 
 type SharedContext = {
   organizationData: Organization[] | null;
   activeOrganization: Organization | null;
-  spacesData: Space[] | null;
-  userSpaces: Space[] | null;
-  sharedSpaces: Space[] | null;
-  activeSpace: Space | null;
+  spacesData: Spaces[] | null;
+  userSpaces: Spaces[] | null;
+  sharedSpaces: Spaces[] | null;
+  activeSpace: Spaces | null;
   user: typeof users.$inferSelect;
   isSubscribed: boolean;
   toggleSidebarCollapsed: () => void;
@@ -86,7 +87,7 @@ export default function DynamicSharedLayout({
     ) || null;
 
   // Get activeSpace from URL if on a space page
-  const [activeSpace, setActiveSpace] = useState<Space | null>(null);
+  const [activeSpace, setActiveSpace] = useState<Spaces | null>(null);
 
   useEffect(() => {
     const spaceIdMatch = pathname.match(/\/dashboard\/spaces\/([^\/]+)/);
@@ -105,7 +106,6 @@ export default function DynamicSharedLayout({
     Cookies.set("theme", newTheme, {
       expires: 365,
     });
-    document.body.className = newTheme;
   };
   useEffect(() => {
     if (Cookies.get("theme")) {
@@ -157,10 +157,12 @@ export default function DynamicSharedLayout({
           </div>
 
           {/* Global upgrade modal that persists regardless of navigation state */}
-          <UpgradeModal
-            open={upgradeModalOpen}
-            onOpenChange={setUpgradeModalOpen}
-          />
+          {buildEnv.NEXT_PUBLIC_IS_CAP && (
+            <UpgradeModal
+              open={upgradeModalOpen}
+              onOpenChange={setUpgradeModalOpen}
+            />
+          )}
         </div>
       </Context.Provider>
     </ThemeContext.Provider>

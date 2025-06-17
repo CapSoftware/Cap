@@ -109,117 +109,129 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
   )
     return null;
 
-   const isActive = (href: string) => pathname === href; 
+  const isActive = (href: string) => pathname === href;
 
   return (
     <>
-    <header className="sticky inset-0 top-4 z-[51] md:top-10">
-      <motion.nav 
-      initial={{ opacity: 0, y: -10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.2, ease: "easeOut" }}
-      className="p-2 mx-auto w-full max-w-[calc(100%-20px)] bg-white rounded-full border backdrop-blur-md md:max-w-fit border-zinc-200 h-fit">
-        <div className="flex gap-12 justify-between items-center mx-auto max-w-4xl h-full transition-all">
-          <div className="flex items-center">
-            <Link passHref href="/home">
-              <Logo className="w-[90px]" />
-            </Link>
-            <div className="hidden md:flex">
-              <NavigationMenu>
-                <NavigationMenuList className="space-x-0">
-                  {Links.map((link) => (
-                    <NavigationMenuItem key={link.label}>
-                      {link.dropdown ? (
-                        <>
-                          <NavigationMenuTrigger
-                            className={
-                              "px-2 py-0 text-sm font-medium text-gray-10 active:text-gray-10 focus:text-gray-10 hover:text-blue-9"
-                            }
-                          >
-                            {link.label}
-                          </NavigationMenuTrigger>
-                          <NavigationMenuContent>
-                            <ul className="grid gap-3 p-6 md:w-[400px] lg:w-[500px] lg:grid-cols-2">
-                              {link.dropdown.map((sublink) => (
-                                <ListItem
-                                  key={sublink.href}
-                                  href={sublink.href}
-                                  title={sublink.label}
-                                >
-                                  {sublink.sub}
-                                </ListItem>
-                              ))}
-                            </ul>
-                          </NavigationMenuContent>
-                        </>
-                      ) : (
-                        <Link href={link.href} legacyBehavior passHref>
-                          <NavigationMenuLink
-                            className={classNames(
-                              navigationMenuTriggerStyle(),
-                              isActive(link.href) ? "text-blue-9" : "text-gray-10",
-                              "px-2 py-0 text-sm font-medium hover:text-blue-9 focus:text-8"
-                            )}
-                          >
-                            {link.label}
-                          </NavigationMenuLink>
-                        </Link>
-                      )}
-                    </NavigationMenuItem>
-                  ))}
-                </NavigationMenuList>
-              </NavigationMenu>
+      <header className="sticky inset-0 top-4 z-[51] md:top-10">
+        <motion.nav
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.2, ease: "easeOut" }}
+          className="p-2 mx-auto w-full max-w-[calc(100%-20px)] bg-white rounded-full border backdrop-blur-md md:max-w-fit border-zinc-200 h-fit"
+        >
+          <div className="flex gap-12 justify-between items-center mx-auto max-w-4xl h-full transition-all">
+            <div className="flex items-center">
+              <Link passHref href="/home">
+                <Logo className="w-[90px]" />
+              </Link>
+              <div className="hidden md:flex">
+                <NavigationMenu>
+                  <NavigationMenuList className="space-x-0">
+                    {Links.map((link) => (
+                      <NavigationMenuItem key={link.label}>
+                        {link.dropdown ? (
+                          <>
+                            <NavigationMenuTrigger
+                              className={
+                                "px-2 py-0 text-sm font-medium text-gray-10 active:text-gray-10 focus:text-gray-10 hover:text-blue-9"
+                              }
+                            >
+                              {link.label}
+                            </NavigationMenuTrigger>
+                            <NavigationMenuContent>
+                              <ul className="grid gap-3 p-6 md:w-[400px] lg:w-[500px] lg:grid-cols-2">
+                                {link.dropdown.map((sublink) => (
+                                  <ListItem
+                                    key={sublink.href}
+                                    href={sublink.href}
+                                    title={sublink.label}
+                                  >
+                                    {sublink.sub}
+                                  </ListItem>
+                                ))}
+                              </ul>
+                            </NavigationMenuContent>
+                          </>
+                        ) : (
+                          <Link href={link.href} legacyBehavior passHref>
+                            <NavigationMenuLink
+                              className={classNames(
+                                navigationMenuTriggerStyle(),
+                                isActive(link.href)
+                                  ? "text-blue-9"
+                                  : "text-gray-10",
+                                "px-2 py-0 text-sm font-medium hover:text-blue-9 focus:text-8"
+                              )}
+                            >
+                              {link.label}
+                            </NavigationMenuLink>
+                          </Link>
+                        )}
+                      </NavigationMenuItem>
+                    ))}
+                  </NavigationMenuList>
+                </NavigationMenu>
+              </div>
             </div>
-          </div>
-          <div className="hidden items-center space-x-2 md:flex">
-            <Button
-              variant="gray"
-              href="https://github.com/CapSoftware/Cap"
-              size="sm"
-              className="w-full font-medium sm:w-auto"
-              icon={<FontAwesomeIcon className="size-4" icon={faGithub} />}
-            >
-              Github
-            </Button>
-            <Button
-              variant="primary"
-              href={auth === false ? "/login" : "/dashboard"}
-              size="sm"
-              className="w-full font-medium sm:w-auto"
-            >
-              {auth === false ? "Login" : "Dashboard"}
-            </Button>
-          </div>
-          <button className="flex md:hidden" onClick={() => setShowMobileMenu(!showMobileMenu)}>
-            <div className="flex flex-col gap-[5px] mr-1">
-              <motion.div
-                initial={{ opacity: 1 }}
-                animate={{ rotate: showMobileMenu ? 45 : 0, y: showMobileMenu ? 7 : 0 }}
-                transition={{ duration: 0.2 }}
-                className="w-6 h-0.5 bg-black"
-              />
-              <motion.div
-                initial={{ opacity: 1 }}
-                animate={{ opacity: showMobileMenu ? 0 : 1, x: showMobileMenu ? -5 : 0 }}
-                transition={{ duration: 0.2 }}
-                className="w-6 h-0.5 bg-black"
-              />
-              <motion.div
-                initial={{ opacity: 1 }}
-                animate={{ rotate: showMobileMenu ? -45 : 0 , y: showMobileMenu ? -7 : 0 }}
-                transition={{ duration: 0.2 }}
-                className="w-6 h-0.5 bg-black"
-              />
+            <div className="hidden items-center space-x-2 md:flex">
+              <Button
+                variant="gray"
+                href="https://github.com/CapSoftware/Cap"
+                size="sm"
+                className="w-full font-medium sm:w-auto"
+                icon={<FontAwesomeIcon className="size-4" icon={faGithub} />}
+              >
+                Github
+              </Button>
+              <Button
+                variant="darkgradient"
+                href={auth === false ? "/login" : "/dashboard"}
+                size="sm"
+                className="w-full font-medium sm:w-auto"
+              >
+                {auth === false ? "Login" : "Dashboard"}
+              </Button>
             </div>
-          </button>
-        </div>
-      </motion.nav>
-    </header>
+            <button
+              className="flex md:hidden"
+              onClick={() => setShowMobileMenu(!showMobileMenu)}
+            >
+              <div className="flex flex-col gap-[5px] mr-1">
+                <motion.div
+                  initial={{ opacity: 1 }}
+                  animate={{
+                    rotate: showMobileMenu ? 45 : 0,
+                    y: showMobileMenu ? 7 : 0,
+                  }}
+                  transition={{ duration: 0.2 }}
+                  className="w-6 h-0.5 bg-black"
+                />
+                <motion.div
+                  initial={{ opacity: 1 }}
+                  animate={{
+                    opacity: showMobileMenu ? 0 : 1,
+                    x: showMobileMenu ? -5 : 0,
+                  }}
+                  transition={{ duration: 0.2 }}
+                  className="w-6 h-0.5 bg-black"
+                />
+                <motion.div
+                  initial={{ opacity: 1 }}
+                  animate={{
+                    rotate: showMobileMenu ? -45 : 0,
+                    y: showMobileMenu ? -7 : 0,
+                  }}
+                  transition={{ duration: 0.2 }}
+                  className="w-6 h-0.5 bg-black"
+                />
+              </div>
+            </button>
+          </div>
+        </motion.nav>
+      </header>
       {showMobileMenu && (
-        <MobileMenu
-          setShowMobileMenu={setShowMobileMenu}
-          auth={auth}
-        />
+        <MobileMenu setShowMobileMenu={setShowMobileMenu} auth={auth} />
       )}
     </>
   );

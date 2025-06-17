@@ -15,6 +15,7 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
+  Avatar,
 } from "@cap/ui";
 import { classNames } from "@cap/utils";
 import { Check, ChevronDown, Plus } from "lucide-react";
@@ -22,7 +23,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 import { NewOrganization } from "@/components/forms/NewOrganization";
 import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
@@ -47,7 +47,10 @@ interface Props {
   toggleMobileNav?: () => void;
 }
 
-export const AdminNavItems = ({ toggleMobileNav }: Props) => {
+export const navItemClass =
+  "flex items-center justify-start rounded-xl outline-none tracking-tight overflow-hidden";
+
+const AdminNavItems = ({ toggleMobileNav }: Props) => {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [hoveredItem, setHoveredItem] = useState<string | null>(null);
@@ -78,9 +81,6 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
       : []),
   ];
 
-  const navItemClass =
-    "flex items-center justify-start px-3 rounded-xl outline-none tracking-tight overflow-hidden";
-
   const [dialogOpen, setDialogOpen] = useState(false);
   const {
     organizationData: orgData,
@@ -90,6 +90,8 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
   const formRef = useRef<HTMLFormElement | null>(null);
   const [createLoading, setCreateLoading] = useState(false);
   const [organizationName, setOrganizationName] = useState("");
+
+  const isPathActive = (path: string) => pathname.includes(path);
 
   return (
     <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -101,27 +103,31 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
         >
           <PopoverTrigger asChild>
             <motion.div
-              initial={{
-                width: sidebarCollapsed ? "40px" : "100%",
-              }}
-              animate={{
-                width: sidebarCollapsed ? "40px" : "100%",
-              }}
               transition={{
-                type: "spring",
-                bounce: 0.2,
-                width: { type: "tween", duration: 0.2 },
+                type: "easeInOut",
+                duration: 0.2,
               }}
               className={clsx(
-                "p-2.5 mt-2.5 rounded-xl cursor-pointer bg-gray-3"
+                "mt-1.5 mx-auto p-2.5 rounded-xl cursor-pointer bg-gray-3",
+                sidebarCollapsed ? "w-fit" : "w-full"
               )}
             >
               <div
-                className="flex justify-between items-center cursor-pointer"
+                className={clsx(
+                  "flex items-center cursor-pointer",
+                  sidebarCollapsed ? "justify-center" : "justify-between"
+                )}
                 role="combobox"
                 aria-expanded={open}
               >
-                <div className="flex justify-between items-center w-full text-left">
+                <div
+                  className={clsx(
+                    "flex items-center",
+                    sidebarCollapsed
+                      ? "justify-center w-fit"
+                      : "justify-between w-full"
+                  )}
+                >
                   <div className="flex items-center">
                     {activeOrg?.organization.iconUrl ? (
                       <div className="overflow-hidden relative flex-shrink-0 rounded-full size-[18px]">
@@ -136,17 +142,25 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                       </div>
                     ) : (
                       <Avatar
-                        letterClass="text-gray-1 text-[10px]"
-                        className="relative flex-shrink-0 size-[18px]"
+                        letterClass={clsx(
+                          sidebarCollapsed ? "text-sm" : "text-[11px]"
+                        )}
+                        className={clsx(
+                          "relative flex-shrink-0 mx-auto",
+                          sidebarCollapsed ? "size-6" : "size-5"
+                        )}
                         name={
                           activeOrg?.organization.name ??
                           "No organization found"
                         }
                       />
                     )}
-                    <p className="ml-2.5 text-sm text-gray-12 truncate">
-                      {activeOrg?.organization.name ?? "No organization found"}
-                    </p>
+                    {!sidebarCollapsed && (
+                      <p className="ml-2.5 text-sm text-gray-12 truncate">
+                        {activeOrg?.organization.name ??
+                          "No organization found"}
+                      </p>
+                    )}
                   </div>
                   {!sidebarCollapsed && (
                     <ChevronDown
@@ -201,7 +215,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                               </div>
                             ) : (
                               <Avatar
-                                letterClass="text-gray-1 text-xs"
+                                letterClass="text-xs"
                                 className="relative flex-shrink-0 size-5"
                                 name={organization.organization.name}
                               />
@@ -228,10 +242,10 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                       <Button
                         variant="dark"
                         size="sm"
-                        className="flex gap-1 items-center mt-3 w-full"
+                        className="flex gap-1 items-center my-2 w-[90%] mx-auto text-sm"
                       >
-                        <Plus className="w-4 h-auto" />
-                        Add new organization
+                        <Plus className="w-3.5 h-auto" />
+                        New organization
                       </Button>
                     </DialogTrigger>
                   </CommandGroup>
@@ -247,50 +261,42 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
       >
         <div
           className={clsx(
-            "mt-8",
+            "mt-5",
             sidebarCollapsed ? "flex flex-col justify-center items-center" : ""
           )}
         >
           {manageNavigation.map((item) => (
             <div
               key={item.name}
-              className="flex relative justify-center items-center w-full mb-2.5"
+              className="flex relative justify-center items-center mb-1.5 w-full"
             >
-              {pathname.includes(item.href) && (
+              {isPathActive(item.href) && (
                 <motion.div
-                  initial={{
-                    width: sidebarCollapsed ? 36 : "100%",
-                    height: sidebarCollapsed ? 36 : "100%",
-                  }}
                   animate={{
                     width: sidebarCollapsed ? 36 : "100%",
-                    height: sidebarCollapsed ? 36 : "100%",
                   }}
                   transition={{
-                    type: "spring",
-                    bounce: 0.2,
-                    duration: 0.4,
-                    width: { type: "tween", duration: 0.05 },
+                    layout: {
+                      type: "tween",
+                      duration: 0.15,
+                    },
+                    width: {
+                      type: "tween",
+                      duration: 0.05,
+                    },
                   }}
-                  layoutId="underline"
-                  id="underline"
-                  className={clsx(
-                    "absolute rounded-xl bg-gray-3",
-                    sidebarCollapsed
-                      ? "inset-0 right-0 left-0 mx-auto w-9 h-9"
-                      : "inset-0 ml-[2px]"
-                  )}
+                  layoutId="navlinks"
+                  id="navlinks"
+                  className="absolute h-[36px] w-full rounded-xl pointer-events-none bg-gray-3"
                 />
               )}
 
-              {hoveredItem === item.name && !pathname.includes(item.href) && (
+              {hoveredItem === item.name && !isPathActive(item.href) && (
                 <motion.div
                   layoutId="hoverIndicator"
                   className={clsx(
                     "absolute bg-transparent rounded-xl",
-                    sidebarCollapsed
-                      ? "inset-0 right-0 left-0 mx-auto w-9 h-9"
-                      : "inset-0 ml-[2px]"
+                    sidebarCollapsed ? "inset-0 mx-auto w-9 h-9" : "inset-0"
                   )}
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
@@ -315,18 +321,23 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
                   prefetch={false}
                   href={item.href}
                   className={classNames(
-                    "relative border border-transparent transition-opacity duration-200 z-3",
+                    "relative border border-transparent transition z-3",
                     sidebarCollapsed
-                      ? "flex justify-center items-center w-full h-9"
-                      : "py-2 w-full",
+                      ? "flex justify-center px-0 items-center w-full size-9"
+                      : "py-2 w-full px-3",
+                    isPathActive(item.href)
+                      ? "bg-transparent pointer-events-none"
+                      : "hover:bg-gray-2",
                     navItemClass
                   )}
                 >
                   <FontAwesomeIcon
                     icon={item.icon as IconDefinition}
                     className={clsx(
-                      "flex-shrink-0 size-3.5 transition-colors duration-200 stroke-[1.5px]",
-                      sidebarCollapsed ? "text-gray-12 mx-auto" : "text-gray-10"
+                      "flex-shrink-0 transition-colors",
+                      sidebarCollapsed
+                        ? "text-gray-12 size-[18px] mx-auto"
+                        : "text-gray-10 size-3.5"
                     )}
                     aria-hidden="true"
                   />
@@ -343,7 +354,7 @@ export const AdminNavItems = ({ toggleMobileNav }: Props) => {
             </div>
           ))}
 
-          <SpacesList />
+          <SpacesList toggleMobileNav={() => toggleMobileNav?.()} />
         </div>
         <div className="pb-4 mt-auto w-full">
           <UsageButton

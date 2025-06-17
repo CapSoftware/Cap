@@ -9,7 +9,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { buildEnv, serverEnv } from "@cap/env";
 import { S3_BUCKET_URL } from "@cap/utils";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
-import crypto from "crypto";
+import crypto from "node:crypto";
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import { PropsWithChildren } from "react";
@@ -17,7 +17,6 @@ import { AuthProvider } from "./AuthProvider";
 import { PostHogProvider, Providers } from "./providers";
 //@ts-expect-error
 import { script } from "./themeScript";
-
 
 const defaultFont = localFont({
   src: [
@@ -51,7 +50,7 @@ const defaultFont = localFont({
       weight: "700",
       style: "italic",
     },
-  ]
+  ],
 });
 
 export const metadata: Metadata = {
@@ -68,6 +67,7 @@ export const metadata: Metadata = {
   },
 };
 
+export const dynamic = "force-dynamic";
 
 export default async function RootLayout({ children }: PropsWithChildren) {
   const user = await getCurrentUser();

@@ -46,7 +46,9 @@ export const OrganizationDetailsCard = ({
             <Label htmlFor="allowedEmailDomain">Access email domain</Label>
             <p className="text-sm text-gray-10">
               Only emails from this domain can access shared videos.{" "}
-              <b>Leave blank to allow everyone.</b>
+              <span className="font-medium text-sm text-gray-11 leading-[0px]">
+                Leave blank to allow everyone.
+              </span>
             </p>
           </div>
           <Input
@@ -66,7 +68,7 @@ export const OrganizationDetailsCard = ({
         </div>
       </div>
       <Button
-        className="mt-8 w-fit"
+        className="mt-8 px-[1.5rem] w-fit"
         type="submit"
         spinner={saveLoading}
         size="sm"

@@ -2,9 +2,14 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { spaces } from "@cap/database/schema";
-import { nanoId } from "@cap/database/helpers";
+import { spaces, users, spaceMembers } from "@cap/database/schema";
+import { inArray, eq, and } from "drizzle-orm";
+import { nanoId, nanoIdLength } from "@cap/database/helpers";
 import { revalidatePath } from "next/cache";
+import { createS3Client, getS3Bucket } from "@/utils/s3";
+import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
+import { serverEnv } from "@cap/env";
+import { v4 as uuidv4 } from "uuid";
 
 interface CreateSpaceResponse {
   success: boolean;
@@ -14,36 +19,128 @@ interface CreateSpaceResponse {
   error?: string;
 }
 
-export async function createSpace(formData: FormData): Promise<CreateSpaceResponse> {
+export async function createSpace(
+  formData: FormData
+): Promise<CreateSpaceResponse> {
   try {
     const user = await getCurrentUser();
 
     if (!user || !user.activeOrganizationId) {
-      return { 
-        success: false, 
-        error: "User not logged in or no active organization" 
+      return {
+        success: false,
+        error: "User not logged in or no active organization",
       };
     }
 
-    const name = formData.get('name') as string;
-    
+    const name = formData.get("name") as string;
+
     if (!name) {
-      return { 
-        success: false, 
-        error: "Space name is required" 
+      return {
+        success: false,
+        error: "Space name is required",
       };
     }
 
-    const iconFile = formData.get('icon') as File | null;
+    // Check for duplicate space name in the same organization
+    const existingSpace = await db()
+      .select({ id: spaces.id })
+      .from(spaces)
+      .where(
+        and(
+          eq(spaces.organizationId, user.activeOrganizationId),
+          eq(spaces.name, name)
+        )
+      )
+      .limit(1);
+    if (existingSpace.length > 0) {
+      return {
+        success: false,
+        error: "A space with this name already exists.",
+      };
+    }
+
+    // Generate the space ID early so we can use it in the file path
+    const spaceId = nanoId();
+
+    const iconFile = formData.get("icon") as File | null;
     let iconUrl = null;
 
     if (iconFile) {
-      iconUrl = `/images/spaces/${Date.now()}-${iconFile.name}`;
-      
+      // Validate file type
+      if (!iconFile.type.startsWith("image/")) {
+        return {
+          success: false,
+          error: "File must be an image",
+        };
+      }
+
+      // Validate file size (limit to 2MB)
+      if (iconFile.size > 2 * 1024 * 1024) {
+        return {
+          success: false,
+          error: "File size must be less than 2MB",
+        };
+      }
+
+      try {
+        // Create a unique file key
+        const fileExtension = iconFile.name.split(".").pop();
+        const fileKey = `organizations/${
+          user.activeOrganizationId
+        }/spaces/${spaceId}/icon-${Date.now()}.${fileExtension}`;
+
+        // Get S3 client
+        const [s3Client] = await createS3Client();
+        const bucketName = await getS3Bucket();
+
+        // Create presigned post
+        const presignedPostData = await createPresignedPost(s3Client, {
+          Bucket: bucketName,
+          Key: fileKey,
+          Fields: {
+            "Content-Type": iconFile.type,
+          },
+          Expires: 600, // 10 minutes
+        });
+
+        // Upload file to S3
+        const formDataForS3 = new FormData();
+        Object.entries(presignedPostData.fields).forEach(([key, value]) => {
+          formDataForS3.append(key, value as string);
+        });
+        formDataForS3.append("file", iconFile);
+
+        const uploadResponse = await fetch(presignedPostData.url, {
+          method: "POST",
+          body: formDataForS3,
+        });
+
+        if (!uploadResponse.ok) {
+          throw new Error("Failed to upload file to S3");
+        }
+
+        // Construct the icon URL
+        if (serverEnv().CAP_AWS_BUCKET_URL) {
+          // If a custom bucket URL is defined, use it
+          iconUrl = `${serverEnv().CAP_AWS_BUCKET_URL}/${fileKey}`;
+        } else if (serverEnv().CAP_AWS_ENDPOINT) {
+          // For custom endpoints like MinIO
+          iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucketName}/${fileKey}`;
+        } else {
+          // Default AWS S3 URL format
+          iconUrl = `https://${bucketName}.s3.${
+            serverEnv().CAP_AWS_REGION || "us-east-1"
+          }.amazonaws.com/${fileKey}`;
+        }
+      } catch (error) {
+        console.error("Error uploading space icon:", error);
+        return {
+          success: false,
+          error: "Failed to upload space icon",
+        };
+      }
     }
 
-    const spaceId = nanoId();
-    
     await db()
       .insert(spaces)
       .values({
@@ -51,24 +148,78 @@ export async function createSpace(formData: FormData): Promise<CreateSpaceRespon
         name,
         organizationId: user.activeOrganizationId,
         createdById: user.id,
+        iconUrl,
         description: iconUrl ? `Space with custom icon: ${iconUrl}` : null,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
 
-    revalidatePath('/dashboard');
-    
-    return { 
+    // --- Member Management Logic ---
+    // Collect member emails from formData
+    const members: string[] = [];
+    for (const entry of formData.getAll("members[]")) {
+      if (typeof entry === "string" && entry.length > 0) {
+        members.push(entry);
+      }
+    }
+
+    // Always add the creator as Owner (if not already in the list)
+    const memberEmailsSet = new Set(members.map((e) => e.toLowerCase()));
+    const creatorEmail = user.email.toLowerCase();
+    if (!memberEmailsSet.has(creatorEmail)) {
+      members.push(user.email);
+    }
+
+    // Look up user IDs for each email
+    if (members.length > 0) {
+      // Fetch all users with these emails
+      const usersFound = await db()
+        .select({ id: users.id, email: users.email })
+        .from(users)
+        .where(inArray(users.email, members));
+
+      // Map email to userId
+      const emailToUserId = Object.fromEntries(
+        usersFound.map((u) => [u.email.toLowerCase(), u.id])
+      );
+
+      // Prepare spaceMembers insertions
+      const spaceMembersToInsert = members
+        .map((email) => {
+          const userId = emailToUserId[email.toLowerCase()];
+          if (!userId) return null;
+          // Creator is always Owner, others are Member
+          const role =
+            email.toLowerCase() === creatorEmail ? "Admin" : "Member";
+          return {
+            id: uuidv4().substring(0, nanoIdLength),
+            spaceId,
+            userId,
+            role,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          };
+        })
+        .filter((v): v is NonNullable<typeof v> => Boolean(v));
+
+      if (spaceMembersToInsert.length > 0) {
+        await db().insert(spaceMembers).values(spaceMembersToInsert);
+      }
+    }
+
+    revalidatePath("/dashboard");
+
+    return {
       success: true,
       spaceId,
       name,
-      iconUrl
+      iconUrl,
     };
   } catch (error) {
     console.error("Error creating space:", error);
-    return { 
-      success: false, 
-      error: "Failed to create space" 
+    return {
+      success: false,
+      error: "Failed to create space",
     };
   }
-} 
+}

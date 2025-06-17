@@ -106,7 +106,11 @@ export const InviteDialog = ({
     },
     onError: (error) => {
       console.error("Error sending invites:", error);
-      toast.error(error instanceof Error ? error.message : "An error occurred while sending invites");
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "An error occurred while sending invites"
+      );
     },
   });
 
@@ -148,7 +152,7 @@ export const InviteDialog = ({
                 {inviteEmails.map((email) => (
                   <div
                     key={email}
-                    className="flex justify-between items-center p-3 rounded-xl border transition-colors duration-200 cursor-pointer border-gray-3"
+                    className="flex justify-between items-center p-3 rounded-xl border transition-colors duration-200 cursor-pointer border-gray-4 hover:bg-gray-3"
                   >
                     <span className="text-sm text-gray-12">{email}</span>
                     <Button
@@ -170,8 +174,8 @@ export const InviteDialog = ({
               </div>
             </>
           ) : (
-            <div className="flex flex-col gap-2 p-4 rounded-xl border bg-amber-50 border-amber-200">
-              <p className="text-amber-800 font-medium">No Seats Available</p>
+            <div className="flex flex-col gap-2 p-4 bg-amber-50 rounded-xl border border-amber-200">
+              <p className="font-medium text-amber-800">No Seats Available</p>
               <p className="text-sm text-amber-700">
                 You've reached your seat limit. Please upgrade your plan or
                 remove existing members to invite new ones.
@@ -180,7 +184,7 @@ export const InviteDialog = ({
                 type="button"
                 size="sm"
                 variant="dark"
-                className="mt-2 self-start"
+                className="self-start mt-2"
                 spinner={upgradeLoading}
                 disabled={upgradeLoading || !isOwner}
                 onClick={handleUpgradePlan}
@@ -205,7 +209,9 @@ export const InviteDialog = ({
             variant="dark"
             spinner={sendInvites.isPending}
             disabled={
-              sendInvites.isPending || inviteEmails.length === 0 || remainingSeats === 0
+              sendInvites.isPending ||
+              inviteEmails.length === 0 ||
+              remainingSeats === 0
             }
             onClick={handleSendInvites}
           >

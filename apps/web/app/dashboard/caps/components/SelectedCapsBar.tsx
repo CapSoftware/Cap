@@ -58,7 +58,7 @@ export const SelectedCapsBar = ({
               variant="destructive"
               onClick={deleteSelectedCaps}
               disabled={isDeleting}
-              className="size-[40px] p-0"
+              className="size-[40px] min-w-[unset] p-0"
               spinner={isDeleting}
               size="sm"
             >
