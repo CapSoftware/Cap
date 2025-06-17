@@ -1,4 +1,3 @@
-import { classNames } from "@cap/utils";
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import clsx from "clsx";
 import { memo } from "react";
@@ -98,7 +97,20 @@ const EveryoneArt = memo(() => {
       fit: Fit.Contain,
     }),
   });
-  return <EveryoneRive className="w-full max-w-[500px] mx-auto h-[250px]" />;
+  return <EveryoneRive className="w-full max-w-[600px] mx-auto h-[300px]" />;
+});
+
+const CapAIArt = memo(() => {
+  const { RiveComponent: CapAIArt } = useRive({
+    src: "/rive/bento.riv",
+    artboard: "capai",
+    animations: ["in"],
+    autoplay: true,
+    layout: new Layout({
+      fit: Fit.Contain,
+    }),
+  });
+  return <CapAIArt className="w-full max-w-[550px] mx-auto h-[300px]" />;
 });
 
 const features: Feature[] = [
@@ -143,7 +155,7 @@ const features: Feature[] = [
   },
   {
     title: "Cap AI",
-    rive: undefined,
+    rive: <CapAIArt />,
     description:
       "Cap AI is a powerful tool that uses advanced AI to help you create better content. With features like automatic transcription, video editing, and content optimization, Cap AI makes it easy to create engaging and effective content for your audience.",
   },
