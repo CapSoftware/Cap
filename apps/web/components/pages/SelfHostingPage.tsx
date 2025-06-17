@@ -67,7 +67,7 @@ export const SelfHostingPage = () => {
       <div className="mt-[120px]">
         <div className="relative z-10 px-5 pt-24 pb-36 w-full">
           <div className="mx-auto text-center wrapper wrapper-sm">
-            <h1 className="fade-in-down text-[2rem] font-bold leading-[2.5rem] md:text-[3.75rem] md:leading-[4rem] relative z-10 text-black mb-4">
+            <h1 className="fade-in-down text-[2rem] font-medium leading-[2.5rem] md:text-[3.75rem] md:leading-[4rem] relative z-10 text-black mb-4">
               Self-host Cap
             </h1>
             <p className="mx-auto mb-8 max-w-3xl text-md sm:text-xl text-zinc-500 fade-in-down animate-delay-1">

@@ -21,6 +21,7 @@ import { isUserOnProPlan } from "@cap/utils";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
 import clsx from "clsx";
+import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 
 export const ShareHeader = ({
   data,
@@ -29,13 +30,27 @@ export const ShareHeader = ({
   domainVerified,
   sharedOrganizations = [],
   userOrganizations = [],
+  sharedSpaces = [],
+  userSpaces = [],
 }: {
   data: typeof videos.$inferSelect;
   user: typeof userSelectProps | null;
-  customDomain: string | null;
-  domainVerified: boolean;
+  customDomain?: string | null;
+  domainVerified?: boolean;
   sharedOrganizations?: { id: string; name: string }[];
   userOrganizations?: { id: string; name: string }[];
+  sharedSpaces?: {
+    id: string;
+    name: string;
+    iconUrl?: string;
+    organizationId: string;
+  }[];
+  userSpaces?: {
+    id: string;
+    name: string;
+    iconUrl?: string;
+    organizationId: string;
+  }[];
 }) => {
   const { push, refresh } = useRouter();
   const [isEditing, setIsEditing] = useState(false);
@@ -43,10 +58,13 @@ export const ShareHeader = ({
   const [isDownloading, setIsDownloading] = useState(false);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
-  const [currentSharedOrganizations, setCurrentSharedOrganizations] =
-    useState(sharedOrganizations);
 
-  const isOwner = user !== null && user.id.toString() === data.ownerId;
+  const contextData = useSharedContext();
+  const contextSpaces = contextData?.spacesData || null;
+  const contextSharedSpaces = contextData?.sharedSpaces || null;
+  const effectiveSharedSpaces = contextSharedSpaces || sharedSpaces;
+
+  const isOwner = user && user.id.toString() === data.ownerId;
 
   const { webUrl } = usePublicEnv();
 
@@ -98,12 +116,7 @@ export const ShareHeader = ({
       })
     : false;
 
-  const handleSharingUpdated = (updatedSharedOrganizations: string[]) => {
-    setCurrentSharedOrganizations(
-      userOrganizations?.filter((organization) =>
-        updatedSharedOrganizations.includes(organization.id)
-      )
-    );
+  const handleSharingUpdated = () => {
     refresh();
   };
 
@@ -112,7 +125,10 @@ export const ShareHeader = ({
       "text-sm text-gray-10 transition-colors duration-200 flex items-center";
 
     if (isOwner) {
-      if (currentSharedOrganizations?.length === 0) {
+      if (
+        (sharedOrganizations?.length === 0 || !sharedOrganizations) &&
+        (effectiveSharedSpaces?.length === 0 || !effectiveSharedSpaces)
+      ) {
         return (
           <p
             className={clsx(baseClassName, "hover:text-gray-12 cursor-pointer")}
@@ -145,8 +161,7 @@ export const ShareHeader = ({
         onClose={() => setIsSharingDialogOpen(false)}
         capId={data.id}
         capName={data.name}
-        sharedOrganizations={currentSharedOrganizations || []}
-        userOrganizations={userOrganizations}
+        sharedSpaces={effectiveSharedSpaces || []}
         onSharingUpdated={handleSharingUpdated}
       />
       <div>
@@ -167,10 +182,7 @@ export const ShareHeader = ({
                   <h1
                     className="text-xl sm:text-2xl"
                     onClick={() => {
-                      if (
-                        user !== null &&
-                        user.id.toString() === data.ownerId
-                      ) {
+                      if (user && user.id.toString() === data.ownerId) {
                         setIsEditing(true);
                       }
                     }}

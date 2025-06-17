@@ -18,14 +18,14 @@ export const SeatsInfoCards = () => {
         <FontAwesomeIcon className="text-gray-10 size-5" icon={faChair} />
         <p className="text-gray-12">
           Seats Remaining
-          <span className="ml-2 font-bold text-gray-12">{remainingSeats}</span>
+          <span className="ml-2 font-medium text-gray-12">{remainingSeats}</span>
         </p>
       </Card>
       <Card className="flex flex-col flex-1 gap-3 justify-center items-center">
         <FontAwesomeIcon className="text-gray-10 size-5" icon={faUserGroup} />
         <p className="text-gray-12">
           Seats Capacity
-          <span className="ml-2 font-bold text-gray-12">{inviteQuota}</span>
+          <span className="ml-2 font-medium text-gray-12">{inviteQuota}</span>
         </p>
       </Card>
     </div>

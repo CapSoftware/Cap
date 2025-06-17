@@ -9,6 +9,8 @@ import {
 } from "@cap/database/schema";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { createSpace as createSpaceAction } from "@/actions/organization/create-space";
+import { updateSpace as updateSpaceAction } from "@/actions/organization/update-space";
 
 export async function updateActiveOrganization(organizationId: string) {
   const user = await getCurrentUser();
@@ -34,4 +36,32 @@ export async function updateActiveOrganization(organizationId: string) {
     .where(eq(users.id, user.id));
 
   revalidatePath("/dashboard");
+}
+
+export async function createSpace(formData: FormData) {
+  try {
+    const result = await createSpaceAction(formData);
+
+    if (!result.success) {
+      throw new Error(result.error || "Failed to create space");
+    }
+
+    return result;
+  } catch (error) {
+    console.error("Error creating space:", error);
+    throw error;
+  }
+}
+
+export async function updateSpace(formData: FormData) {
+  try {
+    const result = await updateSpaceAction(formData);
+    if (!result.success) {
+      throw new Error(result.error || "Failed to update space");
+    }
+    return result;
+  } catch (error) {
+    console.error("Error updating space:", error);
+    throw error;
+  }
 }

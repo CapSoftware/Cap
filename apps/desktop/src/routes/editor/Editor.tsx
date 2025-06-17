@@ -15,8 +15,8 @@ import {
   onMount,
 } from "solid-js";
 import { createStore } from "solid-js/store";
-
 import { cx } from "cva";
+
 import Cropper, { cropToFloor } from "~/components/Cropper";
 import { Toggle } from "~/components/Toggle";
 import Tooltip from "~/components/Tooltip";
@@ -34,13 +34,7 @@ import { ExportDialog } from "./ExportDialog";
 import { Header } from "./Header";
 import { Player } from "./Player";
 import { Timeline } from "./Timeline";
-import {
-  Dialog,
-  DialogContent,
-  EditorButton,
-  Input,
-  Subfield,
-} from "./ui";
+import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
 
 export function Editor() {
   return (

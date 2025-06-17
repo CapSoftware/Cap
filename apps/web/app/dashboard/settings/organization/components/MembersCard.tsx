@@ -76,6 +76,7 @@ export const MembersCard = ({
               type="button"
               size="sm"
               variant="primary"
+              className="px-6 min-w-auto"
               spinner={loading}
               disabled={!isOwner || loading}
               onClick={handleManageBilling}
@@ -87,6 +88,7 @@ export const MembersCard = ({
             type="button"
             size="sm"
             variant="dark"
+            className="px-6 min-w-auto"
             onClick={() => {
               if (!isOwner) {
                 showOwnerToast();

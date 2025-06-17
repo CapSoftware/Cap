@@ -33,12 +33,10 @@ export const Onboarding = () => {
       if (response.ok) {
         const data = await response.json();
 
-        if (!data.isMemberOfOrganization) {
-          setShowUpgradeModal(true);
-        } else {
-          toast.success("Name updated successfully");
-          router.push("/dashboard");
-        }
+        if (!data.isMemberOfOrganization) setShowUpgradeModal(true);
+
+        toast.success("Name updated successfully");
+        router.push("/dashboard");
       } else {
         toast.error("Failed to update name");
       }

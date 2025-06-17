@@ -25,7 +25,6 @@ app.post(
     const { feedback, os, version } = c.req.valid("form");
 
     try {
-      // Send feedback to Discord channel
       const discordWebhookUrl = serverEnv().DISCORD_FEEDBACK_WEBHOOK_URL;
       if (!discordWebhookUrl)
         throw new Error("Discord webhook URL is not configured");
@@ -66,7 +65,6 @@ app.get("/plan", async (c) => {
     subscriptionStatus: user.stripeSubscriptionStatus,
   });
 
-  // Check for third-party Stripe subscription
   if (user.thirdPartyStripeSubscriptionId) {
     isSubscribed = true;
   }

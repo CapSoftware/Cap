@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import Link from "next/link";
 import { Button, Input } from "@cap/ui";
+import Link from "next/link";
+import { useState } from "react";
 
 export const WindowsPage = () => {
   const [isSubmitted, setIsSubmitted] = useState(false);
@@ -80,7 +80,7 @@ export const WindowsPage = () => {
                   meantime, you can{" "}
                   <Link
                     href="https://cap.link/discord"
-                    className="font-bold underline text-base sm:text-xl"
+                    className="font-medium underline text-base sm:text-xl"
                     target="_blank"
                     rel="noopener noreferrer"
                   >

@@ -272,6 +272,14 @@ export function ZoomTrack(props: {
                         Math.max(value.minValue, newStart)
                       )
                     );
+
+                    setProject(
+                      "timeline",
+                      "zoomSegments",
+                      produce((s) => {
+                        s.sort((a, b) => a.start - b.start);
+                      })
+                    );
                   }
                 )}
               />
@@ -360,6 +368,14 @@ export function ZoomTrack(props: {
                       i(),
                       "end",
                       Math.min(value.maxValue, Math.max(value.minValue, newEnd))
+                    );
+
+                    setProject(
+                      "timeline",
+                      "zoomSegments",
+                      produce((s) => {
+                        s.sort((a, b) => a.start - b.start);
+                      })
                     );
                   }
                 )}

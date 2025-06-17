@@ -7,6 +7,7 @@ import {
   sharedVideos,
   users,
   videos,
+  spaces,
 } from "@cap/database/schema";
 import { count, desc, eq, sql } from "drizzle-orm";
 import { Metadata } from "next";
@@ -68,6 +69,57 @@ export default async function CapsPage({
           JSON_ARRAY()
         )
       `,
+      sharedSpaces: sql<
+        {
+          id: string;
+          name: string;
+          organizationId: string;
+          iconUrl: string;
+          isOrg: boolean;
+        }[]
+      >`
+        COALESCE(
+          (
+            SELECT JSON_ARRAYAGG(
+              JSON_OBJECT(
+                'id', s.id,
+                'name', s.name,
+                'organizationId', s.organizationId,
+                'iconUrl', s.iconUrl,
+                'isOrg', s.isOrg
+              )
+            )
+            FROM (
+              -- Include spaces where the video is directly added via space_videos
+              SELECT DISTINCT 
+                s.id, 
+                s.name, 
+                s.organizationId, 
+                o.iconUrl as iconUrl,
+                FALSE as isOrg
+              FROM space_videos sv
+              JOIN spaces s ON sv.spaceId = s.id
+              JOIN organizations o ON s.organizationId = o.id
+              WHERE sv.videoId = ${videos.id}
+              
+              UNION
+              
+              -- For organization-level sharing, include the organization details
+              -- and mark it as an organization with isOrg=TRUE
+              SELECT DISTINCT 
+                o.id as id, 
+                o.name as name, 
+                o.id as organizationId, 
+                o.iconUrl as iconUrl,
+                TRUE as isOrg
+              FROM shared_videos sv
+              JOIN organizations o ON sv.organizationId = o.id
+              WHERE sv.videoId = ${videos.id}
+            ) AS s
+          ),
+          JSON_ARRAY()
+        )
+      `,
       ownerName: users.name,
       effectiveDate: sql<string>`
         COALESCE(
@@ -100,19 +152,6 @@ export default async function CapsPage({
     .limit(limit)
     .offset(offset);
 
-  const userOrganizations = await db()
-    .select({
-      id: organizations.id,
-      name: organizations.name,
-      iconUrl: organizations.iconUrl,
-    })
-    .from(organizations)
-    .leftJoin(
-      organizationMembers,
-      eq(organizations.id, organizationMembers.organizationId)
-    )
-    .where(eq(organizationMembers.userId, userId));
-
   const processedVideoData = videoData.map((video) => {
     const { effectiveDate, ...videoWithoutEffectiveDate } = video;
 
@@ -121,6 +160,7 @@ export default async function CapsPage({
       sharedOrganizations: video.sharedOrganizations.filter(
         (organization) => organization.id !== null
       ),
+      sharedSpaces: video.sharedSpaces.filter((space) => space.id !== null),
       ownerName: video.ownerName ?? "",
       metadata: video.metadata as
         | {
@@ -136,7 +176,6 @@ export default async function CapsPage({
     <Caps
       data={processedVideoData}
       count={totalCount}
-      userOrganizations={userOrganizations}
       dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
     />
   );
