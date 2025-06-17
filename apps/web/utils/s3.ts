@@ -4,6 +4,7 @@ import {
   HeadObjectOutput,
   ListObjectsV2Command,
   ListObjectsV2Output,
+  PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
 import type { s3Buckets } from "@cap/database/schema";
@@ -13,6 +14,7 @@ import { serverEnv } from "@cap/env";
 import * as S3Presigner from "@aws-sdk/s3-request-presigner";
 import * as CloudFrontPresigner from "@aws-sdk/cloudfront-signer";
 import { S3_BUCKET_URL } from "@cap/utils";
+import { StreamingBlobPayloadInputTypes } from "@smithy/types";
 
 type S3Config = {
   endpoint?: string | null;
@@ -34,10 +36,12 @@ async function tryDecrypt(
   }
 }
 
-export async function getS3Config(config?: S3Config) {
+export async function getS3Config(config?: S3Config, internal = false) {
   if (!config) {
     return {
-      endpoint: serverEnv().CAP_AWS_ENDPOINT,
+      endpoint: internal
+        ? serverEnv().S3_INTERNAL_ENDPOINT ?? serverEnv().CAP_AWS_ENDPOINT
+        : serverEnv().S3_PUBLIC_ENDPOINT ?? serverEnv().CAP_AWS_ENDPOINT,
       region: serverEnv().CAP_AWS_REGION,
       credentials: {
         accessKeyId: serverEnv().CAP_AWS_ACCESS_KEY ?? "",
@@ -93,8 +97,8 @@ export async function getS3Bucket(
   );
 }
 
-export async function createS3Client(config?: S3Config) {
-  const s3Config = await getS3Config(config);
+export async function createS3Client(config?: S3Config, internal = false) {
+  const s3Config = await getS3Config(config, internal);
   const isLocalOrMinio =
     s3Config.endpoint?.includes("localhost") ||
     s3Config.endpoint?.includes("127.0.0.1");
@@ -109,6 +113,7 @@ export async function createS3Client(config?: S3Config) {
 }
 
 interface S3BucketProvider {
+  name: string;
   getSignedObjectUrl(key: string): Promise<string>;
   getObject(key: string): Promise<string | undefined>;
   listObjects(config?: {
@@ -116,10 +121,15 @@ interface S3BucketProvider {
     maxKeys?: number;
   }): Promise<ListObjectsV2Output>;
   headObject(key: string): Promise<HeadObjectOutput>;
+  putObject(
+    key: string,
+    body: StreamingBlobPayloadInputTypes,
+    fields?: { contentType?: string }
+  ): Promise<void>;
 }
 
 function createCloudFrontProvider(config: {
-  s3: S3Client;
+  s3: (internal: boolean) => Promise<S3Client>;
   bucket: string;
   keyPairId: string;
   privateKey: string;
@@ -152,37 +162,53 @@ function createCloudFrontProvider(config: {
   };
 }
 
-function createS3Provider(client: S3Client, bucket: string): S3BucketProvider {
+function createS3Provider(
+  getClient: (internal: boolean) => Promise<S3Client>,
+  bucket: string
+): S3BucketProvider {
   return {
-    getSignedObjectUrl(key: string) {
+    name: bucket,
+    async getSignedObjectUrl(key: string) {
       return S3Presigner.getSignedUrl(
-        client,
+        await getClient(false),
         new GetObjectCommand({ Bucket: bucket, Key: key }),
         { expiresIn: 3600 }
       );
     },
     async getObject(key: string, format = "string") {
-      const resp = await client.send(
-        new GetObjectCommand({ Bucket: bucket, Key: key })
+      const resp = await getClient(true).then((c) =>
+        c.send(new GetObjectCommand({ Bucket: bucket, Key: key }))
       );
       if (format === "string") {
         return await resp.Body?.transformToString();
       }
     },
     async listObjects(config) {
-      return await client.send(
-        new ListObjectsV2Command({
-          Bucket: bucket,
-          Prefix: config?.prefix,
-          MaxKeys: config?.maxKeys,
-        })
+      return await getClient(true).then((c) =>
+        c.send(
+          new ListObjectsV2Command({
+            Bucket: bucket,
+            Prefix: config?.prefix,
+            MaxKeys: config?.maxKeys,
+          })
+        )
       );
     },
-    async headObject(key) {
-      return await client.send(
-        new HeadObjectCommand({ Bucket: bucket, Key: key })
-      );
-    },
+    headObject: (key) =>
+      getClient(true).then((client) =>
+        client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
+      ),
+    putObject: (key, body, fields) =>
+      getClient(true).then((client) =>
+        client.send(
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            Body: body,
+            ContentType: fields?.contentType,
+          })
+        )
+      ),
   };
 }
 
@@ -190,7 +216,8 @@ export async function createBucketProvider(
   customBucket?: InferSelectModel<typeof s3Buckets> | null
 ) {
   const bucket = await getS3Bucket(customBucket);
-  const [s3Client] = await createS3Client(customBucket);
+  const getClient = (internal: boolean) =>
+    createS3Client(customBucket, internal).then((v) => v[0]);
 
   if (!customBucket && serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID) {
     const keyPairId = serverEnv().CLOUDFRONT_KEYPAIR_ID;
@@ -200,12 +227,12 @@ export async function createBucketProvider(
       throw new Error("Missing CloudFront keypair ID or private key");
 
     return createCloudFrontProvider({
-      s3: s3Client,
+      s3: getClient,
       bucket,
       keyPairId,
       privateKey,
     });
   }
 
-  return createS3Provider(s3Client, bucket);
+  return createS3Provider(getClient, bucket);
 }

@@ -6,7 +6,7 @@ import { spaces, users, spaceMembers } from "@cap/database/schema";
 import { inArray, eq, and } from "drizzle-orm";
 import { nanoId, nanoIdLength } from "@cap/database/helpers";
 import { revalidatePath } from "next/cache";
-import { createS3Client, getS3Bucket } from "@/utils/s3";
+import { createBucketProvider, createS3Client, getS3Bucket } from "@/utils/s3";
 import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
 import { serverEnv } from "@cap/env";
 import { v4 as uuidv4 } from "uuid";
@@ -89,35 +89,11 @@ export async function createSpace(
           user.activeOrganizationId
         }/spaces/${spaceId}/icon-${Date.now()}.${fileExtension}`;
 
-        // Get S3 client
-        const [s3Client] = await createS3Client();
-        const bucketName = await getS3Bucket();
+        const bucket = await createBucketProvider();
 
-        // Create presigned post
-        const presignedPostData = await createPresignedPost(s3Client, {
-          Bucket: bucketName,
-          Key: fileKey,
-          Fields: {
-            "Content-Type": iconFile.type,
-          },
-          Expires: 600, // 10 minutes
+        await bucket.putObject(fileKey, iconFile, {
+          contentType: iconFile.type,
         });
-
-        // Upload file to S3
-        const formDataForS3 = new FormData();
-        Object.entries(presignedPostData.fields).forEach(([key, value]) => {
-          formDataForS3.append(key, value as string);
-        });
-        formDataForS3.append("file", iconFile);
-
-        const uploadResponse = await fetch(presignedPostData.url, {
-          method: "POST",
-          body: formDataForS3,
-        });
-
-        if (!uploadResponse.ok) {
-          throw new Error("Failed to upload file to S3");
-        }
 
         // Construct the icon URL
         if (serverEnv().CAP_AWS_BUCKET_URL) {
@@ -125,10 +101,10 @@ export async function createSpace(
           iconUrl = `${serverEnv().CAP_AWS_BUCKET_URL}/${fileKey}`;
         } else if (serverEnv().CAP_AWS_ENDPOINT) {
           // For custom endpoints like MinIO
-          iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucketName}/${fileKey}`;
+          iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucket.name}/${fileKey}`;
         } else {
           // Default AWS S3 URL format
-          iconUrl = `https://${bucketName}.s3.${
+          iconUrl = `https://${bucket.name}.s3.${
             serverEnv().CAP_AWS_REGION || "us-east-1"
           }.amazonaws.com/${fileKey}`;
         }

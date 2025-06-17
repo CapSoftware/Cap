@@ -5,7 +5,7 @@ import { spaces } from "@cap/database/schema";
 import { db } from "@cap/database";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { createS3Client, getS3Bucket } from "@/utils/s3";
+import { createBucketProvider, createS3Client, getS3Bucket } from "@/utils/s3";
 import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
 import { serverEnv } from "@cap/env";
 import { DeleteObjectCommand } from "@aws-sdk/client-s3";
