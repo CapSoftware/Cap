@@ -367,7 +367,6 @@ export const ShareVideo = forwardRef<
 
         setTimeout(() => {
           video.removeEventListener("seeked", handleSeeked);
-          setCurrentTime(validTime);
         }, 1000);
       } catch (error) {
         console.error("Error setting video currentTime:", error);
@@ -384,9 +383,14 @@ export const ShareVideo = forwardRef<
     };
 
     videoElement.addEventListener("timeupdate", handleTimeUpdate);
+    const handleEnded = () => {
+      setIsPlaying(false);
+    };
+    videoElement.addEventListener("ended", handleEnded);
 
     return () => {
       videoElement.removeEventListener("timeupdate", handleTimeUpdate);
+      videoElement.removeEventListener("ended", handleEnded);
     };
   }, [videoReadyToPlay]);
 
