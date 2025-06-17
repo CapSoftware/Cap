@@ -1,5 +1,6 @@
 import { editDate } from "@/actions/videos/edit-date";
 import { editTitle } from "@/actions/videos/edit-title";
+import { downloadVideo } from "@/actions/videos/download";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { CapCardAnalytics } from "@/app/dashboard/caps/components/CapCardAnalytics";
 import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
@@ -16,6 +17,7 @@ import {
   faTrash,
   faLock,
   faUnlock,
+  faDownload,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
@@ -88,6 +90,7 @@ export const CapCard = ({
   );
   const [showFullDate, setShowFullDate] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const router = useRouter();
   const { isSubscribed, setUpgradeModalOpen } = useSharedContext();
 
@@ -269,6 +272,48 @@ export const CapCard = ({
     }, 2000);
   };
 
+  const handleDownload = async () => {
+    if (isDownloading) return;
+
+    setIsDownloading(true);
+
+    try {
+      toast.promise(
+        downloadVideo(cap.id).then(async (response) => {
+          if (response.success && response.downloadUrl) {
+            const fetchResponse = await fetch(response.downloadUrl);
+            const blob = await fetchResponse.blob();
+
+            const blobUrl = window.URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = blobUrl;
+            link.download = response.filename;
+            link.style.display = "none";
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            window.URL.revokeObjectURL(blobUrl);
+          }
+        }),
+        {
+          loading: "Preparing download...",
+          success: "Download started successfully",
+          error: (error) => {
+            if (error instanceof Error) {
+              return error.message;
+            }
+            return "Failed to download video - please try again.";
+          },
+        }
+      );
+    } catch (error) {
+      console.error("Download error:", error);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   const handleTitleKeyDown = (
     e: React.KeyboardEvent<HTMLTextAreaElement>,
     capName: string
@@ -343,7 +388,7 @@ export const CapCard = ({
               anyCapSelected
                 ? "opacity-0"
                 : "opacity-0 group-hover:opacity-100",
-              "top-2 right-2 flex-col gap-2 z-[20]"
+              "top-2 right-2 flex-col gap-1 z-[20]"
             )}
           >
             <Tooltip content="Copy link">
@@ -383,6 +428,48 @@ export const CapCard = ({
                 )}
               </Button>
             </Tooltip>
+            <Tooltip content="Download Cap">
+              <Button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDownload();
+                }}
+                disabled={isDownloading}
+                className="!size-8 delay-25 hover:opacity-80 rounded-full min-w-fit !p-0"
+                variant="white"
+                size="sm"
+              >
+                {isDownloading ? (
+                  <div className="animate-spin size-3">
+                    <svg
+                      className="size-3"
+                      xmlns="http://www.w3.org/2000/svg"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      ></circle>
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="m2 12c0-5.523 4.477-10 10-10v3c-3.866 0-7 3.134-7 7s3.134 7 7 7 7-3.134 7-7c0-1.457-.447-2.808-1.208-3.926l2.4-1.6c1.131 1.671 1.808 3.677 1.808 5.526 0 5.523-4.477 10-10 10s-10-4.477-10-10z"
+                      ></path>
+                    </svg>
+                  </div>
+                ) : (
+                  <FontAwesomeIcon
+                    className="text-gray-12 size-3"
+                    icon={faDownload}
+                  />
+                )}
+              </Button>
+            </Tooltip>
             <Tooltip
               content={
                 passwordProtected ? "Edit password" : "Add password to access"
@@ -415,7 +502,7 @@ export const CapCard = ({
                   e.stopPropagation();
                   onDelete?.(cap.id);
                 }}
-                className="!size-8 delay-100 hover:opacity-80 rounded-full min-w-fit !p-0"
+                className="!size-8 delay-75 hover:opacity-80 rounded-full min-w-fit !p-0"
                 variant="white"
                 size="sm"
               >
