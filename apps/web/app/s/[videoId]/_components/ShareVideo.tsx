@@ -728,7 +728,6 @@ export const ShareVideo = forwardRef<
     setShowPreview(false);
   };
 
-  // For chapter clicks (and any non-timeline seek)
   const handleSeekMouseMove = (event: React.MouseEvent | React.TouchEvent) => {
     if (!seeking) return;
 
@@ -1117,9 +1116,7 @@ export const ShareVideo = forwardRef<
           className="h-6 cursor-pointer"
           onMouseDown={handleSeekMouseDown}
           onMouseMove={(e) => {
-            if (seeking) {
-              handleSeekMouseMove(e);
-            }
+            handleSeekMouseMove(e);
           }}
           onMouseUp={handleSeekMouseUp}
           onMouseLeave={() => {
@@ -1127,9 +1124,7 @@ export const ShareVideo = forwardRef<
           }}
           onTouchStart={handleSeekMouseDown}
           onTouchMove={(e) => {
-            if (seeking) {
-              handleSeekMouseMove(e);
-            }
+            handleSeekMouseMove(e);
           }}
         >
           {!isLoading && comments !== null && (
