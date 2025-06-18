@@ -27,7 +27,7 @@ export default function Loading() {
                     width={100}
                   />
                 </span>
-                <span className="ml-2 font-bold">
+                <span className="ml-2 font-medium">
                   <Skeleton
                     baseColor="var(--gray-4)"
                     highlightColor="var(--gray-5)"
@@ -55,7 +55,7 @@ export default function Loading() {
                     width={100}
                   />
                 </span>
-                <span className="ml-2 font-bold">
+                <span className="ml-2 font-medium">
                   <Skeleton
                     baseColor="var(--gray-4)"
                     highlightColor="var(--gray-5)"

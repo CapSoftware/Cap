@@ -1,5 +1,6 @@
 import { editDate } from "@/actions/videos/edit-date";
 import { editTitle } from "@/actions/videos/edit-title";
+import { downloadVideo } from "@/actions/videos/download";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { CapCardAnalytics } from "@/app/dashboard/caps/components/CapCardAnalytics";
 import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
@@ -16,6 +17,7 @@ import {
   faTrash,
   faLock,
   faUnlock,
+  faDownload,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
@@ -33,7 +35,17 @@ interface Props extends PropsWithChildren {
     createdAt: Date;
     totalComments: number;
     totalReactions: number;
-    sharedOrganizations?: { id: string; name: string; iconUrl?: string }[];
+    sharedOrganizations?: {
+      id: string;
+      name: string;
+      iconUrl?: string | null;
+    }[];
+    sharedSpaces?: {
+      id: string;
+      name: string;
+      iconUrl?: string | null;
+      organizationId: string;
+    }[];
     ownerName: string | null;
     metadata?: VideoMetadata;
     hasPassword?: boolean;
@@ -41,10 +53,10 @@ interface Props extends PropsWithChildren {
   analytics: number;
   onDelete?: (videoId: string) => Promise<void>;
   userId?: string;
-  userOrganizations?: { id: string; name: string; iconUrl?: string }[];
   sharedCapCard?: boolean;
   isSelected?: boolean;
   onSelectToggle?: () => void;
+  hideSharedStatus?: boolean;
   anyCapSelected?: boolean;
 }
 
@@ -54,8 +66,8 @@ export const CapCard = ({
   children,
   onDelete,
   userId,
-  userOrganizations,
   sharedCapCard = false,
+  hideSharedStatus = false,
   isSelected = false,
   onSelectToggle,
   anyCapSelected = false,
@@ -71,13 +83,14 @@ export const CapCard = ({
   const [passwordProtected, setPasswordProtected] = useState(
     cap.hasPassword || false
   );
-  const [, setSharedOrganizations] = useState(cap.sharedOrganizations);
   const [isDateEditing, setIsDateEditing] = useState(false);
   const [copyPressed, setCopyPressed] = useState(false);
   const [dateValue, setDateValue] = useState(
     moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss")
   );
   const [showFullDate, setShowFullDate] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const router = useRouter();
   const { isSubscribed, setUpgradeModalOpen } = useSharedContext();
 
@@ -106,12 +119,7 @@ export const CapCard = ({
       ? Math.max(cap.totalComments, cap.totalReactions)
       : analytics;
 
-  const handleSharingUpdated = (updatedSharedOrganizations: string[]) => {
-    setSharedOrganizations(
-      userOrganizations?.filter((organization) =>
-        updatedSharedOrganizations.includes(organization.id)
-      )
-    );
+  const handleSharingUpdated = (updatedSharedSpaces: string[]) => {
     router.refresh();
   };
 
@@ -122,13 +130,52 @@ export const CapCard = ({
 
   const isOwner = userId === cap.ownerId;
 
+  const handleDragStart = (e: React.DragEvent<HTMLDivElement>) => {
+    if (anyCapSelected || !isOwner) return;
+
+    e.dataTransfer.setData(
+      "application/cap",
+      JSON.stringify({
+        id: cap.id,
+        name: cap.name,
+      })
+    );
+
+    setIsDragging(true);
+
+    // Create a smaller drag image
+    const dragImage = new Image();
+    dragImage.src = `https://cap-api-thumbnails.s3.us-west-2.amazonaws.com/${cap.id}/thumbnail.png`;
+    dragImage.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 100;
+      canvas.height = 60;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.drawImage(dragImage, 0, 0, 100, 60);
+        const dataURL = canvas.toDataURL();
+        const img = new Image();
+        img.src = dataURL;
+        e.dataTransfer.setDragImage(img, 50, 30);
+      }
+    };
+  };
+
+  const handleDragEnd = () => {
+    setIsDragging(false);
+  };
+
   const renderSharedStatus = () => {
     const baseClassName = clsx(
       "text-sm text-gray-10 transition-colors duration-200 flex items-center mb-1",
-      sharedCapCard ? "cursor-default" : "hover:text-gray-12 cursor-pointer"
+      "hover:text-gray-12",
+      hideSharedStatus ? "pointer-events-none" : "cursor-pointer"
     );
-    if (isOwner) {
-      if (cap.sharedOrganizations?.length === 0) {
+    if (isOwner && !hideSharedStatus) {
+      if (
+        (cap.sharedOrganizations?.length === 0 || !cap.sharedOrganizations) &&
+        (cap.sharedSpaces?.length === 0 || !cap.sharedSpaces)
+      ) {
         return (
           <p
             className={baseClassName}
@@ -225,6 +272,48 @@ export const CapCard = ({
     }, 2000);
   };
 
+  const handleDownload = async () => {
+    if (isDownloading) return;
+
+    setIsDownloading(true);
+
+    try {
+      toast.promise(
+        downloadVideo(cap.id).then(async (response) => {
+          if (response.success && response.downloadUrl) {
+            const fetchResponse = await fetch(response.downloadUrl);
+            const blob = await fetchResponse.blob();
+
+            const blobUrl = window.URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = blobUrl;
+            link.download = response.filename;
+            link.style.display = "none";
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            window.URL.revokeObjectURL(blobUrl);
+          }
+        }),
+        {
+          loading: "Preparing download...",
+          success: "Download started successfully",
+          error: (error) => {
+            if (error instanceof Error) {
+              return error.message;
+            }
+            return "Failed to download video - please try again.";
+          },
+        }
+      );
+    } catch (error) {
+      console.error("Download error:", error);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   const handleTitleKeyDown = (
     e: React.KeyboardEvent<HTMLTextAreaElement>,
     capName: string
@@ -260,8 +349,7 @@ export const CapCard = ({
         onClose={() => setIsSharingDialogOpen(false)}
         capId={cap.id}
         capName={cap.name}
-        sharedOrganizations={cap.sharedOrganizations || []}
-        userOrganizations={userOrganizations}
+        sharedSpaces={cap.sharedSpaces || []}
         onSharingUpdated={handleSharingUpdated}
       />
       <PasswordDialog
@@ -273,13 +361,18 @@ export const CapCard = ({
       />
       <div
         onClick={handleCardClick}
+        draggable={isOwner && !anyCapSelected}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
         className={clsx(
           "flex relative flex-col gap-4 w-full h-full rounded-xl cursor-default bg-gray-1 border-gray-3 group border-[1px]",
           isSelected
             ? "!border-blue-10 border-[1px]"
             : anyCapSelected
             ? "border-blue-10 border-[1px] hover:border-blue-10"
-            : "hover:border-blue-10"
+            : "hover:border-blue-10",
+          isDragging && "opacity-50",
+          isOwner && !anyCapSelected && "cursor-grab active:cursor-grabbing"
         )}
       >
         {anyCapSelected && !sharedCapCard && (
@@ -295,7 +388,7 @@ export const CapCard = ({
               anyCapSelected
                 ? "opacity-0"
                 : "opacity-0 group-hover:opacity-100",
-              "top-2 right-2 flex-col gap-2 z-[20]"
+              "top-2 right-2 flex-col gap-1 z-[20]"
             )}
           >
             <Tooltip content="Copy link">
@@ -335,6 +428,48 @@ export const CapCard = ({
                 )}
               </Button>
             </Tooltip>
+            <Tooltip content="Download Cap">
+              <Button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDownload();
+                }}
+                disabled={isDownloading}
+                className="!size-8 delay-25 hover:opacity-80 rounded-full min-w-fit !p-0"
+                variant="white"
+                size="sm"
+              >
+                {isDownloading ? (
+                  <div className="animate-spin size-3">
+                    <svg
+                      className="size-3"
+                      xmlns="http://www.w3.org/2000/svg"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      ></circle>
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="m2 12c0-5.523 4.477-10 10-10v3c-3.866 0-7 3.134-7 7s3.134 7 7 7 7-3.134 7-7c0-1.457-.447-2.808-1.208-3.926l2.4-1.6c1.131 1.671 1.808 3.677 1.808 5.526 0 5.523-4.477 10-10 10s-10-4.477-10-10z"
+                      ></path>
+                    </svg>
+                  </div>
+                ) : (
+                  <FontAwesomeIcon
+                    className="text-gray-12 size-3"
+                    icon={faDownload}
+                  />
+                )}
+              </Button>
+            </Tooltip>
             <Tooltip
               content={
                 passwordProtected ? "Edit password" : "Add password to access"
@@ -367,7 +502,7 @@ export const CapCard = ({
                   e.stopPropagation();
                   onDelete?.(cap.id);
                 }}
-                className="!size-8 delay-100 hover:opacity-80 rounded-full min-w-fit !p-0"
+                className="!size-8 delay-75 hover:opacity-80 rounded-full min-w-fit !p-0"
                 variant="white"
                 size="sm"
               >

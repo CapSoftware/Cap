@@ -37,6 +37,7 @@ export function ClipTrack(
   const {
     project,
     setProject,
+    projectActions,
     editorInstance,
     projectHistory,
     editorState,
@@ -226,22 +227,9 @@ export function ClipTrack(
                     const rect = e.currentTarget.getBoundingClientRect();
                     const fraction = (e.clientX - rect.left) / rect.width;
 
-                    const splitTime =
-                      segment.start + fraction * (segment.end - segment.start);
+                    const splitTime = fraction * (segment.end - segment.start);
 
-                    setProject(
-                      "timeline",
-                      "segments",
-                      produce((segments) => {
-                        segments.splice(i() + 1, 0, {
-                          start: splitTime,
-                          end: segment.end,
-                          timescale: 1,
-                          recordingSegment: segment.recordingSegment,
-                        });
-                        segments[i()].end = splitTime;
-                      })
-                    );
+                    projectActions.splitClipSegment(prevDuration() + splitTime);
                   } else {
                     createRoot((dispose) => {
                       createEventListener(e.currentTarget, "mouseup", (e) => {

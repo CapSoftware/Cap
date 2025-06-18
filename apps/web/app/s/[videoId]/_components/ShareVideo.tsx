@@ -367,7 +367,6 @@ export const ShareVideo = forwardRef<
 
         setTimeout(() => {
           video.removeEventListener("seeked", handleSeeked);
-          setCurrentTime(validTime);
         }, 1000);
       } catch (error) {
         console.error("Error setting video currentTime:", error);
@@ -384,9 +383,14 @@ export const ShareVideo = forwardRef<
     };
 
     videoElement.addEventListener("timeupdate", handleTimeUpdate);
+    const handleEnded = () => {
+      setIsPlaying(false);
+    };
+    videoElement.addEventListener("ended", handleEnded);
 
     return () => {
       videoElement.removeEventListener("timeupdate", handleTimeUpdate);
+      videoElement.removeEventListener("ended", handleEnded);
     };
   }, [videoReadyToPlay]);
 
@@ -986,7 +990,7 @@ export const ShareVideo = forwardRef<
                 {isPlaying ? (
                   <motion.div
                     key="pause-button"
-                    className="flex relative z-30 justify-center items-center size-20 bg-black bg-opacity-60 rounded-full"
+                    className="flex relative z-30 justify-center items-center bg-black bg-opacity-60 rounded-full size-20"
                     initial={{ opacity: 0, scale: 0 }}
                     animate={{
                       scale: 1,
@@ -1000,7 +1004,7 @@ export const ShareVideo = forwardRef<
                 ) : (
                   <motion.div
                     key="play-button"
-                    className="flex relative z-30 justify-center items-center size-20 bg-black bg-opacity-60 rounded-full"
+                    className="flex relative z-30 justify-center items-center bg-black bg-opacity-60 rounded-full size-20"
                     initial={{ opacity: 0, scale: 0 }}
                     animate={{
                       scale: 1,
@@ -1044,7 +1048,7 @@ export const ShareVideo = forwardRef<
           <div className="flex flex-col items-center">
             <div
               style={{ boxShadow: "0 0 100px rgba(0, 0, 0, 0.75)" }}
-              className="bg-black rounded-lg border border-gray-600 overflow-hidden"
+              className="overflow-hidden bg-black rounded-lg border border-gray-600"
             >
               <div
                 className="bg-black"
@@ -1073,7 +1077,7 @@ export const ShareVideo = forwardRef<
             <div className="mt-2 text-center space-y-0.5">
               {chapters.length > 0 && longestDuration > 0 && (
                 <div
-                  className="text-sm text-white font-medium leading-tight"
+                  className="text-sm font-medium leading-tight text-white"
                   style={{ textShadow: "0 0 3px rgba(0, 0, 0, 0.7)" }}
                 >
                   {(() => {
@@ -1092,7 +1096,7 @@ export const ShareVideo = forwardRef<
                 </div>
               )}
               <div
-                className="text-sm text-white font-medium"
+                className="text-sm font-medium text-white"
                 style={{ textShadow: "0 0 3px rgba(0, 0, 0, 0.7)" }}
               >
                 {formatTimeWithMilliseconds(previewTime)}
@@ -1112,9 +1116,7 @@ export const ShareVideo = forwardRef<
           className="h-6 cursor-pointer"
           onMouseDown={handleSeekMouseDown}
           onMouseMove={(e) => {
-            if (seeking) {
-              handleSeekMouseMove(e);
-            }
+            handleSeekMouseMove(e);
           }}
           onMouseUp={handleSeekMouseUp}
           onMouseLeave={() => {
@@ -1122,11 +1124,8 @@ export const ShareVideo = forwardRef<
           }}
           onTouchStart={handleSeekMouseDown}
           onTouchMove={(e) => {
-            if (seeking) {
-              handleSeekMouseMove(e);
-            }
+            handleSeekMouseMove(e);
           }}
-          onTouchEnd={(e) => handleSeekMouseUp(e, true)}
         >
           {!isLoading && comments !== null && (
             <div className="-mt-6 w-full md:-mt-6">
@@ -1152,7 +1151,7 @@ export const ShareVideo = forwardRef<
                 return (
                   <div
                     key={comment.id}
-                    className="absolute z-10 text-sm transition-all hover:scale-125 -mt-5 md:-mt-5"
+                    className="absolute z-10 -mt-5 text-sm transition-all hover:scale-125 md:-mt-5"
                     style={{
                       left: `${commentPosition}%`,
                     }}
@@ -1212,7 +1211,7 @@ export const ShareVideo = forwardRef<
                       }}
                     >
                       <div
-                        className="w-full h-full bg-gray-400 bg-opacity-50 group-hover:bg-opacity-70 transition-colors"
+                        className="w-full h-full bg-gray-400 bg-opacity-50 transition-colors group-hover:bg-opacity-70"
                         style={{
                           boxShadow: "0 0 20px rgba(0,0,0,0.6)",
                           borderRight:
@@ -1293,7 +1292,7 @@ export const ShareVideo = forwardRef<
               </button>
             </span>
             <div className="flex items-center space-x-2">
-              <div className="text-xs sm:text-sm text-white font-medium select-none tabular text-clip overflow-hidden whitespace-nowrap">
+              <div className="overflow-hidden text-xs font-medium text-white whitespace-nowrap select-none sm:text-sm tabular text-clip">
                 {formatTime(currentTime)} - {formatTime(longestDuration)}
               </div>
               {chapters.length > 0 && longestDuration > 0 && (
@@ -1575,6 +1574,9 @@ const useTranscriptionProcessing = (
   const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
 
   useEffect(() => {
+    if (!transcriptContent && data.transcriptionStatus === "PROCESSING") {
+      return setIsTranscriptionProcessing(false);
+    }
     if (transcriptContent) {
       const parsedSubtitles = fromVtt(transcriptContent);
       setSubtitles(parsedSubtitles);

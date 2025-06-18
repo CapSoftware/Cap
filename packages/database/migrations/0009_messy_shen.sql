@@ -1,0 +1,1 @@
+ALTER TABLE `spaces` MODIFY COLUMN `role` varchar(255) NOT NULL DEFAULT 'Owner';

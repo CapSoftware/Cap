@@ -13,7 +13,7 @@ import {
   createSignal,
   on,
 } from "solid-js";
-import { createStore, reconcile, unwrap } from "solid-js/store";
+import { createStore, produce, reconcile, unwrap } from "solid-js/store";
 
 import { createPresets } from "~/utils/createPresets";
 import { createImageDataWS, createLazySignal } from "~/utils/socket";
@@ -62,6 +62,77 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
     const [project, setProject] = createStore<ProjectConfiguration>(
       props.editorInstance.savedProjectConfig
     );
+
+    const projectActions = {
+      splitClipSegment: (time: number) => {
+        setProject(
+          "timeline",
+          "segments",
+          produce((segments) => {
+            let searchTime = time;
+            let prevDuration = 0;
+            const currentSegmentIndex = segments.findIndex((segment) => {
+              const duration = segment.end - segment.start;
+              if (searchTime > duration) {
+                searchTime -= duration;
+                prevDuration += duration;
+                return false;
+              }
+
+              return true;
+            });
+
+            if (currentSegmentIndex === -1) return;
+            const segment = segments[currentSegmentIndex];
+
+            segments.splice(currentSegmentIndex + 1, 0, {
+              start: segment.start + searchTime,
+              end: segment.end,
+              timescale: 1,
+              recordingSegment: segment.recordingSegment,
+            });
+            segments[currentSegmentIndex].end = segment.start + searchTime;
+          })
+        );
+      },
+      deleteClipSegment: (segmentIndex: number) => {
+        if (!project.timeline) return;
+        const segment = project.timeline.segments[segmentIndex];
+        if (
+          !segment ||
+          !segment.recordingSegment === undefined ||
+          project.timeline.segments.filter(
+            (s) => s.recordingSegment === segment.recordingSegment
+          ).length < 2
+        )
+          return;
+
+        batch(() => {
+          setProject(
+            "timeline",
+            "segments",
+            produce((s) => {
+              if (!s) return;
+              return s.splice(segmentIndex, 1);
+            })
+          );
+          setEditorState("timeline", "selection", null);
+        });
+      },
+      deleteZoomSegment: (segmentIndex: number) => {
+        batch(() => {
+          setProject(
+            "timeline",
+            "zoomSegments",
+            produce((s) => {
+              if (!s) return;
+              return s.splice(segmentIndex, 1);
+            })
+          );
+          setEditorState("timeline", "selection", null);
+        });
+      },
+    };
 
     createEffect(
       on(
@@ -209,6 +280,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       setDialog,
       project,
       setProject,
+      projectActions,
       projectHistory: createStoreHistory(project, setProject),
       editorState,
       setEditorState,
@@ -328,15 +400,15 @@ function createStoreHistory<T extends Static>(
   });
 
   createEventListener(window, "keydown", (e) => {
-    if (!(e.ctrlKey || e.metaKey)) return;
-
     switch (e.code) {
       case "KeyZ": {
+        if (!(e.ctrlKey || e.metaKey)) return;
         if (e.shiftKey) history.redo();
         else history.undo();
         break;
       }
       case "KeyY": {
+        if (!(e.ctrlKey || e.metaKey)) return;
         history.redo();
         break;
       }

@@ -1,7 +1,7 @@
 "use client";
 
-import Link from "next/link";
 import { Button } from "@cap/ui";
+import Link from "next/link";
 import { useEffect } from "react";
 
 interface ToolCategory {
@@ -77,7 +77,7 @@ export function ToolsPageContent() {
     <div className="py-20 md:py-28">
       <div className="wrapper">
         <div className="text-center mb-12">
-          <h1 className="text-4xl font-bold tracking-tight text-gray-900 mb-4">
+          <h1 className="text-4xl font-medium tracking-tight text-gray-900 mb-4">
             Try our free tools
           </h1>
           <p className="text-xl text-gray-600 max-w-3xl mx-auto">
@@ -148,7 +148,7 @@ export function ToolsPageContent() {
           </div>
           <div className="wrapper mx-auto h-full flex flex-col justify-center items-center relative z-10">
             <div className="text-center max-w-[800px] mx-auto mb-8">
-              <h2 className="text-3xl md:text-4xl font-bold text-white mb-4 drop-shadow-md">
+              <h2 className="text-3xl md:text-4xl font-medium text-white mb-4 drop-shadow-md">
                 The open source Loom alternative
               </h2>
               <p className="text-xl text-white/90 mb-6">

@@ -47,7 +47,6 @@ export const PricingPage = () => {
   const { push } = useRouter();
   const searchParams = useSearchParams();
 
-
   useEffect(() => {
     const init = async () => {
       setInitialRender(false);
@@ -272,30 +271,59 @@ export const PricingPage = () => {
                   <div>
                     <div className="flex items-center space-x-3">
                       <NumberFlow
-                        value={isCommercialAnnual
-                          ? `${29 * licenseQuantity}`
-                          : `${58 * licenseQuantity}`}
+                        value={
+                          isCommercialAnnual
+                            ? `${29 * licenseQuantity}`
+                            : `${58 * licenseQuantity}`
+                        }
                         className="text-4xl tabular-nums"
                         format={{
                           notation: "compact",
                           style: "currency",
-                          currency: "USD",                         
+                          currency: "USD",
                         }}
                       />
                       <div>
                         <p className="text-sm font-medium">
-                          {isCommercialAnnual
-                            ? licenseQuantity === 1
-                              ? "billed annually"
-                              : <>for <NumberFlow value={licenseQuantity} className="text-sm font-medium tabular-nums" /> licenses, billed annually</>
-                            : licenseQuantity === 1
-                            ? "one-time payment"
-                            : <>for <NumberFlow value={licenseQuantity} className="text-sm font-medium tabular-nums" /> licenses, one-time payment</>
-                          }
+                          {isCommercialAnnual ? (
+                            licenseQuantity === 1 ? (
+                              "billed annually"
+                            ) : (
+                              <>
+                                for{" "}
+                                <NumberFlow
+                                  value={licenseQuantity}
+                                  className="text-sm font-medium tabular-nums"
+                                />{" "}
+                                licenses, billed annually
+                              </>
+                            )
+                          ) : licenseQuantity === 1 ? (
+                            "one-time payment"
+                          ) : (
+                            <>
+                              for{" "}
+                              <NumberFlow
+                                value={licenseQuantity}
+                                className="text-sm font-medium tabular-nums"
+                              />{" "}
+                              licenses, one-time payment
+                            </>
+                          )}
                         </p>
                         {isCommercialAnnual && (
                           <p className="text-sm">
-                            or, <NumberFlow value={58 * licenseQuantity} className="text-sm tabular-nums" format={{ notation: "compact", style: "currency", currency: "USD" }} /> one-time payment
+                            or,{" "}
+                            <NumberFlow
+                              value={58 * licenseQuantity}
+                              className="text-sm tabular-nums"
+                              format={{
+                                notation: "compact",
+                                style: "currency",
+                                currency: "USD",
+                              }}
+                            />{" "}
+                            one-time payment
                           </p>
                         )}
                       </div>
@@ -323,7 +351,10 @@ export const PricingPage = () => {
                           >
                             -
                           </QuantityButton>
-                          <NumberFlow value={licenseQuantity} className="text-sm tabular-nums" />
+                          <NumberFlow
+                            value={licenseQuantity}
+                            className="text-sm tabular-nums"
+                          />
                           <QuantityButton
                             onClick={() =>
                               setLicenseQuantity(licenseQuantity + 1)
@@ -394,9 +425,9 @@ export const PricingPage = () => {
                   <div>
                     <div className="flex items-center space-x-3">
                       <NumberFlow
-                        value={isAnnual
-                          ? `${6 * proQuantity}`
-                          : `${9 * proQuantity}`}
+                        value={
+                          isAnnual ? `${6 * proQuantity}` : `${9 * proQuantity}`
+                        }
                         className="text-4xl tabular-nums"
                         format={{
                           notation: "compact",
@@ -404,24 +435,60 @@ export const PricingPage = () => {
                           currency: "USD",
                         }}
                         suffix="/mo"
-                     />
+                      />
                       <div>
                         <p className="text-sm font-medium">
-                          {isAnnual
-                            ? (proQuantity === 1
-                              ? "per user, billed annually."
-                              : <>for <NumberFlow value={proQuantity} className="text-sm font-medium tabular-nums" /> users, billed annually.</>)
-                            : (proQuantity === 1
-                              ? "per user, billed monthly."
-                              : <>for <NumberFlow value={proQuantity} className="text-sm font-medium tabular-nums" /> users, billed monthly.</>)
-                          }
+                          {isAnnual ? (
+                            proQuantity === 1 ? (
+                              "per user, billed annually."
+                            ) : (
+                              <>
+                                for{" "}
+                                <NumberFlow
+                                  value={proQuantity}
+                                  className="text-sm font-medium tabular-nums"
+                                />{" "}
+                                users, billed annually.
+                              </>
+                            )
+                          ) : proQuantity === 1 ? (
+                            "per user, billed monthly."
+                          ) : (
+                            <>
+                              for{" "}
+                              <NumberFlow
+                                value={proQuantity}
+                                className="text-sm font-medium tabular-nums"
+                              />{" "}
+                              users, billed monthly.
+                            </>
+                          )}
                         </p>
                         {isAnnual && (
                           <p className="text-sm">
-                            or, <NumberFlow value={9 * proQuantity} className="text-sm tabular-nums" format={{ notation: "compact", style: "currency", currency: "USD", }} suffix="/mo" />{" "}
-                            {proQuantity === 1
-                              ? "per user, "
-                              : <>for <NumberFlow value={proQuantity} className="text-sm tabular-nums" /> users, </>}
+                            or,{" "}
+                            <NumberFlow
+                              value={9 * proQuantity}
+                              className="text-sm tabular-nums"
+                              format={{
+                                notation: "compact",
+                                style: "currency",
+                                currency: "USD",
+                              }}
+                              suffix="/mo"
+                            />{" "}
+                            {proQuantity === 1 ? (
+                              "per user, "
+                            ) : (
+                              <>
+                                for{" "}
+                                <NumberFlow
+                                  value={proQuantity}
+                                  className="text-sm tabular-nums"
+                                />{" "}
+                                users,{" "}
+                              </>
+                            )}
                             billed monthly.
                           </p>
                         )}
@@ -447,7 +514,10 @@ export const PricingPage = () => {
                           >
                             -
                           </QuantityButton>
-                          <NumberFlow value={proQuantity} className="text-sm tabular-nums" />
+                          <NumberFlow
+                            value={proQuantity}
+                            className="text-sm tabular-nums"
+                          />
                           <QuantityButton
                             onClick={() => setProQuantity(proQuantity + 1)}
                           >

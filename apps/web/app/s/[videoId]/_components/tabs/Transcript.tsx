@@ -2,7 +2,7 @@
 
 import { videos } from "@cap/database/schema";
 import { useState, useEffect } from "react";
-import { MessageSquare, Edit3, Check, X } from "lucide-react";
+import { MessageSquare, Edit3, Check, X, Copy, Download } from "lucide-react";
 import { editTranscriptEntry } from "@/actions/videos/edit-transcript";
 import { useTranscript, useInvalidateTranscript } from "hooks/use-transcript";
 import { Button } from "@cap/ui";
@@ -130,6 +130,9 @@ export const Transcript: React.FC<TranscriptProps> = ({
   const [editingEntry, setEditingEntry] = useState<number | null>(null);
   const [editText, setEditText] = useState<string>("");
   const [isSaving, setIsSaving] = useState(false);
+  const [isCopying, setIsCopying] = useState(false);
+  const [copyPressed, setCopyPressed] = useState(false);
+  const [downloadPressed, setDownloadPressed] = useState(false);
 
   const {
     data: transcriptContent,
@@ -280,6 +283,81 @@ export const Transcript: React.FC<TranscriptProps> = ({
     }
   };
 
+  const formatTranscriptForClipboard = (entries: TranscriptEntry[]): string => {
+    return entries
+      .map((entry) => `[${entry.timestamp}] ${entry.text}`)
+      .join("\n\n");
+  };
+
+  const formatTranscriptAsVTT = (entries: TranscriptEntry[]): string => {
+    const vttHeader = "WEBVTT\n\n";
+
+    const vttEntries = entries.map((entry, index) => {
+      const startSeconds = entry.startTime;
+      const nextEntry = entries[index + 1];
+      const endSeconds = nextEntry ? nextEntry.startTime : startSeconds + 3;
+
+      const formatTime = (seconds: number): string => {
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = Math.floor(seconds % 60);
+        const milliseconds = Math.floor((seconds % 1) * 1000);
+
+        return `${hours.toString().padStart(2, "0")}:${minutes
+          .toString()
+          .padStart(2, "0")}:${secs.toString().padStart(2, "0")}.${milliseconds
+          .toString()
+          .padStart(3, "0")}`;
+      };
+
+      return `${entry.id}\n${formatTime(startSeconds)} --> ${formatTime(
+        endSeconds
+      )}\n${entry.text}\n`;
+    });
+
+    return vttHeader + vttEntries.join("\n");
+  };
+
+  const copyTranscriptToClipboard = async () => {
+    if (transcriptData.length === 0) return;
+
+    setIsCopying(true);
+    try {
+      const formattedTranscript = formatTranscriptForClipboard(transcriptData);
+      await navigator.clipboard.writeText(formattedTranscript);
+      setCopyPressed(true);
+      setTimeout(() => {
+        setCopyPressed(false);
+      }, 2000);
+    } catch (error) {
+      console.error("Failed to copy transcript:", error);
+    } finally {
+      setIsCopying(false);
+    }
+  };
+
+  const downloadTranscriptFile = () => {
+    if (transcriptData.length === 0) return;
+
+    const vttContent = formatTranscriptAsVTT(transcriptData);
+    const blob = new Blob([vttContent], { type: "text/vtt" });
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `transcript-${data.id}.vtt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    URL.revokeObjectURL(url);
+
+    setDownloadPressed(true);
+    setTimeout(() => {
+      setDownloadPressed(false);
+    }, 2000);
+  };
+
   const canEdit = user?.id === data.ownerId;
 
   if (isLoading) {
@@ -360,6 +438,64 @@ export const Transcript: React.FC<TranscriptProps> = ({
 
   return (
     <div className="flex flex-col h-full">
+      <div className="p-4 border-b border-gray-3">
+        <div className="flex gap-2 justify-end">
+          <Button
+            onClick={copyTranscriptToClipboard}
+            disabled={isCopying || transcriptData.length === 0}
+            variant="white"
+            size="xs"
+            spinner={isCopying}
+          >
+            {!copyPressed ? (
+              <Copy className="w-3 h-3 mr-1" />
+            ) : (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="w-3 h-3 mr-1 svgpathanimation"
+              >
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+            )}
+            {copyPressed ? "Copied" : "Copy Transcript"}
+          </Button>
+          <Button
+            onClick={downloadTranscriptFile}
+            disabled={transcriptData.length === 0}
+            variant="white"
+            size="xs"
+          >
+            {!downloadPressed ? (
+              <Download className="w-3 h-3 mr-1" />
+            ) : (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="w-3 h-3 mr-1 svgpathanimation"
+              >
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+            )}
+            {downloadPressed ? "Downloaded" : "Download"}
+          </Button>
+        </div>
+      </div>
+
       <div className="overflow-y-auto flex-1">
         <div className="p-4 space-y-3">
           {transcriptData.map((entry) => (

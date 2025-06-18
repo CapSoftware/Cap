@@ -15,8 +15,8 @@ import {
   onMount,
 } from "solid-js";
 import { createStore } from "solid-js/store";
-
 import { cx } from "cva";
+
 import Cropper, { calcCropFloor } from "~/components/Cropper";
 import { Toggle } from "~/components/Toggle";
 import Tooltip from "~/components/Tooltip";

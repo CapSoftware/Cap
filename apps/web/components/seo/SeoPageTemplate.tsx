@@ -330,7 +330,7 @@ export const SeoPageTemplate = ({
         {/* Features Section */}
         <div className="mb-28">
           <div className="text-center max-w-[800px] mx-auto mb-16">
-            <h2 className="text-4xl font-bold text-gray-800 mb-6 relative inline-block">
+            <h2 className="text-4xl font-medium text-gray-800 mb-6 relative inline-block">
               {content.featuresTitle}
               <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
             </h2>
@@ -345,7 +345,7 @@ export const SeoPageTemplate = ({
                 className="p-8 bg-gray-1 rounded-2xl shadow-md hover:shadow-xl transition-all duration-300 border border-gray-100 hover:border-blue-100 transform hover:-translate-y-1"
               >
                 <div className="bg-blue-50 w-12 h-12 flex items-center justify-center rounded-full mb-4">
-                  <span className="text-blue-500 text-xl font-bold">
+                  <span className="text-blue-500 text-xl font-medium">
                     {index + 1}
                   </span>
                 </div>
@@ -364,7 +364,7 @@ export const SeoPageTemplate = ({
         {showVideo && (
           <div className="mb-28">
             <div className="text-center max-w-[800px] mx-auto mb-10">
-              <h2 className="text-4xl font-bold text-gray-800 mb-6 relative inline-block">
+              <h2 className="text-4xl font-medium text-gray-800 mb-6 relative inline-block">
                 See Cap In Action
                 <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
               </h2>
@@ -390,7 +390,7 @@ export const SeoPageTemplate = ({
         {content.comparison && content.comparisonTitle && (
           <div className="mb-28">
             <div className="text-center max-w-[800px] mx-auto mb-16">
-              <h2 className="text-4xl font-bold text-gray-800 mb-6 relative inline-block">
+              <h2 className="text-4xl font-medium text-gray-800 mb-6 relative inline-block">
                 {content.comparisonTitle}
                 <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
               </h2>
@@ -407,7 +407,7 @@ export const SeoPageTemplate = ({
                   className="p-8 bg-gray-1 rounded-2xl shadow-md hover:shadow-xl transition-all duration-300 border border-gray-100 hover:border-blue-100 transform hover:-translate-y-1"
                 >
                   <div className="bg-indigo-50 w-12 h-12 flex items-center justify-center rounded-full mb-4">
-                    <span className="text-indigo-500 text-xl font-bold">
+                    <span className="text-indigo-500 text-xl font-medium">
                       {index + 1}
                     </span>
                   </div>
@@ -427,7 +427,7 @@ export const SeoPageTemplate = ({
         {content.recordingModes && (
           <div className="mb-28">
             <div className="text-center max-w-[800px] mx-auto mb-16">
-              <h2 className="text-4xl font-bold text-gray-800 mb-6 relative inline-block">
+              <h2 className="text-4xl font-medium text-gray-800 mb-6 relative inline-block">
                 {content.recordingModes.title}
                 <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
               </h2>
@@ -442,7 +442,7 @@ export const SeoPageTemplate = ({
                   className="p-8 bg-blue-50/50 rounded-2xl shadow-md hover:shadow-xl transition-all duration-300 border border-blue-100/20 transform hover:-translate-y-1"
                 >
                   <div className="bg-blue-500 w-12 h-12 flex items-center justify-center rounded-full mb-4">
-                    <span className="text-white text-xl font-bold">
+                    <span className="text-white text-xl font-medium">
                       {index + 1}
                     </span>
                   </div>
@@ -462,7 +462,7 @@ export const SeoPageTemplate = ({
         {content.comparisonTable && (
           <div className="mb-28">
             <div className="text-center max-w-[800px] mx-auto mb-16">
-              <h2 className="text-4xl font-bold text-gray-800 mb-6 relative inline-block">
+              <h2 className="text-4xl font-medium text-gray-800 mb-6 relative inline-block">
                 {content.comparisonTable.title}
                 <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
               </h2>
@@ -508,7 +508,7 @@ export const SeoPageTemplate = ({
         {/* Use Cases Section */}
         <div className="mb-28">
           <div className="text-center max-w-[800px] mx-auto mb-16">
-            <h2 className="text-4xl font-bold text-gray-800 mb-6 relative inline-block">
+            <h2 className="text-4xl font-medium text-gray-800 mb-6 relative inline-block">
               {content.useCasesTitle}
               <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
             </h2>
@@ -523,7 +523,7 @@ export const SeoPageTemplate = ({
                 className="p-8 bg-gray-1 rounded-2xl shadow-md hover:shadow-xl transition-all duration-300 border border-gray-100 hover:border-blue-100 transform hover:-translate-y-1"
               >
                 <div className="bg-blue-50 w-12 h-12 flex items-center justify-center rounded-full mb-4">
-                  <span className="text-blue-500 text-xl font-bold">
+                  <span className="text-blue-500 text-xl font-medium">
                     {String.fromCharCode(65 + index)}
                   </span>
                 </div>
@@ -542,7 +542,7 @@ export const SeoPageTemplate = ({
         {content.testimonials && (
           <div className="mb-28">
             <div className="text-center max-w-[800px] mx-auto mb-16">
-              <h2 className="text-4xl font-bold text-gray-800 mb-6 relative inline-block">
+              <h2 className="text-4xl font-medium text-gray-800 mb-6 relative inline-block">
                 {content.testimonials.title}
                 <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
               </h2>
@@ -578,7 +578,7 @@ export const SeoPageTemplate = ({
         {content.migrationGuide && (
           <div className="mb-28">
             <div className="text-center max-w-[800px] mx-auto mb-16">
-              <h2 className="text-4xl font-bold text-gray-800 mb-6 relative inline-block">
+              <h2 className="text-4xl font-medium text-gray-800 mb-6 relative inline-block">
                 {content.migrationGuide.title}
                 <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
               </h2>
@@ -601,7 +601,7 @@ export const SeoPageTemplate = ({
         {/* FAQ Section */}
         <div className="mb-28">
           <div className="text-center max-w-[800px] mx-auto mb-16">
-            <h2 className="text-4xl font-bold text-gray-800 mb-6 relative inline-block">
+            <h2 className="text-4xl font-medium text-gray-800 mb-6 relative inline-block">
               {content.faqsTitle}
               <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
             </h2>
@@ -654,7 +654,7 @@ export const SeoPageTemplate = ({
           </div>
           <div className="wrapper mx-auto h-full flex flex-col justify-center items-center relative z-10">
             <div className="text-center max-w-[800px] mx-auto mb-8">
-              <h2 className="text-3xl md:text-4xl font-bold text-white mb-4 drop-shadow-md">
+              <h2 className="text-3xl md:text-4xl font-medium text-white mb-4 drop-shadow-md">
                 {content.cta.title}
               </h2>
               <p className="text-xl text-white/90 mb-6">

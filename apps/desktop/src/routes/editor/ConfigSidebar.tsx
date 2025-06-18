@@ -1633,6 +1633,7 @@ function ZoomSegmentConfig(props: {
     editorInstance,
     setEditorState,
     projectHistory,
+    projectActions,
   } = useEditorContext();
 
   const states = {
@@ -1656,17 +1657,7 @@ function ZoomSegmentConfig(props: {
         <EditorButton
           variant="danger"
           onClick={() => {
-            batch(() => {
-              setProject(
-                "timeline",
-                "zoomSegments",
-                produce((s) => {
-                  if (!s) return;
-                  return s.splice(props.segmentIndex, 1);
-                })
-              );
-              setEditorState("timeline", "selection", null);
-            });
+            projectActions.deleteZoomSegment(props.segmentIndex);
           }}
           leftIcon={<IconCapTrash />}
         >
@@ -1905,7 +1896,8 @@ function ClipSegmentConfig(props: {
   segmentIndex: number;
   segment: TimelineSegment;
 }) {
-  const { setProject, setEditorState, project } = useEditorContext();
+  const { setProject, setEditorState, project, projectActions } =
+    useEditorContext();
 
   return (
     <>
@@ -1921,17 +1913,7 @@ function ClipSegmentConfig(props: {
         <EditorButton
           variant="danger"
           onClick={() => {
-            batch(() => {
-              setProject(
-                "timeline",
-                "segments",
-                produce((s) => {
-                  if (!s) return;
-                  return s.splice(props.segmentIndex, 1);
-                })
-              );
-              setEditorState("timeline", "selection", null);
-            });
+            projectActions.deleteClipSegment(props.segmentIndex);
           }}
           disabled={
             (
