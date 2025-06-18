@@ -144,7 +144,7 @@ export const homepageCopy: HomePageCopy = {
       },
     },
     cta: {
-      primaryButton: "Start for free",
+      primaryButton: "Download for free",
       secondaryButton: "Download", // Dynamic based on platform
       freeVersionText: "No credit card required",
       seeOtherOptionsText: "See pricing",
@@ -157,7 +157,7 @@ export const homepageCopy: HomePageCopy = {
     modes: [
       {
         name: "Instant Mode",
-        description: "Hit record, stop, share link. Your video is live in seconds with automatic optimizations. Perfect for quick feedback, bug reports, or when you just need to show something fast.",
+        description: "Hit record, stop, share link. Your video is live in seconds with automatically generated captions, a title, summary, chapters, and more. Perfect for quick feedback, bug reports, or when you just need to show something fast.",
       },
       {
         name: "Studio Mode",
@@ -175,7 +175,7 @@ export const homepageCopy: HomePageCopy = {
       },
       {
         title: "Privacy by default, sharing by choice",
-        description: "Every recording starts private. Share when ready with password protection, expiring links, or domain restrictions. Your internal discussions, client work, and personal notes stay exactly that — personal.",
+        description: "Instant sharing when you need it, local recording when you want it. Share publicly or privately — password protect sensitive recordings or keep them local-only.",
       },
       {
         title: "Async collaboration that actually works",
@@ -187,15 +187,15 @@ export const homepageCopy: HomePageCopy = {
       },
       {
         title: "Quality that makes you look professional",
-        description: "4K recording, 60fps capture, and intelligent compression that keeps file sizes reasonable. Auto-enhance removes background noise and balances audio. Your content looks and sounds like you hired a production team.",
+        description: "4K recording, 60fps capture, and intelligent compression that keeps file sizes reasonable. Auto-enhance removes background noise and balances audio.",
       },
       {
-        title: "Open source, not open season",
+        title: "Truly open source",
         description: "See exactly how Cap works, contribute features you need, or self-host for complete control. Join a community of builders who believe great tools should be transparent, extensible, and respect their users.",
       },
       {
-        title: "AI that enhances, not replaces",
-        description: "Smart titles, automatic chapters, and instant transcriptions powered by local AI. Remove filler words, generate summaries, or search across all your recordings. AI features that actually save time instead of creating more work.",
+        title: "Speed up your workflow with Cap AI",
+        description: "Auto-generated titles, summaries, clickable chapters, and transcriptions for every recording. AI features that actually save time instead of creating more work.",
       },
     ],
   },
@@ -205,7 +205,7 @@ export const homepageCopy: HomePageCopy = {
     cta: "Read more stories",
   },
   pricing: {
-    title: "Pricing that scales with you",
+    title: "Simple, honest pricing",
     subtitle: "Start free, upgrade when you need more. Early adopter pricing locked in forever.",
     lovedBy: "Trusted by 10,000+ users",
     commercial: {
