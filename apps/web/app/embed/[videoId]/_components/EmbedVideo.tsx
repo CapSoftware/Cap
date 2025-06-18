@@ -679,8 +679,8 @@ export const EmbedVideo = forwardRef<
                     {ownerName && (
                       <Avatar
                         name={ownerName}
-                        className="hidden sm:block size-10 flex-shrink-0"
-                        letterClass="text-base font-medium"
+                        className="hidden sm:flex sm:size-10 flex-shrink-0"
+                        letterClass="sm:text-base font-medium"
                       />
                     )}
                     <div className="min-w-0 flex-1">
@@ -733,7 +733,7 @@ export const EmbedVideo = forwardRef<
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.3 }}
-                className="hidden sm:block absolute top-4 left-4 sm:top-6 sm:left-6 z-30"
+                className="hidden sm:flex absolute top-4 left-4 sm:top-6 sm:left-6 z-30"
               >
                 <button
                   onClick={() => window.open("https://cap.so", "_blank")}
