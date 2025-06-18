@@ -542,13 +542,14 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
     println!("Attempting to copy file from {} to {}", src, dst);
 
     let is_screenshot = src.contains("screenshots/");
+    let is_gif = src.ends_with(".gif") || dst.ends_with(".gif");
 
     let src_path = std::path::Path::new(&src);
     if !src_path.exists() {
         return Err(format!("Source file {} does not exist", src));
     }
 
-    if !is_screenshot {
+    if !is_screenshot && !is_gif {
         if !is_valid_mp4(src_path) {
             // Wait for up to 10 seconds for the file to become valid
             let mut attempts = 0;
@@ -599,7 +600,7 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
                     continue;
                 }
 
-                if !is_screenshot && !is_valid_mp4(std::path::Path::new(&dst)) {
+                if !is_screenshot && !is_gif && !is_valid_mp4(std::path::Path::new(&dst)) {
                     last_error = Some("Destination file is not a valid MP4".to_string());
                     // Delete the invalid file
                     let _ = tokio::fs::remove_file(&dst).await;

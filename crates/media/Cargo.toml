@@ -35,6 +35,8 @@ futures = "0.3.31"
 axum = { version = "0.7.9", features = ["macros", "ws"] }
 tokio.workspace = true
 cap-fail = { version = "0.1.0", path = "../fail" }
+image = { version = "0.25.2", features = ["gif"] }
+gif = "0.13.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true, default-features = false, features = [
