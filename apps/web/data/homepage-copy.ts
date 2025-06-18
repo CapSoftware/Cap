@@ -152,7 +152,7 @@ export const homepageCopy: HomePageCopy = {
   },
   textReveal: "Record. Edit. Share.",
   recordingModes: {
-    title: "Two modes. Zero compromises.",
+    title: "Share instantly, or record and edit locally",
     subtitle: "Instant Mode bypasses rendering with real-time uploading whilst you are recording. Studio Mode prioritizes quality with local recording and full editing capabilities.",
     modes: [
       {
