@@ -42,7 +42,10 @@ export default function () {
   );
 
   createEffect(() => {
-    if (!currentRecording.isPending && currentRecording.data === undefined)
+    if (
+      !currentRecording.isPending &&
+      (currentRecording.data === undefined || currentRecording.data === null)
+    )
       getCurrentWindow().close();
   });
 

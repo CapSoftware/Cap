@@ -245,13 +245,13 @@ recordingOptionsChanged: RecordingOptionsChanged,
 recordingStarted: RecordingStarted,
 recordingStopped: RecordingStopped,
 renderFrameEvent: RenderFrameEvent,
+requestDeleteRecording: RequestDeleteRecording,
 requestNewScreenshot: RequestNewScreenshot,
 requestOpenSettings: RequestOpenSettings,
-  requestRestartRecording: RequestRestartRecording,
-  requestDeleteRecording: RequestDeleteRecording,
-  requestStartRecording: RequestStartRecording,
-  requestStopRecording: RequestStopRecording,
-  uploadProgress: UploadProgress
+requestRestartRecording: RequestRestartRecording,
+requestStartRecording: RequestStartRecording,
+requestStopRecording: RequestStopRecording,
+uploadProgress: UploadProgress
 }>({
 audioInputLevelChange: "audio-input-level-change",
 authenticationInvalid: "authentication-invalid",
@@ -265,13 +265,13 @@ recordingOptionsChanged: "recording-options-changed",
 recordingStarted: "recording-started",
 recordingStopped: "recording-stopped",
 renderFrameEvent: "render-frame-event",
+requestDeleteRecording: "request-delete-recording",
 requestNewScreenshot: "request-new-screenshot",
 requestOpenSettings: "request-open-settings",
-  requestRestartRecording: "request-restart-recording",
-  requestDeleteRecording: "request-delete-recording",
-  requestStartRecording: "request-start-recording",
-  requestStopRecording: "request-stop-recording",
-  uploadProgress: "upload-progress"
+requestRestartRecording: "request-restart-recording",
+requestStartRecording: "request-start-recording",
+requestStopRecording: "request-stop-recording",
+uploadProgress: "upload-progress"
 })
 
 /** user-defined constants **/
@@ -360,10 +360,10 @@ export type RecordingStarted = null
 export type RecordingStopped = { path: string }
 export type RecordingType = "studio" | "instant"
 export type RenderFrameEvent = { frame_number: number; fps: number; resolution_base: XY<number> }
+export type RequestDeleteRecording = null
 export type RequestNewScreenshot = null
 export type RequestOpenSettings = { page: string }
 export type RequestRestartRecording = null
-export type RequestDeleteRecording = null
 export type RequestStartRecording = null
 export type RequestStopRecording = null
 export type S3UploadMeta = { id: string; user_id: string; aws_region?: string; aws_bucket?: string; aws_endpoint?: string }
