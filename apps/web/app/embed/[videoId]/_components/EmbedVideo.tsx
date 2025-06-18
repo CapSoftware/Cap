@@ -67,10 +67,19 @@ export const EmbedVideo = forwardRef<
     chapters?: { title: string; start: number }[];
     aiProcessing?: boolean;
     ownerName?: string | null;
+    autoplay?: boolean;
   }
 >(
   (
-    { data, user, comments, chapters = [], aiProcessing = false, ownerName },
+    {
+      data,
+      user,
+      comments,
+      chapters = [],
+      aiProcessing = false,
+      ownerName,
+      autoplay = false,
+    },
     ref
   ) => {
     useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
@@ -296,10 +305,23 @@ export const EmbedVideo = forwardRef<
 
       videoElement.addEventListener("timeupdate", handleTimeUpdate);
 
+      if (autoplay && !isPlaying) {
+        const attemptAutoplay = async () => {
+          try {
+            videoElement.muted = true;
+            await videoElement.play();
+            setIsPlaying(true);
+          } catch (error) {
+            console.log("Autoplay failed:", error);
+          }
+        };
+        attemptAutoplay();
+      }
+
       return () => {
         videoElement.removeEventListener("timeupdate", handleTimeUpdate);
       };
-    }, [videoReadyToPlay]);
+    }, [videoReadyToPlay, autoplay, isPlaying]);
 
     useEffect(() => {
       setTempOverlayVisible(true);

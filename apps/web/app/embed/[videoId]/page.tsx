@@ -24,6 +24,7 @@ export const revalidate = 30;
 
 type Props = {
   params: { [key: string]: string | string[] | undefined };
+  searchParams: { [key: string]: string | string[] | undefined };
 };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
@@ -111,7 +112,9 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function EmbedVideoPage(props: Props) {
   const params = props.params;
+  const searchParams = props.searchParams;
   const videoId = params.videoId as string;
+  const autoplay = searchParams.autoplay === "true";
 
   const user = await getCurrentUser();
 
@@ -169,7 +172,7 @@ export default async function EmbedVideoPage(props: Props) {
         videoId={video.id}
       />
       {userAccess === "has-access" && (
-        <EmbedContent video={video} user={user} />
+        <EmbedContent video={video} user={user} autoplay={autoplay} />
       )}
     </div>
   );
@@ -178,11 +181,13 @@ export default async function EmbedVideoPage(props: Props) {
 async function EmbedContent({
   video,
   user,
+  autoplay,
 }: {
   video: typeof videos.$inferSelect & {
     sharedOrganization: { organizationId: string } | null;
   };
   user: typeof users.$inferSelect | null;
+  autoplay: boolean;
 }) {
   let aiGenerationEnabled = false;
   const videoOwnerQuery = await db()
@@ -298,6 +303,7 @@ async function EmbedContent({
       chapters={initialAiData?.chapters || []}
       aiProcessing={initialAiData?.processing || false}
       ownerName={videoOwner[0]?.name || null}
+      autoplay={autoplay}
     />
   );
 }
