@@ -50,6 +50,7 @@
     "@ts-rest/core": "^3.52.1",
     "@types/js-cookie": "^3.0.6",
     "@uidotdev/usehooks": "^2.4.1",
+    "@virtual-grid/react": "^2.0.3",
     "@workos-inc/node": "^7.34.0",
     "aws-sdk": "^2.1530.0",
     "clsx": "^2.0.0",
