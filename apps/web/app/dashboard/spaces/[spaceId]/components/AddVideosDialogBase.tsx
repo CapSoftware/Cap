@@ -18,7 +18,7 @@ import { faVideo } from "@fortawesome/free-solid-svg-icons";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Search } from "lucide-react";
-import { Check } from "lucide-react";
+import { Check, Minus, Plus } from "lucide-react";
 import moment from "moment";
 import clsx from "clsx";
 import { motion } from "framer-motion";
@@ -31,6 +31,7 @@ interface AddVideosDialogBaseProps {
   entityName: string;
   onVideosAdded?: () => void;
   addVideos: (entityId: string, videoIds: string[]) => Promise<any>;
+  removeVideos: (entityId: string, videoIds: string[]) => Promise<any>;
   getVideos: (limit: number) => Promise<any>;
   getEntityVideoIds: (entityId: string) => Promise<any>;
 }
@@ -59,11 +60,13 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
   entityName,
   onVideosAdded,
   addVideos,
+  removeVideos,
   getVideos,
   getEntityVideoIds,
 }) => {
   const [selectedVideos, setSelectedVideos] = useState<string[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
+  const filterTabs = ['all', 'added', 'notAdded'];
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -96,28 +99,50 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
     enabled: open,
   });
 
-  const addVideosMutation = useMutation({
-    mutationFn: (videoIds: string[]) => addVideos(entityId, videoIds),
+  const updateVideosMutation = useMutation({
+    mutationFn: async ({ toAdd, toRemove }: { toAdd: string[]; toRemove: string[] }) => {
+      let addResult = { success: true, message: "", error: "" };
+      let removeResult = { success: true, message: "", error: "" };
+      if (toAdd.length > 0) {
+        addResult = await addVideos(entityId, toAdd);
+      }
+      if (toRemove.length > 0) {
+        removeResult = await removeVideos(entityId, toRemove);
+      }
+      return { addResult, removeResult };
+    },
     onSuccess: (result) => {
-      if (result?.success) {
-        toast.success(result.message || "Videos added successfully");
+      const { addResult, removeResult } = result || {};
+      if ((addResult?.success ?? true) && (removeResult?.success ?? true)) {
+        toast.success("Videos updated successfully");
         setSelectedVideos([]);
         onVideosAdded?.();
         onClose();
       } else {
-        toast.error(result?.error || "Failed to add videos");
+        toast.error(addResult.error || removeResult.error || "Failed to update videos");
       }
     },
     onError: (error) => {
-      toast.error("Failed to add videos");
-      console.error("Error adding videos:", error);
+      toast.error("Failed to update videos");
+      console.error("Error updating videos:", error);
     },
   });
 
-  const filteredVideos: Video[] =
-    videosData?.filter((video: Video) =>
-      video.name.toLowerCase().includes(searchTerm.toLowerCase())
-    ) || [];
+  // Tab state: 'all', 'added', or 'notAdded'
+  const [videoTab, setVideoTab] = useState<typeof filterTabs[number]>('all');
+
+  // Filter videos by search
+  let filteredVideos: Video[] = videosData?.filter((video: Video) =>
+    video.name.toLowerCase().includes(searchTerm.toLowerCase())
+  ) || [];
+
+  // Further filter by tab
+  if (videoTab === 'added') {
+    filteredVideos = filteredVideos.filter(video => entityVideoIds?.includes(video.id));
+  } else if (videoTab === 'notAdded') {
+    filteredVideos = filteredVideos.filter(video => !entityVideoIds?.includes(video.id));
+  }
+
 
   const handleVideoToggle = (videoId: string) => {
     setSelectedVideos((prev) =>
@@ -127,9 +152,13 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
     );
   };
 
-  const handleAddVideos = () => {
-    if (selectedVideos.length === 0) return;
-    addVideosMutation.mutate(selectedVideos);
+  const handleUpdateVideos = () => {
+    if (!entityVideoIds) return;
+    // To add: selected and not already in entity
+    const toAdd = selectedVideos.filter(id => !entityVideoIds.includes(id));
+    // To remove: selected and already in entity
+    const toRemove = selectedVideos.filter(id => entityVideoIds.includes(id));
+    updateVideosMutation.mutate({ toAdd, toRemove });
   };
 
   useEffect(() => {
@@ -152,9 +181,35 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
           }
         >
           <DialogTitle className="text-lg text-gray-12">
-            Add videos to {entityName}
+            Add Videos
           </DialogTitle>
         </DialogHeader>
+        {/* Tabs for filtering */}
+        <div className="flex w-full h-12 border-b bg-gray-1 border-gray-4">
+          {filterTabs.map((tab) => (
+            <div
+              key={tab}
+              className={clsx(
+                "flex relative flex-1 justify-center items-center w-full min-w-0 text-sm font-medium transition-colors",
+                videoTab === tab
+                  ? "cursor-not-allowed bg-gray-3"
+                  : "cursor-pointer"
+              )}
+              onClick={() => setVideoTab(tab as 'all' | 'added' | 'notAdded')}
+            >
+              <p
+                className={clsx(
+                  videoTab === tab
+                    ? "text-gray-12 font-medium"
+                    : "text-gray-10",
+                  "text-sm"
+                )}
+              >
+                {tab === "all" ? "All" : tab === "added" ? "Added" : "Not Added"}
+              </p>
+            </div>
+          ))}
+        </div>
 
         <div className="flex overflow-hidden flex-col flex-1 px-4 py-4 min-h-0 sm:px-8 sm:py-6">
           <div className="flex-shrink-0 px-2 mb-3">
@@ -179,17 +234,30 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
             ) : filteredVideos.length === 0 ? (
               <div className="flex flex-col justify-center items-center h-24 text-center">
                 <h3 className="text-lg font-medium text-gray-12">
-                  {searchTerm ? "No videos found" : "No videos to add"}
+                  {searchTerm
+                    ? videoTab === 'added'
+                      ? 'No added videos found'
+                      : videoTab === 'notAdded'
+                        ? 'No not added videos found'
+                        : 'No videos found'
+                    : videoTab === 'added'
+                      ? 'No added videos'
+                      : videoTab === 'notAdded'
+                        ? 'No videos to add'
+                        : 'No videos'}
                 </h3>
                 <p className="max-w-sm text-sm text-gray-11">
                   {searchTerm
-                    ? "Try adjusting your search terms"
-                    : "Record some videos first to add them to this " +
-                      entityName}
+                    ? 'Try adjusting your search terms.'
+                    : videoTab === 'added'
+                      ? `You haven't added any videos to this ${entityName} yet.`
+                      : videoTab === 'notAdded'
+                        ? `Record or upload videos to add them to this ${entityName}.`
+                        : `Record or upload videos to see them here.`}
                 </p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 max-h-[400px] overflow-y-auto custom-scroll p-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 max-h-[400px] overflow-y-auto custom-scroll pt-2">
                 {filteredVideos.map((video) => (
                   <VideoCard
                     key={video.id}
@@ -224,23 +292,18 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
             >
               Cancel
             </Button>
+
             <Button
               variant="dark"
               size="sm"
-              disabled={
-                selectedVideos.length === 0 || addVideosMutation.isPending
-              }
-              spinner={addVideosMutation.isPending}
-              onClick={handleAddVideos}
+              disabled={updateVideosMutation.isPending}
+              spinner={updateVideosMutation.isPending}
+              onClick={handleUpdateVideos}
               className="px-3 py-2 text-sm sm:px-4"
             >
-              {addVideosMutation.isPending
-                ? "Adding..."
-                : selectedVideos.length === 0
-                ? "Add videos"
-                : `Add ${selectedVideos.length} video${
-                    selectedVideos.length === 1 ? "" : "s"
-                  }`}
+              {updateVideosMutation.isPending
+                ? "Updating..."
+                : "Update videos"}
             </Button>
           </div>
         </div>
@@ -268,64 +331,64 @@ const VideoCard: React.FC<VideoCardProps> = ({
 
   return (
     <div
-      onClick={isAlreadyInEntity ? undefined : onToggle}
+      onClick={onToggle}
       className={clsx(
-        "flex flex-col p-3 h-full rounded-xl border transition-all duration-200 group",
-        isAlreadyInEntity
-          ? "cursor-not-allowed bg-gray-3 border-gray-6"
-          : isSelected
-          ? "border-green-500 cursor-pointer bg-gray-3"
-          : "bg-transparent cursor-pointer hover:bg-gray-3 hover:border-gray-5 border-gray-4"
+        "flex relative flex-col p-3 h-full rounded-xl border transition-all duration-200 group",
+        isAlreadyInEntity && isSelected && "border-red-500",
+        isAlreadyInEntity && !isSelected && "border-blue-500",
+        !isAlreadyInEntity && isSelected && "border-green-500",
+        !isAlreadyInEntity && !isSelected && "border-gray-4",
+        isAlreadyInEntity ? "bg-gray-3" : isSelected ? "bg-gray-3" : "bg-transparent cursor-pointer hover:bg-gray-3 hover:border-gray-5"
       )}
     >
-      {/* Thumbnail First */}
-      <div className="relative mb-2 w-full">
-        {!isAlreadyInEntity && (
-          <motion.div
-            key={video.id}
-            animate={{
-              scale: isSelected ? 1 : 0,
-            }}
-            initial={{
-              scale: isSelected ? 1 : 0,
-            }}
-            transition={{
-              type: isSelected ? "spring" : "tween",
-              stiffness: isSelected ? 300 : undefined,
-              damping: isSelected ? 20 : undefined,
-              duration: !isSelected ? 0.2 : undefined,
-            }}
-            className="flex absolute -top-2 -right-2 z-10 justify-center items-center bg-green-500 rounded-full bg-gray-4 size-5"
-          >
-            <Check className="text-white" size={12} />
-          </motion.div>
-        )}
-
-        <div
+      {(isSelected || isAlreadyInEntity) && (
+        <motion.div
+          key={video.id + (isAlreadyInEntity ? '-added' : '-selected')}
+          animate={{
+            scale: isSelected || isAlreadyInEntity ? 1 : 0,
+          }}
+          initial={{
+            scale: isSelected || isAlreadyInEntity ? 1 : 0,
+          }}
+          transition={{
+            type: "spring",
+            stiffness: 300,
+            damping: 20,
+          }}
           className={clsx(
-            "overflow-visible relative w-full h-32 rounded-lg border transition-colors bg-gray-3",
-            isSelected || isAlreadyInEntity
-              ? "border-green-500"
-              : "border-transparent"
+            "flex absolute -top-2 -right-2 z-10 justify-center items-center rounded-full size-5",
+            isSelected && !isAlreadyInEntity && "bg-green-500",
+            isSelected && isAlreadyInEntity && "bg-red-500",
+            !isSelected && isAlreadyInEntity && "bg-blue-500"
           )}
         >
-          <VideoThumbnail
-            imageClass="w-full h-full transition-all duration-200 group-hover:scale-105"
-            userId={video.ownerId}
-            videoId={video.id}
-            alt={`${video.name} Thumbnail`}
-            objectFit="cover"
-            containerClass="min-h-full !rounded-lg !border-b-0"
-          />
-          {isAlreadyInEntity && (
-            <span className="absolute right-0 left-0 -bottom-2 z-10 flex-shrink-0 px-2 py-1 mx-auto text-xs font-medium text-white bg-green-600 rounded-full w-fit">
-              Added
-            </span>
+          {isSelected && isAlreadyInEntity ? (
+            <Minus className="text-white" size={14} />
+          ) : isSelected && !isAlreadyInEntity ? (
+            <Check className="text-white" size={14} />
+          ) : (
+            <Plus className="text-white" size={14} />
           )}
-        </div>
+        </motion.div>
+      )}
+
+      <div
+        className={clsx(
+          "overflow-visible relative mb-2 w-full h-32 rounded-lg border transition-colors bg-gray-3 border-gray-5"
+        )}
+      >
+        <VideoThumbnail
+          imageClass="w-full h-full transition-all duration-200 group-hover:scale-105"
+          userId={video.ownerId}
+          videoId={video.id}
+          alt={`${video.name} Thumbnail`}
+          objectFit="cover"
+          containerClass="min-h-full !rounded-lg !border-b-0"
+        />
+
       </div>
 
-      <div className={clsx("space-y-1", isAlreadyInEntity && "mt-3")}>
+      <div className="space-y-1">
         {/* Title Second */}
         <Tooltip content={video.name}>
           <h3
