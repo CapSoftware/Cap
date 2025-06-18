@@ -725,18 +725,23 @@ export const ShareVideo = forwardRef<
 
   const wasTouchEventRef = useRef(false);
 
+  // Shared suppression logic for all seek events (timeline & chapters)
+  const shouldSuppressSeekEvent = (event: any, isTouch?: boolean) => {
+    if ("touches" in event || isTouch) {
+      wasTouchEventRef.current = true;
+      return false;
+    } else if (wasTouchEventRef.current) {
+      setTimeout(() => { wasTouchEventRef.current = false; }, 100);
+      return true;
+    }
+    return false;
+  };
+
   const handleSeekMouseUp = (
     event: React.MouseEvent | React.TouchEvent,
     isTouch = false
   ) => {
-    // If this is a touch event, set the flag
-    if ("touches" in event || isTouch) {
-      wasTouchEventRef.current = true;
-    } else if (wasTouchEventRef.current) {
-      // Ignore mouse events immediately following a touch
-      setTimeout(() => { wasTouchEventRef.current = false; }, 100);
-      return;
-    }
+    if (shouldSuppressSeekEvent(event, isTouch)) return; // suppress duplicate
     if (!seeking) return;
     setSeeking(false);
     const seekBar = event.currentTarget;
@@ -753,6 +758,17 @@ export const ShareVideo = forwardRef<
     }
     setShowPreview(false);
   };
+
+  // For chapter clicks (and any non-timeline seek)
+  const handleChapterClick = (
+    event: React.MouseEvent | React.TouchEvent,
+    time: number
+  ) => {
+    if (shouldSuppressSeekEvent(event)) return;
+    event.stopPropagation();
+    applyTimeToVideos(time);
+  };
+
 
   const handleSeekMouseMove = (event: React.MouseEvent | React.TouchEvent) => {
     if (!seeking) return;
@@ -995,8 +1011,8 @@ export const ShareVideo = forwardRef<
         {!isLoading && (
           <div
             className={`absolute inset-0 z-20 flex items-center justify-center transition-opacity duration-300 ${(overlayVisible && isPlaying) || tempOverlayVisible || !isPlaying
-                ? "opacity-100"
-                : "opacity-0"
+              ? "opacity-100"
+              : "opacity-0"
               }`}
           >
             <button
@@ -1232,10 +1248,7 @@ export const ShareVideo = forwardRef<
                       key={chapter.start}
                       className="relative h-full cursor-pointer group"
                       style={{ width: `${chapterWidth}%` }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        applyTimeToVideos(chapter.start);
-                      }}
+                      onClick={(e) => handleChapterClick(e, chapter.start) }
                     >
                       <div
                         className="w-full h-full bg-gray-400 bg-opacity-50 transition-colors group-hover:bg-opacity-70"
