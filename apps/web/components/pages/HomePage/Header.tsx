@@ -16,70 +16,81 @@ import { useDetectPlatform } from "hooks/useDetectPlatform";
 import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
+import { homepageCopy } from "../../../data/homepage-copy";
 import VideoModal from "./VideoModal";
 
 interface HeaderProps {
-    serverHomepageCopyVariant?: string;
+  serverHomepageCopyVariant?: string;
 }
 
-    
-    // Animation variants
-    const fadeIn = {
-      hidden: { opacity: 0, y: 20 },
-      visible: (custom: number) => ({
-          opacity: 1,
-          y: 0,
-          transition: {
-              delay: custom * 0.1,
-              duration: 0.5,
-              ease: "easeOut"
-          }
-      })
-  };
-  
-  const fadeInFromRight = {
-      hidden: { opacity: 0, x: 50 },
-      visible: {
-          opacity: 1,
-          x: 0,
-          transition: {
-              delay: 0.5,
-              duration: 0.6,
-              ease: "easeOut"
-          }
-      }
-  };
+// Animation variants
+const fadeIn = {
+  hidden: { opacity: 0, y: 20 },
+  visible: (custom: number) => ({
+    opacity: 1,
+    y: 0,
+    transition: {
+      delay: custom * 0.1,
+      duration: 0.5,
+      ease: "easeOut",
+    },
+  }),
+};
+
+const fadeInFromRight = {
+  hidden: { opacity: 0, x: 50 },
+  visible: {
+    opacity: 1,
+    x: 0,
+    transition: {
+      delay: 0.5,
+      duration: 0.6,
+      ease: "easeOut",
+    },
+  },
+};
 
 const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
-    const [videoToggled, setVideoToggled] = useState(false);
-    const { platform, isIntel } = useDetectPlatform();
-    const loading = platform === null;
-    
+  const [videoToggled, setVideoToggled] = useState(false);
+  const { platform, isIntel } = useDetectPlatform();
+  const loading = platform === null;
+
+  const getHeaderContent = () => {
+    const variant =
+      serverHomepageCopyVariant as keyof typeof homepageCopy.header.variants;
     return (
-        <div className="mt-[60px] min-h-screen w-full max-w-[1920px] overflow-x-hidden md:overflow-visible mx-auto md:mt-[15vh]">
-            <div className="flex flex-col justify-center lg:justify-start xl:flex-row relative z-10 px-5 w-full mb-[200px]">
-                <div className="w-full max-w-[500px] 2xl:mt-12 mx-auto xl:ml-[100px] 2xl:ml-[150px]">
-                    <motion.div
-                        initial="hidden"
-                        animate="visible"
-                        custom={0}
-                        variants={fadeIn}
-                    >
-                        <Link
-                            href="https://x.com/richiemcilroy/status/1895526857807733018"
-                            target="_blank"
-                            className="flex gap-2 items-center px-3 py-2 mb-8 bg-white rounded-full border group border-gray-4 w-fit"
-                        >
-                            <p className="font-mono text-xs text-gray-12">
-                                Auto zoom has been released
-                            </p>
-                            <FontAwesomeIcon
-                                fontWeight="light"
-                                className="w-1.5 text-gray-12 group-hover:translate-x-0.5 transition-transform"
-                                icon={faAngleRight}
-                            />
-                        </Link>
-                    </motion.div>
+      homepageCopy.header.variants[variant] ||
+      homepageCopy.header.variants.default
+    );
+  };
+
+  const headerContent = getHeaderContent();
+
+  return (
+    <div className="mt-[60px] min-h-screen w-full max-w-[1920px] overflow-x-hidden md:overflow-visible mx-auto md:mt-[15vh]">
+      <div className="flex flex-col justify-center lg:justify-start xl:flex-row relative z-10 px-5 w-full mb-[200px]">
+        <div className="w-full max-w-[500px] 2xl:mt-12 mx-auto xl:ml-[100px] 2xl:ml-[150px]">
+          <motion.div
+            initial="hidden"
+            animate="visible"
+            custom={0}
+            variants={fadeIn}
+          >
+            <Link
+              href={homepageCopy.header.announcement.href}
+              target="_blank"
+              className="flex gap-2 items-center px-3 py-2 mb-8 bg-white rounded-full border group border-gray-4 w-fit"
+            >
+              <p className="font-mono text-xs text-gray-12">
+                {homepageCopy.header.announcement.text}
+              </p>
+              <FontAwesomeIcon
+                fontWeight="light"
+                className="w-1.5 text-gray-12 group-hover:translate-x-0.5 transition-transform"
+                icon={faAngleRight}
+              />
+            </Link>
+          </motion.div>
 
           <div className="flex flex-col text-left w-full max-w-[650px]">
             <motion.h1
@@ -89,15 +100,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
               custom={1}
               variants={fadeIn}
             >
-              {serverHomepageCopyVariant === "1" ? (
-                <>Beautiful screen recordings, owned by you.</>
-              ) : serverHomepageCopyVariant === "2" ? (
-                <>The open source Loom alternative.</>
-              ) : serverHomepageCopyVariant === "3" ? (
-                <>The open source screen recording suite.</>
-              ) : (
-                <>Beautiful screen recordings, owned by you.</>
-              )}
+              {headerContent.title}
             </motion.h1>
 
             <motion.p
@@ -107,31 +110,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
               custom={2}
               variants={fadeIn}
             >
-              {serverHomepageCopyVariant === "1" ? (
-                <>
-                  Cap is the open source alternative to Loom. Lightweight,
-                  powerful, and cross-platform. Record and share securely in
-                  seconds with custom S3 bucket support.
-                </>
-              ) : serverHomepageCopyVariant === "2" ? (
-                <>
-                  Cap is the open source alternative to Loom. Lightweight,
-                  powerful, and cross-platform. Record and share securely in
-                  seconds. Connect your own storage, domain & more.
-                </>
-              ) : serverHomepageCopyVariant === "3" ? (
-                <>
-                  Cap is open source, lightweight, powerful & cross-platform.
-                  With Instant Mode for shareable links and Studio Mode for
-                  high-quality recordings with local editing.
-                </>
-              ) : (
-                <>
-                  Cap is the open source alternative to Loom. Lightweight,
-                  powerful, and cross-platform. Record and share securely in
-                  seconds with custom S3 bucket support.
-                </>
-              )}
+              {headerContent.description}
             </motion.p>
           </div>
 
@@ -161,7 +140,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
               size="lg"
               className="relative z-[20] w-full font-medium sm:w-auto"
             >
-              Buy Now
+              {homepageCopy.header.cta.primaryButton}
             </Button>
           </motion.div>
 
@@ -172,7 +151,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
             custom={4}
             variants={fadeIn}
           >
-            Free version available. No credit card required.
+            {homepageCopy.header.cta.freeVersionText}
           </motion.p>
 
           <motion.div
@@ -182,19 +161,16 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
             custom={5}
             variants={fadeIn}
           >
-            {/* Platform icons */}
             <PlatformIcons />
 
-            {/* See other options button */}
             <Link
               href="/download"
               className="mt-2 text-sm underline text-gray-10 hover:text-gray-12"
             >
-              See other options
+              {homepageCopy.header.cta.seeOtherOptionsText}
             </Link>
           </motion.div>
 
-          {/* Logo Marquee */}
           <motion.div
             className="mt-14"
             initial="hidden"
@@ -220,7 +196,10 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
             className="size-[70px] md:size-[100px] inset-x-0 mx-auto top-[35vw] xs:top-[180px] sm:top-[35vw] xl:top-[350px] 2xl:top-[400px] xl:left-[-50px] relative cursor-pointer z-10 
               shadow-[0px_60px_40px_3px_rgba(0,0,0,0.4)] flex items-center justify-center rounded-full bg-blue-500"
           >
-            <FontAwesomeIcon icon={faPlay} className="text-white size-4 md:size-6" />
+            <FontAwesomeIcon
+              icon={faPlay}
+              className="text-white size-4 md:size-6"
+            />
           </motion.div>
           <Image
             src="/illustrations/app.webp"
@@ -235,8 +214,8 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
       <AnimatePresence>
         {videoToggled && <VideoModal setVideoToggled={setVideoToggled} />}
       </AnimatePresence>
-        </div>
-    );
+    </div>
+  );
 };
 
 export default Header;

@@ -2,6 +2,7 @@
 
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
 import { TextReveal } from "@/components/ui/TextReveal";
+import { homepageCopy } from "../../../data/homepage-copy";
 import React from "react";
 import Faq from "./Faq";
 import Features from "./Features";
@@ -22,7 +23,7 @@ export const HomePage: React.FC<HomePageProps> = ({
       <Header serverHomepageCopyVariant={serverHomepageCopyVariant} />
       <RecordingModes />
       <TextReveal className="max-w-[600px] mx-auto leading-[1.2] text-center">
-        Record. Edit. Share.
+        {homepageCopy.textReveal}
       </TextReveal>
       <Features />
       <Testimonials />

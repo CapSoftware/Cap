@@ -1,6 +1,7 @@
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import clsx from "clsx";
 import { memo } from "react";
+import { homepageCopy } from "../../../data/homepage-copy";
 
 type Feature = {
   title: string;
@@ -113,62 +114,43 @@ const CapAIArt = memo(() => {
   return <CapAIArt className="w-full max-w-[550px] mx-auto h-[300px]" />;
 });
 
-const features: Feature[] = [
-  {
-    title: "Flexible Storage Options",
-    rive: <StorageOptionsArt />,
-    relative: {
-      top: 25,
-    },
-    description:
-      "Choose how and where you store your recordings. Cap offers both local and cloud storage options to suit your needs. Save space on your device or keep your entire content library accessible from anywhere – ideal for freelancers and growing teams.",
-  },
-  {
-    title: "Privacy-first",
-    rive: <PrivacyFirstArt />,
-    description:
-      "Own your content with Cap’s privacy-focused approach. Keep your sensitive information secure and maintain complete control over who can access your recordings – perfect for confidential client communications and internal team sharing.",
-  },
-  {
-    title: "Seamless Team Collaboration",
-    rive: <CollabArt />,
-    description:
-      "Share knowledge effortlessly with your team or clients. Cap’s intuitive sharing features make it easy to organize content, provide access to specific people, and track engagement. Perfect for small businesses and growing teams who need simple yet powerful collaboration tools.",
-  },
-  {
-    title: "Multi-Platform Support",
-    rive: <PlatformSupportArt />,
-    description:
-      "Cap works seamlessly across macOS and Windows, giving you the flexibility to create content on any device. Capture, share, and collaborate regardless of which platform you or your team prefers, ensuring smooth workflows and consistent experience everywhere.",
-  },
-  {
-    title: "High-Quality Video Capture",
-    rive: <VideoCaptureArt />,
-    description:
-      "Deliver crystal-clear recordings that showcase your professionalism. Cap ensures exceptional quality for client presentations, tutorials, and team communications – making your content stand out whether you’re a solo creator or a small business owner.",
-  },
-  {
-    title: "Built for everyone",
-    rive: <EveryoneArt />,
-    description:
-      "For creators, teams, and educators alike, this screen recorder is designed to adapt to different needs and workflows—whether you’re capturing lessons, product demos, or quick updates. It’s a simple, customizable tool that makes screen recording accessible to everyone.",
-  },
-  {
-    title: "Cap AI",
-    rive: <CapAIArt />,
-    description:
-      "Cap AI is a powerful tool that uses advanced AI to help you create better content. With features like automatic transcription, video editing, and content optimization, Cap AI makes it easy to create engaging and effective content for your audience.",
-  },
-];
+const features: Feature[] = homepageCopy.features.features.map(
+  (feature, index) => {
+    const riveComponents: JSX.Element[] = [
+      <StorageOptionsArt key="storage" />,
+      <PrivacyFirstArt key="privacy" />,
+      <CollabArt key="collab" />,
+      <PlatformSupportArt key="platform" />,
+      <VideoCaptureArt key="video" />,
+      <EveryoneArt key="everyone" />,
+      <CapAIArt key="capai" />,
+    ];
+
+    const relatives = [
+      { top: 25 },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ];
+
+    return {
+      title: feature.title,
+      description: feature.description,
+      rive: riveComponents[index] || <div key={`placeholder-${index}`} />,
+      relative: relatives[index],
+    };
+  }
+);
 
 const Features = () => {
   return (
     <div className="text-center max-w-[1440px] mx-auto mb-8 px-5">
-      <h2 className="mb-3">Crafted for simplicity</h2>
+      <h2 className="mb-3">{homepageCopy.features.title}</h2>
       <p className="text-lg leading-[1.75rem] w-full max-w-[800px] mx-auto">
-        We believe great tools should make your life easier, not more
-        complicated. Cap is crafted to streamline your workflow, so you can
-        record, edit, and share without jumping through hoops.
+        {homepageCopy.features.subtitle}
       </p>
       <div className="flex flex-col gap-4 mt-[52px]">
         {/* Second row - 2 features */}

@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import Image from "next/image";
 import { useState } from "react";
 import { testimonials } from "../../../data/testimonials";
+import { homepageCopy } from "../../../data/homepage-copy";
 
 // Combined type for testimonial data and its position/style configuration
 interface TestimonialItem {
@@ -25,7 +26,8 @@ interface TestimonialCardProps {
 const TestimonialCard: React.FC<TestimonialCardProps> = ({ item }) => {
   const [isHovered, setIsHovered] = useState(false);
   // Destructure all properties from item, including position, rotation and zIndex
-  const { name, handle, image, content, url, position, rotation, zIndex } = item;
+  const { name, handle, image, content, url, position, rotation, zIndex } =
+    item;
 
   return (
     <motion.a
@@ -36,7 +38,9 @@ const TestimonialCard: React.FC<TestimonialCardProps> = ({ item }) => {
       style={{
         ...position,
         transformOrigin: "center center",
-        boxShadow: isHovered ? "0 20px 25px rgba(0, 0, 0, 0.1)" : "0 4px 10px rgba(0, 0, 0, 0.05)",
+        boxShadow: isHovered
+          ? "0 20px 25px rgba(0, 0, 0, 0.1)"
+          : "0 4px 10px rgba(0, 0, 0, 0.05)",
       }}
       initial={{
         rotate: rotation,
@@ -75,40 +79,40 @@ const TestimonialCard: React.FC<TestimonialCardProps> = ({ item }) => {
 // Combined testimonial data with position and style configurations
 const testimonialItems: TestimonialItem[] = [
   {
-    ...testimonials[2], 
-    position: { right: '5%', top: '5%' }, 
-    rotation: 8, 
-    zIndex: 4 
+    ...testimonials[2],
+    position: { right: "5%", top: "5%" },
+    rotation: 8,
+    zIndex: 4,
   },
   {
-    ...testimonials[25], 
-    position: { right: '25%', top: '15%' }, 
-    rotation: -5, 
-    zIndex: 3 
+    ...testimonials[25],
+    position: { right: "25%", top: "15%" },
+    rotation: -5,
+    zIndex: 3,
   },
   {
-    ...testimonials[9], 
-    position: { left: '5%', top: '10%' }, 
-    rotation: -8, 
-    zIndex: 2 
+    ...testimonials[9],
+    position: { left: "5%", top: "10%" },
+    rotation: -8,
+    zIndex: 2,
   },
   {
-    ...testimonials[22], 
-    position: { left: '25%', top: '5%' }, 
-    rotation: 5, 
-    zIndex: 1 
+    ...testimonials[22],
+    position: { left: "25%", top: "5%" },
+    rotation: 5,
+    zIndex: 1,
   },
   {
-    ...testimonials[12], 
-    position: { right: '18%', top: '40%' }, 
-    rotation: 8, 
-    zIndex: 3
+    ...testimonials[12],
+    position: { right: "18%", top: "40%" },
+    rotation: 8,
+    zIndex: 3,
   },
   {
-    ...testimonials[10], 
-    position: { left: '20%', top: '40%' }, 
-    rotation: -4, 
-    zIndex: 0 
+    ...testimonials[10],
+    position: { left: "20%", top: "40%" },
+    rotation: -4,
+    zIndex: 0,
   },
 ];
 
@@ -118,11 +122,10 @@ const Testimonials = () => {
     <div className="w-full max-w-[1200px] mx-auto my-[250px] md:px-5">
       <div className="px-5 mb-16 text-center md:text-left">
         <h2 className="mb-3 w-full max-w-[440px]">
-          What our users say about Cap after hitting record
+          {homepageCopy.testimonials.title}
         </h2>
         <p className="text-lg leading-[1.75rem] w-full max-w-[500px]">
-          Don't just take our word for it. Here's what our users are saying
-          about their experience with Cap.
+          {homepageCopy.testimonials.subtitle}
         </p>
       </div>
 
@@ -134,10 +137,13 @@ const Testimonials = () => {
           ))}
         </div>
       </div>
-      <Button 
-      href="/testimonials"
-      className="mx-auto mt-10 md:mt-0 w-fit" variant="primary" size="lg">
-        View more
+      <Button
+        href="/testimonials"
+        className="mx-auto mt-10 md:mt-0 w-fit"
+        variant="primary"
+        size="lg"
+      >
+        {homepageCopy.testimonials.cta}
       </Button>
     </div>
   );

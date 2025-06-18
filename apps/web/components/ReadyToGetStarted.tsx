@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@cap/ui";
+import { homepageCopy } from "../data/homepage-copy";
 
 export function ReadyToGetStarted() {
   return (
@@ -15,8 +16,7 @@ export function ReadyToGetStarted() {
       <div className="flex relative z-10 flex-col justify-center items-center mx-auto h-full wrapper">
         <div className="text-center max-w-[800px] mx-auto mb-8">
           <h2 className="mb-3 text-3xl md:text-4xl text-gray-12">
-          The easy, high-quality, 
-          and free screen recorder
+            {homepageCopy.readyToGetStarted.title}
           </h2>
         </div>
         <div className="flex flex-col justify-center items-center space-y-4 sm:flex-row sm:space-y-0 sm:space-x-2">
@@ -26,7 +26,7 @@ export function ReadyToGetStarted() {
             size="lg"
             className="w-full font-medium sm:w-auto"
           >
-            Get Started
+            {homepageCopy.readyToGetStarted.buttons.secondary}
           </Button>
           <Button
             variant="primary"
@@ -34,7 +34,7 @@ export function ReadyToGetStarted() {
             size="lg"
             className="w-full font-medium sm:w-auto"
           >
-            Download App
+            {homepageCopy.readyToGetStarted.buttons.primary}
           </Button>
         </div>
       </div>
