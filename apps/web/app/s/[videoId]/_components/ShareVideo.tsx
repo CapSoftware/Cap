@@ -723,10 +723,20 @@ export const ShareVideo = forwardRef<
     }
   };
 
+  const wasTouchEventRef = useRef(false);
+
   const handleSeekMouseUp = (
     event: React.MouseEvent | React.TouchEvent,
     isTouch = false
   ) => {
+    // If this is a touch event, set the flag
+    if ("touches" in event || isTouch) {
+      wasTouchEventRef.current = true;
+    } else if (wasTouchEventRef.current) {
+      // Ignore mouse events immediately following a touch
+      setTimeout(() => { wasTouchEventRef.current = false; }, 100);
+      return;
+    }
     if (!seeking) return;
     setSeeking(false);
     const seekBar = event.currentTarget;
