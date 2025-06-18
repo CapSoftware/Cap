@@ -3,6 +3,7 @@
 import React from "react";
 import { getUserVideos } from "@/actions/videos/get-user-videos";
 import { addVideosToOrganization } from "@/actions/organizations/add-videos";
+import { removeVideosFromOrganization } from "@/actions/organizations/remove-videos";
 import { getOrganizationVideoIds } from "@/actions/organizations/get-organization-videos";
 import AddVideosDialogBase from "./AddVideosDialogBase";
 
@@ -24,6 +25,7 @@ export const AddVideosToOrganizationDialog: React.FC<
       entityId={organizationId}
       entityName={organizationName}
       onVideosAdded={onVideosAdded}
+      removeVideos={removeVideosFromOrganization}
       addVideos={addVideosToOrganization}
       getVideos={getUserVideos}
       getEntityVideoIds={getOrganizationVideoIds}
