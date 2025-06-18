@@ -1574,6 +1574,9 @@ const useTranscriptionProcessing = (
   const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
 
   useEffect(() => {
+    if (!transcriptContent && data.transcriptionStatus === "PROCESSING") {
+      return setIsTranscriptionProcessing(false);
+    }
     if (transcriptContent) {
       const parsedSubtitles = fromVtt(transcriptContent);
       setSubtitles(parsedSubtitles);
