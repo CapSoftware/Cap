@@ -882,9 +882,11 @@ export default function Cropper(
             ref={snapRatioEl}
             style={{
               width: `${SNAP_RATIO_EL_WIDTH_PX}px`,
-              top: `${crop.position.y + 10}px`,
+              top: `${scaledCrop().position.y + 10}px`,
               left: `${
-                crop.position.x + crop.size.x / 2 - SNAP_RATIO_EL_WIDTH_PX / 2
+                scaledCrop().position.x +
+                scaledCrop().size.x / 2 -
+                SNAP_RATIO_EL_WIDTH_PX / 2
               }px`,
             }}
             class="absolute bg-gray-3 opacity-90 h-6 rounded-[7px] text-center text-blue-11 text-sm border border-blue-9 outline-[#dedede] dark:outline-[#000]"
