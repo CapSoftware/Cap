@@ -346,28 +346,12 @@ export const ShareVideo = forwardRef<
     }
   };
 
-  // --- Fix: Debounce duplicate/out-of-order seeks to prevent mobile flicker ---
-  const lastSeekTimeRef = useRef<number | null>(null);
-  const SEEK_DEBOUNCE_MS = 150;
-
   const applyTimeToVideos = (time: number) => {
     if (!Number.isFinite(time)) {
       console.warn("Attempted to set non-finite time:", time);
       return;
     }
     const validTime = Math.max(0, Math.min(time, longestDuration));
-
-    // Debounce: Only seek if it's a new, non-redundant time
-    if (
-      lastSeekTimeRef.current !== null &&
-      Math.abs(validTime - lastSeekTimeRef.current) < 0.05 // less than 0.05s diff
-    ) {
-      return;
-    }
-    lastSeekTimeRef.current = validTime;
-    setTimeout(() => {
-      lastSeekTimeRef.current = null;
-    }, SEEK_DEBOUNCE_MS);
 
     if (videoRef.current && videoRef.current.readyState >= 2) {
       try {
@@ -723,25 +707,10 @@ export const ShareVideo = forwardRef<
     }
   };
 
-  const wasTouchEventRef = useRef(false);
-
-  // Shared suppression logic for all seek events (timeline & chapters)
-  const shouldSuppressSeekEvent = (event: any, isTouch?: boolean) => {
-    if ("touches" in event || isTouch) {
-      wasTouchEventRef.current = true;
-      return false;
-    } else if (wasTouchEventRef.current) {
-      setTimeout(() => { wasTouchEventRef.current = false; }, 100);
-      return true;
-    }
-    return false;
-  };
-
   const handleSeekMouseUp = (
     event: React.MouseEvent | React.TouchEvent,
     isTouch = false
   ) => {
-    if (shouldSuppressSeekEvent(event, isTouch)) return; // suppress duplicate
     if (!seeking) return;
     setSeeking(false);
     const seekBar = event.currentTarget;
@@ -760,16 +729,6 @@ export const ShareVideo = forwardRef<
   };
 
   // For chapter clicks (and any non-timeline seek)
-  const handleChapterClick = (
-    event: React.MouseEvent | React.TouchEvent,
-    time: number
-  ) => {
-    if (shouldSuppressSeekEvent(event)) return;
-    event.stopPropagation();
-    applyTimeToVideos(time);
-  };
-
-
   const handleSeekMouseMove = (event: React.MouseEvent | React.TouchEvent) => {
     if (!seeking) return;
 
@@ -995,8 +954,9 @@ export const ShareVideo = forwardRef<
       className="overflow-hidden relative w-full h-full rounded-lg shadow-lg group"
     >
       <div
-        className={`absolute inset-0 flex items-center justify-center z-10 bg-black transition-opacity duration-300 ${isLoading ? "opacity-100" : "opacity-0 pointer-events-none"
-          }`}
+        className={`absolute inset-0 flex items-center justify-center z-10 bg-black transition-opacity duration-300 ${
+          isLoading ? "opacity-100" : "opacity-0 pointer-events-none"
+        }`}
       >
         <LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
       </div>
@@ -1010,10 +970,11 @@ export const ShareVideo = forwardRef<
         </div>
         {!isLoading && (
           <div
-            className={`absolute inset-0 z-20 flex items-center justify-center transition-opacity duration-300 ${(overlayVisible && isPlaying) || tempOverlayVisible || !isPlaying
-              ? "opacity-100"
-              : "opacity-0"
-              }`}
+            className={`absolute inset-0 z-20 flex items-center justify-center transition-opacity duration-300 ${
+              (overlayVisible && isPlaying) || tempOverlayVisible || !isPlaying
+                ? "opacity-100"
+                : "opacity-0"
+            }`}
           >
             <button
               aria-label={isPlaying ? "Pause video" : "Play video"}
@@ -1062,8 +1023,9 @@ export const ShareVideo = forwardRef<
         )}
         {currentSubtitle && currentSubtitle.text && subtitlesVisible && (
           <div
-            className={`absolute z-10 p-2 w-full text-center transition-all duration-300 ease-in-out ${overlayVisible ? "bottom-16 sm:bottom-20" : "bottom-6 sm:bottom-8"
-              }`}
+            className={`absolute z-10 p-2 w-full text-center transition-all duration-300 ease-in-out ${
+              overlayVisible ? "bottom-16 sm:bottom-20" : "bottom-6 sm:bottom-8"
+            }`}
           >
             <div className="inline px-2 py-1 text-sm text-white bg-black bg-opacity-75 rounded-xl sm:text-lg md:text-2xl">
               {currentSubtitle.text
@@ -1146,8 +1108,9 @@ export const ShareVideo = forwardRef<
       )}
 
       <div
-        className={`absolute left-0 right-0 z-30 transition-all duration-300 ease-in-out ${overlayVisible ? "bottom-[40px] md:bottom-[60px]" : "bottom-1"
-          }`}
+        className={`absolute left-0 right-0 z-30 transition-all duration-300 ease-in-out ${
+          overlayVisible ? "bottom-[40px] md:bottom-[60px]" : "bottom-1"
+        }`}
       >
         <div
           id="seek"
@@ -1168,7 +1131,6 @@ export const ShareVideo = forwardRef<
               handleSeekMouseMove(e);
             }
           }}
-          onTouchEnd={(e) => handleSeekMouseUp(e, true)}
         >
           {!isLoading && comments !== null && (
             <div className="-mt-6 w-full md:-mt-6">
@@ -1248,7 +1210,10 @@ export const ShareVideo = forwardRef<
                       key={chapter.start}
                       className="relative h-full cursor-pointer group"
                       style={{ width: `${chapterWidth}%` }}
-                      onClick={(e) => handleChapterClick(e, chapter.start) }
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        applyTimeToVideos(chapter.start);
+                      }}
                     >
                       <div
                         className="w-full h-full bg-gray-400 bg-opacity-50 transition-colors group-hover:bg-opacity-70"
@@ -1304,8 +1269,9 @@ export const ShareVideo = forwardRef<
       </div>
 
       <div
-        className={`absolute bottom-0 left-0 right-0 bg-black bg-opacity-60 z-20 transition-transform duration-300 ease-in-out ${overlayVisible ? "translate-y-0" : "translate-y-full"
-          }`}
+        className={`absolute bottom-0 left-0 right-0 bg-black bg-opacity-60 z-20 transition-transform duration-300 ease-in-out ${
+          overlayVisible ? "translate-y-0" : "translate-y-full"
+        }`}
         onMouseEnter={() => {
           setIsHoveringControls(true);
         }}
