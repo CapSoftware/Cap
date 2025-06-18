@@ -346,12 +346,28 @@ export const ShareVideo = forwardRef<
     }
   };
 
+  // --- Fix: Debounce duplicate/out-of-order seeks to prevent mobile flicker ---
+  const lastSeekTimeRef = useRef<number | null>(null);
+  const SEEK_DEBOUNCE_MS = 150;
+
   const applyTimeToVideos = (time: number) => {
     if (!Number.isFinite(time)) {
       console.warn("Attempted to set non-finite time:", time);
       return;
     }
     const validTime = Math.max(0, Math.min(time, longestDuration));
+
+    // Debounce: Only seek if it's a new, non-redundant time
+    if (
+      lastSeekTimeRef.current !== null &&
+      Math.abs(validTime - lastSeekTimeRef.current) < 0.05 // less than 0.05s diff
+    ) {
+      return;
+    }
+    lastSeekTimeRef.current = validTime;
+    setTimeout(() => {
+      lastSeekTimeRef.current = null;
+    }, SEEK_DEBOUNCE_MS);
 
     if (videoRef.current && videoRef.current.readyState >= 2) {
       try {
@@ -953,9 +969,8 @@ export const ShareVideo = forwardRef<
       className="overflow-hidden relative w-full h-full rounded-lg shadow-lg group"
     >
       <div
-        className={`absolute inset-0 flex items-center justify-center z-10 bg-black transition-opacity duration-300 ${
-          isLoading ? "opacity-100" : "opacity-0 pointer-events-none"
-        }`}
+        className={`absolute inset-0 flex items-center justify-center z-10 bg-black transition-opacity duration-300 ${isLoading ? "opacity-100" : "opacity-0 pointer-events-none"
+          }`}
       >
         <LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
       </div>
@@ -969,11 +984,10 @@ export const ShareVideo = forwardRef<
         </div>
         {!isLoading && (
           <div
-            className={`absolute inset-0 z-20 flex items-center justify-center transition-opacity duration-300 ${
-              (overlayVisible && isPlaying) || tempOverlayVisible || !isPlaying
+            className={`absolute inset-0 z-20 flex items-center justify-center transition-opacity duration-300 ${(overlayVisible && isPlaying) || tempOverlayVisible || !isPlaying
                 ? "opacity-100"
                 : "opacity-0"
-            }`}
+              }`}
           >
             <button
               aria-label={isPlaying ? "Pause video" : "Play video"}
@@ -990,7 +1004,7 @@ export const ShareVideo = forwardRef<
                 {isPlaying ? (
                   <motion.div
                     key="pause-button"
-                    className="flex relative z-30 justify-center items-center size-20 bg-black bg-opacity-60 rounded-full"
+                    className="flex relative z-30 justify-center items-center bg-black bg-opacity-60 rounded-full size-20"
                     initial={{ opacity: 0, scale: 0 }}
                     animate={{
                       scale: 1,
@@ -1004,7 +1018,7 @@ export const ShareVideo = forwardRef<
                 ) : (
                   <motion.div
                     key="play-button"
-                    className="flex relative z-30 justify-center items-center size-20 bg-black bg-opacity-60 rounded-full"
+                    className="flex relative z-30 justify-center items-center bg-black bg-opacity-60 rounded-full size-20"
                     initial={{ opacity: 0, scale: 0 }}
                     animate={{
                       scale: 1,
@@ -1022,9 +1036,8 @@ export const ShareVideo = forwardRef<
         )}
         {currentSubtitle && currentSubtitle.text && subtitlesVisible && (
           <div
-            className={`absolute z-10 p-2 w-full text-center transition-all duration-300 ease-in-out ${
-              overlayVisible ? "bottom-16 sm:bottom-20" : "bottom-6 sm:bottom-8"
-            }`}
+            className={`absolute z-10 p-2 w-full text-center transition-all duration-300 ease-in-out ${overlayVisible ? "bottom-16 sm:bottom-20" : "bottom-6 sm:bottom-8"
+              }`}
           >
             <div className="inline px-2 py-1 text-sm text-white bg-black bg-opacity-75 rounded-xl sm:text-lg md:text-2xl">
               {currentSubtitle.text
@@ -1048,7 +1061,7 @@ export const ShareVideo = forwardRef<
           <div className="flex flex-col items-center">
             <div
               style={{ boxShadow: "0 0 100px rgba(0, 0, 0, 0.75)" }}
-              className="bg-black rounded-lg border border-gray-600 overflow-hidden"
+              className="overflow-hidden bg-black rounded-lg border border-gray-600"
             >
               <div
                 className="bg-black"
@@ -1077,7 +1090,7 @@ export const ShareVideo = forwardRef<
             <div className="mt-2 text-center space-y-0.5">
               {chapters.length > 0 && longestDuration > 0 && (
                 <div
-                  className="text-sm text-white font-medium leading-tight"
+                  className="text-sm font-medium leading-tight text-white"
                   style={{ textShadow: "0 0 3px rgba(0, 0, 0, 0.7)" }}
                 >
                   {(() => {
@@ -1096,7 +1109,7 @@ export const ShareVideo = forwardRef<
                 </div>
               )}
               <div
-                className="text-sm text-white font-medium"
+                className="text-sm font-medium text-white"
                 style={{ textShadow: "0 0 3px rgba(0, 0, 0, 0.7)" }}
               >
                 {formatTimeWithMilliseconds(previewTime)}
@@ -1107,9 +1120,8 @@ export const ShareVideo = forwardRef<
       )}
 
       <div
-        className={`absolute left-0 right-0 z-30 transition-all duration-300 ease-in-out ${
-          overlayVisible ? "bottom-[40px] md:bottom-[60px]" : "bottom-1"
-        }`}
+        className={`absolute left-0 right-0 z-30 transition-all duration-300 ease-in-out ${overlayVisible ? "bottom-[40px] md:bottom-[60px]" : "bottom-1"
+          }`}
       >
         <div
           id="seek"
@@ -1156,7 +1168,7 @@ export const ShareVideo = forwardRef<
                 return (
                   <div
                     key={comment.id}
-                    className="absolute z-10 text-sm transition-all hover:scale-125 -mt-5 md:-mt-5"
+                    className="absolute z-10 -mt-5 text-sm transition-all hover:scale-125 md:-mt-5"
                     style={{
                       left: `${commentPosition}%`,
                     }}
@@ -1216,7 +1228,7 @@ export const ShareVideo = forwardRef<
                       }}
                     >
                       <div
-                        className="w-full h-full bg-gray-400 bg-opacity-50 group-hover:bg-opacity-70 transition-colors"
+                        className="w-full h-full bg-gray-400 bg-opacity-50 transition-colors group-hover:bg-opacity-70"
                         style={{
                           boxShadow: "0 0 20px rgba(0,0,0,0.6)",
                           borderRight:
@@ -1269,9 +1281,8 @@ export const ShareVideo = forwardRef<
       </div>
 
       <div
-        className={`absolute bottom-0 left-0 right-0 bg-black bg-opacity-60 z-20 transition-transform duration-300 ease-in-out ${
-          overlayVisible ? "translate-y-0" : "translate-y-full"
-        }`}
+        className={`absolute bottom-0 left-0 right-0 bg-black bg-opacity-60 z-20 transition-transform duration-300 ease-in-out ${overlayVisible ? "translate-y-0" : "translate-y-full"
+          }`}
         onMouseEnter={() => {
           setIsHoveringControls(true);
         }}
@@ -1297,7 +1308,7 @@ export const ShareVideo = forwardRef<
               </button>
             </span>
             <div className="flex items-center space-x-2">
-              <div className="text-xs sm:text-sm text-white font-medium select-none tabular text-clip overflow-hidden whitespace-nowrap">
+              <div className="overflow-hidden text-xs font-medium text-white whitespace-nowrap select-none sm:text-sm tabular text-clip">
                 {formatTime(currentTime)} - {formatTime(longestDuration)}
               </div>
               {chapters.length > 0 && longestDuration > 0 && (
