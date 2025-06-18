@@ -44,8 +44,16 @@ const RecordingModes = () => {
   ];
 
   const [activeMode, setActiveMode] = useState<Mode | undefined>(modes[0]);
+  const [hasEverSwitched, setHasEverSwitched] = useState(false);
   const { platform, isIntel } = useDetectPlatform();
   const loading = platform === null;
+
+  const handleModeSwitch = (mode: Mode) => {
+    if (activeMode?.name !== mode.name) {
+      setHasEverSwitched(true);
+    }
+    setActiveMode(mode);
+  };
 
   return (
     <div className="w-full max-w-[1000px] mx-auto px-5">
@@ -61,7 +69,7 @@ const RecordingModes = () => {
       <div className="flex flex-1 gap-5 mt-[52px]">
         {modes.map((mode) => (
           <div
-            onClick={() => setActiveMode(mode)}
+            onClick={() => handleModeSwitch(mode)}
             key={mode.name}
             className={clsx(
               "flex overflow-hidden relative",
@@ -93,7 +101,9 @@ const RecordingModes = () => {
               }}
             >
               <iframe
-                src="https://cap.so/embed/9et66p4qsdz0rgh?autoplay=true"
+                src={`https://cap.so/embed/9et66p4qsdz0rgh${
+                  hasEverSwitched ? "?autoplay=true" : ""
+                }`}
                 frameBorder="0"
                 allowFullScreen
                 style={{
@@ -117,7 +127,9 @@ const RecordingModes = () => {
               }}
             >
               <iframe
-                src="https://cap.so/embed/xt3nhh0zkdw034h?autoplay=true"
+                src={`https://cap.so/embed/xt3nhh0zkdw034h${
+                  hasEverSwitched ? "?autoplay=true" : ""
+                }`}
                 frameBorder="0"
                 allowFullScreen
                 style={{
