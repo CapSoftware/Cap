@@ -88,6 +88,20 @@ export default function () {
     },
   }));
 
+  const deleteRecording = createMutation(() => ({
+    mutationFn: async () => {
+      const shouldDelete = await dialog.confirm(
+        "Are you sure you want to delete the recording?",
+        { title: "Confirm Delete", okLabel: "Delete", cancelLabel: "Cancel" }
+      );
+
+      if (!shouldDelete) return;
+
+      await events.requestDeleteRecording.emit();
+      setState("stopped");
+    },
+  }));
+
   const adjustedTime = () => {
     let t = time() - start;
     for (const { pause, resume } of pauseResumes) {
@@ -152,6 +166,12 @@ export default function () {
             onClick={() => restartRecording.mutate()}
           >
             <IconCapRestart />
+          </ActionButton>
+          <ActionButton
+            disabled={deleteRecording.isPending}
+            onClick={() => deleteRecording.mutate()}
+          >
+            <IconCapTrash />
           </ActionButton>
         </div>
       </div>

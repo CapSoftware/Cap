@@ -283,6 +283,9 @@ pub struct RequestNewScreenshot;
 pub struct RequestStopRecording;
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct RequestDeleteRecording;
+
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestOpenSettings {
     page: String,
 }
@@ -1838,6 +1841,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             RecordingStopped,
             RequestStartRecording,
             RequestRestartRecording,
+            RequestDeleteRecording,
             RequestStopRecording,
             RequestNewScreenshot,
             RequestOpenSettings,
@@ -2033,6 +2037,33 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     tokio::time::sleep(Duration::from_millis(1000)).await;
                     if let Err(e) = recording::start_recording(app.clone(), state, inputs).await {
                         error!("Failed to start new recording: {}", e);
+                    }
+                }
+            });
+
+            RequestDeleteRecording::listen_any_spawn(&app, |_, app| async move {
+                let state = app.state::<Arc<RwLock<App>>>();
+
+                if let Some(recording) = state.write().await.clear_current_recording() {
+                    CurrentRecordingChanged.emit(&app).ok();
+
+                    let recording_dir = recording.recording_dir().clone();
+                    let video_id = match &recording {
+                        recording::InProgressRecording::Instant { video_upload_info, .. } => Some(video_upload_info.id.clone()),
+                        _ => None,
+                    };
+
+                    let _ = recording.cancel().await;
+
+                    std::fs::remove_dir_all(&recording_dir).ok();
+
+                    if let Some(id) = video_id {
+                        let _ = app
+                            .authed_api_request(
+                                format!("/api/desktop/video/delete?videoId={}", id),
+                                |c, url| c.delete(url),
+                            )
+                            .await;
                     }
                 }
             });
