@@ -3,11 +3,6 @@ import posthog from "posthog-js";
 
 export function initAnonymousUser() {
   try {
-    if (!posthog || typeof posthog.identify !== "function") {
-      console.warn("PostHog not available for anonymous user");
-      return;
-    }
-
     const anonymousId = localStorage.getItem("anonymous_id") ?? uuid.v4();
     localStorage.setItem("anonymous_id", anonymousId);
     posthog.identify(anonymousId);
@@ -18,11 +13,6 @@ export function initAnonymousUser() {
 
 export function identifyUser(userId: string, properties?: Record<string, any>) {
   try {
-    if (!posthog || typeof posthog.identify !== "function") {
-      console.warn("PostHog not available for user identification");
-      return;
-    }
-
     const currentId = posthog.get_distinct_id();
     const anonymousId = localStorage.getItem("anonymous_id");
 

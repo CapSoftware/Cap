@@ -23,6 +23,8 @@ import {
   useImperativeHandle,
   useRef,
   useState,
+  use,
+  Suspense,
 } from "react";
 import { Tooltip } from "react-tooltip";
 import { toast } from "sonner";
@@ -63,7 +65,7 @@ export const ShareVideo = forwardRef<
   {
     data: typeof videos.$inferSelect;
     user: typeof userSelectProps | null;
-    comments: CommentWithAuthor[];
+    comments: MaybePromise<CommentWithAuthor[]>;
     chapters?: { title: string; start: number }[];
     aiProcessing?: boolean;
   }
@@ -1132,52 +1134,13 @@ export const ShareVideo = forwardRef<
           }}
           onTouchEnd={(e) => handleSeekMouseUp(e, true)}
         >
-          {!isLoading && comments !== null && (
-            <div className="-mt-6 w-full md:-mt-6">
-              {comments.map((comment) => {
-                const commentPosition =
-                  comment.timestamp === null
-                    ? 0
-                    : (comment.timestamp / longestDuration) * 100;
-
-                let tooltipContent = "";
-                if (comment.type === "text") {
-                  tooltipContent =
-                    comment.authorId === "anonymous"
-                      ? `Anonymous: ${comment.content}`
-                      : `${comment.authorName || "User"}: ${comment.content}`;
-                } else {
-                  tooltipContent =
-                    comment.authorId === "anonymous"
-                      ? "Anonymous"
-                      : comment.authorName || "User";
-                }
-
-                return (
-                  <div
-                    key={comment.id}
-                    className="absolute z-10 text-sm transition-all hover:scale-125 -mt-5 md:-mt-5"
-                    style={{
-                      left: `${commentPosition}%`,
-                    }}
-                    data-tooltip-id={comment.id}
-                    data-tooltip-content={tooltipContent}
-                  >
-                    <span>
-                      {comment.type === "text" ? (
-                        <MessageSquare
-                          fill="#646464"
-                          className="w-auto h-[18px] sm:h-[22px] text-white"
-                        />
-                      ) : (
-                        comment.content
-                      )}
-                    </span>
-                    <Tooltip id={comment.id} />
-                  </div>
-                );
-              })}
-            </div>
+          {!isLoading && (
+            <Suspense>
+              <CommentIndicators
+                className="-mt-6 w-full md:-mt-6"
+                comments={comments}
+              />
+            </Suspense>
           )}
 
           <div
@@ -1602,3 +1565,58 @@ const useTranscriptionProcessing = (
 
   return { isTranscriptionProcessing, subtitles };
 };
+
+function CommentIndicators(props: {
+  className?: string;
+  comments: MaybePromise<CommentWithAuthor[]>;
+}) {
+  const comments = use(props.comments);
+
+  return (
+    <div className={props.className}>
+      {comments.map((comment) => {
+        const commentPosition =
+          comment.timestamp === null
+            ? 0
+            : (comment.timestamp / longestDuration) * 100;
+
+        let tooltipContent = "";
+        if (comment.type === "text") {
+          tooltipContent =
+            comment.authorId === "anonymous"
+              ? `Anonymous: ${comment.content}`
+              : `${comment.authorName || "User"}: ${comment.content}`;
+        } else {
+          tooltipContent =
+            comment.authorId === "anonymous"
+              ? "Anonymous"
+              : comment.authorName || "User";
+        }
+
+        return (
+          <div
+            key={comment.id}
+            className="absolute z-10 text-sm transition-all hover:scale-125 -mt-5 md:-mt-5"
+            style={{
+              left: `${commentPosition}%`,
+            }}
+            data-tooltip-id={comment.id}
+            data-tooltip-content={tooltipContent}
+          >
+            <span>
+              {comment.type === "text" ? (
+                <MessageSquare
+                  fill="#646464"
+                  className="w-auto h-[18px] sm:h-[22px] text-white"
+                />
+              ) : (
+                comment.content
+              )}
+            </span>
+            <Tooltip id={comment.id} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}

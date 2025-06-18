@@ -357,34 +357,50 @@ label {
 /* View Transitions for theme switching */
 /* Icon animations */
 @keyframes rotate-sun {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @keyframes rotate-moon {
-  from { transform: rotate(-360deg); }
-  to { transform: rotate(0deg); }
+  from {
+    transform: rotate(-360deg);
+  }
+  to {
+    transform: rotate(0deg);
+  }
 }
 
 ::view-transition-old(theme-icon) {
   animation: 0.5s cubic-bezier(0.4, 0, 0.2, 1) both fade-out,
-            0.5s cubic-bezier(0.4, 0, 0.2, 1) both rotate-sun;
+    0.5s cubic-bezier(0.4, 0, 0.2, 1) both rotate-sun;
 }
 
 ::view-transition-new(theme-icon) {
   animation: 0.5s cubic-bezier(0.4, 0, 0.2, 1) 0.1s both fade-in,
-            0.5s cubic-bezier(0.4, 0, 0.2, 1) both rotate-moon;
+    0.5s cubic-bezier(0.4, 0, 0.2, 1) both rotate-moon;
 }
 
 /* Wipe effect for the entire theme change */
 @keyframes wipe-in-right {
-  from { clip-path: inset(0 100% 0 0); }
-  to { clip-path: inset(0 0 0 0); }
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
 }
 
 @keyframes wipe-out-left {
-  from { clip-path: inset(0 0 0 0); }
-  to { clip-path: inset(0 0 0 100%); }
+  from {
+    clip-path: inset(0 0 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 100%);
+  }
 }
 
 ::view-transition-old(root) {
@@ -396,13 +412,21 @@ label {
 }
 
 @keyframes fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes fade-out {
-  from { opacity: 1; }
-  to { opacity: 0; }
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
 }
 
 .view-transition-theme-icon {
@@ -426,10 +450,10 @@ label {
   opacity: 0;
 }
 
-.fade-in {
+/* .fade-in {
   animation: fadeIn 1s forwards;
   opacity: 0;
-}
+} */
 
 .fade-in-up {
   animation: fadeInUp 1s forwards;
