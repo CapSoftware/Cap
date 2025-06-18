@@ -66,7 +66,10 @@
     "uuid": "^9.0.1",
     "vinxi": "^0.5.6",
     "webcodecs": "^0.1.0",
-    "zod": "^3.24.2"
+    "zod": "^3.24.2",
+    "@tensorflow-models/body-pix": "^2.2.0",
+    "@tensorflow/tfjs": "^4.16.0",
+    "@tensorflow/tfjs-backend-webgl": "^4.16.0"
   },
   "devDependencies": {
     "@fontsource/geist-sans": "^5.0.3",

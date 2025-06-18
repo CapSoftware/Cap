@@ -21,6 +21,9 @@ import { createStore } from "solid-js/store";
 
 import { createCameraMutation } from "~/utils/queries";
 import { createImageDataWS, createLazySignal } from "~/utils/socket";
+import * as tf from "@tensorflow/tfjs";
+import "@tensorflow/tfjs-backend-webgl";
+import * as bodyPix from "@tensorflow-models/body-pix";
 import {
   RecordingOptionsProvider,
   useRecordingOptions,
@@ -67,12 +70,53 @@ function Page() {
     data: ImageData;
   } | null>();
 
+  let model: bodyPix.BodyPix | null = null;
+  let modelPromise: Promise<bodyPix.BodyPix> | null = null;
+  const processCanvas = document.createElement("canvas");
+  const processCtx = processCanvas.getContext("2d")!;
+  let processing = false;
+
+  async function loadModel() {
+    if (!modelPromise) {
+      await tf.setBackend("webgl");
+      modelPromise = bodyPix.load();
+    }
+    model = await modelPromise;
+    return model;
+  }
+
+  async function applyGreenScreen(frame: ImageData) {
+    const m = await loadModel();
+    processCanvas.width = frame.width;
+    processCanvas.height = frame.height;
+    processCtx.putImageData(frame, 0, 0);
+    const segmentation = await m.segmentPerson(processCanvas, {
+      internalResolution: "medium",
+      segmentationThreshold: 0.7,
+      flipHorizontal: false,
+    });
+    const mask = segmentation.data;
+    const data = frame.data;
+    for (let i = 0; i < mask.length; i++) {
+      if (mask[i] === 0) data[i * 4 + 3] = 0;
+      else data[i * 4 + 3] = 255;
+    }
+  }
+
+  async function handleFrame(imageData: { width: number; data: ImageData }) {
+    if (processing) return;
+    processing = true;
+    await applyGreenScreen(imageData.data);
+    setLatestFrame(imageData);
+    const ctx = cameraCanvasRef?.getContext("2d");
+    ctx?.putImageData(imageData.data, 0, 0);
+    processing = false;
+  }
+
   const [ws, isConnected] = createImageDataWS(
     `ws://localhost:${cameraWsPort}`,
     (imageData) => {
-      setLatestFrame(imageData);
-      const ctx = cameraCanvasRef?.getContext("2d");
-      ctx?.putImageData(imageData.data, 0, 0);
+      handleFrame(imageData);
     }
   );
 
@@ -86,9 +130,7 @@ function Page() {
       const newWs = createImageDataWS(
         `ws://localhost:${cameraWsPort}`,
         (imageData) => {
-          setLatestFrame(imageData);
-          const ctx = cameraCanvasRef?.getContext("2d");
-          ctx?.putImageData(imageData.data, 0, 0);
+          handleFrame(imageData);
         }
       );
       // Update the ws reference
@@ -181,7 +223,7 @@ function Page() {
       </div>
       <div
         class={cx(
-          "flex flex-col flex-1 relative overflow-hidden pointer-events-none border-none shadow-lg bg-gray-1 text-gray-12",
+          "flex flex-col flex-1 relative overflow-hidden pointer-events-none border-none shadow-lg bg-transparent text-gray-12",
           state.shape === "round" ? "rounded-full" : "rounded-3xl"
         )}
         data-tauri-drag-region
