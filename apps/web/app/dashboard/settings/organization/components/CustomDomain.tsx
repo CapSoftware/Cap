@@ -9,6 +9,7 @@ import { UpgradeModal } from "@/components/UpgradeModal";
 import { Button, Input } from "@cap/ui";
 import { faRefresh, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import clsx from "clsx";
 import { Check, CheckCircle, Copy, XCircle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -242,18 +243,18 @@ export function CustomDomain() {
             {activeOrganization?.organization.customDomain &&
               (isVerified ? (
                 <>
-                  <div className="flex items-center gap-1.5 text-green-500 bg-green-200 px-2.5 py-1.5 rounded-xl text-sm">
+                  <div className="flex items-center gap-1.5 text-green-800 bg-green-400 px-2.5 py-1.5 rounded-full text-sm">
                     <CheckCircle className="size-3" />
-                    <span className="text-xs font-medium text-green-500">
+                    <span className="text-xs font-medium text-green-800">
                       Domain verified
                     </span>
                   </div>
                 </>
               ) : (
                 <>
-                  <div className="flex items-center gap-1.5 text-red-600 bg-red-50 px-2.5 py-1.5 rounded-md text-sm">
+                  <div className="flex items-center gap-1.5 text-red-800 bg-red-400 px-2.5 py-1.5 rounded-full text-sm">
                     <XCircle className="w-4 h-4" />
-                    <span className="text-sm font-medium text-red-500">
+                    <span className="text-sm font-medium text-red-800">
                       Domain not verified
                     </span>
                   </div>
@@ -284,11 +285,11 @@ export function CustomDomain() {
                 >
                   {verifying ? (
                     <FontAwesomeIcon
-                      className="animate-spin size-6"
+                      className="animate-spin size-3.5"
                       icon={faRefresh}
                     />
                   ) : (
-                    <FontAwesomeIcon className="mr-1 size-4" icon={faRefresh} />
+                    <FontAwesomeIcon className="size-3.5" icon={faRefresh} />
                   )}
                   Refresh
                 </Button>
@@ -301,7 +302,7 @@ export function CustomDomain() {
                   onClick={handleRemoveDomain}
                   disabled={loading}
                 >
-                  <FontAwesomeIcon className="mr-1 size-4" icon={faTrash} />
+                  <FontAwesomeIcon className="size-3.5" icon={faTrash} />
                   Remove
                 </Button>
               )}
@@ -311,12 +312,12 @@ export function CustomDomain() {
         {activeOrganization?.organization.customDomain && (
           <div className="mt-4 space-y-4">
             {!isVerified && domainConfig?.verification?.[0] && (
-              <div className="overflow-hidden rounded-lg border border-gray-200">
-                <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
-                  <h4 className="font-medium text-gray-900">
+              <div className="overflow-hidden rounded-lg border border-gray-4">
+                <div className="px-4 py-3 border-b bg-gray-2 border-gray-4">
+                  <p className="font-medium text-md text-gray-12">
                     DNS Configuration Required
-                  </h4>
-                  <p className="mt-1 text-sm text-gray-600">
+                  </p>
+                  <p className="mt-1 text-sm text-gray-10">
                     To verify your domain ownership, add the following TXT
                     record to your DNS configuration:
                   </p>
@@ -324,16 +325,17 @@ export function CustomDomain() {
                 <div className="px-4 py-3">
                   <dl className="grid gap-4">
                     <div className="grid grid-cols-[100px,1fr] items-center">
-                      <dt className="text-sm font-medium text-gray-1">Type</dt>
-                      <dd className="text-sm text-gray-900">
+                      <dt className="text-sm font-medium text-gray-12">Type</dt>
+                      <dd className="text-sm text-gray-10">
                         {domainConfig?.verification?.[0]?.type}
                       </dd>
                     </div>
                     <div className="grid grid-cols-[100px,1fr] items-center">
-                      <dt className="text-sm font-medium text-gray-1">Name</dt>
-                      <dd className="flex gap-2 items-center text-sm text-gray-900">
-                        <div className="flex items-center gap-1.5 bg-gray-50 px-2 py-1 rounded flex-1 min-w-0">
-                          <code className="truncate">
+                      <dt className="text-sm font-medium text-gray-12">Name</dt>
+                      <dd className="flex gap-2 items-center text-sm text-gray-10">
+                        <div className="flex items-center justify-between gap-1.5
+                       bg-gray-4 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-6">
+                          <code className="text-xs truncate">
                             {domainConfig?.verification?.[0]?.domain}
                           </code>
                           {domainConfig?.verification?.[0]?.domain && (
@@ -348,9 +350,9 @@ export function CustomDomain() {
                               title="Copy to clipboard"
                             >
                               {copiedField === "name" ? (
-                                <Check className="w-4 h-4 text-green-500" />
+                                <Check className="size-3.5 text-green-500" />
                               ) : (
-                                <Copy className="w-4 h-4 text-gray-1" />
+                                <Copy className="size-3.5 text-gray-10" />
                               )}
                             </button>
                           )}
@@ -358,9 +360,9 @@ export function CustomDomain() {
                       </dd>
                     </div>
                     <div className="grid grid-cols-[100px,1fr] items-center">
-                      <dt className="text-sm font-medium text-gray-1">Value</dt>
-                      <dd className="flex gap-2 items-center text-sm text-gray-900">
-                        <div className="flex items-center gap-1.5 bg-gray-50 p-2 rounded flex-1 min-w-0">
+                      <dt className="text-sm font-medium text-gray-12">Value</dt>
+                      <dd className="flex gap-2 items-center text-sm text-gray-10">
+                        <div className="flex flex-1 gap-1 justify-between items-center px-2 py-1 min-w-0 rounded-lg border bg-gray-4 border-gray-6">
                           <code className="font-mono text-xs break-all">
                             {domainConfig?.verification?.[0]?.value}
                           </code>
@@ -376,9 +378,9 @@ export function CustomDomain() {
                               title="Copy to clipboard"
                             >
                               {copiedField === "value" ? (
-                                <Check className="w-4 h-4 text-green-500" />
+                                <Check className="size-3.5 text-green-500" />
                               ) : (
-                                <Copy className="w-4 h-4 text-gray-1" />
+                                <Copy className="size-3.5 text-gray-10" />
                               )}
                             </button>
                           )}
@@ -390,17 +392,19 @@ export function CustomDomain() {
               </div>
             )}
 
+
+
             {!isVerified &&
               !domainConfig?.verification?.[0] &&
               domainConfig?.requiredAValue && (
-                <div className="overflow-hidden mt-4 rounded-lg border border-gray-200">
-                  <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
-                    <h4 className="font-medium text-gray-900">
+                <div className="overflow-hidden rounded-lg border border-gray-4">
+                  <div className="px-4 py-3 border-b bg-gray-2 border-gray-4">
+                    <p className="font-medium text-md text-gray-12">
                       DNS Configuration Required
-                    </h4>
-                    <p className="mt-1 text-sm text-gray-600">
-                      Please configure your DNS settings with the following A
-                      record:
+                    </p>
+                    <p className="mt-1 text-sm text-gray-10">
+                      To verify your domain ownership, add the following A
+                      record to your DNS configuration:
                     </p>
                   </div>
                   <div className="px-4 py-3">
@@ -408,25 +412,27 @@ export function CustomDomain() {
                       {domainConfig.currentAValues &&
                         domainConfig.currentAValues.length > 0 && (
                           <div className="grid grid-cols-[100px,1fr] items-center">
-                            <dt className="text-sm font-medium text-gray-1">
+                            <dt className="text-sm font-medium text-gray-12">
                               Current
                             </dt>
-                            <dd className="text-sm text-gray-600">
+                            <dd className="space-y-1.5 text-sm text-gray-10">
                               {domainConfig.currentAValues.map(
                                 (value, index) => (
                                   <div
                                     key={index}
-                                    className={
+                                    className={clsx(
                                       value === domainConfig.requiredAValue
-                                        ? "flex items-center gap-2 text-green-600"
-                                        : "flex items-center gap-2 text-red-600"
-                                    }
+                                        ? "flex items-center gap-2 text-green-300"
+                                        : "flex items-center gap-2 text-red-200"
+                                    )}
                                   >
                                     <code
-                                      className={
+                                      className={clsx(
                                         value === domainConfig.requiredAValue
-                                          ? "px-2 py-1 rounded bg-green-50"
-                                          : "px-2 py-1 rounded bg-red-50"
+                                          ? "px-2 py-1 rounded-lg bg-green-900"
+                                          : "px-2 py-1 rounded-lg bg-red-900",
+                                        "text-xs"
+                                      )
                                       }
                                     >
                                       {value}
@@ -443,12 +449,13 @@ export function CustomDomain() {
                           </div>
                         )}
                       <div className="grid grid-cols-[100px,1fr] items-center">
-                        <dt className="text-sm font-medium text-gray-1">
+                        <dt className="text-sm font-medium text-gray-12">
                           Required
                         </dt>
-                        <dd className="flex gap-2 items-center">
-                          <div className="flex items-center gap-1.5 bg-gray-50 px-2 py-1 rounded flex-1 min-w-0">
-                            <code className="text-sm text-gray-900">
+                        <dd className="flex gap-2 items-center text-sm text-gray-10">
+                          <div className="flex items-center justify-between gap-1.5
+                       bg-gray-4 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-6">
+                            <code className="text-xs text-gray-10">
                               {domainConfig.requiredAValue || "Loading..."}
                             </code>
                             {domainConfig.requiredAValue && (
@@ -465,9 +472,9 @@ export function CustomDomain() {
                                 title="Copy to clipboard"
                               >
                                 {copiedField === "value" ? (
-                                  <Check className="w-4 h-4 text-green-500" />
+                                  <Check className="size-3.5 text-green-500" />
                                 ) : (
-                                  <Copy className="w-4 h-4 text-gray-1" />
+                                  <Copy className="size-3.5 text-gray-10" />
                                 )}
                               </button>
                             )}
