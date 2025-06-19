@@ -11,7 +11,6 @@ interface VirtualizedVideoGridProps {
   height?: number;
   columnCount?: number;
   rowHeight?: number;
-  columnWidth?: number;
 }
 
 const VirtualizedVideoGrid = ({
@@ -22,7 +21,6 @@ const VirtualizedVideoGrid = ({
   height = 400,
   columnCount = 3,
   rowHeight = 200,
-  columnWidth = 200,
 }: VirtualizedVideoGridProps) => {
   // Create a ref for the scrollable container
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -53,10 +51,14 @@ const VirtualizedVideoGrid = ({
     scrollRef,
     count: videos.length,
     columns: responsiveColumnCount,
-    gap: 12,
+    gap: {
+      y: 16,
+      x: 12,
+    },
     size: {
       height: rowHeight,
-    }
+    },
+    overscan: 5, // Add overscan to prevent refetching when scrolling
   });
 
   return (
@@ -78,10 +80,10 @@ const VirtualizedVideoGrid = ({
 
           return (
             <div
-              className="px-2 mx-auto md:mx-0 md:px-0"
+              key={video.id}
+              className="px-2 mx-auto md:mx-0 md:px-0 w-[96%]"
             >
               <VideoCard
-                key={video.id}
                 video={video}
                 isSelected={selectedVideos.includes(video.id)}
                 onToggle={() => handleVideoToggle(video.id)}
