@@ -18,12 +18,13 @@
     "@planetscale/database": "^1.13.0",
     "@react-email/components": "^0.1.0",
     "@react-email/render": "1.1.2",
+    "@react-email/tailwind": "^1.0.5",
     "drizzle-orm": "0.43.1",
     "nanoid": "^5.0.4",
     "next": "14.2.9",
     "next-auth": "^4.24.5",
     "react-email": "^4.0.16",
-    "resend": "4.1.2"
+    "resend": "4.6.0"
   },
   "devDependencies": {
     "@cap/ui": "workspace:*",

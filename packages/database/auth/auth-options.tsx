@@ -1,17 +1,18 @@
 import { eq } from "drizzle-orm";
 import { DrizzleAdapter } from "./drizzle-adapter";
-import { db } from "../";
-import { users, organizations, organizationMembers } from "../schema";
+import type { NextAuthOptions } from "next-auth";
 import EmailProvider from "next-auth/providers/email";
 import GoogleProvider from "next-auth/providers/google";
-import type { NextAuthOptions } from "next-auth";
-import { sendEmail } from "../emails/config";
-import { LoginLink } from "../emails/login-link";
-import { nanoId } from "../helpers";
 import WorkOSProvider from "next-auth/providers/workos";
 import { NODE_ENV, serverEnv } from "@cap/env";
 import type { Adapter } from "next-auth/adapters";
 import type { Provider } from "next-auth/providers/index";
+
+import { db } from "../";
+import { users, organizations, organizationMembers } from "../schema";
+import { nanoId } from "../helpers";
+import { sendEmail } from "../emails/config";
+import { LoginLink } from "../emails/login-link";
 
 export const config = {
   maxDuration: 120,
@@ -68,18 +69,18 @@ export const authOptions = (): NextAuthOptions => {
           },
         }),
         EmailProvider({
-          sendVerificationRequest({ identifier, url }) {
-            if (
-              NODE_ENV === "development" ||
-              !serverEnv().RESEND_API_KEY ||
-              serverEnv().RESEND_API_KEY === ""
-            ) {
+          async sendVerificationRequest({ identifier, url }) {
+            console.log("sendVerificationRequest");
+            if (!serverEnv().RESEND_API_KEY) {
               console.log(`Login link: ${url}`);
             } else {
-              sendEmail({
+              console.log({ identifier, url });
+              const email = LoginLink({ url, email: identifier });
+              console.log({ email });
+              await sendEmail({
                 email: identifier,
                 subject: `Your Cap Login Link`,
-                react: LoginLink({ url, email: identifier }),
+                react: email,
               });
             }
           },

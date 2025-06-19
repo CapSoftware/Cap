@@ -4,7 +4,12 @@ import {
   FontAwesomeIcon,
   FontAwesomeIconProps,
 } from "@fortawesome/react-fontawesome";
-import { PropsWithChildren } from "react";
+import {
+  ComponentProps,
+  ForwardedRef,
+  forwardRef,
+  PropsWithChildren,
+} from "react";
 
 interface CapCardAnalyticsProps {
   capId: string;
@@ -50,13 +55,19 @@ const Shell = (props: PropsWithChildren) => (
   </div>
 );
 
-const IconItem = (
-  props: PropsWithChildren<{ icon: FontAwesomeIconProps["icon"] }>
-) => (
-  <div className="flex gap-2 items-center">
-    <FontAwesomeIcon className="text-gray-8 size-4" icon={props.icon} />
-    {props.children}
-  </div>
+const IconItem = forwardRef(
+  (
+    props: { icon: FontAwesomeIconProps["icon"] } & Pick<
+      ComponentProps<"div">,
+      "children"
+    >,
+    ref: ForwardedRef<HTMLDivElement>
+  ) => (
+    <div ref={ref} className="flex gap-2 items-center">
+      <FontAwesomeIcon className="text-gray-8 size-4" icon={props.icon} />
+      {props.children}
+    </div>
+  )
 );
 
 const SkeletonItem = ({ icon }: { icon: FontAwesomeIconProps["icon"] }) => (
