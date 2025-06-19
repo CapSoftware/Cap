@@ -29,7 +29,7 @@ export const UsageButton = memo(
               className={clsx(
                 "overflow-hidden truncate",
                 sidebarCollapsed
-                  ? "p-0 w-10 h-10 rounded-full min-w-10"
+                  ? "p-0 w-10 h-10 rounded-full min-w-[unset] max-w-10"
                   : "w-full"
               )}
               variant="primary"
@@ -95,7 +95,7 @@ const ProRiveButton = memo(
         className={clsx(
           "flex overflow-visible relative gap-3 justify-evenly items-center cursor-pointer",
           "mx-auto",
-          sidebarCollapsed ? "py-0 h-[45px] min-w-[unset]" : "py-3 w-full h-fit"
+          sidebarCollapsed ? "py-0 h-10 min-w-[unset]" : "py-3 w-full h-fit"
         )}
         onClick={() => {
           setUpgradeModalOpen(true);
@@ -105,7 +105,7 @@ const ProRiveButton = memo(
         <ProRive
           className={clsx(
             sidebarCollapsed
-              ? "bottom-[4px] absolute h-[45px] w-[68px]"
+              ? "bottom-[4px] h-10 absolute w-[68px]"
               : "absolute w-[90px] h-[66px] bottom-[-3px] left-[-20px]",
             "scale-[0.8]"
           )}

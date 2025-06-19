@@ -34,7 +34,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import Image from "next/image";
 
 import { useRef, useState } from "react";
@@ -70,13 +70,13 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
     },
     ...(buildEnv.NEXT_PUBLIC_IS_CAP && user.email.endsWith("@cap.so")
       ? [
-          {
-            name: "Admin Dev",
-            href: "/dashboard/admin",
-            icon: faBuilding,
-            subNav: [],
-          },
-        ]
+        {
+          name: "Admin Dev",
+          href: "/dashboard/admin",
+          icon: faBuilding,
+          subNav: [],
+        },
+      ]
       : []),
   ];
 
@@ -357,10 +357,25 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
           <SpacesList toggleMobileNav={() => toggleMobileNav?.()} />
         </div>
         <div className="pb-4 mt-auto w-full">
-          <CapAIBox
-            openAIDialog={openAIDialog}
-            setOpenAIDialog={setOpenAIDialog}
-          />
+          <AnimatePresence>
+            {!sidebarCollapsed && (
+              <motion.div
+                initial={{ scale: 0 }}
+                animate={{ scale: 1 }}
+                exit={{ scale: 0 }}
+                transition={{
+                  type: "spring",
+                  bounce: 0.2,
+                  duration: 0.2,
+                }}
+              >
+                <CapAIBox
+                  openAIDialog={openAIDialog}
+                  setOpenAIDialog={setOpenAIDialog}
+                />
+              </motion.div>
+            )}
+          </AnimatePresence>
           <UsageButton
             toggleMobileNav={() => toggleMobileNav?.()}
             subscribed={userIsSubscribed}
