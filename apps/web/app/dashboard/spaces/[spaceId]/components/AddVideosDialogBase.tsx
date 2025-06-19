@@ -15,7 +15,7 @@ import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faVideo } from "@fortawesome/free-solid-svg-icons";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Search } from "lucide-react";
 import clsx from "clsx";
 import VirtualizedVideoGrid from "./VirtualizedVideoGrid";
@@ -28,7 +28,7 @@ interface AddVideosDialogBaseProps {
   onVideosAdded?: () => void;
   addVideos: (entityId: string, videoIds: string[]) => Promise<any>;
   removeVideos: (entityId: string, videoIds: string[]) => Promise<any>;
-  getVideos: (limit: number) => Promise<any>;
+  getVideos: (limit?: number) => Promise<any>;
   getEntityVideoIds: (entityId: string) => Promise<any>;
 }
 
@@ -64,6 +64,8 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
   const [searchTerm, setSearchTerm] = useState("");
   const filterTabs = ['all', 'added', 'notAdded'];
 
+  const queryClient = useQueryClient();
+
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -74,14 +76,16 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
   const { data: videosData, isLoading } = useQuery<Video[]>({
     queryKey: ["user-videos"],
     queryFn: async () => {
-      const result = await getVideos(50);
+      const result = await getVideos();
       if (!result.success) {
         throw new Error(result.error);
       }
       return result.data;
     },
     enabled: open,
-    refetchOnWindowFocus: false // Don't refetch when window regains focus
+    refetchOnWindowFocus: false, // Don't refetch when window regains focus
+    staleTime: Infinity, // Consider data fresh forever (until manually invalidated)
+    gcTime: 1000 * 60 * 5, // Cache for 5 minutes (gcTime is the new name for cacheTime)
   });
 
   const { data: entityVideoIds } = useQuery<string[]>({
@@ -94,7 +98,9 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
       return result.data;
     },
     enabled: open,
-    refetchOnWindowFocus: false // Don't refetch when window regains focus
+    refetchOnWindowFocus: false, // Don't refetch when window regains focus
+    staleTime: Infinity, // Consider data fresh forever (until manually invalidated)
+    gcTime: 1000 * 60 * 5, // Cache for 5 minutes (gcTime is the new name for cacheTime)
   });
 
   const updateVideosMutation = useMutation({
@@ -109,8 +115,15 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
       }
       return { addResult, removeResult };
     },
-    onSuccess: (result) => {
+    onSuccess: async (result) => {
       const { addResult, removeResult } = result || {};
+
+      // Invalidate both queries to ensure UI updates
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["user-videos"] }),
+        queryClient.invalidateQueries({ queryKey: ["entity-video-ids", entityId] })
+      ]);
+
       if ((addResult?.success ?? true) && (removeResult?.success ?? true)) {
         toast.success("Videos updated successfully");
         setSelectedVideos([]);
@@ -265,7 +278,6 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
                 height={300}
                 columnCount={3}
                 rowHeight={200}
-                columnWidth={200}
               />
             )}
           </div>

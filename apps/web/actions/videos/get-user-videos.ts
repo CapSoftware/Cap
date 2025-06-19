@@ -5,7 +5,7 @@ import { videos, comments, users } from "@cap/database/schema";
 import { db } from "@cap/database";
 import { eq, desc, sql } from "drizzle-orm";
 
-export async function getUserVideos(limit: number = 20) {
+export async function getUserVideos(limit?: number) {
   try {
     const user = await getCurrentUser();
 
@@ -50,7 +50,7 @@ export async function getUserVideos(limit: number = 20) {
           ${videos.createdAt}
         )`)
       )
-      .limit(limit);
+      .limit(limit || 20);
 
     const processedVideoData = videoData.map((video) => {
       const { effectiveDate, ...videoWithoutEffectiveDate } = video;
@@ -68,4 +68,4 @@ export async function getUserVideos(limit: number = 20) {
     console.error("Error fetching user videos:", error);
     return { success: false, error: "Failed to fetch videos" };
   }
-} 
+}
