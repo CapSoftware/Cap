@@ -118,6 +118,15 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
         aria-disabled={disabled}
         {...props}
       >
+
+        {!showEmptyIfNoMembers && orgMemberOptions.length === 0 && (
+          <EmptyMessage
+            message="No members in your organization"
+            showUpgradeButton={true}
+            onButtonClick={() => setIsOpen(false)}
+          />
+        )}
+
         {/* Empty state when no members in organization */}
         {showEmptyIfNoMembers &&
           activeOrganization?.members &&
@@ -268,13 +277,13 @@ const EmptyMessage: React.FC<EmptyMessageProps> = ({
   showUpgradeButton = false,
   onButtonClick,
 }) => (
-  <div className="flex flex-col gap-3 justify-center items-center h-full">
+  <div className="flex flex-col gap-2 justify-center items-center py-2 h-full">
     <p className="text-sm text-center text-gray-10">{message}</p>
     {showUpgradeButton && (
       <Button
         href="/dashboard/settings/organization"
         variant="dark"
-        size="sm"
+        size="xs"
         onClick={onButtonClick}
       >
         <FontAwesomeIcon className="size-3" icon={faPlus} />
