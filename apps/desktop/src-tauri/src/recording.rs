@@ -49,11 +49,13 @@ pub enum InProgressRecording {
         progressive_upload: Option<InstantMultipartUpload>,
         video_upload_info: VideoUploadInfo,
         inputs: StartRecordingInputs,
+        recording_dir: PathBuf,
     },
     Studio {
         target_name: String,
         handle: StudioRecordingHandle,
         inputs: StartRecordingInputs,
+        recording_dir: PathBuf,
     },
 }
 
@@ -83,6 +85,13 @@ impl InProgressRecording {
         match self {
             Self::Instant { handle, .. } => handle.resume().await,
             Self::Studio { handle, .. } => handle.resume().await,
+        }
+    }
+
+    pub fn recording_dir(&self) -> &PathBuf {
+        match self {
+            Self::Instant { recording_dir, .. } => recording_dir,
+            Self::Studio { recording_dir, .. } => recording_dir,
         }
     }
 
@@ -369,6 +378,7 @@ pub async fn start_recording(
                             handle,
                             target_name,
                             inputs,
+                            recording_dir: recording_dir.clone(),
                         },
                         actor_done_rx,
                     )
@@ -397,6 +407,7 @@ pub async fn start_recording(
                             video_upload_info,
                             target_name,
                             inputs,
+                            recording_dir: recording_dir.clone(),
                         },
                         actor_done_rx,
                     )
