@@ -85,7 +85,7 @@ export const OrganizationIndicator = ({
                         <Avatar
                           letterClass="text-md"
                           name={member.name || member.email}
-                          className="mr-3 size-9 text-gray-12"
+                          className="size-9 text-gray-12"
                         />
                       )}
                       <div className="flex-1 min-w-0">
@@ -113,7 +113,7 @@ export const OrganizationIndicator = ({
           </div>
 
           <DialogFooter>
-            <div className="flex justify-between w-full">
+            <div className={clsx("flex w-full", canManageMembers ? "justify-between" : "justify-end")}>
               {canManageMembers && (
                 <Button
                   variant="dark"

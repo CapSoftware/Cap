@@ -67,10 +67,19 @@ export const EmbedVideo = forwardRef<
     chapters?: { title: string; start: number }[];
     aiProcessing?: boolean;
     ownerName?: string | null;
+    autoplay?: boolean;
   }
 >(
   (
-    { data, user, comments, chapters = [], aiProcessing = false, ownerName },
+    {
+      data,
+      user,
+      comments,
+      chapters = [],
+      aiProcessing = false,
+      ownerName,
+      autoplay = false,
+    },
     ref
   ) => {
     useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
@@ -296,10 +305,23 @@ export const EmbedVideo = forwardRef<
 
       videoElement.addEventListener("timeupdate", handleTimeUpdate);
 
+      if (autoplay && !isPlaying) {
+        const attemptAutoplay = async () => {
+          try {
+            videoElement.muted = true;
+            await videoElement.play();
+            setIsPlaying(true);
+          } catch (error) {
+            console.log("Autoplay failed:", error);
+          }
+        };
+        attemptAutoplay();
+      }
+
       return () => {
         videoElement.removeEventListener("timeupdate", handleTimeUpdate);
       };
-    }, [videoReadyToPlay]);
+    }, [videoReadyToPlay, autoplay, isPlaying]);
 
     useEffect(() => {
       setTempOverlayVisible(true);
@@ -579,7 +601,7 @@ export const EmbedVideo = forwardRef<
             isLoading ? "opacity-100" : "opacity-0 pointer-events-none"
           }`}
         >
-          <LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
+          <LogoSpinner className="w-8 h-auto animate-spin xs:w-10" />
         </div>
         <div className="relative w-full h-full">
           <div className="absolute inset-0 bg-black">
@@ -615,7 +637,7 @@ export const EmbedVideo = forwardRef<
                     {isPlaying ? (
                       <motion.div
                         key="pause-button"
-                        className="flex relative z-30 justify-center items-center size-20 bg-black bg-opacity-60 rounded-full"
+                        className="flex relative z-30 justify-center items-center size-16 xs:size-20 md:size-24 bg-black bg-opacity-60 rounded-full"
                         initial={{ opacity: 0, scale: 0 }}
                         animate={{
                           scale: 1,
@@ -624,12 +646,12 @@ export const EmbedVideo = forwardRef<
                         style={{ transformOrigin: "center center" }}
                         transition={{ duration: 0.4, ease: "easeOut" }}
                       >
-                        <Pause className="w-auto h-8 text-white sm:h-10 md:h-12" />
+                        <Pause className="w-auto h-6 text-white xs:h-8 md:h-10 lg:h-12" />
                       </motion.div>
                     ) : (
                       <motion.div
                         key="play-button"
-                        className="flex relative z-30 justify-center items-center size-20 bg-black bg-opacity-60 rounded-full"
+                        className="flex relative z-30 justify-center items-center size-16 xs:size-20 md:size-24 bg-black bg-opacity-60 rounded-full"
                         initial={{ opacity: 0, scale: 0 }}
                         animate={{
                           scale: 1,
@@ -638,7 +660,7 @@ export const EmbedVideo = forwardRef<
                         style={{ transformOrigin: "center center" }}
                         transition={{ duration: 0.4, ease: "easeOut" }}
                       >
-                        <Play className="w-auto h-8 text-white sm:h-10 md:h-12 ml-0.5" />
+                        <Play className="w-auto h-6 text-white xs:h-8 md:h-10 lg:h-12 ml-0.5" />
                       </motion.div>
                     )}
                   </AnimatePresence>
@@ -653,7 +675,7 @@ export const EmbedVideo = forwardRef<
                         e.stopPropagation();
                         window.open("https://cap.so", "_blank");
                       }}
-                      className="flex items-center gap-2 text-white/80 hover:text-white transition-colors duration-200 text-sm bg-black/50 px-3 py-2 rounded-full backdrop-blur-sm"
+                      className="hidden xs:flex items-center gap-2 text-white/80 hover:text-white transition-colors duration-200 text-sm bg-black/50 px-3 py-2 rounded-full backdrop-blur-sm"
                       aria-label="Powered by Cap"
                     >
                       <span className="text-sm text-white/80">Powered by</span>
@@ -672,22 +694,22 @@ export const EmbedVideo = forwardRef<
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
                 transition={{ duration: 0.3 }}
-                className="absolute top-4 left-4 sm:top-6 sm:left-6 z-30 max-w-[calc(100%-2rem)] sm:max-w-2xl"
+                className="absolute top-2 left-2 xs:top-6 xs:left-6 z-30 max-w-[calc(100%-1rem)] xs:max-w-2xl"
               >
-                <div className="bg-gradient-to-r from-black/70 to-black/50 backdrop-blur-md rounded-xl px-3 py-3 sm:px-4 sm:py-3 border border-white/10 shadow-2xl">
-                  <div className="flex items-center gap-3">
+                <div className="bg-gradient-to-r from-black/70 to-black/50 backdrop-blur-md rounded-lg sm:rounded-xl px-2 py-1.5 sm:px-4 sm:py-3 border border-white/10 shadow-2xl">
+                  <div className="flex items-center gap-2 sm:gap-3">
                     {ownerName && (
                       <Avatar
                         name={ownerName}
-                        className="size-8 sm:size-10 flex-shrink-0"
-                        letterClass="text-sm sm:text-base font-medium"
+                        className="hidden xs:flex xs:size-10 flex-shrink-0"
+                        letterClass="xs:text-base font-medium"
                       />
                     )}
                     <div className="min-w-0 flex-1">
-                      <h1 className="text-white text-lg sm:text-xl md:text-2xl font-semibold leading-tight truncate">
+                      <h1 className="text-white text-sm sm:text-xl md:text-2xl font-semibold leading-tight truncate">
                         {data.name}
                       </h1>
-                      <div className="flex items-center gap-2 mt-1">
+                      <div className="flex items-center gap-1 sm:gap-2 mt-0.5 sm:mt-1">
                         {ownerName && (
                           <p className="text-gray-300 text-xs sm:text-sm font-medium truncate">
                             {ownerName}
@@ -713,11 +735,11 @@ export const EmbedVideo = forwardRef<
             <div
               className={`absolute z-10 p-2 w-full text-center transition-all duration-300 ease-in-out ${
                 overlayVisible
-                  ? "bottom-20 sm:bottom-24"
-                  : "bottom-6 sm:bottom-8"
+                  ? "bottom-24 xs:bottom-24"
+                  : "bottom-8 xs:bottom-8"
               }`}
             >
-              <div className="inline px-2 py-1 text-sm text-white bg-black bg-opacity-75 rounded-xl sm:text-lg md:text-2xl">
+              <div className="inline px-3 py-2 text-base text-white bg-black bg-opacity-75 rounded-xl xs:text-lg md:text-2xl max-w-[90%] xs:max-w-none">
                 {currentSubtitle.text
                   .replace("- ", "")
                   .replace(".", "")
@@ -733,14 +755,14 @@ export const EmbedVideo = forwardRef<
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.3 }}
-                className="absolute top-4 left-4 sm:top-6 sm:left-6 z-30"
+                className="hidden xs:flex absolute top-4 left-4 xs:top-6 xs:left-6 z-30"
               >
                 <button
                   onClick={() => window.open("https://cap.so", "_blank")}
                   className="opacity-30 hover:opacity-100 transition-opacity duration-200 cursor-pointer"
                   aria-label="Powered by Cap"
                 >
-                  <Logo className="w-auto h-6 sm:h-8" white={true} />
+                  <Logo className="w-auto h-6 xs:h-8" white={true} />
                 </button>
               </motion.div>
             )}
@@ -749,15 +771,53 @@ export const EmbedVideo = forwardRef<
 
         <div
           className={`absolute left-0 right-0 z-30 transition-all duration-300 ease-in-out ${
-            overlayVisible ? "bottom-[60px]" : "bottom-0"
+            overlayVisible ? "bottom-[68px] xs:bottom-[60px]" : "bottom-0"
           }`}
         >
           <div
             ref={timelineRef}
-            className="h-6 cursor-pointer px-4"
+            className="h-8 xs:h-6 cursor-pointer px-4 py-2 xs:py-0 touch-manipulation"
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
+            onTouchStart={(e) => {
+              e.preventDefault();
+              const touch = e.touches[0];
+              const rect = timelineRef.current?.getBoundingClientRect();
+              if (rect && touch) {
+                const percentage = Math.max(
+                  0,
+                  Math.min(1, (touch.clientX - rect.left) / rect.width)
+                );
+                const seekTime = percentage * longestDuration;
+                if (videoRef.current) {
+                  videoRef.current.currentTime = seekTime;
+                  setCurrentTime(seekTime);
+                }
+              }
+              setIsDragging(true);
+            }}
+            onTouchMove={(e) => {
+              if (isDragging) {
+                e.preventDefault();
+                const touch = e.touches[0];
+                const rect = timelineRef.current?.getBoundingClientRect();
+                if (rect && touch) {
+                  const percentage = Math.max(
+                    0,
+                    Math.min(1, (touch.clientX - rect.left) / rect.width)
+                  );
+                  const seekTime = percentage * longestDuration;
+                  if (videoRef.current) {
+                    videoRef.current.currentTime = seekTime;
+                    setCurrentTime(seekTime);
+                  }
+                }
+              }
+            }}
+            onTouchEnd={() => {
+              setIsDragging(false);
+            }}
           >
             {!isLoading && comments && comments.length > 0 && (
               <div className="-mt-6 w-full md:-mt-6">
@@ -783,7 +843,7 @@ export const EmbedVideo = forwardRef<
                   return (
                     <div
                       key={comment.id}
-                      className="absolute z-10 text-sm transition-all hover:scale-125 -mt-5 md:-mt-5"
+                      className="absolute z-10 text-sm transition-all hover:scale-125 active:scale-110 -mt-5 md:-mt-5 touch-manipulation"
                       style={{
                         left: `${commentPosition}%`,
                       }}
@@ -794,7 +854,7 @@ export const EmbedVideo = forwardRef<
                         {comment.type === "text" ? (
                           <MessageSquare
                             fill="#646464"
-                            className="w-auto h-[18px] sm:h-[22px] text-white"
+                            className="w-auto h-[20px] xs:h-[18px] md:h-[22px] text-white"
                           />
                         ) : (
                           comment.content
@@ -809,7 +869,7 @@ export const EmbedVideo = forwardRef<
 
             <div className="relative w-full h-full">
               {chapters.length > 0 && longestDuration > 0 ? (
-                <div className="absolute top-2.5 w-full h-1 sm:h-1.5 z-10 flex">
+                <div className="absolute top-2.5 xs:top-2.5 w-full h-1.5 xs:h-1.5 z-10 flex">
                   {chapters.map((chapter, index) => {
                     const nextChapter = chapters[index + 1];
                     const chapterStart = chapter.start;
@@ -868,11 +928,11 @@ export const EmbedVideo = forwardRef<
                 <>
                   <div
                     style={{ boxShadow: "0 0 20px rgba(0,0,0,0.6)" }}
-                    className="absolute top-2.5 w-full h-1 sm:h-1.5 bg-gray-400 bg-opacity-50 z-10 cursor-pointer"
+                    className="absolute top-2.5 xs:top-2.5 w-full h-1.5 xs:h-1.5 bg-gray-400 bg-opacity-50 z-10 cursor-pointer"
                     onClick={handleSeek}
                   />
                   <div
-                    className="absolute top-2.5 h-1 sm:h-1.5 bg-white cursor-pointer z-10 pointer-events-none"
+                    className="absolute top-2.5 xs:top-2.5 h-1.5 xs:h-1.5 bg-white cursor-pointer z-10 pointer-events-none"
                     style={{ width: `${watchedPercentage}%` }}
                   />
                 </>
@@ -883,7 +943,7 @@ export const EmbedVideo = forwardRef<
                   boxShadow: "0 0 20px rgba(0,0,0,0.1)",
                   left: `${watchedPercentage}%`,
                 }}
-                className="absolute top-2 z-20 -mt-1.5 -ml-2 w-5 h-5 bg-white rounded-full cursor-pointer focus:outline-none border-2 border-gray-5"
+                className="absolute top-1.5 xs:top-2 z-20 -mt-1.5 -ml-2 xs:-ml-2 w-6 h-6 xs:w-5 xs:h-5 bg-white rounded-full cursor-pointer focus:outline-none border-2 border-gray-5"
                 tabIndex={0}
               />
             </div>
@@ -901,30 +961,30 @@ export const EmbedVideo = forwardRef<
             setIsHoveringControls(false);
           }}
         >
-          <div className="flex justify-between items-center px-4 py-3">
-            <div className="flex items-center space-x-3">
+          <div className="flex justify-between items-center px-3 xs:px-4 py-3 xs:py-3">
+            <div className="flex items-center space-x-2 xs:space-x-3">
               <button
                 aria-label="Play video"
-                className="inline-flex justify-center items-center px-2 py-2 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10"
+                className="inline-flex justify-center items-center px-2 py-2 xs:px-2 xs:py-2 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 min-h-[44px] min-w-[44px] xs:min-h-0 xs:min-w-0"
                 tabIndex={0}
                 type="button"
                 onClick={() => handlePlayPauseClick()}
               >
                 {isPlaying ? (
-                  <Pause className="w-auto h-5 sm:h-6" />
+                  <Pause className="w-auto h-6 xs:h-5 md:h-6" />
                 ) : (
-                  <Play className="w-auto h-5 sm:h-6" />
+                  <Play className="w-auto h-6 xs:h-5 md:h-6" />
                 )}
               </button>
-              <div className="text-sm text-white font-medium select-none tabular">
+              <div className="text-xs xs:text-sm text-white font-medium select-none tabular">
                 {formatTime(currentTime)} / {formatTime(longestDuration)}
               </div>
             </div>
 
-            <div className="flex justify-end space-x-2">
+            <div className="flex justify-end space-x-1 xs:space-x-2">
               <button
                 aria-label={`Change video speed to ${videoSpeed}x`}
-                className="inline-flex min-w-[45px] items-center text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-gray-100 border-transparent hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 px-2 py-2 justify-center rounded-lg"
+                className="inline-flex min-w-[44px] xs:min-w-[45px] items-center text-xs xs:text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-gray-100 border-transparent hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 px-2 py-2 justify-center rounded-lg min-h-[44px] xs:min-h-0"
                 tabIndex={0}
                 type="button"
                 onClick={handleSpeedChange}
@@ -935,7 +995,7 @@ export const EmbedVideo = forwardRef<
               {isTranscriptionProcessing && subtitles.length === 0 && (
                 <button
                   aria-label="Transcription is processing"
-                  className="inline-flex justify-center items-center px-2 py-2 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10"
+                  className="inline-flex justify-center items-center px-2 py-2 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 min-h-[44px] min-w-[44px] xs:min-h-0 xs:min-w-0"
                   tabIndex={0}
                   type="button"
                   onClick={() => {
@@ -944,7 +1004,7 @@ export const EmbedVideo = forwardRef<
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
-                    className="w-5 h-5 sm:w-6 sm:h-6"
+                    className="w-6 h-6 xs:w-5 xs:h-5 md:w-6 md:h-6"
                     viewBox="0 0 24 24"
                   >
                     <style>
@@ -970,7 +1030,7 @@ export const EmbedVideo = forwardRef<
               {aiProcessing && (
                 <button
                   aria-label="AI summary is processing"
-                  className="inline-flex justify-center items-center px-2 py-2 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10"
+                  className="inline-flex justify-center items-center px-2 py-2 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 min-h-[44px] min-w-[44px] xs:min-h-0 xs:min-w-0"
                   tabIndex={0}
                   type="button"
                   onClick={() => {
@@ -979,7 +1039,7 @@ export const EmbedVideo = forwardRef<
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
-                    className="w-5 h-5 sm:w-6 sm:h-6"
+                    className="w-6 h-6 xs:w-5 xs:h-5 md:w-6 md:h-6"
                     viewBox="0 0 24 24"
                   >
                     <style>
@@ -1007,7 +1067,7 @@ export const EmbedVideo = forwardRef<
                   aria-label={
                     subtitlesVisible ? "Hide subtitles" : "Show subtitles"
                   }
-                  className="inline-flex justify-center items-center px-2 py-2 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10"
+                  className="inline-flex justify-center items-center px-2 py-2 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 min-h-[44px] min-w-[44px] xs:min-h-0 xs:min-w-0"
                   tabIndex={0}
                   type="button"
                   onClick={() => setSubtitlesVisible(!subtitlesVisible)}
@@ -1020,7 +1080,7 @@ export const EmbedVideo = forwardRef<
                       strokeLinecap="round"
                       strokeLinejoin="round"
                       strokeWidth="2"
-                      className="w-auto h-5 sm:h-6"
+                      className="w-auto h-6 xs:h-5 md:h-6"
                       viewBox="0 0 24 24"
                     >
                       <rect
@@ -1041,7 +1101,7 @@ export const EmbedVideo = forwardRef<
                       strokeLinecap="round"
                       strokeLinejoin="round"
                       strokeWidth="2"
-                      className="w-auto h-5 sm:h-6"
+                      className="w-auto h-6 xs:h-5 md:h-6"
                       viewBox="0 0 24 24"
                     >
                       <path d="M10.5 5H19a2 2 0 012 2v8.5M17 11h-.5M19 19H5a2 2 0 01-2-2V7a2 2 0 012-2M2 2l20 20M7 11h4M7 15h2.5"></path>
@@ -1052,26 +1112,26 @@ export const EmbedVideo = forwardRef<
 
               <button
                 aria-label={videoRef?.current?.muted ? "Unmute" : "Mute"}
-                className="inline-flex justify-center items-center px-2 py-2 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10"
+                className="inline-flex justify-center items-center px-2 py-2 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 min-h-[44px] min-w-[44px] xs:min-h-0 xs:min-w-0"
                 tabIndex={0}
                 type="button"
                 onClick={() => handleMuteClick()}
               >
                 {videoRef?.current?.muted ? (
-                  <VolumeX className="w-auto h-5 sm:h-6" />
+                  <VolumeX className="w-auto h-6 xs:h-5 md:h-6" />
                 ) : (
-                  <Volume2 className="w-auto h-5 sm:h-6" />
+                  <Volume2 className="w-auto h-6 xs:h-5 md:h-6" />
                 )}
               </button>
 
               <button
                 aria-label="Go fullscreen"
-                className="inline-flex justify-center items-center px-2 py-2 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10"
+                className="inline-flex justify-center items-center px-2 py-2 text-sm font-medium text-gray-100 rounded-lg border border-transparent transition duration-150 ease-in-out focus:outline-none hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 min-h-[44px] min-w-[44px] xs:min-h-0 xs:min-w-0"
                 tabIndex={0}
                 type="button"
                 onClick={handleFullscreenClick}
               >
-                <Maximize className="w-auto h-5 sm:h-6" />
+                <Maximize className="w-auto h-6 xs:h-5 md:h-6" />
               </button>
             </div>
           </div>
@@ -1095,7 +1155,7 @@ export const EmbedVideo = forwardRef<
               >
                 <div className="relative">
                   <div className="opacity-50 transition-opacity hover:opacity-100 peer">
-                    <Logo className="w-auto h-4 sm:h-8" white={true} />
+                    <Logo className="w-auto h-4 xs:h-8" white={true} />
                   </div>
 
                   <div

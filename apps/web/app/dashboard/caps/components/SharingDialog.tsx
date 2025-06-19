@@ -138,11 +138,10 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
   };
 
   const handleCopyEmbedCode = async () => {
-    const embedCode = `<div style="position: relative; padding-bottom: 56.25%; height: 0;"><iframe src="${
-      process.env.NODE_ENV === "development"
-        ? "http://localhost:3000"
-        : "https://cap.so"
-    }/embed/${capId}" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></iframe></div>`;
+    const embedCode = `<div style="position: relative; padding-bottom: 56.25%; height: 0;"><iframe src="${process.env.NODE_ENV === "development"
+      ? "http://localhost:3000"
+      : "https://cap.so"
+      }/embed/${capId}" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></iframe></div>`;
 
     try {
       await navigator.clipboard.writeText(embedCode);
@@ -154,8 +153,8 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 
   const filteredSpaces = searchTerm
     ? spacesData?.filter((space) =>
-        space.name.toLowerCase().includes(searchTerm.toLowerCase())
-      )
+      space.name.toLowerCase().includes(searchTerm.toLowerCase())
+    )
     : spacesData;
 
   return (
@@ -176,7 +175,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
           </DialogTitle>
         </DialogHeader>
 
-        <div className="flex w-full h-12 border-b border-gray-4">
+        <div className="flex w-full h-12 border-b bg-gray-1 border-gray-4">
           {tabs.map((tab) => (
             <div
               key={tab}
@@ -246,11 +245,10 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
             <div className="space-y-4">
               <div className="p-3 rounded-lg border bg-gray-3 border-gray-4">
                 <code className="font-mono text-xs break-all text-gray-11">
-                  {`<div style="position: relative; padding-bottom: 56.25%; height: 0;"><iframe src="${
-                    process.env.NODE_ENV === "development"
-                      ? "http://localhost:3000"
-                      : "https://cap.so"
-                  }/embed/${capId}" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></iframe></div>`}
+                  {`<div style="position: relative; padding-bottom: 56.25%; height: 0;"><iframe src="${process.env.NODE_ENV === "development"
+                    ? "http://localhost:3000"
+                    : "https://cap.so"
+                    }/embed/${capId}" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></iframe></div>`}
                 </code>
               </div>
               <Button

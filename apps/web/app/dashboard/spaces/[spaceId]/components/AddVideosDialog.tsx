@@ -3,6 +3,7 @@
 import React from "react";
 import { getUserVideos } from "@/actions/videos/get-user-videos";
 import { addVideosToSpace } from "@/actions/spaces/add-videos";
+import { removeVideosFromSpace } from "@/actions/spaces/remove-videos";
 import { getSpaceVideoIds } from "@/actions/spaces/get-space-videos";
 import AddVideosDialogBase from "./AddVideosDialogBase";
 
@@ -29,6 +30,7 @@ export const AddVideosDialog: React.FC<AddVideosDialogProps> = ({
       entityName={spaceName}
       onVideosAdded={onVideosAdded}
       addVideos={addVideosToSpace}
+      removeVideos={removeVideosFromSpace}
       getVideos={getUserVideos}
       getEntityVideoIds={getSpaceVideoIds}
     />
