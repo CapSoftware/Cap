@@ -1519,6 +1519,12 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
               onChange={(mirror) => setProject("camera", "mirror", mirror)}
             />
           </Subfield>
+          <Subfield name="Use Camera Aspect Ratio">
+            <Toggle
+              checked={project.camera.use_camera_aspect}
+              onChange={(v) => setProject("camera", "use_camera_aspect", v)}
+            />
+          </Subfield>
         </div>
       </Field>
       {/** Dashed divider */}
