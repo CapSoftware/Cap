@@ -1,4 +1,4 @@
-import React, { useRef, useMemo } from "react";
+import React, { useRef, useState, useEffect } from "react";
 import { Grid, useGrid } from '@virtual-grid/react';
 import VideoCard from "./VideoCard";
 import { Video } from "./AddVideosDialogBase";
@@ -27,12 +27,36 @@ const VirtualizedVideoGrid = ({
   // Create a ref for the scrollable container
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Initialize the grid
+  // State for responsive column count and width
+  const [responsiveColumnCount, setResponsiveColumnCount] = useState(columnCount);
+
+  // Handle responsive column count
+  useEffect(() => {
+    // Function to update column count and width based on screen size
+    const updateResponsiveLayout = () => {
+      const isMobile = window.matchMedia('(max-width: 640px)').matches;
+      setResponsiveColumnCount(isMobile ? 1 : columnCount);
+    };
+
+    // Set initial value
+    updateResponsiveLayout();
+
+    // Add event listener for window resize
+    window.addEventListener('resize', updateResponsiveLayout);
+
+    // Clean up
+    return () => window.removeEventListener('resize', updateResponsiveLayout);
+  }, [columnCount]);
+
+  // Initialize the grid with responsive column count
   const grid = useGrid({
     scrollRef,
     count: videos.length,
-    columns: columnCount,
-    // The itemSize and padding are passed directly as style props
+    columns: responsiveColumnCount,
+    gap: 12,
+    size: {
+      height: rowHeight,
+    }
   });
 
   return (
@@ -40,7 +64,6 @@ const VirtualizedVideoGrid = ({
       ref={scrollRef}
       style={{
         height,
-        overflow: 'auto',
         overflowX: 'hidden',
       }}
       className="pt-2 custom-scroll"
@@ -54,11 +77,9 @@ const VirtualizedVideoGrid = ({
           const video = videos[index]!;
 
           return (
-            <div style={{
-              padding: '8px 12px 0 0',
-              width: columnWidth,
-              height: rowHeight,
-            }}>
+            <div
+              className="px-2 mx-auto md:mx-0 md:px-0"
+            >
               <VideoCard
                 key={video.id}
                 video={video}

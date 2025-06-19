@@ -12,6 +12,7 @@ interface VideoCardProps {
   isSelected: boolean;
   onToggle: () => void;
   isAlreadyInEntity: boolean;
+  className?: string;
 }
 
 const VideoCard: React.FC<VideoCardProps> = memo(({
@@ -19,6 +20,7 @@ const VideoCard: React.FC<VideoCardProps> = memo(({
   isSelected,
   onToggle,
   isAlreadyInEntity,
+  className,
 }) => {
   const effectiveDate = video.metadata?.customCreatedAt
     ? new Date(video.metadata.customCreatedAt)
@@ -28,7 +30,8 @@ const VideoCard: React.FC<VideoCardProps> = memo(({
     <div
       onClick={onToggle}
       className={clsx(
-        "flex relative flex-col p-3 h-full rounded-xl border transition-all duration-200 group",
+        "flex relative flex-col p-3 w-full min-h-fit rounded-xl border transition-all duration-200 group",
+        className,
         isAlreadyInEntity && isSelected && "border-red-500",
         isAlreadyInEntity && !isSelected && "border-blue-500",
         !isAlreadyInEntity && isSelected && "border-green-500",
@@ -100,11 +103,11 @@ const VideoCard: React.FC<VideoCardProps> = memo(({
           videoId={video.id}
           alt={`${video.name} Thumbnail`}
           objectFit="cover"
-          containerClass="min-h-full !rounded-lg !border-b-0"
+          containerClass="!h-full !rounded-lg !border-b-0"
         />
       </div>
 
-      <div className="space-y-1">
+      <div className="space-y-1 min-h-fit">
         <Tooltip content={video.name}>
           <h3
             className={clsx(

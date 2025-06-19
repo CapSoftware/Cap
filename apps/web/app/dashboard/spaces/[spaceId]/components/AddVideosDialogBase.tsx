@@ -171,7 +171,7 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="flex flex-col p-0 w-full max-w-2xl rounded-xl border bg-gray-2 border-gray-4">
+      <DialogContent className="flex flex-col p-0 w-[calc(100%-20px)] max-w-2xl rounded-xl border bg-gray-2 border-gray-4">
         <DialogHeader
           icon={<FontAwesomeIcon icon={faVideo} />}
           description={
@@ -226,7 +226,7 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
             </div>
           </div>
 
-          <div className="flex-1 w-full min-h-0">
+          <div className="flex-1 w-full">
             {isLoading ? (
               <div className="flex justify-center items-center h-64">
                 <div className="w-8 h-8 rounded-full border-b-2 border-blue-500 animate-spin"></div>
