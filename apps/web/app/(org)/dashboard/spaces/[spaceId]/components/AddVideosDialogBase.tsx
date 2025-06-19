@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Dialog,
   DialogContent,
@@ -15,14 +15,10 @@ import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faVideo } from "@fortawesome/free-solid-svg-icons";
-import { VideoThumbnail } from "@/components/VideoThumbnail";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Search } from "lucide-react";
-import { Check, Minus, Plus } from "lucide-react";
-import moment from "moment";
 import clsx from "clsx";
-import { motion } from "framer-motion";
-import { Tooltip } from "@/components/Tooltip";
+import VirtualizedVideoGrid from "./VirtualizedVideoGrid";
 
 interface AddVideosDialogBaseProps {
   open: boolean;
@@ -32,11 +28,11 @@ interface AddVideosDialogBaseProps {
   onVideosAdded?: () => void;
   addVideos: (entityId: string, videoIds: string[]) => Promise<any>;
   removeVideos: (entityId: string, videoIds: string[]) => Promise<any>;
-  getVideos: (limit: number) => Promise<any>;
+  getVideos: (limit?: number) => Promise<any>;
   getEntityVideoIds: (entityId: string) => Promise<any>;
 }
 
-interface Video {
+export interface Video {
   id: string;
   ownerId: string;
   name: string;
@@ -68,6 +64,8 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
   const [searchTerm, setSearchTerm] = useState("");
   const filterTabs = ['all', 'added', 'notAdded'];
 
+  const queryClient = useQueryClient();
+
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -75,19 +73,22 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
     },
   });
 
-  const { data: videosData, isLoading } = useQuery({
+  const { data: videosData, isLoading } = useQuery<Video[]>({
     queryKey: ["user-videos"],
     queryFn: async () => {
-      const result = await getVideos(50);
+      const result = await getVideos();
       if (!result.success) {
         throw new Error(result.error);
       }
       return result.data;
     },
     enabled: open,
+    refetchOnWindowFocus: false, // Don't refetch when window regains focus
+    staleTime: Infinity, // Consider data fresh forever (until manually invalidated)
+    gcTime: 1000 * 60 * 5, // Cache for 5 minutes (gcTime is the new name for cacheTime)
   });
 
-  const { data: entityVideoIds } = useQuery({
+  const { data: entityVideoIds } = useQuery<string[]>({
     queryKey: ["entity-video-ids", entityId],
     queryFn: async () => {
       const result = await getEntityVideoIds(entityId);
@@ -97,6 +98,9 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
       return result.data;
     },
     enabled: open,
+    refetchOnWindowFocus: false, // Don't refetch when window regains focus
+    staleTime: Infinity, // Consider data fresh forever (until manually invalidated)
+    gcTime: 1000 * 60 * 5, // Cache for 5 minutes (gcTime is the new name for cacheTime)
   });
 
   const updateVideosMutation = useMutation({
@@ -111,8 +115,15 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
       }
       return { addResult, removeResult };
     },
-    onSuccess: (result) => {
+    onSuccess: async (result) => {
       const { addResult, removeResult } = result || {};
+
+      // Invalidate both queries to ensure UI updates
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["user-videos"] }),
+        queryClient.invalidateQueries({ queryKey: ["entity-video-ids", entityId] })
+      ]);
+
       if ((addResult?.success ?? true) && (removeResult?.success ?? true)) {
         toast.success("Videos updated successfully");
         setSelectedVideos([]);
@@ -131,26 +142,28 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
   // Tab state: 'all', 'added', or 'notAdded'
   const [videoTab, setVideoTab] = useState<typeof filterTabs[number]>('all');
 
-  // Filter videos by search
-  let filteredVideos: Video[] = videosData?.filter((video: Video) =>
-    video.name.toLowerCase().includes(searchTerm.toLowerCase())
-  ) || [];
+  // Memoize filtered videos for stable reference
+  const filteredVideos: Video[] = useMemo(() => {
+    let vids = videosData?.filter((video: Video) =>
+      video.name.toLowerCase().includes(searchTerm.toLowerCase())
+    ) || [];
+    if (videoTab === 'added') {
+      vids = vids.filter((video: Video) => entityVideoIds?.includes(video.id));
+    } else if (videoTab === 'notAdded') {
+      vids = vids.filter((video: Video) => !entityVideoIds?.includes(video.id));
+    }
+    return vids;
+  }, [videosData, searchTerm, videoTab, entityVideoIds]);
 
-  // Further filter by tab
-  if (videoTab === 'added') {
-    filteredVideos = filteredVideos.filter(video => entityVideoIds?.includes(video.id));
-  } else if (videoTab === 'notAdded') {
-    filteredVideos = filteredVideos.filter(video => !entityVideoIds?.includes(video.id));
-  }
 
-
-  const handleVideoToggle = (videoId: string) => {
+  // Memoize handleVideoToggle for stable reference
+  const handleVideoToggle = useCallback((videoId: string) => {
     setSelectedVideos((prev) =>
       prev.includes(videoId)
         ? prev.filter((id) => id !== videoId)
         : [...prev, videoId]
     );
-  };
+  }, []);
 
   const handleUpdateVideos = () => {
     if (!entityVideoIds) return;
@@ -171,7 +184,7 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="flex flex-col p-0 w-full max-w-2xl rounded-xl border bg-gray-2 border-gray-4">
+      <DialogContent className="flex flex-col p-0 w-[calc(100%-20px)] max-w-2xl rounded-xl border bg-gray-2 border-gray-4">
         <DialogHeader
           icon={<FontAwesomeIcon icon={faVideo} />}
           description={
@@ -212,7 +225,7 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
         </div>
 
         <div className="flex overflow-hidden flex-col flex-1 px-4 py-4 min-h-0 sm:px-8 sm:py-6">
-          <div className="flex-shrink-0 px-2 mb-3">
+          <div className="flex-shrink-0 mb-3">
             <div className="flex relative w-full">
               <div className="flex absolute inset-y-0 left-3 items-center pointer-events-none">
                 <Search className="size-4 text-gray-9" />
@@ -226,7 +239,7 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
             </div>
           </div>
 
-          <div className="overflow-y-auto flex-1 px-1 min-h-0">
+          <div className="flex-1 w-full">
             {isLoading ? (
               <div className="flex justify-center items-center h-64">
                 <div className="w-8 h-8 rounded-full border-b-2 border-blue-500 animate-spin"></div>
@@ -257,19 +270,15 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
                 </p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 max-h-[400px] overflow-y-auto custom-scroll pt-2">
-                {filteredVideos.map((video) => (
-                  <VideoCard
-                    key={video.id}
-                    video={video}
-                    isSelected={selectedVideos.includes(video.id)}
-                    onToggle={() => handleVideoToggle(video.id)}
-                    isAlreadyInEntity={
-                      entityVideoIds?.includes(video.id) || false
-                    }
-                  />
-                ))}
-              </div>
+              <VirtualizedVideoGrid
+                videos={filteredVideos}
+                selectedVideos={selectedVideos}
+                handleVideoToggle={handleVideoToggle}
+                entityVideoIds={entityVideoIds || []}
+                height={300}
+                columnCount={3}
+                rowHeight={200}
+              />
             )}
           </div>
         </div>
@@ -312,101 +321,5 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
   );
 };
 
-interface VideoCardProps {
-  video: Video;
-  isSelected: boolean;
-  onToggle: () => void;
-  isAlreadyInEntity: boolean;
-}
-
-const VideoCard: React.FC<VideoCardProps> = ({
-  video,
-  isSelected,
-  onToggle,
-  isAlreadyInEntity,
-}) => {
-  const effectiveDate = video.metadata?.customCreatedAt
-    ? new Date(video.metadata.customCreatedAt)
-    : video.createdAt;
-
-  return (
-    <div
-      onClick={onToggle}
-      className={clsx(
-        "flex relative flex-col p-3 h-full rounded-xl border transition-all duration-200 group",
-        isAlreadyInEntity && isSelected && "border-red-500",
-        isAlreadyInEntity && !isSelected && "border-blue-500",
-        !isAlreadyInEntity && isSelected && "border-green-500",
-        !isAlreadyInEntity && !isSelected && "border-gray-4",
-        isAlreadyInEntity ? "bg-gray-3" : isSelected ? "bg-gray-3" : "bg-transparent cursor-pointer hover:bg-gray-3 hover:border-gray-5"
-      )}
-    >
-      {(isSelected || isAlreadyInEntity) && (
-        <motion.div
-          key={video.id + (isAlreadyInEntity ? '-added' : '-selected')}
-          animate={{
-            scale: isSelected || isAlreadyInEntity ? 1 : 0,
-          }}
-          initial={{
-            scale: isSelected || isAlreadyInEntity ? 1 : 0,
-          }}
-          transition={{
-            type: "spring",
-            stiffness: 300,
-            damping: 20,
-          }}
-          className={clsx(
-            "flex absolute -top-2 -right-2 z-10 justify-center items-center rounded-full size-5",
-            isSelected && !isAlreadyInEntity && "bg-green-500",
-            isSelected && isAlreadyInEntity && "bg-red-500",
-            !isSelected && isAlreadyInEntity && "bg-blue-500"
-          )}
-        >
-          {isSelected && isAlreadyInEntity ? (
-            <Minus className="text-white" size={14} />
-          ) : isSelected && !isAlreadyInEntity ? (
-            <Check className="text-white" size={14} />
-          ) : (
-            <Plus className="text-white" size={14} />
-          )}
-        </motion.div>
-      )}
-
-      <div
-        className={clsx(
-          "overflow-visible relative mb-2 w-full h-32 rounded-lg border transition-colors bg-gray-3 border-gray-5"
-        )}
-      >
-        <VideoThumbnail
-          imageClass="w-full h-full transition-all duration-200 group-hover:scale-105"
-          userId={video.ownerId}
-          videoId={video.id}
-          alt={`${video.name} Thumbnail`}
-          objectFit="cover"
-          containerClass="min-h-full !rounded-lg !border-b-0"
-        />
-
-      </div>
-
-      <div className="space-y-1">
-        {/* Title Second */}
-        <Tooltip content={video.name}>
-          <h3
-            className={clsx(
-              "text-sm font-medium leading-tight truncate",
-              isAlreadyInEntity ? "text-gray-11" : "text-gray-12"
-            )}
-          >
-            {video.name}
-          </h3>
-        </Tooltip>
-
-        <p className="text-xs text-gray-9">
-          {moment(effectiveDate).format("MMM D, YYYY")}
-        </p>
-      </div>
-    </div>
-  );
-};
 
 export default AddVideosDialogBase;
