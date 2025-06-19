@@ -33,7 +33,7 @@ const toolCategories: ToolCategory[] = [
   },
 ];
 
-export function ToolsPageContent() {
+export function PageContent() {
   useEffect(() => {
     const animateClouds = () => {
       const cloud1 = document.getElementById("cloud-1");
