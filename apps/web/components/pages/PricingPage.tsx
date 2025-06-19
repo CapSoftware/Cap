@@ -97,7 +97,7 @@ export const PricingPage = () => {
           </motion.div>
 
           <motion.div
-            className="w-full max-w-[1000px] mx-auto"
+            className="w-full max-w-[1100px] mx-auto"
             variants={fadeInFromBottom}
             custom={0}
           >

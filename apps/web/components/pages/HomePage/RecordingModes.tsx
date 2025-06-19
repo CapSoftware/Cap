@@ -93,7 +93,8 @@ const RecordingModes = () => {
         <div className="relative h-full">
           {activeMode?.name === "Instant Mode" ? (
             <div
-              className="w-full rounded-t-xl overflow-hidden"
+              key="instant-mode"
+              className="overflow-hidden w-full rounded-t-xl"
               style={{
                 position: "relative",
                 paddingBottom: "56.25%",
@@ -101,9 +102,8 @@ const RecordingModes = () => {
               }}
             >
               <iframe
-                src={`https://cap.so/embed/9et66p4qsdz0rgh${
-                  hasEverSwitched ? "?autoplay=true" : ""
-                }`}
+                src={`https://cap.so/embed/9et66p4qsdz0rgh${hasEverSwitched ? "?autoplay=true" : ""
+                  }`}
                 frameBorder="0"
                 allowFullScreen
                 style={{
@@ -119,7 +119,8 @@ const RecordingModes = () => {
             </div>
           ) : (
             <div
-              className="w-full rounded-t-xl overflow-hidden"
+              key="studio-mode"
+              className="overflow-hidden w-full rounded-t-xl"
               style={{
                 position: "relative",
                 paddingBottom: "56.25%",
@@ -127,9 +128,8 @@ const RecordingModes = () => {
               }}
             >
               <iframe
-                src={`https://cap.so/embed/xt3nhh0zkdw034h${
-                  hasEverSwitched ? "?autoplay=true" : ""
-                }`}
+                src={`https://cap.so/embed/xt3nhh0zkdw034h${hasEverSwitched ? "?autoplay=true" : ""
+                  }`}
                 frameBorder="0"
                 allowFullScreen
                 style={{
@@ -146,7 +146,7 @@ const RecordingModes = () => {
           )}
         </div>
         {/*Video Description*/}
-        <div className="p-4 border-t bg-gray-2 border-gray-5">
+        <div className="p-4 border-t border-b bg-gray-2 border-gray-5">
           <p className="mx-auto w-full text-sm text-center md:text-xl text-gray-12">
             {activeMode?.description}
           </p>
