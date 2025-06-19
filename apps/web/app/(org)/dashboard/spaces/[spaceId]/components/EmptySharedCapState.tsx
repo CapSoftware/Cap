@@ -2,7 +2,7 @@ import { useRive } from "@rive-app/react-canvas";
 import { Button } from "@cap/ui";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faPlus } from "@fortawesome/free-solid-svg-icons";
-
+import { useTheme } from "../../../Contexts";
 interface EmptySharedCapStateProps {
   organizationName: string;
   type?: "space" | "organization";
