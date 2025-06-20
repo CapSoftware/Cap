@@ -1,13 +1,23 @@
 "use client";
 
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
-import { CapCardAnalytics } from "@/app/dashboard/caps/components/CapCardAnalytics";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema } from "@cap/database/schema";
 import { Button, Avatar } from "@cap/ui";
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  use,
+  ComponentProps,
+  Suspense,
+  PropsWithChildren,
+  useMemo,
+} from "react";
 import { Tooltip } from "react-tooltip";
+import { CapCardAnalytics } from "@/app/(org)/dashboard/caps/components/CapCardAnalytics";
+
 import { AuthOverlay } from "../AuthOverlay";
 
 type CommentType = typeof commentsSchema.$inferSelect & {
@@ -15,12 +25,8 @@ type CommentType = typeof commentsSchema.$inferSelect & {
 };
 
 interface ActivityProps {
-  analytics: {
-    views: number;
-    comments: number;
-    reactions: number;
-  };
-  comments: CommentType[];
+  views: MaybePromise<number>;
+  comments: MaybePromise<CommentType[]>;
   user: typeof userSelectProps | null;
   onSeek?: (time: number) => void;
   videoId: string;
@@ -28,13 +34,14 @@ interface ActivityProps {
 }
 
 interface CommentInputProps {
-  onSubmit: (content: string) => void;
+  onSubmit?: (content: string) => void;
   onCancel?: () => void;
   placeholder?: string;
   showCancelButton?: boolean;
   buttonLabel?: string;
   user?: typeof userSelectProps | null;
   autoFocus?: boolean;
+  disabled?: boolean;
 }
 
 const CommentInput: React.FC<CommentInputProps> = ({
@@ -45,6 +52,7 @@ const CommentInput: React.FC<CommentInputProps> = ({
   buttonLabel = "Reply",
   user,
   autoFocus = false,
+  disabled,
 }) => {
   const [content, setContent] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -58,7 +66,7 @@ const CommentInput: React.FC<CommentInputProps> = ({
   const handleSubmit = (e?: React.FormEvent) => {
     e?.preventDefault();
     if (content.trim()) {
-      onSubmit(content);
+      onSubmit?.(content);
       setContent("");
     }
   };
@@ -73,17 +81,23 @@ const CommentInput: React.FC<CommentInputProps> = ({
   return (
     <div className="flex items-start space-x-3">
       <div className="flex-1">
-        <div className="p-4 rounded-lg bg-gray-1">
+        <div className="p-2 rounded-lg bg-gray-1">
           <textarea
             ref={inputRef}
             value={content}
+            disabled={disabled}
             onChange={(e) => setContent(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={placeholder || "Leave a comment"}
             className="w-full text-[15px] leading-[22px] text-gray-12 bg-transparent focus:outline-none"
           />
           <div className="flex mt-2 space-x-2">
-            <Button size="sm" variant="primary" onClick={() => handleSubmit()}>
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => handleSubmit()}
+              disabled={disabled}
+            >
               {buttonLabel}
             </Button>
             {showCancelButton && onCancel && (
@@ -270,11 +284,7 @@ const Comment: React.FC<{
 };
 
 const EmptyState = () => (
-  <motion.div
-    initial={{ opacity: 0 }}
-    animate={{ opacity: 1 }}
-    className="flex flex-col justify-center items-center p-8 h-full text-center"
-  >
+  <div className="flex flex-col justify-center items-center p-8 h-full text-center animate-in fade-in">
     <div className="space-y-2 text-gray-300">
       <svg
         xmlns="http://www.w3.org/2000/svg"
@@ -295,236 +305,327 @@ const EmptyState = () => (
         Be the first to share your thoughts!
       </p>
     </div>
-  </motion.div>
+  </div>
 );
 
-export const Activity: React.FC<ActivityProps> = ({
-  analytics: initialAnalytics,
-  comments: initialComments,
-  user,
-  onSeek,
-  videoId,
-  isOwnerOrMember = false,
-}) => {
-  const [replyingTo, setReplyingTo] = useState<string | null>(null);
-  const [comments, setComments] = useState(initialComments);
-  const [optimisticComments, setOptimisticComments] = useState<CommentType[]>(
-    []
+export const Activity = Object.assign(
+  ({ user, videoId, isOwnerOrMember = false, ...props }: ActivityProps) => {
+    const comments =
+      props.comments instanceof Promise ? use(props.comments) : props.comments;
+
+    return (
+      <Activity.Shell
+        analytics={
+          <Suspense fallback={<CapCardAnalytics.Skeleton />}>
+            <Analytics
+              videoId={videoId}
+              views={props.views}
+              comments={comments}
+            />
+          </Suspense>
+        }
+        user={user}
+        isOwnerOrMember={isOwnerOrMember}
+      >
+        {({ setShowAuthOverlay }) => (
+          <Comments
+            comments={comments}
+            user={user}
+            videoId={videoId}
+            setShowAuthOverlay={setShowAuthOverlay}
+          />
+        )}
+      </Activity.Shell>
+    );
+  },
+  {
+    Shell: (props: {
+      analytics?: JSX.Element;
+      user: typeof userSelectProps | null;
+      isOwnerOrMember: boolean;
+      children?: (props: {
+        setShowAuthOverlay: (show: boolean) => void;
+      }) => JSX.Element;
+    }) => {
+      const [showAuthOverlay, setShowAuthOverlay] = useState(false);
+
+      return (
+        <div className="flex flex-col h-full">
+          {props.user && props.isOwnerOrMember && (
+            <div className="flex flex-row items-center p-4 border-b border-gray-200 h-12">
+              {props.analytics}
+            </div>
+          )}
+
+          {props.children?.({ setShowAuthOverlay })}
+
+          <AuthOverlay
+            isOpen={showAuthOverlay}
+            onClose={() => setShowAuthOverlay(false)}
+          />
+        </div>
+      );
+    },
+    Skeleton: (props: {
+      user: typeof userSelectProps | null;
+      isOwnerOrMember: boolean;
+    }) => (
+      <Activity.Shell {...props} analytics={<CapCardAnalytics.Skeleton />}>
+        {({ setShowAuthOverlay }) => (
+          <Comments.Skeleton
+            setShowAuthOverlay={setShowAuthOverlay}
+            user={props.user}
+          />
+        )}
+      </Activity.Shell>
+    ),
+  }
+);
+
+function Analytics(props: {
+  videoId: string;
+  views: MaybePromise<number>;
+  comments: CommentType[];
+}) {
+  const [_views, setViews] = useState(
+    props.views instanceof Promise ? use(props.views) : props.views
   );
-  const [showAuthOverlay, setShowAuthOverlay] = useState(false);
-  const [analytics, setAnalytics] = useState(initialAnalytics);
-  const commentsContainerRef = useRef<HTMLDivElement>(null);
+  const views = _views === 0 ? props.comments.length : _views;
 
   useEffect(() => {
     const fetchAnalytics = async () => {
       try {
-        const result = await getVideoAnalytics(videoId);
+        const result = await getVideoAnalytics(props.videoId);
 
-        setAnalytics({
-          views: result.count === 0 ? comments.length : result.count,
-          comments: comments.length,
-          reactions: 0,
-        });
+        setViews(result.count);
       } catch (error) {
         console.error("Error fetching analytics:", error);
       }
     };
 
     fetchAnalytics();
-  }, [videoId, comments.length]);
+  }, [props.videoId, props.comments.length]);
 
-  useEffect(() => {
-    if (commentsContainerRef.current) {
-      commentsContainerRef.current.scrollTop =
-        commentsContainerRef.current.scrollHeight;
-    }
-  }, []);
+  const totalComments = useMemo(
+    () => props.comments.filter((c) => c.type === "text").length,
+    [props.comments]
+  );
 
-  const scrollToBottom = () => {
-    if (commentsContainerRef.current) {
-      commentsContainerRef.current.scrollTo({
-        top: commentsContainerRef.current.scrollHeight,
-        behavior: "smooth",
-      });
-    }
-  };
-
-  const addOptimisticComment = (newComment: CommentType) => {
-    setOptimisticComments((prev) => [...prev, newComment]);
-    setTimeout(scrollToBottom, 100);
-  };
-
-  const handleNewComment = async (content: string) => {
-    const optimisticComment: CommentType = {
-      id: `temp-${Date.now()}`,
-      authorId: user?.id || "anonymous",
-      authorName: user?.name || "Anonymous",
-      content,
-      createdAt: new Date(),
-      videoId,
-      parentCommentId: "",
-      type: "text",
-      timestamp: null,
-      updatedAt: new Date(),
-    };
-
-    addOptimisticComment(optimisticComment);
-
-    try {
-      const response = await fetch("/api/video/comment", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          type: "text",
-          content,
-          videoId,
-          parentCommentId: "",
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to post comment");
-      }
-
-      const data = await response.json();
-
-      setOptimisticComments((prev) =>
-        prev.filter((c) => c.id !== optimisticComment.id)
-      );
-
-      setComments((prev) => [...prev, data]);
-    } catch (error) {
-      console.error("Error posting comment:", error);
-      setOptimisticComments((prev) =>
-        prev.filter((c) => c.id !== optimisticComment.id)
-      );
-    }
-  };
-
-  const handleReply = async (content: string) => {
-    if (!replyingTo) return;
-
-    const parentComment = comments.find((c) => c.id === replyingTo);
-    const actualParentId = parentComment?.parentCommentId
-      ? parentComment.parentCommentId
-      : replyingTo;
-
-    const optimisticReply: CommentType = {
-      id: `temp-${Date.now()}`,
-      authorId: user?.id || "anonymous",
-      authorName: user?.name || "Anonymous",
-      content,
-      createdAt: new Date(),
-      videoId: comments[0]?.videoId || "",
-      parentCommentId: actualParentId,
-      type: "text",
-      timestamp: null,
-      updatedAt: new Date(),
-    };
-
-    addOptimisticComment(optimisticReply);
-
-    try {
-      const response = await fetch("/api/video/comment", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          type: "text",
-          content,
-          videoId: comments[0]?.videoId,
-          parentCommentId: actualParentId,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to post reply");
-      }
-
-      const data = await response.json();
-
-      setOptimisticComments((prev) =>
-        prev.filter((c) => c.id !== optimisticReply.id)
-      );
-
-      setComments((prev) => [...prev, data]);
-
-      const newReplyElement = document.getElementById(`comment-${data.id}`);
-      if (newReplyElement) {
-        newReplyElement.scrollIntoView({
-          behavior: "smooth",
-          block: "center",
-        });
-      }
-
-      setReplyingTo(null);
-    } catch (error) {
-      console.error("Error posting reply:", error);
-      setOptimisticComments((prev) =>
-        prev.filter((c) => c.id !== optimisticReply.id)
-      );
-    }
-  };
-
-  const handleCancelReply = () => {
-    setReplyingTo(null);
-  };
-
-  const handleDeleteComment = async (commentId: string) => {
-    try {
-      const response = await fetch(
-        `/api/video/comment/delete?commentId=${commentId}`,
-        {
-          method: "DELETE",
-        }
-      );
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || "Failed to delete comment");
-      }
-
-      // Remove the comment and its replies from the state
-      setComments((prev) =>
-        prev.filter(
-          (comment) =>
-            comment.id !== commentId && comment.parentCommentId !== commentId
-        )
-      );
-    } catch (error) {
-      console.error("Error deleting comment:", error);
-      // You might want to show an error toast here
-    }
-  };
-
-  const allComments = [...comments, ...optimisticComments];
-  const rootComments = allComments.filter(
-    (comment) => !comment.parentCommentId || comment.parentCommentId === ""
+  const totalReactions = useMemo(
+    () => props.comments.filter((c) => c.type === "emoji").length,
+    [props.comments]
   );
 
   return (
-    <div className="flex flex-col h-full">
-      {user && isOwnerOrMember && (
-        <div className="flex-none border-b border-gray-200">
-          <div className="flex justify-between p-4">
-            <CapCardAnalytics
-              capId={videoId}
-              displayCount={analytics.views}
-              totalComments={analytics.comments}
-              totalReactions={analytics.reactions}
-            />
-          </div>
-        </div>
-      )}
+    <CapCardAnalytics
+      capId={props.videoId}
+      displayCount={views}
+      totalComments={totalComments}
+      totalReactions={totalReactions}
+    />
+  );
+}
 
-      <div
-        ref={commentsContainerRef}
-        className="overflow-y-auto flex-1 min-h-0"
+const Comments = Object.assign(
+  (props: {
+    comments: MaybePromise<CommentType[]>;
+    user: typeof userSelectProps | null;
+    videoId: string;
+    onSeek?: (time: number) => void;
+    setShowAuthOverlay: (v: boolean) => void;
+  }) => {
+    const [comments, setComments] = useState(
+      props.comments instanceof Promise ? use(props.comments) : props.comments
+    );
+
+    const { user } = props;
+    const [replyingTo, setReplyingTo] = useState<string | null>(null);
+    const [optimisticComments, setOptimisticComments] = useState<CommentType[]>(
+      []
+    );
+
+    const allComments = [...comments, ...optimisticComments];
+    const rootComments = allComments.filter(
+      (comment) => !comment.parentCommentId || comment.parentCommentId === ""
+    );
+
+    const commentsContainerRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+      if (commentsContainerRef.current) {
+        commentsContainerRef.current.scrollTop =
+          commentsContainerRef.current.scrollHeight;
+      }
+    }, []);
+
+    const scrollToBottom = () => {
+      if (commentsContainerRef.current) {
+        commentsContainerRef.current.scrollTo({
+          top: commentsContainerRef.current.scrollHeight,
+          behavior: "smooth",
+        });
+      }
+    };
+
+    const addOptimisticComment = (newComment: CommentType) => {
+      setOptimisticComments((prev) => [...prev, newComment]);
+      setTimeout(scrollToBottom, 100);
+    };
+
+    const handleNewComment = async (content: string) => {
+      const optimisticComment: CommentType = {
+        id: `temp-${Date.now()}`,
+        authorId: user?.id || "anonymous",
+        authorName: user?.name || "Anonymous",
+        content,
+        createdAt: new Date(),
+        videoId: props.videoId,
+        parentCommentId: "",
+        type: "text",
+        timestamp: null,
+        updatedAt: new Date(),
+      };
+
+      addOptimisticComment(optimisticComment);
+
+      try {
+        const response = await fetch("/api/video/comment", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            type: "text",
+            content,
+            videoId: props.videoId,
+            parentCommentId: "",
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to post comment");
+        }
+
+        const data = await response.json();
+
+        setOptimisticComments((prev) =>
+          prev.filter((c) => c.id !== optimisticComment.id)
+        );
+
+        setComments((prev) => [...prev, data]);
+      } catch (error) {
+        console.error("Error posting comment:", error);
+        setOptimisticComments((prev) =>
+          prev.filter((c) => c.id !== optimisticComment.id)
+        );
+      }
+    };
+
+    const handleReply = async (content: string) => {
+      if (!replyingTo) return;
+
+      const parentComment = comments.find((c) => c.id === replyingTo);
+      const actualParentId = parentComment?.parentCommentId
+        ? parentComment.parentCommentId
+        : replyingTo;
+
+      const optimisticReply: CommentType = {
+        id: `temp-${Date.now()}`,
+        authorId: user?.id || "anonymous",
+        authorName: user?.name || "Anonymous",
+        content,
+        createdAt: new Date(),
+        videoId: comments[0]?.videoId || "",
+        parentCommentId: actualParentId,
+        type: "text",
+        timestamp: null,
+        updatedAt: new Date(),
+      };
+
+      addOptimisticComment(optimisticReply);
+
+      try {
+        const response = await fetch("/api/video/comment", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            type: "text",
+            content,
+            videoId: comments[0]?.videoId,
+            parentCommentId: actualParentId,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to post reply");
+        }
+
+        const data = await response.json();
+
+        setOptimisticComments((prev) =>
+          prev.filter((c) => c.id !== optimisticReply.id)
+        );
+
+        setComments((prev) => [...prev, data]);
+
+        const newReplyElement = document.getElementById(`comment-${data.id}`);
+        if (newReplyElement) {
+          newReplyElement.scrollIntoView({
+            behavior: "smooth",
+            block: "center",
+          });
+        }
+
+        setReplyingTo(null);
+      } catch (error) {
+        console.error("Error posting reply:", error);
+        setOptimisticComments((prev) =>
+          prev.filter((c) => c.id !== optimisticReply.id)
+        );
+      }
+    };
+
+    const handleCancelReply = () => {
+      setReplyingTo(null);
+    };
+
+    const handleDeleteComment = async (commentId: string) => {
+      try {
+        const response = await fetch(
+          `/api/video/comment/delete?commentId=${commentId}`,
+          {
+            method: "DELETE",
+          }
+        );
+
+        if (!response.ok) {
+          const data = await response.json();
+          throw new Error(data.error || "Failed to delete comment");
+        }
+
+        // Remove the comment and its replies from the state
+        setComments((prev) =>
+          prev.filter(
+            (comment) =>
+              comment.id !== commentId && comment.parentCommentId !== commentId
+          )
+        );
+      } catch (error) {
+        console.error("Error deleting comment:", error);
+        // You might want to show an error toast here
+      }
+    };
+
+    return (
+      <Comments.Shell
+        commentInputProps={{ onSubmit: handleNewComment }}
+        setShowAuthOverlay={props.setShowAuthOverlay}
+        user={user}
+        commentsContainerRef={commentsContainerRef}
       >
-        {rootComments.length === 0 && optimisticComments.length === 0 ? (
+        {rootComments.length === 0 ? (
           <EmptyState />
         ) : (
           <div className="p-4 space-y-6">
@@ -546,7 +647,7 @@ export const Activity: React.FC<ActivityProps> = ({
                     )}
                     onReply={(id) => {
                       if (!user) {
-                        setShowAuthOverlay(true);
+                        props.setShowAuthOverlay(true);
                       } else {
                         setReplyingTo(id);
                       }
@@ -556,38 +657,59 @@ export const Activity: React.FC<ActivityProps> = ({
                     onCancelReply={handleCancelReply}
                     onDelete={handleDeleteComment}
                     user={user}
-                    onSeek={onSeek}
+                    onSeek={props.onSeek}
                   />
                 ))}
             </AnimatePresence>
           </div>
         )}
-      </div>
+      </Comments.Shell>
+    );
+  },
+  {
+    Shell: (
+      props: PropsWithChildren<{
+        user: typeof userSelectProps | null;
+        setShowAuthOverlay: (v: boolean) => void;
+        commentInputProps?: Omit<
+          ComponentProps<typeof CommentInput>,
+          "user" | "placholder" | "buttonLabel"
+        >;
+        commentsContainerRef?: React.RefObject<HTMLDivElement>;
+      }>
+    ) => (
+      <>
+        <div
+          ref={props.commentsContainerRef}
+          className="overflow-y-auto flex-1 min-h-0"
+        >
+          {props.children}
+        </div>
 
-      <div className="flex-none p-4 border-t border-gray-200 bg-gray-1">
-        {user ? (
-          <CommentInput
-            onSubmit={handleNewComment}
-            placeholder="Leave a comment"
-            buttonLabel="Comment"
-            user={user}
-          />
-        ) : (
-          <div
-            onClick={() => setShowAuthOverlay(true)}
-            className="p-4 rounded-lg transition-colors cursor-pointer bg-gray-1 hover:bg-gray-200"
-          >
-            <span className="text-[15px] leading-[22px] text-gray-1">
-              Sign in to leave a comment
-            </span>
-          </div>
-        )}
-      </div>
-
-      <AuthOverlay
-        isOpen={showAuthOverlay}
-        onClose={() => setShowAuthOverlay(false)}
-      />
-    </div>
-  );
-};
+        <div className="flex-none p-2 border-t border-gray-200 bg-gray-1">
+          {props.user ? (
+            <CommentInput
+              {...props.commentInputProps}
+              placeholder="Leave a comment"
+              buttonLabel="Comment"
+              user={props.user}
+            />
+          ) : (
+            <div
+              onClick={() => props.setShowAuthOverlay(true)}
+              className="p-4 rounded-lg transition-colors cursor-pointer bg-gray-1 hover:bg-gray-200"
+            >
+              <span className="text-[15px] leading-[22px] text-gray-1">
+                Sign in to leave a comment
+              </span>
+            </div>
+          )}
+        </div>
+      </>
+    ),
+    Skeleton: (props: {
+      user: typeof userSelectProps | null;
+      setShowAuthOverlay: (v: boolean) => void;
+    }) => <Comments.Shell {...props} commentInputProps={{ disabled: true }} />,
+  }
+);

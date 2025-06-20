@@ -1,4 +1,5 @@
 import { buildEnv, serverEnv } from "@cap/env";
+import { render, renderAsync } from "@react-email/render";
 import { JSXElementConstructor, ReactElement } from "react";
 import { Resend } from "resend";
 
@@ -48,5 +49,5 @@ export const sendEmail = async ({
     subject,
     react,
     scheduledAt,
-  } as EmailOptions) as any;
+  }) as any;
 };

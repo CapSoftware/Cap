@@ -450,10 +450,10 @@ label {
   opacity: 0;
 }
 
-.fade-in {
+/* .fade-in {
   animation: fadeIn 1s forwards;
   opacity: 0;
-}
+} */
 
 .fade-in-up {
   animation: fadeInUp 1s forwards;
