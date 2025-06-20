@@ -196,7 +196,7 @@ export const MembersCard = ({
                   <TableCell>{format(member.createdAt, "MMM d, yyyy")}</TableCell>
                   <TableCell>Active</TableCell>
                   <TableCell>{
-                    !isMemberOwner(member.user.id) && (
+                    !isMemberOwner(member.user.id) ? (
                       <Button
                         type="button"
                         size="xs"
@@ -219,6 +219,8 @@ export const MembersCard = ({
                       >
                         Remove
                       </Button>
+                    ) : (
+                      "-"
                     )
                   }</TableCell>
                 </TableRow>
