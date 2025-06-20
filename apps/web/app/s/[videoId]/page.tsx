@@ -1,29 +1,29 @@
-import { db } from "@cap/database";
-import { eq, desc, sql, count, InferSelectModel } from "drizzle-orm";
-import { Logo } from "@cap/ui";
-import {
-  videos,
-  comments,
-  users,
-  sharedVideos,
-  organizationMembers,
-  organizations,
-} from "@cap/database/schema";
-import { VideoMetadata } from "@cap/database/types";
-import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
-import type { Metadata, ResolvingMetadata } from "next";
-import { notFound } from "next/navigation";
-import { buildEnv } from "@cap/env";
+import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { transcribeVideo } from "@/actions/videos/transcribe";
-import { headers } from "next/headers";
-import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
 import { isAiGenerationEnabled, isAiUiEnabled } from "@/utils/flags";
+import { db } from "@cap/database";
+import { getCurrentUser } from "@cap/database/auth/session";
+import {
+  comments,
+  organizationMembers,
+  organizations,
+  sharedVideos,
+  users,
+  videos,
+} from "@cap/database/schema";
+import { VideoMetadata } from "@cap/database/types";
+import { buildEnv } from "@cap/env";
+import { Logo } from "@cap/ui";
+import { eq, InferSelectModel } from "drizzle-orm";
+import type { Metadata } from "next";
+import { headers } from "next/headers";
+import { notFound } from "next/navigation";
 
+import { userHasAccessToVideo } from "@/utils/auth";
 import { Share } from "./Share";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { ShareHeader } from "./_components/ShareHeader";
-import { userHasAccessToVideo } from "@/utils/auth";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -212,7 +212,7 @@ export default async function ShareVideoPage(props: Props) {
   console.log("[ShareVideoPage] Starting page load for videoId:", videoId);
 
   // Wrap getCurrentUser in a try/catch to handle authentication errors gracefully
-  const userPromise = getCurrentUser().catch(error => {
+  const userPromise = await getCurrentUser().catch(error => {
     console.error("[ShareVideoPage] Authentication error:", error);
     return null; // Return null if authentication fails
   });
@@ -505,14 +505,14 @@ async function AuthorizedContent({
 
   const membersListPromise = video.sharedOrganization?.organizationId
     ? db()
-        .select({ userId: organizationMembers.userId })
-        .from(organizationMembers)
-        .where(
-          eq(
-            organizationMembers.organizationId,
-            video.sharedOrganization.organizationId
-          )
+      .select({ userId: organizationMembers.userId })
+      .from(organizationMembers)
+      .where(
+        eq(
+          organizationMembers.organizationId,
+          video.sharedOrganization.organizationId
         )
+      )
     : Promise.resolve([]);
 
   const aiUIEnabledPromise = (async () => {

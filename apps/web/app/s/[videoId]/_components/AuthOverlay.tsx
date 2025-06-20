@@ -49,7 +49,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.2 }}
-              className="text-2xl text-gray-1"
+              className="text-2xl text-gray-12"
             >
               Join the conversation.
             </motion.p>
