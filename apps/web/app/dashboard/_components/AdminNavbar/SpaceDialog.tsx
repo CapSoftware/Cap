@@ -59,7 +59,7 @@ const SpaceDialog = ({
 
   return (
     <Dialog open={open} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
+      <DialogContent className="p-0 w-[calc(100%-20px)] max-w-md rounded-xl border bg-gray-2 border-gray-4">
         <DialogHeader
           icon={<FontAwesomeIcon icon={faLayerGroup} />}
           description={
@@ -99,8 +99,8 @@ const SpaceDialog = ({
                 ? "Saving..."
                 : "Creating..."
               : edit
-              ? "Save"
-              : "Create"}
+                ? "Save"
+                : "Create"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -205,8 +205,8 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
             );
             toast.error(
               error?.message ||
-                error?.error ||
-                (edit ? "Failed to update space" : "Failed to create space")
+              error?.error ||
+              (edit ? "Failed to update space" : "Failed to create space")
             );
           } finally {
             setIsUploading(false);

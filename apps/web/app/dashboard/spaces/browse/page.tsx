@@ -22,6 +22,9 @@ export default function BrowseSpacesPage() {
   const [editSpace, setEditSpace] = useState<any | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
+  const trueActiveOrgMembers = activeOrganization?.members.filter((m) => m.user?.id !== user?.id);
+
+
   const filteredSpaces = spacesData?.filter((space: Spaces) =>
     space.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
@@ -161,7 +164,7 @@ export default function BrowseSpacesPage() {
                                 id: space.id,
                                 name: space.name,
                                 members: (
-                                  activeOrganization?.members || []
+                                  trueActiveOrgMembers || []
                                 ).map(
                                   (m: { user: { id: string } }) => m.user.id
                                 ),
