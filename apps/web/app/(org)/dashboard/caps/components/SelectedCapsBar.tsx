@@ -3,7 +3,7 @@
 import { Button } from "@cap/ui";
 import { faFilm, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { ConfirmationDialog } from "@/app/dashboard/_components/ConfirmationDialog";
+import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import NumberFlow from "@number-flow/react";
 import { AnimatePresence, motion } from "framer-motion";
 

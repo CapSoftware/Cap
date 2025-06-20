@@ -15,7 +15,7 @@ import {
   faVideo,
   faDownload
 } from "@fortawesome/free-solid-svg-icons";
-import { ConfirmationDialog } from "@/app/dashboard/_components/ConfirmationDialog";
+import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import moment from "moment";
@@ -24,7 +24,7 @@ import { useRouter } from "next/navigation";
 import { PropsWithChildren, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
-
+import { downloadVideo } from "@/actions/videos/download";
 import { CapCardAnalytics } from "./CapCardAnalytics";
 import { SharingDialog } from "./SharingDialog";
 import { PasswordDialog } from "./PasswordDialog";
