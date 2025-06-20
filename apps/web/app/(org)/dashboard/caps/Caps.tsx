@@ -71,7 +71,6 @@ export const Caps = ({
       if (!dubApiKeyEnabled) return;
 
       const analyticsData: Record<string, number> = {};
-
       for (const video of data) {
         const response = await apiClient.video.getAnalytics({
           query: { videoId: video.id },
@@ -146,23 +145,22 @@ export const Caps = ({
   }, []);
 
   const deleteCap = async (videoId: string) => {
-    if (
-      !window.confirm(
-        "Are you sure you want to delete this Cap? It cannot be undone."
-      )
-    ) {
-      return;
-    }
-
-    const response = await deleteVideo(videoId);
-
-    if (response.success) {
-      refresh();
-      toast.success("Cap deleted successfully");
-    } else {
-      toast.error(
-        response.message || "Failed to delete Cap - please try again later"
-      );
+    try {
+      const response = await deleteVideo(videoId);
+      if (response.success) {
+        refresh();
+        toast.success("Cap deleted successfully");
+      } else {
+        throw new Error(
+          response.message || "Failed to delete Cap - please try again later"
+        );
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        toast.error(error.message);
+      } else {
+        toast.error("Failed to delete Cap - please try again later");
+      }
     }
   };
 
@@ -180,16 +178,6 @@ export const Caps = ({
 
   const deleteSelectedCaps = async () => {
     if (selectedCaps.length === 0) return;
-
-    if (
-      !window.confirm(
-        `Are you sure you want to delete ${selectedCaps.length} cap${
-          selectedCaps.length === 1 ? "" : "s"
-        }? This cannot be undone.`
-      )
-    ) {
-      return;
-    }
 
     setIsDeleting(true);
 
@@ -217,20 +205,16 @@ export const Caps = ({
           }
         },
         {
-          loading: `Deleting ${selectedCaps.length} cap${
-            selectedCaps.length === 1 ? "" : "s"
-          }...`,
+          loading: `Deleting ${selectedCaps.length} cap${selectedCaps.length === 1 ? "" : "s"
+            }...`,
           success: (data) => {
             if (data.error) {
-              return `Successfully deleted ${data.success} cap${
-                data.success === 1 ? "" : "s"
-              }, but failed to delete ${data.error} cap${
-                data.error === 1 ? "" : "s"
-              }`;
+              return `Successfully deleted ${data.success} cap${data.success === 1 ? "" : "s"
+                }, but failed to delete ${data.error} cap${data.error === 1 ? "" : "s"
+                }`;
             }
-            return `Successfully deleted ${data.success} cap${
-              data.success === 1 ? "" : "s"
-            }`;
+            return `Successfully deleted ${data.success} cap${data.success === 1 ? "" : "s"
+              }`;
           },
           error: (error) =>
             error.message || "An error occurred while deleting caps",
