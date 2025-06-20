@@ -14,6 +14,7 @@ import { deleteSpace } from "@/actions/organization/delete-space";
 import clsx from "clsx";
 import SpaceDialog from "./SpaceDialog";
 import { Button, Avatar } from "@cap/ui";
+import { ConfirmationDialog } from "../ConfirmationDialog";
 import { shareCap } from "@/actions/caps/share";
 import { toast } from "sonner";
 import { useParams, usePathname, useRouter } from "next/navigation";
@@ -28,43 +29,47 @@ import { Spaces } from "../../dashboard-data";
 const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
   const { spacesData, sidebarCollapsed, user } = useSharedContext();
   const [showSpaceDialog, setShowSpaceDialog] = useState(false);
-
   const [showAllSpaces, setShowAllSpaces] = useState(false);
   const [activeDropTarget, setActiveDropTarget] = useState<string | null>(null);
   const router = useRouter();
   const params = useParams();
   const pathname = usePathname();
 
-  const handleDeleteSpace = async (e: React.MouseEvent, spaceId: string) => {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [pendingDeleteSpace, setPendingDeleteSpace] = useState<Spaces | null>(null);
+  const [removing, setRemoving] = useState(false);
+
+  const handleDeleteSpace = (e: React.MouseEvent, space: Spaces) => {
     e.preventDefault();
     e.stopPropagation();
+    setPendingDeleteSpace(space);
+    setConfirmOpen(true);
+  };
 
-    if (
-      confirm(
-        "Are you sure you want to delete this space? This action cannot be undone."
-      )
-    ) {
-      try {
-        const result = await deleteSpace(spaceId);
-
-        if (result.success) {
-          toast.success("Space deleted successfully");
-
-          router.refresh();
-
-          // If we're currently on the deleted space's page, redirect to dashboard
-          if (params.spaceId === spaceId) {
-            router.push("/dashboard");
-          }
-        } else {
-          toast.error(result.error || "Failed to delete space");
+  const confirmRemoveSpace = async () => {
+    if (!pendingDeleteSpace) return;
+    setRemoving(true);
+    try {
+      const result = await deleteSpace(pendingDeleteSpace.id);
+      if (result.success) {
+        toast.success("Space deleted successfully");
+        router.refresh();
+        if (params.spaceId === pendingDeleteSpace.id) {
+          router.push("/dashboard");
         }
-      } catch (error) {
-        console.error("Error deleting space:", error);
-        toast.error("Failed to delete space");
+      } else {
+        toast.error(result.error || "Failed to delete space");
       }
+    } catch (error) {
+      console.error("Error deleting space:", error);
+      toast.error("Failed to delete space");
+    } finally {
+      setRemoving(false);
+      setConfirmOpen(false);
+      setPendingDeleteSpace(null);
     }
   };
+
 
   if (!spacesData) return null;
 
@@ -291,7 +296,7 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
                         {/* Hide delete button for 'All spaces' synthetic entry */}
                         {!space.primary && isOwner && (
                           <div
-                            onClick={(e) => handleDeleteSpace(e, space.id)}
+                            onClick={(e) => handleDeleteSpace(e, space)}
                             className={
                               "flex justify-center items-center ml-auto rounded-full opacity-0 transition-all group size-6 group-hover:opacity-100 hover:bg-gray-4"
                             }
@@ -321,6 +326,20 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
         setShowAllSpaces={setShowAllSpaces}
       />
 
+      <ConfirmationDialog
+        open={confirmOpen}
+        icon={<FontAwesomeIcon icon={faLayerGroup} />}
+        title="Delete space"
+        description={pendingDeleteSpace ? `Are you sure you want to delete the space "${pendingDeleteSpace.name}"? This action cannot be undone.` : ''}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        loading={removing}
+        onConfirm={confirmRemoveSpace}
+        onCancel={() => {
+          setConfirmOpen(false);
+          setPendingDeleteSpace(null);
+        }}
+      />
       <SpaceDialog
         open={showSpaceDialog}
         onClose={() => setShowSpaceDialog(false)}

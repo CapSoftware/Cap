@@ -17,8 +17,10 @@ import {
   faTrash,
   faLock,
   faUnlock,
-  faDownload,
+  faVideo,
+  faDownload
 } from "@fortawesome/free-solid-svg-icons";
+import { ConfirmationDialog } from "@/app/dashboard/_components/ConfirmationDialog";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import moment from "moment";
@@ -118,6 +120,22 @@ export const CapCard = ({
     analytics === 0
       ? Math.max(cap.totalComments, cap.totalReactions)
       : analytics;
+
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [removing, setRemoving] = useState(false);
+
+  const handleDeleteClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setConfirmOpen(true);
+  };
+
+  const confirmRemoveCap = async () => {
+    if (!onDelete) return;
+    setRemoving(true);
+    await onDelete(cap.id);
+    setRemoving(false);
+    setConfirmOpen(false);
+  };
 
   const handleSharingUpdated = (updatedSharedSpaces: string[]) => {
     router.refresh();
@@ -369,8 +387,8 @@ export const CapCard = ({
           isSelected
             ? "!border-blue-10 border-[1px]"
             : anyCapSelected
-            ? "border-blue-10 border-[1px] hover:border-blue-10"
-            : "hover:border-blue-10",
+              ? "border-blue-10 border-[1px] hover:border-blue-10"
+              : "hover:border-blue-10",
           isDragging && "opacity-50",
           isOwner && !anyCapSelected && "cursor-grab active:cursor-grabbing"
         )}
@@ -489,19 +507,15 @@ export const CapCard = ({
                 size="sm"
               >
                 <FontAwesomeIcon
-                  className={`size-3 ${
-                    passwordProtected ? "text-amber-600" : "text-gray-12"
-                  }`}
+                  className={`size-3 ${passwordProtected ? "text-amber-600" : "text-gray-12"
+                    }`}
                   icon={passwordProtected ? faLock : faUnlock}
                 />
               </Button>
             </Tooltip>
             <Tooltip content="Delete Cap">
               <Button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDelete?.(cap.id);
-                }}
+                onClick={handleDeleteClick}
                 className="!size-8 delay-75 hover:opacity-80 rounded-full min-w-fit !p-0"
                 variant="white"
                 size="sm"
@@ -512,15 +526,25 @@ export const CapCard = ({
                 />
               </Button>
             </Tooltip>
+            <ConfirmationDialog
+              open={confirmOpen}
+              icon={<FontAwesomeIcon icon={faVideo} />}
+              title="Delete Cap"
+              description={`Are you sure you want to delete the cap "${cap.name}"? This action cannot be undone.`}
+              confirmLabel="Delete"
+              cancelLabel="Cancel"
+              loading={removing}
+              onConfirm={confirmRemoveCap}
+              onCancel={() => setConfirmOpen(false)}
+            />
           </div>
         )}
         {!sharedCapCard && onSelectToggle && (
           <div
-            className={`absolute top-2 left-2 z-[20] duration-200 ${
-              isSelected || anyCapSelected
-                ? "opacity-100"
-                : "group-hover:opacity-100 opacity-0"
-            }`}
+            className={`absolute top-2 left-2 z-[20] duration-200 ${isSelected || anyCapSelected
+              ? "opacity-100"
+              : "group-hover:opacity-100 opacity-0"
+              }`}
             onClick={(e) => {
               e.stopPropagation();
               handleSelectClick(e);
@@ -548,9 +572,8 @@ export const CapCard = ({
           href={`/s/${cap.id}`}
         >
           <VideoThumbnail
-            imageClass={`${
-              anyCapSelected ? "opacity-50" : "group-hover:opacity-50"
-            } transition-opacity duration-200`}
+            imageClass={`${anyCapSelected ? "opacity-50" : "group-hover:opacity-50"
+              } transition-opacity duration-200`}
             userId={cap.ownerId}
             videoId={cap.id}
             alt={`${cap.name} Thumbnail`}

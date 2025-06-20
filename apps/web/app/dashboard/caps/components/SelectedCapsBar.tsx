@@ -1,8 +1,9 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { faTrash } from "@fortawesome/free-solid-svg-icons";
+import { faFilm, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { ConfirmationDialog } from "@/app/dashboard/_components/ConfirmationDialog";
 import NumberFlow from "@number-flow/react";
 import { AnimatePresence, motion } from "framer-motion";
 
@@ -13,12 +14,25 @@ interface SelectedCapsBarProps {
   isDeleting: boolean;
 }
 
+import { useState } from "react";
+
 export const SelectedCapsBar = ({
   selectedCaps,
   setSelectedCaps,
   deleteSelectedCaps,
   isDeleting,
 }: SelectedCapsBarProps) => {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const handleDeleteClick = () => {
+    setConfirmOpen(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    await deleteSelectedCaps();
+    setConfirmOpen(false);
+  };
+
   return (
     <AnimatePresence>
       {selectedCaps.length > 0 && (
@@ -56,7 +70,7 @@ export const SelectedCapsBar = ({
             </Button>
             <Button
               variant="destructive"
-              onClick={deleteSelectedCaps}
+              onClick={handleDeleteClick}
               disabled={isDeleting}
               className="size-[40px] min-w-[unset] p-0"
               spinner={isDeleting}
@@ -64,6 +78,18 @@ export const SelectedCapsBar = ({
             >
               <FontAwesomeIcon className="w-3.5 text-white" icon={faTrash} />
             </Button>
+            <ConfirmationDialog
+              open={confirmOpen}
+              icon={<FontAwesomeIcon icon={faFilm} className="text-red-10" />}
+              title="Delete selected Caps"
+              description={`Are you sure you want to delete ${selectedCaps.length} cap${selectedCaps.length === 1 ? '' : 's'}? This action cannot be undone.`}
+              confirmLabel="Delete"
+              cancelLabel="Cancel"
+              confirmVariant="dark"
+              loading={isDeleting}
+              onConfirm={handleConfirmDelete}
+              onCancel={() => setConfirmOpen(false)}
+            />
           </div>
         </motion.div>
       )}
