@@ -23,11 +23,6 @@ const nextConfig = {
   experimental: {
     instrumentationHook: process.env.NEXT_PUBLIC_DOCKER_BUILD === "true",
     optimizePackageImports: ["@cap/ui", "@cap/utils", "@cap/web-api-contract"],
-    serverComponentsExternalPackages: [
-      "@react-email/components",
-      "@react-email/render",
-      "@react-email/tailwind",
-    ],
   },
   images: {
     remotePatterns: [

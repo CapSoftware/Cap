@@ -1,9 +1,15 @@
-'use server'
+"use server";
 
-import { db } from "@cap/database"
-import { getCurrentUser } from "@cap/database/auth/session"
-import { sharedVideos, videos, spaces, organizationMembers, organizations, spaceVideos } from "@cap/database/schema"
-import { eq, and, inArray, or } from "drizzle-orm"
+import { db } from "@cap/database";
+import { getCurrentUser } from "@cap/database/auth/session";
+import {
+  sharedVideos,
+  videos,
+  spaces,
+  organizations,
+  spaceVideos,
+} from "@cap/database/schema";
+import { eq } from "drizzle-orm";
 
 interface Space {
   id: string;
@@ -13,12 +19,12 @@ interface Space {
 
 export async function getSharedSpacesForCap(capId: string): Promise<Space[]> {
   try {
-    const user = await getCurrentUser()
+    const user = await getCurrentUser();
     if (!user) {
       return [];
     }
 
-    const [cap] = await db().select().from(videos).where(eq(videos.id, capId))
+    const [cap] = await db().select().from(videos).where(eq(videos.id, capId));
     if (!cap) {
       return [];
     }
@@ -39,10 +45,13 @@ export async function getSharedSpacesForCap(capId: string): Promise<Space[]> {
         name: organizations.name,
       })
       .from(sharedVideos)
-      .innerJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
+      .innerJoin(
+        organizations,
+        eq(sharedVideos.organizationId, organizations.id)
+      )
       .where(eq(sharedVideos.videoId, capId));
 
-    const organizationSpaces = sharedOrganizations.map(org => ({
+    const organizationSpaces = sharedOrganizations.map((org) => ({
       id: org.id,
       name: `All ${org.name}`,
       organizationId: org.id,
@@ -50,7 +59,7 @@ export async function getSharedSpacesForCap(capId: string): Promise<Space[]> {
 
     return [...directlySharedSpaces, ...organizationSpaces];
   } catch (error) {
-    console.error('Error getting shared spaces for cap:', error)
-    return []
+    console.error("Error getting shared spaces for cap:", error);
+    return [];
   }
-} 
+}

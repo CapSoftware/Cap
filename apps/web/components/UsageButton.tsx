@@ -1,4 +1,4 @@
-import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
+import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { Tooltip } from "@/components/Tooltip";
 import { Button } from "@cap/ui";
 import { faCheck } from "@fortawesome/free-solid-svg-icons";
@@ -16,7 +16,7 @@ export const UsageButton = memo(
     subscribed: boolean;
     toggleMobileNav?: () => void;
   }) => {
-    const { sidebarCollapsed } = useSharedContext();
+    const { sidebarCollapsed } = useDashboardContext();
     if (subscribed) {
       return (
         <Tooltip position="right" content="Cap Pro">
@@ -64,7 +64,7 @@ export const UsageButton = memo(
 
 const ProRiveButton = memo(
   ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
-    const { setUpgradeModalOpen, sidebarCollapsed } = useSharedContext();
+    const { setUpgradeModalOpen, sidebarCollapsed } = useDashboardContext();
 
     const { rive, RiveComponent: ProRive } = useRive({
       src: "/rive/pricing.riv",

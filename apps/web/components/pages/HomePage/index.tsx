@@ -2,8 +2,8 @@
 
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
 import { TextReveal } from "@/components/ui/TextReveal";
-import { homepageCopy } from "../../../data/homepage-copy";
 import React from "react";
+import { homepageCopy } from "../../../data/homepage-copy";
 import Faq from "./Faq";
 import Features from "./Features";
 import Header from "./Header";

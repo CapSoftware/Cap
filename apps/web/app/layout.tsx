@@ -1,22 +1,26 @@
 import "@/app/globals.css";
-import { BentoScript } from "@/components/BentoScript";
-import { Footer } from "@/components/Footer";
-import { Navbar } from "@/components/Navbar";
-import { SonnerToastProvider } from "@/components/SonnerToastProvider";
-import { getBootstrapData } from "@/utils/getBootstrapData";
+import { SonnerToaster } from "@/components/SonnerToastProvider";
 import { PublicEnvContext } from "@/utils/public-env";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { buildEnv, serverEnv } from "@cap/env";
+import { buildEnv } from "@cap/env";
 import { S3_BUCKET_URL } from "@cap/utils";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
-import crypto from "node:crypto";
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import { PropsWithChildren } from "react";
-import { AuthProvider } from "./AuthProvider";
-import { PostHogProvider, Providers } from "./providers";
+import { getBootstrapData } from "@/utils/getBootstrapData";
+
+import {
+  SessionProvider,
+  PostHogProvider,
+  ReactQueryProvider,
+} from "./Layout/providers";
+
 //@ts-expect-error
 import { script } from "./themeScript";
+import { getCurrentUser } from "@cap/database/auth/session";
+import { AuthContextProvider } from "./Layout/AuthContext";
+import { Intercom } from "./Layout/Intercom";
+import { PosthogIdentify } from "./Layout/PosthogIdentify";
 
 const defaultFont = localFont({
   src: [
@@ -70,16 +74,8 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function RootLayout({ children }: PropsWithChildren) {
-  const user = await getCurrentUser();
   const bootstrapData = await getBootstrapData();
-  const intercomSecret = serverEnv().INTERCOM_SECRET;
-  let intercomHash = "";
-  if (intercomSecret) {
-    intercomHash = crypto
-      .createHmac("sha256", intercomSecret)
-      .update(user?.id ?? "")
-      .digest("hex");
-  }
+  const userPromise = getCurrentUser();
 
   return (
     <html className={defaultFont.className} lang="en">
@@ -113,30 +109,24 @@ export default async function RootLayout({ children }: PropsWithChildren) {
         />
         <TooltipPrimitive.Provider>
           <PostHogProvider bootstrapData={bootstrapData}>
-            <AuthProvider>
-              <PublicEnvContext
-                value={{
-                  webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
-                  awsBucket: buildEnv.NEXT_PUBLIC_CAP_AWS_BUCKET,
-                  s3BucketUrl: S3_BUCKET_URL,
-                }}
-              >
-                <Providers
-                  userId={user?.id}
-                  intercomHash={intercomHash}
-                  name={`${user?.name ?? ""} ${user?.lastName ?? ""}`}
-                  email={user?.email ?? ""}
+            <AuthContextProvider user={userPromise}>
+              <SessionProvider>
+                <PublicEnvContext
+                  value={{
+                    webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
+                    awsBucket: buildEnv.NEXT_PUBLIC_CAP_AWS_BUCKET,
+                    s3BucketUrl: S3_BUCKET_URL,
+                  }}
                 >
-                  <SonnerToastProvider />
-                  <main className="w-full">
-                    <Navbar auth={user ? true : false} />
-                    {children}
-                    <Footer />
-                  </main>
-                  <BentoScript user={user} />
-                </Providers>
-              </PublicEnvContext>
-            </AuthProvider>
+                  <ReactQueryProvider>
+                    <SonnerToaster />
+                    <main className="overflow-x-hidden w-full">{children}</main>
+                    <PosthogIdentify />
+                    <Intercom />
+                  </ReactQueryProvider>
+                </PublicEnvContext>
+              </SessionProvider>
+            </AuthContextProvider>
           </PostHogProvider>
         </TooltipPrimitive.Provider>
       </body>
