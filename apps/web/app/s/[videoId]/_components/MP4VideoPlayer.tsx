@@ -210,7 +210,7 @@ export const MP4VideoPlayer = memo(
 
     if (hasError) {
       return (
-        <div className="flex items-center justify-center w-full h-full bg-black text-white">
+        <div className="flex justify-center items-center w-full h-full text-white bg-black">
           <p>Unable to load video</p>
         </div>
       );
