@@ -211,7 +211,11 @@ export default async function ShareVideoPage(props: Props) {
   const videoId = params.videoId as string;
   console.log("[ShareVideoPage] Starting page load for videoId:", videoId);
 
-  const userPromise = getCurrentUser();
+  // Wrap getCurrentUser in a try/catch to handle authentication errors gracefully
+  const userPromise = getCurrentUser().catch(error => {
+    console.error("[ShareVideoPage] Authentication error:", error);
+    return null; // Return null if authentication fails
+  });
 
   const [video] = await db()
     .select({
