@@ -211,10 +211,15 @@ export default async function ShareVideoPage(props: Props) {
   const videoId = params.videoId as string;
   console.log("[ShareVideoPage] Starting page load for videoId:", videoId);
 
-  // Wrap getCurrentUser in a try/catch to handle authentication errors gracefully
-  const userPromise = await getCurrentUser().catch(error => {
-    console.error("[ShareVideoPage] Authentication error:", error);
-    return null; // Return null if authentication fails
+  // IMPORTANT: Don't await getCurrentUser() directly - this causes authentication errors in production
+  // Instead, create a promise that will be resolved later and can safely fail
+  const userPromise = Promise.resolve().then(async () => {
+    try {
+      return await getCurrentUser();
+    } catch (error) {
+      console.error("[ShareVideoPage] Authentication error:", error);
+      return null; // Return null if authentication fails
+    }
   });
 
   const [video] = await db()
