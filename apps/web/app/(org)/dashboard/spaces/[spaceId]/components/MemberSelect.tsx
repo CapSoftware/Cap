@@ -71,13 +71,11 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
     // Generate options from organization members if no external options provided
     const { user } = useDashboardContext();
 
+    const trueActiveOrgMembers = activeOrganization?.members.filter((m) => m.user?.id !== user?.id);
+
     // Only show members that can be added (not already selected and not the current user)
     const orgMemberOptions =
-      activeOrganization?.members
-        // Only filter out current user from dropdown options
-        .filter((m) => m.user?.id !== user?.id)
-        // Filter out members who are already selected
-        .filter((m) => !selected.some((s) => s.value === m.user?.id))
+      trueActiveOrgMembers?.filter((m) => !selected.some((s) => s.value === m.user?.id))
         .map((m) => {
           // Cast to our known type for proper type safety
           const member = m as unknown as OrganizationMember;
@@ -119,7 +117,7 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
         {...props}
       >
 
-        {!showEmptyIfNoMembers && orgMemberOptions.length === 0 && (
+        {!showEmptyIfNoMembers && trueActiveOrgMembers?.length === 0 && (
           <EmptyMessage
             message="No members in your organization"
             showUpgradeButton={true}
@@ -129,9 +127,7 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
 
         {/* Empty state when no members in organization */}
         {showEmptyIfNoMembers &&
-          activeOrganization?.members &&
-          activeOrganization.members.filter((m) => m.user?.id !== user?.id)
-            .length === 0 && (
+          trueActiveOrgMembers?.length === 0 && (
             <div className="py-3">
               <EmptyMessage
                 message="No members in your organization"
@@ -143,9 +139,8 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
 
         {/* Empty state when no members added to space */}
         {showEmptyIfNoMembers &&
-          activeOrganization?.members &&
-          activeOrganization.members.filter((m) => m.user?.id !== user?.id)
-            .length > 0 &&
+          trueActiveOrgMembers &&
+          trueActiveOrgMembers.length > 0 &&
           selected.length === 0 && (
             <EmptyMessage
               message="No members have been added to this space"
