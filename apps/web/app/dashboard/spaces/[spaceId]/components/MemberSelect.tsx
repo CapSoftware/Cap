@@ -104,6 +104,7 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
       onSelect((selected ?? []).filter((t) => t.value !== tag.value));
     };
 
+
     return (
       <div
         ref={ref || containerRef}
