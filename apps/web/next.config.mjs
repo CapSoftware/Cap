@@ -13,7 +13,12 @@ const { version } = packageJson;
 const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
-  transpilePackages: ["@cap/ui", "@cap/utils", "@cap/web-api-contract"],
+  transpilePackages: [
+    "@cap/ui",
+    "@cap/utils",
+    "@cap/web-api-contract",
+    "next-mdx-remote",
+  ],
   eslint: {
     ignoreDuringBuilds: true,
   },

@@ -118,7 +118,6 @@ export default async function DocPage(props: DocProps) {
     return (
       <div className="px-5 py-32 mx-auto sm:py-32 prose">
         <h1>{displayCategory} Documentation</h1>
-
         {/* Show root category content if it exists */}
         {rootDoc && (
           <div className="mb-8">
@@ -126,14 +125,13 @@ export default async function DocPage(props: DocProps) {
             <hr className="my-8" />
           </div>
         )}
-
         {/* Show subcategory docs */}
         {categoryDocs.length > (rootDoc ? 1 : 0) && (
           <>
             <h2 className="mt-0">Available Guides</h2>
             <div className="grid gap-4">
               {categoryDocs
-                .filter((doc) => doc.slug !== category) // Filter out the root doc if it exists
+                .filter((doc) => doc.slug !== category)
                 .map((doc) => (
                   <Link
                     key={doc.slug}
@@ -191,7 +189,6 @@ export default async function DocPage(props: DocProps) {
           />
         </div>
       )}
-
       <div className="wrapper">
         <header>
           <h1 className="mb-2">{doc.metadata.title}</h1>
