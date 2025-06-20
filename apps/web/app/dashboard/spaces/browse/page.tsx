@@ -8,8 +8,9 @@ import { Input } from "@cap/ui";
 import { useRouter } from "next/navigation";
 import { Button, Avatar } from "@cap/ui";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faEdit, faPlus, faTrash } from "@fortawesome/free-solid-svg-icons";
+import { faEdit, faLayerGroup, faPlus, faTrash } from "@fortawesome/free-solid-svg-icons";
 import SpaceDialog from "../../_components/AdminNavbar/SpaceDialog";
+import { ConfirmationDialog } from "../../_components/ConfirmationDialog";
 
 import { Spaces } from "../../dashboard-data";
 import { deleteSpace } from "@/actions/organization/delete-space";
@@ -31,48 +32,66 @@ export default function BrowseSpacesPage() {
   const router = useRouter();
   const params = useParams();
 
-  const handleDeleteSpace = async (e: React.MouseEvent, spaceId: string) => {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [pendingDeleteSpace, setPendingDeleteSpace] = useState<Spaces | null>(null);
+  const [removing, setRemoving] = useState(false);
+
+  const handleDeleteSpace = (e: React.MouseEvent, space: Spaces) => {
     e.preventDefault();
     e.stopPropagation();
+    setPendingDeleteSpace(space);
+    setConfirmOpen(true);
+  };
 
-    if (
-      confirm(
-        "Are you sure you want to delete this space? This action cannot be undone."
-      )
-    ) {
-      try {
-        const result = await deleteSpace(spaceId);
-
-        if (result.success) {
-          toast.success("Space deleted successfully");
-
-          router.refresh();
-
-          // If we're currently on the deleted space's page, redirect to dashboard
-          if (params.spaceId === spaceId) {
-            router.push("/dashboard");
-          }
-        } else {
-          toast.error(result.error || "Failed to delete space");
+  const confirmRemoveSpace = async () => {
+    if (!pendingDeleteSpace) return;
+    setRemoving(true);
+    try {
+      const result = await deleteSpace(pendingDeleteSpace.id);
+      if (result.success) {
+        toast.success("Space deleted successfully");
+        router.refresh();
+        if (params.spaceId === pendingDeleteSpace.id) {
+          router.push("/dashboard");
         }
-      } catch (error) {
-        console.error("Error deleting space:", error);
-        toast.error("Failed to delete space");
+      } else {
+        toast.error(result.error || "Failed to delete space");
       }
+    } catch (error) {
+      console.error("Error deleting space:", error);
+      toast.error("Failed to delete space");
+    } finally {
+      setRemoving(false);
+      setConfirmOpen(false);
+      setPendingDeleteSpace(null);
     }
   };
 
   return (
-    <div>
-      <div className="flex flex-wrap gap-3 justify-between items-start mb-4 w-full">
-        <Button
-          onClick={() => setShowSpaceDialog(true)}
-          size="sm"
-          variant="dark"
-        >
-          <FontAwesomeIcon className="size-3" icon={faPlus} />
-          Create Space
-        </Button>
+    <>
+      <div>
+        <div className="flex flex-wrap gap-3 justify-between items-start mb-4 w-full">
+          <Button
+            onClick={() => setShowSpaceDialog(true)}
+            size="sm"
+            variant="dark"
+          >
+            <FontAwesomeIcon className="size-3" icon={faPlus} />
+            Create Space
+          </Button>
+          <div className="flex relative w-full max-w-md">
+            <div className="flex absolute inset-y-0 left-3 items-center pointer-events-none">
+              <Search className="size-4 text-gray-9" />
+            </div>
+            <Input
+              type="text"
+              placeholder="Search spaces..."
+              className="flex-1 pr-3 pl-8 w-full min-w-full text-sm placeholder-gray-8"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
+        </div>
         <div className="flex relative w-full max-w-md">
           <div className="flex absolute inset-y-0 left-3 items-center pointer-events-none">
             <Search className="size-4 text-gray-9" />
@@ -177,10 +196,7 @@ export default function BrowseSpacesPage() {
                           </Button>
                           <Button
                             variant="gray"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteSpace(e, space.id);
-                            }}
+                            onClick={(e) => handleDeleteSpace(e, space)}
                             className="size-8 p-0 min-w-[unset]"
                             size="sm"
                           >
@@ -216,6 +232,20 @@ export default function BrowseSpacesPage() {
           router.refresh();
         }}
       />
-    </div>
+      <ConfirmationDialog
+        open={confirmOpen}
+        icon={<FontAwesomeIcon icon={faLayerGroup} />}
+        title="Delete space"
+        description={pendingDeleteSpace ? `Are you sure you want to delete the space "${pendingDeleteSpace?.name || 'selected'}"? This action cannot be undone.` : 'Are you sure you want to delete this space? This action cannot be undone.'}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        loading={removing}
+        onConfirm={confirmRemoveSpace}
+        onCancel={() => {
+          setConfirmOpen(false);
+          setPendingDeleteSpace(null);
+        }}
+      />
+    </>
   );
 }

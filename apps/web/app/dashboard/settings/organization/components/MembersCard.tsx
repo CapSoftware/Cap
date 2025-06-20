@@ -1,6 +1,10 @@
 "use client";
 
 import { removeOrganizationInvite } from "@/actions/organization/remove-invite";
+import { removeOrganizationMember } from "@/actions/organization/remove-member";
+import { ConfirmationDialog } from "@/app/dashboard/_components/ConfirmationDialog";
+import { RemoveMemberIcon } from "./RemoveMemberIcon";
+import { useState } from "react";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { Tooltip } from "@/components/Tooltip";
 import { calculateSeats } from "@/utils/organization";
@@ -21,6 +25,8 @@ import { format } from "date-fns";
 import { useRouter } from "next/navigation";
 
 import { toast } from "sonner";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faUser } from "@fortawesome/free-solid-svg-icons";
 
 interface MembersCardProps {
   isOwner: boolean;
@@ -60,106 +66,193 @@ export const MembersCard = ({
     }
   };
 
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [pendingMember, setPendingMember] = useState<{
+    id: string;
+    name: string;
+    email: string;
+  } | null>(null);
+  const [removing, setRemoving] = useState(false);
+
+  const handleRemoveMember = (member: { id: string; user: { name: string; email: string } }) => {
+    setPendingMember({ id: member.id, name: member.user.name, email: member.user.email });
+    setConfirmOpen(true);
+  };
+
+  const confirmRemoveMember = async () => {
+    if (!pendingMember) return;
+    setRemoving(true);
+    try {
+      await removeOrganizationMember(
+        pendingMember.id,
+        activeOrganization?.organization.id as string
+      );
+      toast.success("Member removed successfully");
+      setConfirmOpen(false);
+      setPendingMember(null);
+      router.refresh();
+    } catch (error) {
+      console.error("Error removing member:", error);
+      toast.error(
+        error instanceof Error ? error.message : "An error occurred while removing member"
+      );
+    } finally {
+      setRemoving(false);
+    }
+  };
+
+
+  const isMemberOwner = (id: string) => {
+    return id === activeOrganization?.organization.ownerId;
+  };
+
+  const pendingMemberTest = {
+    id: "1",
+    name: "John Doe",
+    email: "john.doe@example.com",
+  }
+
   return (
-    <Card>
-      <div className="flex flex-wrap gap-6 justify-between items-center w-full">
-        <CardHeader>
-          <CardTitle>Members</CardTitle>
-          <CardDescription>Manage your organization members.</CardDescription>
-        </CardHeader>
-        <div className="flex flex-wrap gap-3">
-          <Tooltip
-            position="top"
-            content="Once inside the Stripe dashboard, click 'Manage Plan', then increase quantity of subscriptions to purchase more seats"
-          >
+    <>
+      <ConfirmationDialog
+        open={confirmOpen}
+        icon={<FontAwesomeIcon icon={faUser} />}
+        title="Remove member"
+        description={pendingMemberTest ? `Are you sure you want to remove ${pendingMemberTest.name} 
+         from your organization? this action cannot be undone.` : ""}
+        cancelLabel="Cancel"
+        loading={removing}
+        onConfirm={confirmRemoveMember}
+        onCancel={() => {
+          setConfirmOpen(false);
+          setPendingMember(null);
+        }}
+      />
+      <Card>
+        <div className="flex flex-wrap gap-6 justify-between items-center w-full">
+          <CardHeader>
+            <CardTitle>Members</CardTitle>
+            <CardDescription>Manage your organization members.</CardDescription>
+          </CardHeader>
+          <div className="flex flex-wrap gap-3">
+            <Tooltip
+              position="top"
+              content="Once inside the Stripe dashboard, click 'Manage Plan', then increase quantity of subscriptions to purchase more seats"
+            >
+              <Button
+                type="button"
+                size="sm"
+                variant="primary"
+                className="px-6 min-w-auto"
+                spinner={loading}
+                disabled={!isOwner || loading}
+                onClick={handleManageBilling}
+              >
+                {loading ? "Loading..." : "+ Purchase more seats"}
+              </Button>
+            </Tooltip>
             <Button
               type="button"
               size="sm"
-              variant="primary"
+              variant="dark"
               className="px-6 min-w-auto"
-              spinner={loading}
-              disabled={!isOwner || loading}
-              onClick={handleManageBilling}
+              onClick={() => {
+                if (!isOwner) {
+                  showOwnerToast();
+                } else if (remainingSeats <= 0) {
+                  toast.error("Invite limit reached, please purchase more seats");
+                } else {
+                  setIsInviteDialogOpen(true);
+                }
+              }}
+              disabled={!isOwner}
             >
-              {loading ? "Loading..." : "+ Purchase more seats"}
+              + Invite users
             </Button>
-          </Tooltip>
-          <Button
-            type="button"
-            size="sm"
-            variant="dark"
-            className="px-6 min-w-auto"
-            onClick={() => {
-              if (!isOwner) {
-                showOwnerToast();
-              } else if (remainingSeats <= 0) {
-                toast.error("Invite limit reached, please purchase more seats");
-              } else {
-                setIsInviteDialogOpen(true);
-              }
-            }}
-            disabled={!isOwner}
-          >
-            + Invite users
-          </Button>
+          </div>
         </div>
-      </div>
-      <Table className="mt-5">
-        <TableHeader>
-          <TableRow>
-            <TableHead>{"Member"}</TableHead>
-            <TableHead>{"Email"}</TableHead>
-            <TableHead>{"Role"}</TableHead>
-            <TableHead>{"Joined"}</TableHead>
-            <TableHead>{"Status"}</TableHead>
-            <TableHead>{"Actions"}</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {activeOrganization?.members &&
-            activeOrganization.members.map((member) => (
-              <TableRow key={member.id}>
-                <TableCell>{member.user.name}</TableCell>
-                <TableCell>{member.user.email}</TableCell>
-                <TableCell>
-                  {member.user.id === activeOrganization?.organization.ownerId
-                    ? "Owner"
-                    : "Member"}
-                </TableCell>
-                <TableCell>{format(member.createdAt, "MMM d, yyyy")}</TableCell>
-                <TableCell>Active</TableCell>
-                <TableCell>-</TableCell>
-              </TableRow>
-            ))}
-          {activeOrganization?.invites &&
-            activeOrganization.invites.map((invite) => (
-              <TableRow key={invite.id}>
-                <TableCell>{invite.id}</TableCell>
-                <TableCell>{invite.invitedEmail}</TableCell>
-                <TableCell>Member</TableCell>
-                <TableCell>-</TableCell>
-                <TableCell>Invited</TableCell>
-                <TableCell>
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="destructive"
-                    onClick={() => {
-                      if (isOwner) {
-                        handleDeleteInvite(invite.id);
-                      } else {
-                        showOwnerToast();
-                      }
-                    }}
-                    disabled={!isOwner}
-                  >
-                    Delete Invite
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
-        </TableBody>
-      </Table>
-    </Card>
+        <Table className="mt-5">
+          <TableHeader>
+            <TableRow>
+              <TableHead>{"Member"}</TableHead>
+              <TableHead>{"Email"}</TableHead>
+              <TableHead>{"Role"}</TableHead>
+              <TableHead>{"Joined"}</TableHead>
+              <TableHead>{"Status"}</TableHead>
+              <TableHead>{"Actions"}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {activeOrganization?.members &&
+              activeOrganization.members.map((member) => (
+                <TableRow key={member.id}>
+                  <TableCell>{member.user.name}</TableCell>
+                  <TableCell>{member.user.email}</TableCell>
+                  <TableCell>
+                    {isMemberOwner(member.user.id)
+                      ? "Owner"
+                      : "Member"}
+                  </TableCell>
+                  <TableCell>{format(member.createdAt, "MMM d, yyyy")}</TableCell>
+                  <TableCell>Active</TableCell>
+                  <TableCell>{
+                    !isMemberOwner(member.user.id) && (
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="destructive"
+                        className="min-w-[unset] h-[28px]"
+                        onClick={() => {
+                          if (isOwner) {
+                            handleRemoveMember({
+                              id: member.id,
+                              user: {
+                                name: member.user.name ?? "(No Name)",
+                                email: member.user.email ?? "(No Email)"
+                              }
+                            });
+                          } else {
+                            showOwnerToast();
+                          }
+                        }}
+                        disabled={!isOwner}
+                      >
+                        Remove
+                      </Button>
+                    )
+                  }</TableCell>
+                </TableRow>
+              ))}
+            {activeOrganization?.invites &&
+              activeOrganization.invites.map((invite) => (
+                <TableRow key={invite.id}>
+                  <TableCell>{invite.id}</TableCell>
+                  <TableCell>{invite.invitedEmail}</TableCell>
+                  <TableCell>Member</TableCell>
+                  <TableCell>-</TableCell>
+                  <TableCell>Invited</TableCell>
+                  <TableCell>
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="destructive"
+                      onClick={() => {
+                        if (isOwner) {
+                          handleDeleteInvite(invite.id);
+                        } else {
+                          showOwnerToast();
+                        }
+                      }}
+                      disabled={!isOwner}
+                    >
+                      Delete Invite
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+          </TableBody>
+        </Table>
+      </Card>
+    </>
   );
 };
