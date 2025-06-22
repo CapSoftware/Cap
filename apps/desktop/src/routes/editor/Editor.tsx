@@ -295,18 +295,26 @@ function Dialogs() {
               {(dialog) => {
                 const { setProject: setState, editorInstance } =
                   useEditorContext();
+                // const [crop, setCrop] = createStore<Crop>({
+                //   position: dialog().position,
+                //   size: dialog().size,
+                // });
+
+                const display = editorInstance.recordings.segments[0].display;
                 const [crop, setCrop] = createStore<Crop>({
-                  position: dialog().position,
-                  size: dialog().size,
+                  position: { x: 0, y: 0 },
+                  size: {
+                    x: display.width,
+                    y: display.height,
+                  },
                 });
+
                 const [cropOptions, setCropOptions] = makePersisted(
                   createStore({
                     showGrid: false,
                   }),
                   { name: "cropOptionsState" }
                 );
-
-                const display = editorInstance.recordings.segments[0].display;
 
                 const adjustedCrop = createMemo(() => calcCropFloor(crop));
 
