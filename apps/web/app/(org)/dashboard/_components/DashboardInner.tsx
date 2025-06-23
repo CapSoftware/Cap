@@ -22,7 +22,7 @@ import { signOut } from "next-auth/react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import React, { cloneElement, memo, useRef, useState } from "react";
+import React, { cloneElement, memo, useMemo, useRef, useState } from "react";
 import { useDashboardContext, useTheme } from "../Contexts";
 import { MembersDialog } from "../spaces/[spaceId]/components/MembersDialog";
 import { ArrowUpIcon } from "./AnimatedIcons/ArrowUp";
@@ -133,7 +133,7 @@ const User = () => {
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const { user, isSubscribed } = useDashboardContext();
 
-  const menuItems = [
+  const menuItems = useMemo(() => [
     {
       name: "Homepage",
       icon: <HomeIcon />,
@@ -181,7 +181,7 @@ const User = () => {
       iconClassName: "text-gray-11 group-hover:text-gray-12",
       showCondition: true,
     },
-  ];
+  ], []);
 
   return (
     <>
