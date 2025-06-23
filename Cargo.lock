@@ -938,6 +938,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "cap-audio",
+ "cap-displays",
  "cap-editor",
  "cap-export",
  "cap-fail",
@@ -1020,7 +1021,11 @@ dependencies = [
 name = "cap-displays"
 version = "0.1.0"
 dependencies = [
+ "cidre",
  "core-graphics 0.24.0",
+ "foreign-types 0.5.0",
+ "serde",
+ "specta",
  "windows 0.58.0",
  "windows-sys 0.59.0",
 ]

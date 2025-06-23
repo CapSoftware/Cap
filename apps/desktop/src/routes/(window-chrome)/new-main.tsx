@@ -116,8 +116,12 @@ function Page() {
 
     const monitor = await primaryMonitor();
     if (!monitor) return;
+  });
 
-    commands.showWindow("StartRecordingOverlay");
+  createEffect(() => {
+    console.log({ mode: rawOptions.targetMode });
+    if (rawOptions.targetMode) commands.openTargetSelectOverlays();
+    else commands.closeTargetSelectOverlays();
   });
 
   // createEffect(() => {
@@ -280,159 +284,33 @@ function Page() {
           )}
         </div>
       </WindowChromeHeader>
-      {/* <div class="flex items-center justify-between pb-[0.25rem]">
-        <div class="flex items-center space-x-1">
-          <a
-            class="*:w-[92px] *:h-auto text-[--text-primary]"
-            target="_blank"
-            href={
-              auth.data
-                ? `${import.meta.env.VITE_SERVER_URL}/dashboard`
-                : import.meta.env.VITE_SERVER_URL
-            }
-          >
-            <IconCapLogoFullDark class="hidden dark:block" />
-            <IconCapLogoFull class="block dark:hidden" />
-          </a>
-          <ErrorBoundary fallback={<></>}>
-            <Suspense>
-              <span
-                onClick={async () => {
-                  if (license.data?.type !== "pro") {
-                    await commands.showWindow("Upgrade");
-                  }
-                }}
-                class={`text-[0.6rem] ${
-                  license.data?.type === "pro"
-                    ? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
-                    : "bg-gray-3 cursor-pointer hover:bg-gray-5"
-                } rounded-lg px-1.5 py-0.5`}
-              >
-                {license.data?.type === "commercial"
-                  ? "Commercial"
-                  : license.data?.type === "pro"
-                  ? "Pro"
-                  : "Personal"}
-              </span>
-            </Suspense>
-          </ErrorBoundary>
-        </div>
-        <Mode />
-      </div> */}
-      {/* <div>
-        <AreaSelectButton
-          screen={options.screen()}
-          targetVariant={
-            rawOptions.captureTarget.variant === "window"
-              ? "other"
-              : rawOptions.captureTarget.variant
-          }
-          onChange={(area) => {
-            if (!area)
-              setOptions(
-                "captureTarget",
-                reconcile({
-                  variant: "screen",
-                  id: options.screen()?.id ?? -1,
-                })
-              );
-          }}
-        />
-        <div
-          class={cx(
-            "flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500",
-            (rawOptions.captureTarget.variant === "screen" ||
-              rawOptions.captureTarget.variant === "area") &&
-              "ml-[2.4rem]"
-          )}
-          style={{
-            "transition-timing-function":
-              "cubic-bezier(0.785, 0.135, 0.15, 0.86)",
-          }}
-        >
-          <div
-            class="w-1/2 absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-300 outline-offset-2 rounded-[0.6rem] overflow-hidden"
-            style={{
-              transform:
-                rawOptions.captureTarget.variant === "window"
-                  ? "translateX(100%)"
-                  : undefined,
-            }}
-          >
-            <div class="flex-1 bg-gray-2" />
-          </div>
-          <TargetSelect<CaptureScreen>
-            options={screens.data ?? []}
-            onChange={(value) => {
-              if (!value) return;
-
-              trackEvent("display_selected", {
-                display_id: value.id,
-                display_name: value.name,
-                refresh_rate: value.refresh_rate,
-              });
-
-              setOptions(
-                "captureTarget",
-                reconcile({ variant: "screen", id: value.id })
-              );
-            }}
-            value={options.screen() ?? null}
-            placeholder="Screen"
-            optionsEmptyText="No screens found"
-            selected={
-              rawOptions.captureTarget.variant === "screen" ||
-              rawOptions.captureTarget.variant === "area"
-            }
-          />
-          <TargetSelect<CaptureWindow>
-            options={windows.data ?? []}
-            onChange={(value) => {
-              if (!value) return;
-
-              trackEvent("window_selected", {
-                window_id: value.id,
-                window_name: value.name,
-                owner_name: value.owner_name,
-                refresh_rate: value.refresh_rate,
-              });
-
-              setOptions(
-                "captureTarget",
-                reconcile({ variant: "window", id: value.id })
-              );
-            }}
-            value={options.window() ?? null}
-            placeholder="Window"
-            optionsEmptyText="No windows found"
-            selected={rawOptions.captureTarget.variant === "window"}
-            getName={(value) =>
-              platform() === "windows"
-                ? value.name
-                : `${value.owner_name} | ${value.name}`
-            }
-            disabled={windows.data?.length === 0}
-          />
-        </div>
-      </div> */}
-
       <div class="flex flex-row items-stretch gap-1.5 w-full text-xs text-gray-11">
         <TargetTypeButton
           selected={rawOptions.targetMode === "screen"}
           Component={IconMdiMonitor}
-          onClick={() => setOptions("targetMode", "screen")}
+          onClick={() =>
+            setOptions("targetMode", (v) =>
+              v === "screen" ? undefined : "screen"
+            )
+          }
           name="Screen"
         />
         <TargetTypeButton
           selected={rawOptions.targetMode === "window"}
           Component={IconLucideAppWindowMac}
-          onClick={() => setOptions("targetMode", "window")}
+          onClick={() =>
+            setOptions("targetMode", (v) =>
+              v === "window" ? undefined : "window"
+            )
+          }
           name="Window"
         />
         <TargetTypeButton
           selected={rawOptions.targetMode === "area"}
           Component={IconMaterialSymbolsScreenshotFrame2Rounded}
-          onClick={() => setOptions("targetMode", "area")}
+          onClick={() =>
+            setOptions("targetMode", (v) => (v === "area" ? undefined : "area"))
+          }
           name="Area"
         />
         {/* <div class="flex-1 text-center flex flex-col items-center justify-end gap-1 py-1 rounded-lg">

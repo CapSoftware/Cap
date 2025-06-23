@@ -1,7 +1,7 @@
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
-pub use macos::DisplayImpl;
+pub use macos::{DisplayIdImpl, DisplayImpl};
 
 #[cfg(windows)]
 mod win;

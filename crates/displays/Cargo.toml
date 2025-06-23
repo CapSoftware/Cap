@@ -7,9 +7,13 @@ edition = "2024"
 workspace = true
 
 [dependencies]
+serde = { version = "1.0.219", features = ["derive"] }
+specta.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"
+foreign-types = "0.5.0"
+cidre = { workspace = true }
 
 [target.'cfg(target_os= "windows")'.dependencies]
 windows = { workspace = true, features = [

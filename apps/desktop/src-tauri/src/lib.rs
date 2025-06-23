@@ -17,6 +17,7 @@ mod export;
 mod fake_window;
 // mod live_state;
 mod presets;
+mod target_select_overlay;
 mod tray;
 mod upload;
 mod web_api;
@@ -1660,7 +1661,17 @@ async fn seek_to(editor_instance: WindowEditorInstance, frame_number: u32) -> Re
 #[tauri::command]
 #[specta::specta]
 async fn show_window(app: AppHandle, window: ShowCapWindow) -> Result<(), String> {
-    window.show(&app).await.unwrap();
+    let _ = window.show(&app).await;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn close_window(app: AppHandle, window: CapWindowId) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(&window.label()) {
+        let _ = window.close();
+    }
+
     Ok(())
 }
 
@@ -1810,6 +1821,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             windows::set_theme,
             global_message_dialog,
             show_window,
+            close_window,
             write_clipboard_string,
             platform::perform_haptic_feedback,
             list_fails,
@@ -1826,7 +1838,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             captions::download_whisper_model,
             captions::check_model_exists,
             captions::delete_whisper_model,
-            captions::export_captions_srt
+            captions::export_captions_srt,
+            target_select_overlay::open_target_select_overlays,
+            target_select_overlay::close_target_select_overlays,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -1847,6 +1861,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             audio_meter::AudioInputLevelChange,
             UploadProgress,
             captions::DownloadProgress,
+            target_select_overlay::DisplayUnderCursorChanged
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
@@ -1916,7 +1931,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 .with_denylist(&[
                     CapWindowId::Setup.label().as_str(),
                     "window-capture-occluder",
-                    "start-recording-overlay",
+                    "target-select-overlay",
                     // CapWindowId::WindowCaptureOccluder.label().as_str(),
                     CapWindowId::CaptureArea.label().as_str(),
                     CapWindowId::Camera.label().as_str(),
@@ -1929,9 +1944,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     label if label.starts_with("window-capture-occluder-") => {
                         "window-capture-occluder"
                     }
-                    label if label.starts_with("start-recording-overlay") => {
-                        "start-recording-overlay"
-                    }
+                    label if label.starts_with("target-select-overlay") => "target-select-overlay",
                     _ => label,
                 })
                 .build(),

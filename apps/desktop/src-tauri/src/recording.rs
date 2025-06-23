@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
+use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc, time::Duration};
 
 use crate::{
     audio::AppSounds,
@@ -17,7 +17,7 @@ use crate::{
     App, CurrentRecordingChanged, DynLoggingLayer, MutableState, NewStudioRecordingAdded,
     RecordingStarted, RecordingStopped, VideoUploadInfo,
 };
-use base64::{prelude::BASE64_STANDARD, Engine};
+use base64::Engine;
 use cap_fail::fail;
 use cap_media::{feeds::CameraFeed, platform::display_for_window, sources::ScreenCaptureTarget};
 use cap_media::{
