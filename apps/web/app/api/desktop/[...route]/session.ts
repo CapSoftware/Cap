@@ -41,10 +41,7 @@ app.get(
       new URL(`${redirectOrigin}${url.pathname}${url.search}`).toString()
     );
 
-    const session = await getServerSession(authOptions());
-    if (!session) return c.redirect(loginRedirectUrl);
-
-    const user = await getCurrentUser(session);
+    const user = await getCurrentUser();
     if (!user) return c.redirect(loginRedirectUrl);
 
     let data;

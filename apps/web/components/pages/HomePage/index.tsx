@@ -21,9 +21,9 @@ import Link from "next/link";
 import React, { useState } from "react";
 import { Parallax, ParallaxProvider } from "react-scroll-parallax";
 import { LogoSection } from "../_components/LogoSection";
-import { FeatureCard } from "../SelfHostingPage";
 import LeftBlueHue from "./LeftBlueHue";
 import PowerfulFeaturesSVG from "./PowerfulFeaturesSVG";
+import { FeatureCard } from "../_components/FeatureCard";
 
 interface HomePageProps {
   serverHomepageCopyVariant?: string;

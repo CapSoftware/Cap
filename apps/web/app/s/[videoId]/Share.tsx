@@ -33,12 +33,8 @@ type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
 interface ShareProps {
   data: VideoWithOrganizationInfo;
   user: typeof userSelectProps | null;
-  comments: CommentWithAuthor[];
-  initialAnalytics: {
-    views: number;
-    comments: number;
-    reactions: number;
-  };
+  comments: MaybePromise<CommentWithAuthor[]>;
+  views: MaybePromise<number>;
   customDomain: string | null;
   domainVerified: boolean;
   userOrganizations?: { id: string; name: string }[];
@@ -143,7 +139,7 @@ export const Share = ({
   data,
   user,
   comments,
-  initialAnalytics,
+  views,
   initialAiData,
   aiGenerationEnabled,
   aiUiEnabled,
@@ -159,19 +155,19 @@ export const Share = ({
     aiData: initialAiData,
   });
 
-  const { data: viewCount } = useVideoAnalytics(
-    data.id,
-    initialAnalytics.views
-  );
+  // const { data: viewCount } = useVideoAnalytics(
+  //   data.id,
+  //   initialAnalytics.views
+  // );
 
-  const analytics = useMemo(
-    () => ({
-      views: viewCount || 0,
-      comments: comments.filter((c) => c.type === "text").length,
-      reactions: comments.filter((c) => c.type === "emoji").length,
-    }),
-    [viewCount, comments]
-  );
+  // const analytics = useMemo(
+  //   () => ({
+  //     views: viewCount || 0,
+  //     comments: 0, // comments.filter((c) => c.type === "text").length,
+  //     reactions: 0, // comments.filter((c) => c.type === "emoji").length,
+  //   }),
+  //   [viewCount, comments]
+  // );
 
   const transcriptionStatus =
     videoStatus?.transcriptionStatus || data.transcriptionStatus;
@@ -256,7 +252,7 @@ export const Share = ({
             }}
             user={user}
             comments={comments}
-            analytics={analytics}
+            views={views}
             onSeek={handleSeek}
             videoId={data.id}
             aiData={aiData}
