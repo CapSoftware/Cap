@@ -22,7 +22,7 @@ import { signOut } from "next-auth/react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import React, { cloneElement, useRef, useState } from "react";
+import React, { cloneElement, memo, useRef, useState } from "react";
 import { useDashboardContext, useTheme } from "../Contexts";
 import { MembersDialog } from "../spaces/[spaceId]/components/MembersDialog";
 import { ArrowUpIcon } from "./AnimatedIcons/ArrowUp";
@@ -242,7 +242,7 @@ const User = () => {
       </Popover>
     </>
   );
-};
+}
 
 interface Props {
   icon: React.ReactElement;
@@ -252,7 +252,7 @@ interface Props {
   iconClassName?: string;
 }
 
-const MenuItem = ({ icon, name, href, onClick, iconClassName }: Props) => {
+const MenuItem = memo(({ icon, name, href, onClick, iconClassName }: Props) => {
   const iconRef = useRef<DownloadIconHandle>(null);
   return (
     <CommandItem
@@ -286,4 +286,4 @@ const MenuItem = ({ icon, name, href, onClick, iconClassName }: Props) => {
       </Link>
     </CommandItem>
   );
-};
+});
