@@ -1,30 +1,30 @@
 "use client";
 
-import { ChevronDown, ChevronUp } from "lucide-react";
-import Link from "next/link";
-import { useState } from "react";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { shareCap } from "@/actions/caps/share";
+import { deleteSpace } from "@/actions/organization/delete-space";
+import { Tooltip } from "@/components/Tooltip";
+import { Avatar, Button } from "@cap/ui";
 import {
   faLayerGroup,
   faPlus,
   faXmark,
 } from "@fortawesome/free-solid-svg-icons";
-import { deleteSpace } from "@/actions/organization/delete-space";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
-import SpaceDialog from "./SpaceDialog";
-import { Button, Avatar } from "@cap/ui";
-import { ConfirmationDialog } from "../ConfirmationDialog";
-import { shareCap } from "@/actions/caps/share";
-import { toast } from "sonner";
-import { useParams, usePathname, useRouter } from "next/navigation";
-import { Tooltip } from "@/components/Tooltip";
 import { motion } from "framer-motion";
-import { useMemo } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import Image from "next/image";
+import Link from "next/link";
+import { useParams, usePathname, useRouter } from "next/navigation";
+import { useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
+import { ConfirmationDialog } from "../ConfirmationDialog";
+import SpaceDialog from "./SpaceDialog";
 
-import { navItemClass } from "./Items";
-import { Spaces } from "../../dashboard-data";
 import { useDashboardContext } from "../../Contexts";
+import { Spaces } from "../../dashboard-data";
+import { LayersIcon, LayersIconHandle } from "../AnimatedIcons/Layers";
+import { navItemClass } from "./Items";
 
 const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
   const { spacesData, sidebarCollapsed, user } = useDashboardContext();
@@ -34,6 +34,7 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
   const router = useRouter();
   const params = useParams();
   const pathname = usePathname();
+  const layersIconRef = useRef<LayersIconHandle>(null);
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [pendingDeleteSpace, setPendingDeleteSpace] = useState<Spaces | null>(null);
@@ -168,6 +169,8 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
           passHref
           onClick={() => toggleMobileNav?.()}
           prefetch={false}
+          onMouseEnter={() => layersIconRef.current?.startAnimation()}
+          onMouseLeave={() => layersIconRef.current?.stopAnimation()}
           href="/dashboard/spaces/browse"
           className={clsx(
             "relative border border-transparent transition z-3",
@@ -180,16 +183,7 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
             navItemClass
           )}
         >
-          <FontAwesomeIcon
-            icon={faLayerGroup}
-            className={clsx(
-              "flex-shrink-0 transition-colors",
-              sidebarCollapsed
-                ? "text-gray-12 size-[18px] mx-auto"
-                : "text-gray-10 size-3.5"
-            )}
-            aria-hidden="true"
-          />
+          <LayersIcon ref={layersIconRef} className={clsx(sidebarCollapsed ? "text-gray-12" : "text-gray-10")} size={sidebarCollapsed ? 18 : 14} />
           <p
             className={clsx(
               "text-sm text-gray-12 truncate",

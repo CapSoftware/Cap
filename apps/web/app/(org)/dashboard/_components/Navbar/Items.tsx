@@ -1,5 +1,10 @@
 "use client";
+import { NewOrganization } from "@/components/forms/NewOrganization";
+import { Tooltip } from "@/components/Tooltip";
+import { UsageButton } from "@/components/UsageButton";
+import { buildEnv } from "@cap/env";
 import {
+  Avatar,
   Button,
   Command,
   CommandEmpty,
@@ -15,31 +20,23 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-  Avatar,
 } from "@cap/ui";
 import { classNames } from "@cap/utils";
-import { Check, ChevronDown, Plus } from "lucide-react";
-import Link from "next/link";
-import { usePathname } from "next/navigation";
-
-import { NewOrganization } from "@/components/forms/NewOrganization";
-import { Tooltip } from "@/components/Tooltip";
-import { UsageButton } from "@/components/UsageButton";
-import { buildEnv } from "@cap/env";
-import {
-  faBuilding,
-  faRecordVinyl,
-  IconDefinition,
-} from "@fortawesome/free-solid-svg-icons";
+import { faBuilding } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { motion } from "framer-motion";
+import { Check, ChevronDown, Plus } from "lucide-react";
 import Image from "next/image";
-
-import { useRef, useState } from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { cloneElement, useRef, useState } from "react";
+import { useDashboardContext } from "../../Contexts";
+import { CapIcon } from "../AnimatedIcons/Cap";
+import { CogIcon, CogIconHandle } from "../AnimatedIcons/Cog";
 import { updateActiveOrganization } from "./server";
 import SpacesList from "./SpacesList";
-import { useDashboardContext } from "../../Contexts";
+
 
 interface Props {
   toggleMobileNav?: () => void;
@@ -54,28 +51,29 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
   const [hoveredItem, setHoveredItem] = useState<string | null>(null);
   const { user, sidebarCollapsed } = useDashboardContext();
 
+
   const manageNavigation = [
     {
       name: "My Caps",
       href: `/dashboard/caps`,
-      icon: faRecordVinyl,
+      icon: <CapIcon />,
       subNav: [],
     },
     {
       name: "Organization Settings",
       href: `/dashboard/settings/organization`,
-      icon: faBuilding,
+      icon: <CogIcon />,
       subNav: [],
     },
     ...(buildEnv.NEXT_PUBLIC_IS_CAP && user.email.endsWith("@cap.so")
       ? [
-          {
-            name: "Admin Dev",
-            href: "/dashboard/admin",
-            icon: faBuilding,
-            subNav: [],
-          },
-        ]
+        {
+          name: "Admin Dev",
+          href: "/dashboard/admin",
+          icon: <CogIcon />,
+          subNav: [],
+        },
+      ]
       : []),
   ];
 
@@ -306,49 +304,14 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
                   }}
                 />
               )}
-              <Tooltip
-                content={item.name}
-                disable={sidebarCollapsed === false}
-                position="right"
-              >
-                <Link
-                  passHref
-                  onClick={() => toggleMobileNav?.()}
-                  onMouseEnter={() => setHoveredItem(item.name)}
-                  onMouseLeave={() => setHoveredItem(null)}
-                  prefetch={false}
-                  href={item.href}
-                  className={classNames(
-                    "relative border border-transparent transition z-3",
-                    sidebarCollapsed
-                      ? "flex justify-center px-0 items-center w-full size-9"
-                      : "py-2 w-full px-3",
-                    isPathActive(item.href)
-                      ? "bg-transparent pointer-events-none"
-                      : "hover:bg-gray-2",
-                    navItemClass
-                  )}
-                >
-                  <FontAwesomeIcon
-                    icon={item.icon as IconDefinition}
-                    className={clsx(
-                      "flex-shrink-0 transition-colors",
-                      sidebarCollapsed
-                        ? "text-gray-12 size-[18px] mx-auto"
-                        : "text-gray-10 size-3.5"
-                    )}
-                    aria-hidden="true"
-                  />
-                  <p
-                    className={clsx(
-                      "text-sm text-gray-12 truncate",
-                      sidebarCollapsed ? "hidden" : "ml-2.5"
-                    )}
-                  >
-                    {item.name}
-                  </p>
-                </Link>
-              </Tooltip>
+              <NavItem
+                name={item.name}
+                href={item.href}
+                icon={item.icon}
+                sidebarCollapsed={sidebarCollapsed}
+                toggleMobileNav={toggleMobileNav}
+                isPathActive={isPathActive}
+              />
             </div>
           ))}
 
@@ -400,5 +363,65 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
     </Dialog>
   );
 };
+
+
+const NavItem = ({
+  name,
+  href,
+  icon,
+  sidebarCollapsed,
+  toggleMobileNav,
+  isPathActive,
+}: {
+  name: string;
+  href: string;
+  icon: React.ReactElement;
+  sidebarCollapsed: boolean;
+  toggleMobileNav?: () => void;
+  isPathActive: (path: string) => boolean;
+}) => {
+  const iconRef = useRef<CogIconHandle>(null);
+  return (
+    <Tooltip disable={!sidebarCollapsed} content={name} position="right">
+      <Link
+        href={href}
+        onClick={() => toggleMobileNav?.()}
+        onMouseEnter={() => {
+          iconRef.current?.startAnimation();
+        }}
+        onMouseLeave={() => {
+          iconRef.current?.stopAnimation();
+        }}
+        prefetch={false}
+        passHref
+        className={classNames(
+          "relative border border-transparent transition z-3",
+          sidebarCollapsed
+            ? "flex justify-center items-center px-0 w-full size-9"
+            : "px-3 py-2 w-full",
+          isPathActive(href)
+            ? "bg-transparent pointer-events-none"
+            : "hover:bg-gray-2",
+          navItemClass
+        )}
+      >
+        {cloneElement(icon, {
+          ref: iconRef,
+          className: clsx(sidebarCollapsed ? "text-gray-12 mx-auto" : "text-gray-10"),
+          size: sidebarCollapsed ? 18 : 16,
+        })}
+        <p
+          className={clsx(
+            "text-sm text-gray-12 truncate",
+            sidebarCollapsed ? "hidden" : "ml-2.5"
+          )}
+        >
+          {name}
+        </p>
+      </Link>
+    </Tooltip>
+  )
+}
+
 
 export default AdminNavItems;

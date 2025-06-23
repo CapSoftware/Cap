@@ -3,34 +3,37 @@
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { buildEnv } from "@cap/env";
 import {
+  Avatar,
   Command,
   CommandGroup,
   CommandItem,
   Popover,
   PopoverContent,
   PopoverTrigger,
-  Avatar,
 } from "@cap/ui";
+import {
+  faMoon,
+  faSun
+} from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { MoreVertical } from "lucide-react";
 import { signOut } from "next-auth/react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
-import {
-  faMoon,
-  faSun,
-  faHome,
-  faCrown,
-  faGear,
-  faMessage,
-  faSignOut,
-  faDownload,
-} from "@fortawesome/free-solid-svg-icons";
-import Image from "next/image";
-import { MembersDialog } from "../spaces/[spaceId]/components/MembersDialog";
+import React, { cloneElement, useRef, useState } from "react";
 import { useDashboardContext, useTheme } from "../Contexts";
+import { MembersDialog } from "../spaces/[spaceId]/components/MembersDialog";
+import { ArrowUpIcon } from "./AnimatedIcons/ArrowUp";
+import { MessageCircleMoreIcon } from "./AnimatedIcons/Chat";
+import { DownloadIcon, DownloadIconHandle } from "./AnimatedIcons/Download";
+import { HomeIcon } from "./AnimatedIcons/Home";
+import { LogoutIcon } from "./AnimatedIcons/Logout";
+import { SettingsGearIcon } from "./AnimatedIcons/Settings";
+
+export const navItemClass =
+  "flex items-center justify-start rounded-xl outline-none tracking-tight overflow-hidden";
 
 export default function DashboardInner({
   children,
@@ -53,12 +56,11 @@ export default function DashboardInner({
   const title = activeSpace ? activeSpace.name : titles[pathname] || "";
   const { theme, setThemeHandler } = useTheme();
   const isSharedCapsPage = pathname === "/dashboard/shared-caps";
-
   return (
     <div className="flex flex-col min-h-screen">
       <div
         className={clsx(
-          "flex sticky z-50 justify-between items-center px-5 mt-10 w-full border-b",
+          "flex sticky z-40 justify-between items-center px-5 mt-10 w-full border-b",
           "bg-gray-1 lg:bg-transparent min-h-16 lg:min-h-10 border-gray-3 lg:border-b-0 lg:pl-0 lg:pr-5 lg:top-0 lg:relative top-[64px] lg:mt-5 lg:h-8"
         )}
       >
@@ -130,6 +132,57 @@ const User = () => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const { user, isSubscribed } = useDashboardContext();
+
+  const menuItems = [
+    {
+      name: "Homepage",
+      icon: <HomeIcon />,
+      href: "/home",
+      onClick: () => setMenuOpen(false),
+      iconClassName: "text-gray-11 group-hover:text-gray-12",
+      showCondition: true,
+    },
+    {
+      name: "Upgrade to Pro",
+      icon: <ArrowUpIcon />,
+      onClick: () => {
+        setMenuOpen(false);
+        setUpgradeModalOpen(true);
+      },
+      iconClassName: "text-amber-400 group-hover:text-amber-500",
+      showCondition: !isSubscribed && buildEnv.NEXT_PUBLIC_IS_CAP,
+    },
+    {
+      name: "Settings",
+      icon: <SettingsGearIcon />,
+      href: "/dashboard/settings/account",
+      onClick: () => setMenuOpen(false),
+      iconClassName: "text-gray-11 group-hover:text-gray-12",
+      showCondition: true,
+    },
+    {
+      name: "Chat Support",
+      icon: <MessageCircleMoreIcon />,
+      onClick: () => window.open("https://cap.link/discord", "_blank"),
+      iconClassName: "text-gray-11 group-hover:text-gray-12",
+      showCondition: true,
+    },
+    {
+      name: "Download App",
+      icon: <DownloadIcon />,
+      onClick: () => window.open("https://cap.so/download", "_blank"),
+      iconClassName: "text-gray-11 group-hover:text-gray-12",
+      showCondition: true,
+    },
+    {
+      name: "Sign Out",
+      icon: <LogoutIcon />,
+      onClick: () => signOut(),
+      iconClassName: "text-gray-11 group-hover:text-gray-12",
+      showCondition: true,
+    },
+  ];
+
   return (
     <>
       <UpgradeModal
@@ -171,101 +224,66 @@ const User = () => {
         <PopoverContent className="p-1 w-48">
           <Command>
             <CommandGroup>
-              <Link href="/home">
-                <CommandItem
-                  className="px-2 py-1.5 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-5 group"
-                  onSelect={() => {
-                    setMenuOpen(false);
-                  }}
-                >
-                  <FontAwesomeIcon
-                    icon={faHome}
-                    className="mr-2 text-gray-11 transition-colors duration-300 size-3.5 group-hover:text-gray-12"
+              {menuItems
+                .filter((item) => item.showCondition)
+                .map((item, index) => (
+                  <MenuItem
+                    key={index}
+                    icon={item.icon}
+                    name={item.name}
+                    href={item.href ?? "#"}
+                    onClick={item.onClick}
+                    iconClassName={item.iconClassName}
                   />
-                  <span className="text-[13px] transition-colors duration-300 text-gray-11 group-hover:text-gray-12">
-                    Homepage
-                  </span>
-                </CommandItem>
-              </Link>
-              {!isSubscribed && buildEnv.NEXT_PUBLIC_IS_CAP && (
-                <CommandItem
-                  className="px-2 py-1.5 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-5 group"
-                  onSelect={() => {
-                    setMenuOpen(false);
-                    setUpgradeModalOpen(true);
-                  }}
-                >
-                  <FontAwesomeIcon
-                    icon={faCrown}
-                    className="mr-2 text-amber-400 transition-colors duration-300 size-3.5 group-hover:text-amber-500"
-                  />
-                  <span className="text-[13px] transition-colors duration-300 text-gray-11 group-hover:text-gray-12">
-                    Upgrade to Pro
-                  </span>
-                </CommandItem>
-              )}
-              <Link href="/dashboard/settings/account">
-                <CommandItem
-                  className="px-2 py-1.5 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-5 group"
-                  onSelect={() => {
-                    setMenuOpen(false);
-                  }}
-                >
-                  <FontAwesomeIcon
-                    icon={faGear}
-                    className="mr-2 text-gray-11 transition-colors duration-300 size-3.5 group-hover:text-gray-12"
-                  />
-                  <span className="text-[13px] transition-colors duration-300 text-gray-11 group-hover:text-gray-12">
-                    Settings
-                  </span>
-                </CommandItem>
-              </Link>
-              <CommandItem
-                className="px-2 py-1.5 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-5 group"
-                onSelect={() =>
-                  window.open("https://cap.link/discord", "_blank")
-                }
-              >
-                <FontAwesomeIcon
-                  icon={faMessage}
-                  className="mr-2 text-gray-11 transition-colors duration-300 size-3.5 group-hover:text-gray-12"
-                />
-                <span className="text-[13px] transition-colors duration-300 text-gray-11 group-hover:text-gray-12">
-                  Chat Support
-                </span>
-              </CommandItem>
-
-              <CommandItem
-                className="px-2 py-1.5 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-5 group"
-                onSelect={() =>
-                  window.open("https://cap.so/download", "_blank")
-                }
-              >
-                <FontAwesomeIcon
-                  icon={faDownload}
-                  className="mr-2 text-gray-11 transition-colors duration-300 size-3.5 group-hover:text-gray-12"
-                />
-                <span className="text-[13px] transition-colors duration-300 text-gray-11 group-hover:text-gray-12">
-                  Download App
-                </span>
-              </CommandItem>
-
-              <CommandItem
-                className="px-2 py-1.5 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-5 group"
-                onSelect={() => signOut()}
-              >
-                <FontAwesomeIcon
-                  icon={faSignOut}
-                  className="mr-2 text-gray-11 transition-colors duration-300 size-3.5 group-hover:text-gray-12"
-                />
-                <span className="text-[13px] transition-colors duration-300 text-gray-11 group-hover:text-gray-12">
-                  Sign Out
-                </span>
-              </CommandItem>
+                ))}
             </CommandGroup>
           </Command>
         </PopoverContent>
       </Popover>
     </>
+  );
+};
+
+interface Props {
+  icon: React.ReactElement;
+  name: string;
+  href?: string;
+  onClick: () => void;
+  iconClassName?: string;
+}
+
+const MenuItem = ({ icon, name, href, onClick, iconClassName }: Props) => {
+  const iconRef = useRef<DownloadIconHandle>(null);
+  return (
+    <CommandItem
+      key={name}
+      className="px-2 py-1.5 rounded-lg transition-colors duration-300 cursor-pointer hover:bg-gray-5 group"
+      onSelect={onClick}
+      onMouseEnter={() => {
+        iconRef.current?.startAnimation();
+      }}
+      onMouseLeave={() => {
+        iconRef.current?.stopAnimation();
+      }}
+    >
+      <Link
+        className="flex gap-2 items-center"
+        href={href ?? "#"}
+        onClick={onClick}
+      >
+        {cloneElement(icon, {
+          ref: iconRef,
+          className: iconClassName,
+          size: 14,
+        })}
+        <p
+          className={clsx(
+            "text-sm text-gray-12"
+          )}
+        >
+          {name}
+        </p>
+      </Link>
+    </CommandItem>
   );
 };
