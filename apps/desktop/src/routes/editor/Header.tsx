@@ -5,10 +5,11 @@ import { remove } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
-import { ComponentProps, onCleanup, onMount } from "solid-js";
+import { ComponentProps, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 
 import { Button } from "@cap/ui-solid";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import Tooltip from "~/components/Tooltip";
 import { trackEvent } from "~/utils/analytics";
 import { initializeTitlebar } from "~/utils/titlebar-state";
 import { useEditorContext } from "./context";
@@ -51,6 +52,16 @@ export function Header() {
   });
   onCleanup(() => unlistenTitlebar?.());
 
+  const [truncated, setTruncated] = createSignal(false);
+  let prettyNameRef: HTMLParagraphElement | undefined;
+
+  createEffect(() => {
+    if (!prettyNameRef) return;
+    const width = prettyNameRef.offsetWidth;
+    const scrollWidth = prettyNameRef.scrollWidth;
+    setTruncated(width < scrollWidth);
+  });
+
   return (
     <div
       data-tauri-drag-region
@@ -82,9 +93,14 @@ export function Header() {
         />
 
         <div class="flex flex-row items-center">
-          <p class="text-sm truncate text-gray-12 max-w-[300px]">
-            {meta().prettyName + "this is a long name asdasd asdsad"}
-          </p>
+          <Tooltip
+            disabled={!truncated()}
+            content={meta().prettyName}
+          >
+            <p ref={prettyNameRef} class="text-sm truncate text-gray-12 max-w-[300px] cursor-default">
+              {meta().prettyName}
+            </p>
+          </Tooltip>
           <span class="text-sm text-gray-11">.cap</span>
         </div>
         {/* <ErrorBoundary fallback={<></>}>
