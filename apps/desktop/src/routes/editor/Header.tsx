@@ -81,10 +81,12 @@ export function Header() {
           leftIcon={<IconLucideFolder class="w-5" />}
         />
 
-        <p class="text-sm text-gray-12">
-          {meta().prettyName}
+        <div class="flex flex-row items-center">
+          <p class="text-sm truncate text-gray-12 max-w-[300px]">
+            {meta().prettyName + "this is a long name asdasd asdsad"}
+          </p>
           <span class="text-sm text-gray-11">.cap</span>
-        </p>
+        </div>
         {/* <ErrorBoundary fallback={<></>}>
             <Suspense>
               <span
