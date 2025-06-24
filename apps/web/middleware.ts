@@ -1,7 +1,7 @@
 import { db } from "@cap/database";
 import { organizations } from "@cap/database/schema";
-import { eq } from "drizzle-orm";
 import { buildEnv, serverEnv } from "@cap/env";
+import { eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { NextRequest, NextResponse, userAgent } from "next/server";
 
@@ -22,8 +22,17 @@ const mainOrigins = [
 
 export async function middleware(request: NextRequest) {
   const url = new URL(request.url);
-  const hostname = url.hostname;
   const path = url.pathname;
+
+  // Add anti-clickjacking headers for /login
+  if (path.startsWith("/login")) {
+    const response = NextResponse.next();
+    response.headers.set("X-Frame-Options", "DENY");
+    response.headers.set("Content-Security-Policy", "frame-ancestors 'none'");
+    return response;
+  }
+
+  const hostname = url.hostname;
 
   if (buildEnv.NEXT_PUBLIC_IS_CAP !== "true") {
     if (
