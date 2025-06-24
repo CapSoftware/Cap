@@ -27,8 +27,11 @@ export async function middleware(request: NextRequest) {
   // Add anti-clickjacking headers for /login
   if (path.startsWith("/login")) {
     const response = NextResponse.next();
-    response.headers.set("X-Frame-Options", "DENY");
-    response.headers.set("Content-Security-Policy", "frame-ancestors 'none'");
+    response.headers.set("X-Frame-Options", "SAMEORIGIN");
+    response.headers.set(
+      "Content-Security-Policy",
+      "frame-ancestors https://cap.so"
+    );
     return response;
   }
 
