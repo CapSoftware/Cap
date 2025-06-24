@@ -67,18 +67,6 @@ html {
   color: #ffffff;
 }
 
-.wrapper {
-  @apply mx-auto w-[92%] max-w-screen-2xl;
-}
-
-.wrapper-max {
-  @apply max-w-screen-2xl;
-}
-
-.wrapper-sm {
-  @apply max-w-5xl;
-}
-
 .prose
   :where(blockquote p:first-of-type):not(
     :where([class~="not-prose"], [class~="not-prose"] *)

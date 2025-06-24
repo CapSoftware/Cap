@@ -656,7 +656,7 @@ importers:
         version: 2.6.0
       tailwindcss-animate:
         specifier: ^1.0.6
-        version: 1.0.7(tailwindcss@3.4.17(ts-node@10.9.2(@types/node@20.17.43)(typescript@5.8.3)))
+        version: 1.0.7(tailwindcss@4.1.10)
       uuid:
         specifier: ^9.0.1
         version: 9.0.1
@@ -704,8 +704,8 @@ importers:
         specifier: ^8.4.23
         version: 8.5.3
       tailwindcss:
-        specifier: ^3
-        version: 3.4.17(ts-node@10.9.2(@types/node@20.17.43)(typescript@5.8.3))
+        specifier: ^4.1.10
+        version: 4.1.10
       typescript:
         specifier: ^5.8.3
         version: 5.8.3
@@ -767,7 +767,7 @@ importers:
         version: 4.6.2(eslint@8.57.1)
       eslint-plugin-tailwindcss:
         specifier: ^3.12.0
-        version: 3.18.0(tailwindcss@3.4.17(ts-node@10.9.2(@types/node@20.17.43)(typescript@5.8.3)))
+        version: 3.18.0(tailwindcss@4.1.10)
       eslint-utils:
         specifier: ^3.0.0
         version: 3.0.0(eslint@8.57.1)
@@ -12146,6 +12146,9 @@ packages:
     engines: {node: '>=14.0.0'}
     hasBin: true
 
+  tailwindcss@4.1.10:
+    resolution: {integrity: sha512-P3nr6WkvKV/ONsTzj6Gb57sWPMX29EPNPopo7+FcpkQaNsrNpZ1pv8QmrYI2RqEKD7mlGqLnGovlcYnBK0IqUA==}
+
   tar-stream@2.2.0:
     resolution: {integrity: sha512-ujeqbceABgwMZxEJnk2HDY2DlnUZ+9oEcb1KzTVfYHio0UE6dG71n60d8D2I4qNvleWrrXpmjpt7vZeF1LnMZQ==}
     engines: {node: '>=6'}
@@ -21541,11 +21544,11 @@ snapshots:
       string.prototype.matchall: 4.0.12
       string.prototype.repeat: 1.0.0
 
-  eslint-plugin-tailwindcss@3.18.0(tailwindcss@3.4.17(ts-node@10.9.2(@types/node@20.17.43)(typescript@5.8.3))):
+  eslint-plugin-tailwindcss@3.18.0(tailwindcss@4.1.10):
     dependencies:
       fast-glob: 3.3.3
       postcss: 8.5.3
-      tailwindcss: 3.4.17(ts-node@10.9.2(@types/node@20.17.43)(typescript@5.8.3))
+      tailwindcss: 4.1.10
 
   eslint-plugin-turbo@1.13.4(eslint@8.57.1):
     dependencies:
@@ -26672,6 +26675,10 @@ snapshots:
     dependencies:
       tailwindcss: 3.4.17(ts-node@10.9.2(@types/node@22.15.17)(typescript@5.8.3))
 
+  tailwindcss-animate@1.0.7(tailwindcss@4.1.10):
+    dependencies:
+      tailwindcss: 4.1.10
+
   tailwindcss@3.4.17(ts-node@10.9.2(@types/node@20.17.43)(typescript@5.8.3)):
     dependencies:
       '@alloc/quick-lru': 5.2.0
@@ -26725,6 +26732,8 @@ snapshots:
       sucrase: 3.35.0
     transitivePeerDependencies:
       - ts-node
+
+  tailwindcss@4.1.10: {}
 
   tar-stream@2.2.0:
     dependencies:
