@@ -12,6 +12,7 @@ specta.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"
+core-foundation = "0.10.0"
 foreign-types = "0.5.0"
 cidre = { workspace = true }
 

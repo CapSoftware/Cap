@@ -245,7 +245,6 @@ export const events = __makeEvents__<{
 audioInputLevelChange: AudioInputLevelChange,
 authenticationInvalid: AuthenticationInvalid,
 currentRecordingChanged: CurrentRecordingChanged,
-displayUnderCursorChanged: DisplayUnderCursorChanged,
 downloadProgress: DownloadProgress,
 editorStateChanged: EditorStateChanged,
 newNotification: NewNotification,
@@ -260,12 +259,12 @@ requestOpenSettings: RequestOpenSettings,
 requestRestartRecording: RequestRestartRecording,
 requestStartRecording: RequestStartRecording,
 requestStopRecording: RequestStopRecording,
+targetUnderCursor: TargetUnderCursor,
 uploadProgress: UploadProgress
 }>({
 audioInputLevelChange: "audio-input-level-change",
 authenticationInvalid: "authentication-invalid",
 currentRecordingChanged: "current-recording-changed",
-displayUnderCursorChanged: "display-under-cursor-changed",
 downloadProgress: "download-progress",
 editorStateChanged: "editor-state-changed",
 newNotification: "new-notification",
@@ -280,6 +279,7 @@ requestOpenSettings: "request-open-settings",
 requestRestartRecording: "request-restart-recording",
 requestStartRecording: "request-start-recording",
 requestStopRecording: "request-stop-recording",
+targetUnderCursor: "target-under-cursor",
 uploadProgress: "upload-progress"
 })
 
@@ -327,7 +327,6 @@ export type CursorMeta = { imagePath: string; hotspot: XY<number> }
 export type CursorType = "pointer" | "circle"
 export type Cursors = { [key in string]: string } | { [key in string]: CursorMeta }
 export type DisplayId = string
-export type DisplayUnderCursorChanged = { display_id: DisplayId | null }
 export type DownloadProgress = { progress: number; message: string }
 export type EditorStateChanged = { playhead_position: number }
 export type ExportCompression = "Minimal" | "Social" | "Web" | "Potato"
@@ -348,6 +347,9 @@ export type HotkeysConfiguration = { show: boolean }
 export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } }
 export type InstantRecordingMeta = { fps: number; sample_rate: number | null }
 export type JsonValue<T> = [T]
+export type LogicalBounds = { position: LogicalPosition; size: LogicalSize }
+export type LogicalPosition = { x: number; y: number }
+export type LogicalSize = { width: number; height: number }
 export type MainWindowRecordingStartBehaviour = "close" | "minimise"
 export type MultipleSegment = { display: VideoMeta; camera?: VideoMeta | null; mic?: AudioMeta | null; system_audio?: AudioMeta | null; cursor?: string | null }
 export type MultipleSegments = { segments: MultipleSegment[]; cursors: Cursors }
@@ -388,6 +390,7 @@ export type SingleSegment = { display: VideoMeta; camera?: VideoMeta | null; aud
 export type StartRecordingInputs = { capture_target: ScreenCaptureTarget; capture_system_audio?: boolean; mode: RecordingMode }
 export type StereoMode = "stereo" | "monoL" | "monoR"
 export type StudioRecordingMeta = { segment: SingleSegment } | { inner: MultipleSegments }
+export type TargetUnderCursor = { display_id: DisplayId | null; window: WindowUnderCursor | null }
 export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments: ZoomSegment[] }
 export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number }
 export type UploadMode = { Initial: { pre_created_video: VideoUploadInfo | null } } | "Reupload"
@@ -401,6 +404,8 @@ export type VideoMeta = { path: string; fps?: number;
 start_time?: number | null }
 export type VideoRecordingMetadata = { duration: number; size: number }
 export type VideoUploadInfo = { id: string; link: string; config: S3UploadMeta }
+export type WindowId = string
+export type WindowUnderCursor = { id: WindowId; app_name: string; bounds: LogicalBounds }
 export type XY<T> = { x: T; y: T }
 export type ZoomMode = "auto" | { manual: { x: number; y: number } }
 export type ZoomSegment = { start: number; end: number; amount: number; mode: ZoomMode }

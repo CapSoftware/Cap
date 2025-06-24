@@ -6,24 +6,31 @@ import {
   JSX,
   Match,
   PropsWithChildren,
+  Show,
   Switch,
 } from "solid-js";
 import { useSearchParams } from "@solidjs/router";
-import { createStore } from "solid-js/store";
+import { createStore, reconcile } from "solid-js/store";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { cx } from "cva";
 
 import { createOptionsQuery } from "~/utils/queries";
-import { commands, events, ScreenCaptureTarget } from "~/utils/tauri";
+import {
+  commands,
+  events,
+  ScreenCaptureTarget,
+  TargetUnderCursor,
+} from "~/utils/tauri";
 
 export default function () {
   const [params] = useSearchParams<{ displayId: string }>();
   const { rawOptions } = createOptionsQuery();
 
-  const [overDisplay, setOverDisplay] = createSignal<string | null>(null);
+  const [targetUnderCursor, setTargetUnderCursor] =
+    createStore<TargetUnderCursor>({ display_id: null, window: null });
 
-  events.displayUnderCursorChanged.listen((event) => {
-    setOverDisplay(event.payload.display_id);
+  events.targetUnderCursor.listen((event) => {
+    setTargetUnderCursor(reconcile(event.payload));
   });
 
   return (
@@ -31,14 +38,49 @@ export default function () {
       <Match when={rawOptions.targetMode === "screen"}>
         {(_) => (
           <div
-            data-over={overDisplay() === params.displayId}
-            class="w-screen h-screen flex flex-col items-center justify-center bg-black/40 data-[over='true']:bg-blue-500/20 transition-colors"
+            data-over={targetUnderCursor.display_id === params.displayId}
+            class="w-screen h-screen flex flex-col items-center justify-center bg-black/40 data-[over='true']:bg-blue-600/30 transition-colors"
           >
             <RecordingControls
               target={{ variant: "screen", id: Number(params.displayId) }}
             />
           </div>
         )}
+      </Match>
+      <Match
+        when={
+          rawOptions.targetMode === "window" &&
+          targetUnderCursor.display_id === params.displayId
+        }
+      >
+        <Show when={targetUnderCursor.window} keyed>
+          {(windowUnderCursor) => (
+            <div
+              data-over={targetUnderCursor.display_id === params.displayId}
+              class="w-screen h-screen bg-black/40 relative"
+            >
+              <div
+                class="bg-blue-600/30 absolute flex flex-col items-center justify-center"
+                style={{
+                  width: `${windowUnderCursor.bounds.size.width}px`,
+                  height: `${windowUnderCursor.bounds.size.height}px`,
+                  left: `${windowUnderCursor.bounds.position.x}px`,
+                  top: `${windowUnderCursor.bounds.position.y}px`,
+                }}
+              >
+                <span class="text-3xl font-semibold mb-2">
+                  {windowUnderCursor.app_name}
+                </span>
+                <RecordingControls
+                  target={{
+                    variant: "window",
+                    id: Number(windowUnderCursor.id),
+                  }}
+                />
+              </div>
+            </div>
+          )}
+        </Show>
       </Match>
       <Match when={rawOptions.targetMode === "area"}>
         {(_) => {
@@ -365,7 +407,7 @@ export default function () {
           }
 
           return (
-            <div class="w-screen h-screen flex flex-col items-center justify-center data-[over='true']:bg-blue-500/20 transition-colors relative cursor-crosshair">
+            <div class="w-screen h-screen flex flex-col items-center justify-center data-[over='true']:bg-blue-600/30 transition-colors relative cursor-crosshair">
               <Occluders />
 
               <div
@@ -460,10 +502,6 @@ function RecordingControls(props: { target: ScreenCaptureTarget }) {
       onClick={() => {
         commands.startRecording({
           capture_target: props.target,
-          // {
-          //   variant: "screen",
-          //   id: Number(params.displayId),
-          // },
           mode: rawOptions.mode,
           capture_system_audio: rawOptions.captureSystemAudio,
         });

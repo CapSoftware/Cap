@@ -1861,7 +1861,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             audio_meter::AudioInputLevelChange,
             UploadProgress,
             captions::DownloadProgress,
-            target_select_overlay::DisplayUnderCursorChanged
+            target_select_overlay::TargetUnderCursor
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()

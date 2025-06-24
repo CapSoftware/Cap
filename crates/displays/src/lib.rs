@@ -1,9 +1,9 @@
-mod bounds;
-mod platform;
+pub mod bounds;
+pub mod platform;
 
 use std::str::FromStr;
 
-pub use platform::{DisplayIdImpl, DisplayImpl};
+pub use platform::{DisplayIdImpl, DisplayImpl, WindowIdImpl, WindowImpl};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
@@ -19,20 +19,16 @@ impl Display {
         &self.0
     }
 
-    pub fn raw_id(&self) -> DisplayId {
+    pub fn id(&self) -> DisplayId {
         DisplayId(self.0.raw_id())
     }
 
-    pub fn id(&self) -> String {
-        self.0.id()
-    }
-
     pub fn from_id(id: DisplayId) -> Option<Self> {
-        Self::list().into_iter().find(|d| d.raw_id() == id)
+        Self::list().into_iter().find(|d| d.id() == id)
     }
 
-    pub fn get_at_cursor() -> Option<Self> {
-        DisplayImpl::get_display_at_cursor().map(Self)
+    pub fn get_containing_cursor() -> Option<Self> {
+        DisplayImpl::get_containing_cursor().map(Self)
     }
 }
 
@@ -75,5 +71,71 @@ mod serde_display_id {
     {
         let s = String::deserialize(deserializer)?;
         s.parse::<DisplayIdImpl>().map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Window(WindowImpl);
+
+impl Window {
+    pub fn list() -> Vec<Self> {
+        WindowImpl::list().into_iter().map(Self).collect()
+    }
+
+    pub fn list_containing_cursor() -> Vec<Self> {
+        WindowImpl::list_containing_cursor()
+            .into_iter()
+            .map(Self)
+            .collect()
+    }
+
+    pub fn id(&self) -> WindowId {
+        WindowId(self.0.id())
+    }
+
+    pub fn raw_handle(&self) -> &WindowImpl {
+        &self.0
+    }
+}
+
+#[derive(Serialize, Deserialize, Type, Clone, PartialEq)]
+pub struct WindowId(
+    #[serde(with = "serde_window_id")]
+    #[specta(type = String)]
+    WindowIdImpl,
+);
+
+impl std::fmt::Display for WindowId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl FromStr for WindowId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse::<WindowIdImpl>().map(Self)
+    }
+}
+
+mod serde_window_id {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    use crate::WindowIdImpl;
+
+    pub fn serialize<S>(this: &WindowIdImpl, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&this.to_string())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<WindowIdImpl, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse::<WindowIdImpl>().map_err(serde::de::Error::custom)
     }
 }

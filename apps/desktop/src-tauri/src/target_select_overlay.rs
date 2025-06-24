@@ -1,15 +1,23 @@
 use std::{str::FromStr, time::Duration};
 
 use crate::windows::{CapWindowId, ShowCapWindow};
-use cap_displays::DisplayId;
+use cap_displays::{bounds::LogicalBounds, DisplayId, WindowId};
 use serde::Serialize;
 use specta::Type;
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
 
 #[derive(tauri_specta::Event, Serialize, Type, Clone)]
-pub struct DisplayUnderCursorChanged {
+pub struct TargetUnderCursor {
     display_id: Option<DisplayId>,
+    window: Option<WindowUnderCursor>,
+}
+
+#[derive(Serialize, Type, Clone)]
+pub struct WindowUnderCursor {
+    id: WindowId,
+    app_name: String,
+    bounds: LogicalBounds,
 }
 
 #[specta::specta]
@@ -18,30 +26,51 @@ pub async fn open_target_select_overlays(app: AppHandle) -> Result<(), String> {
     println!("OPEN SELECT OVERLAYS");
     for display in cap_displays::Display::list() {
         let _ = ShowCapWindow::TargetSelectOverlay {
-            display_id: display.raw_id(),
+            display_id: display.id(),
         }
         .show(&app)
         .await;
     }
 
+    #[cfg(target_os = "macos")]
     tokio::spawn(async move {
-        let mut selected_display = None;
-
         loop {
-            let display = cap_displays::Display::get_at_cursor();
+            let display = cap_displays::Display::get_containing_cursor();
+            let mut windows = cap_displays::Window::list_containing_cursor();
 
-            if let Some(display) = display {
-                if selected_display.replace(display).map(|v| v.raw_id()) != Some(display.raw_id()) {
-                    let _ = DisplayUnderCursorChanged {
-                        display_id: Some(display.raw_id()),
-                    }
-                    .emit(&app);
-                }
-            } else {
-                if selected_display.take().map(|v| v.raw_id()) != None {
-                    let _ = DisplayUnderCursorChanged { display_id: None }.emit(&app);
+            let mut window = None;
+
+            #[cfg(target_os = "macos")]
+            {
+                let mut windows_with_level = windows
+                    .into_iter()
+                    .filter_map(|window| {
+                        let level = window.raw_handle().level()?;
+                        if level > 5 {
+                            return None;
+                        }
+                        Some((window, level))
+                    })
+                    .collect::<Vec<_>>();
+
+                windows_with_level.sort_by(|a, b| b.1.cmp(&a.1));
+
+                if windows_with_level.len() > 0 {
+                    window = Some(windows_with_level.swap_remove(0).0);
                 }
             }
+
+            let _ = TargetUnderCursor {
+                display_id: display.map(|d| d.id()),
+                window: window.and_then(|w| {
+                    Some(WindowUnderCursor {
+                        id: w.id(),
+                        bounds: w.raw_handle().bounds()?,
+                        app_name: w.raw_handle().owner_name()?,
+                    })
+                }),
+            }
+            .emit(&app);
 
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
