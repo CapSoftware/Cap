@@ -1,19 +1,13 @@
 import { downloadVideo } from "@/actions/videos/download";
-import { editDate } from "@/actions/videos/edit-date";
-import { editTitle } from "@/actions/videos/edit-title";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { Tooltip } from "@/components/Tooltip";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
 import { VideoMetadata } from "@cap/database/types";
-import { buildEnv, NODE_ENV } from "@cap/env";
 import { Button, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@cap/ui";
 import {
   faCheck,
-  faChevronDown,
-  faDownload,
   faEllipsis,
-  faLink,
   faLock,
   faTrash,
   faUnlock,
@@ -21,112 +15,19 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
-import moment from "moment";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { PropsWithChildren, ReactNode, useState } from "react";
+import { PropsWithChildren, useState } from "react";
 import { toast } from "sonner";
+import { PasswordDialog } from "../PasswordDialog";
+import { SharingDialog } from "../SharingDialog";
 import { CapCardAnalytics } from "./CapCardAnalytics";
-import { PasswordDialog } from "./PasswordDialog";
-import { SharingDialog } from "./SharingDialog";
+import { CapCardButtons } from "./CapCardButtons";
+import { CapCardContent } from "./CapCardContent";
 
-interface ButtonConfig {
-  tooltipContent: string;
-  onClick: (e: React.MouseEvent) => void;
-  className: string;
-  disabled: boolean;
-  icon: () => ReactNode;
-}
 
-// Button configuration function defined before use
-const getCapCardButtons = (
-  cap: {
-    id: string;
-  },
-  copyPressed: boolean,
-  isDownloading: boolean,
-  handleCopy: (url: string) => void,
-  handleDownload: () => void
-): ButtonConfig[] => [
-    {
-      tooltipContent: "Copy link",
-      onClick: (e: React.MouseEvent) => {
-        e.stopPropagation();
-        handleCopy(
-          buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-            ? `https://cap.link/${cap.id}`
-            : `${location.origin}/s/${cap.id}`
-        );
-      },
-      className: "delay-0",
-      disabled: false,
-      icon: () => {
-        return !copyPressed ? (
-          <FontAwesomeIcon
-            className="text-gray-12 size-4"
-            icon={faLink}
-          />
-        ) : (
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="24"
-            height="24"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="text-gray-12 size-5 svgpathanimation"
-          >
-            <path d="M20 6 9 17l-5-5" />
-          </svg>
-        );
-      },
-    },
-    {
-      tooltipContent: "Download Cap",
-      onClick: (e: React.MouseEvent) => {
-        e.stopPropagation();
-        handleDownload();
-      },
-      className: "delay-25",
-      disabled: isDownloading,
-      icon: () => {
-        return isDownloading ? (
-          <div className="animate-spin size-3">
-            <svg
-              className="size-3"
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-            >
-              <circle
-                className="opacity-25"
-                cx="12"
-                cy="12"
-                r="10"
-                stroke="currentColor"
-                strokeWidth="4"
-              ></circle>
-              <path
-                className="opacity-75"
-                fill="currentColor"
-                d="m2 12c0-5.523 4.477-10 10-10v3c-3.866 0-7 3.134-7 7s3.134 7 7 7 7-3.134 7-7c0-1.457-.447-2.808-1.208-3.926l2.4-1.6c1.131 1.671 1.808 3.677 1.808 5.526 0 5.523-4.477 10-10 10s-10-4.477-10-10z"
-              ></path>
-            </svg>
-          </div>
-        ) : (
-          <FontAwesomeIcon
-            className="text-gray-12 size-3"
-            icon={faDownload}
-          />
-        );
-      },
-    },
-  ];
 
-interface Props extends PropsWithChildren {
+export interface CapCardProps extends PropsWithChildren {
   cap: {
     id: string;
     ownerId: string;
@@ -170,49 +71,18 @@ export const CapCard = ({
   isSelected = false,
   onSelectToggle,
   anyCapSelected = false,
-}: Props) => {
-  const effectiveDate = cap.metadata?.customCreatedAt
-    ? new Date(cap.metadata.customCreatedAt)
-    : cap.createdAt;
-
-  const [isEditing, setIsEditing] = useState(false);
-  const [title, setTitle] = useState(cap.name);
+}: CapCardProps) => {
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
   const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [passwordProtected, setPasswordProtected] = useState(
     cap.hasPassword || false
   );
-  const [isDateEditing, setIsDateEditing] = useState(false);
   const [copyPressed, setCopyPressed] = useState(false);
-  const [dateValue, setDateValue] = useState(
-    moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss")
-  );
-  const [showFullDate, setShowFullDate] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const router = useRouter();
   const { isSubscribed, setUpgradeModalOpen } = useDashboardContext();
-
-  const handleTitleBlur = async (capName: string) => {
-    if (!title || capName === title) {
-      setIsEditing(false);
-      return;
-    }
-
-    try {
-      await editTitle(cap.id, title);
-      toast.success("Video title updated");
-      setIsEditing(false);
-      router.refresh();
-    } catch (error) {
-      if (error instanceof Error) {
-        toast.error(error.message);
-      } else {
-        toast.error("Failed to update title - please try again.");
-      }
-    }
-  };
 
   const displayCount =
     analytics === 0
@@ -235,7 +105,7 @@ export const CapCard = ({
     setConfirmOpen(false);
   };
 
-  const handleSharingUpdated = (updatedSharedSpaces: string[]) => {
+  const handleSharingUpdated = () => {
     router.refresh();
   };
 
@@ -279,105 +149,6 @@ export const CapCard = ({
 
   const handleDragEnd = () => {
     setIsDragging(false);
-  };
-
-  const renderSharedStatus = () => {
-    const baseClassName = clsx(
-      "text-sm text-gray-10 transition-colors duration-200 flex items-center mb-1",
-      "hover:text-gray-12",
-      hideSharedStatus ? "pointer-events-none" : "cursor-pointer"
-    );
-    if (isOwner && !hideSharedStatus) {
-      if (
-        (cap.sharedOrganizations?.length === 0 || !cap.sharedOrganizations) &&
-        (cap.sharedSpaces?.length === 0 || !cap.sharedSpaces)
-      ) {
-        return (
-          <p
-            className={baseClassName}
-            onClick={() => setIsSharingDialogOpen(true)}
-          >
-            Not shared{" "}
-            <FontAwesomeIcon className="ml-2 size-2.5" icon={faChevronDown} />
-          </p>
-        );
-      } else {
-        return (
-          <p
-            className={baseClassName}
-            onClick={() => setIsSharingDialogOpen(true)}
-          >
-            Shared{" "}
-            <FontAwesomeIcon className="ml-1 size-2.5" icon={faChevronDown} />
-          </p>
-        );
-      }
-    } else {
-      return <p className={baseClassName}>Shared with you</p>;
-    }
-  };
-
-  const handleDateClick = () => {
-    if (userId === cap.ownerId) {
-      if (!isDateEditing) {
-        setIsDateEditing(true);
-      }
-    } else {
-      setShowFullDate(!showFullDate);
-    }
-  };
-
-  const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setDateValue(e.target.value);
-  };
-
-  const handleDateBlur = async () => {
-    const isValidDate = moment(dateValue).isValid();
-
-    if (!isValidDate) {
-      toast.error("Invalid date format. Please use YYYY-MM-DD HH:mm:ss");
-      setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss"));
-      setIsDateEditing(false);
-      return;
-    }
-
-    const selectedDate = moment(dateValue);
-    const currentDate = moment();
-
-    if (selectedDate.isAfter(currentDate)) {
-      toast.error("Cannot set a date in the future");
-      setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss"));
-      setIsDateEditing(false);
-      return;
-    }
-
-    if (selectedDate.isSame(effectiveDate)) {
-      setIsDateEditing(false);
-      return;
-    }
-
-    try {
-      await editDate(cap.id, selectedDate.toISOString());
-      toast.success("Video date updated");
-      setIsDateEditing(false);
-      router.refresh();
-    } catch (error) {
-      if (error instanceof Error) {
-        toast.error(error.message);
-      } else {
-        toast.error("Failed to update date - please try again.");
-      }
-    }
-  };
-
-  const handleDateKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      handleDateBlur();
-    } else if (e.key === "Escape") {
-      setDateValue(moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss"));
-      setIsDateEditing(false);
-    }
   };
 
   const handleCopy = (text: string) => {
@@ -430,14 +201,6 @@ export const CapCard = ({
     }
   };
 
-  const handleTitleKeyDown = (
-    e: React.KeyboardEvent<HTMLTextAreaElement>,
-    capName: string
-  ) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-    }
-  };
 
   const handleCardClick = (e: React.MouseEvent) => {
     if (anyCapSelected) {
@@ -508,26 +271,13 @@ export const CapCard = ({
               "top-2 right-2 flex-col gap-2 z-[20]"
             )}
           >
-            {getCapCardButtons(
-              cap,
-              copyPressed,
-              isDownloading,
-              handleCopy,
-              handleDownload
-            ).map((button, index) => (
-              <Tooltip key={index} content={button.tooltipContent}>
-                <Button
-                  onClick={button.onClick}
-                  disabled={button.disabled}
-                  className={clsx(`!size-8 hover:bg-gray-5 hover:border-gray-7 rounded-full min-w-fit !p-0`, button.className)}
-                  variant="white"
-                  size="sm"
-                  aria-label={button.tooltipContent}
-                >
-                  {button.icon()}
-                </Button>
-              </Tooltip>
-            ))}
+            <CapCardButtons
+              capId={cap.id}
+              copyPressed={copyPressed}
+              isDownloading={isDownloading}
+              handleCopy={handleCopy}
+              handleDownload={handleDownload}
+            />
 
             <DropdownMenu modal={false} onOpenChange={setIsDropdownOpen}>
               <Tooltip content="More options">
@@ -642,66 +392,14 @@ export const CapCard = ({
             !sharedCapCard ? "cursor-pointer" : "cursor-default"
           )}
         >
-          <div>
-            <div className="h-[1.25rem] mb-1">
-              {" "}
-              {/* Fixed height container */}
-              {isEditing && !sharedCapCard ? (
-                <textarea
-                  rows={1}
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  onBlur={() => handleTitleBlur(cap.name)}
-                  onKeyDown={(e) => handleTitleKeyDown(e, cap.name)}
-                  autoFocus
-                  className="text-md resize-none bg-transparent truncate w-full border-0 outline-0 text-gray-12 font-medium p-0 m-0 h-[1.25rem] overflow-hidden leading-[1.25rem] tracking-normal font-[inherit]"
-                />
-              ) : (
-                <p
-                  className="text-md truncate leading-[1.25rem] text-gray-12 font-medium p-0 m-0 h-[1.25rem] tracking-normal"
-                  onClick={() => {
-                    if (!sharedCapCard) {
-                      if (userId === cap.ownerId) {
-                        setIsEditing(true);
-                      }
-                    }
-                  }}
-                >
-                  {title}
-                </p>
-              )}
-            </div>
-
-            {renderSharedStatus()}
-            <div className="mb-1 h-[1.5rem]">
-              {" "}
-              {isDateEditing && !sharedCapCard ? (
-                <div className="flex items-center h-full">
-                  <input
-                    type="text"
-                    value={dateValue}
-                    onChange={handleDateChange}
-                    onBlur={handleDateBlur}
-                    onKeyDown={handleDateKeyDown}
-                    autoFocus
-                    className="text-sm w-full truncate text-gray-10 bg-transparent focus:outline-none h-full leading-[1.5rem]"
-                    placeholder="YYYY-MM-DD HH:mm:ss"
-                  />
-                </div>
-              ) : (
-                <Tooltip content={`Cap created at ${effectiveDate}`}>
-                  <p
-                    className="text-sm truncate text-gray-10 cursor-pointer flex items-center h-full leading-[1.5rem]"
-                    onClick={handleDateClick}
-                  >
-                    {showFullDate
-                      ? moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss")
-                      : moment(effectiveDate).fromNow()}
-                  </p>
-                </Tooltip>
-              )}
-            </div>
-          </div>
+          <CapCardContent
+            cap={cap}
+            userId={userId}
+            sharedCapCard={sharedCapCard}
+            hideSharedStatus={hideSharedStatus}
+            isOwner={isOwner}
+            setIsSharingDialogOpen={setIsSharingDialogOpen}
+          />
           {children}
           <CapCardAnalytics
             capId={cap.id}
@@ -714,5 +412,3 @@ export const CapCard = ({
     </>
   );
 };
-
-// Function has been moved to the top of the file

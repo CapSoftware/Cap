@@ -57,6 +57,7 @@
     "clsx": "^2.1.1",
     "cookies-next": "^4.1.0",
     "date-fns": "^3.2.0",
+    "dompurify": "^3.2.6",
     "dotenv": "^16.3.1",
     "drizzle-orm": "0.43.1",
     "dub": "^0.33.1",
@@ -67,6 +68,7 @@
     "hls.js": "^1.5.3",
     "hono": "^4.7.1",
     "js-cookie": "^3.0.5",
+    "jsdom": "^26.1.0",
     "jszip": "^3.10.1",
     "lodash": "^4.17.21",
     "lucide-react": "^0.294.0",
@@ -101,6 +103,7 @@
   },
   "devDependencies": {
     "@types/file-saver": "^2.0.7",
+    "@types/jsdom": "^21.1.7",
     "@types/lodash": "^4.17.5",
     "@types/node": "^20.11.5",
     "@types/react": "^18.2.7",

@@ -1,7 +1,7 @@
 "use client";
 
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
-import { CapCardAnalytics } from "@/app/(org)/dashboard/caps/components/CapCardAnalytics";
+import { CapCardAnalytics } from "@/app/(org)/dashboard/caps/components/CapCard/CapCardAnalytics";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema } from "@cap/database/schema";
 import { Avatar, Button } from "@cap/ui";
@@ -168,120 +168,119 @@ const Comment: React.FC<{
   level = 0,
   onSeek,
 }) => {
-  const isReplying = replyingToId === comment.id;
-  const isOwnComment = user?.id === comment.authorId;
-  const nestedReplies =
-    level === 0
-      ? replies.filter((reply) => {
+    const isReplying = replyingToId === comment.id;
+    const isOwnComment = user?.id === comment.authorId;
+    const nestedReplies =
+      level === 0
+        ? replies.filter((reply) => {
           if (reply.parentCommentId === comment.id) return true;
           const parentComment = replies.find(
             (r) => r.id === reply.parentCommentId
           );
           return parentComment && parentComment.parentCommentId === comment.id;
         })
-      : [];
+        : [];
 
-  const handleDelete = () => {
-    if (window.confirm("Are you sure you want to delete this comment?")) {
-      onDelete(comment.id);
-    }
-  };
+    const handleDelete = () => {
+      if (window.confirm("Are you sure you want to delete this comment?")) {
+        onDelete(comment.id);
+      }
+    };
 
-  const canReply = true;
-  const commentDate = new Date(comment.createdAt);
+    const canReply = true;
+    const commentDate = new Date(comment.createdAt);
 
-  return (
-    <motion.div
-      id={`comment-${comment.id}`}
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -20 }}
-      transition={{ duration: 0.2 }}
-      className={`space-y-3 ${
-        level > 0 ? "ml-8 border-l-2 border-gray-100 pl-4" : ""
-      }`}
-    >
-      <div className="flex items-start space-x-3">
-        <Avatar name={comment.authorName} />
-        <div className="flex-1">
-          <div className="flex items-center space-x-2">
-            <span className="font-medium text-gray-12">
-              {comment.authorName || "Anonymous"}
-            </span>
-            <span
-              className="text-sm text-gray-8"
-              data-tooltip-id={`comment-${comment.id}-timestamp`}
-              data-tooltip-content={formatTimestamp(commentDate)}
-            >
-              {formatTimeAgo(commentDate)}
-            </span>
-            <Tooltip id={`comment-${comment.id}-timestamp`} />
-            {comment.timestamp && (
-              <button
-                onClick={() => onSeek?.(comment.timestamp!)}
-                className="text-sm text-blue-500 cursor-pointer hover:text-blue-700"
+    return (
+      <motion.div
+        id={`comment-${comment.id}`}
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -20 }}
+        transition={{ duration: 0.2 }}
+        className={`space-y-3 ${level > 0 ? "ml-8 border-l-2 border-gray-100 pl-4" : ""
+          }`}
+      >
+        <div className="flex items-start space-x-3">
+          <Avatar name={comment.authorName} />
+          <div className="flex-1">
+            <div className="flex items-center space-x-2">
+              <span className="font-medium text-gray-12">
+                {comment.authorName || "Anonymous"}
+              </span>
+              <span
+                className="text-sm text-gray-8"
+                data-tooltip-id={`comment-${comment.id}-timestamp`}
+                data-tooltip-content={formatTimestamp(commentDate)}
               >
-                {new Date(comment.timestamp * 1000).toISOString().substr(11, 8)}
-              </button>
-            )}
-          </div>
-          <p className="mt-1 text-gray-700">{comment.content}</p>
-          <div className="flex items-center mt-2 space-x-4">
-            {user && !isReplying && canReply && (
-              <button
-                onClick={() => onReply(comment.id)}
-                className="text-sm text-gray-1 hover:text-gray-700"
-              >
-                Reply
-              </button>
-            )}
-            {isOwnComment && (
-              <button
-                onClick={handleDelete}
-                className="text-sm text-red-500 hover:text-red-700"
-              >
-                Delete
-              </button>
-            )}
+                {formatTimeAgo(commentDate)}
+              </span>
+              <Tooltip id={`comment-${comment.id}-timestamp`} />
+              {comment.timestamp && (
+                <button
+                  onClick={() => onSeek?.(comment.timestamp!)}
+                  className="text-sm text-blue-500 cursor-pointer hover:text-blue-700"
+                >
+                  {new Date(comment.timestamp * 1000).toISOString().substr(11, 8)}
+                </button>
+              )}
+            </div>
+            <p className="mt-1 text-gray-700">{comment.content}</p>
+            <div className="flex items-center mt-2 space-x-4">
+              {user && !isReplying && canReply && (
+                <button
+                  onClick={() => onReply(comment.id)}
+                  className="text-sm text-gray-1 hover:text-gray-700"
+                >
+                  Reply
+                </button>
+              )}
+              {isOwnComment && (
+                <button
+                  onClick={handleDelete}
+                  className="text-sm text-red-500 hover:text-red-700"
+                >
+                  Delete
+                </button>
+              )}
+            </div>
           </div>
         </div>
-      </div>
 
-      {isReplying && canReply && (
-        <div className="ml-5">
-          <CommentInput
-            onSubmit={handleReply}
-            onCancel={onCancelReply}
-            placeholder="Write a reply..."
-            showCancelButton={true}
-            user={user}
-            autoFocus={true}
-          />
-        </div>
-      )}
-
-      {nestedReplies.length > 0 && (
-        <div className="mt-3 space-y-3">
-          {nestedReplies.map((reply) => (
-            <Comment
-              key={reply.id}
-              comment={reply}
-              replies={replies}
-              onReply={onReply}
-              replyingToId={replyingToId}
-              handleReply={handleReply}
-              onCancelReply={onCancelReply}
-              onDelete={onDelete}
+        {isReplying && canReply && (
+          <div className="ml-5">
+            <CommentInput
+              onSubmit={handleReply}
+              onCancel={onCancelReply}
+              placeholder="Write a reply..."
+              showCancelButton={true}
               user={user}
-              level={1}
-              onSeek={onSeek}
+              autoFocus={true}
             />
-          ))}
-        </div>
-      )}
-    </motion.div>
-  );
-};
+          </div>
+        )}
+
+        {nestedReplies.length > 0 && (
+          <div className="mt-3 space-y-3">
+            {nestedReplies.map((reply) => (
+              <Comment
+                key={reply.id}
+                comment={reply}
+                replies={replies}
+                onReply={onReply}
+                replyingToId={replyingToId}
+                handleReply={handleReply}
+                onCancelReply={onCancelReply}
+                onDelete={onDelete}
+                user={user}
+                level={1}
+                onSeek={onSeek}
+              />
+            ))}
+          </div>
+        )}
+      </motion.div>
+    );
+  };
 
 const EmptyState = () => (
   <div className="flex flex-col justify-center items-center p-8 h-full text-center animate-in fade-in">

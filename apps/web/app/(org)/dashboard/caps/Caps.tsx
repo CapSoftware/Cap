@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "../Contexts";
-import { CapCard } from "./components/CapCard";
+import { CapCard } from "./components/CapCard/CapCard";
 import { CapPagination } from "./components/CapPagination";
 import { EmptyCapState } from "./components/EmptyCapState";
 import { SelectedCapsBar } from "./components/SelectedCapsBar";
