@@ -5,7 +5,6 @@ import { VideoMetadata } from "@cap/database/types";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-
 import { useDashboardContext } from "../Contexts";
 import { CapCard } from "./components/CapCard";
 import { CapPagination } from "./components/CapPagination";

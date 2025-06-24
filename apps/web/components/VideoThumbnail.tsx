@@ -59,7 +59,7 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
     return (
       <div
         className={clsx(
-          `overflow-hidden relative mx-auto w-full bg-black rounded-t-xl border-b border-gray-3 max-h-[175px] aspect-video`,
+          `overflow-hidden relative mx-auto w-full h-full bg-black rounded-t-xl border-b border-gray-3 aspect-video`,
           containerClass
         )}
       >

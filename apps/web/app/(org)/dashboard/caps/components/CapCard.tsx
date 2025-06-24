@@ -1,33 +1,130 @@
+import { downloadVideo } from "@/actions/videos/download";
 import { editDate } from "@/actions/videos/edit-date";
 import { editTitle } from "@/actions/videos/edit-title";
+import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
+import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { Tooltip } from "@/components/Tooltip";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
 import { VideoMetadata } from "@cap/database/types";
 import { buildEnv, NODE_ENV } from "@cap/env";
-import { Button } from "@cap/ui";
+import { Button, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@cap/ui";
 import {
   faCheck,
   faChevronDown,
+  faDownload,
+  faEllipsis,
   faLink,
-  faTrash,
   faLock,
+  faTrash,
   faUnlock,
-  faVideo,
-  faDownload
+  faVideo
 } from "@fortawesome/free-solid-svg-icons";
-import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import moment from "moment";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { PropsWithChildren, useState } from "react";
+import { PropsWithChildren, ReactNode, useState } from "react";
 import { toast } from "sonner";
-import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
-import { downloadVideo } from "@/actions/videos/download";
 import { CapCardAnalytics } from "./CapCardAnalytics";
-import { SharingDialog } from "./SharingDialog";
 import { PasswordDialog } from "./PasswordDialog";
+import { SharingDialog } from "./SharingDialog";
+
+interface ButtonConfig {
+  tooltipContent: string;
+  onClick: (e: React.MouseEvent) => void;
+  className: string;
+  disabled: boolean;
+  icon: () => ReactNode;
+}
+
+// Button configuration function defined before use
+const getCapCardButtons = (
+  cap: {
+    id: string;
+  },
+  copyPressed: boolean,
+  isDownloading: boolean,
+  handleCopy: (url: string) => void,
+  handleDownload: () => void
+): ButtonConfig[] => [
+    {
+      tooltipContent: "Copy link",
+      onClick: (e: React.MouseEvent) => {
+        e.stopPropagation();
+        handleCopy(
+          buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+            ? `https://cap.link/${cap.id}`
+            : `${location.origin}/s/${cap.id}`
+        );
+      },
+      className: "delay-0",
+      disabled: false,
+      icon: () => {
+        return !copyPressed ? (
+          <FontAwesomeIcon
+            className="text-gray-12 size-4"
+            icon={faLink}
+          />
+        ) : (
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="24"
+            height="24"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="text-gray-12 size-5 svgpathanimation"
+          >
+            <path d="M20 6 9 17l-5-5" />
+          </svg>
+        );
+      },
+    },
+    {
+      tooltipContent: "Download Cap",
+      onClick: (e: React.MouseEvent) => {
+        e.stopPropagation();
+        handleDownload();
+      },
+      className: "delay-25",
+      disabled: isDownloading,
+      icon: () => {
+        return isDownloading ? (
+          <div className="animate-spin size-3">
+            <svg
+              className="size-3"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+            >
+              <circle
+                className="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                strokeWidth="4"
+              ></circle>
+              <path
+                className="opacity-75"
+                fill="currentColor"
+                d="m2 12c0-5.523 4.477-10 10-10v3c-3.866 0-7 3.134-7 7s3.134 7 7 7 7-3.134 7-7c0-1.457-.447-2.808-1.208-3.926l2.4-1.6c1.131 1.671 1.808 3.677 1.808 5.526 0 5.523-4.477 10-10 10s-10-4.477-10-10z"
+              ></path>
+            </svg>
+          </div>
+        ) : (
+          <FontAwesomeIcon
+            className="text-gray-12 size-3"
+            icon={faDownload}
+          />
+        );
+      },
+    },
+  ];
 
 interface Props extends PropsWithChildren {
   cap: {
@@ -82,6 +179,7 @@ export const CapCard = ({
   const [title, setTitle] = useState(cap.name);
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
   const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [passwordProtected, setPasswordProtected] = useState(
     cap.hasPassword || false
   );
@@ -338,7 +436,6 @@ export const CapCard = ({
   ) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      handleTitleBlur(capName);
     }
   };
 
@@ -383,11 +480,11 @@ export const CapCard = ({
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
         className={clsx(
-          "flex relative flex-col gap-4 w-full h-full rounded-xl cursor-default bg-gray-1 border-gray-3 group border-[1px]",
+          "flex relative flex-col gap-4 w-full h-full rounded-xl cursor-default bg-gray-1 border-gray-3 group border-px",
           isSelected
-            ? "!border-blue-10 border-[1px]"
+            ? "!border-blue-10 border-px"
             : anyCapSelected
-              ? "border-blue-10 border-[1px] hover:border-blue-10"
+              ? "border-blue-10 border-px hover:border-blue-10"
               : "hover:border-blue-10",
           isDragging && "opacity-50",
           isOwner && !anyCapSelected && "cursor-grab active:cursor-grabbing"
@@ -397,7 +494,7 @@ export const CapCard = ({
           <div
             className="absolute inset-0 z-10"
             onClick={handleCardClick}
-          ></div>
+          />
         )}
         {!sharedCapCard && (
           <div
@@ -405,127 +502,83 @@ export const CapCard = ({
               "flex absolute duration-200",
               anyCapSelected
                 ? "opacity-0"
-                : "opacity-0 group-hover:opacity-100",
-              "top-2 right-2 flex-col gap-1 z-[20]"
+                : isDropdownOpen
+                  ? "opacity-100"
+                  : "opacity-0 group-hover:opacity-100",
+              "top-2 right-2 flex-col gap-2 z-[20]"
             )}
           >
-            <Tooltip content="Copy link">
-              <Button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleCopy(
-                    buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-                      ? `https://cap.link/${cap.id}`
-                      : `${location.origin}/s/${cap.id}`
-                  );
-                }}
-                className="!size-8 delay-0 hover:opacity-80 rounded-full min-w-fit !p-0"
-                variant="white"
-                size="sm"
-              >
-                {!copyPressed ? (
-                  <FontAwesomeIcon
-                    className="text-gray-12 size-4"
-                    icon={faLink}
-                  />
-                ) : (
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="24"
-                    height="24"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="text-gray-12 size-5 svgpathanimation"
+            {getCapCardButtons(
+              cap,
+              copyPressed,
+              isDownloading,
+              handleCopy,
+              handleDownload
+            ).map((button, index) => (
+              <Tooltip key={index} content={button.tooltipContent}>
+                <Button
+                  onClick={button.onClick}
+                  disabled={button.disabled}
+                  className={clsx(`!size-8 hover:bg-gray-5 hover:border-gray-7 rounded-full min-w-fit !p-0`, button.className)}
+                  variant="white"
+                  size="sm"
+                  aria-label={button.tooltipContent}
+                >
+                  {button.icon()}
+                </Button>
+              </Tooltip>
+            ))}
+
+            <DropdownMenu modal={false} onOpenChange={setIsDropdownOpen}>
+              <Tooltip content="More options">
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                    }}
+                    className={clsx("!size-8 hover:bg-gray-5 hover:border-gray-7 rounded-full min-w-fit !p-0 delay-75",
+                      isDropdownOpen ? "bg-gray-5 border-gray-7" : ""
+                    )}
+                    variant="white"
+                    size="sm"
+                    aria-label="More options"
                   >
-                    <path d="M20 6 9 17l-5-5" />
-                  </svg>
-                )}
-              </Button>
-            </Tooltip>
-            <Tooltip content="Download Cap">
-              <Button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDownload();
-                }}
-                disabled={isDownloading}
-                className="!size-8 delay-25 hover:opacity-80 rounded-full min-w-fit !p-0"
-                variant="white"
-                size="sm"
+                    <FontAwesomeIcon className="text-gray-12 size-4" icon={faEllipsis} />
+                  </Button>
+                </DropdownMenuTrigger>
+              </Tooltip>
+
+              <DropdownMenuContent
+                align="end"
+                sideOffset={5}
               >
-                {isDownloading ? (
-                  <div className="animate-spin size-3">
-                    <svg
-                      className="size-3"
-                      xmlns="http://www.w3.org/2000/svg"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                    >
-                      <circle
-                        className="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        strokeWidth="4"
-                      ></circle>
-                      <path
-                        className="opacity-75"
-                        fill="currentColor"
-                        d="m2 12c0-5.523 4.477-10 10-10v3c-3.866 0-7 3.134-7 7s3.134 7 7 7 7-3.134 7-7c0-1.457-.447-2.808-1.208-3.926l2.4-1.6c1.131 1.671 1.808 3.677 1.808 5.526 0 5.523-4.477 10-10 10s-10-4.477-10-10z"
-                      ></path>
-                    </svg>
-                  </div>
-                ) : (
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    if (!isSubscribed) {
+                      setUpgradeModalOpen(true);
+                    } else {
+                      setIsPasswordDialogOpen(true);
+                    }
+                  }}
+                  className="flex gap-2 items-center rounded-lg"
+                >
                   <FontAwesomeIcon
-                    className="text-gray-12 size-3"
-                    icon={faDownload}
+                    className="size-3"
+                    icon={passwordProtected ? faLock : faUnlock}
                   />
-                )}
-              </Button>
-            </Tooltip>
-            <Tooltip
-              content={
-                passwordProtected ? "Edit password" : "Add password to access"
-              }
-            >
-              <Button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (!isSubscribed) {
-                    setUpgradeModalOpen(true);
-                  } else {
-                    setIsPasswordDialogOpen(true);
-                  }
-                }}
-                className="!size-8 delay-50 hover:opacity-80 rounded-full min-w-fit !p-0"
-                variant="white"
-                size="sm"
-              >
-                <FontAwesomeIcon
-                  className={`size-3 ${passwordProtected ? "text-amber-600" : "text-gray-12"
-                    }`}
-                  icon={passwordProtected ? faLock : faUnlock}
-                />
-              </Button>
-            </Tooltip>
-            <Tooltip content="Delete Cap">
-              <Button
-                onClick={handleDeleteClick}
-                className="!size-8 delay-75 hover:opacity-80 rounded-full min-w-fit !p-0"
-                variant="white"
-                size="sm"
-              >
-                <FontAwesomeIcon
-                  className="text-gray-12 size-2.5"
-                  icon={faTrash}
-                />
-              </Button>
-            </Tooltip>
+                  <p className="text-sm text-gray-12">{passwordProtected ? "Edit password" : "Add password"}</p>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    handleDeleteClick(e);
+                  }}
+                  className="flex gap-2 items-center rounded-lg"
+                >
+                  <FontAwesomeIcon className="size-3" icon={faTrash} />
+                  <p className="text-sm text-gray-12">Delete Cap</p>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <ConfirmationDialog
               open={confirmOpen}
               icon={<FontAwesomeIcon icon={faVideo} />}
@@ -541,10 +594,12 @@ export const CapCard = ({
         )}
         {!sharedCapCard && onSelectToggle && (
           <div
-            className={`absolute top-2 left-2 z-[20] duration-200 ${isSelected || anyCapSelected
-              ? "opacity-100"
-              : "group-hover:opacity-100 opacity-0"
-              }`}
+            className={clsx(
+              "absolute top-2 left-2 z-[20] duration-200",
+              isSelected || anyCapSelected || isDropdownOpen
+                ? "opacity-100"
+                : "group-hover:opacity-100 opacity-0"
+            )}
             onClick={(e) => {
               e.stopPropagation();
               handleSelectClick(e);
@@ -572,8 +627,10 @@ export const CapCard = ({
           href={`/s/${cap.id}`}
         >
           <VideoThumbnail
-            imageClass={`${anyCapSelected ? "opacity-50" : "group-hover:opacity-50"
-              } transition-opacity duration-200`}
+            imageClass={clsx(
+              anyCapSelected ? "opacity-50" : isDropdownOpen ? "opacity-30" : "group-hover:opacity-30",
+              "transition-opacity duration-200"
+            )}
             userId={cap.ownerId}
             videoId={cap.id}
             alt={`${cap.name} Thumbnail`}
@@ -657,3 +714,5 @@ export const CapCard = ({
     </>
   );
 };
+
+// Function has been moved to the top of the file

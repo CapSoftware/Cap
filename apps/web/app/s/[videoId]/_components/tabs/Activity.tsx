@@ -1,22 +1,22 @@
 "use client";
 
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
+import { CapCardAnalytics } from "@/app/(org)/dashboard/caps/components/CapCardAnalytics";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema } from "@cap/database/schema";
-import { Button, Avatar } from "@cap/ui";
+import { Avatar, Button } from "@cap/ui";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  ComponentProps,
+  PropsWithChildren,
+  Suspense,
+  use,
   useEffect,
+  useMemo,
   useRef,
   useState,
-  use,
-  ComponentProps,
-  Suspense,
-  PropsWithChildren,
-  useMemo,
 } from "react";
 import { Tooltip } from "react-tooltip";
-import { CapCardAnalytics } from "@/app/(org)/dashboard/caps/components/CapCardAnalytics";
 
 import { AuthOverlay } from "../AuthOverlay";
 
@@ -352,7 +352,7 @@ export const Activity = Object.assign(
       return (
         <div className="flex flex-col h-full">
           {props.user && props.isOwnerOrMember && (
-            <div className="flex flex-row items-center p-4 border-b border-gray-200 h-12">
+            <div className="flex flex-row items-center p-4 h-12 border-b border-gray-200">
               {props.analytics}
             </div>
           )}
