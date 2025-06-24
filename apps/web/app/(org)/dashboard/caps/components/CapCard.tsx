@@ -536,7 +536,9 @@ export const CapCard = ({
                     onClick={(e) => {
                       e.stopPropagation();
                     }}
-                    className="!size-8 hover:bg-gray-5 hover:border-gray-7 rounded-full min-w-fit !p-0 delay-75"
+                    className={clsx("!size-8 hover:bg-gray-5 hover:border-gray-7 rounded-full min-w-fit !p-0 delay-75",
+                      isDropdownOpen ? "bg-gray-5 border-gray-7" : ""
+                    )}
                     variant="white"
                     size="sm"
                     aria-label="More options"
