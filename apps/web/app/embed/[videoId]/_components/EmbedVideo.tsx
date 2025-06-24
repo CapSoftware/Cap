@@ -691,9 +691,17 @@ export const EmbedVideo = forwardRef<
                       />
                     )}
                     <div className="min-w-0 flex-1">
-                      <h1 className="text-white text-sm sm:text-xl md:text-2xl font-semibold leading-tight truncate">
-                        {data.name}
-                      </h1>
+                      <a
+                        href={`/s/${data.id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <h1 className="text-white text-sm sm:text-xl md:text-2xl font-semibold leading-tight truncate hover:underline transition-all duration-200 cursor-pointer">
+                          {data.name}
+                        </h1>
+                      </a>
                       <div className="flex items-center gap-1 sm:gap-2 mt-0.5 sm:mt-1">
                         {ownerName && (
                           <p className="text-gray-300 text-xs sm:text-sm font-medium truncate">
