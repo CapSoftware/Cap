@@ -242,7 +242,7 @@ h2,
 h3,
 h4,
 h5 {
-  @apply font-normal tracking-[-0.03em] text-[1.75rem] leading-[2.5rem] md:text-[2.5rem] md:leading-[3.25rem];
+  @apply font-normal tracking-[-0.03em] text-[1.75rem] leading-[2.5rem];
 }
 
 a,
