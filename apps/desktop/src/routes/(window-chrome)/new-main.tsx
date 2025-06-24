@@ -59,33 +59,9 @@ export default function () {
 function Page() {
   const { rawOptions, setOptions } = useRecordingOptions();
 
-  const currentRecording = createCurrentRecordingQuery();
-  const generalSettings = generalSettingsStore.createQuery();
-
-  const isRecording = () => !!currentRecording.data;
-
   const license = createLicenseQuery();
 
   createUpdateCheck();
-
-  const auth = authStore.createQuery();
-
-  // onMount(async () => {
-  //   const auth = await authStore.get();
-  //   const userId = auth?.user_id;
-  //   if (!userId) return;
-
-  //   const trackedSession = localStorage.getItem("tracked_signin_session");
-
-  //   if (trackedSession !== userId) {
-  //     console.log("New auth session detected, tracking sign in event");
-  //     identifyUser(userId);
-  //     trackEvent("user_signed_in", { platform: "desktop" });
-  //     localStorage.setItem("tracked_signin_session", userId);
-  //   } else {
-  //     console.log("Auth session already tracked, skipping sign in event");
-  //   }
-  // });
 
   onMount(async () => {
     // Enforce window size with multiple safeguards
@@ -119,15 +95,9 @@ function Page() {
   });
 
   createEffect(() => {
-    console.log({ mode: rawOptions.targetMode });
     if (rawOptions.targetMode) commands.openTargetSelectOverlays();
     else commands.closeTargetSelectOverlays();
   });
-
-  // createEffect(() => {
-  //   const size = getWindowSize();
-  //   getCurrentWindow().setSize(new LogicalSize(size.width, size.height));
-  // });
 
   const screens = createQuery(() => listScreens);
   const windows = createQuery(() => listWindows);

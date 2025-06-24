@@ -15,6 +15,7 @@ pub struct DisplayUnderCursorChanged {
 #[specta::specta]
 #[tauri::command]
 pub async fn open_target_select_overlays(app: AppHandle) -> Result<(), String> {
+    println!("OPEN SELECT OVERLAYS");
     for display in cap_displays::Display::list() {
         let _ = ShowCapWindow::TargetSelectOverlay {
             display_id: display.raw_id(),
@@ -52,6 +53,8 @@ pub async fn open_target_select_overlays(app: AppHandle) -> Result<(), String> {
 #[specta::specta]
 #[tauri::command]
 pub async fn close_target_select_overlays(app: AppHandle) -> Result<(), String> {
+    println!("CLOSE SELECT OVERLAYS");
+
     for (id, window) in app.webview_windows() {
         if let Ok(CapWindowId::TargetSelectOverlay { .. }) = CapWindowId::from_str(&id) {
             let _ = window.close();

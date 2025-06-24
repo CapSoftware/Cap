@@ -66,26 +66,26 @@ export const getPermissions = queryOptions({
 
 export function createOptionsQuery() {
   const PERSIST_KEY = "recording-options-query";
-  const [state, setState] = makePersisted(
-    createStore<{
-      captureTarget: ScreenCaptureTarget;
-      micName: string | null;
-      cameraLabel: string | null;
-      mode: RecordingMode;
-      captureSystemAudio?: boolean;
-      targetMode?: "screen" | "window" | "area";
-    }>({
-      captureTarget: { variant: "screen", id: 0 },
-      micName: null,
-      cameraLabel: null,
-      mode: "studio",
-    }),
-    { name: PERSIST_KEY }
-  );
+  const [_state, _setState] = createStore<{
+    captureTarget: ScreenCaptureTarget;
+    micName: string | null;
+    cameraLabel: string | null;
+    mode: RecordingMode;
+    captureSystemAudio?: boolean;
+    targetMode?: "screen" | "window" | "area";
+  }>({
+    captureTarget: { variant: "screen", id: 0 },
+    micName: null,
+    cameraLabel: null,
+    mode: "studio",
+  });
 
   createEventListener(window, "storage", (e) => {
-    console.log(e);
-    if (e.key === PERSIST_KEY) setState(JSON.parse(e.newValue ?? "{}"));
+    if (e.key === PERSIST_KEY) _setState(JSON.parse(e.newValue ?? "{}"));
+  });
+
+  const [state, setState] = makePersisted([_state, _setState], {
+    name: PERSIST_KEY,
   });
 
   return { rawOptions: state, setOptions: setState };
