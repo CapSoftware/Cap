@@ -111,11 +111,11 @@ a.bg-primary:hover {
 }
 
 .bg-gradient {
-  @apply bg-gradient-to-r transition-all duration-300 from-secondary-2 to-secondary-3;
+  @apply bg-gradient-to-r transition-all duration-300;
 }
 
 .bg-gradient:hover {
-  @apply bg-gradient-to-r from-secondary to-secondary-3;
+  @apply bg-gradient-to-r;
 }
 
 .bg-animated {
