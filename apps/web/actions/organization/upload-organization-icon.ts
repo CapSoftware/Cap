@@ -1,13 +1,15 @@
 "use server";
 
-import { getCurrentUser } from "@cap/database/auth/session";
-import { organizations } from "@cap/database/schema";
-import { db } from "@cap/database";
-import { eq } from "drizzle-orm";
-import { revalidatePath } from "next/cache";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
 import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
+import { db } from "@cap/database";
+import { getCurrentUser } from "@cap/database/auth/session";
+import { organizations } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
+import DOMPurify from "dompurify";
+import { eq } from "drizzle-orm";
+import { JSDOM } from "jsdom";
+import { revalidatePath } from "next/cache";
 
 export async function uploadOrganizationIcon(
   formData: FormData,
@@ -53,6 +55,20 @@ export async function uploadOrganizationIcon(
   const fileKey = `organizations/${organizationId}/icon-${Date.now()}.${fileExtension}`;
 
   try {
+    // Sanitize SVG if applicable
+    let uploadFile = file;
+    if (file.type === "image/svg+xml") {
+      const arrayBuffer = await file.arrayBuffer();
+      const svgString = Buffer.from(arrayBuffer).toString("utf-8");
+      const dom = new JSDOM(svgString, { contentType: "image/svg+xml" });
+      const purify = DOMPurify(dom.window);
+      const sanitizedSvg = purify.sanitize(
+        dom.window.document.documentElement.outerHTML,
+        { USE_PROFILES: { svg: true, svgFilters: true } }
+      );
+      uploadFile = new File([sanitizedSvg], file.name, { type: file.type });
+    }
+
     // Get S3 client
     const [s3Client] = await createS3Client();
     const bucketName = await getS3Bucket();
@@ -62,7 +78,7 @@ export async function uploadOrganizationIcon(
       Bucket: bucketName,
       Key: fileKey,
       Fields: {
-        "Content-Type": file.type,
+        "Content-Type": uploadFile.type,
       },
       Expires: 600, // 10 minutes
     });

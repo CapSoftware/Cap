@@ -1,14 +1,14 @@
 "use server";
 
+import { createS3Client, getS3Bucket } from "@/utils/s3";
+import { DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
+import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { spaces } from "@cap/database/schema";
-import { db } from "@cap/database";
+import { serverEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { createS3Client, getS3Bucket } from "@/utils/s3";
-import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
-import { serverEnv } from "@cap/env";
-import { DeleteObjectCommand } from "@aws-sdk/client-s3";
 
 export async function uploadSpaceIcon(formData: FormData, spaceId: string) {
   const user = await getCurrentUser();
@@ -45,6 +45,22 @@ export async function uploadSpaceIcon(formData: FormData, spaceId: string) {
   }
   if (file.size > 2 * 1024 * 1024) {
     throw new Error("File size must be less than 2MB");
+  }
+
+  // Sanitize SVG if applicable
+  let uploadFile = file;
+  if (file.type === "image/svg+xml") {
+    const arrayBuffer = await file.arrayBuffer();
+    const svgString = Buffer.from(arrayBuffer).toString("utf-8");
+    const dom = new (await import("jsdom")).JSDOM(svgString, {
+      contentType: "image/svg+xml",
+    });
+    const purify = (await import("dompurify")).default(dom.window);
+    const sanitizedSvg = purify.sanitize(
+      dom.window.document.documentElement.outerHTML,
+      { USE_PROFILES: { svg: true, svgFilters: true } }
+    );
+    uploadFile = new File([sanitizedSvg], file.name, { type: file.type });
   }
 
   // Prepare new file key

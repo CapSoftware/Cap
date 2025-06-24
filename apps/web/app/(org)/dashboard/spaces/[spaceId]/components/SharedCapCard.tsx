@@ -1,7 +1,7 @@
 import { VideoMetadata } from "@cap/database/types";
 import { faBuilding, faUser } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { CapCard } from "../../../caps/components/CapCard";
+import { CapCard } from "../../../caps/components/CapCard/CapCard";
 
 interface SharedCapCardProps {
   cap: {
