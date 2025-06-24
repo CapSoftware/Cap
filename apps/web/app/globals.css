@@ -242,7 +242,7 @@ h2,
 h3,
 h4,
 h5 {
-  @apply font-normal tracking-[-0.03em] text-[1.75rem] leading-[2.5rem];
+  @apply tracking-[-0.03em] text-[1.75rem] leading-[2.5rem];
 }
 
 a,
@@ -251,7 +251,7 @@ span,
 input,
 label,
 button {
-  @apply tracking-tight text-gray-10 font-normal text-[1rem] leading-[1.5rem];
+  @apply tracking-tight text-gray-10 text-[1rem] leading-[1.5rem];
 }
 
 a,
@@ -668,7 +668,7 @@ footer a {
 .prose p,
 .prose li,
 .prose a {
-  @apply tracking-tight font-normal text-[1.125rem] leading-[1.75rem] !important;
+  @apply tracking-tight text-[1.125rem] leading-[1.75rem] !important;
 }
 
 .prose p,
