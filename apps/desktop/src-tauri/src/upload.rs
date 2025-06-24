@@ -35,13 +35,6 @@ use specta::Type;
 #[derive(Deserialize, Serialize, Clone, Type, Debug)]
 pub struct S3UploadMeta {
     id: String,
-    user_id: String,
-    #[serde(default)]
-    aws_region: String,
-    #[serde(default, deserialize_with = "deserialize_empty_object_as_string")]
-    aws_bucket: String,
-    #[serde(default)]
-    aws_endpoint: String,
 }
 
 fn deserialize_empty_object_as_string<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -88,62 +81,16 @@ impl S3UploadMeta {
         &self.id
     }
 
-    pub fn user_id(&self) -> &str {
-        &self.user_id
-    }
-
-    pub fn aws_region(&self) -> &str {
-        &self.aws_region
-    }
-
-    pub fn aws_bucket(&self) -> &str {
-        &self.aws_bucket
-    }
-
-    pub fn aws_endpoint(&self) -> &str {
-        &self.aws_endpoint
-    }
-
-    pub fn new(
-        id: String,
-        user_id: String,
-        aws_region: String,
-        aws_bucket: String,
-        aws_endpoint: String,
-    ) -> Self {
-        Self {
-            id,
-            user_id,
-            aws_region,
-            aws_bucket,
-            aws_endpoint,
-        }
-    }
-
-    pub fn ensure_defaults(&mut self) {
-        if self.aws_region.is_empty() {
-            self.aws_region = std::env::var("NEXT_PUBLIC_CAP_AWS_REGION")
-                .unwrap_or_else(|_| "us-east-1".to_string());
-        }
-        if self.aws_bucket.is_empty() {
-            self.aws_bucket =
-                std::env::var("NEXT_PUBLIC_CAP_AWS_BUCKET").unwrap_or_else(|_| "capso".to_string());
-        }
-        if self.aws_endpoint.is_empty() {
-            self.aws_endpoint = std::env::var("NEXT_PUBLIC_CAP_AWS_ENDPOINT")
-                .unwrap_or_else(|_| "https://s3.amazonaws.com".to_string());
-        }
+    pub fn new(id: String) -> Self {
+        Self { id }
     }
 }
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct S3UploadBody {
-    user_id: String,
-    file_key: String,
-    aws_bucket: String,
-    aws_region: String,
-    aws_endpoint: String,
+    video_id: String,
+    subpath: String,
 }
 
 #[derive(serde::Serialize)]
@@ -201,33 +148,17 @@ pub async fn upload_video(
 ) -> Result<UploadedVideo, String> {
     println!("Uploading video {video_id}...");
 
-    let file_name = file_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or("Invalid file path")?
-        .to_string();
-
     let client = reqwest::Client::new();
     let s3_config = match existing_config {
         Some(config) => config,
-        None => create_or_get_video(app, false, Some(video_id), None).await?,
+        None => create_or_get_video(app, false, Some(video_id.clone()), None).await?,
     };
-
-    let file_key = format!(
-        "{}/{}/{}",
-        s3_config.user_id(),
-        s3_config.id(),
-        "result.mp4"
-    );
 
     let body = build_video_upload_body(
         &file_path,
         S3UploadBody {
-            user_id: s3_config.user_id().to_string(),
-            file_key: file_key.clone(),
-            aws_bucket: s3_config.aws_bucket().to_string(),
-            aws_region: s3_config.aws_region().to_string(),
-            aws_endpoint: s3_config.aws_endpoint().to_string(),
+            video_id: video_id.clone(),
+            subpath: "result.mp4".to_string(),
         },
     )?;
 
@@ -336,17 +267,10 @@ pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
     let client = reqwest::Client::new();
     let s3_config = create_or_get_video(app, true, None, None).await?;
 
-    let file_key = format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name);
-
-    println!("File key: {file_key}");
-
     let body = S3ImageUploadBody {
         base: S3UploadBody {
-            user_id: s3_config.user_id,
-            file_key: file_key.clone(),
-            aws_bucket: s3_config.aws_bucket,
-            aws_region: s3_config.aws_region,
-            aws_endpoint: s3_config.aws_endpoint,
+            video_id: s3_config.id.clone(),
+            subpath: file_name,
         },
     };
 
@@ -427,7 +351,6 @@ pub async fn create_or_get_video(
         )
     })?;
 
-    config.ensure_defaults();
     Ok(config)
 }
 
@@ -532,18 +455,10 @@ pub async fn prepare_screenshot_upload(
     s3_config: &S3UploadMeta,
     screenshot_path: PathBuf,
 ) -> Result<reqwest::Response, String> {
-    let file_key = format!(
-        "{}/{}/screenshot/screen-capture.jpg",
-        s3_config.user_id, s3_config.id
-    );
-
     let body = S3ImageUploadBody {
         base: S3UploadBody {
-            user_id: s3_config.user_id.clone(),
-            file_key: file_key.clone(),
-            aws_bucket: s3_config.aws_bucket.clone(),
-            aws_region: s3_config.aws_region.clone(),
-            aws_endpoint: s3_config.aws_endpoint.clone(),
+            video_id: s3_config.id.clone(),
+            subpath: "screenshot/screen-capture.jpg".to_string(),
         },
     };
 
@@ -632,10 +547,8 @@ impl InstantMultipartUpload {
         // --------------------------------------------
         // basic constants and info for chunk approach
         // --------------------------------------------
-        let file_name = "result.mp4";
         let client = reqwest::Client::new();
         let s3_config = pre_created_video.config;
-        let file_key = format!("{}/{}/{}", s3_config.user_id(), s3_config.id(), file_name);
 
         let mut uploaded_parts = Vec::new();
         let mut part_number = 1;
@@ -652,7 +565,7 @@ impl InstantMultipartUpload {
                 c.post(url)
                     .header("Content-Type", "application/json")
                     .json(&serde_json::json!({
-                        "fileKey": file_key,
+                        "videoId": s3_config.id(),
                         "contentType": "video/mp4"
                     }))
             })
@@ -747,7 +660,7 @@ impl InstantMultipartUpload {
                     &app,
                     &client,
                     &file_path,
-                    &file_key,
+                    &video_id,
                     &upload_id,
                     &mut part_number,
                     &mut last_uploaded_position,
@@ -774,7 +687,7 @@ impl InstantMultipartUpload {
                         &app,
                         &client,
                         &file_path,
-                        &file_key,
+                        &video_id,
                         &upload_id,
                         &mut 1,
                         &mut 0,
@@ -797,15 +710,8 @@ impl InstantMultipartUpload {
                     "Completing multipart upload with {} parts",
                     uploaded_parts.len()
                 );
-                Self::finalize_upload(
-                    &app,
-                    &file_path,
-                    &file_key,
-                    &upload_id,
-                    &uploaded_parts,
-                    &video_id,
-                )
-                .await?;
+                Self::finalize_upload(&app, &file_path, &video_id, &upload_id, &uploaded_parts)
+                    .await?;
 
                 break;
             } else {
@@ -825,7 +731,7 @@ impl InstantMultipartUpload {
         app: &AppHandle,
         client: &reqwest::Client,
         file_path: &PathBuf,
-        file_key: &str,
+        video_id: &str,
         upload_id: &str,
         part_number: &mut i32,
         last_uploaded_position: &mut u64,
@@ -929,7 +835,7 @@ impl InstantMultipartUpload {
                 c.post(url)
                     .header("Content-Type", "application/json")
                     .json(&serde_json::json!({
-                        "fileKey": file_key,
+                        "video_id": video_id,
                         "uploadId": upload_id,
                         "partNumber": *part_number,
                         "md5Sum": &md5_sum
@@ -1069,10 +975,9 @@ impl InstantMultipartUpload {
     async fn finalize_upload(
         app: &AppHandle,
         file_path: &PathBuf,
-        file_key: &str,
+        video_id: &str,
         upload_id: &str,
         uploaded_parts: &[UploadedPart],
-        video_id: &str,
     ) -> Result<(), String> {
         println!(
             "Completing multipart upload with {} parts",
@@ -1106,7 +1011,7 @@ impl InstantMultipartUpload {
                 c.post(url)
                     .header("Content-Type", "application/json")
                     .json(&serde_json::json!({
-                        "fileKey": file_key,
+                        "videoId": video_id,
                         "uploadId": upload_id,
                         "parts": uploaded_parts
                     }))

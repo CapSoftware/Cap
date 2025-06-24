@@ -1,5 +1,5 @@
 import { dub } from "@/utils/dub";
-import { getS3Bucket, getS3Config } from "@/utils/s3";
+import { createBucketProvider, getS3Bucket, getS3Config } from "@/utils/s3";
 import { db } from "@cap/database";
 import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
@@ -48,24 +48,23 @@ app.get(
       if (!isUpgraded && duration && duration > 300)
         return c.json({ error: "upgrade_required" }, { status: 403 });
 
-      const [bucket] = await db()
+      const [customBucket] = await db()
         .select()
         .from(s3Buckets)
         .where(eq(s3Buckets.ownerId, user.id));
 
-      console.log("User bucket:", bucket ? "found" : "not found");
+      console.log("User bucket:", customBucket ? "found" : "not found");
 
-      const s3Config = await getS3Config(bucket);
-      const bucketName = await getS3Bucket(bucket);
+      const bucket = await createBucketProvider(customBucket);
+      const s3Config = await getS3Config(customBucket);
+      const bucketName = await getS3Bucket(customBucket);
 
       console.log("S3 Config:", { region: s3Config.region, bucketName });
 
       const date = new Date();
       const formattedDate = `${date.getDate()} ${date.toLocaleString(
         "default",
-        {
-          month: "long",
-        }
+        { month: "long" }
       )} ${date.getFullYear()}`;
 
       if (videoId !== undefined) {
@@ -77,9 +76,6 @@ app.get(
         if (video) {
           return c.json({
             id: video.id,
-            user_id: user.id,
-            aws_region: video.awsRegion,
-            aws_bucket: video.awsBucket,
           });
         }
       }
@@ -101,7 +97,7 @@ app.get(
             ? { type: "desktopMP4" as const }
             : undefined,
         isScreenshot,
-        bucket: bucket?.id,
+        bucket: customBucket?.id,
       };
 
       await db().insert(videos).values(videoData);
@@ -156,12 +152,7 @@ app.get(
         );
       }
 
-      return c.json({
-        id: idToUse,
-        user_id: user.id,
-        aws_region: s3Config.region,
-        aws_bucket: bucketName,
-      });
+      return c.json({ id: idToUse });
     } catch (error) {
       console.error("Error in video create endpoint:", error);
       return c.json({ error: "Internal server error" }, { status: 500 });

@@ -1,11 +1,30 @@
 import {
+  CompleteMultipartUploadCommand,
+  CompleteMultipartUploadCommandInput,
+  CompleteMultipartUploadOutput,
+  CopyObjectCommand,
+  CopyObjectCommandInput,
+  CopyObjectCommandOutput,
+  CreateMultipartUploadCommand,
+  CreateMultipartUploadCommandInput,
+  CreateMultipartUploadOutput,
+  DeleteObjectCommand,
+  DeleteObjectCommandOutput,
+  DeleteObjectsCommand,
+  DeleteObjectsCommandOutput,
   GetObjectCommand,
   HeadObjectCommand,
   HeadObjectOutput,
   ListObjectsV2Command,
   ListObjectsV2Output,
+  ObjectIdentifier,
   PutObjectCommand,
+  PutObjectCommandInput,
+  PutObjectCommandOutput,
+  PutObjectRequest,
   S3Client,
+  UploadPartCommand,
+  UploadPartCommandInput,
 } from "@aws-sdk/client-s3";
 import type { s3Buckets } from "@cap/database/schema";
 import type { InferSelectModel } from "drizzle-orm";
@@ -14,7 +33,15 @@ import { serverEnv } from "@cap/env";
 import * as S3Presigner from "@aws-sdk/s3-request-presigner";
 import * as CloudFrontPresigner from "@aws-sdk/cloudfront-signer";
 import { S3_BUCKET_URL } from "@cap/utils";
-import { StreamingBlobPayloadInputTypes } from "@smithy/types";
+import {
+  RequestPresigningArguments,
+  StreamingBlobPayloadInputTypes,
+} from "@smithy/types";
+import {
+  createPresignedPost,
+  PresignedPost,
+  PresignedPostOptions,
+} from "@aws-sdk/s3-presigned-post";
 
 type S3Config = {
   endpoint?: string | null;
@@ -125,7 +152,43 @@ interface S3BucketProvider {
     key: string,
     body: StreamingBlobPayloadInputTypes,
     fields?: { contentType?: string }
-  ): Promise<void>;
+  ): Promise<PutObjectCommandOutput>;
+  copyObject(
+    source: string,
+    key: string,
+    args?: Omit<CopyObjectCommandInput, "Bucket" | "CopySource" | "Key">
+  ): Promise<CopyObjectCommandOutput>;
+  deleteObject(key: string): Promise<DeleteObjectCommandOutput>;
+  deleteObjects(keys: ObjectIdentifier[]): Promise<DeleteObjectsCommandOutput>;
+  getPresignedPutUrl(
+    key: string,
+    args?: Omit<PutObjectRequest, "Key" | "Bucket">,
+    signingArgs?: RequestPresigningArguments
+  ): Promise<string>;
+  getPresignedPostUrl(
+    key: string,
+    args: Omit<PresignedPostOptions, "Bucket" | "Key">
+  ): Promise<PresignedPost>;
+  multipart: {
+    create(
+      key: string,
+      args?: Omit<CreateMultipartUploadCommandInput, "Bucket" | "Key">
+    ): Promise<CreateMultipartUploadOutput>;
+    getPresignedUploadPartUrl(
+      key: string,
+      uploadId: string,
+      partNumber: number,
+      args?: Omit<UploadPartCommandInput, "Key" | "Bucket" | "PartNumber">
+    ): Promise<string>;
+    complete(
+      key: string,
+      uploadId: string,
+      args?: Omit<
+        CompleteMultipartUploadCommandInput,
+        "Key" | "Bucket" | "UploadId"
+      >
+    ): Promise<CompleteMultipartUploadOutput>;
+  };
 }
 
 function createCloudFrontProvider(config: {
@@ -209,6 +272,87 @@ function createS3Provider(
           })
         )
       ),
+    copyObject: (source, key, args) =>
+      getClient(true).then((client) =>
+        client.send(
+          new CopyObjectCommand({
+            Bucket: bucket,
+            CopySource: source,
+            Key: key,
+            ...args,
+          })
+        )
+      ),
+    deleteObject: (key) =>
+      getClient(true).then((client) =>
+        client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
+      ),
+    deleteObjects: (objects: ObjectIdentifier[]) =>
+      getClient(true).then((client) =>
+        client.send(
+          new DeleteObjectsCommand({
+            Bucket: bucket,
+            Delete: {
+              Objects: objects,
+            },
+          })
+        )
+      ),
+    getPresignedPutUrl: (key: string, args, signingArgs) =>
+      getClient(false).then((client) =>
+        S3Presigner.getSignedUrl(
+          client,
+          new PutObjectCommand({ Bucket: bucket, Key: key, ...args }),
+          signingArgs
+        )
+      ),
+    getPresignedPostUrl: (
+      key: string,
+      args: Omit<PresignedPostOptions, "Bucket" | "Key">
+    ) =>
+      getClient(false).then((client) =>
+        createPresignedPost(client, {
+          ...args,
+          Bucket: bucket,
+          Key: key,
+        })
+      ),
+    multipart: {
+      create: (key, args) =>
+        getClient(true).then((client) =>
+          client.send(
+            new CreateMultipartUploadCommand({
+              ...args,
+              Bucket: bucket,
+              Key: key,
+            })
+          )
+        ),
+      getPresignedUploadPartUrl: (key, uploadId, partNumber, args) =>
+        getClient(false).then((client) =>
+          S3Presigner.getSignedUrl(
+            client,
+            new UploadPartCommand({
+              Bucket: bucket,
+              Key: key,
+              UploadId: uploadId,
+              PartNumber: partNumber,
+              ...args,
+            })
+          )
+        ),
+      complete: (key, uploadId, args) =>
+        getClient(true).then((client) =>
+          client.send(
+            new CompleteMultipartUploadCommand({
+              Bucket: bucket,
+              Key: key,
+              UploadId: uploadId,
+              ...args,
+            })
+          )
+        ),
+    },
   };
 }
 

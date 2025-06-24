@@ -6,8 +6,7 @@ import { spaces, users, spaceMembers } from "@cap/database/schema";
 import { inArray, eq, and } from "drizzle-orm";
 import { nanoId, nanoIdLength } from "@cap/database/helpers";
 import { revalidatePath } from "next/cache";
-import { createBucketProvider, createS3Client, getS3Bucket } from "@/utils/s3";
-import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
+import { createBucketProvider } from "@/utils/s3";
 import { serverEnv } from "@cap/env";
 import { v4 as uuidv4 } from "uuid";
 

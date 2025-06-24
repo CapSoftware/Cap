@@ -1,8 +1,4 @@
-import { createS3Client, getS3Bucket } from "@/utils/s3";
-import {
-  createPresignedPost,
-  type PresignedPost,
-} from "@aws-sdk/s3-presigned-post";
+import { createBucketProvider } from "@/utils/s3";
 import {
   CloudFrontClient,
   CreateInvalidationCommand,
@@ -16,8 +12,7 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 
 import { withAuth } from "../../utils";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { PutObjectCommand } from "@aws-sdk/client-s3";
+import { nanoIdLength } from "@cap/database/helpers";
 
 export const app = new Hono().use(withAuth);
 
@@ -25,47 +20,63 @@ app.post(
   "/",
   zValidator(
     "json",
-    z.object({
-      fileKey: z.string(),
-      duration: z.string().optional(),
-      bandwidth: z.string().optional(),
-      resolution: z.string().optional(),
-      videoCodec: z.string().optional(),
-      audioCodec: z.string().optional(),
-      method: z.union([z.literal("post"), z.literal("put")]).default("post"),
-    })
+    z
+      .object({
+        duration: z.string().optional(),
+        bandwidth: z.string().optional(),
+        resolution: z.string().optional(),
+        videoCodec: z.string().optional(),
+        audioCodec: z.string().optional(),
+        method: z.union([z.literal("post"), z.literal("put")]).default("post"),
+      })
+      .and(
+        z.union([
+          // DEPRECATED
+          z.object({ fileKey: z.string() }),
+          z.object({ videoId: z.string(), subpath: z.string() }),
+        ])
+      )
   ),
   async (c) => {
     const user = c.get("user");
-    const {
-      fileKey,
-      duration,
-      bandwidth,
-      resolution,
-      videoCodec,
-      audioCodec,
-      method,
-    } = c.req.valid("json");
+    const { duration, bandwidth, resolution, videoCodec, audioCodec, method } =
+      c.req.valid("json");
+
+    const fileKey = (() => {
+      const body = c.req.valid("json");
+      if ("fileKey" in body) {
+        const [userId, videoId, ...subpath] = body.fileKey.split("/");
+        if (
+          !userId ||
+          !videoId ||
+          userId.length !== nanoIdLength ||
+          videoId.length !== nanoIdLength
+        )
+          throw new Error("Invalid fileKey");
+
+        return `${user.id}/${videoId}/${subpath.join("/")}`;
+      } else return `${user.id}/${body.videoId}/${body.subpath}`;
+    })();
 
     try {
-      const [bucket] = await db()
+      const [customBucket] = await db()
         .select()
         .from(s3Buckets)
         .where(eq(s3Buckets.ownerId, user.id));
 
-      const s3Config = bucket
+      const s3Config = customBucket
         ? {
-            endpoint: bucket.endpoint || undefined,
-            region: bucket.region,
-            accessKeyId: bucket.accessKeyId,
-            secretAccessKey: bucket.secretAccessKey,
+            endpoint: customBucket.endpoint || undefined,
+            region: customBucket.region,
+            accessKeyId: customBucket.accessKeyId,
+            secretAccessKey: customBucket.secretAccessKey,
           }
         : null;
 
       if (
-        !bucket ||
+        !customBucket ||
         !s3Config ||
-        bucket.bucketName !== serverEnv().CAP_AWS_BUCKET
+        customBucket.bucketName !== serverEnv().CAP_AWS_BUCKET
       ) {
         const distributionId = serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID;
         if (distributionId) {
@@ -101,15 +112,6 @@ app.post(
         }
       }
 
-      console.log("Creating S3 client with config:", {
-        hasEndpoint: !!s3Config?.endpoint,
-        hasRegion: !!s3Config?.region,
-        hasAccessKey: !!s3Config?.accessKeyId,
-        hasSecretKey: !!s3Config?.secretAccessKey,
-      });
-
-      const [s3Client] = await createS3Client(s3Config);
-
       const contentType = fileKey.endsWith(".aac")
         ? "audio/aac"
         : fileKey.endsWith(".webm")
@@ -122,7 +124,7 @@ app.post(
         ? "application/x-mpegURL"
         : "video/mp2t";
 
-      const bucketName = await getS3Bucket(bucket);
+      const bucket = await createBucketProvider(customBucket);
 
       let data;
       if (method === "post") {
@@ -136,18 +138,11 @@ app.post(
           "x-amz-meta-audiocodec": audioCodec ?? "",
         };
 
-        data = await createPresignedPost(s3Client, {
-          Bucket: bucketName,
-          Key: fileKey,
-          Fields,
-          Expires: 1800,
-        });
+        data = bucket.getPresignedPostUrl(fileKey, { Fields, Expires: 1800 });
       } else if (method === "put") {
-        const presignedUrl = await getSignedUrl(
-          s3Client,
-          new PutObjectCommand({
-            Bucket: bucketName,
-            Key: fileKey,
+        const presignedUrl = await bucket.getPresignedPutUrl(
+          fileKey,
+          {
             ContentType: contentType,
             Metadata: {
               userid: user.id,
@@ -157,13 +152,12 @@ app.post(
               videocodec: videoCodec ?? "",
               audiocodec: audioCodec ?? "",
             },
-          }),
+          },
           { expiresIn: 1800 }
         );
 
         data = { url: presignedUrl, fields: {} };
       }
-      console.log({ data });
 
       console.log("Presigned URL created successfully");
 

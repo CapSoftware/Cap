@@ -5,8 +5,7 @@ import { organizations } from "@cap/database/schema";
 import { db } from "@cap/database";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { createBucketProvider, createS3Client, getS3Bucket } from "@/utils/s3";
-import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
+import { createBucketProvider } from "@/utils/s3";
 import { serverEnv } from "@cap/env";
 
 export async function uploadOrganizationIcon(
