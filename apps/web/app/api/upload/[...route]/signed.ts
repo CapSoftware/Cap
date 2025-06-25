@@ -12,7 +12,7 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 
 import { withAuth } from "../../utils";
-import { nanoIdLength } from "@cap/database/helpers";
+import { parseVideoIdOrFileKey } from "../utils";
 
 export const app = new Hono().use(withAuth);
 
@@ -39,24 +39,17 @@ app.post(
   ),
   async (c) => {
     const user = c.get("user");
-    const { duration, bandwidth, resolution, videoCodec, audioCodec, method } =
-      c.req.valid("json");
+    const {
+      duration,
+      bandwidth,
+      resolution,
+      videoCodec,
+      audioCodec,
+      method,
+      ...body
+    } = c.req.valid("json");
 
-    const fileKey = (() => {
-      const body = c.req.valid("json");
-      if ("fileKey" in body) {
-        const [userId, videoId, ...subpath] = body.fileKey.split("/");
-        if (
-          !userId ||
-          !videoId ||
-          userId.length !== nanoIdLength ||
-          videoId.length !== nanoIdLength
-        )
-          throw new Error("Invalid fileKey");
-
-        return `${user.id}/${videoId}/${subpath.join("/")}`;
-      } else return `${user.id}/${body.videoId}/${body.subpath}`;
-    })();
+    const fileKey = parseVideoIdOrFileKey(user.id, body);
 
     try {
       const [customBucket] = await db()

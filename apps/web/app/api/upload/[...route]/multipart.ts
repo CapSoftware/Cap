@@ -7,6 +7,7 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { serverEnv } from "@cap/env";
 import { withAuth } from "@/app/api/utils";
+import { parseVideoIdOrFileKey } from "../utils";
 
 export const app = new Hono().use(withAuth);
 
@@ -30,17 +31,10 @@ app.post(
     const { contentType, ...body } = c.req.valid("json");
     const user = c.get("user");
 
-    const fileKey = (() => {
-      let videoId;
-
-      if ("fileKey" in body) {
-        const [_, _videoId] = body.fileKey.split("/");
-        if (!_videoId) throw new Error("Invalid fileKey");
-        videoId = _videoId;
-      } else videoId = body.videoId;
-
-      return videoResultKey(user.id, videoId);
-    })();
+    const fileKey = parseVideoIdOrFileKey(user.id, {
+      ...body,
+      subpath: "result.mp4",
+    });
 
     try {
       try {
@@ -117,17 +111,10 @@ app.post(
     const { uploadId, partNumber, md5Sum, ...body } = c.req.valid("json");
     const user = c.get("user");
 
-    const fileKey = (() => {
-      let videoId;
-
-      if ("fileKey" in body) {
-        const [_, _videoId] = body.fileKey.split("/");
-        if (!_videoId) throw new Error("Invalid fileKey");
-        videoId = _videoId;
-      } else videoId = body.videoId;
-
-      return videoResultKey(user.id, videoId);
-    })();
+    const fileKey = parseVideoIdOrFileKey(user.id, {
+      ...body,
+      subpath: "result.mp4",
+    });
 
     try {
       try {
@@ -194,17 +181,10 @@ app.post(
     const { uploadId, parts, ...body } = c.req.valid("json");
     const user = c.get("user");
 
-    const fileKey = (() => {
-      let videoId;
-
-      if ("fileKey" in body) {
-        const [_, _videoId] = body.fileKey.split("/");
-        if (!_videoId) throw new Error("Invalid fileKey");
-        videoId = _videoId;
-      } else videoId = body.videoId;
-
-      return videoResultKey(user.id, videoId);
-    })();
+    const fileKey = parseVideoIdOrFileKey(user.id, {
+      ...body,
+      subpath: "result.mp4",
+    });
 
     try {
       try {
