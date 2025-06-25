@@ -68,8 +68,8 @@ module.exports = function (app, options) {
               h6: {
                 fontWeight: "500",
               },
-            }
-          }
+            },
+          },
         },
         colors: {
           gray: getColorScale("gray"),

@@ -1,7 +1,6 @@
 module.exports = {
   plugins: {
-    tailwindcss: {},
-    autoprefixer: {},
+    "@tailwindcss/postcss": {},
     // thanks cal.com :)
     "postcss-pseudo-companion-classes": {
       prefix: "sb-pseudo--",

@@ -5,9 +5,7 @@
 @import "@radix-ui/colors/gray-dark.css";
 @import "@radix-ui/colors/blue.css";
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
 :root {
   --primary: #005cb1;
