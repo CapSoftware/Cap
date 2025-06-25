@@ -1,5 +1,6 @@
 "use client";
 
+import Notifications from "@/app/dashboard/_components/Notifications";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { buildEnv } from "@cap/env";
 import {
@@ -12,17 +13,20 @@ import {
   PopoverTrigger,
 } from "@cap/ui";
 import {
+  faBell,
   faMoon,
   faSun
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { useClickAway } from "@uidotdev/usehooks";
 import clsx from "clsx";
+import { AnimatePresence } from "framer-motion";
 import { MoreVertical } from "lucide-react";
 import { signOut } from "next-auth/react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import React, { cloneElement, memo, useMemo, useRef, useState } from "react";
+import React, { cloneElement, memo, MutableRefObject, useMemo, useRef, useState } from "react";
 import { useDashboardContext, useTheme } from "../Contexts";
 import { MembersDialog } from "../spaces/[spaceId]/components/MembersDialog";
 import { ArrowUpIcon } from "./AnimatedIcons/ArrowUp";
@@ -55,6 +59,15 @@ export default function DashboardInner({
 
   const title = activeSpace ? activeSpace.name : titles[pathname] || "";
   const { theme, setThemeHandler } = useTheme();
+  const [toggleNotifications, setToggleNotifications] = useState(false);
+  const notificationsRef: MutableRefObject<HTMLDivElement> = useClickAway(
+    (e) => {
+      if (bellRef.current && !bellRef.current.contains(e.target as Node)) {
+        setToggleNotifications(false);
+      }
+    }
+  );
+  const bellRef = useRef<HTMLDivElement>(null);
   const isSharedCapsPage = pathname === "/dashboard/shared-caps";
   return (
     <div className="flex flex-col min-h-screen">
@@ -89,6 +102,23 @@ export default function DashboardInner({
           </div>
         </div>
         <div className="flex gap-4 items-center">
+          <div
+            data-state={toggleNotifications ? "open" : "closed"}
+            ref={bellRef}
+            onClick={() => {
+              setToggleNotifications(!toggleNotifications);
+            }}
+            className="hidden relative justify-center data-[state=open]:hover:bg-gray-5 items-center bg-gray-3
+            rounded-full transition-colors cursor-pointer lg:flex
+            hover:bg-gray-5 data-[state=open]:bg-gray-5
+            size-9"
+          >
+            <div className="absolute top-0 border border-gray-1 right-0 rounded-full z-[10] size-2 bg-red-400" />
+            <FontAwesomeIcon className="text-gray-12 size-3.5" icon={faBell} />
+            <AnimatePresence>
+              {toggleNotifications && <Notifications ref={notificationsRef} />}
+            </AnimatePresence>
+          </div>
           <div
             onClick={() => {
               if (document.startViewTransition) {

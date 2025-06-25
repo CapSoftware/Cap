@@ -14,7 +14,7 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>(
   (props, ref) => {
     const { className } = props;
     const [activeFilter, setActiveFilter] = useState<FilterType>(FilterType.ALL);
-    
+
     const filteredNotifications = mockNotifications.filter(notification => {
       // If the active filter is ALL or if the notification type matches the mapped type
       const mappedType = filterToNotificationType[activeFilter];
@@ -36,18 +36,18 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>(
         {...props}
       >
         <NotificationHeader />
-        <FilterTabs activeFilter={activeFilter} setActiveFilter={setActiveFilter} />        
+        <FilterTabs activeFilter={activeFilter} setActiveFilter={setActiveFilter} />
         <div className="isolate flex-1 h-full custom-scroll">
           {filteredNotifications.map((notification, idx) => (
-            <NotificationItem 
-              key={notification.id} 
-              notification={notification} 
-              isFirst={idx === 0} 
+            <NotificationItem
+              key={notification.id}
+              notification={notification}
+              isFirst={idx === 0}
               isLast={idx === filteredNotifications.length - 1}
             />
           ))}
         </div>
-        
+
         <NotificationFooter />
       </motion.div>
     );

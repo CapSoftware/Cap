@@ -565,8 +565,7 @@ slot:not(.dashboard-layout slot) {
 
 /* Custom scrollbar */
 .custom-scroll {
-  overflow-y: scroll;
-  padding-right: 3px;
+  overflow-y: auto;
 }
 
 .custom-scroll::-webkit-scrollbar {
