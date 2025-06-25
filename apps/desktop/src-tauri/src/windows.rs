@@ -443,7 +443,7 @@ impl ShowCapWindow {
             Self::InProgressRecording {
                 position: _position,
             } => {
-                let mut width = 180.0 + 32.0;
+                let width = 300.0;
 
                 let height = 40.0;
 

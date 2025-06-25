@@ -245,6 +245,7 @@ recordingOptionsChanged: RecordingOptionsChanged,
 recordingStarted: RecordingStarted,
 recordingStopped: RecordingStopped,
 renderFrameEvent: RenderFrameEvent,
+requestDeleteRecording: RequestDeleteRecording,
 requestNewScreenshot: RequestNewScreenshot,
 requestOpenSettings: RequestOpenSettings,
 requestRestartRecording: RequestRestartRecording,
@@ -264,6 +265,7 @@ recordingOptionsChanged: "recording-options-changed",
 recordingStarted: "recording-started",
 recordingStopped: "recording-stopped",
 renderFrameEvent: "render-frame-event",
+requestDeleteRecording: "request-delete-recording",
 requestNewScreenshot: "request-new-screenshot",
 requestOpenSettings: "request-open-settings",
 requestRestartRecording: "request-restart-recording",
@@ -358,6 +360,7 @@ export type RecordingStarted = null
 export type RecordingStopped = { path: string }
 export type RecordingType = "studio" | "instant"
 export type RenderFrameEvent = { frame_number: number; fps: number; resolution_base: XY<number> }
+export type RequestDeleteRecording = null
 export type RequestNewScreenshot = null
 export type RequestOpenSettings = { page: string }
 export type RequestRestartRecording = null
