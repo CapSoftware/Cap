@@ -56,8 +56,8 @@ export async function createOrganization(formData: FormData) {
     try {
       const bucket = await createBucketProvider();
 
-      await bucket.putObject(fileKey, iconFile, {
-        ContentType: iconFile.type,
+      await bucket.putObject(fileKey, await iconFile.bytes(), {
+        contentType: iconFile.type,
       });
 
       // Construct the icon URL

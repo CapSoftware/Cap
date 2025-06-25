@@ -54,7 +54,7 @@ export async function uploadOrganizationIcon(
   try {
     const bucket = await createBucketProvider();
 
-    await bucket.putObject(fileKey, file, {
+    await bucket.putObject(fileKey, await file.bytes(), {
       contentType: file.type,
     });
 

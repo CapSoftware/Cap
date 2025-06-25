@@ -51,6 +51,7 @@ export async function createSpace(
         )
       )
       .limit(1);
+
     if (existingSpace.length > 0) {
       return {
         success: false,
@@ -90,7 +91,7 @@ export async function createSpace(
 
         const bucket = await createBucketProvider();
 
-        await bucket.putObject(fileKey, iconFile, {
+        await bucket.putObject(fileKey, await iconFile.bytes(), {
           contentType: iconFile.type,
         });
 

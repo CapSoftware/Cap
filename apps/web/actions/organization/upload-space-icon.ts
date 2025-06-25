@@ -68,7 +68,7 @@ export async function uploadSpaceIcon(formData: FormData, spaceId: string) {
       }
     }
 
-    await bucket.putObject(fileKey, file, {
+    await bucket.putObject(fileKey, await file.bytes(), {
       contentType: file.type,
     });
 
