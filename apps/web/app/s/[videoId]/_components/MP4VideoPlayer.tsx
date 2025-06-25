@@ -175,6 +175,10 @@ export const MP4VideoPlayer = memo(
       video.addEventListener("error", handleError as EventListener);
       video.addEventListener("canplay", handleCanPlay);
 
+      if (video.readyState === 4) {
+        handleLoadedData();
+      }
+
       if (!isLoaded && !hasError && retryCount.current === 0) {
         const initialTimeout = setTimeout(() => {
           if (!isLoaded && !hasError) {

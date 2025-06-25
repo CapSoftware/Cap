@@ -1568,7 +1568,8 @@ function CommentIndicators(props: {
   className?: string;
   comments: MaybePromise<CommentWithAuthor[]>;
 }) {
-  const comments = use(props.comments);
+  const comments =
+    props.comments instanceof Promise ? use(props.comments) : props.comments;
 
   return (
     <div className={props.className}>
