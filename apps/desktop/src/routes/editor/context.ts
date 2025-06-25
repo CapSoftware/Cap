@@ -11,6 +11,7 @@ import {
   createEffect,
   createResource,
   createSignal,
+  createMemo,
   on,
 } from "solid-js";
 import { createStore, produce, reconcile, unwrap } from "solid-js/store";
@@ -62,6 +63,17 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
     const [project, setProject] = createStore<ProjectConfiguration>(
       props.editorInstance.savedProjectConfig
     );
+
+    const videoFps = createMemo(() => {
+      const meta = props.meta();
+      if ("display" in meta) {
+        return meta.display.fps || 30;
+      }
+      if ("segments" in meta && meta.segments.length > 0) {
+        return meta.segments[0].display.fps || 30;
+      }
+      return 30;
+    });
 
     const projectActions = {
       splitClipSegment: (time: number) => {
@@ -231,7 +243,6 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
           | { type: "zoom"; index: number }
           | { type: "clip"; index: number },
         transform: {
-          // visible seconds
           zoom: zoomOutLimit(),
           updateZoom(z: number, origin: number) {
             const { zoom, position } = updateZoom(
@@ -250,7 +261,6 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
               transform.setPosition(position);
             });
           },
-          // number of seconds of leftmost point
           position: 0,
           setPosition(p: number) {
             setEditorState(
@@ -288,9 +298,9 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       zoomOutLimit,
       exportState,
       setExportState,
+      videoFps,
     };
   },
-  // biome-ignore lint/style/noNonNullAssertion: it's ok
   null!
 );
 
@@ -384,8 +394,6 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 function createStoreHistory<T extends Static>(
   ...[state, setState]: ReturnType<typeof createStore<T>>
 ) {
-  // not working properly yet
-  // const getDelta = captureStoreUpdates(state);
 
   const [pauseCount, setPauseCount] = createSignal(0);
 

@@ -47,6 +47,11 @@ export default function Settings(props: RouteSectionProps) {
                 icon: IconLucideUnplug,
               },
               {
+                href: "importer",
+                name: "Importer",
+                icon: IconCapFile,
+              },
+              {
                 href: "license",
                 name: "License",
                 icon: IconLucideGift,

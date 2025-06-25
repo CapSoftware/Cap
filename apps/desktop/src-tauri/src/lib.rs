@@ -1,22 +1,21 @@
 mod audio;
+mod audio_meter;
 mod auth;
 mod camera;
 mod captions;
 mod deeplink_actions;
-mod flags;
-mod general_settings;
-mod hotkeys;
-mod notifications;
-mod permissions;
-mod platform;
-mod recording;
-// mod resource;
-mod audio_meter;
 mod editor_window;
 mod export;
 mod fake_window;
-// mod live_state;
+mod flags;
+mod general_settings;
+mod hotkeys;
+mod importer;
+mod notifications;
+mod permissions;
+mod platform;
 mod presets;
+mod recording;
 mod tray;
 mod upload;
 mod web_api;
@@ -1825,7 +1824,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             captions::download_whisper_model,
             captions::check_model_exists,
             captions::delete_whisper_model,
-            captions::export_captions_srt
+            captions::export_captions_srt,
+            importer::import_video_file,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,

@@ -226,6 +226,9 @@ async deleteWhisperModel(modelPath: string) : Promise<null> {
  */
 async exportCaptionsSrt(videoId: string) : Promise<string | null> {
     return await TAURI_INVOKE("export_captions_srt", { videoId });
+},
+async importVideoFile(videoPath: string) : Promise<string> {
+    return await TAURI_INVOKE("import_video_file", { videoPath });
 }
 }
 
