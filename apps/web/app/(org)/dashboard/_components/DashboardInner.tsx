@@ -113,7 +113,7 @@ export default function DashboardInner({
             hover:bg-gray-5 data-[state=open]:bg-gray-5
             size-9"
           >
-            <div className="absolute top-0 border border-gray-1 right-0 rounded-full z-[10] size-2 bg-red-400" />
+            <div className="absolute top-0.5 border border-gray-1 right-0 rounded-full z-[10] size-2 bg-red-400" />
             <FontAwesomeIcon className="text-gray-12 size-3.5" icon={faBell} />
             <AnimatePresence>
               {toggleNotifications && <Notifications ref={notificationsRef} />}
