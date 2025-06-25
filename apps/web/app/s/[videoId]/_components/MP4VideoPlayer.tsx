@@ -148,12 +148,6 @@ export const MP4VideoPlayer = memo(
         }
       };
 
-      const handleLoadedMetadata = () => {
-        if (videoRef.current) {
-          videoRef.current.dispatchEvent(new Event("loadedmetadata"));
-        }
-      };
-
       const handleError = (e: ErrorEvent) => {
         console.error("Video loading error:", e);
         if (!isLoaded && !hasError) {
@@ -171,7 +165,6 @@ export const MP4VideoPlayer = memo(
       };
 
       video.addEventListener("loadeddata", handleLoadedData);
-      video.addEventListener("loadedmetadata", handleLoadedMetadata);
       video.addEventListener("error", handleError as EventListener);
       video.addEventListener("canplay", handleCanPlay);
 
@@ -192,7 +185,6 @@ export const MP4VideoPlayer = memo(
         return () => {
           clearTimeout(initialTimeout);
           video.removeEventListener("loadeddata", handleLoadedData);
-          video.removeEventListener("loadedmetadata", handleLoadedMetadata);
           video.removeEventListener("error", handleError as EventListener);
           video.removeEventListener("canplay", handleCanPlay);
           if (retryTimeout.current) {
@@ -203,7 +195,6 @@ export const MP4VideoPlayer = memo(
 
       return () => {
         video.removeEventListener("loadeddata", handleLoadedData);
-        video.removeEventListener("loadedmetadata", handleLoadedMetadata);
         video.removeEventListener("error", handleError as EventListener);
         video.removeEventListener("canplay", handleCanPlay);
         if (retryTimeout.current) {

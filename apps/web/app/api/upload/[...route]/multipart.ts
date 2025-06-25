@@ -11,10 +11,6 @@ import { parseVideoIdOrFileKey } from "../utils";
 
 export const app = new Hono().use(withAuth);
 
-function videoResultKey(userId: string, videoId: string) {
-  return `/${userId}/${videoId}/result.mp4`;
-}
-
 app.post(
   "/initiate",
   zValidator(
