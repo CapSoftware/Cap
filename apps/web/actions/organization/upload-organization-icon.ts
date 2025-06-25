@@ -3,10 +3,13 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizations } from "@cap/database/schema";
 import { db } from "@cap/database";
-import { eq } from "drizzle-orm";
-import { revalidatePath } from "next/cache";
 import { createBucketProvider } from "@/utils/s3";
 import { serverEnv } from "@cap/env";
+import { eq } from "drizzle-orm";
+import DOMPurify from "dompurify";
+import { JSDOM } from "jsdom";
+import { revalidatePath } from "next/cache";
+import { sanitizeFile } from "@/lib/sanitizeFile";
 
 export async function uploadOrganizationIcon(
   formData: FormData,
@@ -52,9 +55,11 @@ export async function uploadOrganizationIcon(
   const fileKey = `organizations/${organizationId}/icon-${Date.now()}.${fileExtension}`;
 
   try {
+    const sanitizedFile = await sanitizeFile(file);
+
     const bucket = await createBucketProvider();
 
-    await bucket.putObject(fileKey, await file.bytes(), {
+    await bucket.putObject(fileKey, await sanitizedFile.bytes(), {
       contentType: file.type,
     });
 

@@ -1,12 +1,13 @@
 "use server";
 
+import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { spaces } from "@cap/database/schema";
-import { db } from "@cap/database";
+import { serverEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { createBucketProvider } from "@/utils/s3";
-import { serverEnv } from "@cap/env";
+import { sanitizeFile } from "@/lib/sanitizeFile";
 
 export async function uploadSpaceIcon(formData: FormData, spaceId: string) {
   const user = await getCurrentUser();
@@ -68,7 +69,9 @@ export async function uploadSpaceIcon(formData: FormData, spaceId: string) {
       }
     }
 
-    await bucket.putObject(fileKey, await file.bytes(), {
+    const sanitizedFile = await sanitizeFile(file);
+
+    await bucket.putObject(fileKey, await sanitizedFile.bytes(), {
       contentType: file.type,
     });
 
