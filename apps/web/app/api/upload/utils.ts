@@ -15,7 +15,10 @@ export function parseVideoIdOrFileKey(
     if (!_videoId) throw new Error("Invalid fileKey");
     videoId = _videoId;
     subpath = subpathParts.join("/");
-  } else videoId = input.videoId;
+  } else {
+    videoId = input.videoId;
+    subpath = input.subpath;
+  }
 
   return `/${userId}/${videoId}/${subpath}`;
 }

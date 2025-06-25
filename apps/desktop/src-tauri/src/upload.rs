@@ -835,7 +835,7 @@ impl InstantMultipartUpload {
                 c.post(url)
                     .header("Content-Type", "application/json")
                     .json(&serde_json::json!({
-                        "video_id": video_id,
+                        "videoId": video_id,
                         "uploadId": upload_id,
                         "partNumber": *part_number,
                         "md5Sum": &md5_sum

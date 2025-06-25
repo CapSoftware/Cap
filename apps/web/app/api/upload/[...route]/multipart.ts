@@ -95,11 +95,9 @@ app.post(
       })
       .and(
         z.union([
-          z.object({
-            // deprecated
-            fileKey: z.string(),
-          }),
           z.object({ videoId: z.string() }),
+          // deprecated
+          z.object({ fileKey: z.string() }),
         ])
       )
   ),
