@@ -56,10 +56,6 @@ app.get(
       console.log("User bucket:", customBucket ? "found" : "not found");
 
       const bucket = await createBucketProvider(customBucket);
-      const s3Config = await getS3Config(customBucket);
-      const bucketName = await getS3Bucket(customBucket);
-
-      console.log("S3 Config:", { region: s3Config.region, bucketName });
 
       const date = new Date();
       const formattedDate = `${date.getDate()} ${date.toLocaleString(
@@ -76,6 +72,10 @@ app.get(
         if (video) {
           return c.json({
             id: video.id,
+            // All deprecated
+            user_id: user.id,
+            aws_region: "n/a",
+            aws_bucket: "n/a",
           });
         }
       }
@@ -88,8 +88,8 @@ app.get(
           name ??
           `Cap ${isScreenshot ? "Screenshot" : "Recording"} - ${formattedDate}`,
         ownerId: user.id,
-        awsRegion: s3Config.region,
-        awsBucket: bucketName,
+        awsRegion: "auto",
+        awsBucket: bucket.name,
         source:
           recordingMode === "hls"
             ? { type: "local" as const }
@@ -152,7 +152,13 @@ app.get(
         );
       }
 
-      return c.json({ id: idToUse });
+      return c.json({
+        id: idToUse,
+        // All deprecated
+        user_id: user.id,
+        aws_region: "n/a",
+        aws_bucket: "n/a",
+      });
     } catch (error) {
       console.error("Error in video create endpoint:", error);
       return c.json({ error: "Internal server error" }, { status: 500 });
