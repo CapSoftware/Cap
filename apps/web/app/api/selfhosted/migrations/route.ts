@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@cap/database";
 import { migrate } from "drizzle-orm/mysql2/migrator";
 import path from "path";
-import { serverEnv } from "@cap/env";
+import { buildEnv } from "@cap/env";
 
 const migrations = {
   run: false,
@@ -16,7 +16,7 @@ export async function POST() {
     });
   }
 
-  const isDockerBuild = serverEnv().DOCKER_BUILD === "true";
+  const isDockerBuild = buildEnv.NEXT_PUBLIC_DOCKER_BUILD === "true";
   if (isDockerBuild) {
     try {
       console.log("🔍 DB migrations triggered");

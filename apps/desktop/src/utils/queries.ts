@@ -4,12 +4,15 @@ import {
   queryOptions,
 } from "@tanstack/solid-query";
 import { createStore, reconcile } from "solid-js/store";
-import { createMemo, createSignal } from "solid-js";
+import { createMemo } from "solid-js";
 import { makePersisted } from "@solid-primitives/storage";
 
 import { authStore, generalSettingsStore } from "~/store";
-import { commands, events, RecordingOptions } from "./tauri";
+import { commands, RecordingMode, ScreenCaptureTarget } from "./tauri";
 import { createQueryInvalidate } from "./events";
+import { createEventListener } from "@solid-primitives/event-listener";
+import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export const listWindows = queryOptions({
   queryKey: ["capture", "windows"] as const,
@@ -34,11 +37,6 @@ export const listScreens = queryOptions({
   refetchInterval: 1000,
 });
 
-const getOptions = queryOptions({
-  queryKey: ["recordingOptions"] as const,
-  queryFn: () => commands.getRecordingOptions(),
-});
-
 const getCurrentRecording = queryOptions({
   queryKey: ["currentRecording"] as const,
   queryFn: () => commands.getCurrentRecording().then((d) => d[0]),
@@ -48,6 +46,7 @@ const listVideoDevices = queryOptions({
   queryKey: ["videoDevices"] as const,
   queryFn: () => commands.listCameras(),
   refetchInterval: 1000,
+  initialData: [],
 });
 
 export function createVideoDevicesQuery() {
@@ -64,10 +63,7 @@ export function createVideoDevicesQuery() {
 
 export const listAudioDevices = queryOptions({
   queryKey: ["audioDevices"] as const,
-  queryFn: async () => {
-    const devices = await commands.listAudioDevices();
-    return devices.map((name) => ({ name, deviceId: name }));
-  },
+  queryFn: () => commands.listAudioDevices(),
   reconcile: "name",
   refetchInterval: 1000,
   gcTime: 0,
@@ -81,40 +77,29 @@ export const getPermissions = queryOptions({
 });
 
 export function createOptionsQuery() {
+  const PERSIST_KEY = "recording-options-query";
   const [state, setState] = makePersisted(
-    createSignal<RecordingOptions | null>(),
-    { name: "recording-options-query" }
+    createStore<{
+      captureTarget: ScreenCaptureTarget;
+      micName: string | null;
+      cameraLabel: string | null;
+      mode: RecordingMode;
+      captureSystemAudio?: boolean;
+    }>({
+      captureTarget: { variant: "screen", id: 0 },
+      micName: null,
+      cameraLabel: null,
+      mode: "studio",
+    }),
+    { name: PERSIST_KEY }
   );
 
-  const setOptions = createMutation(() => ({
-    mutationFn: async (newOptions: RecordingOptions) => {
-      await commands.setRecordingOptions(newOptions);
-    },
-  }));
-
-  const initialData = state() ?? undefined;
-  const options = createQuery<RecordingOptions>(() => ({
-    ...getOptions,
-    ...(initialData === undefined
-      ? { initialData, staleTime: 1000 }
-      : ({} as any)),
-    select: (data) => {
-      setState(data);
-
-      return data;
-    },
-  }));
-
-  createQueryInvalidate(options, "recordingOptionsChanged");
-
-  events.recordingOptionsChanged.listen(() => {
-    commands.getRecordingOptions().then((options) => {
-      console.log("setting state", options);
-      setState(options);
-    });
+  createEventListener(window, "storage", (e) => {
+    console.log(e);
+    if (e.key === PERSIST_KEY) setState(JSON.parse(e.newValue ?? "{}"));
   });
 
-  return { options, setOptions };
+  return { rawOptions: state, setOptions: setState };
 }
 
 export function createCurrentRecordingQuery() {
@@ -147,4 +132,21 @@ export function createLicenseQuery() {
   authStore.listen(() => query.refetch());
 
   return query;
+}
+
+export function createCameraMutation() {
+  const { setOptions } = useRecordingOptions();
+
+  const setCameraInput = createMutation(() => ({
+    mutationFn: async (label: string | null) => {
+      setOptions("cameraLabel", label);
+      if (label) {
+        await commands.showWindow("Camera");
+        getCurrentWindow().setFocus();
+      }
+      await commands.setCameraInput(label);
+    },
+  }));
+
+  return setCameraInput;
 }

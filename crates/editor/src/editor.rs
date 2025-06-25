@@ -4,7 +4,7 @@ use cap_media::{feeds::RawCameraFrame, frame_ws::WSFrame};
 use cap_project::{BackgroundSource, CursorEvents, RecordingMeta, StudioRecordingMeta, XY};
 use cap_rendering::{
     decoder::DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectRecordings, ProjectUniforms,
-    RenderVideoConstants,
+    RenderVideoConstants, RendererLayers,
 };
 use tokio::{
     sync::{mpsc, oneshot},
@@ -74,6 +74,9 @@ impl Renderer {
 
         let mut frame_renderer = FrameRenderer::new(&self.render_constants);
 
+        let mut layers =
+            RendererLayers::new(&self.render_constants.device, &self.render_constants.queue);
+
         loop {
             while let Some(msg) = self.rx.recv().await {
                 match msg {
@@ -96,7 +99,7 @@ impl Renderer {
                         let output_size = uniforms.output_size;
 
                         let frame = frame_renderer
-                            .render(segment_frames, uniforms, &cursor)
+                            .render(segment_frames, uniforms, &cursor, &mut layers)
                             .await
                             .unwrap();
 

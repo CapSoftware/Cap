@@ -1,7 +1,7 @@
 import { createRive } from "@aerofoil/rive-solid-canvas";
 import { Button } from "@cap/ui-solid";
 import { action, useAction } from "@solidjs/router";
-import { createMutation } from "@tanstack/solid-query";
+import { createMutation, useQueryClient } from "@tanstack/solid-query";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, Window } from "@tauri-apps/api/window";
@@ -19,151 +19,6 @@ import PricingRive from "../../assets/rive/pricing.riv";
 import { authStore } from "../../store";
 
 import { Dialog, DialogContent, Input } from "../editor/ui";
-import callbackTemplate from "./callback.template";
-
-const signInAction = action(async (planType: "yearly" | "monthly") => {
-  console.log("Starting sign in action");
-  let res: (url: URL) => void;
-
-  try {
-    console.log("Setting up OAuth URL listener");
-    const stopListening = await listen(
-      "oauth://url",
-      (data: { payload: string }) => {
-        console.log("Received OAuth URL:", data.payload);
-        if (!data.payload.includes("token")) {
-          console.log("URL does not contain token, ignoring");
-          return;
-        }
-
-        const urlObject = new URL(data.payload);
-        res(urlObject);
-      }
-    );
-
-    try {
-      console.log("Stopping any existing OAuth server");
-      await invoke("plugin:oauth|stop");
-    } catch (e) {
-      console.log("No existing OAuth server to stop");
-    }
-
-    console.log("Starting OAuth server");
-    const port: string = await invoke("plugin:oauth|start", {
-      config: {
-        response: callbackTemplate,
-        headers: {
-          "Content-Type": "text/html; charset=utf-8",
-          "Cache-Control": "no-store, no-cache, must-revalidate",
-          Pragma: "no-cache",
-        },
-        cleanup: true,
-      },
-    });
-    console.log("OAuth server started on port:", port);
-
-    const platform =
-      import.meta.env.VITE_ENVIRONMENT === "development" ? "web" : "desktop";
-    console.log("Platform:", platform);
-
-    const callbackUrl = new URL(
-      `/api/desktop/session/request`,
-      clientEnv.VITE_SERVER_URL
-    );
-    callbackUrl.searchParams.set("port", port);
-    callbackUrl.searchParams.set("platform", platform);
-    console.log("Callback URL:", callbackUrl.toString());
-
-    console.log("Hiding upgrade window");
-    const currentUpgradeWindow = await Window.getByLabel("upgrade");
-    if (currentUpgradeWindow) {
-      await currentUpgradeWindow.minimize();
-    }
-
-    console.log("Opening auth URL in browser");
-    await shell.open(callbackUrl.toString());
-
-    console.log("Waiting for OAuth callback");
-    const url = await new Promise<URL>((r) => {
-      res = r;
-    });
-    console.log("Received OAuth callback");
-    stopListening();
-
-    const isDevMode = import.meta.env.VITE_ENVIRONMENT === "development";
-    if (!isDevMode) {
-      console.log("Not in dev mode, returning");
-      return;
-    }
-
-    const token = url.searchParams.get("token");
-    const user_id = url.searchParams.get("user_id");
-    const expires = Number(url.searchParams.get("expires"));
-    if (!token || !expires || !user_id) {
-      console.error("Missing required auth params");
-      throw new Error("Invalid token or expires");
-    }
-    console.log("Received valid auth params");
-
-    const existingAuth = await authStore.get();
-    console.log("Setting auth store");
-    await authStore.set({
-      token,
-      user_id,
-      expires,
-      intercom_hash: existingAuth?.intercom_hash ?? "",
-      plan: {
-        upgraded: false,
-        last_checked: 0,
-        manual: existingAuth?.plan?.manual ?? false,
-      },
-    });
-
-    console.log("Identifying user in analytics");
-    identifyUser(user_id);
-    console.log("Tracking sign in event");
-    trackEvent("user_signed_in", { platform: "desktop" });
-
-    console.log("Reopening upgrade window");
-    await commands.showWindow("Upgrade");
-
-    console.log("Waiting for window to be ready");
-    await new Promise((resolve) => setTimeout(resolve, 500));
-
-    console.log("Getting upgrade window reference");
-    const focusedUpgradeWindow = await Window.getByLabel("upgrade");
-    if (focusedUpgradeWindow) {
-      try {
-        console.log("Setting focus on upgrade window");
-        await focusedUpgradeWindow.show();
-        await focusedUpgradeWindow.setFocus();
-      } catch (e) {
-        console.error("Failed to focus upgrade window:", e);
-      }
-    }
-
-    console.log("Getting checkout URL");
-    const planId = getProPlanId(planType);
-    const response = await apiClient.desktop.getProSubscribeURL({
-      body: { priceId: planId },
-      headers: await protectedHeaders(),
-    });
-
-    if (response.status === 200) {
-      console.log("Opening checkout URL in external browser");
-      commands.openExternalLink(response.body.url);
-      console.log("Minimizing upgrade window");
-      const window = await Window.getByLabel("upgrade");
-      if (window) {
-        await window.minimize();
-      }
-    }
-  } catch (error) {
-    console.error("Sign in failed:", error);
-    await authStore.set();
-    throw error;
-  }
-});
 
 const proFeatures = [
   "Commercial License Included",
@@ -178,6 +33,7 @@ const proFeatures = [
 
 import { RuntimeLoader } from "@rive-app/canvas";
 import riveWASMResource from "@rive-app/canvas/rive.wasm?url";
+import { createSignInMutation } from "~/utils/auth";
 
 RuntimeLoader.setWasmUrl(riveWASMResource);
 
@@ -186,7 +42,7 @@ export default function Page() {
   const [isCommercialAnnual, setIsCommercialAnnual] = createSignal(true);
   const [upgradeComplete, setUpgradeComplete] = createSignal(false);
   const [loading, setLoading] = createSignal(false);
-  const signIn = useAction(signInAction);
+  const signIn = createSignInMutation();
   const license = createLicenseQuery();
   const [openLicenseDialog, setOpenLicenseDialog] = createSignal(false);
 
@@ -233,12 +89,11 @@ export default function Page() {
 
     try {
       const auth = await authStore.get();
-      console.log("Auth status:", auth ? "authenticated" : "not authenticated");
 
+      console.log({ auth });
       if (!auth) {
         console.log("No auth found, starting sign in flow");
-        await signIn(isProAnnual() ? "yearly" : "monthly");
-        return;
+        await signIn.mutateAsync(new AbortController());
       }
 
       const planId = getProPlanId(isProAnnual() ? "yearly" : "monthly");
@@ -253,9 +108,7 @@ export default function Page() {
         commands.openExternalLink(response.body.url);
         console.log("Minimizing upgrade window");
         const window = await Window.getByLabel("upgrade");
-        if (window) {
-          await window.minimize();
-        }
+        if (window) await window.minimize();
       } else {
         console.error("Failed to get checkout URL, status:", response.status);
       }
@@ -286,107 +139,107 @@ export default function Page() {
     },
   }));
 
-  onMount(async () => {
-    console.log("Component mounted");
-    const unsubscribeDeepLink = await onOpenUrl(async (urls) => {
-      console.log("Deep link received:", urls);
-      const isDevMode = import.meta.env.VITE_ENVIRONMENT === "development";
-      if (isDevMode) {
-        console.log("In dev mode, ignoring deep link");
-        return;
-      }
+  // onMount(async () => {
+  //   console.log("Component mounted");
+  //   const unsubscribeDeepLink = await onOpenUrl(async (urls) => {
+  //     console.log("Deep link received:", urls);
+  //     const isDevMode = import.meta.env.VITE_ENVIRONMENT === "development";
+  //     if (isDevMode) {
+  //       console.log("In dev mode, ignoring deep link");
+  //       return;
+  //     }
 
-      for (const url of urls) {
-        if (!url.includes("token=")) {
-          console.log("URL does not contain token, skipping");
-          return;
-        }
+  //     for (const url of urls) {
+  //       if (!url.includes("token=")) {
+  //         console.log("URL does not contain token, skipping");
+  //         return;
+  //       }
 
-        console.log("Processing auth URL");
-        const urlObject = new URL(url);
-        const token = urlObject.searchParams.get("token");
-        const user_id = urlObject.searchParams.get("user_id");
-        const expires = Number(urlObject.searchParams.get("expires"));
+  //       console.log("Processing auth URL");
+  //       const urlObject = new URL(url);
+  //       const token = urlObject.searchParams.get("token");
+  //       const user_id = urlObject.searchParams.get("user_id");
+  //       const expires = Number(urlObject.searchParams.get("expires"));
 
-        if (!token || !expires || !user_id) {
-          console.error("Invalid signin params");
-          throw new Error("Invalid signin params");
-        }
+  //       if (!token || !expires || !user_id) {
+  //         console.error("Invalid signin params");
+  //         throw new Error("Invalid signin params");
+  //       }
 
-        console.log("Setting auth store with new credentials");
-        const existingAuth = await authStore.get();
-        await authStore.set({
-          token,
-          user_id,
-          expires,
-          intercom_hash: existingAuth?.intercom_hash ?? "",
-          plan: {
-            upgraded: false,
-            last_checked: 0,
-            manual: existingAuth?.plan?.manual ?? false,
-          },
-        });
+  //       console.log("Setting auth store with new credentials");
+  //       const existingAuth = await authStore.get();
+  //       await authStore.set({
+  //         token,
+  //         user_id,
+  //         expires,
+  //         intercom_hash: existingAuth?.intercom_hash ?? "",
+  //         plan: {
+  //           upgraded: false,
+  //           last_checked: 0,
+  //           manual: existingAuth?.plan?.manual ?? false,
+  //         },
+  //       });
 
-        console.log("Identifying user in analytics");
-        identifyUser(user_id);
-        console.log("Tracking sign in event");
-        trackEvent("user_signed_in", { platform: "desktop" });
+  //       console.log("Identifying user in analytics");
+  //       identifyUser(user_id);
+  //       console.log("Tracking sign in event");
+  //       trackEvent("user_signed_in", { platform: "desktop" });
 
-        console.log("Reopening upgrade window");
-        await commands.showWindow("Upgrade");
+  //       console.log("Reopening upgrade window");
+  //       await commands.showWindow("Upgrade");
 
-        console.log("Waiting for window to be ready");
-        await new Promise((resolve) => setTimeout(resolve, 500));
+  //       console.log("Waiting for window to be ready");
+  //       await new Promise((resolve) => setTimeout(resolve, 500));
 
-        console.log("Getting upgrade window reference");
-        const upgradeWindow = await Window.getByLabel("upgrade");
-        if (upgradeWindow) {
-          try {
-            console.log("Setting focus on upgrade window");
-            await upgradeWindow.show();
-            await upgradeWindow.setFocus();
-          } catch (e) {
-            console.error("Failed to focus upgrade window:", e);
-          }
-        }
+  //       console.log("Getting upgrade window reference");
+  //       const upgradeWindow = await Window.getByLabel("upgrade");
+  //       if (upgradeWindow) {
+  //         try {
+  //           console.log("Setting focus on upgrade window");
+  //           await upgradeWindow.show();
+  //           await upgradeWindow.setFocus();
+  //         } catch (e) {
+  //           console.error("Failed to focus upgrade window:", e);
+  //         }
+  //       }
 
-        console.log("Getting checkout URL");
-        const planId = getProPlanId(isProAnnual() ? "yearly" : "monthly");
-        const response = await apiClient.desktop.getProSubscribeURL({
-          body: { priceId: planId },
-          headers: await protectedHeaders(),
-        });
+  //       console.log("Getting checkout URL");
+  //       const planId = getProPlanId(isProAnnual() ? "yearly" : "monthly");
+  //       const response = await apiClient.desktop.getProSubscribeURL({
+  //         body: { priceId: planId },
+  //         headers: await protectedHeaders(),
+  //       });
 
-        if (response.status === 200) {
-          console.log("Opening checkout URL in external browser");
-          commands.openExternalLink(response.body.url);
-          console.log("Minimizing upgrade window");
-          if (upgradeWindow) {
-            await upgradeWindow.minimize();
-          }
-        }
-      }
-    });
+  //       if (response.status === 200) {
+  //         console.log("Opening checkout URL in external browser");
+  //         commands.openExternalLink(response.body.url);
+  //         console.log("Minimizing upgrade window");
+  //         if (upgradeWindow) {
+  //           await upgradeWindow.minimize();
+  //         }
+  //       }
+  //     }
+  //   });
 
-    onCleanup(() => {
-      console.log("Cleaning up deep link listener");
-      unsubscribeDeepLink();
-    });
+  //   onCleanup(() => {
+  //     console.log("Cleaning up deep link listener");
+  //     unsubscribeDeepLink();
+  //   });
 
-    console.log("Setting up upgrade status check interval");
-    const interval = setInterval(async () => {
-      console.log("Checking upgrade status");
-      const result = await commands.checkUpgradedAndUpdate();
-      if (result) {
-        console.log("Upgrade complete");
-        setUpgradeComplete(true);
-      }
-    }, 5000);
-    onCleanup(() => {
-      console.log("Cleaning up upgrade status check interval");
-      clearInterval(interval);
-    });
-  });
+  //   console.log("Setting up upgrade status check interval");
+  //   const interval = setInterval(async () => {
+  //     console.log("Checking upgrade status");
+  //     const result = await commands.checkUpgradedAndUpdate();
+  //     if (result) {
+  //       console.log("Upgrade complete");
+  //       setUpgradeComplete(true);
+  //     }
+  //   }, 5000);
+  //   onCleanup(() => {
+  //     console.log("Cleaning up upgrade status check interval");
+  //     clearInterval(interval);
+  //   });
+  // });
 
   const { rive: CommercialRive, RiveComponent: Commercial } = createRive(
     () => ({
@@ -430,34 +283,30 @@ export default function Page() {
       {!upgradeComplete() && (
         <>
           {license.data?.type === "commercial" ? (
-            <div class="bg-[--gray-50] dark:bg-[--gray-900] rounded-xl shadow-sm border border-gray-3 dark:border-[--gray-700] w-full">
+            <div class="p-8 mx-auto w-full max-w-[700px] rounded-xl border shadow-sm bg-gray-2 border-gray-3">
               <div class="space-y-6">
-                <div class="border-b border-gray-3 dark:border-[--gray-700] pb-6">
-                  <h3 class="text-2xl font-semibold tracking-tight text-[--text-primary]">
-                    Your Commercial License
-                  </h3>
-                  <p class="mt-2 text-sm text-[--text-tertiary]">
-                    License details for Cap commercial use
+                <div class="flex flex-col items-center mb-6 text-center">
+                  <h3 class="text-2xl font-medium">Commercial License</h3>
+                  <p class="text-sm text-gray-11">
+                    Your license details for Cap commercial use
                   </p>
                 </div>
 
                 <div class="space-y-6">
-                  <div class="space-y-2">
-                    <label class="text-sm font-medium text-[--text-primary]">
+                  <div>
+                    <label class="block mb-2 text-sm text-gray-12">
                       License Key
                     </label>
-                    <pre class="w-full p-3 bg-gray-1 rounded-lg border border-gray-3 dark:border-[--gray-700] font-mono text-sm text-[--text-secondary] break-all whitespace-pre-wrap">
+                    <p class="overflow-x-auto p-3 font-mono text-xs whitespace-pre-wrap break-all rounded-lg border border-gray-4 text-gray-9 bg-gray-3">
                       {license.data.licenseKey}
-                    </pre>
+                    </p>
                   </div>
 
                   <Show when={license.data.expiryDate}>
                     {(expiryDate) => (
-                      <div class="space-y-2">
-                        <label class="text-sm font-medium text-[--text-primary]">
-                          Expiration Date
-                        </label>
-                        <div class="w-full p-3 bg-gray-1 rounded-lg border border-gray-3 dark:border-[--gray-700] text-sm text-[--text-secondary]">
+                      <div class="space-y-1">
+                        <label class="text-sm text-gray-12">Expires</label>
+                        <p class="text-gray-10">
                           {new Date(expiryDate()).toLocaleDateString(
                             undefined,
                             {
@@ -466,27 +315,23 @@ export default function Page() {
                               day: "numeric",
                             }
                           )}
-                        </div>
+                        </p>
                       </div>
                     )}
                   </Show>
 
-                  <div class="pt-4 border-t border-gray-3 dark:border-[--gray-700]">
+                  <div class="flex flex-col items-center pt-6 border-t border-gray-3">
                     <Button
                       variant="destructive"
-                      class="mx-auto w-fit"
                       disabled={resetLicense.isPending}
                       onClick={() => {
                         resetLicense.mutate();
                       }}
                     >
                       {resetLicense.isPending
-                        ? "Detaching..."
-                        : "Detach License"}
+                        ? "Deactivating..."
+                        : "Deactivate License"}
                     </Button>
-                    <p class="mt-2 text-xs text-[--text-tertiary]">
-                      This will remove the license key from this device.
-                    </p>
                   </div>
                 </div>
               </div>
@@ -701,6 +546,7 @@ interface Props {
 
 const ActivateLicenseDialog = ({ open, onOpenChange }: Props) => {
   const [licenseKey, setLicenseKey] = createSignal("");
+  const queryClient = useQueryClient();
 
   const activateLicenseKey = createMutation(() => ({
     mutationFn: async (vars: { licenseKey: string }) => {
@@ -731,6 +577,7 @@ const ActivateLicenseDialog = ({ open, onOpenChange }: Props) => {
           licenseKey: value.licenseKey,
         },
       });
+      await queryClient.refetchQueries({ queryKey: ["bruh"] });
     },
   }));
   return (

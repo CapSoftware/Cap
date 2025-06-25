@@ -4,12 +4,13 @@ import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { classNames } from "@cap/utils";
 import { AnimatePresence, motion } from "framer-motion";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { Activity } from "./tabs/Activity";
 import { Settings } from "./tabs/Settings";
+import { Summary } from "./tabs/Summary";
 import { Transcript } from "./tabs/Transcript";
 
-type TabType = "activity" | "transcript" | "settings";
+type TabType = "activity" | "transcript" | "summary" | "settings";
 
 type CommentType = typeof commentsSchema.$inferSelect & {
   authorName?: string | null;
@@ -20,19 +21,21 @@ type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
   organizationId?: string;
 };
 
-interface Analytics {
-  views: number;
-  comments: number;
-  reactions: number;
-}
-
 interface SidebarProps {
   data: VideoWithOrganizationInfo;
   user: typeof userSelectProps | null;
-  comments: CommentType[];
-  analytics: Analytics;
+  comments: MaybePromise<CommentType[]>;
+  views: MaybePromise<number>;
   onSeek?: (time: number) => void;
   videoId: string;
+  aiData?: {
+    title?: string | null;
+    summary?: string | null;
+    chapters?: { title: string; start: number }[] | null;
+    processing?: boolean;
+  } | null;
+  aiGenerationEnabled?: boolean;
+  aiUiEnabled?: boolean;
 }
 
 const TabContent = motion.div;
@@ -63,9 +66,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   data,
   user,
   comments,
-  analytics,
+  views,
   onSeek,
   videoId,
+  aiData,
+  aiGenerationEnabled = false,
+  aiUiEnabled = false,
 }) => {
   const isOwnerOrMember: boolean = Boolean(
     user?.id === data.ownerId ||
@@ -76,8 +82,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [activeTab, setActiveTab] = useState<TabType>("activity");
   const [[page, direction], setPage] = useState([0, 0]);
 
+  const hasExistingAiData =
+    aiData?.summary || (aiData?.chapters && aiData.chapters.length > 0);
+
   const tabs = [
     { id: "activity", label: "Comments" },
+    ...(aiUiEnabled || hasExistingAiData
+      ? [{ id: "summary", label: "Summary" }]
+      : []),
     { id: "transcript", label: "Transcript" },
   ];
 
@@ -94,17 +106,37 @@ export const Sidebar: React.FC<SidebarProps> = ({
     switch (activeTab) {
       case "activity":
         return (
-          <Activity
-            analytics={analytics}
-            comments={comments}
-            user={user}
-            onSeek={onSeek}
+          <Suspense
+            fallback={
+              <Activity.Skeleton
+                user={user}
+                isOwnerOrMember={isOwnerOrMember}
+              />
+            }
+          >
+            <Activity
+              views={views}
+              comments={comments}
+              user={user}
+              isOwnerOrMember={isOwnerOrMember}
+              onSeek={onSeek}
+              videoId={videoId}
+            />
+          </Suspense>
+        );
+      case "summary":
+        return (
+          <Summary
             videoId={videoId}
-            isOwnerOrMember={isOwnerOrMember}
+            onSeek={onSeek}
+            initialAiData={aiData || undefined}
+            aiGenerationEnabled={aiGenerationEnabled}
+            aiUiEnabled={aiUiEnabled}
+            user={user}
           />
         );
       case "transcript":
-        return <Transcript data={data} onSeek={onSeek} />;
+        return <Transcript data={data} onSeek={onSeek} user={user} />;
       case "settings":
         return <Settings />;
       default:
@@ -123,14 +155,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 paginate(tab.id === activeTab ? 0 : 1, tab.id as TabType)
               }
               className={classNames(
-                "flex-1 px-6 py-3 text-sm font-medium relative transition-colors duration-200",
+                "flex-1 px-5 py-3 text-sm font-medium relative transition-colors duration-200",
                 "hover:bg-gray-1",
                 activeTab === tab.id ? "bg-gray-3" : ""
               )}
             >
               <span
                 className={classNames(
-                  "relative z-10",
+                  "relative z-10 text-sm",
                   activeTab === tab.id ? "text-gray-12" : "text-gray-9"
                 )}
               >

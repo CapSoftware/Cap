@@ -1,17 +1,25 @@
 import {
-    createEventListener,
-    createEventListenerMap,
+  createEventListener,
+  createEventListenerMap,
 } from "@solid-primitives/event-listener";
-import { For, Show, batch, createRoot, createSignal } from "solid-js";
+import {
+  For,
+  Show,
+  batch,
+  createMemo,
+  createRoot,
+  createSignal,
+} from "solid-js";
 import { produce } from "solid-js/store";
 
 import { useEditorContext } from "../context";
 import {
-    useSegmentContext,
-    useTimelineContext,
-    useTrackContext,
+  useSegmentContext,
+  useTimelineContext,
+  useTrackContext,
 } from "./context";
 import { SegmentContent, SegmentHandle, SegmentRoot, TrackRoot } from "./Track";
+import { cx } from "cva";
 
 export type ZoomSegmentDragState =
   | { type: "idle" }
@@ -200,9 +208,26 @@ export function ZoomTrack(props: {
             };
           }
 
+          const isSelected = createMemo(() => {
+            const selection = editorState.timeline.selection;
+            if (!selection || selection.type !== "zoom") return false;
+
+            const segmentIndex = project.timeline?.zoomSegments?.findIndex(
+              (s) => s.start === segment.start && s.end === segment.end
+            );
+
+            return segmentIndex === selection.index;
+          });
+
           return (
             <SegmentRoot
-              class="bg-gradient-to-r zoom-gradient-border hover:border duration-200 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]"
+              class={cx(
+                "border duration-200 hover:border-gray-12 transition-colors group",
+                "bg-gradient-to-r from-[#292929] via-[#434343] to-[#292929] shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]",
+                isSelected()
+                  ? "wobble-wrapper border-gray-12"
+                  : "border-transparent"
+              )}
               innerClass="ring-red-5"
               segment={segment}
               onMouseEnter={() => {
@@ -246,6 +271,14 @@ export function ZoomTrack(props: {
                         value.maxValue,
                         Math.max(value.minValue, newStart)
                       )
+                    );
+
+                    setProject(
+                      "timeline",
+                      "zoomSegments",
+                      produce((s) => {
+                        s.sort((a, b) => a.start - b.start);
+                      })
                     );
                   }
                 )}
@@ -336,6 +369,14 @@ export function ZoomTrack(props: {
                       "end",
                       Math.min(value.maxValue, Math.max(value.minValue, newEnd))
                     );
+
+                    setProject(
+                      "timeline",
+                      "zoomSegments",
+                      produce((s) => {
+                        s.sort((a, b) => a.start - b.start);
+                      })
+                    );
                   }
                 )}
               />
@@ -355,7 +396,7 @@ export function ZoomTrack(props: {
               end: time() + 1,
             }}
           >
-            <SegmentContent class="bg-gradient-to-r zoom-gradient-border hover:border duration-200 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]">
+            <SegmentContent class="bg-gradient-to-r hover:border duration-200 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]">
               <p class="w-full text-center text-gray-1 dark:text-gray-12 text-md text-primary">
                 +
               </p>

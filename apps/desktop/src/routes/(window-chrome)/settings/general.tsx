@@ -26,6 +26,7 @@ import themePreviewDark from "~/assets/theme-previews/dark.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
 import { Toggle } from "~/components/Toggle";
 import { TextInput } from "~/routes/editor/TextInput";
+import { Setting, ToggleSetting } from "./Setting";
 
 export default function GeneralSettings() {
   const [store] = createResource(() => generalSettingsStore.get());
@@ -83,13 +84,10 @@ function AppearanceSection(props: {
                   </div>
                 </div>
                 <span
-                  class={cx(
-                    `mt-2 text-sm transition-color duration-200`,
-                    {
-                      "text-blue-9": props.currentTheme === theme.id,
-                      "text-gray-11": props.currentTheme !== theme.id,
-                    }
-                  )}
+                  class={cx(`mt-2 text-sm transition-color duration-200`, {
+                    "text-blue-9": props.currentTheme === theme.id,
+                    "text-gray-11": props.currentTheme !== theme.id,
+                  })}
                 >
                   {theme.name}
                 </span>
@@ -143,18 +141,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
             value={!!settings.disableAutoOpenLinks}
             onChange={(value) => handleChange("disableAutoOpenLinks", value)}
           />
-          <ToggleSetting
-            label="Enable custom cursor capture in Studio Mode (Experimental)"
-            description="Whether Studio Mode recordings should capture cursor state separately, for customisation (size, smoothing) in the editor. Currently experimental as cursor events may not be captured accurately."
-            value={!!settings.customCursorCapture}
-            onChange={(value) => handleChange("customCursorCapture", value)}
-          />
-          <ToggleSetting
-            label="System audio capture (Experimental)"
-            description="Provides the option for you to capture audio coming from your system, such as music or video playback."
-            value={!!settings.systemAudioCapture}
-            onChange={(value) => handleChange("systemAudioCapture", value)}
-          />
+
           {ostype === "macos" && (
             <>
               <ToggleSetting
@@ -272,16 +259,19 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
           <ServerURLSetting
             value={settings.serverUrl ?? "https://cap.so"}
             onChange={async (v) => {
+              const url = new URL(v);
+              const origin = url.origin;
+
               if (
                 !(await confirm(
-                  `Are you sure you want to change the server URL to '${v}'? You will need to sign in again.`
+                  `Are you sure you want to change the server URL to '${origin}'? You will need to sign in again.`
                 ))
               )
                 return;
 
               await authStore.set(undefined);
-              await commands.setServerUrl(v);
-              handleChange("serverUrl", v);
+              await commands.setServerUrl(origin);
+              handleChange("serverUrl", origin);
             }}
           />
         </div>
@@ -309,58 +299,12 @@ function ServerURLSetting(props: {
         />
         <Button
           size="sm"
-          
           disabled={props.value === value()}
           onClick={() => props.onChange(value())}
         >
           Update
         </Button>
       </div>
-    </Setting>
-  );
-}
-
-function Setting(
-  props: {
-    pro?: boolean;
-    label: string;
-    description?: string;
-  } & ParentProps
-) {
-  return (
-    <div class="flex flex-row gap-2 justify-between items-start py-3 text-sm">
-      <div class="flex flex-col justify-between items-start space-y-2">
-        {props.pro && (
-          <span class="px-2 py-1 text-xs font-medium rounded-lg text-solid-white bg-blue-9">
-            Cap Pro
-          </span>
-        )}
-        <div class="flex gap-2 items-center">
-          <p class="text-gray-12">{props.label}</p>
-        </div>
-        {props.description && (
-          <p class="text-xs text-gray-11">{props.description}</p>
-        )}
-      </div>
-      {props.children}
-    </div>
-  );
-}
-
-function ToggleSetting(props: {
-  pro?: boolean;
-  label: string;
-  description?: string;
-  value: boolean;
-  onChange(v: boolean): void;
-}) {
-  return (
-    <Setting {...props}>
-      <Toggle
-        size="sm"
-        checked={props.value}
-        onChange={(v) => props.onChange(v)}
-      />
     </Setting>
   );
 }

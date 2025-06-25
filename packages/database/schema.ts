@@ -202,6 +202,7 @@ export const videos = mysqlTable(
     bucket: nanoIdNullable("bucket"),
     metadata: json("metadata").$type<VideoMetadata>(),
     public: boolean("public").notNull().default(true),
+    password: encryptedTextNullable("password"),
     videoStartTime: varchar("videoStartTime", { length: 255 }),
     audioStartTime: varchar("audioStartTime", { length: 255 }),
     xStreamInfo: text("xStreamInfo"),
@@ -282,6 +283,12 @@ export const s3Buckets = mysqlTable("s3_buckets", {
   provider: text("provider").notNull().default("aws"),
 });
 
+export const authApiKeys = mysqlTable("auth_api_keys", {
+  id: varchar("id", { length: 36 }).notNull().primaryKey().unique(),
+  userId: nanoId("userId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
 export const commentsRelations = relations(comments, ({ one }) => ({
   author: one(users, {
     fields: [comments.authorId],
@@ -305,6 +312,8 @@ export const usersRelations = relations(users, ({ many, one }) => ({
   videos: many(videos),
   sharedVideos: many(sharedVideos),
   customBucket: one(s3Buckets),
+  spaces: many(spaces),
+  spaceMembers: many(spaceMembers),
 }));
 
 export const accountsRelations = relations(accounts, ({ one }) => ({
@@ -321,15 +330,19 @@ export const s3BucketsRelations = relations(s3Buckets, ({ one }) => ({
   }),
 }));
 
-export const organizationsRelations = relations(organizations, ({ one, many }) => ({
-  owner: one(users, {
-    fields: [organizations.ownerId],
-    references: [users.id],
-  }),
-  organizationMembers: many(organizationMembers),
-  sharedVideos: many(sharedVideos),
-  organizationInvites: many(organizationInvites),
-}));
+export const organizationsRelations = relations(
+  organizations,
+  ({ one, many }) => ({
+    owner: one(users, {
+      fields: [organizations.ownerId],
+      references: [users.id],
+    }),
+    organizationMembers: many(organizationMembers),
+    sharedVideos: many(sharedVideos),
+    organizationInvites: many(organizationInvites),
+    spaces: many(spaces),
+  })
+);
 
 export const sessionsRelations = relations(sessions, ({ one }) => ({
   user: one(users, {
@@ -345,16 +358,19 @@ export const verificationTokensRelations = relations(
   })
 );
 
-export const organizationMembersRelations = relations(organizationMembers, ({ one }) => ({
-  user: one(users, {
-    fields: [organizationMembers.userId],
-    references: [users.id],
-  }),
-  organization: one(organizations, {
-    fields: [organizationMembers.organizationId],
-    references: [organizations.id],
-  }),
-}));
+export const organizationMembersRelations = relations(
+  organizationMembers,
+  ({ one }) => ({
+    user: one(users, {
+      fields: [organizationMembers.userId],
+      references: [users.id],
+    }),
+    organization: one(organizations, {
+      fields: [organizationMembers.organizationId],
+      references: [organizations.id],
+    }),
+  })
+);
 
 export const organizationInvitesRelations = relations(
   organizationInvites,
@@ -362,12 +378,13 @@ export const organizationInvitesRelations = relations(
     organization: one(organizations, {
       fields: [organizationInvites.organizationId],
       references: [organizations.id],
-  }),
-  invitedByUser: one(users, {
-    fields: [organizationInvites.invitedByUserId],
-    references: [users.id],
-  }),
-}));
+    }),
+    invitedByUser: one(users, {
+      fields: [organizationInvites.invitedByUserId],
+      references: [users.id],
+    }),
+  })
+);
 
 export const videosRelations = relations(videos, ({ one, many }) => ({
   owner: one(users, {
@@ -375,6 +392,7 @@ export const videosRelations = relations(videos, ({ one, many }) => ({
     references: [users.id],
   }),
   sharedVideos: many(sharedVideos),
+  spaceVideos: many(spaceVideos),
 }));
 
 export const sharedVideosRelations = relations(sharedVideos, ({ one }) => ({
@@ -388,6 +406,107 @@ export const sharedVideosRelations = relations(sharedVideos, ({ one }) => ({
   }),
   sharedByUser: one(users, {
     fields: [sharedVideos.sharedByUserId],
+    references: [users.id],
+  }),
+}));
+
+export const spaces = mysqlTable(
+  "spaces",
+  {
+    id: nanoId("id").notNull().primaryKey().unique(),
+    primary: boolean("primary").notNull().default(false),
+    name: varchar("name", { length: 255 }).notNull(),
+    organizationId: nanoId("organizationId").notNull(),
+    createdById: nanoId("createdById").notNull(),
+    iconUrl: varchar("iconUrl", { length: 255 }),
+    description: varchar("description", { length: 1000 }),
+    createdAt: timestamp("createdAt").notNull().defaultNow(),
+    updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+    privacy: varchar("privacy", { length: 255, enum: ["Public", "Private"] })
+      .notNull()
+      .default("Private"),
+  },
+  (table) => ({
+    organizationIdIndex: index("organization_id_idx").on(table.organizationId),
+    createdByIdIndex: index("created_by_id_idx").on(table.createdById),
+  })
+);
+
+export const spaceMembers = mysqlTable(
+  "space_members",
+  {
+    id: nanoId("id").notNull().primaryKey().unique(),
+    spaceId: nanoId("spaceId").notNull(),
+    userId: nanoId("userId").notNull(),
+    role: varchar("role", { length: 255 }).notNull().default("member"),
+    createdAt: timestamp("createdAt").notNull().defaultNow(),
+    updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+  },
+  (table) => ({
+    spaceIdIndex: index("space_id_idx").on(table.spaceId),
+    userIdIndex: index("user_id_idx").on(table.userId),
+    spaceIdUserIdIndex: index("space_id_user_id_idx").on(
+      table.spaceId,
+      table.userId
+    ),
+  })
+);
+
+export const spaceVideos = mysqlTable(
+  "space_videos",
+  {
+    id: nanoId("id").notNull().primaryKey().unique(),
+    spaceId: nanoId("spaceId").notNull(),
+    videoId: nanoId("videoId").notNull(),
+    addedById: nanoId("addedById").notNull(),
+    addedAt: timestamp("addedAt").notNull().defaultNow(),
+  },
+  (table) => ({
+    spaceIdIndex: index("space_id_idx").on(table.spaceId),
+    videoIdIndex: index("video_id_idx").on(table.videoId),
+    addedByIdIndex: index("added_by_id_idx").on(table.addedById),
+    spaceIdVideoIdIndex: index("space_id_video_id_idx").on(
+      table.spaceId,
+      table.videoId
+    ),
+  })
+);
+
+export const spacesRelations = relations(spaces, ({ one, many }) => ({
+  organization: one(organizations, {
+    fields: [spaces.organizationId],
+    references: [organizations.id],
+  }),
+  createdBy: one(users, {
+    fields: [spaces.createdById],
+    references: [users.id],
+  }),
+  spaceMembers: many(spaceMembers),
+  spaceVideos: many(spaceVideos),
+}));
+
+export const spaceMembersRelations = relations(spaceMembers, ({ one }) => ({
+  space: one(spaces, {
+    fields: [spaceMembers.spaceId],
+    references: [spaces.id],
+  }),
+  user: one(users, {
+    fields: [spaceMembers.userId],
+    references: [users.id],
+  }),
+}));
+
+export const spaceVideosRelations = relations(spaceVideos, ({ one }) => ({
+  space: one(spaces, {
+    fields: [spaceVideos.spaceId],
+    references: [spaces.id],
+  }),
+  video: one(videos, {
+    fields: [spaceVideos.videoId],
+    references: [videos.id],
+  }),
+  addedBy: one(users, {
+    fields: [spaceVideos.addedById],
     references: [users.id],
   }),
 }));

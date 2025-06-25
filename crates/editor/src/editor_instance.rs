@@ -240,18 +240,17 @@ impl EditorInstance {
                     .get_frames(segment_time as f32, !project.camera.hide)
                     .await
                 {
+                    let uniforms = ProjectUniforms::new(
+                        &self.render_constants,
+                        &project,
+                        frame_number,
+                        fps,
+                        resolution_base,
+                        &segment.cursor,
+                        &segment_frames,
+                    );
                     self.renderer
-                        .render_frame(
-                            segment_frames,
-                            ProjectUniforms::new(
-                                &self.render_constants,
-                                &project,
-                                frame_number,
-                                fps,
-                                resolution_base,
-                            ),
-                            segment.cursor.clone(),
-                        )
+                        .render_frame(segment_frames, uniforms, segment.cursor.clone())
                         .await;
                 }
             }
