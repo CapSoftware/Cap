@@ -123,7 +123,8 @@ app.post(
         const presignedUrl = await bucket.multipart.getPresignedUploadPartUrl(
           fileKey,
           uploadId,
-          partNumber
+          partNumber,
+          { ContentMD5: md5Sum }
         );
 
         return c.json({ presignedUrl });
