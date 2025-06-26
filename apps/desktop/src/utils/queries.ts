@@ -1,18 +1,21 @@
+import { makePersisted } from "@solid-primitives/storage";
 import {
   createMutation,
   createQuery,
   queryOptions,
+  useQuery,
 } from "@tanstack/solid-query";
-import { createStore, reconcile } from "solid-js/store";
 import { createMemo } from "solid-js";
-import { makePersisted } from "@solid-primitives/storage";
+import { createStore, reconcile } from "solid-js/store";
 
-import { authStore, generalSettingsStore } from "~/store";
-import { commands, RecordingMode, ScreenCaptureTarget } from "./tauri";
-import { createQueryInvalidate } from "./events";
 import { createEventListener } from "@solid-primitives/event-listener";
-import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";
+import { CustomDomainResponse } from "~/routes/editor/context";
+import { authStore, generalSettingsStore } from "~/store";
+import { createQueryInvalidate } from "./events";
+import { commands, RecordingMode, ScreenCaptureTarget } from "./tauri";
+import { authedRequest } from "./web-api";
 
 export const listWindows = queryOptions({
   queryKey: ["capture", "windows"] as const,
@@ -149,4 +152,21 @@ export function createCameraMutation() {
   }));
 
   return setCameraInput;
+}
+
+export function createCustomDomainQuery() {
+  return useQuery(() => ({
+    queryKey: ["customDomain"] as const,
+    queryFn: async () => {
+      const data = await authedRequest<CustomDomainResponse>(
+        "/desktop/org-custom-domain",
+        {
+          method: "GET",
+        }
+      );
+      return data;
+    },
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
+  }));
 }
