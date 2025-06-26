@@ -41,14 +41,14 @@ export const authedRequest = async <T>(
   args: RequestInit
 ): Promise<T> => {
   const { authorization } = await protectedHeaders();
-
-  return fetch(`${clientEnv.VITE_SERVER_URL}/api${path}`, {
+  const data = await fetch(`${clientEnv.VITE_SERVER_URL}/api${path}`, {
     ...args,
     headers: {
       ...args.headers,
       authorization,
     },
-  }).then((res) => res.json());
+  });
+  return data.json();
 };
 
 export async function maybeProtectedHeaders() {
