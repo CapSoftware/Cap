@@ -20,5 +20,5 @@ export function parseVideoIdOrFileKey(
     subpath = input.subpath;
   }
 
-  return `/${userId}/${videoId}/${subpath}`;
+  return `${userId}/${videoId}/${subpath}`;
 }
