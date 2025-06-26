@@ -232,7 +232,7 @@ function ShareButton() {
                           >
                             <MenuItemList<typeof KSelect.Listbox>
                               as={KSelect.Listbox}
-                              class="w-[200px]"
+                              class="w-[236px]"
                             />
                           </PopperContent>
                         </KSelect.Portal>
