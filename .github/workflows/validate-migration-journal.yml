@@ -22,8 +22,8 @@ jobs:
           git fetch origin
 
           # Check if journal exists in previous commit
-          if git show 0b27bf484d64:$JOURNAL_PATH > /dev/null 2>&1; then
-            git show 0b27bf484d64:$JOURNAL_PATH > base.json
+          if git show 34cd664a1215:$JOURNAL_PATH > /dev/null 2>&1; then
+            git show 34cd664a1215:$JOURNAL_PATH > base.json
           else
             echo '{"version":"5","dialect":"mysql","entries":[]}' > base.json
           fi
