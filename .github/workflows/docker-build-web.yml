@@ -51,15 +51,30 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and Push Platform Image
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
           file: apps/web/Dockerfile
           platforms: linux/${{ matrix.platform }}
           push: true
-          tags: ghcr.io/capsoftware/cap-web:${{ inputs.tag || 'latest' }}-${{ matrix.platform }}
+          outputs: type=image,name=ghcr.io/capsoftware/cap-web,push-by-digest=true
           cache-from: type=gha,scope=buildx-${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=buildx-${{ matrix.platform }}
+
+      - name: Export Digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload Digest
+        uses: actions/upload-artifact@v3
+        with:
+          name: digests-${{ matrix.platform }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
 
   merge:
     name: Create Multi-Architecture Manifest
@@ -70,6 +85,11 @@ jobs:
       packages: write
 
     steps:
+      - name: Download Digests
+        uses: actions/download-artifact@v3
+        with:
+          path: /tmp/digests
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -80,9 +100,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create and Push Multi-Arch Manifest
+      - name: Create Image Manifest
         run: |
-          docker buildx imagetools create \
-            --tag ghcr.io/capsoftware/cap-web:${{ inputs.tag || 'latest' }} \
-            ghcr.io/capsoftware/cap-web:${{ inputs.tag || 'latest' }}-amd64 \
-            ghcr.io/capsoftware/cap-web:${{ inputs.tag || 'latest' }}-arm64
+          docker buildx imagetools create -t ghcr.io/capsoftware/cap-web:${{ inputs.tag || 'latest' }} \
+            $(find /tmp/digests -type f -not -path "*/\.*" | xargs -I {} echo "-f ghcr.io/capsoftware/cap-web@sha256:{}")
