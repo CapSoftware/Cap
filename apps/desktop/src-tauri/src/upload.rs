@@ -602,7 +602,7 @@ impl InstantMultipartUpload {
                 return Err("No uploadId returned from initiate endpoint".to_string());
             }
         };
-        dbg!(&upload_id);
+
         if upload_id.is_empty() {
             return Err("Empty uploadId returned from initiate endpoint".to_string());
         }
