@@ -29,9 +29,6 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -105,4 +102,4 @@ jobs:
       - name: Create Image Manifest
         run: |
           docker buildx imagetools create -t ghcr.io/capsoftware/cap-web:${{ inputs.tag || 'latest' }} \
-            $(find /tmp/digests -type f -not -path "*/\.*" | xargs -I {} echo "-f ghcr.io/capsoftware/cap-web@sha256:{}")
+            $(find /tmp/digests -type f -not -path "*/\.*" -exec basename {} \; | xargs -I {} echo "ghcr.io/capsoftware/cap-web@sha256:{}")
