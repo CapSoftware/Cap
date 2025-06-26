@@ -18,12 +18,12 @@ jobs:
         run: |
           JOURNAL_PATH="packages/database/migrations/meta/_journal.json"
 
-          # Get the journal from base branch
-          git fetch origin ${{ github.base_ref }}
+          # Get the journal from previous commit
+          git fetch origin HEAD^
 
-          # Check if journal exists in base branch
-          if git show origin/${{ github.base_ref }}:$JOURNAL_PATH > /dev/null 2>&1; then
-            git show origin/${{ github.base_ref }}:$JOURNAL_PATH > base.json
+          # Check if journal exists in previous commit
+          if git show HEAD^:$JOURNAL_PATH > /dev/null 2>&1; then
+            git show HEAD^:$JOURNAL_PATH > base.json
           else
             echo '{"version":"5","dialect":"mysql","entries":[]}' > base.json
           fi
