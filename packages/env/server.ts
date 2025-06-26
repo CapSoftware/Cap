@@ -60,6 +60,8 @@ function createServerEnv() {
       POSTHOG_PERSONAL_API_KEY: z.string().optional(),
       CLOUDFRONT_KEYPAIR_ID: z.string().optional(),
       CLOUDFRONT_KEYPAIR_PRIVATE_KEY: z.string().optional(),
+      S3_PUBLIC_ENDPOINT: z.string().optional(),
+      S3_INTERNAL_ENDPOINT: z.string().optional(),
     },
     experimental__runtimeEnv: {
       ...process.env,

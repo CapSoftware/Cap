@@ -1106,6 +1106,8 @@ async fn upload_exported_video(
             Ok(UploadResult::Success(uploaded_video.link))
         }
         Err(e) => {
+            error!("Failed to upload video: {e}");
+
             NotificationType::UploadFailed.send(&app);
             Err(e)
         }
