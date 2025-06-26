@@ -12,10 +12,10 @@ import { useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
 import { Dialog, DialogContent, MenuItem, MenuItemList, PopperContent, topLeftAnimateClasses } from "./ui";
 
-
 function ShareButton() {
   const { editorInstance, meta, customDomain } = useEditorContext();
   const projectPath = editorInstance.path;
+
 
   const upload = createMutation(() => ({
     mutationFn: async () => {
@@ -141,15 +141,15 @@ function ShareButton() {
         {(sharing) => {
 
           const normalUrl = () => new URL(sharing().link);
-          const customUrl = () => new URL(customDomain()?.custom_domain + `/s/${meta().sharing?.id}`);
+          const customUrl = () => customDomain()?.custom_domain ? new URL(customDomain()?.custom_domain + `/s/${meta().sharing?.id}`) : null;
 
           const normalLink = `${normalUrl().host}${normalUrl().pathname}`;
-          const customLink = `${customUrl().host}${customUrl().pathname}`;
+          const customLink = `${customUrl()?.host}${customUrl()?.pathname}`;
 
 
           const copyLinks = {
             normal: sharing().link,
-            custom: customUrl().href
+            custom: customUrl()?.href
           }
 
           const [linkToDisplay, setLinkToDisplay] = createSignal<string | null>(

@@ -1,4 +1,8 @@
-import { contract, licenseContract } from "@cap/web-api-contract";
+import {
+  contract,
+  licenseContract,
+  orgCustomDomainContract,
+} from "@cap/web-api-contract";
 import { fetch } from "@tauri-apps/plugin-http";
 import { ApiFetcher, initClient } from "@ts-rest/core";
 
@@ -36,20 +40,10 @@ export const licenseApiClient = initClient(licenseContract, {
   api,
 });
 
-export const authedRequest = async <T>(
-  path: string,
-  args: RequestInit
-): Promise<T> => {
-  const { authorization } = await protectedHeaders();
-  const data = await fetch(`${clientEnv.VITE_SERVER_URL}/api${path}`, {
-    ...args,
-    headers: {
-      ...args.headers,
-      authorization,
-    },
-  });
-  return data.json();
-};
+export const orgCustomDomainClient = initClient(orgCustomDomainContract, {
+  baseUrl: `${clientEnv.VITE_SERVER_URL}/api/desktop`,
+  api,
+});
 
 export async function maybeProtectedHeaders() {
   const store = await authStore.get();
