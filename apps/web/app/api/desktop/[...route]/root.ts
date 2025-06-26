@@ -72,8 +72,18 @@ app.get("/org-custom-domain", async (c) => {
       .leftJoin(organizations, eq(users.activeOrganizationId, organizations.id))
       .where(eq(users.id, user.id));
 
+    // Ensure custom domain has https:// prefix
+    let customDomain = result?.customDomain ?? null;
+    if (
+      customDomain &&
+      !customDomain.startsWith("http://") &&
+      !customDomain.startsWith("https://")
+    ) {
+      customDomain = `https://${customDomain}`;
+    }
+
     return c.json({
-      custom_domain: result?.customDomain ?? null,
+      custom_domain: customDomain,
       domain_verified: result?.domainVerified ?? null,
     });
   } catch (error) {

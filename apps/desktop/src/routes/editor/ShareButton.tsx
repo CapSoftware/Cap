@@ -17,16 +17,6 @@ function ShareButton() {
   const { editorInstance, meta, customDomain } = useEditorContext();
   const projectPath = editorInstance.path;
 
-  // Ensure custom domain has https:// prefix
-  // this is needed for opening the link
-  // we need to do this because the custom domain is not necessarily returned with the https:// prefix
-  const ensureHttps = (domain: string | null | undefined) => {
-    if (!domain) return '';
-    return domain.startsWith('http://') || domain.startsWith('https://')
-      ? domain
-      : `https://${domain}`;
-  };
-
   const upload = createMutation(() => ({
     mutationFn: async () => {
       setUploadState({ type: "idle" });
@@ -150,19 +140,20 @@ function ShareButton() {
       <Show when={meta().sharing}>
         {(sharing) => {
 
-          const customDomainLink = `${customDomain()?.custom_domain}/s/${meta().sharing?.id}`;
-
           const normalUrl = () => new URL(sharing().link);
+          const customUrl = () => new URL(customDomain()?.custom_domain + `/s/${meta().sharing?.id}`);
+
           const normalLink = `${normalUrl().host}${normalUrl().pathname}`;
+          const customLink = `${customUrl().host}${customUrl().pathname}`;
 
 
           const copyLinks = {
             normal: sharing().link,
-            custom: ensureHttps(customDomainLink)
+            custom: customUrl().href
           }
 
           const [linkToDisplay, setLinkToDisplay] = createSignal<string | null>(
-            customDomain()?.custom_domain && customDomain()?.domain_verified ? customDomainLink : normalLink
+            customDomain()?.custom_domain && customDomain()?.domain_verified ? customLink : normalLink
           );
 
           const [copyPressed, setCopyPressed] = createSignal(false);
@@ -199,7 +190,7 @@ function ShareButton() {
                 <div class="rounded-xl px-3 py-2 flex flex-row items-center gap-[0.375rem] bg-gray-3 hover:bg-gray-4 transition-colors duration-100">
                   <a
                     href={
-                      linkToDisplay() === customDomainLink ? copyLinks.custom : copyLinks.normal
+                      linkToDisplay() === customLink ? copyLinks.custom : copyLinks.normal
                     }
                     target="_blank"
                     rel="noreferrer"
@@ -210,12 +201,12 @@ function ShareButton() {
                     </span>
                   </a>
                   {/** Dropdown */}
-                  <Show when={customDomain()?.custom_domain && customDomain()?.domain_verified === false}>
+                  <Show when={customDomain()?.custom_domain && customDomain()?.domain_verified}>
                     <Tooltip content="Select link">
                       <KSelect
                         value={linkToDisplay()}
                         onChange={(value) => value && setLinkToDisplay(value)}
-                        options={[customDomainLink, normalLink].filter(link => link !== linkToDisplay())}
+                        options={[customLink, normalLink].filter(link => link !== linkToDisplay())}
                         multiple={false}
                         itemComponent={(props) => (
                           <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
