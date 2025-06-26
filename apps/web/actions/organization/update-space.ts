@@ -8,8 +8,7 @@ import { revalidatePath } from "next/cache";
 import { uploadSpaceIcon } from "./upload-space-icon";
 import { v4 as uuidv4 } from "uuid";
 import { nanoIdLength } from "@cap/database/helpers";
-import { createS3Client, getS3Bucket } from "@/utils/s3";
-import { DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { createBucketProvider } from "@/utils/s3";
 
 export async function updateSpace(formData: FormData) {
   const user = await getCurrentUser();
@@ -44,17 +43,10 @@ export async function updateSpace(formData: FormData) {
     const space = spaceArr[0];
     if (space && space.iconUrl) {
       try {
-        const [s3Client] = await createS3Client();
-        const bucketName = await getS3Bucket();
+        const bucketProvider = await createBucketProvider();
         const prevKeyMatch = space.iconUrl.match(/organizations\/.+/);
-        if (prevKeyMatch && prevKeyMatch[0]) {
-          await s3Client.send(
-            new DeleteObjectCommand({
-              Bucket: bucketName,
-              Key: prevKeyMatch[0],
-            })
-          );
-        }
+        if (prevKeyMatch && prevKeyMatch[0])
+          await bucketProvider.deleteObject(prevKeyMatch[0]);
       } catch (e) {
         console.warn("Failed to delete old space icon from S3", e);
       }

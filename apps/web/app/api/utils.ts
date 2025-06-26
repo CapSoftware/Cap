@@ -57,9 +57,7 @@ export const withAuth = createMiddleware<{
     user: NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>;
   };
 }>(async (c, next) => {
-  console.log("withAuth", c.req);
   const auth = await getAuth(c);
-  console.log("withAuth", { auth });
   if (!auth) return c.text("User not authenticated", 401);
 
   c.set("user", auth.user);

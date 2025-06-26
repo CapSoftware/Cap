@@ -1,11 +1,12 @@
 import { db } from "@cap/database";
 import { organizations, users } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 import { isUserOnProPlan, stripe } from "@cap/utils";
 import { zValidator } from "@hono/zod-validator";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import * as crypto from "node:crypto";
+import { PostHog } from "posthog-node";
 import { z } from "zod";
 import { withAuth } from "../../utils";
 
@@ -171,10 +172,32 @@ app.post(
       success_url: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true`,
       cancel_url: `${serverEnv().WEB_URL}/pricing`,
       allow_promotion_codes: true,
+      metadata: { platform: "desktop" },
     });
 
     if (checkoutSession.url) {
       console.log("[POST] Checkout session created successfully");
+
+      try {
+        const ph = new PostHog(buildEnv.NEXT_PUBLIC_POSTHOG_KEY || "", {
+          host: buildEnv.NEXT_PUBLIC_POSTHOG_HOST || "",
+        });
+
+        ph.capture({
+          distinctId: user.id,
+          event: "checkout_started",
+          properties: {
+            price_id: priceId,
+            quantity: 1,
+            platform: "desktop",
+          },
+        });
+
+        await ph.shutdown();
+      } catch (e) {
+        console.error("Failed to capture checkout_started in PostHog", e);
+      }
+
       return c.json({ url: checkoutSession.url });
     }
 

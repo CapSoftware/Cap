@@ -1,15 +1,15 @@
 "use server";
 
-import { createS3Client, getS3Bucket } from "@/utils/s3";
-import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
-import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizations } from "@cap/database/schema";
+import { db } from "@cap/database";
+import { createBucketProvider } from "@/utils/s3";
 import { serverEnv } from "@cap/env";
-import DOMPurify from "dompurify";
 import { eq } from "drizzle-orm";
+import DOMPurify from "dompurify";
 import { JSDOM } from "jsdom";
 import { revalidatePath } from "next/cache";
+import { sanitizeFile } from "@/lib/sanitizeFile";
 
 export async function uploadOrganizationIcon(
   formData: FormData,
@@ -55,49 +55,13 @@ export async function uploadOrganizationIcon(
   const fileKey = `organizations/${organizationId}/icon-${Date.now()}.${fileExtension}`;
 
   try {
-    // Sanitize SVG if applicable
-    let uploadFile = file;
-    if (file.type === "image/svg+xml") {
-      const arrayBuffer = await file.arrayBuffer();
-      const svgString = Buffer.from(arrayBuffer).toString("utf-8");
-      const dom = new JSDOM(svgString, { contentType: "image/svg+xml" });
-      const purify = DOMPurify(dom.window);
-      const sanitizedSvg = purify.sanitize(
-        dom.window.document.documentElement.outerHTML,
-        { USE_PROFILES: { svg: true, svgFilters: true } }
-      );
-      uploadFile = new File([sanitizedSvg], file.name, { type: file.type });
-    }
+    const sanitizedFile = await sanitizeFile(file);
 
-    // Get S3 client
-    const [s3Client] = await createS3Client();
-    const bucketName = await getS3Bucket();
+    const bucket = await createBucketProvider();
 
-    // Create presigned post
-    const presignedPostData = await createPresignedPost(s3Client, {
-      Bucket: bucketName,
-      Key: fileKey,
-      Fields: {
-        "Content-Type": uploadFile.type,
-      },
-      Expires: 600, // 10 minutes
+    await bucket.putObject(fileKey, await sanitizedFile.bytes(), {
+      contentType: file.type,
     });
-
-    // Upload file to S3
-    const formDataForS3 = new FormData();
-    Object.entries(presignedPostData.fields).forEach(([key, value]) => {
-      formDataForS3.append(key, value as string);
-    });
-    formDataForS3.append("file", file);
-
-    const uploadResponse = await fetch(presignedPostData.url, {
-      method: "POST",
-      body: formDataForS3,
-    });
-
-    if (!uploadResponse.ok) {
-      throw new Error("Failed to upload file to S3");
-    }
 
     // Construct the icon URL
     let iconUrl;
@@ -106,10 +70,10 @@ export async function uploadOrganizationIcon(
       iconUrl = `${serverEnv().CAP_AWS_BUCKET_URL}/${fileKey}`;
     } else if (serverEnv().CAP_AWS_ENDPOINT) {
       // For custom endpoints like MinIO
-      iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucketName}/${fileKey}`;
+      iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucket.name}/${fileKey}`;
     } else {
       // Default AWS S3 URL format
-      iconUrl = `https://${bucketName}.s3.${
+      iconUrl = `https://${bucket.name}.s3.${
         serverEnv().CAP_AWS_REGION || "us-east-1"
       }.amazonaws.com/${fileKey}`;
     }
@@ -117,9 +81,7 @@ export async function uploadOrganizationIcon(
     // Update organization with new icon URL
     await db()
       .update(organizations)
-      .set({
-        iconUrl,
-      })
+      .set({ iconUrl })
       .where(eq(organizations.id, organizationId));
 
     revalidatePath("/dashboard/settings/organization");
