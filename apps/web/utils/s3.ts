@@ -178,7 +178,10 @@ interface S3BucketProvider {
       key: string,
       uploadId: string,
       partNumber: number,
-      args?: Omit<UploadPartCommandInput, "Key" | "Bucket" | "PartNumber">
+      args?: Omit<
+        UploadPartCommandInput,
+        "Key" | "Bucket" | "PartNumber" | "UploadId"
+      >
     ): Promise<string>;
     complete(
       key: string,
@@ -328,19 +331,27 @@ function createS3Provider(
             })
           )
         ),
-      getPresignedUploadPartUrl: (key, uploadId, partNumber, args) =>
-        getClient(false).then((client) =>
+      getPresignedUploadPartUrl: (key, uploadId, partNumber, args) => {
+        console.log({
+          ...args,
+          Bucket: bucket,
+          Key: key,
+          UploadId: uploadId,
+          PartNumber: partNumber,
+        });
+        return getClient(false).then((client) =>
           S3Presigner.getSignedUrl(
             client,
             new UploadPartCommand({
+              ...args,
               Bucket: bucket,
               Key: key,
               UploadId: uploadId,
               PartNumber: partNumber,
-              ...args,
             })
           )
-        ),
+        );
+      },
       complete: (key, uploadId, args) =>
         getClient(true).then((client) =>
           client.send(

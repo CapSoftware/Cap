@@ -244,10 +244,14 @@ app.post(
               "Performing metadata fix by copying the object to itself..."
             );
 
-            const copyResult = await bucket.copyObject(fileKey, fileKey, {
-              ContentType: "video/mp4",
-              MetadataDirective: "REPLACE",
-            });
+            const copyResult = await bucket.copyObject(
+              `${bucket.name}/${fileKey}`,
+              fileKey,
+              {
+                ContentType: "video/mp4",
+                MetadataDirective: "REPLACE",
+              }
+            );
 
             console.log("Copy for metadata fix successful:", copyResult);
           } catch (copyError) {

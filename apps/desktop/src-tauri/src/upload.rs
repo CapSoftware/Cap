@@ -602,6 +602,7 @@ impl InstantMultipartUpload {
                 return Err("No uploadId returned from initiate endpoint".to_string());
             }
         };
+        dbg!(&upload_id);
         if upload_id.is_empty() {
             return Err("Empty uploadId returned from initiate endpoint".to_string());
         }
@@ -660,7 +661,7 @@ impl InstantMultipartUpload {
                     &app,
                     &client,
                     &file_path,
-                    &video_id,
+                    s3_config.id(),
                     &upload_id,
                     &mut part_number,
                     &mut last_uploaded_position,
@@ -687,7 +688,7 @@ impl InstantMultipartUpload {
                         &app,
                         &client,
                         &file_path,
-                        &video_id,
+                        s3_config.id(),
                         &upload_id,
                         &mut 1,
                         &mut 0,
@@ -710,8 +711,14 @@ impl InstantMultipartUpload {
                     "Completing multipart upload with {} parts",
                     uploaded_parts.len()
                 );
-                Self::finalize_upload(&app, &file_path, &video_id, &upload_id, &uploaded_parts)
-                    .await?;
+                Self::finalize_upload(
+                    &app,
+                    &file_path,
+                    &s3_config.id(),
+                    &upload_id,
+                    &uploaded_parts,
+                )
+                .await?;
 
                 break;
             } else {
