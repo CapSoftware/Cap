@@ -1,1 +1,0 @@
-ALTER TABLE `space_members` ADD `role` varchar(255) DEFAULT 'member' NOT NULL;
