@@ -1134,6 +1134,7 @@ export const ShareVideo = forwardRef<
               <CommentIndicators
                 className="-mt-6 w-full md:-mt-6"
                 comments={comments}
+                longestDuration={longestDuration}
               />
             </Suspense>
           )}
@@ -1567,6 +1568,7 @@ const useTranscriptionProcessing = (
 function CommentIndicators(props: {
   className?: string;
   comments: MaybePromise<CommentWithAuthor[]>;
+  longestDuration: number;
 }) {
   const comments =
     props.comments instanceof Promise ? use(props.comments) : props.comments;
@@ -1577,7 +1579,7 @@ function CommentIndicators(props: {
         const commentPosition =
           comment.timestamp === null
             ? 0
-            : (comment.timestamp / longestDuration) * 100;
+            : (comment.timestamp / props.longestDuration) * 100;
 
         let tooltipContent = "";
         if (comment.type === "text") {

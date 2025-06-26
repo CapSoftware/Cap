@@ -103,7 +103,9 @@ export async function getS3Config(config?: S3Config, internal = false) {
         serverEnv().CAP_AWS_SECRET_KEY ??
         "",
     },
-    forcePathStyle: config.forcePathStyle ?? true,
+    forcePathStyle: endpoint?.endsWith("s3.amazonaws.com")
+      ? false
+      : config.forcePathStyle ?? true,
     useArnRegion: false,
     requestHandler: {
       connectionTimeout: isLocalOrMinio ? 5000 : 10000,
