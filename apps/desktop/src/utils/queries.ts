@@ -158,6 +158,8 @@ export function createCustomDomainQuery() {
     queryKey: ["customDomain"] as const,
     queryFn: async () => {
       try {
+        const auth = await authStore.get();
+        if (!auth) return { custom_domain: null, domain_verified: null };
         const response = await orgCustomDomainClient.getOrgCustomDomain({
           headers: await protectedHeaders(),
         });
