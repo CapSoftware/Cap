@@ -12,10 +12,14 @@ on:
 jobs:
   build:
     name: Build Docker Image (${{ matrix.platform }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        platform: [amd64, arm64]
+        include:
+          - platform: amd64
+            runner: ubuntu-24.04
+          - platform: arm64
+            runner: ubuntu-24.04-arm
       fail-fast: false
     permissions:
       contents: read
