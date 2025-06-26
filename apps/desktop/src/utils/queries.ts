@@ -158,13 +158,18 @@ export function createCustomDomainQuery() {
   return useQuery(() => ({
     queryKey: ["customDomain"] as const,
     queryFn: async () => {
-      const data = await authedRequest<CustomDomainResponse>(
-        "/desktop/org-custom-domain",
-        {
-          method: "GET",
-        }
-      );
-      return data;
+      try {
+        const data = await authedRequest<CustomDomainResponse>(
+          "/desktop/org-custom-domain",
+          {
+            method: "GET",
+          }
+        );
+        return data;
+      } catch (error) {
+        console.error("Error fetching custom domain:", error);
+        return { custom_domain: null, domain_verified: null };
+      }
     },
     refetchOnMount: true,
     refetchOnWindowFocus: true,
