@@ -86,7 +86,6 @@ export default async function RootLayout({ children }: PropsWithChildren) {
                     <SonnerToaster />
                     <main className="overflow-x-hidden w-full">{children}</main>
                     <PosthogIdentify />
-                    <Intercom />
                   </ReactQueryProvider>
                 </PublicEnvContext>
               </SessionProvider>
