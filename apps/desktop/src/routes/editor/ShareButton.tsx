@@ -1,8 +1,8 @@
 import { Button } from "@cap/ui-solid";
+import { Select as KSelect } from "@kobalte/core/select";
 import { createMutation } from "@tanstack/solid-query";
 import { createSignal, Show } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
-
 import Tooltip from "~/components/Tooltip";
 import { createProgressBar } from "~/routes/editor/utils";
 import { authStore } from "~/store";
@@ -10,11 +10,12 @@ import { exportVideo } from "~/utils/export";
 import { commands, events } from "~/utils/tauri";
 import { useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
-import { Dialog, DialogContent } from "./ui";
+import { Dialog, DialogContent, MenuItem, MenuItemList, PopperContent, topLeftAnimateClasses } from "./ui";
 
 function ShareButton() {
-  const { editorInstance, meta } = useEditorContext();
+  const { editorInstance, meta, customDomain } = useEditorContext();
   const projectPath = editorInstance.path;
+
 
   const upload = createMutation(() => ({
     mutationFn: async () => {
@@ -89,8 +90,8 @@ function ShareButton() {
         const result = meta().sharing
           ? await commands.uploadExportedVideo(projectPath, "Reupload")
           : await commands.uploadExportedVideo(projectPath, {
-              Initial: { pre_created_video: null },
-            });
+            Initial: { pre_created_video: null },
+          });
 
         if (result === "NotAuthenticated") {
           throw new Error("You need to sign in to share recordings");
@@ -138,11 +139,27 @@ function ShareButton() {
     <div class="relative">
       <Show when={meta().sharing}>
         {(sharing) => {
-          const url = () => new URL(sharing().link);
+
+          const normalUrl = () => new URL(sharing().link);
+          const customUrl = () => customDomain()?.custom_domain ? new URL(customDomain()?.custom_domain + `/s/${meta().sharing?.id}`) : null;
+
+          const normalLink = `${normalUrl().host}${normalUrl().pathname}`;
+          const customLink = `${customUrl()?.host}${customUrl()?.pathname}`;
+
+
+          const copyLinks = {
+            normal: sharing().link,
+            custom: customUrl()?.href
+          }
+
+          const [linkToDisplay, setLinkToDisplay] = createSignal<string | null>(
+            customDomain()?.custom_domain && customDomain()?.domain_verified ? customLink : normalLink
+          );
 
           const [copyPressed, setCopyPressed] = createSignal(false);
+
           const copyLink = () => {
-            navigator.clipboard.writeText(sharing().link);
+            navigator.clipboard.writeText(linkToDisplay() || sharing().link);
             setCopyPressed(true);
             setTimeout(() => {
               setCopyPressed(false);
@@ -172,26 +189,66 @@ function ShareButton() {
               <Tooltip content="Open link">
                 <div class="rounded-xl px-3 py-2 flex flex-row items-center gap-[0.375rem] bg-gray-3 hover:bg-gray-4 transition-colors duration-100">
                   <a
-                    href={sharing().link}
+                    href={
+                      linkToDisplay() === customLink ? copyLinks.custom : copyLinks.normal
+                    }
                     target="_blank"
                     rel="noreferrer"
-                    class="w-full truncate max-w-48"
+                    class="w-full truncate max-w-[200px]"
                   >
                     <span class="text-xs text-gray-12">
-                      {url().host}
-                      {url().pathname}
+                      {linkToDisplay()}
                     </span>
                   </a>
+                  {/** Dropdown */}
+                  <Show when={customDomain()?.custom_domain && customDomain()?.domain_verified}>
+                    <Tooltip content="Select link">
+                      <KSelect
+                        value={linkToDisplay()}
+                        onChange={(value) => value && setLinkToDisplay(value)}
+                        options={[customLink, normalLink].filter(link => link !== linkToDisplay())}
+                        multiple={false}
+                        itemComponent={(props) => (
+                          <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
+                            <KSelect.ItemLabel class="flex-1 text-xs truncate">
+                              {props.item.rawValue}
+                            </KSelect.ItemLabel>
+                          </MenuItem>
+                        )}
+                        placement="bottom-end"
+                        gutter={4}
+                      >
+                        <KSelect.Trigger
+                          class="flex justify-center items-center transition-colors duration-200 rounded-lg size-[22px] text-gray-12 bg-gray-6 hover:bg-gray-7 group focus:outline-none focus-visible:outline-none"
+                        >
+                          <KSelect.Icon>
+                            <IconCapChevronDown class="size-4 transition-transform duration-200 group-data-[expanded]:rotate-180" />
+                          </KSelect.Icon>
+                        </KSelect.Trigger>
+                        <KSelect.Portal>
+                          <PopperContent<typeof KSelect.Content>
+                            as={KSelect.Content}
+                            class={topLeftAnimateClasses}
+                          >
+                            <MenuItemList<typeof KSelect.Listbox>
+                              as={KSelect.Listbox}
+                              class="w-[236px]"
+                            />
+                          </PopperContent>
+                        </KSelect.Portal>
+                      </KSelect>
+                    </Tooltip>
+                  </Show>
                   {/** Copy button */}
                   <Tooltip content="Copy link">
                     <div
-                      class="flex justify-center items-center rounded-lg size-[22px] text-gray-12 !px-0 !py-0 dark:bg-black-transparent-10 dark:hover:bg-black-transparent-40 bg-gray-3 hover:bg-gray-5"
+                      class="flex justify-center items-center transition-colors duration-200 rounded-lg size-[22px] text-gray-12 bg-gray-6 hover:bg-gray-7"
                       onClick={copyLink}
                     >
                       {!copyPressed() ? (
-                        <IconCapCopy class="size-2.5" />
+                        <IconCapCopy class="size-3" />
                       ) : (
-                        <IconLucideCheck class="size-2.5 svgpathanimation" />
+                        <IconLucideCheck class="size-3 svgpathanimation" />
                       )}
                     </div>
                   </Tooltip>
@@ -213,20 +270,19 @@ function ShareButton() {
               <div
                 class="bg-blue-9 h-2.5 rounded-full"
                 style={{
-                  width: `${
-                    uploadState.type === "uploading"
-                      ? uploadState.progress
-                      : uploadState.type === "link-copied"
+                  width: `${uploadState.type === "uploading"
+                    ? uploadState.progress
+                    : uploadState.type === "link-copied"
                       ? 100
                       : uploadState.type === "rendering"
-                      ? Math.min(
+                        ? Math.min(
                           (uploadState.renderedFrames /
                             uploadState.totalFrames) *
-                            100,
+                          100,
                           100
                         )
-                      : 0
-                  }%`,
+                        : 0
+                    }%`,
                 }}
               />
             </div>
@@ -235,10 +291,10 @@ function ShareButton() {
               {uploadState.type == "idle" || uploadState.type === "starting"
                 ? "Preparing to render..."
                 : uploadState.type === "rendering"
-                ? `Rendering video (${uploadState.renderedFrames}/${uploadState.totalFrames} frames)`
-                : uploadState.type === "uploading"
-                ? `Uploading - ${Math.floor(uploadState.progress)}%`
-                : "Link copied to clipboard!"}
+                  ? `Rendering video (${uploadState.renderedFrames}/${uploadState.totalFrames} frames)`
+                  : uploadState.type === "uploading"
+                    ? `Uploading - ${Math.floor(uploadState.progress)}%`
+                    : "Link copied to clipboard!"}
             </p>
           </div>
         </DialogContent>

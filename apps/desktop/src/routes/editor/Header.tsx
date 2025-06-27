@@ -5,7 +5,7 @@ import { remove } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
-import { ComponentProps, createEffect, createSignal, onCleanup, onMount } from "solid-js";
+import { ComponentProps, createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
 
 import { Button } from "@cap/ui-solid";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
@@ -44,6 +44,7 @@ export function Header() {
     meta,
     exportState,
     setExportState,
+    customDomain
   } = useEditorContext();
 
   let unlistenTitlebar: UnlistenFn | undefined;
@@ -53,6 +54,7 @@ export function Header() {
   onCleanup(() => unlistenTitlebar?.());
 
   const [truncated, setTruncated] = createSignal(false);
+
   let prettyNameRef: HTMLParagraphElement | undefined;
 
   createEffect(() => {
@@ -165,7 +167,9 @@ export function Header() {
           leftIcon={<IconCapRedo class="w-5" />}
         />
         <div data-tauri-drag-region class="flex-1 h-full" />
-        <ShareButton />
+        <Show when={customDomain()}>
+          <ShareButton />
+        </Show>
         <Button
           variant="lightdark"
           class={cx("flex gap-2 justify-center")}

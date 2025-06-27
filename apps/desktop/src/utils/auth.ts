@@ -1,12 +1,12 @@
-import * as shell from "@tauri-apps/plugin-shell";
 import { createMutation } from "@tanstack/solid-query";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { authStore, generalSettingsStore } from "~/store";
 import { invoke } from "@tauri-apps/api/core";
-import callbackTemplate from "~/components/callback.template";
 import { listen } from "@tauri-apps/api/event";
-import { z } from "zod";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
+import * as shell from "@tauri-apps/plugin-shell";
+import { z } from "zod";
+import callbackTemplate from "~/components/callback.template";
+import { authStore, generalSettingsStore } from "~/store";
 import { identifyUser, trackEvent } from "./analytics";
 import { commands } from "./tauri";
 

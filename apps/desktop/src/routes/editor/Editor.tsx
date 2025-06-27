@@ -4,6 +4,7 @@ import { throttle } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
 import { createMutation } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { cx } from "cva";
 import {
   Match,
   Show,
@@ -15,7 +16,6 @@ import {
   onMount,
 } from "solid-js";
 import { createStore } from "solid-js/store";
-import { cx } from "cva";
 
 import Cropper, { cropToFloor } from "~/components/Cropper";
 import { Toggle } from "~/components/Toggle";
