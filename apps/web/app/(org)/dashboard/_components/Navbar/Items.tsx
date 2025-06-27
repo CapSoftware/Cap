@@ -62,6 +62,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
     {
       name: "Organization Settings",
       href: `/dashboard/settings/organization`,
+      ownerOnly: true,
       icon: <CogIcon />,
       subNav: [],
     },
@@ -75,7 +76,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
         },
       ]
       : []),
-  ];
+  ]
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const {
@@ -86,6 +87,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
   const formRef = useRef<HTMLFormElement | null>(null);
   const [createLoading, setCreateLoading] = useState(false);
   const [organizationName, setOrganizationName] = useState("");
+  const isOwner = activeOrg?.organization.ownerId === user.id;
 
   const isPathActive = (path: string) => pathname.includes(path);
 
@@ -261,7 +263,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
             sidebarCollapsed ? "flex flex-col justify-center items-center" : ""
           )}
         >
-          {manageNavigation.map((item) => (
+          {manageNavigation.filter((item) => !item.ownerOnly || isOwner).map((item) => (
             <div
               key={item.name}
               className="flex relative justify-center items-center mb-1.5 w-full"
