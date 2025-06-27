@@ -538,14 +538,6 @@ ul {
   @apply pb-4 border-b border-filler;
 }
 
-.dashboard-page h1,
-.dashboard-page h2,
-.dashboard-page h3,
-.dashboard-page h4,
-.dashboard-page h5 {
-  @apply text-[1rem] font-medium leading-[1.25rem] text-gray-12 !important;
-}
-
 .dashboard-header p {
   @apply text-lg;
 }

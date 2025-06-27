@@ -21,9 +21,9 @@ const buttonVariants = cva(
         destructive:
           "bg-gradient-to-t disabled:opacity-50 disabled:from-red-800 disabled:to-red-600 disabled:cursor-not-allowed shadow-[0_0_0_1px] shadow-red-900 hover:brightness-110 from-red-600 to-red-400 text-gray-50 button-gradient-border hover:bg-red-400 border-red-300",
         white:
-          "bg-gray-2 text-gray-12 hover:border-gray-4 hover:bg-gray-3 border disabled:bg-gray-1 border-gray-3",
+          "bg-gray-2 text-gray-12 over:bg-gray-3 disabled:bg-gray-1",
         gray: "bg-gray-4 text-gray-12 hover:bg-gray-6 hover:border-gray-7 disabled:bg-gray-1 border-gray-5 border",
-        dark: "bg-gray-12 text-gray-1 disabled:cursor-not-allowed hover:bg-gray-11 disabled:text-gray-10 border disabled:bg-gray-7 disabled:border-gray-8 border-gray-12",
+        dark: "bg-gray-12 text-gray-1 disabled:cursor-not-allowed hover:bg-gray-11 disabled:text-gray-10 disabled:bg-gray-7",
         darkgradient:
           "bg-gradient-to-t button-gradient-border from-[#0f0f0f] to-[#404040] shadow-[0_0_0_1px] hover:brightness-110 shadow-[#383838] text-gray-50 hover:bg-[#383838] disabled:bg-[#383838] border-transparent",
         radialblue:
@@ -41,7 +41,7 @@ const buttonVariants = cva(
 
 export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>,
-    VariantProps<typeof buttonVariants> {
+  VariantProps<typeof buttonVariants> {
   asChild?: boolean;
   spinner?: boolean;
   href?: string;

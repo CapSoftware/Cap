@@ -2,16 +2,22 @@
 import { deleteVideo } from "@/actions/videos/delete";
 import { useApiClient } from "@/utils/web-api";
 import { VideoMetadata } from "@cap/database/types";
+import { Button } from "@cap/ui";
+import { faFolderPlus } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "../Contexts";
 import { CapCard } from "./components/CapCard/CapCard";
 import { CapPagination } from "./components/CapPagination";
+
 import { EmptyCapState } from "./components/EmptyCapState";
 import { SelectedCapsBar } from "./components/SelectedCapsBar";
 import { UploadCapButton } from "./components/UploadCapButton";
 import { UploadPlaceholderCard } from "./components/UploadPlaceholderCard";
+import { useTheme } from "../Contexts";
 
 type VideoData = {
   id: string;
@@ -45,7 +51,8 @@ export const Caps = ({
   const params = useSearchParams();
   const page = Number(params.get("page")) || 1;
   const [analytics, setAnalytics] = useState<Record<string, number>>({});
-  const { user, spacesData, organizationData } = useDashboardContext();
+  const { user } = useDashboardContext();
+  const { theme } = useTheme();
   const limit = 15;
   const totalPages = Math.ceil(count / limit);
   const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
@@ -262,14 +269,24 @@ export const Caps = ({
           </div>
         </div>
       )}
-      <div className="flex justify-start mb-5">
+      <div className="flex gap-3 justify-start mb-10">
         <UploadCapButton
           onStart={handleUploadStart}
           size="sm"
           onProgress={handleUploadProgress}
           onComplete={handleUploadComplete}
         />
+        <Button size="sm" variant="dark" className="flex gap-2 items-center">
+          <FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
+          New Folder
+        </Button>
       </div>
+      <h1 className="mb-3 text-xl text-gray-12">Folders</h1>
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4 mb-10">
+        <Folder />
+        <Folder />
+      </div>
+      <h1 className="mb-3 text-xl text-gray-12">Videos</h1>
       <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
         {uploadPlaceholders.map((u) => (
           <UploadPlaceholderCard
@@ -292,11 +309,13 @@ export const Caps = ({
           />
         ))}
       </div>
-      {(data.length > limit || data.length === limit || page !== 1) && (
-        <div className="mt-7">
-          <CapPagination currentPage={page} totalPages={totalPages} />
-        </div>
-      )}
+      {
+        (data.length > limit || data.length === limit || page !== 1) && (
+          <div className="mt-7">
+            <CapPagination currentPage={page} totalPages={totalPages} />
+          </div>
+        )
+      }
 
       <SelectedCapsBar
         selectedCaps={selectedCaps}
@@ -304,6 +323,33 @@ export const Caps = ({
         deleteSelectedCaps={deleteSelectedCaps}
         isDeleting={isDeleting}
       />
+    </div >
+  );
+};
+
+
+const Folder = () => {
+  const { theme } = useTheme();
+  const { rive, RiveComponent: FolderRive } = useRive({
+    src: "/rive/dashboard.riv",
+    artboard: theme === "dark" ? "folder" : "folder-dark",
+    animations: "idle",
+    autoplay: false,
+    layout: new Layout({
+      fit: Fit.Contain,
+    }),
+  });
+
+  return (
+    <div
+      onMouseEnter={() => rive?.play("folder-open")}
+      onMouseLeave={() => rive?.play("folder-close")}
+      className="flex justify-center items-center px-6 py-5 space-x-6 w-full h-auto rounded-lg border transition-colors duration-200 cursor-pointer bg-gray-3 border-gray-5 hover:bg-gray-4 hover:border-gray-6">
+      <FolderRive key={theme + "folder"} className="w-[60px] h-[60px]" />
+      <div className="flex flex-col">
+        <h2 className="text-base truncate text-gray-12 w-fit">Untitled folder</h2>
+        <p className="text-sm truncate text-gray-10 w-fit">12 videos</p>
+      </div>
     </div>
   );
 };
