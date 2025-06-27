@@ -62,7 +62,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
     {
       name: "Organization Settings",
       href: `/dashboard/settings/organization`,
-      protected: true,
+      ownerOnly: true,
       icon: <CogIcon />,
       subNav: [],
     },
@@ -76,7 +76,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
         },
       ]
       : []),
-  ];
+  ]
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const {
@@ -263,7 +263,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
             sidebarCollapsed ? "flex flex-col justify-center items-center" : ""
           )}
         >
-          {manageNavigation.filter((item) => !item.protected || isOwner).map((item) => (
+          {manageNavigation.filter((item) => !item.ownerOnly || isOwner).map((item) => (
             <div
               key={item.name}
               className="flex relative justify-center items-center mb-1.5 w-full"
