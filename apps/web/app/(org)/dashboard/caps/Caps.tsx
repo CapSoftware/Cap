@@ -281,12 +281,12 @@ export const Caps = ({
           New Folder
         </Button>
       </div>
-      <h1 className="mb-3 text-xl text-gray-12">Folders</h1>
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4 mb-10">
+      <h1 className="mb-3 text-xl font-medium text-gray-12">Folders</h1>
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4 mb-10">
         <Folder />
         <Folder />
       </div>
-      <h1 className="mb-3 text-xl text-gray-12">Videos</h1>
+      <h1 className="mb-3 text-xl font-medium text-gray-12">Videos</h1>
       <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
         {uploadPlaceholders.map((u) => (
           <UploadPlaceholderCard
@@ -342,12 +342,20 @@ const Folder = () => {
 
   return (
     <div
-      onMouseEnter={() => rive?.play("folder-open")}
-      onMouseLeave={() => rive?.play("folder-close")}
-      className="flex justify-center items-center px-6 py-5 space-x-6 w-full h-auto rounded-lg border transition-colors duration-200 cursor-pointer bg-gray-3 border-gray-5 hover:bg-gray-4 hover:border-gray-6">
-      <FolderRive key={theme + "folder"} className="w-[60px] h-[60px]" />
+      onMouseEnter={() => {
+        if (!rive) return;
+        rive.stop();
+        rive.play("folder-open")
+      }}
+      onMouseLeave={() => {
+        if (!rive) return;
+        rive.stop();
+        rive.play("folder-close")
+      }}
+      className="flex justify-center items-center px-2 py-4 space-x-5 w-full h-auto rounded-lg border transition-colors duration-200 cursor-pointer bg-gray-3 border-gray-5 hover:bg-gray-4 hover:border-gray-6">
+      <FolderRive key={theme + "folder"} className="w-[50px] h-[50px]" />
       <div className="flex flex-col">
-        <h2 className="text-base truncate text-gray-12 w-fit">Untitled folder</h2>
+        <p className="text-[15px] truncate text-gray-12 w-fit">Untitled folder</p>
         <p className="text-sm truncate text-gray-10 w-fit">12 videos</p>
       </div>
     </div>
