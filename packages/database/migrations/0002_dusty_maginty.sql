@@ -2,7 +2,7 @@ CREATE TABLE `space_members` (
 	`id` varchar(15) NOT NULL,
 	`spaceId` varchar(15) NOT NULL,
 	`userId` varchar(15) NOT NULL,
-	`role` varchar(255) NOT NULL,
+	`role` varchar(255) NOT NULL DEFAULT 'member',
 	`createdAt` timestamp NOT NULL DEFAULT (now()),
 	`updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
 	CONSTRAINT `space_members_id` PRIMARY KEY(`id`),
@@ -21,12 +21,15 @@ CREATE TABLE `space_videos` (
 --> statement-breakpoint
 CREATE TABLE `spaces` (
 	`id` varchar(15) NOT NULL,
+	`primary` boolean NOT NULL DEFAULT false,
 	`name` varchar(255) NOT NULL,
 	`organizationId` varchar(15) NOT NULL,
 	`createdById` varchar(15) NOT NULL,
+	`iconUrl` varchar(255),
 	`description` varchar(1000),
 	`createdAt` timestamp NOT NULL DEFAULT (now()),
 	`updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+	`privacy` varchar(255) NOT NULL DEFAULT 'Private',
 	CONSTRAINT `spaces_id` PRIMARY KEY(`id`),
 	CONSTRAINT `spaces_id_unique` UNIQUE(`id`)
 );

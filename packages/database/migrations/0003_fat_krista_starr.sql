@@ -1,1 +1,0 @@
-ALTER TABLE `organizations` ADD `iconUrl` varchar(1024);

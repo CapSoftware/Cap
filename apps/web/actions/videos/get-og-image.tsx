@@ -1,8 +1,5 @@
 import { ImageResponse } from "next/og";
-import { GetObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { createS3Client, getS3Bucket } from "@/utils/s3";
-import { serverEnv } from "@cap/env";
+import { createBucketProvider } from "@/utils/s3";
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
@@ -38,9 +35,9 @@ export async function generateVideoOgImage(videoId: string) {
     );
   }
 
-  const { video, bucket } = videoData;
+  const { video } = videoData;
 
-  if (!video || !bucket || video.public === false) {
+  if (!video || video.public === false) {
     return new ImageResponse(
       (
         <div
@@ -64,18 +61,13 @@ export async function generateVideoOgImage(videoId: string) {
     );
   }
 
-  const [s3Client] = await createS3Client(bucket);
-  const Bucket = await getS3Bucket(bucket as any);
+  const bucket = await createBucketProvider(videoData.bucket);
 
   const screenshotKey = `${video.ownerId}/${video.id}/screenshot/screen-capture.jpg`;
   let screenshotUrl = null;
 
   try {
-    screenshotUrl = await getSignedUrl(
-      s3Client,
-      new GetObjectCommand({ Bucket, Key: screenshotKey }),
-      { expiresIn: 3600 }
-    );
+    screenshotUrl = await bucket.getSignedObjectUrl(screenshotKey);
   } catch (error) {
     console.error("Error generating URL for screenshot:", error);
   }
@@ -173,15 +165,8 @@ async function getData(videoId: string) {
 
   if (!result) return;
 
-  const defaultBucket = {
-    name: serverEnv().CAP_AWS_BUCKET,
-    region: serverEnv().CAP_AWS_REGION,
-    accessKeyId: serverEnv().CAP_AWS_ACCESS_KEY,
-    secretAccessKey: serverEnv().CAP_AWS_SECRET_KEY,
-  };
-
   return {
     video: result.video,
-    bucket: result.bucket || defaultBucket,
+    bucket: result.bucket,
   };
 }
