@@ -12,7 +12,7 @@ import { toast } from "sonner";
 import { useDashboardContext } from "../Contexts";
 import { CapCard } from "./components/CapCard/CapCard";
 import { CapPagination } from "./components/CapPagination";
-
+import { NewFolderDialog } from "./components/NewFolderDialog";
 import { EmptyCapState } from "./components/EmptyCapState";
 import { SelectedCapsBar } from "./components/SelectedCapsBar";
 import { UploadCapButton } from "./components/UploadCapButton";
@@ -51,6 +51,7 @@ export const Caps = ({
   const params = useSearchParams();
   const page = Number(params.get("page")) || 1;
   const [analytics, setAnalytics] = useState<Record<string, number>>({});
+  const [openNewFolderDialog, setOpenNewFolderDialog] = useState(false);
   const { user } = useDashboardContext();
   const { theme } = useTheme();
   const limit = 15;
@@ -276,11 +277,14 @@ export const Caps = ({
           onProgress={handleUploadProgress}
           onComplete={handleUploadComplete}
         />
-        <Button size="sm" variant="dark" className="flex gap-2 items-center">
+        <Button
+          onClick={() => setOpenNewFolderDialog(true)}
+          size="sm" variant="dark" className="flex gap-2 items-center">
           <FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
           New Folder
         </Button>
       </div>
+      <NewFolderDialog open={openNewFolderDialog} onOpenChange={setOpenNewFolderDialog} />
       <h1 className="mb-3 text-xl font-medium text-gray-12">Folders</h1>
       <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4 mb-10">
         <Folder />
