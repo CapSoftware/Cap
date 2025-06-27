@@ -26,7 +26,7 @@ export const CustomDomainIconCard = ({
             it unique.
           </CardDescription>
         </div>
-        <CustomDomain />
+        <CustomDomain isOwner={isOwner} showOwnerToast={showOwnerToast} />
       </div>
     </Card>
   );
