@@ -125,7 +125,7 @@ export const CapCard = ({
     element.textContent = text;
 
     // Apply Tailwind-like styles directly
-    element.className = 'px-2 py-1.5 text-sm font-medium rounded-lg border shadow-md text-gray-1 bg-gray-12 border-gray-3';
+    element.className = 'px-2 py-1.5 text-sm font-medium rounded-lg shadow-md text-gray-1 bg-gray-12';
 
     // Position off-screen
     element.style.position = 'absolute';
