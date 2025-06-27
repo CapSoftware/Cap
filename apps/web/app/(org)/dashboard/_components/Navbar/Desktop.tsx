@@ -43,7 +43,7 @@ export const DesktopNav = () => {
         animate={{
           width: sidebarCollapsed ? "70px" : "230px",
           transition: {
-            duration: 0.4,
+            duration: 0.6,
             type: "spring",
             bounce: 0.25,
           },
