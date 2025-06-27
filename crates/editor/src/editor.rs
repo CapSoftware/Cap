@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Instant};
 use cap_media::{feeds::RawCameraFrame, frame_ws::WSFrame};
 use cap_project::{BackgroundSource, CursorEvents, RecordingMeta, StudioRecordingMeta, XY};
 use cap_rendering::{
-    decoder::DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectRecordings, ProjectUniforms,
+    decoder::DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectRecordingsMeta, ProjectUniforms,
     RenderVideoConstants, RendererLayers,
 };
 use tokio::{
@@ -41,7 +41,7 @@ impl Renderer {
         recording_meta: &RecordingMeta,
         meta: &StudioRecordingMeta,
     ) -> Result<RendererHandle, String> {
-        let recordings = Arc::new(ProjectRecordings::new(&recording_meta.project_path, meta)?);
+        let recordings = Arc::new(ProjectRecordingsMeta::new(&recording_meta.project_path, meta)?);
         let mut max_duration = recordings.duration();
 
         // Check camera duration if it exists

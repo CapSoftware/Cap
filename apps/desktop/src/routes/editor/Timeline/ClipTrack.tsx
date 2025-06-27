@@ -89,6 +89,10 @@ export function ClipTrack(
             position: "left",
           }));
 
+          createEffect(() => {
+            console.log("left", marker());
+          });
+
           const endMarker = useSectionMarker(() => ({
             segments: segments(),
             i: i(),
@@ -553,6 +557,7 @@ function useSectionMarker(
         editorInstance.recordings.segments[prevSegment.recordingSegment ?? 0]
           .display.duration;
       const nextSegment = segments[i];
+      console.log({ prevSegmentRecordingDuration, prevSegment, nextSegment });
       if (prevSegment.recordingSegment === nextSegment.recordingSegment) {
         const timeDiff = nextSegment.start - prevSegment.end;
         return {
@@ -566,11 +571,15 @@ function useSectionMarker(
         const leftTime = prevSegmentRecordingDuration - prevSegment.end;
         const rightTime = nextSegment.start;
 
+        console.log({ leftTime, rightTime });
+
         const left = leftTime === 0 ? null : { type: "time", time: leftTime };
         const right =
           rightTime === 0 ? null : { type: "time", time: rightTime };
 
         if (left === null && right === null) return null;
+
+        console.log({ left, right });
 
         return { type: "dual", left, right } as any;
       }

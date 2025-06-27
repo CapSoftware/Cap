@@ -33,7 +33,7 @@ use cap_recording::{
     CompletedStudioRecording, RecordingError, RecordingMode, RecordingOptions,
     StudioRecordingHandle,
 };
-use cap_rendering::ProjectRecordings;
+use cap_rendering::ProjectRecordingsMeta;
 use cap_utils::{ensure_dir, spawn_actor};
 use scap::Target;
 use serde::Deserialize;
@@ -572,7 +572,7 @@ async fn handle_recording_finish(
 
     let (meta_inner, sharing) = match completed_recording {
         CompletedRecording::Studio { recording, .. } => {
-            let recordings = ProjectRecordings::new(&recording_dir, &recording.meta)?;
+            let recordings = ProjectRecordingsMeta::new(&recording_dir, &recording.meta)?;
 
             let config = project_config_from_recording(
                 &recording,
@@ -729,7 +729,7 @@ async fn handle_recording_finish(
 
 fn generate_zoom_segments_from_clicks(
     recording: &CompletedStudioRecording,
-    recordings: &ProjectRecordings,
+    recordings: &ProjectRecordingsMeta,
 ) -> Vec<ZoomSegment> {
     let mut segments = vec![];
 
@@ -773,7 +773,7 @@ fn generate_zoom_segments_from_clicks(
 
 fn project_config_from_recording(
     completed_recording: &CompletedStudioRecording,
-    recordings: &ProjectRecordings,
+    recordings: &ProjectRecordingsMeta,
     default_config: Option<ProjectConfiguration>,
 ) -> ProjectConfiguration {
     ProjectConfiguration {

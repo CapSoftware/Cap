@@ -74,17 +74,38 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
         let (timestamp_tx, timestamp_rx) = flume::bounded(1);
 
         builder.spawn_task("screen_capture_encoder", move |ready| {
+            use std::time::Duration;
+
             let mut timestamp_tx = Some(timestamp_tx);
             let _ = ready.send(Ok(()));
 
-            while let Ok(frame) = source.1.recv() {
-                if let Some(timestamp_tx) = timestamp_tx.take() {
-                    let _ = timestamp_tx.send(frame.1);
-                }
+            let Ok(frame) = source.1.recv() else {
+                return Ok(());
+            };
 
-                screen_encoder.queue_video_frame(frame.0.as_ref());
+            if let Some(timestamp_tx) = timestamp_tx.take() {
+                let _ = timestamp_tx.send(frame.1);
             }
+
+            let result = loop {
+                use flume::RecvTimeoutError;
+
+                match source.1.recv_timeout(Duration::from_secs(1)) {
+                    Ok(frame) => {
+                        let _ = screen_encoder.queue_video_frame(frame.0.as_ref());
+                    }
+                    Err(RecvTimeoutError::Timeout) => {
+                        break Err("Frame receive timeout".to_string());
+                    }
+                    Err(_) => {
+                        break Ok(());
+                    }
+                }
+            };
+
             screen_encoder.finish();
+
+            result
         });
 
         builder.spawn_source("screen_capture", source.0);
@@ -164,10 +185,12 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
                     if let Ok(mut mp4) = mp4.lock() {
                         if let Err(e) = mp4.queue_audio_frame(frame) {
                             error!("{e}");
-                            return;
+                            return Ok(());
                         }
                     }
                 }
+
+                Ok(())
             });
         }
 
@@ -192,6 +215,8 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
             if let Ok(mut mp4) = mp4.lock() {
                 mp4.finish();
             }
+
+            Ok(())
         });
 
         builder.spawn_source("screen_capture", source.0);
@@ -235,6 +260,7 @@ impl MakeCapturePipeline for AVFrameCapture {
                 screen_encoder.queue_video_frame(frame.0);
             }
             screen_encoder.finish();
+            Ok(())
         });
 
         Ok((builder, timestamp_rx))
@@ -293,6 +319,7 @@ impl MakeCapturePipeline for AVFrameCapture {
                         mp4.queue_audio_frame(frame);
                     }
                 }
+                Ok(())
             });
         }
 
@@ -314,6 +341,7 @@ impl MakeCapturePipeline for AVFrameCapture {
             if let Ok(mut mp4) = mp4.lock() {
                 mp4.finish();
             }
+            Ok(())
         });
 
         Ok(builder)
