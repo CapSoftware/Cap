@@ -116,9 +116,29 @@ export const CapCard = ({
 
   const isOwner = userId === cap.ownerId;
 
+  // Helper function to create a drag preview element
+  const createDragPreview = (text: string): HTMLElement => {
+    // Create the element
+    const element = document.createElement('div');
+
+    // Add text content
+    element.textContent = text;
+
+    // Apply Tailwind-like styles directly
+    element.className = 'px-2 py-1.5 text-sm font-medium rounded-lg shadow-md text-gray-1 bg-gray-12';
+
+    // Position off-screen
+    element.style.position = 'absolute';
+    element.style.top = '-9999px';
+    element.style.left = '-9999px';
+
+    return element;
+  };
+
   const handleDragStart = (e: React.DragEvent<HTMLDivElement>) => {
     if (anyCapSelected || !isOwner) return;
 
+    // Set the data transfer
     e.dataTransfer.setData(
       "application/cap",
       JSON.stringify({
@@ -127,24 +147,22 @@ export const CapCard = ({
       })
     );
 
-    setIsDragging(true);
+    // Set drag effect to 'move' to avoid showing the + icon
+    e.dataTransfer.effectAllowed = 'move';
 
-    // Create a smaller drag image
-    const dragImage = new Image();
-    dragImage.src = `https://cap-api-thumbnails.s3.us-west-2.amazonaws.com/${cap.id}/thumbnail.png`;
-    dragImage.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = 100;
-      canvas.height = 60;
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.drawImage(dragImage, 0, 0, 100, 60);
-        const dataURL = canvas.toDataURL();
-        const img = new Image();
-        img.src = dataURL;
-        e.dataTransfer.setDragImage(img, 50, 30);
-      }
-    };
+    // Set the drag image using the helper function
+    try {
+      const dragPreview = createDragPreview(cap.name);
+      document.body.appendChild(dragPreview);
+      e.dataTransfer.setDragImage(dragPreview, 10, 10);
+
+      // Clean up after a short delay
+      setTimeout(() => document.body.removeChild(dragPreview), 100);
+    } catch (error) {
+      console.error('Error setting drag image:', error);
+    }
+
+    setIsDragging(true);
   };
 
   const handleDragEnd = () => {
