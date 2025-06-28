@@ -73,24 +73,24 @@ export function Editor() {
 }
 
 function Inner() {
-  const { project, editorState, setEditorState } = useEditorContext();
+  const { project, editorState, setEditorState, videoFps } = useEditorContext();
 
   onMount(() =>
     events.editorStateChanged.listen((e) => {
       renderFrame.clear();
-      setEditorState("playbackTime", e.payload.playhead_position / FPS);
+      setEditorState("playbackTime", e.payload.playhead_position / videoFps());
     })
   );
 
   const renderFrame = throttle((time: number) => {
     if (!editorState.playing) {
       events.renderFrameEvent.emit({
-        frame_number: Math.max(Math.floor(time * FPS), 0),
-        fps: FPS,
+        frame_number: Math.max(Math.floor(time * videoFps()), 0),
+        fps: videoFps(),
         resolution_base: OUTPUT_SIZE,
       });
     }
-  }, 1000 / FPS);
+  }, 1000 / videoFps());
 
   const frameNumberToRender = createMemo(() => {
     const preview = editorState.previewTime;

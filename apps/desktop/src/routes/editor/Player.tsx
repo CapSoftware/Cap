@@ -32,6 +32,7 @@ export function Player() {
     setEditorState,
     zoomOutLimit,
     setProject,
+    videoFps,
   } = useEditorContext();
 
   // Load captions on mount
@@ -120,15 +121,17 @@ export function Player() {
         await commands.stopPlayback();
         setEditorState("playbackTime", 0);
         await commands.seekTo(0);
-        await commands.startPlayback(FPS, OUTPUT_SIZE);
+        await commands.startPlayback(videoFps(), OUTPUT_SIZE);
         setEditorState("playing", true);
       } else if (editorState.playing) {
         await commands.stopPlayback();
         setEditorState("playing", false);
       } else {
         // Ensure we seek to the current playback time before starting playback
-        await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
-        await commands.startPlayback(FPS, OUTPUT_SIZE);
+        await commands.seekTo(
+          Math.floor(editorState.playbackTime * videoFps())
+        );
+        await commands.startPlayback(videoFps(), OUTPUT_SIZE);
         setEditorState("playing", true);
       }
       if (editorState.playing) setEditorState("previewTime", null);
@@ -146,7 +149,9 @@ export function Player() {
       if (!editorState.playing) {
         if (prevTime !== null) setEditorState("playbackTime", prevTime);
 
-        await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
+        await commands.seekTo(
+          Math.floor(editorState.playbackTime * videoFps())
+        );
       }
 
       await handlePlayPauseClick();
@@ -320,8 +325,8 @@ function PreviewCanvas() {
 
   return (
     <div
-      ref={setCanvasContainerRef}
       class="relative flex-1 justify-center items-center"
+      ref={setCanvasContainerRef}
     >
       <Show when={latestFrame()}>
         {(currentFrame) => {
