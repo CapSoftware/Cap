@@ -72,7 +72,7 @@ export function ClipTrack(
 
           const relativeSegment = mergeProps(segment, () => ({
             start: prevDuration(),
-            end: segment.end - segment.start + prevDuration(),
+            end: prevDuration() + (segment.end - segment.start) / segment.timescale,
           }));
 
           const segmentX = useSegmentTranslateX(() => relativeSegment);
@@ -80,7 +80,7 @@ export function ClipTrack(
 
           const segmentRecording = (s = i()) =>
             editorInstance.recordings.segments[
-              segments()[s].recordingSegment ?? 0
+            segments()[s].recordingSegment ?? 0
             ];
 
           const marker = useSectionMarker(() => ({
@@ -113,9 +113,8 @@ export function ClipTrack(
                   <div
                     class="absolute w-0 z-10 h-full *:absolute"
                     style={{
-                      transform: `translateX(${
-                        i() === 0 ? segmentX() : segmentX()
-                      }px)`,
+                      transform: `translateX(${i() === 0 ? segmentX() : segmentX()
+                        }px)`,
                     }}
                   >
                     <div class="w-[2px] bottom-0 -top-2 rounded-full from-red-300 to-transparent bg-gradient-to-b -translate-x-1/2" />
@@ -265,7 +264,7 @@ export function ClipTrack(
                           segmentI === i()
                             ? acc
                             : acc +
-                              (segment.end - segment.start) / segment.timescale,
+                            (segment.end - segment.start) / segment.timescale,
                         0
                       );
 
@@ -278,7 +277,7 @@ export function ClipTrack(
                     const prevSegmentIsSameClip =
                       prevSegment?.recordingSegment !== undefined
                         ? prevSegment.recordingSegment ===
-                          segment.recordingSegment
+                        segment.recordingSegment
                         : false;
 
                     function update(event: MouseEvent) {
@@ -332,6 +331,12 @@ export function ClipTrack(
                             <IconLucideClock class="size-3.5" />{" "}
                             {(segment.end - segment.start).toFixed(1)}s
                           </div>
+                          <Show when={segment.timescale !== 1}>
+                            <div class="flex gap-1 items-center text-xs font-bold text-blue-11">
+                              <IconLucideFastForward class="size-3" />
+                              {segment.timescale}x
+                            </div>
+                          </Show>
                         </div>
                       </Show>
                     );
@@ -355,7 +360,7 @@ export function ClipTrack(
                           segmentI === i()
                             ? acc
                             : acc +
-                              (segment.end - segment.start) / segment.timescale,
+                            (segment.end - segment.start) / segment.timescale,
                         0
                       );
 
@@ -363,7 +368,7 @@ export function ClipTrack(
                     const nextSegmentIsSameClip =
                       nextSegment?.recordingSegment !== undefined
                         ? nextSegment.recordingSegment ===
-                          segment.recordingSegment
+                        segment.recordingSegment
                         : false;
 
                     function update(event: MouseEvent) {
@@ -470,9 +475,8 @@ function Markings(props: { segment: TimelineSegment; prevDuration: number }) {
       {(marking) => (
         <div
           style={{
-            transform: `translateX(${
-              (marking - props.segment.start) / secsPerPixel()
-            }px)`,
+            transform: `translateX(${(marking - props.segment.start) / secsPerPixel()
+              }px)`,
           }}
           class="absolute z-10 w-px h-12 bg-gradient-to-b from-transparent to-transparent via-white-transparent-40 dark:via-black-transparent-60"
         />
@@ -516,10 +520,10 @@ function useSectionMarker(
   }
 ): Accessor<
   | ({ type: "dual" } & (
-      | { left: SectionMarker; right: null }
-      | { left: null; right: SectionMarker }
-      | { left: SectionMarker; right: SectionMarker }
-    ))
+    | { left: SectionMarker; right: null }
+    | { left: null; right: SectionMarker }
+    | { left: SectionMarker; right: SectionMarker }
+  ))
   | { type: "single"; value: SectionMarker }
   | null
 > {
@@ -532,10 +536,10 @@ function useSectionMarker(
       return segments[0].start === 0
         ? null
         : {
-            type: "dual",
-            right: { type: "time", time: segments[0].start },
-            left: null,
-          };
+          type: "dual",
+          right: { type: "time", time: segments[0].start },
+          left: null,
+        };
     }
 
     if (i === segments.length - 1 && position === "right") {
