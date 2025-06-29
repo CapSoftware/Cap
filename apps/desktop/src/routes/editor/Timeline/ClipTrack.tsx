@@ -4,7 +4,6 @@ import {
 } from "@solid-primitives/event-listener";
 import { cx } from "cva";
 import {
-  Accessor,
   ComponentProps,
   For,
   Match,
@@ -28,6 +27,7 @@ import {
   useSegmentTranslateX,
   useSegmentWidth,
 } from "./Track";
+import { getSectionMarker } from "./sectionMarker";
 
 export function ClipTrack(
   props: Pick<ComponentProps<"div">, "ref"> & {
@@ -510,81 +510,14 @@ function CutOffsetButton(props: {
   );
 }
 
-type SectionMarker = { type: "reset" } | { type: "time"; time: number };
-
 function useSectionMarker(
   props: () => {
     segments: TimelineSegment[];
     i: number;
     position: "left" | "right";
   }
-): Accessor<
-  | ({ type: "dual" } & (
-      | { left: SectionMarker; right: null }
-      | { left: null; right: SectionMarker }
-      | { left: SectionMarker; right: SectionMarker }
-    ))
-  | { type: "single"; value: SectionMarker }
-  | null
-> {
+) {
   const { editorInstance } = useEditorContext();
 
-  return () => {
-    const { segments, i, position } = props();
-
-    if (i === 0 && position === "left") {
-      return segments[0].start === 0
-        ? null
-        : {
-            type: "dual",
-            right: { type: "time", time: segments[0].start },
-            left: null,
-          };
-    }
-
-    if (i === segments.length - 1 && position === "right") {
-      const diff =
-        editorInstance.recordings.segments[segments[i].recordingSegment ?? 0]
-          .display.duration - segments[i].end;
-      return diff > 0
-        ? { type: "dual", left: { type: "time", time: diff }, right: null }
-        : null;
-    }
-
-    if (position === "left") {
-      const prevSegment = segments[i - 1];
-      const prevSegmentRecordingDuration =
-        editorInstance.recordings.segments[prevSegment.recordingSegment ?? 0]
-          .display.duration;
-      const nextSegment = segments[i];
-      console.log({ prevSegmentRecordingDuration, prevSegment, nextSegment });
-      if (prevSegment.recordingSegment === nextSegment.recordingSegment) {
-        const timeDiff = nextSegment.start - prevSegment.end;
-        return {
-          type: "single",
-          value:
-            timeDiff === 0
-              ? { type: "reset" }
-              : { type: "time", time: timeDiff },
-        };
-      } else {
-        const leftTime = prevSegmentRecordingDuration - prevSegment.end;
-        const rightTime = nextSegment.start;
-
-        console.log({ leftTime, rightTime });
-
-        const left = leftTime === 0 ? null : { type: "time", time: leftTime };
-        const right =
-          rightTime === 0 ? null : { type: "time", time: rightTime };
-
-        if (left === null && right === null) return null;
-
-        console.log({ left, right });
-
-        return { type: "dual", left, right } as any;
-      }
-    }
-
-    return null;
-  };
+  return () => getSectionMarker(props(), editorInstance.recordings.segments);
 }

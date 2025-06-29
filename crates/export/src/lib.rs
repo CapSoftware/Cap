@@ -222,8 +222,7 @@ impl Exporter {
                             .map(|v| v.boxed())
                     })
                 },
-            )
-            .unwrap();
+            )?;
 
             while let Ok(frame) = frame_rx.recv() {
                 encoder.queue_video_frame(frame.video);
