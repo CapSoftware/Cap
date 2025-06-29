@@ -34,10 +34,7 @@ use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
 use cap_project::RecordingMetaInner;
 use cap_project::XY;
 use cap_project::{ProjectConfiguration, RecordingMeta, SharingMeta, StudioRecordingMeta};
-use cap_recording::RecordingMode;
-use cap_recording::RecordingOptions;
-use cap_rendering::ProjectRecordings;
-use captions::DownloadProgress;
+use cap_rendering::ProjectRecordingsMeta;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
 use editor_window::EditorInstances;
@@ -266,9 +263,7 @@ pub struct NewScreenshotAdded {
 pub struct RecordingStarted;
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
-pub struct RecordingStopped {
-    path: PathBuf,
-}
+pub struct RecordingStopped;
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestStartRecording;
@@ -771,7 +766,7 @@ struct SerializedEditorInstance {
     frames_socket_url: String,
     recording_duration: f64,
     saved_project_config: ProjectConfiguration,
-    recordings: Arc<ProjectRecordings>,
+    recordings: Arc<ProjectRecordingsMeta>,
     path: PathBuf,
 }
 
@@ -839,7 +834,7 @@ async fn copy_video_to_clipboard(
 #[tauri::command]
 #[specta::specta]
 async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, String> {
-    let recording_meta = RecordingMeta::load_for_project(&path)?;
+    let recording_meta = RecordingMeta::load_for_project(&path).map_err(|v| v.to_string())?;
 
     fn get_duration_for_path(path: PathBuf) -> Result<f64, String> {
         let reader = BufReader::new(
@@ -1043,7 +1038,7 @@ async fn upload_exported_video(
         return Ok(UploadResult::UpgradeRequired);
     }
 
-    let mut meta = RecordingMeta::load_for_project(&path)?;
+    let mut meta = RecordingMeta::load_for_project(&path).map_err(|v| v.to_string())?;
 
     let output_path = meta.output_path();
     if !output_path.exists() {
@@ -2295,7 +2290,7 @@ impl<F: Future<Output = T>, T, E> TransposeAsync for Result<F, E> {
 }
 
 fn open_project_from_path(path: &PathBuf, app: AppHandle) -> Result<(), String> {
-    let meta = RecordingMeta::load_for_project(path)?;
+    let meta = RecordingMeta::load_for_project(path).map_err(|v| v.to_string())?;
 
     match &meta.inner {
         RecordingMetaInner::Studio(_) => {
