@@ -1,7 +1,7 @@
 use anyhow::Result;
 use cap_project::{
-    AspectRatio, CameraXPosition, CameraYPosition, Crop, CursorEvents, ProjectConfiguration,
-    RecordingMeta, StudioRecordingMeta, XY,
+    AspectRatio, CameraShape, CameraXPosition, CameraYPosition, Crop, CursorEvents,
+    ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY,
 };
 use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
@@ -768,10 +768,26 @@ impl ProjectUniforms {
                 let zoomed_size =
                     (zoom.t as f32) * zoom_size * base_size + (1.0 - zoom.t as f32) * base_size;
 
-                let size = [
-                    min_axis * zoomed_size + CAMERA_PADDING,
-                    min_axis * zoomed_size + CAMERA_PADDING,
-                ];
+                let aspect = frame_size[0] / frame_size[1];
+                let size = match project.camera.shape {
+                    CameraShape::Source => {
+                        if aspect >= 1.0 {
+                            [
+                                (min_axis * zoomed_size + CAMERA_PADDING) * aspect,
+                                min_axis * zoomed_size + CAMERA_PADDING,
+                            ]
+                        } else {
+                            [
+                                min_axis * zoomed_size + CAMERA_PADDING,
+                                (min_axis * zoomed_size + CAMERA_PADDING) / aspect,
+                            ]
+                        }
+                    }
+                    CameraShape::Square => [
+                        min_axis * zoomed_size + CAMERA_PADDING,
+                        min_axis * zoomed_size + CAMERA_PADDING,
+                    ],
+                };
 
                 let position = {
                     let x = match &project.camera.position.x {
@@ -800,18 +816,21 @@ impl ProjectUniforms {
                 CompositeVideoFrameUniforms {
                     output_size,
                     frame_size,
-                    crop_bounds: [
-                        (frame_size[0] - frame_size[1]) / 2.0,
-                        0.0,
-                        frame_size[0] - (frame_size[0] - frame_size[1]) / 2.0,
-                        frame_size[1],
-                    ],
+                    crop_bounds: match project.camera.shape {
+                        CameraShape::Source => [0.0, 0.0, frame_size[0], frame_size[1]],
+                        CameraShape::Square => [
+                            (frame_size[0] - frame_size[1]) / 2.0,
+                            0.0,
+                            frame_size[0] - (frame_size[0] - frame_size[1]) / 2.0,
+                            frame_size[1],
+                        ],
+                    },
                     target_bounds,
                     target_size: [
                         target_bounds[2] - target_bounds[0],
                         target_bounds[3] - target_bounds[1],
                     ],
-                    rounding_px: project.camera.rounding / 100.0 * 0.5 * size[0],
+                    rounding_px: project.camera.rounding / 100.0 * 0.5 * size[0].min(size[1]),
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
                     velocity_uv: [0.0, 0.0],
                     motion_blur_amount,
