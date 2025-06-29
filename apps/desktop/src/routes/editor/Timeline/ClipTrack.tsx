@@ -89,10 +89,6 @@ export function ClipTrack(
             position: "left",
           }));
 
-          createEffect(() => {
-            console.log("left", marker());
-          });
-
           const endMarker = useSectionMarker(() => ({
             segments: segments(),
             i: i(),
