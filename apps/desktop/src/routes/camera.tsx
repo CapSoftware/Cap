@@ -72,26 +72,28 @@ function Page() {
     height: number;
   } | null>(null);
 
+  function imageDataHandler(imageData: { width: number; data: ImageData }) {
+    setLatestFrame(imageData);
+
+    const currentDimensions = frameDimensions();
+    if (
+      !currentDimensions ||
+      currentDimensions.width !== imageData.data.width ||
+      currentDimensions.height !== imageData.data.height
+    ) {
+      setFrameDimensions({
+        width: imageData.data.width,
+        height: imageData.data.height,
+      });
+    }
+
+    const ctx = cameraCanvasRef?.getContext("2d");
+    ctx?.putImageData(imageData.data, 0, 0);
+  }
+
   const [ws, isConnected] = createImageDataWS(
     `ws://localhost:${cameraWsPort}`,
-    (imageData) => {
-      setLatestFrame(imageData);
-
-      const currentDimensions = frameDimensions();
-      if (
-        !currentDimensions ||
-        currentDimensions.width !== imageData.data.width ||
-        currentDimensions.height !== imageData.data.height
-      ) {
-        setFrameDimensions({
-          width: imageData.data.width,
-          height: imageData.data.height,
-        });
-      }
-
-      const ctx = cameraCanvasRef?.getContext("2d");
-      ctx?.putImageData(imageData.data, 0, 0);
-    }
+    imageDataHandler
   );
 
   const reconnectInterval = setInterval(() => {
@@ -101,24 +103,7 @@ function Page() {
 
       const newWs = createImageDataWS(
         `ws://localhost:${cameraWsPort}`,
-        (imageData) => {
-          setLatestFrame(imageData);
-
-          const currentDimensions = frameDimensions();
-          if (
-            !currentDimensions ||
-            currentDimensions.width !== imageData.data.width ||
-            currentDimensions.height !== imageData.data.height
-          ) {
-            setFrameDimensions({
-              width: imageData.data.width,
-              height: imageData.data.height,
-            });
-          }
-
-          const ctx = cameraCanvasRef?.getContext("2d");
-          ctx?.putImageData(imageData.data, 0, 0);
-        }
+        imageDataHandler
       );
       Object.assign(ws, newWs[0]);
     }
