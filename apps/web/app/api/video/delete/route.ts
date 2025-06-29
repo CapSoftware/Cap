@@ -3,13 +3,8 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { db } from "@cap/database";
 import { and, eq } from "drizzle-orm";
-import {
-  DeleteObjectsCommand,
-  ListObjectsV2Command,
-  S3Client,
-} from "@aws-sdk/client-s3";
 import { getHeaders } from "@/utils/helpers";
-import { createS3Client, getS3Bucket } from "@/utils/s3";
+import { createBucketProvider } from "@/utils/s3";
 
 export async function DELETE(request: NextRequest) {
   const user = await getCurrentUser();
@@ -55,28 +50,19 @@ export async function DELETE(request: NextRequest) {
     .delete(videos)
     .where(and(eq(videos.id, videoId), eq(videos.ownerId, userId)));
 
-  const [s3Client] = await createS3Client(result.bucket);
-  const Bucket = await getS3Bucket(result.bucket);
+  const bucketProvider = await createBucketProvider(result.bucket);
   const prefix = `${userId}/${videoId}/`;
 
-  const listObjectsCommand = new ListObjectsV2Command({
-    Bucket,
-    Prefix: prefix,
+  const listedObjects = await bucketProvider.listObjects({
+    prefix: prefix,
   });
 
-  const listedObjects = await s3Client.send(listObjectsCommand);
-
   if (listedObjects.Contents?.length) {
-    const deleteObjectsCommand = new DeleteObjectsCommand({
-      Bucket,
-      Delete: {
-        Objects: listedObjects.Contents.map((content: any) => ({
-          Key: content.Key,
-        })),
-      },
-    });
-
-    await s3Client.send(deleteObjectsCommand);
+    await bucketProvider.deleteObjects(
+      listedObjects.Contents.map((content) => ({
+        Key: content.Key,
+      }))
+    );
   }
 
   return Response.json(true, {

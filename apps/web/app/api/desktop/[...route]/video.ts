@@ -1,5 +1,5 @@
 import { dub } from "@/utils/dub";
-import { createS3Client, getS3Bucket, getS3Config } from "@/utils/s3";
+import { createBucketProvider, getS3Bucket, getS3Config } from "@/utils/s3";
 import { db } from "@cap/database";
 import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
@@ -10,10 +10,7 @@ import { zValidator } from "@hono/zod-validator";
 import { count, eq, and } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
-import {
-  DeleteObjectsCommand,
-  ListObjectsV2Command,
-} from "@aws-sdk/client-s3";
+import { DeleteObjectsCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 
 import { withAuth } from "../../utils";
 
@@ -52,24 +49,19 @@ app.get(
       if (!isUpgraded && duration && duration > 300)
         return c.json({ error: "upgrade_required" }, { status: 403 });
 
-      const [bucket] = await db()
+      const [customBucket] = await db()
         .select()
         .from(s3Buckets)
         .where(eq(s3Buckets.ownerId, user.id));
 
-      console.log("User bucket:", bucket ? "found" : "not found");
+      console.log("User bucket:", customBucket ? "found" : "not found");
 
-      const s3Config = await getS3Config(bucket);
-      const bucketName = await getS3Bucket(bucket);
-
-      console.log("S3 Config:", { region: s3Config.region, bucketName });
+      const bucket = await createBucketProvider(customBucket);
 
       const date = new Date();
       const formattedDate = `${date.getDate()} ${date.toLocaleString(
         "default",
-        {
-          month: "long",
-        }
+        { month: "long" }
       )} ${date.getFullYear()}`;
 
       if (videoId !== undefined) {
@@ -81,9 +73,10 @@ app.get(
         if (video) {
           return c.json({
             id: video.id,
+            // All deprecated
             user_id: user.id,
-            aws_region: video.awsRegion,
-            aws_bucket: video.awsBucket,
+            aws_region: "n/a",
+            aws_bucket: "n/a",
           });
         }
       }
@@ -96,8 +89,8 @@ app.get(
           name ??
           `Cap ${isScreenshot ? "Screenshot" : "Recording"} - ${formattedDate}`,
         ownerId: user.id,
-        awsRegion: s3Config.region,
-        awsBucket: bucketName,
+        awsRegion: "auto",
+        awsBucket: bucket.name,
         source:
           recordingMode === "hls"
             ? { type: "local" as const }
@@ -105,7 +98,7 @@ app.get(
             ? { type: "desktopMP4" as const }
             : undefined,
         isScreenshot,
-        bucket: bucket?.id,
+        bucket: customBucket?.id,
       };
 
       await db().insert(videos).values(videoData);
@@ -162,9 +155,10 @@ app.get(
 
       return c.json({
         id: idToUse,
+        // All deprecated
         user_id: user.id,
-        aws_region: s3Config.region,
-        aws_bucket: bucketName,
+        aws_region: "n/a",
+        aws_bucket: "n/a",
       });
     } catch (error) {
       console.error("Error in video create endpoint:", error);
@@ -188,12 +182,18 @@ app.delete(
         .where(eq(videos.id, videoId));
 
       if (query.length === 0) {
-        return c.json({ error: true, message: "Video does not exist" }, { status: 401 });
+        return c.json(
+          { error: true, message: "Video does not exist" },
+          { status: 401 }
+        );
       }
 
       const result = query[0];
       if (!result) {
-        return c.json({ error: true, message: "Video not found" }, { status: 404 });
+        return c.json(
+          { error: true, message: "Video not found" },
+          { status: 404 }
+        );
       }
 
       await db()
@@ -204,14 +204,19 @@ app.delete(
       const Bucket = await getS3Bucket(result.bucket);
       const prefix = `${user.id}/${videoId}/`;
 
-      const listObjectsCommand = new ListObjectsV2Command({ Bucket, Prefix: prefix });
+      const listObjectsCommand = new ListObjectsV2Command({
+        Bucket,
+        Prefix: prefix,
+      });
       const listedObjects = await s3Client.send(listObjectsCommand);
 
       if (listedObjects.Contents?.length) {
         const deleteObjectsCommand = new DeleteObjectsCommand({
           Bucket,
           Delete: {
-            Objects: listedObjects.Contents.map((content: any) => ({ Key: content.Key })),
+            Objects: listedObjects.Contents.map((content: any) => ({
+              Key: content.Key,
+            })),
           },
         });
 

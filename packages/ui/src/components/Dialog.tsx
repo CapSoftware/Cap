@@ -67,13 +67,13 @@ const DialogHeader = ({
 }: DialogHeaderProps) => (
   <div
     className={classNames(
-      "flex gap-3 items-center p-5 border-b border-gray-4",
+      "flex flex-col gap-3 items-start p-5 border-b md:items-center md:flex-row border-gray-4",
       className
     )}
     {...props}
   >
     {icon && (
-      <div className="flex justify-center items-center rounded-full border text-gray-12 border-gray-5 bg-gray-3 size-10">
+      <div className="flex justify-center items-center rounded-full border md:mb-0 text-gray-12 border-gray-5 bg-gray-3 size-10">
         {icon}
       </div>
     )}

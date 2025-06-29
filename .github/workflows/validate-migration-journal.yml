@@ -1,0 +1,76 @@
+name: Validate Migrations
+
+on:
+  pull_request:
+    paths:
+      - "packages/database/migrations/**"
+
+jobs:
+  validate-journal:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate journal is append-only
+        run: |
+          JOURNAL_PATH="packages/database/migrations/meta/_journal.json"
+
+          # Get the journal from previous commit
+          git fetch origin
+
+          # Check if journal exists in previous commit
+          if git show 34cd664a1215:$JOURNAL_PATH > /dev/null 2>&1; then
+            git show 34cd664a1215:$JOURNAL_PATH > base.json
+          else
+            echo '{"version":"5","dialect":"mysql","entries":[]}' > base.json
+          fi
+
+          # Get current journal
+          cp $JOURNAL_PATH current.json
+
+          # Check version and dialect haven't changed
+          BASE_VERSION=$(jq -r '.version' base.json)
+          CURRENT_VERSION=$(jq -r '.version' current.json)
+          if [ "$BASE_VERSION" != "$CURRENT_VERSION" ]; then
+            echo "::error file=$JOURNAL_PATH,line=2,title=Version Changed::Migration journal version cannot be changed (was: $BASE_VERSION, now: $CURRENT_VERSION)"
+            exit 1
+          fi
+
+          BASE_DIALECT=$(jq -r '.dialect' base.json)
+          CURRENT_DIALECT=$(jq -r '.dialect' current.json)
+          if [ "$BASE_DIALECT" != "$CURRENT_DIALECT" ]; then
+            echo "::error file=$JOURNAL_PATH,line=3,title=Dialect Changed::Migration journal dialect cannot be changed (was: $BASE_DIALECT, now: $CURRENT_DIALECT)"
+            exit 1
+          fi
+
+          # Check that entries weren't removed
+          BASE_COUNT=$(jq '.entries | length' base.json)
+          CURRENT_COUNT=$(jq '.entries | length' current.json)
+          if [ "$CURRENT_COUNT" -lt "$BASE_COUNT" ]; then
+            echo "::error file=$JOURNAL_PATH,title=Entries Removed::Migration entries cannot be removed (base has $BASE_COUNT entries, current has $CURRENT_COUNT)"
+            exit 1
+          fi
+
+          # Extract and compare the overlapping entries
+          jq --argjson n "$BASE_COUNT" '.entries[:$n]' current.json > current_overlap.json
+          jq '.entries' base.json > base_entries.json
+
+          if ! diff -q base_entries.json current_overlap.json > /dev/null; then
+            echo "::error file=$JOURNAL_PATH,title=Existing Entries Modified::Existing migration entries have been modified. Migrations are append-only."
+
+            # Find which entry was modified using jq
+            for i in $(seq 0 $((BASE_COUNT - 1))); do
+              BASE_ENTRY=$(jq ".entries[$i]" base.json)
+              CURRENT_ENTRY=$(jq ".entries[$i]" current.json)
+              if [ "$BASE_ENTRY" != "$CURRENT_ENTRY" ]; then
+                TAG=$(echo "$BASE_ENTRY" | jq -r '.tag')
+                echo "::error file=$JOURNAL_PATH,title=Entry Modified::Migration entry '$TAG' (index $i) was modified"
+              fi
+            done
+            exit 1
+          fi
+
+          echo "::notice file=$JOURNAL_PATH,title=Journal Valid::✅ Migration journal validation passed! ($((CURRENT_COUNT - BASE_COUNT)) new entries added)"

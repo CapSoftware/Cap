@@ -158,7 +158,6 @@ export function ExportDialog() {
       setExportState(reconcile({ action: "copy", type: "starting" }));
 
       const outputPath = await exportWithSettings((progress) => {
-        console.log(progress);
         setExportState({ type: "rendering", progress });
       });
 

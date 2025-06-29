@@ -4,11 +4,7 @@ import { Button } from "@cap/ui";
 import { videos } from "@cap/database/schema";
 import moment from "moment";
 import { userSelectProps } from "@cap/database/auth/session";
-import {
-  faChevronDown,
-  faLock,
-  faUnlock,
-} from "@fortawesome/free-solid-svg-icons";
+import { faChevronDown, faLock } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
@@ -19,9 +15,9 @@ import { editTitle } from "@/actions/videos/edit-title";
 import { usePublicEnv } from "@/utils/public-env";
 import { isUserOnProPlan } from "@cap/utils";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
 import clsx from "clsx";
-import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
+import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDialog";
 
 export const ShareHeader = ({
   data,
@@ -59,7 +55,7 @@ export const ShareHeader = ({
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
 
-  const contextData = useSharedContext();
+  const contextData = useDashboardContext();
   const contextSpaces = contextData?.spacesData || null;
   const contextSharedSpaces = contextData?.sharedSpaces || null;
   const effectiveSharedSpaces = contextSharedSpaces || sharedSpaces;

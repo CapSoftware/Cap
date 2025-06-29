@@ -1,8 +1,8 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "7fa85e98-38f6-4126-bb02-8edc9b64801d",
-  "prevId": "94acb4a1-1de9-4bcf-bb06-5aeae407cd92",
+  "id": "34547a7f-467f-4213-af17-84b26feef022",
+  "prevId": "b5bc5676-a4a0-47e2-9d59-1ee12ab6a9c2",
   "tables": {
     "accounts": {
       "name": "accounts",
@@ -144,6 +144,52 @@
       "uniqueConstraints": {
         "accounts_id_unique": {
           "name": "accounts_id_unique",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "checkConstraint": {}
+    },
+    "auth_api_keys": {
+      "name": "auth_api_keys",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "auth_api_keys_id": {
+          "name": "auth_api_keys_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {
+        "auth_api_keys_id_unique": {
+          "name": "auth_api_keys_id_unique",
           "columns": [
             "id"
           ]
@@ -527,6 +573,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "iconUrl": {
+          "name": "iconUrl",
+          "type": "varchar(1024)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "createdAt": {
           "name": "createdAt",
           "type": "timestamp",
@@ -884,7 +937,8 @@
           "type": "varchar(255)",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false
+          "autoincrement": false,
+          "default": "'member'"
         },
         "createdAt": {
           "name": "createdAt",
@@ -1047,6 +1101,14 @@
           "notNull": true,
           "autoincrement": false
         },
+        "primary": {
+          "name": "primary",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
         "name": {
           "name": "name",
           "type": "varchar(255)",
@@ -1066,6 +1128,13 @@
           "type": "varchar(15)",
           "primaryKey": false,
           "notNull": true,
+          "autoincrement": false
+        },
+        "iconUrl": {
+          "name": "iconUrl",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false,
           "autoincrement": false
         },
         "description": {
@@ -1091,6 +1160,14 @@
           "autoincrement": false,
           "onUpdate": true,
           "default": "(now())"
+        },
+        "privacy": {
+          "name": "privacy",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'Private'"
         }
       },
       "indexes": {
@@ -1411,6 +1488,13 @@
           "notNull": true,
           "autoincrement": false,
           "default": true
+        },
+        "password": {
+          "name": "password",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         },
         "videoStartTime": {
           "name": "videoStartTime",

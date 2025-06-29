@@ -1,16 +1,14 @@
 "use server";
 
-import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos, s3Buckets } from "@cap/database/schema";
 import { db } from "@cap/database";
 import { eq } from "drizzle-orm";
-import { createS3Client } from "@/utils/s3";
+import { createBucketProvider } from "@/utils/s3";
 
 export async function getTranscript(
   videoId: string
 ): Promise<{ success: boolean; content?: string; message: string }> {
-
   const user = await getCurrentUser();
 
   if (!videoId) {
@@ -38,7 +36,7 @@ export async function getTranscript(
     return { success: false, message: "Video information is missing" };
   }
 
-  const { video, bucket } = result;
+  const { video } = result;
 
   if (video.transcriptionStatus !== "COMPLETE") {
     return {
@@ -47,27 +45,12 @@ export async function getTranscript(
     };
   }
 
-  const awsRegion = video.awsRegion;
-  const awsBucket = video.awsBucket;
-
-  if (!awsRegion || !awsBucket) {
-    return {
-      success: false,
-      message: "AWS region or bucket information is missing",
-    };
-  }
-  const [s3Client] = await createS3Client(bucket);
+  const bucket = await createBucketProvider(result.bucket);
 
   try {
     const transcriptKey = `${video.ownerId}/${videoId}/transcription.vtt`;
 
-    const getCommand = new GetObjectCommand({
-      Bucket: awsBucket,
-      Key: transcriptKey,
-    });
-
-    const response = await s3Client.send(getCommand);
-    const vttContent = await response.Body?.transformToString();
+    const vttContent = await bucket.getObject(transcriptKey);
 
     if (!vttContent) {
       return { success: false, message: "Transcript file not found" };
@@ -82,11 +65,11 @@ export async function getTranscript(
     console.error("[getTranscript] Error fetching transcript:", {
       error: error instanceof Error ? error.message : error,
       videoId,
-      userId: user?.id
+      userId: user?.id,
     });
     return {
       success: false,
       message: "Failed to fetch transcript",
     };
   }
-} 
+}

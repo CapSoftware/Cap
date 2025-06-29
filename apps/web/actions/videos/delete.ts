@@ -4,8 +4,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { db } from "@cap/database";
 import { and, eq } from "drizzle-orm";
-import { DeleteObjectsCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
-import { createS3Client, getS3Bucket } from "@/utils/s3";
+import { createBucketProvider } from "@/utils/s3";
 
 export async function deleteVideo(videoId: string) {
   try {
@@ -25,15 +24,7 @@ export async function deleteVideo(videoId: string) {
       .leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
       .where(eq(videos.id, videoId));
 
-    if (query.length === 0) {
-      return {
-        success: false,
-        message: "Video does not exist",
-      };
-    }
-
-    const result = query[0];
-    if (!result) {
+    if (!query[0]) {
       return {
         success: false,
         message: "Video not found",
@@ -44,28 +35,19 @@ export async function deleteVideo(videoId: string) {
       .delete(videos)
       .where(and(eq(videos.id, videoId), eq(videos.ownerId, userId)));
 
-    const [s3Client] = await createS3Client(result.bucket);
-    const Bucket = await getS3Bucket(result.bucket);
+    const bucket = await createBucketProvider(query[0].bucket);
     const prefix = `${userId}/${videoId}/`;
 
-    const listObjectsCommand = new ListObjectsV2Command({
-      Bucket,
-      Prefix: prefix,
+    const listedObjects = await bucket.listObjects({
+      prefix: prefix,
     });
 
-    const listedObjects = await s3Client.send(listObjectsCommand);
-
     if (listedObjects.Contents?.length) {
-      const deleteObjectsCommand = new DeleteObjectsCommand({
-        Bucket,
-        Delete: {
-          Objects: listedObjects.Contents.map((content: any) => ({
-            Key: content.Key,
-          })),
-        },
-      });
-
-      await s3Client.send(deleteObjectsCommand);
+      await bucket.deleteObjects(
+        listedObjects.Contents.map((content) => ({
+          Key: content.Key,
+        }))
+      );
     }
 
     return {

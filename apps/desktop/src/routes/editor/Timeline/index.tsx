@@ -5,7 +5,7 @@ import { cx } from "cva";
 import { For, Show, batch, createRoot, createSignal, onMount } from "solid-js";
 import { produce } from "solid-js/store";
 
-import "../../../styles/timeline.css";
+import "./styles.css";
 
 import { useEditorContext } from "../context";
 import { formatTime } from "../utils";
