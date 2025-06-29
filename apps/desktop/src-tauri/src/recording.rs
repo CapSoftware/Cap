@@ -39,6 +39,7 @@ use scap::Target;
 use serde::Deserialize;
 use specta::Type;
 use tauri::{AppHandle, Manager};
+use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder};
 use tauri_specta::Event;
 use tracing::{error, info};
 
@@ -416,16 +417,32 @@ pub async fn start_recording(
         let state_mtx = Arc::clone(&state_mtx);
         async move {
             fail!("recording::wait_actor_done");
-            let Ok(_) = actor_done_rx.await else {
-                return;
-            };
+            match actor_done_rx.await {
+                Ok(Ok(_)) => {
+                    let _ = finish_upload_tx.send(());
+                    return;
+                }
+                Ok(Err(e)) => {
+                    let mut state = state_mtx.write().await;
 
-            let _ = finish_upload_tx.send(());
+                    let mut dialog = MessageDialogBuilder::new(
+                        app.dialog().clone(),
+                        format!("An error occurred"),
+                        e,
+                    )
+                    .kind(tauri_plugin_dialog::MessageDialogKind::Error);
 
-            let mut state = state_mtx.write().await;
+                    if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
+                        dialog = dialog.parent(&window);
+                    }
 
-            // this clears the current recording for us
-            handle_recording_end(app, None, &mut state).await.ok();
+                    dialog.blocking_show();
+
+                    // this clears the current recording for us
+                    handle_recording_end(app, None, &mut state).await.ok();
+                }
+                _ => {}
+            }
         }
     });
 
@@ -512,6 +529,8 @@ async fn handle_recording_end(
         handle_recording_finish(&handle, recording).await?;
     };
 
+    let _ = RecordingStopped.emit(&handle);
+
     let _ = app.recording_logging_handle.reload(None);
 
     if let Some(window) = CapWindowId::InProgressRecording.get(&handle) {
@@ -528,9 +547,6 @@ async fn handle_recording_end(
         app.mic_feed.take();
     }
 
-    // Play sound to indicate recording has stopped
-    AppSounds::StopRecording.play();
-
     CurrentRecordingChanged.emit(&handle).ok();
 
     Ok(())
@@ -542,7 +558,6 @@ async fn handle_recording_finish(
     completed_recording: CompletedRecording,
 ) -> Result<(), String> {
     let recording_dir = completed_recording.project_path().clone();
-    let id = completed_recording.id().clone();
 
     let screenshots_dir = recording_dir.join("screenshots");
     std::fs::create_dir_all(&screenshots_dir).ok();
@@ -675,11 +690,6 @@ async fn handle_recording_finish(
         }
     };
 
-    let _ = RecordingStopped {
-        path: recording_dir.clone(),
-    }
-    .emit(app);
-
     let meta = RecordingMeta {
         platform: Some(Platform::default()),
         project_path: recording_dir.clone(),
@@ -723,6 +733,9 @@ async fn handle_recording_finish(
             }
         };
     }
+
+    // Play sound to indicate recording has stopped
+    AppSounds::StopRecording.play();
 
     Ok(())
 }

@@ -462,14 +462,7 @@ async fn run_actor_iteration(
             None
         }
 
-        (Msg::Pause(_), state @ State::Paused { .. }) => {
-            // Already paused, ignore
-            Some((state, actor))
-        }
-        (Msg::Resume(_), state @ State::Recording { .. }) => {
-            // Already recording, ignore
-            Some((state, actor))
-        }
+        (_, state) => Some((state, actor)),
     })
 }
 

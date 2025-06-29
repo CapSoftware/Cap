@@ -263,9 +263,7 @@ pub struct NewScreenshotAdded {
 pub struct RecordingStarted;
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
-pub struct RecordingStopped {
-    path: PathBuf,
-}
+pub struct RecordingStopped;
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestStartRecording;

@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 use tokio::sync::oneshot;
-use tracing::{info, trace};
+use tracing::{error, info, trace};
 
 use crate::pipeline::{
     clock::CloneFrom,
@@ -105,7 +105,7 @@ impl<T> PipelineBuilder<T> {
                             .map_err(|_| format!("Panicked"))
                         })
                         .and_then(|v| v);
-                    done_tx.send(result).ok();
+                    let _ = done_tx.send(result);
                 });
             }
         });
@@ -157,22 +157,21 @@ impl<T: PipelineClock> PipelineBuilder<T> {
 
         let (done_tx, done_rx) = oneshot::channel();
 
-        tokio::spawn({
-            let mut control = control.clone();
-            async move {
-                let (result, index, _) = futures::future::select_all(stop_rx).await;
-                let task_name = &task_names[index];
+        tokio::spawn(async move {
+            let (result, index, _) = futures::future::select_all(stop_rx).await;
+            let task_name = &task_names[index];
 
-                let result = match result {
-                    Ok(Err(error)) => Err(format!("Task '{task_name}' failed: {error}")),
-                    Err(_) => Err(format!("Task '{task_name}' failed for unknown reason")),
-                    _ => Ok(()),
-                };
+            let result = match result {
+                Ok(Err(error)) => Err(format!("Task '{task_name}' failed: {error}")),
+                Err(_) => Err(format!("Task '{task_name}' failed for unknown reason")),
+                _ => Ok(()),
+            };
 
-                let _ = control.broadcast(super::control::Control::Shutdown).await;
-
-                done_tx.send(result).ok();
+            if let Err(e) = &result {
+                error!("{e}");
             }
+
+            let _ = done_tx.send(result);
         });
 
         Ok((
