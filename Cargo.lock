@@ -932,7 +932,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop"
-version = "0.3.51"
+version = "0.3.52"
 dependencies = [
  "anyhow",
  "axum",
@@ -1060,6 +1060,7 @@ dependencies = [
  "image 0.25.5",
  "mp4",
  "serde",
+ "serde_json",
  "specta",
  "tempfile",
  "thiserror 1.0.69",
@@ -6885,9 +6886,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.133"
+version = "1.0.140"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7fceb2473b9166b2294ef05efcb65a3db80803f0b03ef86a5fc88a2b85ee377"
+checksum = "20068b6e96dc6c9bd23e01df8827e6c7e1f2fddd43c21810382803c136b99373"
 dependencies = [
  "itoa 1.0.11",
  "memchr",

@@ -6,14 +6,13 @@ import { videos, s3Buckets } from "@cap/database/schema";
 import { db } from "@cap/database";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { createS3Client } from "@/utils/s3";
+import { createBucketProvider } from "@/utils/s3";
 
 export async function editTranscriptEntry(
   videoId: string,
   entryId: number,
   newText: string
 ): Promise<{ success: boolean; message: string }> {
-
   const user = await getCurrentUser();
 
   if (!user || !videoId || entryId === undefined || !newText?.trim()) {
@@ -42,7 +41,7 @@ export async function editTranscriptEntry(
     return { success: false, message: "Video information is missing" };
   }
 
-  const { video, bucket } = result;
+  const { video } = result;
 
   if (video.ownerId !== userId) {
     return {
@@ -51,40 +50,21 @@ export async function editTranscriptEntry(
     };
   }
 
-  const awsRegion = video.awsRegion;
-  const awsBucket = video.awsBucket;
-
-  if (!awsRegion || !awsBucket) {
-    return {
-      success: false,
-      message: "AWS region or bucket information is missing",
-    };
-  }
-  const [s3Client] = await createS3Client(bucket);
+  const bucket = await createBucketProvider(result.bucket);
 
   try {
     const transcriptKey = `${video.ownerId}/${videoId}/transcription.vtt`;
 
-    const getCommand = new GetObjectCommand({
-      Bucket: awsBucket,
-      Key: transcriptKey,
-    });
-
-    const response = await s3Client.send(getCommand);
-    const vttContent = await response.Body?.transformToString();
-
-    if (!vttContent) {
+    const vttContent = await bucket.getObject(transcriptKey);
+    if (!vttContent)
       return { success: false, message: "Transcript file not found" };
-    }
+
     const updatedVttContent = updateVttEntry(vttContent, entryId, newText);
-    const putCommand = new PutObjectCommand({
-      Bucket: awsBucket,
-      Key: transcriptKey,
-      Body: updatedVttContent,
-      ContentType: "text/vtt",
+
+    await bucket.putObject(transcriptKey, updatedVttContent, {
+      contentType: "text/vtt",
     });
 
-    await s3Client.send(putCommand);
     revalidatePath(`/s/${videoId}`);
 
     return {
@@ -96,7 +76,7 @@ export async function editTranscriptEntry(
       error: error instanceof Error ? error.message : error,
       videoId,
       entryId,
-      userId
+      userId,
     });
     return {
       success: false,
@@ -105,8 +85,11 @@ export async function editTranscriptEntry(
   }
 }
 
-function updateVttEntry(vttContent: string, entryId: number, newText: string): string {
-  
+function updateVttEntry(
+  vttContent: string,
+  entryId: number,
+  newText: string
+): string {
   const lines = vttContent.split("\n");
   const updatedLines: string[] = [];
   let currentEntryId: number | null = null;
@@ -116,7 +99,7 @@ function updateVttEntry(vttContent: string, entryId: number, newText: string): s
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] || "";
     const trimmedLine = line.trim();
-    
+
     if (!trimmedLine) {
       updatedLines.push(line);
       isNextLineText = false;
@@ -152,12 +135,15 @@ function updateVttEntry(vttContent: string, entryId: number, newText: string): s
       }
     }
   }
-  
+
   if (!foundEntry) {
-    console.warn("Target entry not found in VTT content", { entryId, totalEntries: lines.filter(line => /^\d+$/.test(line.trim())).length });
+    console.warn("Target entry not found in VTT content", {
+      entryId,
+      totalEntries: lines.filter((line) => /^\d+$/.test(line.trim())).length,
+    });
   }
 
   const result = updatedLines.join("\n");
-  
+
   return result;
-} 
+}

@@ -65,7 +65,8 @@ export function AnalyticsProvider({
   email?: string;
 }) {
   const pathname = usePathname();
-  const isSharePage = pathname?.startsWith("/s/");
+  const isSharePage =
+    pathname?.startsWith("/s/") || pathname?.startsWith("/embed/");
 
   useEffect(() => {
     if (!isSharePage) {

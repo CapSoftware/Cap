@@ -16,6 +16,7 @@ import {
 import { createStore, produce, reconcile, unwrap } from "solid-js/store";
 
 import { createPresets } from "~/utils/createPresets";
+import { createCustomDomainQuery } from "~/utils/queries";
 import { createImageDataWS, createLazySignal } from "~/utils/socket";
 import {
   commands,
@@ -51,6 +52,11 @@ export const MAX_ZOOM_IN = 3;
 export type RenderState =
   | { type: "starting" }
   | { type: "rendering"; progress: FramesRendered };
+
+export type CustomDomainResponse = {
+  custom_domain: string | null;
+  domain_verified: boolean | null;
+};
 
 export const [EditorContextProvider, useEditorContext] = createContextProvider(
   (props: {
@@ -269,10 +275,15 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       },
     });
 
+    const customDomainData = createCustomDomainQuery();
+
     return {
       ...editorInstanceContext,
       meta() {
         return props.meta();
+      },
+      customDomain() {
+        return customDomainData.data;
       },
       refetchMeta: () => props.refetchMeta(),
       editorInstance: props.editorInstance,

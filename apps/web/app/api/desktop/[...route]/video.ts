@@ -1,5 +1,5 @@
 import { dub } from "@/utils/dub";
-import { getS3Bucket, getS3Config } from "@/utils/s3";
+import { createBucketProvider } from "@/utils/s3";
 import { db } from "@cap/database";
 import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
@@ -7,7 +7,7 @@ import { nanoId } from "@cap/database/helpers";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { zValidator } from "@hono/zod-validator";
-import { count, eq } from "drizzle-orm";
+import { count, eq, and } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 
@@ -48,24 +48,19 @@ app.get(
       if (!isUpgraded && duration && duration > 300)
         return c.json({ error: "upgrade_required" }, { status: 403 });
 
-      const [bucket] = await db()
+      const [customBucket] = await db()
         .select()
         .from(s3Buckets)
         .where(eq(s3Buckets.ownerId, user.id));
 
-      console.log("User bucket:", bucket ? "found" : "not found");
+      console.log("User bucket:", customBucket ? "found" : "not found");
 
-      const s3Config = await getS3Config(bucket);
-      const bucketName = await getS3Bucket(bucket);
-
-      console.log("S3 Config:", { region: s3Config.region, bucketName });
+      const bucket = await createBucketProvider(customBucket);
 
       const date = new Date();
       const formattedDate = `${date.getDate()} ${date.toLocaleString(
         "default",
-        {
-          month: "long",
-        }
+        { month: "long" }
       )} ${date.getFullYear()}`;
 
       if (videoId !== undefined) {
@@ -77,9 +72,10 @@ app.get(
         if (video) {
           return c.json({
             id: video.id,
+            // All deprecated
             user_id: user.id,
-            aws_region: video.awsRegion,
-            aws_bucket: video.awsBucket,
+            aws_region: "n/a",
+            aws_bucket: "n/a",
           });
         }
       }
@@ -92,8 +88,8 @@ app.get(
           name ??
           `Cap ${isScreenshot ? "Screenshot" : "Recording"} - ${formattedDate}`,
         ownerId: user.id,
-        awsRegion: s3Config.region,
-        awsBucket: bucketName,
+        awsRegion: "auto",
+        awsBucket: bucket.name,
         source:
           recordingMode === "hls"
             ? { type: "local" as const }
@@ -101,7 +97,7 @@ app.get(
             ? { type: "desktopMP4" as const }
             : undefined,
         isScreenshot,
-        bucket: bucket?.id,
+        bucket: customBucket?.id,
       };
 
       await db().insert(videos).values(videoData);
@@ -158,12 +154,58 @@ app.get(
 
       return c.json({
         id: idToUse,
+        // All deprecated
         user_id: user.id,
-        aws_region: s3Config.region,
-        aws_bucket: bucketName,
+        aws_region: "n/a",
+        aws_bucket: "n/a",
       });
     } catch (error) {
       console.error("Error in video create endpoint:", error);
+      return c.json({ error: "Internal server error" }, { status: 500 });
+    }
+  }
+);
+
+app.delete(
+  "/delete",
+  zValidator("query", z.object({ videoId: z.string() })),
+  async (c) => {
+    const { videoId } = c.req.valid("query");
+    const user = c.get("user");
+
+    try {
+      const [result] = await db()
+        .select({ video: videos, bucket: s3Buckets })
+        .from(videos)
+        .leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
+        .where(eq(videos.id, videoId));
+
+      if (!result)
+        return c.json(
+          { error: true, message: "Video not found" },
+          { status: 404 }
+        );
+
+      await db()
+        .delete(videos)
+        .where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
+
+      const bucket = await createBucketProvider(result.bucket);
+
+      const listedObjects = await bucket.listObjects({
+        prefix: `${user.id}/${videoId}/`,
+      });
+
+      if (listedObjects.Contents?.length)
+        await bucket.deleteObjects(
+          listedObjects.Contents.map((content: any) => ({
+            Key: content.Key,
+          }))
+        );
+
+      return c.json(true);
+    } catch (error) {
+      console.error("Error in video delete endpoint:", error);
       return c.json({ error: "Internal server error" }, { status: 500 });
     }
   }

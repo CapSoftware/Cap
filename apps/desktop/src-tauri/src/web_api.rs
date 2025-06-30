@@ -14,16 +14,18 @@ async fn do_authed_request(
 ) -> Result<reqwest::Response, reqwest::Error> {
     let client = reqwest::Client::new();
 
-    let mut req = build(client, url).header(
-        "Authorization",
-        format!(
-            "Bearer {}",
-            match &auth.secret {
-                AuthSecret::ApiKey { api_key } => api_key,
-                AuthSecret::Session { token, .. } => token,
-            }
-        ),
-    );
+    let mut req = build(client, url)
+        .header(
+            "Authorization",
+            format!(
+                "Bearer {}",
+                match &auth.secret {
+                    AuthSecret::ApiKey { api_key } => api_key,
+                    AuthSecret::Session { token, .. } => token,
+                }
+            ),
+        )
+        .header("X-Desktop-Version", env!("CARGO_PKG_VERSION"));
 
     if let Some(s) = std::option_env!("VITE_VERCEL_AUTOMATION_BYPASS_SECRET") {
         req = req.header("x-vercel-protection-bypass", s);

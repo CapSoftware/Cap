@@ -1,20 +1,15 @@
 use cap_editor::{get_audio_segments, Segment};
 use cap_media::{
-    data::{AudioInfo, RawVideoFormat, VideoInfo},
-    encoders::{AACEncoder, AudioEncoder, GifEncoderWrapper, H264Encoder, MP4Input, OpusEncoder},
-    feeds::{AudioRenderer, AudioSegment, AudioSegmentTrack},
-    MediaError,
+    data::{RawVideoFormat, VideoInfo},
+    encoders::{AACEncoder, AudioEncoder, GifEncoderWrapper, H264Encoder, MP4Input},
+    feeds::AudioRenderer,
 };
-use cap_project::{
-    AudioConfiguration, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
-    StudioRecordingMeta, XY,
-};
+use cap_project::{ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY};
 use cap_rendering::{
-    ProjectRecordings, ProjectUniforms, RecordingSegmentDecoders, RenderSegment,
-    RenderVideoConstants, RenderedFrame, SegmentVideoPaths,
+    ProjectRecordingsMeta, ProjectUniforms, RenderSegment, RenderVideoConstants, RenderedFrame,
 };
 use futures::FutureExt;
-use image::{ImageBuffer, Rgba};
+use image::ImageBuffer;
 use serde::Deserialize;
 use specta::Type;
 use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -44,26 +39,11 @@ pub enum ExportError {
     Timeout(#[from] tokio::time::error::Elapsed),
 }
 
-pub struct Exporter<TOnProgress> {
-    render_segments: Vec<RenderSegment>,
-    audio_segments: Vec<AudioSegment>,
-    output_size: (u32, u32),
-    output_path: PathBuf,
-    project: ProjectConfiguration,
-    project_path: PathBuf,
-    on_progress: TOnProgress,
-    recording_meta: RecordingMeta,
-    render_constants: Arc<RenderVideoConstants>,
-    settings: ExportSettings,
-    recordings: Arc<ProjectRecordings>,
-}
-
-#[derive(Deserialize, Type, Clone, Debug)]
+#[derive(Deserialize, Type, Clone, Copy, Debug)]
 pub struct ExportSettings {
     pub fps: u32,
     pub resolution_base: XY<u32>,
     pub compression: ExportCompression,
-    pub format: ExportFormat,
 }
 
 #[derive(Deserialize, Clone, Copy, Debug, Type)]
@@ -91,111 +71,139 @@ impl ExportCompression {
     }
 }
 
-impl<TOnProgress> Exporter<TOnProgress>
-where
-    TOnProgress: FnMut(u32) + Send + 'static,
-{
-    pub async fn new(
-        project: ProjectConfiguration,
-        output_path: PathBuf,
-        on_progress: TOnProgress,
-        project_path: PathBuf,
-        recording_meta: RecordingMeta,
-        render_constants: Arc<RenderVideoConstants>,
-        segments: &[Segment],
-        recordings: Arc<ProjectRecordings>,
-        settings: ExportSettings,
-    ) -> Result<Self, ExportError> {
-        let RecordingMetaInner::Studio(meta) = &recording_meta.inner else {
-            return Err(ExportError::Other(
-                "Cannot export non-studio recordings".to_string(),
-            ));
-        };
+#[derive(thiserror::Error, Debug)]
+pub enum ExporterBuildError {
+    #[error("Failled to load config: {0}")]
+    ConfigLoad(#[source] Box<dyn std::error::Error>),
+    #[error("Failed to load meta: {0}")]
+    MetaLoad(#[source] Box<dyn std::error::Error>),
+    #[error("Recording is not a studio recording")]
+    NotStudioRecording,
+    #[error("Failed to load recordings meta: {0}")]
+    RecordingsMeta(String),
+    #[error("Failed to setup renderer: {0}")]
+    RendererSetup(#[source] cap_rendering::RenderingError),
+    #[error("Failed to load media: {0}")]
+    MediaLoad(String),
+}
 
-        let output_folder = output_path.parent().unwrap();
-        std::fs::create_dir_all(output_folder)?;
+pub struct ExporterBuilder {
+    project_path: PathBuf,
+    config: Option<ProjectConfiguration>,
+    output_path: Option<PathBuf>,
+}
 
-        let output_size = ProjectUniforms::get_output_size(
-            &render_constants.options,
-            &project,
-            settings.resolution_base,
+impl ExporterBuilder {
+    pub fn with_config(mut self, config: ProjectConfiguration) -> Self {
+        self.config = Some(config);
+        self
+    }
+
+    pub async fn build(self) -> Result<Exporter, ExporterBuildError> {
+        type Error = ExporterBuildError;
+
+        let project_config = serde_json::from_reader(
+            std::fs::File::open(self.project_path.join("project-config.json"))
+                .map_err(|v| Error::ConfigLoad(v.into()))?,
+        )
+        .map_err(|v| Error::ConfigLoad(v.into()))?;
+
+        let recording_meta = RecordingMeta::load_for_project(&self.project_path)
+            .map_err(|v| Error::MetaLoad(v.into()))?;
+        let studio_meta = recording_meta
+            .studio_meta()
+            .ok_or(Error::NotStudioRecording)?;
+
+        let recordings = Arc::new(
+            ProjectRecordingsMeta::new(&recording_meta.project_path, studio_meta)
+                .map_err(Error::RecordingsMeta)?,
         );
 
-        let mut render_segments = vec![];
+        let render_constants = Arc::new(
+            RenderVideoConstants::new(&recordings.segments, &recording_meta, studio_meta)
+                .await
+                .unwrap(),
+        );
 
-        for (i, s) in segments.iter().enumerate() {
-            let segment_paths = match &meta {
-                cap_project::StudioRecordingMeta::SingleSegment { segment: s } => {
-                    SegmentVideoPaths {
-                        display: recording_meta.path(&s.display.path),
-                        camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
-                    }
-                }
-                cap_project::StudioRecordingMeta::MultipleSegments { inner, .. } => {
-                    let s = &inner.segments[i];
+        let segments = cap_editor::create_segments(&recording_meta, studio_meta)
+            .await
+            .map_err(Error::MediaLoad)?;
 
-                    SegmentVideoPaths {
-                        display: recording_meta.path(&s.display.path),
-                        camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
-                    }
-                }
-            };
-            render_segments.push(RenderSegment {
-                cursor: s.cursor.clone(),
-                decoders: RecordingSegmentDecoders::new(&recording_meta, meta, segment_paths, i)
-                    .await
-                    .map_err(ExportError::Other)?,
-            });
-        }
-
-        Ok(Self {
-            project,
-            output_path,
-            on_progress,
-            project_path,
-            recording_meta,
+        Ok(Exporter {
+            output_path: self
+                .output_path
+                .unwrap_or_else(|| recording_meta.output_path()),
+            studio_meta: studio_meta.clone(),
+            recordings,
             render_constants,
-            render_segments,
-            audio_segments: get_audio_segments(segments),
-            output_size,
-            recordings: recordings.clone(),
-            settings,
+            segments,
+            recording_meta,
+            project_config,
+            project_path: self.project_path,
         })
     }
+}
 
-    pub async fn export_with_custom_muxer(self) -> Result<PathBuf, ExportError> {
-        match self.settings.format {
-            ExportFormat::MP4 => self.export_mp4().await,
-            ExportFormat::GIF => self.export_gif().await,
+pub struct Exporter {
+    project_path: PathBuf,
+    recording_meta: RecordingMeta,
+    project_config: ProjectConfiguration,
+    studio_meta: StudioRecordingMeta,
+    recordings: Arc<ProjectRecordingsMeta>,
+    render_constants: Arc<RenderVideoConstants>,
+    segments: Vec<Segment>,
+    output_path: PathBuf,
+}
+
+impl Exporter {
+    pub fn builder(project_path: PathBuf) -> ExporterBuilder {
+        ExporterBuilder {
+            project_path,
+            config: None,
+            output_path: None,
         }
     }
 
-    async fn export_mp4(mut self) -> Result<PathBuf, ExportError> {
-        let meta = match &self.recording_meta.inner {
-            RecordingMetaInner::Studio(meta) => meta,
-            _ => panic!("Not a studio recording"),
-        };
+    pub fn total_frames(&self, export_settings: &ExportSettings) -> u32 {
+        let duration = cap_rendering::get_duration(
+            &self.recordings,
+            &self.recording_meta,
+            &self.studio_meta,
+            &self.project_config,
+        );
 
-        println!("Exporting MP4 with custom muxer");
+        (export_settings.fps as f64 * duration).ceil() as u32
+    }
+
+    pub async fn export_mp4(
+        self,
+        export_settings: ExportSettings,
+        mut on_progress: impl FnMut(u32) + Send + 'static,
+    ) -> Result<PathBuf, Box<dyn std::error::Error>> {
+        let output_path = self.output_path.clone();
+        let meta = &self.studio_meta;
 
         let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(RenderedFrame, u32)>(4);
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<MP4Input>(4);
 
-        let fps = self.settings.fps;
+        let fps = export_settings.fps;
 
-        let mut video_info = VideoInfo::from_raw(
-            RawVideoFormat::Rgba,
-            self.output_size.0,
-            self.output_size.1,
-            self.settings.fps,
+        let output_size = ProjectUniforms::get_output_size(
+            &self.render_constants.options,
+            &self.project_config,
+            export_settings.resolution_base,
         );
-        video_info.time_base = ffmpeg::Rational::new(1, self.settings.fps as i32);
 
-        let mut audio_renderer = self
-            .audio_segments
+        let mut video_info =
+            VideoInfo::from_raw(RawVideoFormat::Rgba, output_size.0, output_size.1, fps);
+        video_info.time_base = ffmpeg::Rational::new(1, fps as i32);
+
+        let audio_segments = get_audio_segments(&self.segments);
+
+        let mut audio_renderer = audio_segments
             .get(0)
-            .filter(|_| !self.project.audio.mute)
-            .map(|_| AudioRenderer::new(self.audio_segments.clone()));
+            .filter(|_| !self.project_config.audio.mute)
+            .map(|_| AudioRenderer::new(audio_segments.clone()));
         let has_audio = audio_renderer.is_some();
 
         let encoder_thread = tokio::task::spawn_blocking(move || {
@@ -204,7 +212,7 @@ where
                 self.output_path.clone(),
                 |o| {
                     H264Encoder::builder("output_video", video_info)
-                        .with_bpp(self.settings.compression.bits_per_pixel())
+                        .with_bpp(export_settings.compression.bits_per_pixel())
                         .build(o)
                 },
                 |o| {
@@ -213,8 +221,7 @@ where
                             .map(|v| v.boxed())
                     })
                 },
-            )
-            .unwrap();
+            )?;
 
             while let Ok(frame) = frame_rx.recv() {
                 encoder.queue_video_frame(frame.video);
@@ -230,7 +237,7 @@ where
         .then(|f| async { f.map_err(Into::into).and_then(|v| v) });
 
         let render_task = tokio::spawn({
-            let project = self.project.clone();
+            let project = self.project_config.clone();
             let project_path = self.project_path.clone();
             async move {
                 println!("Starting FFmpeg output process...");
@@ -238,9 +245,8 @@ where
                 let mut frame_count = 0;
                 let mut first_frame = None;
 
-                let audio_samples_per_frame = (f64::from(AudioRenderer::SAMPLE_RATE)
-                    / f64::from(self.settings.fps))
-                .ceil() as usize;
+                let audio_samples_per_frame =
+                    (f64::from(AudioRenderer::SAMPLE_RATE) / f64::from(fps)).ceil() as usize;
 
                 loop {
                     let Some((frame, frame_number)) =
@@ -249,7 +255,7 @@ where
                         break;
                     };
 
-                    (self.on_progress)(frame_count);
+                    (on_progress)(frame_count);
 
                     if frame_count == 0 {
                         first_frame = Some(frame.clone());
@@ -319,35 +325,45 @@ where
         println!("Rendering video to channel");
 
         let render_video_task = cap_rendering::render_video_to_channel(
-            self.render_constants.options,
-            self.project,
+            &self.render_constants,
+            &self.project_config,
             tx_image_data,
             &self.recording_meta,
             meta,
-            self.render_segments,
-            self.settings.fps,
-            self.settings.resolution_base,
+            self.segments
+                .iter()
+                .map(|s| RenderSegment {
+                    cursor: s.cursor.clone(),
+                    decoders: s.decoders.clone(),
+                })
+                .collect(),
+            fps,
+            export_settings.resolution_base,
             &self.recordings,
         )
         .then(|f| async { f.map_err(Into::into) });
 
-        let (output_path, _, _) = tokio::try_join!(encoder_thread, render_video_task, render_task)?;
+        let _ = tokio::try_join!(encoder_thread, render_video_task, render_task)?;
 
         Ok(output_path)
     }
 
-    async fn export_gif(mut self) -> Result<PathBuf, ExportError> {
-        let meta = match &self.recording_meta.inner {
-            RecordingMetaInner::Studio(meta) => meta,
-            _ => panic!("Not a studio recording"),
-        };
-
-        println!(
-            "Exporting GIF with settings: fps={}, output_size={}x{}",
-            self.settings.fps, self.output_size.0, self.output_size.1
-        );
+    async fn export_gif(
+        self,
+        export_settings: ExportSettings,
+        mut on_progress: impl FnMut(u32) + Send + 'static,
+    ) -> Result<PathBuf, Box<dyn std::error::Error>> {
+        let meta = &self.studio_meta;
 
         let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(RenderedFrame, u32)>(4);
+
+        let fps = export_settings.fps;
+
+        let output_size = ProjectUniforms::get_output_size(
+            &self.render_constants.options,
+            &self.project_config,
+            export_settings.resolution_base,
+        );
 
         // Ensure the output path has .gif extension
         let mut gif_output_path = self.output_path.clone();
@@ -355,31 +371,19 @@ where
             gif_output_path.set_extension("gif");
         }
 
-        println!("Creating GIF encoder at path: {:?}", gif_output_path);
-        let mut gif_encoder = GifEncoderWrapper::new(
-            &gif_output_path,
-            self.output_size.0,
-            self.output_size.1,
-            self.settings.fps,
-        )
-        .map_err(|e| {
-            eprintln!("Failed to create GIF encoder: {}", e);
-            ExportError::Other(format!("Failed to create GIF encoder: {}", e))
-        })?;
-        println!("GIF encoder created successfully");
+        let mut gif_encoder =
+            GifEncoderWrapper::new(&gif_output_path, output_size.0, output_size.1, fps)
+                .map_err(|e| ExportError::Other(format!("Failed to create GIF encoder: {}", e)))?;
 
         let encoder_thread = tokio::task::spawn_blocking(move || {
-            println!("Starting GIF encoding thread");
             let mut frame_count = 0;
 
             while let Some((frame, _frame_number)) = video_rx.blocking_recv() {
-                println!("Processing frame {} for GIF", frame_count);
-                (self.on_progress)(frame_count);
+                (on_progress)(frame_count);
 
                 if let Err(e) =
                     gif_encoder.add_frame(&frame.data, frame.padded_bytes_per_row as usize)
                 {
-                    eprintln!("Failed to add frame to GIF: {}", e);
                     return Err(ExportError::Other(format!(
                         "Failed to add frame to GIF: {}",
                         e
@@ -389,26 +393,29 @@ where
                 frame_count += 1;
             }
 
-            println!("Finished processing {} frames, finalizing GIF", frame_count);
             if let Err(e) = gif_encoder.finish() {
-                eprintln!("Failed to finish GIF: {}", e);
                 return Err(ExportError::Other(format!("Failed to finish GIF: {}", e)));
             }
 
-            println!("GIF export completed successfully: {:?}", gif_output_path);
             Ok(gif_output_path)
         })
         .then(|f| async { f.map_err(Into::into).and_then(|v| v) });
 
         let render_video_task = cap_rendering::render_video_to_channel(
-            self.render_constants.options,
-            self.project,
+            &self.render_constants,
+            &self.project_config,
             tx_image_data,
             &self.recording_meta,
             meta,
-            self.render_segments,
-            self.settings.fps,
-            self.settings.resolution_base,
+            self.segments
+                .iter()
+                .map(|s| RenderSegment {
+                    cursor: s.cursor.clone(),
+                    decoders: s.decoders.clone(),
+                })
+                .collect(),
+            fps,
+            export_settings.resolution_base,
             &self.recordings,
         )
         .then(|f| async { f.map_err(Into::into) });

@@ -6,6 +6,8 @@ use crate::{
 };
 
 pub struct CameraLayer {
+    frame_texture: wgpu::Texture,
+    frame_texture_view: wgpu::TextureView,
     uniforms_buffer: wgpu::Buffer,
     bind_group: Option<wgpu::BindGroup>,
     pipeline: CompositeVideoFramePipeline,
@@ -13,7 +15,11 @@ pub struct CameraLayer {
 
 impl CameraLayer {
     pub fn new(device: &wgpu::Device) -> Self {
+        let frame_texture = CompositeVideoFramePipeline::create_frame_texture(device, 1920, 1080);
+
         Self {
+            frame_texture_view: frame_texture.create_view(&Default::default()),
+            frame_texture,
             uniforms_buffer: device.create_buffer_init(
                 &(wgpu::util::BufferInitDescriptor {
                     label: Some("CameraLayer Uniforms Buffer"),
@@ -31,15 +37,28 @@ impl CameraLayer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         uniforms: CompositeVideoFrameUniforms,
-        camera_size: XY<u32>,
+        frame_size: XY<u32>,
         camera_frame: &DecodedFrame,
-        (texture, texture_view): (&wgpu::Texture, &wgpu::TextureView),
     ) {
-        queue.write_buffer(&self.uniforms_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        if self.frame_texture.width() != frame_size.x || self.frame_texture.height() != frame_size.y
+        {
+            self.frame_texture = CompositeVideoFramePipeline::create_frame_texture(
+                device,
+                frame_size.x,
+                frame_size.y,
+            );
+            self.frame_texture_view = self.frame_texture.create_view(&Default::default());
+
+            self.bind_group = Some(self.pipeline.bind_group(
+                &device,
+                &self.uniforms_buffer,
+                &self.frame_texture_view,
+            ));
+        }
 
         queue.write_texture(
             wgpu::ImageCopyTexture {
-                texture: &texture,
+                texture: &self.frame_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -47,21 +66,17 @@ impl CameraLayer {
             camera_frame,
             wgpu::ImageDataLayout {
                 offset: 0,
-                bytes_per_row: Some(camera_size.x * 4),
+                bytes_per_row: Some(frame_size.x * 4),
                 rows_per_image: None,
             },
             wgpu::Extent3d {
-                width: camera_size.x,
-                height: camera_size.y,
+                width: frame_size.x,
+                height: frame_size.y,
                 depth_or_array_layers: 1,
             },
         );
 
-        self.bind_group = Some(self.pipeline.bind_group(
-            &device,
-            &self.uniforms_buffer,
-            &texture_view,
-        ))
+        queue.write_buffer(&self.uniforms_buffer, 0, bytemuck::cast_slice(&[uniforms]));
     }
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {

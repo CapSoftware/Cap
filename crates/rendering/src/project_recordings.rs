@@ -89,11 +89,11 @@ impl Audio {
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
-pub struct ProjectRecordings {
+pub struct ProjectRecordingsMeta {
     pub segments: Vec<SegmentRecordings>,
 }
 
-impl ProjectRecordings {
+impl ProjectRecordingsMeta {
     pub fn new(recording_path: &PathBuf, meta: &StudioRecordingMeta) -> Result<Self, String> {
         let segments = match &meta {
             StudioRecordingMeta::SingleSegment { segment: s } => {

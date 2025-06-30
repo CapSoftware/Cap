@@ -1,6 +1,4 @@
-"use client";
-
-import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
+import { SeoPageTemplate } from "@/components/seo/SeoPageTemplate";
 import Script from "next/script";
 
 export const remoteTeamCollaborationContent = {

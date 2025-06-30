@@ -3,12 +3,15 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
-import { organizationMembers, organizations, users } from "@cap/database/schema";
+import {
+  organizationMembers,
+  organizations,
+  users,
+} from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
-import { createS3Client, getS3Bucket } from "@/utils/s3";
-import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
+import { createBucketProvider } from "@/utils/s3";
 import { serverEnv } from "@cap/env";
 
 export async function createOrganization(formData: FormData) {
@@ -16,23 +19,28 @@ export async function createOrganization(formData: FormData) {
   if (!user) throw new Error("Unauthorized");
 
   // Extract the name from the FormData
-  const name = formData.get('name') as string;
+  const name = formData.get("name") as string;
   if (!name) throw new Error("Organization name is required");
 
   const organizationId = nanoId();
-  
+
   // Create the organization first
-  const orgValues: { id: string; ownerId: string; name: string; iconUrl?: string } = {
+  const orgValues: {
+    id: string;
+    ownerId: string;
+    name: string;
+    iconUrl?: string;
+  } = {
     id: organizationId,
     ownerId: user.id,
     name: name,
   };
 
   // Check if an icon file was uploaded
-  const iconFile = formData.get('icon') as File;
+  const iconFile = formData.get("icon") as File;
   if (iconFile) {
     // Validate file type
-    if (!iconFile.type.startsWith('image/')) {
+    if (!iconFile.type.startsWith("image/")) {
       throw new Error("File must be an image");
     }
 
@@ -42,39 +50,15 @@ export async function createOrganization(formData: FormData) {
     }
 
     // Create a unique file key
-    const fileExtension = iconFile.name.split('.').pop();
+    const fileExtension = iconFile.name.split(".").pop();
     const fileKey = `organizations/${organizationId}/icon-${Date.now()}.${fileExtension}`;
 
     try {
-      // Get S3 client
-      const [s3Client] = await createS3Client();
-      const bucketName = await getS3Bucket();
+      const bucket = await createBucketProvider();
 
-      // Create presigned post
-      const presignedPostData = await createPresignedPost(s3Client, {
-        Bucket: bucketName,
-        Key: fileKey,
-        Fields: {
-          'Content-Type': iconFile.type,
-        },
-        Expires: 600, // 10 minutes
+      await bucket.putObject(fileKey, await iconFile.bytes(), {
+        contentType: iconFile.type,
       });
-
-      // Upload file to S3
-      const formDataForS3 = new FormData();
-      Object.entries(presignedPostData.fields).forEach(([key, value]) => {
-        formDataForS3.append(key, value as string);
-      });
-      formDataForS3.append('file', iconFile);
-
-      const uploadResponse = await fetch(presignedPostData.url, {
-        method: 'POST',
-        body: formDataForS3,
-      });
-
-      if (!uploadResponse.ok) {
-        throw new Error("Failed to upload file to S3");
-      }
 
       // Construct the icon URL
       let iconUrl;
@@ -83,10 +67,12 @@ export async function createOrganization(formData: FormData) {
         iconUrl = `${serverEnv().CAP_AWS_BUCKET_URL}/${fileKey}`;
       } else if (serverEnv().CAP_AWS_ENDPOINT) {
         // For custom endpoints like MinIO
-        iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucketName}/${fileKey}`;
+        iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucket.name}/${fileKey}`;
       } else {
         // Default AWS S3 URL format
-        iconUrl = `https://${bucketName}.s3.${serverEnv().CAP_AWS_REGION || 'us-east-1'}.amazonaws.com/${fileKey}`;
+        iconUrl = `https://${bucket.name}.s3.${
+          serverEnv().CAP_AWS_REGION || "us-east-1"
+        }.amazonaws.com/${fileKey}`;
       }
 
       // Add the icon URL to the organization values

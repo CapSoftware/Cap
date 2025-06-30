@@ -197,6 +197,7 @@ export const videos = mysqlTable(
     id: nanoId("id").notNull().primaryKey().unique(),
     ownerId: nanoId("ownerId").notNull(),
     name: varchar("name", { length: 255 }).notNull().default("My Video"),
+    // DEPRECATED
     awsRegion: varchar("awsRegion", { length: 255 }),
     awsBucket: varchar("awsBucket", { length: 255 }),
     bucket: nanoIdNullable("bucket"),
