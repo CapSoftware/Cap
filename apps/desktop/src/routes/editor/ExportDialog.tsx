@@ -9,6 +9,7 @@ import {
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import {
+  batch,
   createEffect,
   createRoot,
   createSignal,
@@ -86,9 +87,9 @@ export const EXPORT_TO_OPTIONS = [
 ] as const;
 
 export const FORMAT_OPTIONS = [
-  { label: "MP4", value: "mp4" },
-  { label: "GIF", value: "gif" },
-] as { label: string; value: string; disabled?: boolean }[];
+  { label: "MP4", value: "MP4" },
+  { label: "GIF", value: "GIF" },
+] as { label: string; value: ExportFormat; disabled?: boolean }[];
 
 type ExportToOption = (typeof EXPORT_TO_OPTIONS)[number]["value"];
 
@@ -114,26 +115,6 @@ export function ExportDialog() {
     { name: "export_settings" }
   );
 
-  // Update FPS when format changes
-  createEffect(() => {
-    if (settings.format === "GIF" && ![10, 15, 30].includes(settings.fps)) {
-      setSettings("fps", 10);
-    } else if (
-      settings.format === "MP4" &&
-      ![15, 30, 60].includes(settings.fps)
-    ) {
-      setSettings("fps", 30);
-    }
-  });
-
-  // Update resolution when format changes to GIF
-  createEffect(() => {
-    if (settings.format === "GIF" && settings.resolution.value !== "720p") {
-      setSettings("resolution", RESOLUTION_OPTIONS._720p);
-    }
-  });
-
-  // just a wrapper of exportVideo that provides the current settings
   const exportWithSettings = (onProgress: (progress: FramesRendered) => void) =>
     exportVideo(
       projectPath,
@@ -463,9 +444,36 @@ export function ExportDialog() {
                     {(option) => (
                       <Button
                         variant="secondary"
-                        onClick={() =>
-                          setSettings("format", option.value as ExportFormat)
-                        }
+                        onClick={() => {
+                          setSettings(
+                            produce((newSettings) => {
+                              newSettings.format = option.value as ExportFormat;
+
+                              // if (
+                              //   option.value === "GIF" &&
+                              //   settings.resolution.value !== "720p"
+                              // )
+                              //   newSettings.resolution =
+                              //     RESOLUTION_OPTIONS._720p;
+
+                              // if (
+                              //   option.value === "GIF" &&
+                              //   GIF_FPS_OPTIONS.every(
+                              //     (v) => v.value === settings.fps
+                              //   )
+                              // )
+                              //   newSettings.fps = 10;
+
+                              // if (
+                              //   option.value === "MP4" &&
+                              //   FPS_OPTIONS.every(
+                              //     (v) => v.value !== settings.fps
+                              //   )
+                              // )
+                              //   newSettings.fps = 30;
+                            })
+                          );
+                        }}
                         autofocus={false}
                         class={cx(
                           settings.format === option.value && selectedStyle
@@ -482,7 +490,7 @@ export function ExportDialog() {
             <div class="overflow-hidden relative p-4 rounded-xl bg-gray-2">
               <div class="flex flex-col gap-3">
                 <h3 class="text-gray-12">Frame rate</h3>
-                <KSelect
+                <KSelect<{ label: string; value: number }>
                   options={
                     settings.format === "GIF" ? GIF_FPS_OPTIONS : FPS_OPTIONS
                   }
