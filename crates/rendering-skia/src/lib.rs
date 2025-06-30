@@ -4,22 +4,22 @@ pub mod context;
 pub mod layers;
 
 pub use context::SkiaRenderContext;
-pub use layers::{LayerStack, BackgroundLayer};
+pub use layers::{BackgroundLayer, LayerStack};
 
 #[derive(Error, Debug)]
 pub enum SkiaRenderingError {
     #[error("Failed to create GPU context")]
     NoGpuContext,
-    
+
     #[error("Failed to create surface: {0}")]
     SurfaceCreationFailed(String),
-    
+
     #[error("Failed to read pixels from surface")]
     ReadPixelsFailed,
-    
+
     #[error("Invalid dimensions: {0}")]
     InvalidDimensions(String),
-    
+
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }

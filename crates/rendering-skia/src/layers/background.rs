@@ -58,11 +58,11 @@ impl From<BackgroundSource> for Background {
 pub struct BackgroundLayer {
     // Current background configuration
     current_background: Option<Background>,
-    
+
     // Track what we rendered last to detect changes
     last_rendered_background: Option<Background>,
     last_rendered_size: (u32, u32),
-    
+
     // For image backgrounds
     image_path: Option<PathBuf>,
     loaded_image: Option<Image>,
@@ -207,11 +207,11 @@ impl RecordableLayer for BackgroundLayer {
     ) -> Option<Picture> {
         let canvas = recorder.begin_recording(bounds, None);
         self.render_background(canvas, bounds);
-        
+
         // Update what was last rendered
         self.last_rendered_background = self.current_background.clone();
         self.last_rendered_size = uniforms.output_size;
-        
+
         recorder.finish_recording_as_picture(None)
     }
 
@@ -220,8 +220,8 @@ impl RecordableLayer for BackgroundLayer {
         let new_size = uniforms.output_size;
 
         // Check against what was last rendered, not what's currently prepared
-        self.last_rendered_background.as_ref() != Some(&new_background) || 
-        self.last_rendered_size != new_size
+        self.last_rendered_background.as_ref() != Some(&new_background)
+            || self.last_rendered_size != new_size
     }
 
     fn prepare(&mut self, frame_data: &FrameData) -> Result<(), SkiaRenderingError> {
@@ -261,7 +261,7 @@ impl RecordableLayer for BackgroundLayer {
 
         // Update current state (but not last_rendered, that happens in record())
         self.current_background = Some(new_background);
-        
+
         Ok(())
     }
 

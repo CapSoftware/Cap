@@ -85,13 +85,18 @@ fn test_color_background(
         let canvas = surface.canvas();
         canvas.clear(skia_safe::Color::BLACK);
         layer_stack.render(canvas, &uniforms);
-        
+
         // Flush to ensure rendering is complete
         context.flush();
 
         // Save output
         let image = surface.image_snapshot();
-        println!("   - Image snapshot for {}: {}x{}", name, image.width(), image.height());
+        println!(
+            "   - Image snapshot for {}: {}x{}",
+            name,
+            image.width(),
+            image.height()
+        );
         match image.encode(context.direct_context(), EncodedImageFormat::PNG, 100) {
             Some(data) => {
                 let path = format!("{}/background_color_{}.png", output_dir, name);
@@ -143,13 +148,17 @@ fn test_gradient_background(
     let canvas = surface.canvas();
     canvas.clear(skia_safe::Color::BLACK);
     layer_stack.render(canvas, &uniforms);
-    
+
     // Flush to ensure rendering is complete
     context.flush();
 
     // Save output
     let image = surface.image_snapshot();
-    println!("   - Image snapshot created: {}x{}", image.width(), image.height());
+    println!(
+        "   - Image snapshot created: {}x{}",
+        image.width(),
+        image.height()
+    );
     match image.encode(context.direct_context(), EncodedImageFormat::PNG, 100) {
         Some(data) => {
             let path = format!("{}/background_gradient.png", output_dir);
@@ -203,13 +212,18 @@ fn test_gradient_angles(
         let canvas = surface.canvas();
         canvas.clear(skia_safe::Color::BLACK);
         layer_stack.render(canvas, &uniforms);
-        
+
         // Flush to ensure rendering is complete
         context.flush();
 
         // Save output
         let image = surface.image_snapshot();
-        println!("   - Image snapshot for angle {}: {}x{}", angle, image.width(), image.height());
+        println!(
+            "   - Image snapshot for angle {}: {}x{}",
+            angle,
+            image.width(),
+            image.height()
+        );
         match image.encode(context.direct_context(), EncodedImageFormat::PNG, 100) {
             Some(data) => {
                 let path = format!(
@@ -220,7 +234,10 @@ fn test_gradient_angles(
                 println!("   ✓ Saved gradient with angle {} to: {}", angle, path);
             }
             None => {
-                println!("   ✗ Failed to encode gradient angle {} image to PNG", angle);
+                println!(
+                    "   ✗ Failed to encode gradient angle {} image to PNG",
+                    angle
+                );
             }
         }
     }
