@@ -6,20 +6,20 @@ import { createMutation, createQuery } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { cx } from "cva";
 import {
-    type Accessor,
-    type ComponentProps,
-    createEffect,
-    createMemo,
-    createResource,
-    createSignal,
-    For,
-    Match,
-    onCleanup,
-    onMount,
-    Show,
-    startTransition,
-    Suspense,
-    Switch,
+  type Accessor,
+  type ComponentProps,
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  For,
+  Match,
+  onCleanup,
+  onMount,
+  Show,
+  startTransition,
+  Suspense,
+  Switch,
 } from "solid-js";
 import { createStore, produce, SetStoreFunction } from "solid-js/store";
 import { TransitionGroup } from "solid-transition-group";
@@ -559,6 +559,7 @@ function createRecordingMutations(
     exportVideo(
       media.path,
       { fps: FPS, resolution_base: OUTPUT_SIZE, compression: "Web" },
+      "MP4",
       onProgress
     );
 

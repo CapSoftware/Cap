@@ -54,12 +54,6 @@ pub enum ExportCompression {
     Potato,
 }
 
-#[derive(Deserialize, Clone, Copy, Debug, Type)]
-pub enum ExportFormat {
-    MP4,
-    GIF,
-}
-
 impl ExportCompression {
     pub fn bits_per_pixel(&self) -> f32 {
         match self {
@@ -348,7 +342,7 @@ impl Exporter {
         Ok(output_path)
     }
 
-    async fn export_gif(
+    pub async fn export_gif(
         self,
         export_settings: ExportSettings,
         mut on_progress: impl FnMut(u32) + Send + 'static,

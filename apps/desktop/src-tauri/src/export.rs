@@ -1,7 +1,15 @@
 use crate::{get_video_metadata, FramesRendered};
 use cap_export::{ExportSettings, Exporter};
 use cap_project::{RecordingMeta, XY};
+use serde::Deserialize;
+use specta::Type;
 use std::path::PathBuf;
+
+#[derive(Deserialize, Clone, Copy, Debug, Type)]
+pub enum ExportFormat {
+    MP4,
+    GIF,
+}
 
 #[tauri::command]
 #[specta::specta]
@@ -9,6 +17,7 @@ pub async fn export_video(
     project_path: PathBuf,
     progress: tauri::ipc::Channel<FramesRendered>,
     settings: ExportSettings,
+    format: ExportFormat,
 ) -> Result<PathBuf, String> {
     let exporter = Exporter::builder(project_path).build().await.map_err(|e| {
         sentry::capture_message(&e.to_string(), sentry::Level::Error);
@@ -22,19 +31,34 @@ pub async fn export_video(
         total_frames,
     });
 
-    exporter
-        .export_mp4(settings, move |frame_index| {
-            // Ensure progress never exceeds total frames
-            let _ = progress.send(FramesRendered {
-                rendered_count: (frame_index + 1).min(total_frames),
-                total_frames,
-            });
-        })
-        .await
-        .map_err(|e| {
-            sentry::capture_message(&e.to_string(), sentry::Level::Error);
-            e.to_string()
-        })
+    match format {
+        ExportFormat::MP4 => {
+            exporter
+                .export_mp4(settings, move |frame_index| {
+                    // Ensure progress never exceeds total frames
+                    let _ = progress.send(FramesRendered {
+                        rendered_count: (frame_index + 1).min(total_frames),
+                        total_frames,
+                    });
+                })
+                .await
+        }
+        ExportFormat::GIF => {
+            exporter
+                .export_gif(settings, move |frame_index| {
+                    // Ensure progress never exceeds total frames
+                    let _ = progress.send(FramesRendered {
+                        rendered_count: (frame_index + 1).min(total_frames),
+                        total_frames,
+                    });
+                })
+                .await
+        }
+    }
+    .map_err(|e| {
+        sentry::capture_message(&e.to_string(), sentry::Level::Error);
+        e.to_string()
+    })
 }
 
 #[derive(Debug, serde::Serialize, specta::Type)]

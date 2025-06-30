@@ -31,6 +31,7 @@ import {
   commands,
   events,
   ExportCompression,
+  ExportFormat,
   FramesRendered,
 } from "~/utils/tauri";
 import { RenderState, useEditorContext } from "./context";
@@ -104,7 +105,7 @@ export function ExportDialog() {
 
   const [settings, setSettings] = makePersisted(
     createStore({
-      format: "mp4" as "mp4" | "gif",
+      format: "MP4" as ExportFormat,
       fps: 30,
       exportTo: "file" as ExportToOption,
       resolution: { label: "720p", value: "720p", width: 1280, height: 720 },
@@ -115,10 +116,10 @@ export function ExportDialog() {
 
   // Update FPS when format changes
   createEffect(() => {
-    if (settings.format === "gif" && ![10, 15, 30].includes(settings.fps)) {
+    if (settings.format === "GIF" && ![10, 15, 30].includes(settings.fps)) {
       setSettings("fps", 10);
     } else if (
-      settings.format === "mp4" &&
+      settings.format === "MP4" &&
       ![15, 30, 60].includes(settings.fps)
     ) {
       setSettings("fps", 30);
@@ -127,7 +128,7 @@ export function ExportDialog() {
 
   // Update resolution when format changes to GIF
   createEffect(() => {
-    if (settings.format === "gif" && settings.resolution.value !== "720p") {
+    if (settings.format === "GIF" && settings.resolution.value !== "720p") {
       setSettings("resolution", RESOLUTION_OPTIONS._720p);
     }
   });
@@ -143,8 +144,8 @@ export function ExportDialog() {
           y: settings.resolution.height,
         },
         compression: settings.compression,
-        format: settings.format === "mp4" ? "MP4" : "GIF",
       },
+      settings.format,
       onProgress
     );
 
@@ -220,7 +221,7 @@ export function ExportDialog() {
     mutationFn: async () => {
       if (exportState.type !== "idle") return;
 
-      const extension = settings.format === "gif" ? "gif" : "mp4";
+      const extension = settings.format === "GIF" ? "gif" : "mp4";
       const savePath = await saveDialog({
         filters: [
           {
@@ -463,7 +464,7 @@ export function ExportDialog() {
                       <Button
                         variant="secondary"
                         onClick={() =>
-                          setSettings("format", option.value as "mp4" | "gif")
+                          setSettings("format", option.value as ExportFormat)
                         }
                         autofocus={false}
                         class={cx(
@@ -483,18 +484,18 @@ export function ExportDialog() {
                 <h3 class="text-gray-12">Frame rate</h3>
                 <KSelect
                   options={
-                    settings.format === "gif" ? GIF_FPS_OPTIONS : FPS_OPTIONS
+                    settings.format === "GIF" ? GIF_FPS_OPTIONS : FPS_OPTIONS
                   }
                   optionValue="value"
                   optionTextValue="label"
                   placeholder="Select FPS"
-                  value={(settings.format === "gif"
+                  value={(settings.format === "GIF"
                     ? GIF_FPS_OPTIONS
                     : FPS_OPTIONS
                   ).find((opt) => opt.value === settings.fps)}
                   onChange={(option) => {
                     const value =
-                      option?.value ?? (settings.format === "gif" ? 10 : 30);
+                      option?.value ?? (settings.format === "GIF" ? 10 : 30);
                     trackEvent("export_fps_changed", {
                       fps: value,
                     });
@@ -596,7 +597,7 @@ export function ExportDialog() {
                 <div class="flex gap-2">
                   <For
                     each={
-                      settings.format === "gif"
+                      settings.format === "GIF"
                         ? [RESOLUTION_OPTIONS._720p]
                         : [
                             RESOLUTION_OPTIONS._720p,
