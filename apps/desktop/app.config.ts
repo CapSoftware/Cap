@@ -28,5 +28,8 @@ export default defineConfig({
         root: ".",
       }),
     ],
+    define: {
+      "import.meta.vitest": "undefined",
+    },
   }),
 });

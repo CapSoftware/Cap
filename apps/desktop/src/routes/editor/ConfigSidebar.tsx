@@ -42,6 +42,7 @@ import { Toggle } from "~/components/Toggle";
 import { generalSettingsStore } from "~/store";
 import {
   type BackgroundSource,
+  CameraShape,
   StereoMode,
   TimelineSegment,
   ZoomSegment,
@@ -181,6 +182,17 @@ const STEREO_MODES = [
   { name: "Mono L", value: "monoL" },
   { name: "Mono R", value: "monoR" },
 ] satisfies Array<{ name: string; value: StereoMode }>;
+
+const CAMERA_SHAPES = [
+  {
+    name: "Square",
+    value: "square",
+  },
+  {
+    name: "Source",
+    value: "source",
+  },
+] satisfies Array<{ name: string; value: CameraShape }>;
 
 const BACKGROUND_THEMES = {
   macOS: "macOS",
@@ -1519,6 +1531,65 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
               onChange={(mirror) => setProject("camera", "mirror", mirror)}
             />
           </Subfield>
+          <Subfield name="Shape">
+            <KSelect<{ name: string; value: CameraShape }>
+              options={CAMERA_SHAPES}
+              optionValue="value"
+              optionTextValue="name"
+              value={CAMERA_SHAPES.find(
+                (v) => v.value === project.camera.shape
+              )}
+              onChange={(v) => {
+                if (v) setProject("camera", "shape", v.value);
+              }}
+              disallowEmptySelection
+              itemComponent={(props) => (
+                <MenuItem<typeof KSelect.Item>
+                  as={KSelect.Item}
+                  item={props.item}
+                >
+                  <KSelect.ItemLabel class="flex-1">
+                    {props.item.rawValue.name}
+                  </KSelect.ItemLabel>
+                </MenuItem>
+              )}
+            >
+              <KSelect.Trigger class="flex flex-row gap-2 items-center px-2 w-full h-8 rounded-lg transition-colors bg-gray-3 disabled:text-gray-11">
+                <KSelect.Value<{
+                  name: string;
+                  value: StereoMode;
+                }> class="flex-1 text-sm text-left truncate text-[--gray-500] font-normal">
+                  {(state) => <span>{state.selectedOption().name}</span>}
+                </KSelect.Value>
+                <KSelect.Icon<ValidComponent>
+                  as={(props) => (
+                    <IconCapChevronDown
+                      {...props}
+                      class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]"
+                    />
+                  )}
+                />
+              </KSelect.Trigger>
+              <KSelect.Portal>
+                <PopperContent<typeof KSelect.Content>
+                  as={KSelect.Content}
+                  class={cx(topSlideAnimateClasses, "z-50")}
+                >
+                  <MenuItemList<typeof KSelect.Listbox>
+                    class="overflow-y-auto max-h-32"
+                    as={KSelect.Listbox}
+                  />
+                </PopperContent>
+              </KSelect.Portal>
+            </KSelect>
+          </Subfield>
+
+          {/* <Subfield name="Use Camera Aspect Ratio">
+            <Toggle
+              checked={project.camera.use_camera_aspect}
+              onChange={(v) => setProject("camera", "use_camera_aspect", v)}
+            />
+          </Subfield> */}
         </div>
       </Field>
       {/** Dashed divider */}

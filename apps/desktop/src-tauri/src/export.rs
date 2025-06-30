@@ -1,89 +1,40 @@
-use crate::{create_editor_instance_impl, get_video_metadata, FramesRendered};
-use cap_export::ExportSettings;
+use crate::{get_video_metadata, FramesRendered};
+use cap_export::{ExportSettings, Exporter};
 use cap_project::{RecordingMeta, XY};
 use std::path::PathBuf;
-use tauri::AppHandle;
 
 #[tauri::command]
 #[specta::specta]
 pub async fn export_video(
-    app: AppHandle,
     project_path: PathBuf,
     progress: tauri::ipc::Channel<FramesRendered>,
     settings: ExportSettings,
 ) -> Result<PathBuf, String> {
-    let editor_instance = create_editor_instance_impl(&app, project_path.clone()).await?;
+    let exporter = Exporter::builder(project_path).build().await.map_err(|e| {
+        sentry::capture_message(&e.to_string(), sentry::Level::Error);
+        e.to_string()
+    })?;
 
-    let screen_metadata = get_video_metadata(project_path.clone())
-        .await
-        .map_err(|e| {
-            sentry::capture_message(
-                &format!("Failed to get video metadata: {}", e),
-                sentry::Level::Error,
-            );
-            "Failed to read video metadata. The recording may be from an incompatible version."
-                .to_string()
-        })?;
-
-    // Get camera metadata if it exists
-    let camera_metadata = get_video_metadata(project_path.clone()).await.ok();
-
-    // Use the longer duration between screen and camera
-    let duration = screen_metadata.duration.max(
-        camera_metadata
-            .map(|m| m.duration)
-            .unwrap_or(screen_metadata.duration),
-    );
-
-    let total_frames = editor_instance.get_total_frames(settings.fps);
-
-    let output_path = editor_instance.meta().output_path();
+    let total_frames = exporter.total_frames(&settings);
 
     let _ = progress.send(FramesRendered {
         rendered_count: 0,
         total_frames,
     });
 
-    // Create a modified project configuration that accounts for different video lengths
-    let mut modified_project = editor_instance.project_config.1.borrow().clone();
-    if let Some(timeline) = &mut modified_project.timeline {
-        // Ensure timeline duration matches the longest video
-        for segment in timeline.segments.iter_mut() {
-            if segment.end > duration {
-                segment.end = duration;
-            }
-        }
-    }
-
-    cap_export::Exporter::new(
-        modified_project,
-        output_path.clone(),
-        move |frame_index| {
+    exporter
+        .export_mp4(settings, move |frame_index| {
             // Ensure progress never exceeds total frames
-            let current_frame = (frame_index + 1).min(total_frames);
             let _ = progress.send(FramesRendered {
-                rendered_count: current_frame,
+                rendered_count: (frame_index + 1).min(total_frames),
                 total_frames,
             });
-        },
-        editor_instance.project_path.clone(),
-        editor_instance.meta().clone(),
-        editor_instance.render_constants.clone(),
-        &editor_instance.segments,
-        editor_instance.recordings.clone(),
-        settings,
-    )
-    .await
-    .map_err(|e| {
-        sentry::capture_message(&e.to_string(), sentry::Level::Error);
-        e.to_string()
-    })?
-    .export_with_custom_muxer()
-    .await
-    .map_err(|e| {
-        sentry::capture_message(&e.to_string(), sentry::Level::Error);
-        e.to_string()
-    })
+        })
+        .await
+        .map_err(|e| {
+            sentry::capture_message(&e.to_string(), sentry::Level::Error);
+            e.to_string()
+        })
 }
 
 #[derive(Debug, serde::Serialize, specta::Type)]
