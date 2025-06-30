@@ -2,8 +2,8 @@ use std::{
     collections::HashMap,
     hash::{DefaultHasher, Hash, Hasher},
     path::PathBuf,
-    sync::{atomic::AtomicBool, Arc},
-    time::{Duration, Instant, SystemTime},
+    pin::pin,
+    time::{Duration, SystemTime},
 };
 
 use cap_cursor_capture::RawCursorPosition;
@@ -12,8 +12,9 @@ use cap_media::{platform::Bounds, sources::CropRatio};
 use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
 use cap_utils::spawn_actor;
 use device_query::{DeviceQuery, DeviceState};
+use futures::future::Either;
 use tokio::sync::oneshot;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 pub struct Cursor {
     pub file_name: String,
@@ -32,14 +33,13 @@ pub struct CursorActorResponse {
 }
 
 pub struct CursorActor {
-    stop_signal: Arc<AtomicBool>,
+    shutdown_tx: oneshot::Sender<()>,
     rx: oneshot::Receiver<CursorActorResponse>,
 }
 
 impl CursorActor {
     pub async fn stop(self) -> CursorActorResponse {
-        self.stop_signal
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = self.shutdown_tx.send(());
         self.rx.await.unwrap()
     }
 }
@@ -54,178 +54,182 @@ pub fn spawn_cursor_recorder(
     next_cursor_id: u32,
     start_time: SystemTime,
 ) -> CursorActor {
-    let stop_signal = Arc::new(AtomicBool::new(false));
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
     let (tx, rx) = oneshot::channel();
 
-    spawn_actor({
-        let stop_signal = stop_signal.clone();
-        async move {
-            let device_state = DeviceState::new();
-            let mut last_mouse_state = device_state.get_mouse();
+    spawn_actor(async move {
+        let device_state = DeviceState::new();
+        let mut last_mouse_state = device_state.get_mouse();
 
-            #[cfg(target_os = "macos")]
-            let mut last_position = RawCursorPosition::get();
+        #[cfg(target_os = "macos")]
+        let mut last_position = RawCursorPosition::get();
 
-            // Create cursors directory if it doesn't exist
-            std::fs::create_dir_all(&cursors_dir).unwrap();
+        // Create cursors directory if it doesn't exist
+        std::fs::create_dir_all(&cursors_dir).unwrap();
 
-            let mut response = CursorActorResponse {
-                cursors: prev_cursors,
-                next_cursor_id,
-                moves: vec![],
-                clicks: vec![],
+        let mut response = CursorActorResponse {
+            cursors: prev_cursors,
+            next_cursor_id,
+            moves: vec![],
+            clicks: vec![],
+        };
+
+        loop {
+            let sleep = tokio::time::sleep(Duration::from_millis(10));
+            let Either::Right(_) = futures::future::select(&mut shutdown_rx, pin!(sleep)).await
+            else {
+                break;
             };
 
-            while !stop_signal.load(std::sync::atomic::Ordering::Relaxed) {
-                let Ok(elapsed) = start_time.elapsed() else {
-                    continue;
-                };
-                let elapsed = elapsed.as_secs_f64() * 1000.0;
-                let mouse_state = device_state.get_mouse();
+            let Ok(elapsed) = start_time.elapsed() else {
+                continue;
+            };
+            let elapsed = elapsed.as_secs_f64() * 1000.0;
+            let mouse_state = device_state.get_mouse();
 
-                let cursor_data = get_cursor_image_data();
-                let cursor_id = if let Some(data) = cursor_data {
-                    let mut hasher = DefaultHasher::default();
-                    data.image.hash(&mut hasher);
-                    let id = hasher.finish();
+            let cursor_data = get_cursor_image_data();
+            let cursor_id = if let Some(data) = cursor_data {
+                let mut hasher = DefaultHasher::default();
+                data.image.hash(&mut hasher);
+                let id = hasher.finish();
 
-                    // Check if we've seen this cursor data before
-                    if let Some(existing_id) = response.cursors.get(&id) {
-                        existing_id.id.to_string()
-                    } else {
-                        // New cursor data - save it
-                        let cursor_id = response.next_cursor_id.to_string();
-                        let file_name = format!("cursor_{}.png", cursor_id);
-                        let cursor_path = cursors_dir.join(&file_name);
-
-                        if let Ok(image) = image::load_from_memory(&data.image) {
-                            // Convert to RGBA
-                            let rgba_image = image.into_rgba8();
-
-                            if let Err(e) = rgba_image.save(&cursor_path) {
-                                error!("Failed to save cursor image: {}", e);
-                            } else {
-                                info!("Saved cursor {cursor_id} image to: {:?}", file_name);
-                                response.cursors.insert(
-                                    id,
-                                    Cursor {
-                                        file_name,
-                                        id: response.next_cursor_id,
-                                        hotspot: data.hotspot,
-                                    },
-                                );
-                                response.next_cursor_id += 1;
-                            }
-                        }
-
-                        cursor_id
-                    }
+                // Check if we've seen this cursor data before
+                if let Some(existing_id) = response.cursors.get(&id) {
+                    existing_id.id.to_string()
                 } else {
-                    "default".to_string()
-                };
+                    // New cursor data - save it
+                    let cursor_id = response.next_cursor_id.to_string();
+                    let file_name = format!("cursor_{}.png", cursor_id);
+                    let cursor_path = cursors_dir.join(&file_name);
 
-                // TODO: use this on windows too
-                #[cfg(target_os = "macos")]
-                let position = {
-                    let position = RawCursorPosition::get();
+                    if let Ok(image) = image::load_from_memory(&data.image) {
+                        // Convert to RGBA
+                        let rgba_image = image.into_rgba8();
 
-                    if position != last_position {
-                        last_position = position;
-
-                        let cropped_position = position
-                            .relative_to_display(display)
-                            .normalize()
-                            .with_crop(crop_ratio.position, crop_ratio.size);
-
-                        Some((cropped_position.x() as f64, cropped_position.y() as f64))
-                    } else {
-                        None
+                        if let Err(e) = rgba_image.save(&cursor_path) {
+                            error!("Failed to save cursor image: {}", e);
+                        } else {
+                            info!("Saved cursor {cursor_id} image to: {:?}", file_name);
+                            response.cursors.insert(
+                                id,
+                                Cursor {
+                                    file_name,
+                                    id: response.next_cursor_id,
+                                    hotspot: data.hotspot,
+                                },
+                            );
+                            response.next_cursor_id += 1;
+                        }
                     }
-                };
 
-                #[cfg(windows)]
-                let position = if mouse_state.coords != last_mouse_state.coords {
-                    let (mouse_x, mouse_y) = {
-                        (
-                            mouse_state.coords.0 - screen_bounds.x as i32,
-                            mouse_state.coords.1 - screen_bounds.y as i32,
-                        )
-                    };
+                    cursor_id
+                }
+            } else {
+                "default".to_string()
+            };
 
-                    // Calculate normalized coordinates (0.0 to 1.0) within the screen bounds
-                    // Check if screen_bounds dimensions are valid to avoid division by zero
-                    let x = if screen_bounds.width > 0.0 {
-                        mouse_x as f64 / screen_bounds.width
-                    } else {
-                        0.5 // Fallback if width is invalid
-                    };
+            // TODO: use this on windows too
+            #[cfg(target_os = "macos")]
+            let position = {
+                let position = RawCursorPosition::get();
 
-                    let y = if screen_bounds.height > 0.0 {
-                        mouse_y as f64 / screen_bounds.height
-                    } else {
-                        0.5 // Fallback if height is invalid
-                    };
+                if position != last_position {
+                    last_position = position;
 
-                    // Clamp values to ensure they're within valid range
-                    let x = if x.is_nan() || x.is_infinite() {
-                        debug!("X coordinate is invalid: {}", x);
-                        0.5
-                    } else {
-                        x
-                    };
+                    let cropped_position = position
+                        .relative_to_display(display)
+                        .normalize()
+                        .with_crop(crop_ratio.position, crop_ratio.size);
 
-                    let y = if y.is_nan() || y.is_infinite() {
-                        debug!("Y coordinate is invalid: {}", y);
-                        0.5
-                    } else {
-                        y
-                    };
-
-                    Some((x, y))
+                    Some((cropped_position.x() as f64, cropped_position.y() as f64))
                 } else {
                     None
+                }
+            };
+
+            #[cfg(windows)]
+            let position = if mouse_state.coords != last_mouse_state.coords {
+                let (mouse_x, mouse_y) = {
+                    (
+                        mouse_state.coords.0 - screen_bounds.x as i32,
+                        mouse_state.coords.1 - screen_bounds.y as i32,
+                    )
                 };
 
-                if let Some((x, y)) = position {
-                    let mouse_event = CursorMoveEvent {
-                        active_modifiers: vec![],
-                        cursor_id: cursor_id.clone(),
-                        time_ms: elapsed,
-                        x,
-                        y,
-                    };
+                // Calculate normalized coordinates (0.0 to 1.0) within the screen bounds
+                // Check if screen_bounds dimensions are valid to avoid division by zero
+                let x = if screen_bounds.width > 0.0 {
+                    mouse_x as f64 / screen_bounds.width
+                } else {
+                    0.5 // Fallback if width is invalid
+                };
 
-                    response.moves.push(mouse_event);
-                }
+                let y = if screen_bounds.height > 0.0 {
+                    mouse_y as f64 / screen_bounds.height
+                } else {
+                    0.5 // Fallback if height is invalid
+                };
 
-                for (num, &pressed) in mouse_state.button_pressed.iter().enumerate() {
-                    let Some(prev) = last_mouse_state.button_pressed.get(num) else {
-                        continue;
-                    };
+                // Clamp values to ensure they're within valid range
+                let x = if x.is_nan() || x.is_infinite() {
+                    debug!("X coordinate is invalid: {}", x);
+                    0.5
+                } else {
+                    x
+                };
 
-                    if pressed == *prev {
-                        continue;
-                    }
+                let y = if y.is_nan() || y.is_infinite() {
+                    debug!("Y coordinate is invalid: {}", y);
+                    0.5
+                } else {
+                    y
+                };
 
-                    let mouse_event = CursorClickEvent {
-                        down: pressed,
-                        active_modifiers: vec![],
-                        cursor_num: num as u8,
-                        cursor_id: cursor_id.clone(),
-                        time_ms: elapsed,
-                    };
-                    response.clicks.push(mouse_event);
-                }
+                Some((x, y))
+            } else {
+                None
+            };
 
-                last_mouse_state = mouse_state;
-                tokio::time::sleep(Duration::from_millis(10)).await;
+            if let Some((x, y)) = position {
+                let mouse_event = CursorMoveEvent {
+                    active_modifiers: vec![],
+                    cursor_id: cursor_id.clone(),
+                    time_ms: elapsed,
+                    x,
+                    y,
+                };
+
+                response.moves.push(mouse_event);
             }
 
-            tx.send(response).ok();
+            for (num, &pressed) in mouse_state.button_pressed.iter().enumerate() {
+                let Some(prev) = last_mouse_state.button_pressed.get(num) else {
+                    continue;
+                };
+
+                if pressed == *prev {
+                    continue;
+                }
+
+                let mouse_event = CursorClickEvent {
+                    down: pressed,
+                    active_modifiers: vec![],
+                    cursor_num: num as u8,
+                    cursor_id: cursor_id.clone(),
+                    time_ms: elapsed,
+                };
+                response.clicks.push(mouse_event);
+            }
+
+            last_mouse_state = mouse_state;
         }
+
+        info!("cursor recorder done");
+
+        let _ = tx.send(response);
     });
 
-    CursorActor { rx, stop_signal }
+    CursorActor { shutdown_tx, rx }
 }
 
 #[derive(Debug)]
