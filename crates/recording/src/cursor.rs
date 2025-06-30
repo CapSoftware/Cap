@@ -12,9 +12,9 @@ use cap_media::{platform::Bounds, sources::CropRatio};
 use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
 use cap_utils::spawn_actor;
 use device_query::{DeviceQuery, DeviceState};
-use futures::{future::Either, pin_mut};
+use futures::future::Either;
 use tokio::sync::oneshot;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 pub struct Cursor {
     pub file_name: String,

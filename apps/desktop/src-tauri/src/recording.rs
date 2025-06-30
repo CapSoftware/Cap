@@ -12,12 +12,11 @@ use crate::{
     upload::{
         create_or_get_video, prepare_screenshot_upload, upload_video, InstantMultipartUpload,
     },
-    web_api::{self, ManagerExt},
+    web_api::ManagerExt,
     windows::{CapWindowId, ShowCapWindow},
     App, CurrentRecordingChanged, DynLoggingLayer, MutableState, NewStudioRecordingAdded,
     RecordingStarted, RecordingStopped, VideoUploadInfo,
 };
-use base64::{prelude::BASE64_STANDARD, Engine};
 use cap_fail::fail;
 use cap_media::{feeds::CameraFeed, platform::display_for_window, sources::ScreenCaptureTarget};
 use cap_media::{
@@ -30,12 +29,10 @@ use cap_project::{
 };
 use cap_recording::{
     instant_recording::{CompletedInstantRecording, InstantRecordingHandle},
-    CompletedStudioRecording, RecordingError, RecordingMode, RecordingOptions,
-    StudioRecordingHandle,
+    CompletedStudioRecording, RecordingError, RecordingMode, StudioRecordingHandle,
 };
 use cap_rendering::ProjectRecordingsMeta;
 use cap_utils::{ensure_dir, spawn_actor};
-use scap::Target;
 use serde::Deserialize;
 use specta::Type;
 use tauri::{AppHandle, Manager};
