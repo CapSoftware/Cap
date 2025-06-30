@@ -17,7 +17,7 @@ import {
 import { createStore } from "solid-js/store";
 import { cx } from "cva";
 
-import Cropper, { calcCropFloor } from "~/components/Cropper";
+import Cropper, { calcCropFloor } from "~/components/CropperOLD";
 import { Toggle } from "~/components/Toggle";
 import Tooltip from "~/components/Tooltip";
 import { events, type Crop } from "~/utils/tauri";

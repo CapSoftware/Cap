@@ -8,7 +8,7 @@ import {
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { Transition } from "solid-transition-group";
-import Cropper from "~/components/Cropper";
+import Cropper from "~/components/CropperOLD";
 import { createOptionsQuery } from "~/utils/queries";
 import { type Crop } from "~/utils/tauri";
 
