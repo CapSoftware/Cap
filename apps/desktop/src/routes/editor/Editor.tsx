@@ -17,7 +17,7 @@ import {
 } from "solid-js";
 import { createStore } from "solid-js/store";
 
-import Cropper, { cropToFloor } from "~/components/Cropper";
+import Cropper, { calcCropFloor } from "~/components/Cropper";
 import { Toggle } from "~/components/Toggle";
 import Tooltip from "~/components/Tooltip";
 import { events, type Crop } from "~/utils/tauri";
@@ -308,7 +308,7 @@ function Dialogs() {
 
                 const display = editorInstance.recordings.segments[0].display;
 
-                const adjustedCrop = createMemo(() => cropToFloor(crop));
+                const adjustedCrop = createMemo(() => calcCropFloor(crop));
 
                 return (
                   <>
