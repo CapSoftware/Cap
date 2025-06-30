@@ -4,11 +4,7 @@ import { Button } from "@cap/ui";
 import { videos } from "@cap/database/schema";
 import moment from "moment";
 import { userSelectProps } from "@cap/database/auth/session";
-import {
-  faChevronDown,
-  faLock,
-  faUnlock,
-} from "@fortawesome/free-solid-svg-icons";
+import { faChevronDown, faLock } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
@@ -19,8 +15,9 @@ import { editTitle } from "@/actions/videos/edit-title";
 import { usePublicEnv } from "@/utils/public-env";
 import { isUserOnProPlan } from "@cap/utils";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
 import clsx from "clsx";
+import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDialog";
 
 export const ShareHeader = ({
   data,
@@ -29,6 +26,8 @@ export const ShareHeader = ({
   domainVerified,
   sharedOrganizations = [],
   userOrganizations = [],
+  sharedSpaces = [],
+  userSpaces = [],
 }: {
   data: typeof videos.$inferSelect;
   user: typeof userSelectProps | null;
@@ -36,6 +35,18 @@ export const ShareHeader = ({
   domainVerified?: boolean;
   sharedOrganizations?: { id: string; name: string }[];
   userOrganizations?: { id: string; name: string }[];
+  sharedSpaces?: {
+    id: string;
+    name: string;
+    iconUrl?: string;
+    organizationId: string;
+  }[];
+  userSpaces?: {
+    id: string;
+    name: string;
+    iconUrl?: string;
+    organizationId: string;
+  }[];
 }) => {
   const { push, refresh } = useRouter();
   const [isEditing, setIsEditing] = useState(false);
@@ -43,8 +54,11 @@ export const ShareHeader = ({
   const [isDownloading, setIsDownloading] = useState(false);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
-  const [currentSharedOrganizations, setCurrentSharedOrganizations] =
-    useState(sharedOrganizations);
+
+  const contextData = useDashboardContext();
+  const contextSpaces = contextData?.spacesData || null;
+  const contextSharedSpaces = contextData?.sharedSpaces || null;
+  const effectiveSharedSpaces = contextSharedSpaces || sharedSpaces;
 
   const isOwner = user && user.id.toString() === data.ownerId;
 
@@ -98,12 +112,7 @@ export const ShareHeader = ({
       })
     : false;
 
-  const handleSharingUpdated = (updatedSharedOrganizations: string[]) => {
-    setCurrentSharedOrganizations(
-      userOrganizations?.filter((organization) =>
-        updatedSharedOrganizations.includes(organization.id)
-      )
-    );
+  const handleSharingUpdated = () => {
     refresh();
   };
 
@@ -112,7 +121,10 @@ export const ShareHeader = ({
       "text-sm text-gray-10 transition-colors duration-200 flex items-center";
 
     if (isOwner) {
-      if (currentSharedOrganizations?.length === 0) {
+      if (
+        (sharedOrganizations?.length === 0 || !sharedOrganizations) &&
+        (effectiveSharedSpaces?.length === 0 || !effectiveSharedSpaces)
+      ) {
         return (
           <p
             className={clsx(baseClassName, "hover:text-gray-12 cursor-pointer")}
@@ -145,8 +157,7 @@ export const ShareHeader = ({
         onClose={() => setIsSharingDialogOpen(false)}
         capId={data.id}
         capName={data.name}
-        sharedOrganizations={currentSharedOrganizations || []}
-        userOrganizations={userOrganizations}
+        sharedSpaces={effectiveSharedSpaces || []}
         onSharingUpdated={handleSharingUpdated}
       />
       <div>

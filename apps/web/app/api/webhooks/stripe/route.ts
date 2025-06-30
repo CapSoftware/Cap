@@ -202,26 +202,29 @@ export const POST = async (req: Request) => {
             { host: buildEnv.NEXT_PUBLIC_POSTHOG_HOST || "" }
           );
 
-          // Track subscription completed event
+          const isFirstPurchase = !dbUser.stripeSubscriptionId;
+          // Track purchase completed event
           serverPostHog.capture({
             distinctId: dbUser.id,
-            event: "subscription_completed",
+            event: "purchase_completed",
             properties: {
               subscription_id: subscription.id,
               subscription_status: subscription.status,
               invite_quota: inviteQuota,
               price_id: subscription.items.data[0]?.price.id,
               quantity: inviteQuota,
-              platform: "web",
-              is_first_subscription: true,
+              platform:
+                (session.metadata && (session.metadata as any).platform) ||
+                "web",
+              is_first_purchase: isFirstPurchase,
             },
           });
 
           // Shutdown the client
           await serverPostHog.shutdown();
-          console.log("Successfully tracked subscription event in PostHog");
+          console.log("Successfully tracked purchase event in PostHog");
         } catch (error) {
-          console.error("Error tracking subscription in PostHog:", error);
+          console.error("Error tracking purchase in PostHog:", error);
           // Don't throw - we don't want to fail the webhook because of analytics
         }
       }

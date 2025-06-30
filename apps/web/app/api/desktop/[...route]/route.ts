@@ -1,5 +1,5 @@
-import { handle } from "hono/vercel";
 import { Hono } from "hono";
+import { handle } from "hono/vercel";
 
 import { corsMiddleware } from "../../utils";
 

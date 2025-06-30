@@ -1,11 +1,6 @@
 import { z } from "zod";
 import desktop from "./desktop";
 import { c } from "./util";
-import {
-  ClientInferRequest,
-  ClientInferResponseBody,
-  ClientInferResponses,
-} from "@ts-rest/core";
 
 export const contract = c.router({
   desktop,
@@ -37,6 +32,23 @@ export const contract = c.router({
       },
     },
   }),
+});
+
+export const orgCustomDomainContract = c.router({
+  getOrgCustomDomain: {
+    method: "GET",
+    path: "/org-custom-domain",
+    headers: z.object({ authorization: z.string() }),
+    responses: {
+      200: z.object({
+        custom_domain: z.string().nullable(),
+        domain_verified: z.boolean().nullable(),
+      }),
+      500: z.object({
+        message: z.string(),
+      }),
+    },
+  },
 });
 
 export const licenseContract = c.router({

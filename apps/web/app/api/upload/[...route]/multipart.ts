@@ -1,21 +1,13 @@
 import { Hono } from "hono";
-import { createS3Client, getS3Bucket } from "@/utils/s3";
-import {
-  CompleteMultipartUploadCommand,
-  CopyObjectCommand,
-  CreateMultipartUploadCommand,
-  HeadObjectCommand,
-  UploadPartCommand,
-} from "@aws-sdk/client-s3";
+import { createBucketProvider } from "@/utils/s3";
 import { db } from "@cap/database";
 import { s3Buckets } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { serverEnv } from "@cap/env";
-import { handle } from "hono/vercel";
-import { withAuth, corsMiddleware } from "@/app/api/utils";
+import { withAuth } from "@/app/api/utils";
+import { parseVideoIdOrFileKey } from "../utils";
 
 export const app = new Hono().use(withAuth);
 
@@ -23,24 +15,33 @@ app.post(
   "/initiate",
   zValidator(
     "json",
-    z.object({ fileKey: z.string(), contentType: z.string() })
+    z.object({ contentType: z.string() }).and(
+      z.union([
+        z.object({ videoId: z.string() }),
+        // deprecated
+        z.object({ fileKey: z.string() }),
+      ])
+    )
   ),
   async (c) => {
-    const { fileKey, contentType } = c.req.valid("json");
+    const { contentType, ...body } = c.req.valid("json");
     const user = c.get("user");
+
+    const fileKey = parseVideoIdOrFileKey(user.id, {
+      ...body,
+      subpath: "result.mp4",
+    });
 
     try {
       try {
-        const { s3Client, bucketName } = await getUserBucketWithClient(user.id);
+        const { bucket } = await getUserBucketWithClient(user.id);
 
         const finalContentType = contentType || "video/mp4";
         console.log(
-          `Creating multipart upload in bucket: ${bucketName}, content-type: ${finalContentType}, key: ${fileKey}`
+          `Creating multipart upload in bucket: ${bucket.name}, content-type: ${finalContentType}, key: ${fileKey}`
         );
 
-        const command = new CreateMultipartUploadCommand({
-          Bucket: bucketName,
-          Key: fileKey,
+        const { UploadId } = await bucket.multipart.create(fileKey, {
           ContentType: finalContentType,
           Metadata: {
             userId: user.id,
@@ -48,9 +49,6 @@ app.post(
           },
           CacheControl: "max-age=31536000",
         });
-
-        const result = await s3Client.send(command);
-        const { UploadId } = result;
 
         if (!UploadId) {
           throw new Error("No UploadId returned from S3");
@@ -60,7 +58,7 @@ app.post(
           `Successfully initiated multipart upload with ID: ${UploadId}`
         );
         console.log(
-          `Upload details: Bucket=${bucketName}, Key=${fileKey}, ContentType=${finalContentType}`
+          `Upload details: Bucket=${bucket.name}, Key=${fileKey}, ContentType=${finalContentType}`
         );
 
         return c.json({ uploadId: UploadId });
@@ -89,36 +87,43 @@ app.post(
   "/presign-part",
   zValidator(
     "json",
-    z.object({
-      fileKey: z.string(),
-      uploadId: z.string(),
-      partNumber: z.number(),
-      md5Sum: z.string(),
-    })
+    z
+      .object({
+        uploadId: z.string(),
+        partNumber: z.number(),
+        md5Sum: z.string(),
+      })
+      .and(
+        z.union([
+          z.object({ videoId: z.string() }),
+          // deprecated
+          z.object({ fileKey: z.string() }),
+        ])
+      )
   ),
   async (c) => {
-    const { fileKey, uploadId, partNumber, md5Sum } = c.req.valid("json");
+    const { uploadId, partNumber, md5Sum, ...body } = c.req.valid("json");
     const user = c.get("user");
+
+    const fileKey = parseVideoIdOrFileKey(user.id, {
+      ...body,
+      subpath: "result.mp4",
+    });
 
     try {
       try {
-        const { s3Client, bucketName } = await getUserBucketWithClient(user.id);
+        const { bucket } = await getUserBucketWithClient(user.id);
 
         console.log(
           `Getting presigned URL for part ${partNumber} of upload ${uploadId}`
         );
 
-        const command = new UploadPartCommand({
-          Bucket: bucketName,
-          Key: fileKey,
-          UploadId: uploadId,
-          PartNumber: partNumber,
-          ContentMD5: md5Sum,
-        });
-
-        const presignedUrl = await getSignedUrl(s3Client, command, {
-          expiresIn: 3600,
-        });
+        const presignedUrl = await bucket.multipart.getPresignedUploadPartUrl(
+          fileKey,
+          uploadId,
+          partNumber,
+          { ContentMD5: md5Sum }
+        );
 
         return c.json({ presignedUrl });
       } catch (s3Error) {
@@ -146,25 +151,39 @@ app.post(
   "/complete",
   zValidator(
     "json",
-    z.object({
-      fileKey: z.string(),
-      uploadId: z.string(),
-      parts: z.array(
-        z.object({
-          partNumber: z.number(),
-          etag: z.string(),
-          size: z.number(),
-        })
-      ),
-    })
+    z
+      .object({
+        uploadId: z.string(),
+        parts: z.array(
+          z.object({
+            partNumber: z.number(),
+            etag: z.string(),
+            size: z.number(),
+          })
+        ),
+      })
+      .and(
+        z.union([
+          z.object({
+            // deprecated
+            fileKey: z.string(),
+          }),
+          z.object({ videoId: z.string() }),
+        ])
+      )
   ),
   async (c) => {
-    const { fileKey, uploadId, parts } = c.req.valid("json");
+    const { uploadId, parts, ...body } = c.req.valid("json");
     const user = c.get("user");
+
+    const fileKey = parseVideoIdOrFileKey(user.id, {
+      ...body,
+      subpath: "result.mp4",
+    });
 
     try {
       try {
-        const { s3Client, bucketName } = await getUserBucketWithClient(user.id);
+        const { bucket } = await getUserBucketWithClient(user.id);
 
         console.log(
           `Completing multipart upload ${uploadId} with ${parts.length} parts for key: ${fileKey}`
@@ -196,7 +215,7 @@ app.post(
           "Sending to S3:",
           JSON.stringify(
             {
-              Bucket: bucketName,
+              Bucket: bucket.name,
               Key: fileKey,
               UploadId: uploadId,
               Parts: formattedParts,
@@ -206,17 +225,13 @@ app.post(
           )
         );
 
-        const command = new CompleteMultipartUploadCommand({
-          Bucket: bucketName,
-          Key: fileKey,
-          UploadId: uploadId,
+        const result = await bucket.multipart.complete(fileKey, uploadId, {
           MultipartUpload: {
             Parts: formattedParts,
           },
         });
 
         try {
-          const result = await s3Client.send(command);
           console.log(
             `Multipart upload completed successfully: ${
               result.Location || "no location"
@@ -228,15 +243,16 @@ app.post(
             console.log(
               "Performing metadata fix by copying the object to itself..."
             );
-            const copyCommand = new CopyObjectCommand({
-              Bucket: bucketName,
-              CopySource: `${bucketName}/${fileKey}`,
-              Key: fileKey,
-              ContentType: "video/mp4",
-              MetadataDirective: "REPLACE",
-            });
 
-            const copyResult = await s3Client.send(copyCommand);
+            const copyResult = await bucket.copyObject(
+              `${bucket.name}/${fileKey}`,
+              fileKey,
+              {
+                ContentType: "video/mp4",
+                MetadataDirective: "REPLACE",
+              }
+            );
+
             console.log("Copy for metadata fix successful:", copyResult);
           } catch (copyError) {
             console.error(
@@ -246,12 +262,7 @@ app.post(
           }
 
           try {
-            const headCommand = new HeadObjectCommand({
-              Bucket: bucketName,
-              Key: fileKey,
-            });
-
-            const headResult = await s3Client.send(headCommand);
+            const headResult = await bucket.headObject(fileKey);
             console.log(
               `Object verification successful: ContentType=${headResult.ContentType}, ContentLength=${headResult.ContentLength}`
             );
@@ -279,7 +290,6 @@ app.post(
             location: result.Location,
             success: true,
             fileKey,
-            bucketName,
           });
         } catch (completeError) {
           console.error("Failed to complete multipart upload:", completeError);
@@ -319,35 +329,20 @@ app.post(
 );
 
 async function getUserBucketWithClient(userId: string) {
-  const [bucket] = await db()
+  const [customBucket] = await db()
     .select()
     .from(s3Buckets)
     .where(eq(s3Buckets.ownerId, userId));
 
   console.log("S3 bucket configuration:", {
-    hasEndpoint: !!bucket?.endpoint,
-    endpoint: bucket?.endpoint || "N/A",
-    region: bucket?.region || "N/A",
-    hasAccessKey: !!bucket?.accessKeyId,
-    hasSecretKey: !!bucket?.secretAccessKey,
+    hasEndpoint: !!customBucket?.endpoint,
+    endpoint: customBucket?.endpoint || "N/A",
+    region: customBucket?.region || "N/A",
+    hasAccessKey: !!customBucket?.accessKeyId,
+    hasSecretKey: !!customBucket?.secretAccessKey,
   });
 
-  const initialS3Config = bucket
-    ? {
-        endpoint: bucket.endpoint || undefined,
-        region: bucket.region,
-        accessKeyId: bucket.accessKeyId,
-        secretAccessKey: bucket.secretAccessKey,
-        forcePathStyle: true,
-      }
-    : null;
+  const bucket = await createBucketProvider(customBucket);
 
-  if (!initialS3Config?.endpoint && !initialS3Config?.region) {
-    console.log("Using default S3 configuration");
-  }
-
-  const [s3Client, s3Config] = await createS3Client(initialS3Config);
-  const bucketName = await getS3Bucket(bucket);
-
-  return { s3Client, s3Config, bucketName };
+  return { bucket };
 }
