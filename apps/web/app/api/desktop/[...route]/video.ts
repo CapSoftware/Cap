@@ -1,5 +1,5 @@
 import { dub } from "@/utils/dub";
-import { createBucketProvider, getS3Bucket, getS3Config } from "@/utils/s3";
+import { createBucketProvider } from "@/utils/s3";
 import { db } from "@cap/database";
 import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
@@ -10,7 +10,6 @@ import { zValidator } from "@hono/zod-validator";
 import { count, eq, and } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
-import { DeleteObjectsCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 
 import { withAuth } from "../../utils";
 
@@ -175,53 +174,34 @@ app.delete(
     const user = c.get("user");
 
     try {
-      const query = await db()
+      const [result] = await db()
         .select({ video: videos, bucket: s3Buckets })
         .from(videos)
         .leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
         .where(eq(videos.id, videoId));
 
-      if (query.length === 0) {
-        return c.json(
-          { error: true, message: "Video does not exist" },
-          { status: 401 }
-        );
-      }
-
-      const result = query[0];
-      if (!result) {
+      if (!result)
         return c.json(
           { error: true, message: "Video not found" },
           { status: 404 }
         );
-      }
 
       await db()
         .delete(videos)
         .where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
 
-      const [s3Client] = await createS3Client(result.bucket);
-      const Bucket = await getS3Bucket(result.bucket);
-      const prefix = `${user.id}/${videoId}/`;
+      const bucket = await createBucketProvider(result.bucket);
 
-      const listObjectsCommand = new ListObjectsV2Command({
-        Bucket,
-        Prefix: prefix,
+      const listedObjects = await bucket.listObjects({
+        prefix: `${user.id}/${videoId}/`,
       });
-      const listedObjects = await s3Client.send(listObjectsCommand);
 
-      if (listedObjects.Contents?.length) {
-        const deleteObjectsCommand = new DeleteObjectsCommand({
-          Bucket,
-          Delete: {
-            Objects: listedObjects.Contents.map((content: any) => ({
-              Key: content.Key,
-            })),
-          },
-        });
-
-        await s3Client.send(deleteObjectsCommand);
-      }
+      if (listedObjects.Contents?.length)
+        await bucket.deleteObjects(
+          listedObjects.Contents.map((content: any) => ({
+            Key: content.Key,
+          }))
+        );
 
       return c.json(true);
     } catch (error) {

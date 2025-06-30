@@ -262,16 +262,7 @@ pub struct RecordingStopped;
 pub struct RequestStartRecording;
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
-pub struct RequestRestartRecording;
-
-#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestNewScreenshot;
-
-#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
-pub struct RequestStopRecording;
-
-#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
-pub struct RequestDeleteRecording;
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestOpenSettings {
@@ -1718,6 +1709,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             recording::stop_recording,
             recording::pause_recording,
             recording::resume_recording,
+            recording::restart_recording,
+            recording::delete_recording,
             recording::list_cameras,
             recording::list_capture_windows,
             recording::list_capture_screens,
@@ -1788,9 +1781,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             RecordingStarted,
             RecordingStopped,
             RequestStartRecording,
-            RequestRestartRecording,
-            RequestDeleteRecording,
-            RequestStopRecording,
             RequestNewScreenshot,
             RequestOpenSettings,
             NewNotification,
@@ -1955,78 +1945,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             audio_meter::spawn_event_emitter(app.clone(), audio_input_rx);
 
             tray::create_tray(&app).unwrap();
-
-            RequestStopRecording::listen_any_spawn(&app, |_, app| async move {
-                if let Err(e) = recording::stop_recording(app.clone(), app.state()).await {
-                    eprintln!("Failed to stop recording: {}", e);
-                }
-            });
-
-            RequestRestartRecording::listen_any_spawn(&app, |_, app| async move {
-                let state = app.state::<Arc<RwLock<App>>>();
-
-                let inputs = if let Some(recording) = state.write().await.clear_current_recording()
-                {
-                    CurrentRecordingChanged.emit(&app).ok();
-
-                    let inputs = recording.inputs().clone();
-
-                    let _ = recording.cancel().await;
-
-                    Some(inputs)
-                } else {
-                    None
-                };
-
-                if let Some(inputs) = inputs {
-                    tokio::time::sleep(Duration::from_millis(1000)).await;
-                    if let Err(e) = recording::start_recording(app.clone(), state, inputs).await {
-                        error!("Failed to start new recording: {}", e);
-                    }
-                }
-            });
-
-            RequestDeleteRecording::listen_any_spawn(&app, |_, app| async move {
-                let state = app.state::<Arc<RwLock<App>>>();
-
-                let recording_data = {
-                    let mut app_state = state.write().await;
-                    if let Some(recording) = app_state.clear_current_recording() {
-                        let recording_dir = recording.recording_dir().clone();
-                        let video_id = match &recording {
-                            recording::InProgressRecording::Instant {
-                                video_upload_info, ..
-                            } => Some(video_upload_info.id.clone()),
-                            _ => None,
-                        };
-                        Some((recording, recording_dir, video_id))
-                    } else {
-                        None
-                    }
-                };
-
-                if let Some((recording, recording_dir, video_id)) = recording_data {
-                    CurrentRecordingChanged.emit(&app).ok();
-                    RecordingStopped {
-                        path: recording_dir.clone(),
-                    }
-                    .emit(&app)
-                    .ok();
-
-                    let _ = recording.cancel().await;
-
-                    std::fs::remove_dir_all(&recording_dir).ok();
-
-                    if let Some(id) = video_id {
-                        let _ = app
-                            .authed_api_request(
-                                format!("/api/desktop/video/delete?videoId={}", id),
-                                |c, url| c.delete(url),
-                            )
-                            .await;
-                    }
-                }
-            });
 
             RequestNewScreenshot::listen_any_spawn(&app, |_, app| async move {
                 if let Err(e) = take_screenshot(app.clone(), app.state()).await {

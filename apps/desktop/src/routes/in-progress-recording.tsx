@@ -85,7 +85,8 @@ export default function () {
 
       if (!shouldRestart) return;
 
-      await events.requestRestartRecording.emit();
+      await commands.restartRecording();
+
       setState("recording");
       setTime(Date.now());
     },
@@ -100,7 +101,8 @@ export default function () {
 
       if (!shouldDelete) return;
 
-      await events.requestDeleteRecording.emit();
+      await commands.deleteRecording();
+
       setState("stopped");
     },
   }));

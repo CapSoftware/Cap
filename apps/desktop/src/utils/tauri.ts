@@ -23,6 +23,12 @@ async pauseRecording() : Promise<null> {
 async resumeRecording() : Promise<null> {
     return await TAURI_INVOKE("resume_recording");
 },
+async restartRecording() : Promise<null> {
+    return await TAURI_INVOKE("restart_recording");
+},
+async deleteRecording() : Promise<null> {
+    return await TAURI_INVOKE("delete_recording");
+},
 async listCameras() : Promise<string[]> {
     return await TAURI_INVOKE("list_cameras");
 },
@@ -245,12 +251,9 @@ recordingOptionsChanged: RecordingOptionsChanged,
 recordingStarted: RecordingStarted,
 recordingStopped: RecordingStopped,
 renderFrameEvent: RenderFrameEvent,
-requestDeleteRecording: RequestDeleteRecording,
 requestNewScreenshot: RequestNewScreenshot,
 requestOpenSettings: RequestOpenSettings,
-requestRestartRecording: RequestRestartRecording,
 requestStartRecording: RequestStartRecording,
-requestStopRecording: RequestStopRecording,
 uploadProgress: UploadProgress
 }>({
 audioInputLevelChange: "audio-input-level-change",
@@ -265,12 +268,9 @@ recordingOptionsChanged: "recording-options-changed",
 recordingStarted: "recording-started",
 recordingStopped: "recording-stopped",
 renderFrameEvent: "render-frame-event",
-requestDeleteRecording: "request-delete-recording",
 requestNewScreenshot: "request-new-screenshot",
 requestOpenSettings: "request-open-settings",
-requestRestartRecording: "request-restart-recording",
 requestStartRecording: "request-start-recording",
-requestStopRecording: "request-stop-recording",
 uploadProgress: "upload-progress"
 })
 
@@ -361,12 +361,9 @@ export type RecordingStarted = null
 export type RecordingStopped = null
 export type RecordingType = "studio" | "instant"
 export type RenderFrameEvent = { frame_number: number; fps: number; resolution_base: XY<number> }
-export type RequestDeleteRecording = null
 export type RequestNewScreenshot = null
 export type RequestOpenSettings = { page: string }
-export type RequestRestartRecording = null
 export type RequestStartRecording = null
-export type RequestStopRecording = null
 export type S3UploadMeta = { id: string }
 export type ScreenCaptureTarget = { variant: "window"; id: number } | { variant: "screen"; id: number } | { variant: "area"; screen: number; bounds: Bounds }
 export type SegmentRecordings = { display: Video; camera: Video | null; mic: Audio | null; system_audio: Audio | null }

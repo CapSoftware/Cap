@@ -527,6 +527,64 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+pub async fn restart_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
+    let Some(recording) = state.write().await.clear_current_recording() else {
+        return Err("No recording in progress".to_string());
+    };
+
+    let _ = CurrentRecordingChanged.emit(&app);
+
+    let inputs = recording.inputs().clone();
+
+    let _ = recording.cancel().await;
+
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+    start_recording(app.clone(), state, inputs).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
+    let recording_data = {
+        let mut app_state = state.write().await;
+        if let Some(recording) = app_state.clear_current_recording() {
+            let recording_dir = recording.recording_dir().clone();
+            let video_id = match &recording {
+                InProgressRecording::Instant {
+                    video_upload_info, ..
+                } => Some(video_upload_info.id.clone()),
+                _ => None,
+            };
+            Some((recording, recording_dir, video_id))
+        } else {
+            None
+        }
+    };
+
+    if let Some((recording, recording_dir, video_id)) = recording_data {
+        CurrentRecordingChanged.emit(&app).ok();
+        RecordingStopped {}.emit(&app).ok();
+
+        let _ = recording.cancel().await;
+
+        std::fs::remove_dir_all(&recording_dir).ok();
+
+        if let Some(id) = video_id {
+            let _ = app
+                .authed_api_request(
+                    format!("/api/desktop/video/delete?videoId={}", id),
+                    |c, url| c.delete(url),
+                )
+                .await;
+        }
+    }
+
+    Ok(())
+}
+
 // runs when a recording ends, whether from success or failure
 async fn handle_recording_end(
     handle: AppHandle,

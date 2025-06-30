@@ -844,8 +844,6 @@ async fn create_segment_pipeline(
         None
     };
 
-    let (mut pipeline, pipeline_done_rx) = pipeline_builder.build().await?;
-
     let cursor = custom_cursor_capture.then(move || {
         let cursor = spawn_cursor_recorder(
             screen.bounds.clone(),
@@ -876,6 +874,8 @@ async fn create_segment_pipeline(
             actor: Some(cursor),
         }
     });
+
+    let (mut pipeline, pipeline_done_rx) = pipeline_builder.build().await?;
 
     pipeline.play().await?;
 
