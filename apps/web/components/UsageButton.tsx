@@ -32,11 +32,11 @@ export const UsageButton = memo(
                   ? "p-0 w-10 h-10 rounded-full min-w-[unset] max-w-10"
                   : "w-full"
               )}
-              variant="primary"
+              variant="blue"
             >
               <FontAwesomeIcon
                 className={clsx(
-                  "text-white",
+                  "text-white size-4",
                   sidebarCollapsed ? "mr-0" : "mr-1"
                 )}
                 icon={faCheck}
