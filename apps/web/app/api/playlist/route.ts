@@ -1,7 +1,6 @@
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
-import { getCurrentUser } from "@cap/database/auth/session";
 import {
   generateM3U8Playlist,
   generateMasterPlaylist,

@@ -30,6 +30,7 @@ import { fromVtt, Subtitle } from "subtitles-parser-vtt";
 import { MP4VideoPlayer } from "../../../s/[videoId]/_components/MP4VideoPlayer";
 import { VideoPlayer } from "../../../s/[videoId]/_components/VideoPlayer";
 import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "next/navigation";
 
 declare global {
   interface Window {
@@ -83,6 +84,9 @@ export const EmbedVideo = forwardRef<
     ref
   ) => {
     useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
+
+    const searchParams = useSearchParams();
+    const hideBranding = searchParams.get("hideBranding") === "true";
 
     const videoRef = useRef<HTMLVideoElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
@@ -650,7 +654,7 @@ export const EmbedVideo = forwardRef<
                     )}
                   </AnimatePresence>
 
-                  {!isPlaying && (
+                  {!isPlaying && !hideBranding && (
                     <motion.button
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -691,9 +695,17 @@ export const EmbedVideo = forwardRef<
                       />
                     )}
                     <div className="min-w-0 flex-1">
-                      <h1 className="text-white text-sm sm:text-xl md:text-2xl font-semibold leading-tight truncate">
-                        {data.name}
-                      </h1>
+                      <a
+                        href={`/s/${data.id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <h1 className="text-white text-sm sm:text-xl md:text-2xl font-semibold leading-tight truncate hover:underline transition-all duration-200 cursor-pointer">
+                          {data.name}
+                        </h1>
+                      </a>
                       <div className="flex items-center gap-1 sm:gap-2 mt-0.5 sm:mt-1">
                         {ownerName && (
                           <p className="text-gray-300 text-xs sm:text-sm font-medium truncate">
@@ -734,7 +746,7 @@ export const EmbedVideo = forwardRef<
           )}
 
           <AnimatePresence>
-            {isPlaying && !showTitleOverlay && (
+            {isPlaying && !showTitleOverlay && !hideBranding && (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}

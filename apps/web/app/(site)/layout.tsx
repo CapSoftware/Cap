@@ -1,6 +1,7 @@
+import { PropsWithChildren } from "react";
 import { Footer } from "./Footer";
 import { Navbar } from "./Navbar";
-import { PropsWithChildren } from "react";
+import { Intercom } from "../Layout/Intercom";
 
 export default function Layout(props: PropsWithChildren) {
   return (
@@ -8,6 +9,7 @@ export default function Layout(props: PropsWithChildren) {
       <Navbar />
       {props.children}
       <Footer />
+      <Intercom />
     </>
   );
 }

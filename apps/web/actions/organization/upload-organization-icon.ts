@@ -3,11 +3,13 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizations } from "@cap/database/schema";
 import { db } from "@cap/database";
-import { eq } from "drizzle-orm";
-import { revalidatePath } from "next/cache";
-import { createS3Client, getS3Bucket } from "@/utils/s3";
-import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
+import { createBucketProvider } from "@/utils/s3";
 import { serverEnv } from "@cap/env";
+import { eq } from "drizzle-orm";
+import DOMPurify from "dompurify";
+import { JSDOM } from "jsdom";
+import { revalidatePath } from "next/cache";
+import { sanitizeFile } from "@/lib/sanitizeFile";
 
 export async function uploadOrganizationIcon(
   formData: FormData,
@@ -53,35 +55,13 @@ export async function uploadOrganizationIcon(
   const fileKey = `organizations/${organizationId}/icon-${Date.now()}.${fileExtension}`;
 
   try {
-    // Get S3 client
-    const [s3Client] = await createS3Client();
-    const bucketName = await getS3Bucket();
+    const sanitizedFile = await sanitizeFile(file);
 
-    // Create presigned post
-    const presignedPostData = await createPresignedPost(s3Client, {
-      Bucket: bucketName,
-      Key: fileKey,
-      Fields: {
-        "Content-Type": file.type,
-      },
-      Expires: 600, // 10 minutes
+    const bucket = await createBucketProvider();
+
+    await bucket.putObject(fileKey, await sanitizedFile.bytes(), {
+      contentType: file.type,
     });
-
-    // Upload file to S3
-    const formDataForS3 = new FormData();
-    Object.entries(presignedPostData.fields).forEach(([key, value]) => {
-      formDataForS3.append(key, value as string);
-    });
-    formDataForS3.append("file", file);
-
-    const uploadResponse = await fetch(presignedPostData.url, {
-      method: "POST",
-      body: formDataForS3,
-    });
-
-    if (!uploadResponse.ok) {
-      throw new Error("Failed to upload file to S3");
-    }
 
     // Construct the icon URL
     let iconUrl;
@@ -90,10 +70,10 @@ export async function uploadOrganizationIcon(
       iconUrl = `${serverEnv().CAP_AWS_BUCKET_URL}/${fileKey}`;
     } else if (serverEnv().CAP_AWS_ENDPOINT) {
       // For custom endpoints like MinIO
-      iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucketName}/${fileKey}`;
+      iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucket.name}/${fileKey}`;
     } else {
       // Default AWS S3 URL format
-      iconUrl = `https://${bucketName}.s3.${
+      iconUrl = `https://${bucket.name}.s3.${
         serverEnv().CAP_AWS_REGION || "us-east-1"
       }.amazonaws.com/${fileKey}`;
     }
@@ -101,9 +81,7 @@ export async function uploadOrganizationIcon(
     // Update organization with new icon URL
     await db()
       .update(organizations)
-      .set({
-        iconUrl,
-      })
+      .set({ iconUrl })
       .where(eq(organizations.id, organizationId));
 
     revalidatePath("/dashboard/settings/organization");

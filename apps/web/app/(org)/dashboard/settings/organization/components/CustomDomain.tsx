@@ -33,7 +33,12 @@ type DomainConfig = {
   requiredAValue?: string;
 };
 
-export function CustomDomain() {
+interface CustomDomainProps {
+  isOwner: boolean;
+  showOwnerToast: () => void;
+}
+
+export function CustomDomain({ isOwner, showOwnerToast }: CustomDomainProps) {
   const router = useRouter();
   const { activeOrganization, isSubscribed } = useDashboardContext();
   const [domain, setDomain] = useState(
@@ -226,6 +231,7 @@ export function CustomDomain() {
     }
   };
 
+
   return (
     <div className="flex flex-wrap mt-4 space-y-6">
       <div className="flex-1">
@@ -233,28 +239,28 @@ export function CustomDomain() {
           <Input
             type="text"
             id="customDomain"
-            placeholder="your-domain.com"
+            placeholder={isOwner ? "your-domain.com" : "Only the owner of the organization can change this"}
             value={domain}
             onChange={(e) => setDomain(e.target.value)}
-            disabled={loading}
+            disabled={!isOwner}
             className="flex-1 min-h-[44px]"
           />
           <div className="flex gap-2 justify-between items-center mt-4">
             {activeOrganization?.organization.customDomain &&
               (isVerified ? (
                 <>
-                  <div className="flex items-center gap-1.5 text-green-800 bg-green-400 px-2.5 py-1.5 rounded-full text-sm">
+                  <div className="flex items-center gap-1 text-white bg-green-600 px-2.5 py-1.5 rounded-full text-sm">
                     <CheckCircle className="size-3" />
-                    <span className="text-xs font-medium text-green-800">
+                    <span className="text-xs font-medium text-white">
                       Domain verified
                     </span>
                   </div>
                 </>
               ) : (
                 <>
-                  <div className="flex items-center gap-1.5 text-red-800 bg-red-400 px-2.5 py-1.5 rounded-full text-sm">
-                    <XCircle className="w-4 h-4" />
-                    <span className="text-sm font-medium text-red-800">
+                  <div className="flex items-center gap-1 text-white bg-red-500 px-2.5 py-1.5 rounded-full text-sm">
+                    <XCircle className="size-3" />
+                    <span className="text-xs font-medium text-white">
                       Domain not verified
                     </span>
                   </div>
@@ -265,7 +271,6 @@ export function CustomDomain() {
             <Button
               type="submit"
               size="sm"
-              className="px-[1.5rem]"
               variant="dark"
               onClick={handleSubmit}
               spinner={loading}
@@ -285,11 +290,11 @@ export function CustomDomain() {
                 >
                   {verifying ? (
                     <FontAwesomeIcon
-                      className="animate-spin size-3.5"
+                      className="animate-spin size-3 mr-0.5"
                       icon={faRefresh}
                     />
                   ) : (
-                    <FontAwesomeIcon className="size-3.5" icon={faRefresh} />
+                    <FontAwesomeIcon className="size-3 mr-0.5" icon={faRefresh} />
                   )}
                   Refresh
                 </Button>
@@ -302,7 +307,7 @@ export function CustomDomain() {
                   onClick={handleRemoveDomain}
                   disabled={loading}
                 >
-                  <FontAwesomeIcon className="size-3.5" icon={faTrash} />
+                  <FontAwesomeIcon className="size-3 mr-0.5" icon={faTrash} />
                   Remove
                 </Button>
               )}

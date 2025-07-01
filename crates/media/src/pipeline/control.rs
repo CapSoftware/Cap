@@ -67,25 +67,9 @@ impl ControlBroadcast {
         }
     }
 
-    pub async fn broadcast(&mut self, value: Control) -> Result<(), MediaError> {
-        let mut any_dropped = false;
-
-        if self.listeners.is_empty() {
-            eprintln!("Attempting to broadcast value without any listeners");
-        }
-
-        for (name, listener) in self.listeners.iter() {
-            if let Err(_) = listener.send_async(value).await {
-                error!("{name} is unreachable!");
-                any_dropped = true;
-            }
-        }
-
-        match any_dropped {
-            false => Ok(()),
-            true => Err(MediaError::Any(
-                "Attempted to broadcast value to a listener that has been dropped. Pipeline execution may be compromised.".into(),
-            )),
+    pub async fn broadcast(&mut self, value: Control) {
+        for (_, listener) in self.listeners.iter() {
+            let _ = listener.send_async(value).await;
         }
     }
 }

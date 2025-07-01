@@ -1,22 +1,21 @@
 "use client";
 
-import { useState } from "react";
 import Image from "next/image";
+import { useState } from "react";
 
-import { Search } from "lucide-react";
-import { Input } from "@cap/ui";
-import { useRouter } from "next/navigation";
-import { Button, Avatar } from "@cap/ui";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Avatar, Button, Input } from "@cap/ui";
 import { faEdit, faLayerGroup, faPlus, faTrash } from "@fortawesome/free-solid-svg-icons";
-import SpaceDialog from "../../_components/Navbar/SpaceDialog";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Search } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { ConfirmationDialog } from "../../_components/ConfirmationDialog";
+import SpaceDialog from "../../_components/Navbar/SpaceDialog";
 
-import { Spaces } from "../../dashboard-data";
 import { deleteSpace } from "@/actions/organization/delete-space";
-import { toast } from "sonner";
 import { useParams } from "next/navigation";
+import { toast } from "sonner";
 import { useDashboardContext } from "../../Contexts";
+import { Spaces } from "../../dashboard-data";
 
 export default function BrowseSpacesPage() {
   const { spacesData, user, activeOrganization } = useDashboardContext();
@@ -70,29 +69,15 @@ export default function BrowseSpacesPage() {
 
   return (
     <>
-      <div>
-        <div className="flex flex-wrap gap-3 justify-between items-start mb-4 w-full">
-          <Button
-            onClick={() => setShowSpaceDialog(true)}
-            size="sm"
-            variant="dark"
-          >
-            <FontAwesomeIcon className="size-3" icon={faPlus} />
-            Create Space
-          </Button>
-          <div className="flex relative w-full max-w-md">
-            <div className="flex absolute inset-y-0 left-3 items-center pointer-events-none">
-              <Search className="size-4 text-gray-9" />
-            </div>
-            <Input
-              type="text"
-              placeholder="Search spaces..."
-              className="flex-1 pr-3 pl-8 w-full min-w-full text-sm placeholder-gray-8"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-          </div>
-        </div>
+      <div className="flex flex-wrap gap-3 justify-between items-start w-full">
+        <Button
+          onClick={() => setShowSpaceDialog(true)}
+          size="sm"
+          variant="dark"
+        >
+          <FontAwesomeIcon className="size-3" icon={faPlus} />
+          Create Space
+        </Button>
         <div className="flex relative w-full max-w-md">
           <div className="flex absolute inset-y-0 left-3 items-center pointer-events-none">
             <Search className="size-4 text-gray-9" />
