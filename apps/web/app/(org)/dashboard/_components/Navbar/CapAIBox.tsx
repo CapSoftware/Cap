@@ -4,7 +4,7 @@ import CapAIDialog from "./CapAIDialog";
 import { memo, useState } from "react";
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { useTheme } from "../DynamicSharedLayout";
+import { useTheme } from "../../Contexts";
 
 const CapAIBox = ({
   openAIDialog,
