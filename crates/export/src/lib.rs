@@ -14,6 +14,7 @@ use serde::Deserialize;
 use specta::Type;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::time::timeout;
+use tracing::{error, info, trace, warn};
 
 #[derive(thiserror::Error, Debug)]
 pub enum ExportError {
@@ -158,7 +159,7 @@ impl Exporter {
         }
     }
 
-    pub fn total_frames(&self, export_settings: &ExportSettings) -> u32 {
+    pub fn total_frames(&self, fps: u32) -> u32 {
         let duration = cap_rendering::get_duration(
             &self.recordings,
             &self.recording_meta,
@@ -166,16 +167,22 @@ impl Exporter {
             &self.project_config,
         );
 
-        (export_settings.fps as f64 * duration).ceil() as u32
+        (fps as f64 * duration).ceil() as u32
     }
 
     pub async fn export_mp4(
         self,
         export_settings: ExportSettings,
         mut on_progress: impl FnMut(u32) + Send + 'static,
-    ) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    ) -> Result<PathBuf, String> {
         let output_path = self.output_path.clone();
         let meta = &self.studio_meta;
+
+        info!("Exporting mp4 with settings: {export_settings:?}");
+        info!(
+            "Expected to render {} frames",
+            self.total_frames(export_settings.fps)
+        );
 
         let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(RenderedFrame, u32)>(4);
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<MP4Input>(4);
@@ -215,7 +222,8 @@ impl Exporter {
                             .map(|v| v.boxed())
                     })
                 },
-            )?;
+            )
+            .map_err(|v| v.to_string())?;
 
             while let Ok(frame) = frame_rx.recv() {
                 encoder.queue_video_frame(frame.video);
@@ -226,16 +234,13 @@ impl Exporter {
 
             encoder.finish();
 
-            Ok::<_, ExportError>(self.output_path)
-        })
-        .then(|f| async { f.map_err(Into::into).and_then(|v| v) });
+            Ok::<_, String>(self.output_path)
+        });
 
         let render_task = tokio::spawn({
             let project = self.project_config.clone();
             let project_path = self.project_path.clone();
             async move {
-                println!("Starting FFmpeg output process...");
-
                 let mut frame_count = 0;
                 let mut first_frame = None;
 
@@ -243,11 +248,17 @@ impl Exporter {
                     (f64::from(AudioRenderer::SAMPLE_RATE) / f64::from(fps)).ceil() as usize;
 
                 loop {
-                    let Some((frame, frame_number)) =
-                        timeout(Duration::from_secs(6), video_rx.recv()).await?
-                    else {
-                        break;
-                    };
+                    let (frame, frame_number) =
+                        match timeout(Duration::from_secs(6), video_rx.recv()).await {
+                            Err(_) => {
+                                warn!("render_task frame receive timed out");
+                                break;
+                            }
+                            Ok(Some(v)) => v,
+                            _ => {
+                                break;
+                            }
+                        };
 
                     (on_progress)(frame_count);
 
@@ -308,15 +319,13 @@ impl Exporter {
                         eprintln!("Failed to save screenshot: {:?}", e);
                     });
                 } else {
-                    eprintln!("No frames were processed, cannot save screenshot or thumbnail");
+                    warn!("No frames were processed, cannot save screenshot or thumbnail");
                 }
 
                 Ok::<_, ExportError>(())
             }
         })
-        .then(|f| async { f.map_err(Into::into).and_then(|v| v) });
-
-        println!("Rendering video to channel");
+        .then(|f| async { f.map(|v| v.map_err(|e| e.to_string())) });
 
         let render_video_task = cap_rendering::render_video_to_channel(
             &self.render_constants,
@@ -335,9 +344,10 @@ impl Exporter {
             export_settings.resolution_base,
             &self.recordings,
         )
-        .then(|f| async { f.map_err(Into::into) });
+        .then(|v| async { Ok(v.map_err(|e| e.to_string())) });
 
-        let _ = tokio::try_join!(encoder_thread, render_video_task, render_task)?;
+        let _ = tokio::try_join!(encoder_thread, render_video_task, render_task)
+            .map_err(|e| e.to_string())?;
 
         Ok(output_path)
     }
@@ -346,7 +356,7 @@ impl Exporter {
         self,
         export_settings: ExportSettings,
         mut on_progress: impl FnMut(u32) + Send + 'static,
-    ) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    ) -> Result<PathBuf, String> {
         let meta = &self.studio_meta;
 
         let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(RenderedFrame, u32)>(4);
@@ -365,9 +375,15 @@ impl Exporter {
             gif_output_path.set_extension("gif");
         }
 
+        std::fs::create_dir_all(gif_output_path.parent().unwrap()).map_err(|e| e.to_string())?;
+
+        trace!(
+            "Creating GIF encoder at path '{}'",
+            gif_output_path.display()
+        );
         let mut gif_encoder =
             GifEncoderWrapper::new(&gif_output_path, output_size.0, output_size.1, fps)
-                .map_err(|e| ExportError::Other(format!("Failed to create GIF encoder: {}", e)))?;
+                .map_err(|e| format!("Failed to create GIF encoder: {}", e))?;
 
         let encoder_thread = tokio::task::spawn_blocking(move || {
             let mut frame_count = 0;
@@ -393,7 +409,10 @@ impl Exporter {
 
             Ok(gif_output_path)
         })
-        .then(|f| async { f.map_err(Into::into).and_then(|v| v) });
+        .then(|f| async {
+            f.map_err(|e| e.to_string())
+                .and_then(|v| v.map_err(|v| v.to_string()))
+        });
 
         let render_video_task = cap_rendering::render_video_to_channel(
             &self.render_constants,
@@ -412,9 +431,10 @@ impl Exporter {
             export_settings.resolution_base,
             &self.recordings,
         )
-        .then(|f| async { f.map_err(Into::into) });
+        .then(|f| async { f.map_err(|v| v.to_string()) });
 
-        let (output_path, _) = tokio::try_join!(encoder_thread, render_video_task)?;
+        let (output_path, _) =
+            tokio::try_join!(encoder_thread, render_video_task).map_err(|e| e.to_string())?;
 
         Ok(output_path)
     }

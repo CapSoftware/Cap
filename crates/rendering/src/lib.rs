@@ -193,10 +193,6 @@ pub async fn render_video_to_channel(
     let duration = get_duration(recordings, recording_meta, meta, &project);
 
     let total_frames = (fps as f64 * duration).ceil() as u32;
-    println!(
-        "Final export duration: {} seconds ({} frames at {}fps)",
-        duration, total_frames, fps
-    );
 
     let mut frame_number = 0;
 
@@ -266,7 +262,6 @@ pub fn get_duration(
     project: &ProjectConfiguration,
 ) -> f64 {
     let mut max_duration = recordings.duration();
-    println!("Initial screen recording duration: {}", max_duration);
 
     // Check camera duration if it exists
     if let Some(camera_path) = meta.camera_path() {
@@ -281,7 +276,6 @@ pub fn get_duration(
 
     // If there's a timeline, ensure all segments extend to the max duration
     if let Some(timeline) = &project.timeline {
-        println!("Found timeline with {} segments", timeline.segments.len());
         // for (i, segment) in timeline.segments.iter().enumerate() {
         //     println!(
         //         "Segment {} - current end: {}, max_duration: {}",
@@ -292,12 +286,7 @@ pub fn get_duration(
         //         println!("Extended segment {} to new end: {}", i, segment.end);
         //     }
         // }
-        let final_duration = timeline.duration();
-        println!(
-            "Final timeline duration after adjustments: {}",
-            final_duration
-        );
-        final_duration
+        timeline.duration()
     } else {
         println!("No timeline found, using max_duration: {}", max_duration);
         max_duration
@@ -333,7 +322,6 @@ impl RenderVideoConstants {
                 .map(|c| XY::new(c.width, c.height)),
         };
 
-        println!("Initializing wgpu...");
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions::default())
@@ -432,7 +420,6 @@ impl RenderVideoConstants {
                             hotspot: cursor.hotspot.map(|v| v as f32),
                         },
                     );
-                    println!("Successfully loaded cursor texture: {}", cursor_id);
                 }
                 Err(e) => {
                     println!(
@@ -446,10 +433,6 @@ impl RenderVideoConstants {
             }
         }
 
-        println!(
-            "Completed loading cursor textures. Total loaded: {}",
-            textures.len()
-        );
         textures
     }
 }

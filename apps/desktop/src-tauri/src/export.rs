@@ -24,7 +24,7 @@ pub async fn export_video(
         e.to_string()
     })?;
 
-    let total_frames = exporter.total_frames(&settings);
+    let total_frames = exporter.total_frames(settings.fps);
 
     let _ = progress.send(FramesRendered {
         rendered_count: 0,
