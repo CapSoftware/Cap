@@ -8,6 +8,7 @@ import {
   users,
   videos,
   spaces,
+  folders,
 } from "@cap/database/schema";
 import { count, desc, eq, sql } from "drizzle-orm";
 import { Metadata } from "next";
@@ -152,11 +153,24 @@ export default async function CapsPage({
     .limit(limit)
     .offset(offset);
 
+  const foldersData = await db()
+    .select({
+      id: folders.id,
+      name: folders.name,
+      color: folders.color,
+      videoCount: sql<number>`(
+        SELECT COUNT(*) FROM videos WHERE videos.folderId = ${folders.id}
+      )`,
+    })
+    .from(folders)
+    .where(eq(folders.organizationId, user.activeOrganizationId));
+
   const processedVideoData = videoData.map((video) => {
     const { effectiveDate, ...videoWithoutEffectiveDate } = video;
 
     return {
       ...videoWithoutEffectiveDate,
+      foldersData,
       sharedOrganizations: video.sharedOrganizations.filter(
         (organization) => organization.id !== null
       ),
@@ -175,6 +189,7 @@ export default async function CapsPage({
   return (
     <Caps
       data={processedVideoData}
+      folders={foldersData}
       count={totalCount}
       dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
     />

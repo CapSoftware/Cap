@@ -3,21 +3,25 @@ import { deleteVideo } from "@/actions/videos/delete";
 import { useApiClient } from "@/utils/web-api";
 import { VideoMetadata } from "@cap/database/types";
 import { Button } from "@cap/ui";
-import { faFolderPlus } from "@fortawesome/free-solid-svg-icons";
+import { faFolderPlus, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { NewFolderDialog } from "./components/NewFolderDialog";
+import Link from "next/link";
 import { useDashboardContext } from "../Contexts";
 import { CapCard } from "./components/CapCard/CapCard";
 import { CapPagination } from "./components/CapPagination";
-import { NewFolderDialog } from "./components/NewFolderDialog";
+import { useTheme } from "../Contexts";
 import { EmptyCapState } from "./components/EmptyCapState";
 import { SelectedCapsBar } from "./components/SelectedCapsBar";
 import { UploadCapButton } from "./components/UploadCapButton";
 import { UploadPlaceholderCard } from "./components/UploadPlaceholderCard";
-import { useTheme } from "../Contexts";
+import { deleteFolder, updateFolder } from "../folder/[id]/actions";
+import { ConfirmationDialog } from "../_components/ConfirmationDialog";
+import { FoldersDropdown } from "./components/FoldersDropdown";
 
 type VideoData = {
   id: string;
@@ -38,23 +42,31 @@ type VideoData = {
   hasPassword: boolean;
 }[];
 
+type FolderDataType = {
+  name: string;
+  id: string;
+  color: "normal" | "blue" | "red" | "yellow";
+  videoCount: number;
+};
+
 export const Caps = ({
   data,
   count,
   dubApiKeyEnabled,
+  folders,
 }: {
   data: VideoData;
   count: number;
+  folders: FolderDataType[];
   dubApiKeyEnabled: boolean;
 }) => {
   const { refresh } = useRouter();
   const params = useSearchParams();
   const page = Number(params.get("page")) || 1;
   const [analytics, setAnalytics] = useState<Record<string, number>>({});
-  const [openNewFolderDialog, setOpenNewFolderDialog] = useState(false);
   const { user } = useDashboardContext();
-  const { theme } = useTheme();
   const limit = 15;
+  const [openNewFolderDialog, setOpenNewFolderDialog] = useState(false);
   const totalPages = Math.ceil(count / limit);
   const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
   const previousCountRef = useRef<number>(0);
@@ -279,17 +291,28 @@ export const Caps = ({
         />
         <Button
           onClick={() => setOpenNewFolderDialog(true)}
-          size="sm" variant="dark" className="flex gap-2 items-center">
+          size="sm"
+          variant="dark"
+          className="flex gap-2 items-center"
+        >
           <FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
           New Folder
         </Button>
       </div>
-      <NewFolderDialog open={openNewFolderDialog} onOpenChange={setOpenNewFolderDialog} />
-      <h1 className="mb-3 text-xl font-medium text-gray-12">Folders</h1>
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4 mb-10">
-        <Folder />
-        <Folder />
-      </div>
+      <NewFolderDialog
+        open={openNewFolderDialog}
+        onOpenChange={setOpenNewFolderDialog}
+      />
+      {folders.length > 0 && (
+        <>
+          <h1 className="mb-3 text-xl font-medium text-gray-12">Folders</h1>
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4 mb-10">
+            {folders.map((folder) => (
+              <Folder key={folder.id} {...folder} />
+            ))}
+          </div>
+        </>
+      )}
       <h1 className="mb-3 text-xl font-medium text-gray-12">Videos</h1>
       <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
         {uploadPlaceholders.map((u) => (
@@ -313,13 +336,11 @@ export const Caps = ({
           />
         ))}
       </div>
-      {
-        (data.length > limit || data.length === limit || page !== 1) && (
-          <div className="mt-7">
-            <CapPagination currentPage={page} totalPages={totalPages} />
-          </div>
-        )
-      }
+      {(data.length > limit || data.length === limit || page !== 1) && (
+        <div className="mt-7">
+          <CapPagination currentPage={page} totalPages={totalPages} />
+        </div>
+      )}
 
       <SelectedCapsBar
         selectedCaps={selectedCaps}
@@ -327,16 +348,28 @@ export const Caps = ({
         deleteSelectedCaps={deleteSelectedCaps}
         isDeleting={isDeleting}
       />
-    </div >
+    </div>
   );
 };
 
-
-const Folder = () => {
+const Folder = ({ name, color, id, videoCount }: FolderDataType) => {
   const { theme } = useTheme();
+  const [confirmDeleteFolderOpen, setConfirmDeleteFolderOpen] = useState(false);
+  const [deleteFolderLoading, setDeleteFolderLoading] = useState(false);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [updateName, setUpdateName] = useState(name);
+  const nameRef = useRef<HTMLTextAreaElement>(null);
+
+  const artboard =
+    theme === "dark" && color === "normal"
+      ? "folder"
+      : color === "normal"
+        ? "folder-dark"
+        : `folder-${color}`;
+
   const { rive, RiveComponent: FolderRive } = useRive({
     src: "/rive/dashboard.riv",
-    artboard: theme === "dark" ? "folder" : "folder-dark",
+    artboard,
     animations: "idle",
     autoplay: false,
     layout: new Layout({
@@ -344,24 +377,110 @@ const Folder = () => {
     }),
   });
 
+  const deleteFolderHandler = async () => {
+    try {
+      setDeleteFolderLoading(true);
+      await deleteFolder(id);
+      toast.success("Folder deleted successfully");
+    } catch (error) {
+      toast.error("Failed to delete folder");
+    } finally {
+      setDeleteFolderLoading(false);
+      setConfirmDeleteFolderOpen(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isRenaming && nameRef.current) {
+      nameRef.current.focus();
+      nameRef.current.select();
+    }
+  }, [isRenaming]);
+
+  const updateFolderNameHandler = async () => {
+    try {
+      await updateFolder({ folderId: id, name: updateName });
+      toast.success("Folder name updated successfully");
+    } catch (error) {
+      toast.error("Failed to update folder name");
+    } finally {
+      setIsRenaming(false);
+    }
+  };
+
   return (
-    <div
-      onMouseEnter={() => {
-        if (!rive) return;
-        rive.stop();
-        rive.play("folder-open")
-      }}
-      onMouseLeave={() => {
-        if (!rive) return;
-        rive.stop();
-        rive.play("folder-close")
-      }}
-      className="flex justify-center items-center px-2 py-4 space-x-5 w-full h-auto rounded-lg border transition-colors duration-200 cursor-pointer bg-gray-3 border-gray-5 hover:bg-gray-4 hover:border-gray-6">
-      <FolderRive key={theme + "folder"} className="w-[50px] h-[50px]" />
-      <div className="flex flex-col">
-        <p className="text-[15px] truncate text-gray-12 w-fit">Untitled folder</p>
-        <p className="text-sm truncate text-gray-10 w-fit">12 videos</p>
+    <Link legacyBehavior prefetch={false} href={`/dashboard/folder/${id}`}>
+      <div
+        onMouseEnter={() => {
+          if (!rive) return;
+          rive.stop();
+          rive.play("folder-open");
+        }}
+        onMouseLeave={() => {
+          if (!rive) return;
+          rive.stop();
+          rive.play("folder-close");
+        }}
+        className="flex justify-between items-center px-4 py-4 w-full h-auto rounded-lg border transition-colors duration-200 cursor-pointer bg-gray-3 border-gray-5 hover:bg-gray-4 hover:border-gray-6"
+      >
+        <div
+          className="flex flex-1 gap-3 items-center">
+          <FolderRive
+            key={theme + "folder" + id}
+            className="w-[50px] h-[50px]"
+          />
+          <div onClick={(e) => {
+            e.stopPropagation();
+          }} className="flex flex-col justify-center h-10">
+            {isRenaming ? (
+              <textarea
+                ref={nameRef}
+                rows={1}
+                value={updateName}
+                onChange={(e) => setUpdateName(e.target.value)}
+                onBlur={async () => {
+                  setIsRenaming(false);
+                  if (updateName.trim() !== name) {
+                    await updateFolderNameHandler();
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    setIsRenaming(false);
+                    if (updateName.trim() !== name) {
+                      updateFolderNameHandler();
+                    }
+                  }
+                }}
+                className="w-full resize-none bg-transparent border-none focus:outline-none
+                 focus:ring-0 focus:border-none text-gray-12 text-[15px] max-w-[116px] truncate p-0 m-0 h-[22px] leading-[22px] overflow-hidden font-normal tracking-normal"
+              />
+            ) : (
+              <p onClick={(e) => {
+                e.stopPropagation()
+                setIsRenaming(true)
+              }} className="text-[15px] truncate text-gray-12 w-full max-w-[116px] m-0 p-0 h-[22px] leading-[22px] font-normal tracking-normal">{updateName}</p>
+            )}
+            <p className="text-sm truncate text-gray-10 w-fit">{`${videoCount} ${videoCount === 1 ? "video" : "videos"
+              }`}</p>
+          </div>
+        </div>
+        <ConfirmationDialog
+          loading={deleteFolderLoading}
+          open={confirmDeleteFolderOpen}
+          icon={<FontAwesomeIcon icon={faTrash} />}
+          onConfirm={deleteFolderHandler}
+          onCancel={() => setConfirmDeleteFolderOpen(false)}
+          title="Delete Folder"
+          description={`Are you sure you want to delete the folder "${name}"? This action cannot be undone.`}
+        />
+        <FoldersDropdown
+          id={id}
+          setIsRenaming={setIsRenaming}
+          setConfirmDeleteFolderOpen={setConfirmDeleteFolderOpen}
+          nameRef={nameRef}
+        />
       </div>
-    </div>
+    </Link >
   );
 };

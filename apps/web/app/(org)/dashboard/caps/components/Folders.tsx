@@ -1,3 +1,5 @@
+"use client"
+
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import { useTheme } from "../../Contexts";
 import React, { useImperativeHandle } from "react";
@@ -106,4 +108,39 @@ export const YellowFolder = React.forwardRef<FolderHandle>((_, ref) => {
   }), [rive]);
 
   return <YellowFolderRive className="w-[50px] h-[50px]" />
+});
+
+interface AllFoldersProps {
+  color: "normal" | "blue" | "red" | "yellow";
+  className?: string;
+}
+
+
+export const AllFolders = React.forwardRef<FolderHandle, AllFoldersProps>((props, ref) => {
+  const { theme } = useTheme();
+
+
+  const artboard = theme === "dark" && props.color === "normal" ? "folder" : props.color === "blue" ? "folder-blue" : props.color === "red" ? "folder-red" : props.color === "yellow" ? "folder-yellow" : "folder-dark";
+  const { rive, RiveComponent: AllFoldersRive } = useRive({
+    src: "/rive/dashboard.riv",
+    artboard,
+    animations: "idle",
+    autoplay: false,
+    layout: new Layout({
+      fit: Fit.Contain,
+    }),
+  });
+
+  useImperativeHandle(ref, () => ({
+    play: (animationName: string) => {
+      if (!rive) return;
+      rive.play(animationName);
+    },
+    stop: () => {
+      if (!rive) return;
+      rive.stop();
+    }
+  }), [rive]);
+
+  return <AllFoldersRive key={theme + props.color} className={props.className} />
 });
