@@ -21,14 +21,16 @@ export const HomePage: React.FC<HomePageProps> = ({
   return (
     <>
       <Header serverHomepageCopyVariant={serverHomepageCopyVariant} />
-      <RecordingModes />
+      <div className="space-y-[150px] md:space-y-[200px] lg:space-y-[300px]">
+        <RecordingModes />
+        <Features />
+        <Testimonials />
+        <Pricing />
+        <Faq />
+      </div>
       <TextReveal className="max-w-[600px] mx-auto leading-[1.2] text-center">
         {homepageCopy.textReveal}
       </TextReveal>
-      <Features />
-      <Testimonials />
-      <Pricing />
-      <Faq />
       <ReadyToGetStarted />
     </>
   );

@@ -9,7 +9,7 @@ export { ProCard } from "./ProCard";
 
 const Pricing = () => {
   return (
-    <div className="w-full max-w-[1100px] mx-auto my-[150px] md:my-[200px] lg:my-[250px] px-5">
+    <div className="w-full max-w-[1100px] mx-auto px-5">
       <div className="px-5 mb-16 text-center">
         <h2 className="mb-3 w-full">{homepageCopy.pricing.title}</h2>
         <p className="text-lg max-w-[800px] mx-auto leading-[1.75rem] w-full">

@@ -66,7 +66,7 @@ const RecordingModes = () => {
         </p>
       </div>
       {/*Toggles*/}
-      <div className="flex flex-1 gap-5 mt-[52px]">
+      <div className="flex flex-col sm:flex-row gap-2 sm:gap-5 mt-[52px]">
         {modes.map((mode) => (
           <div
             onClick={() => handleModeSwitch(mode)}

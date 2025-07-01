@@ -18,7 +18,7 @@ const Faq = () => {
   };
 
   return (
-    <div className="mx-auto max-w-[1000px] px-5 my-[150px] md:my-[200px] lg:my-[250px]">
+    <div className="mx-auto max-w-[1000px] px-5">
       <h2 className="mb-10 text-4xl text-gray-12">{homepageCopy.faq.title}</h2>
       <div className="space-y-4">
         {homepageCopy.faq.items.map((item, index) => (

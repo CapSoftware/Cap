@@ -48,7 +48,7 @@ body {
 body,
 html {
   color: #000000;
-  background-color: #F2F2F2;
+  background-color: #f2f2f2;
 }
 
 ::-webkit-scrollbar {
@@ -266,7 +266,8 @@ a,
 p,
 span,
 input,
-label, button {
+label,
+button {
   @apply tracking-normal text-gray-10 font-normal leading-[1.5rem];
 }
 
@@ -282,7 +283,6 @@ nav ul {
 nav.mobile a {
   @apply flex w-full;
 }
-
 
 label {
   @apply block text-sm font-semibold text-left;
@@ -554,7 +554,6 @@ slot:not(.dashboard-layout slot) {
 /* Custom scrollbar */
 .custom-scroll {
   overflow-y: scroll;
-  padding-right: 3px;
 }
 
 .custom-scroll::-webkit-scrollbar {
@@ -680,7 +679,8 @@ footer a {
 }
 
 .read-more-transition {
-  transition: max-height 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.35s cubic-bezier(0.4,0,0.2,1);
+  transition: max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .animate-marquee {
@@ -688,7 +688,9 @@ footer a {
   min-width: max-content;
 }
 
-.prose p, .prose li, .prose a {
+.prose p,
+.prose li,
+.prose a {
   @apply tracking-normal font-normal text-[1.125rem] leading-[1.75rem] !important;
 }
 

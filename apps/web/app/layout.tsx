@@ -120,7 +120,7 @@ export default async function RootLayout({ children }: PropsWithChildren) {
                 >
                   <ReactQueryProvider>
                     <SonnerToaster />
-                    <main className="overflow-x-hidden w-full">{children}</main>
+                    <main className="w-full">{children}</main>
                     <PosthogIdentify />
                   </ReactQueryProvider>
                 </PublicEnvContext>

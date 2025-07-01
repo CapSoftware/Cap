@@ -83,7 +83,7 @@ export default function DashboardInner({
                   name={activeSpace?.name}
                 />
               ))}
-            <p className="relative text-base truncate md:text-lg text-gray-12 lg:text-2xl">
+            <p className="relative text-lg truncate text-gray-12 lg:text-2xl">
               {title}
             </p>
           </div>

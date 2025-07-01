@@ -147,7 +147,7 @@ const features: Feature[] = homepageCopy.features.features.map(
 
 const Features = () => {
   return (
-    <div className="text-center max-w-[1440px] mx-auto mb-8 px-5">
+    <div className="text-center max-w-[1440px] mx-auto px-5">
       <h2 className="mb-3">{homepageCopy.features.title}</h2>
       <p className="text-lg leading-[1.75rem] w-full max-w-[800px] mx-auto">
         {homepageCopy.features.subtitle}

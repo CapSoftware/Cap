@@ -119,7 +119,7 @@ const testimonialItems: TestimonialItem[] = [
 // Main Testimonials component
 const Testimonials = () => {
   return (
-    <div className="w-full max-w-[1200px] mx-auto my-[250px] md:px-5">
+    <div className="w-full max-w-[1200px] mx-auto md:px-5">
       <div className="px-5 mb-16 text-center md:text-left">
         <h2 className="mb-3 w-full max-w-[440px]">
           {homepageCopy.testimonials.title}
