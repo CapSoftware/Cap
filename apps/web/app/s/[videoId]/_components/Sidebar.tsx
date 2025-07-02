@@ -4,7 +4,7 @@ import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { classNames } from "@cap/utils";
 import { AnimatePresence, motion } from "framer-motion";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { Activity } from "./tabs/Activity";
 import { Settings } from "./tabs/Settings";
 import { Summary } from "./tabs/Summary";
@@ -21,17 +21,11 @@ type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
   organizationId?: string;
 };
 
-interface Analytics {
-  views: number;
-  comments: number;
-  reactions: number;
-}
-
 interface SidebarProps {
   data: VideoWithOrganizationInfo;
   user: typeof userSelectProps | null;
-  comments: CommentType[];
-  analytics: Analytics;
+  comments: MaybePromise<CommentType[]>;
+  views: MaybePromise<number>;
   onSeek?: (time: number) => void;
   videoId: string;
   aiData?: {
@@ -72,7 +66,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   data,
   user,
   comments,
-  analytics,
+  views,
   onSeek,
   videoId,
   aiData,
@@ -88,9 +82,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [activeTab, setActiveTab] = useState<TabType>("activity");
   const [[page, direction], setPage] = useState([0, 0]);
 
+  const hasExistingAiData =
+    aiData?.summary || (aiData?.chapters && aiData.chapters.length > 0);
+
   const tabs = [
     { id: "activity", label: "Comments" },
-    ...(aiUiEnabled ? [{ id: "summary", label: "Summary" }] : []),
+    ...(aiUiEnabled || hasExistingAiData
+      ? [{ id: "summary", label: "Summary" }]
+      : []),
     { id: "transcript", label: "Transcript" },
   ];
 
@@ -107,14 +106,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
     switch (activeTab) {
       case "activity":
         return (
-          <Activity
-            analytics={analytics}
-            comments={comments}
-            user={user}
-            onSeek={onSeek}
-            videoId={videoId}
-            isOwnerOrMember={isOwnerOrMember}
-          />
+          <Suspense
+            fallback={
+              <Activity.Skeleton
+                user={user}
+                isOwnerOrMember={isOwnerOrMember}
+              />
+            }
+          >
+            <Activity
+              views={views}
+              comments={comments}
+              user={user}
+              isOwnerOrMember={isOwnerOrMember}
+              onSeek={onSeek}
+              videoId={videoId}
+            />
+          </Suspense>
         );
       case "summary":
         return (
@@ -128,7 +136,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           />
         );
       case "transcript":
-        return <Transcript data={data} onSeek={onSeek} />;
+        return <Transcript data={data} onSeek={onSeek} user={user} />;
       case "settings":
         return <Settings />;
       default:

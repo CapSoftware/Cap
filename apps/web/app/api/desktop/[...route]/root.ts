@@ -1,12 +1,13 @@
-import { serverEnv } from "@cap/env";
-import { Hono } from "hono";
-import { zValidator } from "@hono/zod-validator";
-import { z } from "zod";
-import { isUserOnProPlan, stripe } from "@cap/utils";
 import { db } from "@cap/database";
-import { users } from "@cap/database/schema";
+import { organizations, users } from "@cap/database/schema";
+import { buildEnv, serverEnv } from "@cap/env";
+import { isUserOnProPlan, stripe } from "@cap/utils";
+import { zValidator } from "@hono/zod-validator";
 import { eq } from "drizzle-orm";
+import { Hono } from "hono";
 import * as crypto from "node:crypto";
+import { PostHog } from "posthog-node";
+import { z } from "zod";
 import { withAuth } from "../../utils";
 
 export const app = new Hono().use(withAuth);
@@ -25,7 +26,6 @@ app.post(
     const { feedback, os, version } = c.req.valid("form");
 
     try {
-      // Send feedback to Discord channel
       const discordWebhookUrl = serverEnv().DISCORD_FEEDBACK_WEBHOOK_URL;
       if (!discordWebhookUrl)
         throw new Error("Discord webhook URL is not configured");
@@ -59,6 +59,39 @@ app.post(
   }
 );
 
+app.get("/org-custom-domain", async (c) => {
+  const user = c.get("user");
+
+  try {
+    const [result] = await db()
+      .select({
+        customDomain: organizations.customDomain,
+        domainVerified: organizations.domainVerified,
+      })
+      .from(users)
+      .leftJoin(organizations, eq(users.activeOrganizationId, organizations.id))
+      .where(eq(users.id, user.id));
+
+    // Ensure custom domain has https:// prefix
+    let customDomain = result?.customDomain ?? null;
+    if (
+      customDomain &&
+      !customDomain.startsWith("http://") &&
+      !customDomain.startsWith("https://")
+    ) {
+      customDomain = `https://${customDomain}`;
+    }
+
+    return c.json({
+      custom_domain: customDomain,
+      domain_verified: result?.domainVerified ?? null,
+    });
+  } catch (error) {
+    console.error("[GET] Error fetching custom domain:", error);
+    return c.json({ error: "Failed to fetch custom domain" }, { status: 500 });
+  }
+});
+
 app.get("/plan", async (c) => {
   const user = c.get("user");
 
@@ -66,7 +99,6 @@ app.get("/plan", async (c) => {
     subscriptionStatus: user.stripeSubscriptionStatus,
   });
 
-  // Check for third-party Stripe subscription
   if (user.thirdPartyStripeSubscriptionId) {
     isSubscribed = true;
   }
@@ -150,10 +182,32 @@ app.post(
       success_url: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true`,
       cancel_url: `${serverEnv().WEB_URL}/pricing`,
       allow_promotion_codes: true,
+      metadata: { platform: "desktop" },
     });
 
     if (checkoutSession.url) {
       console.log("[POST] Checkout session created successfully");
+
+      try {
+        const ph = new PostHog(buildEnv.NEXT_PUBLIC_POSTHOG_KEY || "", {
+          host: buildEnv.NEXT_PUBLIC_POSTHOG_HOST || "",
+        });
+
+        ph.capture({
+          distinctId: user.id,
+          event: "checkout_started",
+          properties: {
+            price_id: priceId,
+            quantity: 1,
+            platform: "desktop",
+          },
+        });
+
+        await ph.shutdown();
+      } catch (e) {
+        console.error("Failed to capture checkout_started in PostHog", e);
+      }
+
       return c.json({ url: checkoutSession.url });
     }
 

@@ -1,9 +1,13 @@
-import { ApiFetcher, initClient } from "@ts-rest/core";
-import { contract, licenseContract } from "@cap/web-api-contract";
+import {
+  contract,
+  licenseContract,
+  orgCustomDomainContract,
+} from "@cap/web-api-contract";
 import { fetch } from "@tauri-apps/plugin-http";
+import { ApiFetcher, initClient } from "@ts-rest/core";
 
-import { clientEnv } from "./env";
 import { authStore } from "~/store";
+import { clientEnv } from "./env";
 
 const api: ApiFetcher = async (args) => {
   const bypassSecret = import.meta.env.VITE_VERCEL_AUTOMATION_BYPASS_SECRET;
@@ -36,6 +40,11 @@ export const licenseApiClient = initClient(licenseContract, {
   api,
 });
 
+export const orgCustomDomainClient = initClient(orgCustomDomainContract, {
+  baseUrl: `${clientEnv.VITE_SERVER_URL}/api/desktop`,
+  api,
+});
+
 export async function maybeProtectedHeaders() {
   const store = await authStore.get();
 
@@ -52,6 +61,5 @@ export async function maybeProtectedHeaders() {
 export async function protectedHeaders() {
   const { authorization } = await maybeProtectedHeaders();
   if (!authorization) throw new Error("Not authorized");
-  console.log({ authorization });
   return { authorization };
 }

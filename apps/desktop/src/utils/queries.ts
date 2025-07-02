@@ -1,17 +1,20 @@
+import { makePersisted } from "@solid-primitives/storage";
 import {
   createMutation,
   createQuery,
   queryOptions,
+  useQuery,
 } from "@tanstack/solid-query";
-import { createStore, reconcile } from "solid-js/store";
 import { createMemo } from "solid-js";
-import { makePersisted } from "@solid-primitives/storage";
+import { createStore, reconcile } from "solid-js/store";
 
-import { authStore, generalSettingsStore } from "~/store";
-import { commands, RecordingMode, ScreenCaptureTarget } from "./tauri";
-import { createQueryInvalidate } from "./events";
 import { createEventListener } from "@solid-primitives/event-listener";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";
+import { authStore, generalSettingsStore } from "~/store";
+import { createQueryInvalidate } from "./events";
+import { commands, RecordingMode, ScreenCaptureTarget } from "./tauri";
+import { orgCustomDomainClient, protectedHeaders } from "./web-api";
 
 export const listWindows = queryOptions({
   queryKey: ["capture", "windows"] as const,
@@ -138,11 +141,35 @@ export function createCameraMutation() {
 
   const setCameraInput = createMutation(() => ({
     mutationFn: async (label: string | null) => {
-      await commands.setCameraInput(label);
       setOptions("cameraLabel", label);
-      await commands.showWindow("Camera");
+      if (label) {
+        await commands.showWindow("Camera");
+        getCurrentWindow().setFocus();
+      }
+      await commands.setCameraInput(label);
     },
   }));
 
   return setCameraInput;
+}
+
+export function createCustomDomainQuery() {
+  return useQuery(() => ({
+    queryKey: ["customDomain"] as const,
+    queryFn: async () => {
+      try {
+        const auth = await authStore.get();
+        if (!auth) return { custom_domain: null, domain_verified: null };
+        const response = await orgCustomDomainClient.getOrgCustomDomain({
+          headers: await protectedHeaders(),
+        });
+        if (response.status === 200) return response.body;
+      } catch (error) {
+        console.error("Error fetching custom domain:", error);
+        return { custom_domain: null, domain_verified: null };
+      }
+    },
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
+  }));
 }

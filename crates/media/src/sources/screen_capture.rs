@@ -89,7 +89,16 @@ impl ScreenCaptureTarget {
         match target {
             None => None,
             Some(scap::Target::Window(window)) => Some(window.title.clone()),
-            Some(scap::Target::Display(screen)) => Some(screen.title.clone()),
+            Some(scap::Target::Display(screen)) => {
+                let names = crate::platform::display_names();
+
+                Some(
+                    names
+                        .get(&screen.id)
+                        .cloned()
+                        .unwrap_or_else(|| screen.title.clone()),
+                )
+            }
         }
     }
 }
@@ -670,9 +679,20 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                                 return ControlFlow::Continue(());
                             }
 
-                            if let Err(_) = video_tx.send((sample_buffer, relative_time)) {
-                                error!("Pipeline is unreachable. Shutting down recording.");
-                                return ControlFlow::Continue(());
+                            let check_skip_send = || {
+                                cap_fail::fail_err!(
+                                    "media::sources::screen_capture::skip_send",
+                                    ()
+                                );
+
+                                Ok::<(), ()>(())
+                            };
+
+                            if check_skip_send().is_ok() {
+                                if let Err(_) = video_tx.send((sample_buffer, relative_time)) {
+                                    error!("Pipeline is unreachable. Shutting down recording.");
+                                    return ControlFlow::Continue(());
+                                }
                             }
                         }
                         SCStreamOutputType::Audio => {

@@ -1,13 +1,18 @@
 // credit @filleduchaos
 
+use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use cap_utils::spawn_actor;
 use flume::Receiver;
 use futures::{stream, StreamExt};
 use image::codecs::jpeg::JpegEncoder;
 use image::ImageReader;
+use reqwest::header::CONTENT_LENGTH;
 use reqwest::{multipart::Form, StatusCode};
+use serde_json::json;
+use std::collections::HashMap;
 use std::io::SeekFrom;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Runtime};
@@ -30,13 +35,6 @@ use specta::Type;
 #[derive(Deserialize, Serialize, Clone, Type, Debug)]
 pub struct S3UploadMeta {
     id: String,
-    user_id: String,
-    #[serde(default)]
-    aws_region: String,
-    #[serde(default, deserialize_with = "deserialize_empty_object_as_string")]
-    aws_bucket: String,
-    #[serde(default)]
-    aws_endpoint: String,
 }
 
 fn deserialize_empty_object_as_string<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -83,62 +81,16 @@ impl S3UploadMeta {
         &self.id
     }
 
-    pub fn user_id(&self) -> &str {
-        &self.user_id
-    }
-
-    pub fn aws_region(&self) -> &str {
-        &self.aws_region
-    }
-
-    pub fn aws_bucket(&self) -> &str {
-        &self.aws_bucket
-    }
-
-    pub fn aws_endpoint(&self) -> &str {
-        &self.aws_endpoint
-    }
-
-    pub fn new(
-        id: String,
-        user_id: String,
-        aws_region: String,
-        aws_bucket: String,
-        aws_endpoint: String,
-    ) -> Self {
-        Self {
-            id,
-            user_id,
-            aws_region,
-            aws_bucket,
-            aws_endpoint,
-        }
-    }
-
-    pub fn ensure_defaults(&mut self) {
-        if self.aws_region.is_empty() {
-            self.aws_region = std::env::var("NEXT_PUBLIC_CAP_AWS_REGION")
-                .unwrap_or_else(|_| "us-east-1".to_string());
-        }
-        if self.aws_bucket.is_empty() {
-            self.aws_bucket =
-                std::env::var("NEXT_PUBLIC_CAP_AWS_BUCKET").unwrap_or_else(|_| "capso".to_string());
-        }
-        if self.aws_endpoint.is_empty() {
-            self.aws_endpoint = std::env::var("NEXT_PUBLIC_CAP_AWS_ENDPOINT")
-                .unwrap_or_else(|_| "https://s3.amazonaws.com".to_string());
-        }
+    pub fn new(id: String) -> Self {
+        Self { id }
     }
 }
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct S3UploadBody {
-    user_id: String,
-    file_key: String,
-    aws_bucket: String,
-    aws_region: String,
-    aws_endpoint: String,
+    video_id: String,
+    subpath: String,
 }
 
 #[derive(serde::Serialize)]
@@ -196,37 +148,21 @@ pub async fn upload_video(
 ) -> Result<UploadedVideo, String> {
     println!("Uploading video {video_id}...");
 
-    let file_name = file_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or("Invalid file path")?
-        .to_string();
-
     let client = reqwest::Client::new();
     let s3_config = match existing_config {
         Some(config) => config,
-        None => create_or_get_video(app, false, Some(video_id), None).await?,
+        None => create_or_get_video(app, false, Some(video_id.clone()), None).await?,
     };
-
-    let file_key = format!(
-        "{}/{}/{}",
-        s3_config.user_id(),
-        s3_config.id(),
-        "result.mp4"
-    );
 
     let body = build_video_upload_body(
         &file_path,
         S3UploadBody {
-            user_id: s3_config.user_id().to_string(),
-            file_key: file_key.clone(),
-            aws_bucket: s3_config.aws_bucket().to_string(),
-            aws_region: s3_config.aws_region().to_string(),
-            aws_endpoint: s3_config.aws_endpoint().to_string(),
+            video_id: video_id.clone(),
+            subpath: "result.mp4".to_string(),
         },
     )?;
 
-    let (upload_url, form) = presigned_s3_url(app, body).await?;
+    let presigned_put = presigned_s3_put(app, body).await?;
 
     let file = tokio::fs::File::open(&file_path)
         .await
@@ -258,36 +194,24 @@ pub async fn upload_video(
         }
     });
 
-    // Create a stream that reports progress
-    let file_part = reqwest::multipart::Part::stream_with_length(
-        reqwest::Body::wrap_stream(progress_stream),
-        total_size as u64,
-    )
-    .file_name(file_name.clone())
-    .mime_str("video/mp4")
-    .map_err(|e| format!("Error setting MIME type: {}", e))?;
-
-    let form = form.part("file", file_part);
-
     let screenshot_upload = match screenshot_path {
         Some(screenshot_path) if screenshot_path.exists() => {
-            Some(prepare_screenshot_upload(app, &s3_config, screenshot_path).await?)
+            Some(prepare_screenshot_upload(app, &s3_config, screenshot_path))
         }
         _ => None,
     };
 
+    let video_upload = client
+        .put(presigned_put)
+        .body(reqwest::Body::wrap_stream(progress_stream))
+        .header(CONTENT_LENGTH, metadata.len());
+
     let (video_upload, screenshot_result): (
         Result<reqwest::Response, reqwest::Error>,
-        Option<Result<reqwest::Response, reqwest::Error>>,
-    ) = tokio::join!(client.post(upload_url).multipart(form).send(), async {
-        if let Some((screenshot_url, screenshot_form)) = screenshot_upload {
-            Some(
-                client
-                    .post(screenshot_url)
-                    .multipart(screenshot_form)
-                    .send()
-                    .await,
-            )
+        Option<Result<reqwest::Response, String>>,
+    ) = tokio::join!(video_upload.send(), async {
+        if let Some(screenshot_req) = screenshot_upload {
+            Some(screenshot_req.await)
         } else {
             None
         }
@@ -343,35 +267,23 @@ pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
     let client = reqwest::Client::new();
     let s3_config = create_or_get_video(app, true, None, None).await?;
 
-    let file_key = format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name);
-
-    println!("File key: {file_key}");
-
     let body = S3ImageUploadBody {
         base: S3UploadBody {
-            user_id: s3_config.user_id,
-            file_key: file_key.clone(),
-            aws_bucket: s3_config.aws_bucket,
-            aws_region: s3_config.aws_region,
-            aws_endpoint: s3_config.aws_endpoint,
+            video_id: s3_config.id.clone(),
+            subpath: file_name,
         },
     };
 
-    let (upload_url, mut form) = presigned_s3_url_image(app, body).await?;
+    let presigned_put = presigned_s3_put(app, body).await?;
 
     let file_content = tokio::fs::read(&file_path)
         .await
         .map_err(|e| format!("Failed to read file: {}", e))?;
 
-    let file_part = reqwest::multipart::Part::bytes(file_content)
-        .file_name(file_name.clone())
-        .mime_str("image/jpeg")
-        .map_err(|e| format!("Error setting MIME type: {}", e))?;
-    form = form.part("file", file_part);
-
     let response = client
-        .post(upload_url)
-        .multipart(form)
+        .put(presigned_put)
+        .header(CONTENT_LENGTH, file_content.len())
+        .body(file_content)
         .send()
         .await
         .map_err(|e| format!("Failed to send upload file request: {}", e))?;
@@ -396,81 +308,6 @@ pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
     );
     Err(format!(
         "Failed to upload file. Status: {}. Body: {}",
-        status, error_body
-    ))
-}
-
-pub async fn upload_audio(app: &AppHandle, file_path: PathBuf) -> Result<UploadedAudio, String> {
-    let file_name = file_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or("Invalid file path")?
-        .to_string();
-
-    let client = reqwest::Client::new();
-    let s3_config = create_or_get_video(app, false, None, None).await?;
-
-    let file_key = format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name);
-
-    println!("File key: {file_key}");
-
-    let body = build_audio_upload_body(
-        &file_path,
-        S3UploadBody {
-            user_id: s3_config.user_id.clone(),
-            file_key: file_key.clone(),
-            aws_bucket: s3_config.aws_bucket.clone(),
-            aws_region: s3_config.aws_region.clone(),
-            aws_endpoint: s3_config.aws_endpoint.clone(),
-        },
-    )?;
-
-    let (upload_url, mut form) = presigned_s3_url_audio(app, body).await?;
-
-    let file_content = tokio::fs::read(&file_path)
-        .await
-        .map_err(|e| format!("Failed to read file: {}", e))?;
-
-    let mime_type = if file_name.ends_with(".mp3") {
-        "audio/mpeg"
-    } else {
-        "audio/wav"
-    };
-
-    let file_part = reqwest::multipart::Part::bytes(file_content)
-        .file_name(file_name.clone())
-        .mime_str(mime_type)
-        .map_err(|e| format!("Error setting MIME type: {}", e))?;
-    form = form.part("file", file_part);
-
-    let response = client
-        .post(upload_url)
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to send upload file request: {}", e))?;
-
-    if response.status().is_success() {
-        println!("Audio file uploaded successfully");
-        return Ok(UploadedAudio {
-            link: app.make_app_url(format!("/s/{}", &s3_config.id)).await,
-            id: s3_config.id.clone(),
-            config: s3_config,
-        });
-    }
-
-    let status = response.status();
-    let error_body = response
-        .text()
-        .await
-        .unwrap_or_else(|_| "<no response body>".to_string());
-    tracing::error!(
-        "Failed to upload audio file. Status: {}. Body: {}",
-        status,
-        error_body
-    );
-    Err(format!(
-        "Failed to upload audio file. Status: {}. Body: {}",
         status, error_body
     ))
 }
@@ -514,17 +351,27 @@ pub async fn create_or_get_video(
         )
     })?;
 
-    config.ensure_defaults();
     Ok(config)
 }
 
-async fn presigned_s3_url(
-    app: &AppHandle,
-    body: S3VideoUploadBody,
-) -> Result<(String, Form), String> {
+async fn presigned_s3_put(app: &AppHandle, body: impl Serialize) -> Result<String, String> {
+    #[derive(Deserialize, Debug)]
+    struct Data {
+        url: String,
+    }
+
+    #[derive(Deserialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    struct Wrapper {
+        presigned_put_data: Data,
+    }
+
     let response = app
         .authed_api_request("/api/upload/signed", |client, url| {
-            client.post(url).json(&serde_json::json!(body))
+            let mut body_json = json!(body);
+            let a = body_json.as_object_mut().unwrap();
+            a.insert("method".to_string(), json!("put"));
+            client.post(url).json(&json!(body_json))
         })
         .await
         .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
@@ -533,101 +380,12 @@ async fn presigned_s3_url(
         return Err("Failed to authenticate request; please log in again".into());
     }
 
-    let presigned_post_data = response
-        .json::<serde_json::Value>()
+    let Wrapper { presigned_put_data } = response
+        .json::<Wrapper>()
         .await
         .map_err(|e| format!("Failed to deserialize server response: {}", e))?;
 
-    let fields = presigned_post_data["presignedPostData"]["fields"]
-        .as_object()
-        .ok_or("Fields object is missing or not an object")?;
-    let post_url = presigned_post_data["presignedPostData"]["url"]
-        .as_str()
-        .ok_or("URL is missing or not a string")?
-        .to_string();
-
-    let mut form = Form::new();
-
-    for (key, value) in fields.iter() {
-        let value_str = value
-            .as_str()
-            .ok_or(format!("Value for key '{}' is not a string", key))?;
-        form = form.text(key.to_string(), value_str.to_owned());
-    }
-
-    Ok((post_url, form))
-}
-
-async fn presigned_s3_url_image(
-    app: &AppHandle,
-    body: S3ImageUploadBody,
-) -> Result<(String, Form), String> {
-    let response = app
-        .authed_api_request("/api/upload/signed", |client, url| {
-            client.post(url).json(&serde_json::json!(body))
-        })
-        .await
-        .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
-
-    let presigned_post_data = response
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|e| format!("Failed to deserialize server response: {}", e))?;
-
-    let fields = presigned_post_data["presignedPostData"]["fields"]
-        .as_object()
-        .ok_or("Fields object is missing or not an object")?;
-    let post_url = presigned_post_data["presignedPostData"]["url"]
-        .as_str()
-        .ok_or("URL is missing or not a string")?
-        .to_string();
-
-    let mut form = Form::new();
-
-    for (key, value) in fields.iter() {
-        let value_str = value
-            .as_str()
-            .ok_or(format!("Value for key '{}' is not a string", key))?;
-        form = form.text(key.to_string(), value_str.to_owned());
-    }
-
-    Ok((post_url, form))
-}
-
-async fn presigned_s3_url_audio(
-    app: &AppHandle,
-    body: S3AudioUploadBody,
-) -> Result<(String, Form), String> {
-    let response = app
-        .authed_api_request("/api/upload/signed", |client, url| {
-            client.post(url).json(&serde_json::json!(body))
-        })
-        .await
-        .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
-
-    let presigned_post_data = response
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|e| format!("Failed to deserialize server response: {}", e))?;
-
-    let fields = presigned_post_data["presignedPostData"]["fields"]
-        .as_object()
-        .ok_or("Fields object is missing or not an object")?;
-    let post_url = presigned_post_data["presignedPostData"]["url"]
-        .as_str()
-        .ok_or("URL is missing or not a string")?
-        .to_string();
-
-    let mut form = Form::new();
-
-    for (key, value) in fields.iter() {
-        let value_str = value
-            .as_str()
-            .ok_or(format!("Value for key '{}' is not a string", key))?;
-        form = form.text(key.to_string(), value_str.to_owned());
-    }
-
-    Ok((post_url, form))
+    Ok(presigned_put_data.url)
 }
 
 fn build_video_upload_body(
@@ -692,107 +450,29 @@ fn build_audio_upload_body(
     })
 }
 
-pub async fn upload_individual_file(
-    app: &AppHandle,
-    file_path: PathBuf,
-    s3_config: S3UploadMeta,
-    file_name: &str,
-    is_audio: bool,
-) -> Result<(), String> {
-    let client = reqwest::Client::new();
-
-    let file_key = format!(
-        "{}/{}/individual/{}",
-        s3_config.user_id, s3_config.id, file_name
-    );
-
-    let base_upload_body = S3UploadBody {
-        user_id: s3_config.user_id.clone(),
-        file_key: file_key.clone(),
-        aws_bucket: s3_config.aws_bucket.clone(),
-        aws_region: s3_config.aws_region.clone(),
-        aws_endpoint: s3_config.aws_endpoint.clone(),
-    };
-
-    let (upload_url, mut form) = if is_audio {
-        let audio_body = build_audio_upload_body(&file_path, base_upload_body)?;
-        presigned_s3_url_audio(app, audio_body).await?
-    } else {
-        let video_body = build_video_upload_body(&file_path, base_upload_body)?;
-        presigned_s3_url(app, video_body).await?
-    };
-
-    let file_content = tokio::fs::read(&file_path)
-        .await
-        .map_err(|e| format!("Failed to read file: {}", e))?;
-
-    let mime_type = if is_audio { "audio/mpeg" } else { "video/mp4" };
-
-    let file_part = reqwest::multipart::Part::bytes(file_content)
-        .file_name(file_name.to_string())
-        .mime_str(mime_type)
-        .map_err(|e| format!("Error setting MIME type: {}", e))?;
-    form = form.part("file", file_part);
-
-    let response = client
-        .post(upload_url)
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to send upload file request: {}", e))?;
-
-    if response.status().is_success() {
-        println!("Individual file uploaded successfully");
-        Ok(())
-    } else {
-        let status = response.status();
-        let error_body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "<no response body>".to_string());
-        Err(format!(
-            "Failed to upload individual file. Status: {}. Body: {}",
-            status, error_body
-        ))
-    }
-}
-
 pub async fn prepare_screenshot_upload(
     app: &AppHandle,
     s3_config: &S3UploadMeta,
     screenshot_path: PathBuf,
-) -> Result<(String, Form), String> {
-    let file_name = screenshot_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or("Invalid screenshot file path")?
-        .to_string();
-    let file_key = format!(
-        "{}/{}/screenshot/screen-capture.jpg",
-        s3_config.user_id, s3_config.id
-    );
-
+) -> Result<reqwest::Response, String> {
     let body = S3ImageUploadBody {
         base: S3UploadBody {
-            user_id: s3_config.user_id.clone(),
-            file_key: file_key.clone(),
-            aws_bucket: s3_config.aws_bucket.clone(),
-            aws_region: s3_config.aws_region.clone(),
-            aws_endpoint: s3_config.aws_endpoint.clone(),
+            video_id: s3_config.id.clone(),
+            subpath: "screenshot/screen-capture.jpg".to_string(),
         },
     };
 
-    let (upload_url, mut form) = presigned_s3_url_image(app, body).await?;
+    let presigned_put = presigned_s3_put(app, body).await?;
 
     let compressed_image = compress_image(screenshot_path).await?;
 
-    let file_part = reqwest::multipart::Part::bytes(compressed_image)
-        .file_name(file_name)
-        .mime_str("image/jpeg")
-        .map_err(|e| format!("Error setting MIME type for screenshot: {}", e))?;
-    form = form.part("file", file_part);
-
-    Ok((upload_url, form))
+    reqwest::Client::new()
+        .put(presigned_put)
+        .header(CONTENT_LENGTH, compressed_image.len())
+        .body(compressed_image)
+        .send()
+        .await
+        .map_err(|e| format!("Error uploading screenshot: {}", e))
 }
 
 async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
@@ -867,10 +547,8 @@ impl InstantMultipartUpload {
         // --------------------------------------------
         // basic constants and info for chunk approach
         // --------------------------------------------
-        let file_name = "result.mp4";
         let client = reqwest::Client::new();
         let s3_config = pre_created_video.config;
-        let file_key = format!("{}/{}/{}", s3_config.user_id(), s3_config.id(), file_name);
 
         let mut uploaded_parts = Vec::new();
         let mut part_number = 1;
@@ -887,7 +565,7 @@ impl InstantMultipartUpload {
                 c.post(url)
                     .header("Content-Type", "application/json")
                     .json(&serde_json::json!({
-                        "fileKey": file_key,
+                        "videoId": s3_config.id(),
                         "contentType": "video/mp4"
                     }))
             })
@@ -924,6 +602,7 @@ impl InstantMultipartUpload {
                 return Err("No uploadId returned from initiate endpoint".to_string());
             }
         };
+
         if upload_id.is_empty() {
             return Err("Empty uploadId returned from initiate endpoint".to_string());
         }
@@ -982,7 +661,7 @@ impl InstantMultipartUpload {
                     &app,
                     &client,
                     &file_path,
-                    &file_key,
+                    s3_config.id(),
                     &upload_id,
                     &mut part_number,
                     &mut last_uploaded_position,
@@ -1009,7 +688,7 @@ impl InstantMultipartUpload {
                         &app,
                         &client,
                         &file_path,
-                        &file_key,
+                        s3_config.id(),
                         &upload_id,
                         &mut 1,
                         &mut 0,
@@ -1035,10 +714,9 @@ impl InstantMultipartUpload {
                 Self::finalize_upload(
                     &app,
                     &file_path,
-                    &file_key,
+                    &s3_config.id(),
                     &upload_id,
                     &uploaded_parts,
-                    &video_id,
                 )
                 .await?;
 
@@ -1060,7 +738,7 @@ impl InstantMultipartUpload {
         app: &AppHandle,
         client: &reqwest::Client,
         file_path: &PathBuf,
-        file_key: &str,
+        video_id: &str,
         upload_id: &str,
         part_number: &mut i32,
         last_uploaded_position: &mut u64,
@@ -1164,7 +842,7 @@ impl InstantMultipartUpload {
                 c.post(url)
                     .header("Content-Type", "application/json")
                     .json(&serde_json::json!({
-                        "fileKey": file_key,
+                        "videoId": video_id,
                         "uploadId": upload_id,
                         "partNumber": *part_number,
                         "md5Sum": &md5_sum
@@ -1304,10 +982,9 @@ impl InstantMultipartUpload {
     async fn finalize_upload(
         app: &AppHandle,
         file_path: &PathBuf,
-        file_key: &str,
+        video_id: &str,
         upload_id: &str,
         uploaded_parts: &[UploadedPart],
-        video_id: &str,
     ) -> Result<(), String> {
         println!(
             "Completing multipart upload with {} parts",
@@ -1341,7 +1018,7 @@ impl InstantMultipartUpload {
                 c.post(url)
                     .header("Content-Type", "application/json")
                     .json(&serde_json::json!({
-                        "fileKey": file_key,
+                        "videoId": video_id,
                         "uploadId": upload_id,
                         "parts": uploaded_parts
                     }))

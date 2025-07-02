@@ -1,9 +1,9 @@
-@import '@radix-ui/colors/red.css';
-@import '@radix-ui/colors/red-dark.css';
-@import '@radix-ui/colors/gray.css';
-@import '@radix-ui/colors/gray-alpha.css';
-@import '@radix-ui/colors/gray-dark.css';
-@import '@radix-ui/colors/blue.css';
+@import "@radix-ui/colors/red.css";
+@import "@radix-ui/colors/red-dark.css";
+@import "@radix-ui/colors/gray.css";
+@import "@radix-ui/colors/gray-alpha.css";
+@import "@radix-ui/colors/gray-dark.css";
+@import "@radix-ui/colors/blue.css";
 
 @tailwind base;
 @tailwind components;
@@ -68,7 +68,7 @@ html {
 }
 
 .wrapper {
-  @apply mx-auto w-[92%] max-w-screen-xl;
+  @apply mx-auto w-[92%] max-w-screen-2xl;
 }
 
 .wrapper-max {
@@ -79,7 +79,10 @@ html {
   @apply max-w-5xl;
 }
 
-.prose :where(blockquote p:first-of-type):not(:where([class~="not-prose"],[class~="not-prose"] *))::before {
+.prose
+  :where(blockquote p:first-of-type):not(
+    :where([class~="not-prose"], [class~="not-prose"] *)
+  )::before {
   content: "“" !important;
   display: none;
 }
@@ -155,7 +158,7 @@ a.bg-primary:hover {
 }
 
 .TooltipContent {
-	transform-origin: var(--radix-tooltip-content-transform-origin);
+  transform-origin: var(--radix-tooltip-content-transform-origin);
 }
 
 @keyframes slideRight {
@@ -194,7 +197,6 @@ a.bg-primary:hover {
   animation-iteration-count: infinite;
 }
 
-
 @keyframes slideLeft {
   from {
     opacity: 0;
@@ -228,17 +230,14 @@ a.bg-primary:hover {
   }
 }
 
-
 .button-gradient-border::before {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   padding: 1px;
   border-radius: var(--gradient-border-radius);
   background: linear-gradient(to bottom, #ffffff40 70%, #ffffff00 100%);
-  -webkit-mask:
-    linear-gradient(#fff 0 0) content-box,
-    linear-gradient(#fff 0 0);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
 }
@@ -262,7 +261,8 @@ a,
 p,
 span,
 input,
-label, button {
+label,
+button {
   @apply tracking-tight text-gray-10 font-normal text-[1rem] leading-[1.5rem];
 }
 
@@ -293,49 +293,43 @@ label {
 }
 
 .play-button-outer-border::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    padding: 1px;
-    border-radius: 100px;
-    background: linear-gradient(to bottom, #fff, transparent 100%);
-    -webkit-mask:
-      linear-gradient(#fff 0 0) content-box,
-      linear-gradient(#fff 0 0);
-    -webkit-mask-composite: xor;
-    mask-composite: exclude;
-}
-
-.inner-play-button-border-two::before {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   padding: 1px;
   border-radius: 100px;
-  background: linear-gradient(to bottom, #446FAE 20%, transparent 90%);
-  -webkit-mask:
-    linear-gradient(#fff 0 0) content-box,
-    linear-gradient(#fff 0 0);
+  background: linear-gradient(to bottom, #fff, transparent 100%);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+.inner-play-button-border-two::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: 100px;
+  background: linear-gradient(to bottom, #446fae 20%, transparent 90%);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
 }
 
 .inner-play-button-border::before {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   padding: 1px;
   border-radius: 100px;
   background: linear-gradient(to bottom, #fff 10%, transparent 50%);
-  -webkit-mask:
-    linear-gradient(#fff 0 0) content-box,
-    linear-gradient(#fff 0 0);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
 }
 
 .custom-bg {
-  background: linear-gradient(180deg, #4785FF 0%, #85ADFF 100%);
+  background: linear-gradient(180deg, #4785ff 0%, #85adff 100%);
 }
 
 .muted-custom-bg {
@@ -356,6 +350,93 @@ label {
   );
 }
 
+.theme-transition {
+  transition: background-color 0.5s ease-in-out;
+}
+
+/* View Transitions for theme switching */
+/* Icon animations */
+@keyframes rotate-sun {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes rotate-moon {
+  from {
+    transform: rotate(-360deg);
+  }
+  to {
+    transform: rotate(0deg);
+  }
+}
+
+::view-transition-old(theme-icon) {
+  animation: 0.5s cubic-bezier(0.4, 0, 0.2, 1) both fade-out,
+    0.5s cubic-bezier(0.4, 0, 0.2, 1) both rotate-sun;
+}
+
+::view-transition-new(theme-icon) {
+  animation: 0.5s cubic-bezier(0.4, 0, 0.2, 1) 0.1s both fade-in,
+    0.5s cubic-bezier(0.4, 0, 0.2, 1) both rotate-moon;
+}
+
+/* Wipe effect for the entire theme change */
+@keyframes wipe-in-right {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+@keyframes wipe-out-left {
+  from {
+    clip-path: inset(0 0 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 100%);
+  }
+}
+
+::view-transition-old(root) {
+  animation: 0.7s cubic-bezier(0.4, 0, 0.2, 1) both wipe-out-left;
+}
+
+::view-transition-new(root) {
+  animation: 0.7s cubic-bezier(0.4, 0, 0.2, 1) both wipe-in-right;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.view-transition-theme-icon {
+  view-transition-name: theme-icon;
+}
+
+::view-transition-group(root) {
+  animation-duration: 0.7s;
+}
+
 .styled-links a {
   @apply font-semibold underline;
 }
@@ -369,10 +450,10 @@ label {
   opacity: 0;
 }
 
-.fade-in {
+/* .fade-in {
   animation: fadeIn 1s forwards;
   opacity: 0;
-}
+} */
 
 .fade-in-up {
   animation: fadeInUp 1s forwards;
@@ -436,7 +517,7 @@ label {
 ul {
   @apply pl-5 list-disc;
 }
-/* 
+/*
 .embossed {
   @apply bg-white-a12 border-2 border-filler-3 relative w-[320px] max-w-full min-h-[60px] rounded-xl z-10;
 }
@@ -457,7 +538,11 @@ ul {
   @apply pb-4 border-b border-filler;
 }
 
-.dashboard-page h1, .dashboard-page h2, .dashboard-page h3, .dashboard-page h4, .dashboard-page h5 {
+.dashboard-page h1,
+.dashboard-page h2,
+.dashboard-page h3,
+.dashboard-page h4,
+.dashboard-page h5 {
   @apply text-[1rem] font-medium leading-[1.25rem] text-gray-12 !important;
 }
 
@@ -471,12 +556,13 @@ slot:not(.dashboard-layout slot) {
 }
 
 .dashboard-layout {
-  @apply bg-gray-50
+  @apply bg-gray-50;
 }
 
 /* Custom scrollbar */
 .custom-scroll {
   overflow-y: scroll;
+  padding-right: 3px;
 }
 
 .custom-scroll::-webkit-scrollbar {
@@ -530,12 +616,52 @@ body.react-draggable-transparent-selection .crosshair {
   display: block;
 }
 
+@keyframes wobble {
+  0% {
+    transform: rotate(-3deg) scale(1.05);
+  }
+  10% {
+    transform: rotate(3deg) scale(1.05);
+  }
+  20% {
+    transform: rotate(-3deg) scale(1.05);
+  }
+  30% {
+    transform: rotate(3deg) scale(1.05);
+  }
+  40% {
+    transform: rotate(-2deg) scale(1.05);
+  }
+  50% {
+    transform: rotate(2deg) scale(1.05);
+  }
+  60% {
+    transform: rotate(-1deg) scale(1.05);
+  }
+  70% {
+    transform: rotate(1deg) scale(1.05);
+  }
+  80% {
+    transform: rotate(-1deg) scale(1.05);
+  }
+  90% {
+    transform: rotate(1deg) scale(1.05);
+  }
+  100% {
+    transform: rotate(-3deg) scale(1.05);
+  }
+}
+
+.wobble {
+  animation: wobble 2.5s infinite linear;
+}
+
 footer ul {
   @apply p-0 list-none;
 }
 
 footer h3 {
-  @apply text-xl font-semibold !important; 
+  @apply text-xl font-semibold !important;
 }
 
 footer a {
@@ -551,17 +677,20 @@ footer a {
   @apply mt-6 text-2xl font-semibold;
 }
 
-.prose p, .prose li, .prose a {
+.prose p,
+.prose li,
+.prose a {
   @apply tracking-tight font-normal text-[1.125rem] leading-[1.75rem] !important;
 }
 
-.prose p, .prose li {
+.prose p,
+.prose li {
   @apply text-gray-12 !important;
 }
 
 .new-card-style {
-  background: #FFFFFF;
-  border: 1px solid #E7EAF0;
+  background: #ffffff;
+  border: 1px solid #e7eaf0;
   box-shadow: 0px 8px 16px rgba(18, 22, 31, 0.04);
   border-radius: 20px;
 }
@@ -582,9 +711,10 @@ footer a {
 }
 
 /* Safari-specific styles using CSS hacks */
-@media screen and (-webkit-min-device-pixel-ratio:0) {
-  _::-webkit-full-page-media, _:future, :root #video-container {
-    height: calc(100% - 1.70rem) !important;
+@media screen and (-webkit-min-device-pixel-ratio: 0) {
+  _::-webkit-full-page-media,
+  _:future,
+  :root #video-container {
+    height: calc(100% - 1.7rem) !important;
   }
 }
-

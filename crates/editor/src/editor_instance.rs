@@ -8,7 +8,7 @@ use cap_media::frame_ws::create_frame_ws;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, XY};
 use cap_project::{RecordingConfig, StudioRecordingMeta};
 use cap_rendering::{
-    get_duration, ProjectRecordings, ProjectUniforms, RecordingSegmentDecoders, RenderOptions,
+    get_duration, ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders, RenderOptions,
     RenderVideoConstants, SegmentVideoPaths,
 };
 use std::ops::Deref;
@@ -19,7 +19,7 @@ use tokio::sync::{mpsc, watch, Mutex};
 pub struct EditorInstance {
     pub project_path: PathBuf,
     pub ws_port: u16,
-    pub recordings: Arc<ProjectRecordings>,
+    pub recordings: Arc<ProjectRecordingsMeta>,
     pub renderer: Arc<editor::RendererHandle>,
     pub render_constants: Arc<RenderVideoConstants>,
     pub state: Arc<Mutex<EditorState>>,
@@ -53,18 +53,10 @@ impl EditorInstance {
             return Err("Cannot edit non-studio recordings".to_string());
         };
         let project = recording_meta.project_config();
-        let recordings = Arc::new(ProjectRecordings::new(&recording_meta.project_path, meta)?);
-
-        let render_options = RenderOptions {
-            screen_size: XY::new(
-                recordings.segments[0].display.width,
-                recordings.segments[0].display.height,
-            ),
-            camera_size: recordings.segments[0]
-                .camera
-                .as_ref()
-                .map(|c| XY::new(c.width, c.height)),
-        };
+        let recordings = Arc::new(ProjectRecordingsMeta::new(
+            &recording_meta.project_path,
+            meta,
+        )?);
 
         let segments = create_segments(&recording_meta, meta).await?;
 
@@ -73,7 +65,7 @@ impl EditorInstance {
         let (ws_port, ws_shutdown) = create_frame_ws(frame_rx).await;
 
         let render_constants = Arc::new(
-            RenderVideoConstants::new(render_options, &recording_meta, meta)
+            RenderVideoConstants::new(&recordings.segments, &recording_meta, meta)
                 .await
                 .unwrap(),
         );

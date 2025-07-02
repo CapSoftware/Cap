@@ -158,7 +158,6 @@ export function ExportDialog() {
       setExportState(reconcile({ action: "copy", type: "starting" }));
 
       const outputPath = await exportWithSettings((progress) => {
-        console.log(progress);
         setExportState({ type: "rendering", progress });
       });
 
@@ -710,11 +709,11 @@ export function ExportDialog() {
                                   <IconLucideCheck class="text-gray-1 size-5" />
                                 </div>
                                 <div class="flex flex-col gap-1 items-center">
-                                  <h1 class="text-xl font-medium text-gray-600">
+                                  <h1 class="text-xl font-medium text-gray-12">
                                     Export Completed
                                   </h1>
                                   <p class="text-sm text-gray-11">
-                                    Your video has been successfully exported
+                                    Your video has successfully been exported
                                   </p>
                                 </div>
                               </div>

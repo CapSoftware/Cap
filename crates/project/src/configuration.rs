@@ -235,6 +235,16 @@ pub struct Camera {
     pub shadow: f32,
     #[serde(default)]
     pub advanced_shadow: Option<ShadowConfiguration>,
+    #[serde(default)]
+    pub shape: CameraShape,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum CameraShape {
+    #[default]
+    Square,
+    Source,
 }
 
 impl Camera {
@@ -262,6 +272,7 @@ impl Default for Camera {
                 opacity: 44.2,
                 blur: 10.5,
             }),
+            shape: CameraShape::Square,
         }
     }
 }

@@ -1,12 +1,12 @@
-import * as shell from "@tauri-apps/plugin-shell";
 import { createMutation } from "@tanstack/solid-query";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { authStore, generalSettingsStore } from "~/store";
 import { invoke } from "@tauri-apps/api/core";
-import callbackTemplate from "~/components/callback.template";
 import { listen } from "@tauri-apps/api/event";
-import { z } from "zod";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
+import * as shell from "@tauri-apps/plugin-shell";
+import { z } from "zod";
+import callbackTemplate from "~/components/callback.template";
+import { authStore, generalSettingsStore } from "~/store";
 import { identifyUser, trackEvent } from "./analytics";
 import { commands } from "./tauri";
 
@@ -95,20 +95,28 @@ async function createLocalServerSession(signal: AbortSignal) {
 
       if (signal.aborted) throw new Error("Sign in aborted");
 
-      return paramsValidator.parse({
-        type: url.searchParams.get("type"),
-        api_key: url.searchParams.get("api_key"),
-        user_id: url.searchParams.get("user_id"),
-      });
+      const a = [...url.searchParams].reduce((acc, [k, v]) => {
+        acc[k] = v;
+        return acc;
+      }, {} as any);
+
+      return paramsValidator.parse(a);
     },
   };
 }
 
-const paramsValidator = z.object({
-  type: z.literal("api_key"),
-  api_key: z.string(),
-  user_id: z.string(),
-});
+const paramsValidator = z.union([
+  z.object({
+    type: z.literal("api_key"),
+    api_key: z.string(),
+    user_id: z.string(),
+  }),
+  z.object({
+    token: z.string(),
+    user_id: z.string(),
+    expires: z.coerce.number(),
+  }),
+]);
 
 async function createDeepLinkSession(signal: AbortSignal) {
   let res: (data: z.infer<typeof paramsValidator>) => void;
@@ -122,11 +130,12 @@ async function createDeepLinkSession(signal: AbortSignal) {
       const url = new URL(urlString);
 
       res(
-        paramsValidator.parse({
-          type: url.searchParams.get("type"),
-          api_key: url.searchParams.get("api_key"),
-          user_id: url.searchParams.get("user_id"),
-        })
+        paramsValidator.parse(
+          [...url.searchParams].reduce((acc, [k, v]) => {
+            acc[k] = v;
+            return acc;
+          }, {} as any)
+        )
       );
     }
   });
@@ -147,7 +156,10 @@ async function processAuthData(data: z.infer<typeof paramsValidator>) {
 
   const existingAuth = await authStore.get();
   await authStore.set({
-    secret: { api_key: data.api_key },
+    secret:
+      "api_key" in data
+        ? { api_key: data.api_key }
+        : { token: data.token, expires: data.expires },
     user_id: data.user_id,
     intercom_hash: existingAuth?.intercom_hash ?? "",
     plan: null,

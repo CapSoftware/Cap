@@ -79,7 +79,6 @@ export const Summary: React.FC<SummaryProps> = ({
   );
 
   useEffect(() => {
-    console.log("[Summary] Received initialAiData update:", initialAiData);
     if (initialAiData) {
       setAiData(initialAiData);
       setIsLoading(aiGenerationEnabled && initialAiData.processing === true);
@@ -100,16 +99,10 @@ export const Summary: React.FC<SummaryProps> = ({
       })
     : false;
 
-  console.log("[Summary] Current state:", {
-    isLoading,
-    aiData,
-    initialAiData,
-    aiUiEnabled,
-    aiGenerationEnabled,
-    hasProAccess,
-  });
+  const hasExistingAiData =
+    aiData?.summary || (aiData?.chapters && aiData.chapters.length > 0);
 
-  if (aiUiEnabled && !hasProAccess) {
+  if (aiUiEnabled && !hasProAccess && !hasExistingAiData) {
     return (
       <div className="flex flex-col justify-center items-center p-8 h-full text-center">
         <div className="space-y-4 max-w-sm">
