@@ -30,6 +30,7 @@ import { fromVtt, Subtitle } from "subtitles-parser-vtt";
 import { MP4VideoPlayer } from "../../../s/[videoId]/_components/MP4VideoPlayer";
 import { VideoPlayer } from "../../../s/[videoId]/_components/VideoPlayer";
 import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "next/navigation";
 
 declare global {
   interface Window {
@@ -83,6 +84,9 @@ export const EmbedVideo = forwardRef<
     ref
   ) => {
     useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
+
+    const searchParams = useSearchParams();
+    const hideBranding = searchParams.get("hideBranding") === "true";
 
     const videoRef = useRef<HTMLVideoElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
@@ -650,7 +654,7 @@ export const EmbedVideo = forwardRef<
                     )}
                   </AnimatePresence>
 
-                  {!isPlaying && (
+                  {!isPlaying && !hideBranding && (
                     <motion.button
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -742,7 +746,7 @@ export const EmbedVideo = forwardRef<
           )}
 
           <AnimatePresence>
-            {isPlaying && !showTitleOverlay && (
+            {isPlaying && !showTitleOverlay && !hideBranding && (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}

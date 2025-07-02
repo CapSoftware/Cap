@@ -148,9 +148,9 @@ function ShareButton() {
         {(sharing) => {
           const normalUrl = () => new URL(sharing().link);
           const customUrl = () =>
-            customDomain()?.custom_domain
+            customDomain.data?.custom_domain
               ? new URL(
-                  customDomain()?.custom_domain + `/s/${meta().sharing?.id}`
+                  customDomain.data?.custom_domain + `/s/${meta().sharing?.id}`
                 )
               : null;
 
@@ -163,7 +163,8 @@ function ShareButton() {
           };
 
           const [linkToDisplay, setLinkToDisplay] = createSignal<string | null>(
-            customDomain()?.custom_domain && customDomain()?.domain_verified
+            customDomain.data?.custom_domain &&
+              customDomain.data?.domain_verified
               ? customLink
               : normalLink
           );
@@ -215,8 +216,8 @@ function ShareButton() {
                   {/** Dropdown */}
                   <Show
                     when={
-                      customDomain()?.custom_domain &&
-                      customDomain()?.domain_verified
+                      customDomain.data?.custom_domain &&
+                      customDomain.data?.domain_verified
                     }
                   >
                     <Tooltip content="Select link">

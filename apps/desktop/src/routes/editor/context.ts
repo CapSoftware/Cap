@@ -275,16 +275,18 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       },
     });
 
-    const customDomainData = createCustomDomainQuery();
+    const [micWaveforms] = createResource(() => commands.getMicWaveforms());
+    const [systemAudioWaveforms] = createResource(() =>
+      commands.getSystemAudioWaveforms()
+    );
+    const customDomain = createCustomDomainQuery();
 
     return {
       ...editorInstanceContext,
       meta() {
         return props.meta();
       },
-      customDomain() {
-        return customDomainData.data;
-      },
+      customDomain,
       refetchMeta: () => props.refetchMeta(),
       editorInstance: props.editorInstance,
       dialog,
@@ -299,6 +301,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       zoomOutLimit,
       exportState,
       setExportState,
+      micWaveforms,
+      systemAudioWaveforms,
     };
   },
   // biome-ignore lint/style/noNonNullAssertion: it's ok
