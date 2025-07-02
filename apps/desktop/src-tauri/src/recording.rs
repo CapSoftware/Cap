@@ -12,12 +12,11 @@ use crate::{
     upload::{
         create_or_get_video, prepare_screenshot_upload, upload_video, InstantMultipartUpload,
     },
-    web_api::{self, ManagerExt},
+    web_api::ManagerExt,
     windows::{CapWindowId, ShowCapWindow},
     App, CurrentRecordingChanged, DynLoggingLayer, MutableState, NewStudioRecordingAdded,
     RecordingStarted, RecordingStopped, VideoUploadInfo,
 };
-use base64::{prelude::BASE64_STANDARD, Engine};
 use cap_fail::fail;
 use cap_media::{feeds::CameraFeed, platform::display_for_window, sources::ScreenCaptureTarget};
 use cap_media::{
@@ -30,12 +29,10 @@ use cap_project::{
 };
 use cap_recording::{
     instant_recording::{CompletedInstantRecording, InstantRecordingHandle},
-    CompletedStudioRecording, RecordingError, RecordingMode, RecordingOptions,
-    StudioRecordingHandle,
+    CompletedStudioRecording, RecordingError, RecordingMode, StudioRecordingHandle,
 };
 use cap_rendering::ProjectRecordingsMeta;
 use cap_utils::{ensure_dir, spawn_actor};
-use scap::Target;
 use serde::Deserialize;
 use specta::Type;
 use tauri::{AppHandle, Manager};
@@ -50,11 +47,13 @@ pub enum InProgressRecording {
         progressive_upload: Option<InstantMultipartUpload>,
         video_upload_info: VideoUploadInfo,
         inputs: StartRecordingInputs,
+        recording_dir: PathBuf,
     },
     Studio {
         target_name: String,
         handle: StudioRecordingHandle,
         inputs: StartRecordingInputs,
+        recording_dir: PathBuf,
     },
 }
 
@@ -84,6 +83,13 @@ impl InProgressRecording {
         match self {
             Self::Instant { handle, .. } => handle.resume().await,
             Self::Studio { handle, .. } => handle.resume().await,
+        }
+    }
+
+    pub fn recording_dir(&self) -> &PathBuf {
+        match self {
+            Self::Instant { recording_dir, .. } => recording_dir,
+            Self::Studio { recording_dir, .. } => recording_dir,
         }
     }
 
@@ -370,6 +376,7 @@ pub async fn start_recording(
                             handle,
                             target_name,
                             inputs,
+                            recording_dir: recording_dir.clone(),
                         },
                         actor_done_rx,
                     )
@@ -398,6 +405,7 @@ pub async fn start_recording(
                             video_upload_info,
                             target_name,
                             inputs,
+                            recording_dir: recording_dir.clone(),
                         },
                         actor_done_rx,
                     )
@@ -512,6 +520,64 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
     let completed_recording = current_recording.stop().await.map_err(|e| e.to_string())?;
 
     handle_recording_end(app, Some(completed_recording), &mut state).await?;
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn restart_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
+    let Some(recording) = state.write().await.clear_current_recording() else {
+        return Err("No recording in progress".to_string());
+    };
+
+    let _ = CurrentRecordingChanged.emit(&app);
+
+    let inputs = recording.inputs().clone();
+
+    let _ = recording.cancel().await;
+
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+    start_recording(app.clone(), state, inputs).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
+    let recording_data = {
+        let mut app_state = state.write().await;
+        if let Some(recording) = app_state.clear_current_recording() {
+            let recording_dir = recording.recording_dir().clone();
+            let video_id = match &recording {
+                InProgressRecording::Instant {
+                    video_upload_info, ..
+                } => Some(video_upload_info.id.clone()),
+                _ => None,
+            };
+            Some((recording, recording_dir, video_id))
+        } else {
+            None
+        }
+    };
+
+    if let Some((recording, recording_dir, video_id)) = recording_data {
+        CurrentRecordingChanged.emit(&app).ok();
+        RecordingStopped {}.emit(&app).ok();
+
+        let _ = recording.cancel().await;
+
+        std::fs::remove_dir_all(&recording_dir).ok();
+
+        if let Some(id) = video_id {
+            let _ = app
+                .authed_api_request(
+                    format!("/api/desktop/video/delete?videoId={}", id),
+                    |c, url| c.delete(url),
+                )
+                .await;
+        }
+    }
 
     Ok(())
 }

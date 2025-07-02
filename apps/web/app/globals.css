@@ -41,14 +41,19 @@
   }
 }
 
+body {
+  overflow-x: hidden;
+}
+
 body,
 html {
   color: #000000;
-  background-color: white;
+  background-color: #f2f2f2;
 }
 
 ::-webkit-scrollbar {
-  width: 7px;
+  width: 4px;
+  height: 4px;
 }
 
 /* Track */
@@ -254,7 +259,7 @@ h2,
 h3,
 h4,
 h5 {
-  @apply font-normal tracking-[-0.03em] text-[1.75rem] leading-[2.5rem] md:text-[2.5rem] md:leading-[3.25rem];
+  @apply font-normal tracking-normal text-[1.75rem] leading-[2.5rem] md:text-[2.5rem] md:leading-[3.25rem];
 }
 
 a,
@@ -263,7 +268,7 @@ span,
 input,
 label,
 button {
-  @apply tracking-tight text-gray-10 font-normal text-[1rem] leading-[1.5rem];
+  @apply tracking-normal text-gray-10 font-normal leading-[1.5rem];
 }
 
 a,
@@ -275,17 +280,8 @@ nav ul {
   @apply list-none;
 }
 
-nav a {
-  @apply text-sm md:text-base;
-}
-
 nav.mobile a {
   @apply flex w-full;
-}
-
-nav.mobile a:not(.button),
-nav.mobile a:not(.button) * {
-  @apply text-[1.3rem] text-gray-700;
 }
 
 label {
@@ -326,10 +322,6 @@ label {
   -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
-}
-
-.custom-bg {
-  background: linear-gradient(180deg, #4785ff 0%, #85adff 100%);
 }
 
 .muted-custom-bg {
@@ -514,9 +506,6 @@ label {
   @apply mx-auto max-w-2xl text-base fade-in-down animate-delay-1 sm:text-xl;
 }
 
-ul {
-  @apply pl-5 list-disc;
-}
 /*
 .embossed {
   @apply bg-white-a12 border-2 border-filler-3 relative w-[320px] max-w-full min-h-[60px] rounded-xl z-10;
@@ -554,7 +543,6 @@ slot:not(.dashboard-layout slot) {
 /* Custom scrollbar */
 .custom-scroll {
   overflow-y: scroll;
-  padding-right: 3px;
 }
 
 .custom-scroll::-webkit-scrollbar {
@@ -669,10 +657,30 @@ footer a {
   @apply mt-6 text-2xl font-semibold;
 }
 
+/* Logo Marquee Animation */
+@keyframes marquee {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.read-more-transition {
+  transition: max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.animate-marquee {
+  animation: marquee 30s linear infinite;
+  min-width: max-content;
+}
+
 .prose p,
 .prose li,
 .prose a {
-  @apply tracking-tight font-normal text-[1.125rem] leading-[1.75rem] !important;
+  @apply tracking-normal font-normal text-[1.125rem] leading-[1.75rem] !important;
 }
 
 .prose p,

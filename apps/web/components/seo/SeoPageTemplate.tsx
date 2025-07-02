@@ -134,7 +134,7 @@ export const SeoPageTemplate = ({
           </div>
           <div className="flex flex-col justify-center items-center space-y-2 fade-in-up animate-delay-2 sm:flex-row sm:space-y-0 sm:space-x-4">
             <Button
-              variant="radialblue"
+              variant="blue"
               href="/download"
               size="lg"
               className="relative z-[20] w-full font-medium text-md sm:w-auto"

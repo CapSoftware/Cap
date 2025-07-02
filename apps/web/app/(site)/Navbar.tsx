@@ -20,6 +20,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Suspense, use, useState } from "react";
 import { useAuthContext } from "../Layout/AuthContext";
+import MobileMenu from "@/components/ui/MobileMenu";
 
 const Links = [
   {
@@ -97,6 +98,7 @@ const Links = [
 export const Navbar = () => {
   const pathname = usePathname();
   const [showMobileMenu, setShowMobileMenu] = useState(false);
+  const auth = use(useAuthContext().user);
 
   return (
     <>
@@ -169,7 +171,7 @@ export const Navbar = () => {
               <Suspense
                 fallback={
                   <Button
-                    variant="darkgradient"
+                    variant="dark"
                     disabled
                     size="sm"
                     className="w-full font-medium sm:w-auto"
@@ -218,9 +220,9 @@ export const Navbar = () => {
           </div>
         </nav>
       </header>
-      {/* {showMobileMenu && (
+      {showMobileMenu && (
         <MobileMenu setShowMobileMenu={setShowMobileMenu} auth={auth} />
-      )} */}
+      )}
     </>
   );
 };
@@ -229,7 +231,7 @@ function LoginOrDashboard() {
   const auth = use(useAuthContext().user);
   return (
     <Button
-      variant="darkgradient"
+      variant="dark"
       href={auth ? "/dashboard" : "/login"}
       size="sm"
       className="w-full font-medium sm:w-auto"

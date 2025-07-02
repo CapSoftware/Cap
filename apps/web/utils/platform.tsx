@@ -22,9 +22,9 @@ export const getDownloadButtonText = (
   if (loading) {
     return "Download Cap";
   } else if (platform === "windows") {
-    return "Download for Windows (Beta)";
+    return "Download for free";
   } else if (platform === "macos") {
-    return isIntel ? "Download for Apple Intel" : "Download for Apple Silicon";
+    return isIntel ? "Download for free" : "Download for free";
   } else {
     return "Download Cap";
   }
@@ -60,21 +60,21 @@ export const getVersionText = (platform: string | null): React.ReactNode => {
 
 export const PlatformIcons: React.FC = () => {
   return (
-    <div className="flex relative z-10 gap-3 justify-center mt-5 animate-delay-2 fade-in-up">
+    <div className="flex relative z-10 gap-3 mt-5">
       <div>
         <button
           onClick={() => {
             window.location.href = "/download/apple-silicon";
           }}
           className="focus:outline-none"
-          aria-label="Download for Apple Silicon"
+          aria-label="Download for free"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
             width="1em"
             height="1em"
             fill="currentColor"
-            className="size-[24px] text-gray-1 opacity-90"
+            className="size-[24px] text-gray-12 opacity-90"
             viewBox="0 0 384 512"
           >
             <path d="M318.7 268.7c-.2-36.7 16.4-64.4 50-84.8-18.8-26.9-47.2-41.7-84.7-44.6-35.5-2.8-74.3 20.7-88.5 20.7-15 0-49.4-19.7-76.4-19.7C63.3 141.2 4 184.8 4 273.5q0 39.3 14.4 81.2c12.8 36.7 59 126.7 107.2 125.2 25.2-.6 43-17.9 75.8-17.9 31.8 0 48.3 17.9 76.4 17.9 48.6-.7 90.4-82.5 102.6-119.3-65.2-30.7-61.7-90-61.7-91.9m-56.6-164.2c27.3-32.4 24.8-61.9 24-72.5-24.1 1.4-52 16.4-67.9 34.9-17.5 19.8-27.8 44.3-25.6 71.9 26.1 2 49.9-11.4 69.5-34.3" />
@@ -93,7 +93,7 @@ export const PlatformIcons: React.FC = () => {
             height="1em"
             fill="currentColor"
             style={{ marginTop: "1.5px" }}
-            className="size-[24px] text-gray-1 opacity-90"
+            className="size-[24px] text-gray-12 opacity-90"
             viewBox="0 0 256 256"
           >
             <path d="M112 144v51.64a8 8 0 0 1-8 8 8.5 8.5 0 0 1-1.43-.13l-64-11.64A8 8 0 0 1 32 184v-40a8 8 0 0 1 8-8h64a8 8 0 0 1 8 8m-2.87-89.78a8 8 0 0 0-6.56-1.73l-64 11.64A8 8 0 0 0 32 72v40a8 8 0 0 0 8 8h64a8 8 0 0 0 8-8V60.36a8 8 0 0 0-2.87-6.14M216 136h-80a8 8 0 0 0-8 8v57.45a8 8 0 0 0 6.57 7.88l80 14.54a7.6 7.6 0 0 0 1.43.13 8 8 0 0 0 8-8v-72a8 8 0 0 0-8-8m5.13-102.14a8 8 0 0 0-6.56-1.73l-80 14.55a8 8 0 0 0-6.57 7.87V112a8 8 0 0 0 8 8h80a8 8 0 0 0 8-8V40a8 8 0 0 0-2.87-6.14" />

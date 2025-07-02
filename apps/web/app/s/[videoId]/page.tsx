@@ -18,7 +18,7 @@ import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { transcribeVideo } from "@/actions/videos/transcribe";
 import { headers } from "next/headers";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
-import { isAiGenerationEnabled, isAiUiEnabled } from "@/utils/flags";
+import { isAiGenerationEnabled } from "@/utils/flags";
 
 import { Share } from "./Share";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
@@ -67,11 +67,9 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     return notFound();
   }
 
-  // Get the headers from the middleware
   const headersList = headers();
   const referrer = headersList.get("x-referrer") || "";
 
-  // Check if referrer is from allowed platforms
   const allowedReferrers = [
     "x.com",
     "twitter.com",
@@ -86,7 +84,6 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     referrer.includes(domain)
   );
 
-  // Set robots metadata based on referrer and video publicity
   const robotsDirective = isAllowedReferrer
     ? "index, follow"
     : "noindex, nofollow";
@@ -511,22 +508,6 @@ async function AuthorizedContent({
         )
     : Promise.resolve([]);
 
-  const aiUIEnabledPromise = (async () => {
-    let aiUiEnabled = false;
-
-    if (user?.email) {
-      aiUiEnabled = await isAiUiEnabled({
-        email: user.email,
-        stripeSubscriptionStatus: user.stripeSubscriptionStatus,
-      });
-      console.log(
-        `[ShareVideoPage] AI UI feature flag check for viewer ${user.id}: ${aiUiEnabled} (email: ${user.email})`
-      );
-    }
-
-    return aiUiEnabled;
-  })();
-
   const commentsPromise = db()
     .select({
       id: comments.id,
@@ -549,13 +530,11 @@ async function AuthorizedContent({
 
   const [
     membersList,
-    aiUiEnabled,
     userOrganizations,
     sharedOrganizations,
     { customDomain, domainVerified },
   ] = await Promise.all([
     membersListPromise,
-    aiUIEnabledPromise,
     userOrganizationsPromise,
     sharedOrganizationsPromise,
     customDomainPromise,
@@ -599,7 +578,6 @@ async function AuthorizedContent({
           userOrganizations={userOrganizations}
           initialAiData={initialAiData}
           aiGenerationEnabled={aiGenerationEnabled}
-          aiUiEnabled={aiUiEnabled}
         />
       </div>
       <div className="py-4 mt-auto">

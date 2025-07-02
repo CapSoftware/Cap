@@ -22,11 +22,13 @@ export const UploadCapButton = ({
   onProgress,
   onComplete,
   size = "md",
+  grey = false,
 }: {
   onStart?: (id: string, thumbnail?: string) => void;
   onProgress?: (id: string, progress: number, uploadProgress?: number) => void;
   onComplete?: (id: string) => void;
   size?: "sm" | "lg" | "md";
+  grey?: boolean;
 }) => {
   const { user, isSubscribed } = useDashboardContext();
   const inputRef = useRef<HTMLInputElement>(null);
