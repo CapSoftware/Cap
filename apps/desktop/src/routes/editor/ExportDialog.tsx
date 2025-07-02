@@ -197,7 +197,12 @@ export function ExportDialog() {
             )
           );
         });
-      } else toast.success("Recording exported to clipboard");
+      } else
+        toast.success(
+          `${
+            settings.format === "Gif" ? "GIF" : "Recording"
+          } exported to clipboard`
+        );
     },
   }));
 
@@ -259,7 +264,10 @@ export function ExportDialog() {
             )
           );
         });
-      } else toast.success("Recording exported to file");
+      } else
+        toast.success(
+          `${settings.format === "Gif" ? "GIF" : "Recording"} exported to file`
+        );
     },
   }));
 
@@ -679,7 +687,9 @@ export function ExportDialog() {
                             {copyState.type === "starting"
                               ? "Preparing..."
                               : copyState.type === "rendering"
-                              ? "Rendering video..."
+                              ? settings.format === "Gif"
+                                ? "Rendering GIF..."
+                                : "Rendering video..."
                               : copyState.type === "copying"
                               ? "Copying to clipboard..."
                               : "Copied to clipboard"}
@@ -693,7 +703,10 @@ export function ExportDialog() {
                             keyed
                           >
                             {(copyState) => (
-                              <RenderProgress state={copyState} />
+                              <RenderProgress
+                                state={copyState}
+                                format={settings.format}
+                              />
                             )}
                           </Show>
                         </div>
@@ -716,7 +729,9 @@ export function ExportDialog() {
                                   {saveState.type === "starting"
                                     ? "Preparing..."
                                     : saveState.type === "rendering"
-                                    ? "Rendering video..."
+                                    ? settings.format === "Gif"
+                                      ? "Rendering GIF..."
+                                      : "Rendering video..."
                                     : saveState.type === "copying"
                                     ? "Exporting to file..."
                                     : "Export completed"}
@@ -730,7 +745,10 @@ export function ExportDialog() {
                                   keyed
                                 >
                                   {(copyState) => (
-                                    <RenderProgress state={copyState} />
+                                    <RenderProgress
+                                      state={copyState}
+                                      format={settings.format}
+                                    />
                                   )}
                                 </Show>
                               </>
@@ -746,7 +764,11 @@ export function ExportDialog() {
                                     Export Completed
                                   </h1>
                                   <p class="text-sm text-gray-11">
-                                    Your video has successfully been exported
+                                    Your{" "}
+                                    {settings.format === "Gif"
+                                      ? "GIF"
+                                      : "video"}{" "}
+                                    has successfully been exported
                                   </p>
                                 </div>
                               </div>
@@ -795,7 +817,10 @@ export function ExportDialog() {
                                     keyed
                                   >
                                     {(renderState) => (
-                                      <RenderProgress state={renderState} />
+                                      <RenderProgress
+                                        state={renderState}
+                                        format={settings.format}
+                                      />
                                     )}
                                   </Match>
                                 </Switch>
@@ -886,7 +911,11 @@ export function ExportDialog() {
                             setClipboardCopyPressed(false);
                           }, 2000);
                           await commands.copyVideoToClipboard(path);
-                          toast.success("Video copied to clipboard");
+                          toast.success(
+                            `${
+                              settings.format === "Gif" ? "GIF" : "Video"
+                            } copied to clipboard`
+                          );
                         }
                       }}
                     >
@@ -908,7 +937,7 @@ export function ExportDialog() {
   );
 }
 
-function RenderProgress(props: { state: RenderState }) {
+function RenderProgress(props: { state: RenderState; format?: ExportFormat }) {
   return (
     <ProgressView
       amount={
@@ -920,7 +949,9 @@ function RenderProgress(props: { state: RenderState }) {
       }
       label={
         props.state.type === "rendering"
-          ? `Rendering video (${props.state.progress.renderedCount}/${props.state.progress.totalFrames} frames)`
+          ? `Rendering ${props.format === "Gif" ? "GIF" : "video"} (${
+              props.state.progress.renderedCount
+            }/${props.state.progress.totalFrames} frames)`
           : "Preparing to render..."
       }
     />
