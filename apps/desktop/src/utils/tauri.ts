@@ -327,7 +327,7 @@ export type DownloadProgress = { progress: number; message: string }
 export type EditorStateChanged = { playhead_position: number }
 export type ExportCompression = "Minimal" | "Social" | "Web" | "Potato"
 export type ExportEstimates = { duration_seconds: number; estimated_time_seconds: number; estimated_size_mb: number }
-export type ExportSettings = { fps: number; resolution_base: XY<number>; compression: ExportCompression }
+export type ExportSettings = ({ format: "Mp4" } & Mp4ExportSettings) | ({ format: "Gif" } & GifExportSettings)
 export type Flags = { captions: boolean }
 export type FramesRendered = { renderedCount: number; totalFrames: number; type: "FramesRendered" }
 export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; hapticsEnabled?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; customCursorCapture?: boolean; serverUrl?: string; 
@@ -335,6 +335,7 @@ export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?
  * @deprecated
  */
 openEditorAfterRecording?: boolean }
+export type GifExportSettings = { fps: number; resolution_base: XY<number> }
 export type HapticPattern = "Alignment" | "LevelChange" | "Generic"
 export type HapticPerformanceTime = "Default" | "Now" | "DrawCompleted"
 export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
@@ -344,6 +345,7 @@ export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } }
 export type InstantRecordingMeta = { fps: number; sample_rate: number | null }
 export type JsonValue<T> = [T]
 export type MainWindowRecordingStartBehaviour = "close" | "minimise"
+export type Mp4ExportSettings = { fps: number; resolution_base: XY<number>; compression: ExportCompression }
 export type MultipleSegment = { display: VideoMeta; camera?: VideoMeta | null; mic?: AudioMeta | null; system_audio?: AudioMeta | null; cursor?: string | null }
 export type MultipleSegments = { segments: MultipleSegment[]; cursors: Cursors }
 export type NewNotification = { title: string; body: string; is_error: boolean }

@@ -795,7 +795,8 @@ async fn create_segment_pipeline(
             output_path.clone(),
             |o| H264Encoder::builder("camera", camera_config).build(o),
             |_| None,
-        )?;
+        )
+        .map_err(|e| RecordingError::Media(e.into()))?;
 
         pipeline_builder.spawn_source("camera_capture", camera_source);
 

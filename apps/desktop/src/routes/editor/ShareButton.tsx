@@ -72,6 +72,7 @@ function ShareButton() {
         await exportVideo(
           projectPath,
           {
+            format: "Mp4",
             fps: 30,
             resolution_base: {
               x: RESOLUTION_OPTIONS._1080p.width,
