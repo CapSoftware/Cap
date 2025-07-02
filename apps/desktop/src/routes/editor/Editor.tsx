@@ -391,7 +391,7 @@ function Dialogs() {
                         </div>
                         <EditorButton
                           leftIcon={<IconCapCircleX />}
-                          onClick={cropController.reset}
+                          onClick={() => cropController.reset()}
                         >
                           Reset
                         </EditorButton>

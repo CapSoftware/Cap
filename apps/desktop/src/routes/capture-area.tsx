@@ -10,7 +10,6 @@ import { createStore, reconcile } from "solid-js/store";
 import { Transition } from "solid-transition-group";
 import CropArea from "~/components/CropArea";
 import { createOptionsQuery } from "~/utils/queries";
-import { type Crop } from "~/utils/tauri";
 import { createCropController, CropBounds } from "~/utils/cropController";
 
 export default function CaptureArea() {

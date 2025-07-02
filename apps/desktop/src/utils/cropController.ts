@@ -26,6 +26,10 @@ type CropControllerOptions = {
   initialCrop?: CropBounds;
 };
 
+function clamp(n: number, min = 0, max = 1) {
+  return Math.max(min, Math.min(max, n));
+}
+
 export type CropController = {
   crop: Accessor<CropBounds>;
   setCrop: (bounds: CropBounds) => void;
@@ -98,8 +102,6 @@ export function createCropController(
   };
 
   const uncheckedSetCrop = (bounds: CropBounds) => {
-    console.log(`Setting unchecked: ${JSON.stringify(bounds)}`);
-
     box.setFromBounds(bounds);
     setCropBounds(bounds);
   };
@@ -175,18 +177,28 @@ export function createCropController(
       setCropBounds(newBox.toBounds());
       box = newBox;
     } else {
-      const container = containerSize();
-      const width = container.x / 2;
-      const height = container.y / 2;
+      const mapped = options.mappedSize || containerSize();
+
+      let width = clamp(mapped.x / 2, logicalMinSize().x, mapped.x);
+      let height = clamp(mapped.y / 2, logicalMinSize().y, mapped.y);
+
       newBox = Box.fromBounds({
-        x: container.x / 4,
-        y: container.y / 4,
+        x: (mapped.x - width) / 2,
+        y: (mapped.y - height) / 2,
         width,
         height,
       });
+
+      if (options.aspectRatio) {
+        newBox.constrainToRatio(
+          options.aspectRatio[0] / options.aspectRatio[1],
+          ORIGIN_CENTER
+        );
+      }
+
       box = newBox;
+      setCropBounds(newBox.toBounds());
     }
-    setBoxAndApplyConstraints();
   };
 
   const init = (containerElement: HTMLElement) => {

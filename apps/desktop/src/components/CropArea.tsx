@@ -844,7 +844,7 @@ export default function Cropper(
             }
           >
             {(ratio) => {
-              const locked = controller.options.aspectRatio === null;
+              const locked = controller.options.aspectRatio !== null;
               return (
                 <div
                   ref={snapRatioEl}
