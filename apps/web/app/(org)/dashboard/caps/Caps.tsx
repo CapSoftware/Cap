@@ -266,8 +266,8 @@ export const Caps = ({
       {isDraggingCap && (
         <div className="fixed inset-0 z-50 pointer-events-none">
           <div className="flex justify-center items-center w-full h-full">
-            <div className="px-5 py-3 text-sm font-medium rounded-lg border backdrop-blur-md bg-gray-1/80 border-gray-4 text-gray-12">
-              Drag to a space to share
+            <div className="px-5 py-3 text-sm font-medium text-white rounded-xl bg-blue-10">
+              Drag to a space or folder to share
             </div>
           </div>
         </div>

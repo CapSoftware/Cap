@@ -121,4 +121,4 @@ const MessageCircleMoreIcon = forwardRef<
 
 MessageCircleMoreIcon.displayName = 'MessageCircleMoreIcon';
 
-export { MessageCircleMoreIcon };
+export default MessageCircleMoreIcon;
