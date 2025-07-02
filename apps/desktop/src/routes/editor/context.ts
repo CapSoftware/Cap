@@ -276,6 +276,9 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
     });
 
     const [micWaveforms] = createResource(() => commands.getMicWaveforms());
+    const [systemAudioWaveforms] = createResource(() =>
+      commands.getSystemAudioWaveforms()
+    );
     const customDomain = createCustomDomainQuery();
 
     return {
@@ -299,6 +302,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       exportState,
       setExportState,
       micWaveforms,
+      systemAudioWaveforms,
     };
   },
   // biome-ignore lint/style/noNonNullAssertion: it's ok

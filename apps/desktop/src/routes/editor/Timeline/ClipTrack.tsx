@@ -30,34 +30,35 @@ import {
 import { getSectionMarker } from "./sectionMarker";
 
 function WaveformCanvas(props: {
-  waveform: number[];
+  systemWaveform?: number[];
+  micWaveform?: number[];
   segment: { start: number; end: number };
   secsPerPixel: number;
 }) {
+  const { project } = useEditorContext();
+
   let canvas: HTMLCanvasElement | undefined;
   const { width } = useSegmentContext();
   const { secsPerPixel } = useTimelineContext();
 
-  const render = () => {
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const w = width();
-    if (w <= 0) return;
-
-    const h = canvas.height;
-    canvas.width = w;
-    ctx.clearRect(0, 0, w, h);
-
+  const render = (
+    ctx: CanvasRenderingContext2D,
+    h: number,
+    waveform: number[],
+    color: string,
+    gain = 0
+  ) => {
     const maxAmplitude = h;
 
-    ctx.fillStyle = "rgba(255,255,255,0.3)";
+    // yellow please
+    ctx.fillStyle = color;
     ctx.beginPath();
 
     const step = 0.05 / secsPerPixel();
 
     ctx.moveTo(0, h);
+
+    const norm = (w: number) => 1.0 - Math.max(w + gain, -60) / -60;
 
     for (
       let segmentTime = props.segment.start;
@@ -67,13 +68,13 @@ function WaveformCanvas(props: {
       const index = Math.floor(segmentTime * 10);
       const xTime = index / 10;
 
-      const amplitude = props.waveform[index] * maxAmplitude;
+      const amplitude = norm(waveform[index]) * maxAmplitude;
 
       const x = (xTime - props.segment.start) / secsPerPixel();
       const y = h - amplitude;
 
       const prevX = (xTime - 0.1 - props.segment.start) / secsPerPixel();
-      const prevAmplitude = props.waveform[index - 1] * maxAmplitude;
+      const prevAmplitude = norm(waveform[index - 1]) * maxAmplitude;
       const prevY = h - prevAmplitude;
 
       const cpX1 = prevX + step / 2;
@@ -91,15 +92,46 @@ function WaveformCanvas(props: {
     ctx.fill();
   };
 
+  function renderWaveforms() {
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const w = width();
+    if (w <= 0) return;
+
+    const h = canvas.height;
+    canvas.width = w;
+    ctx.clearRect(0, 0, w, h);
+
+    if (props.micWaveform)
+      render(
+        ctx,
+        h,
+        props.micWaveform,
+        "rgba(255,255,255,0.3)",
+        project.audio.micVolumeDb
+      );
+
+    if (props.systemWaveform)
+      render(
+        ctx,
+        h,
+        props.systemWaveform,
+        "rgba(255,150,0,0.5)",
+        project.audio.systemVolumeDb
+      );
+  }
+
   createEffect(() => {
-    render();
+    renderWaveforms();
   });
 
   return (
     <canvas
       ref={(el) => {
         canvas = el;
-        render();
+        renderWaveforms();
       }}
       class="absolute inset-0 w-full h-full pointer-events-none"
       height={52}
@@ -122,6 +154,7 @@ export function ClipTrack(
     setEditorState,
     totalDuration,
     micWaveforms,
+    systemAudioWaveforms,
     metaQuery,
   } = useEditorContext();
 
@@ -186,9 +219,23 @@ export function ClipTrack(
             return segmentIndex === selection.index;
           });
 
-          const waveform = () => {
+          const micWaveform = () => {
+            if (project.audio.micVolumeDb && project.audio.micVolumeDb < -30)
+              return;
+
             const idx = segment.recordingSegment ?? i();
             return micWaveforms()?.[idx] ?? [];
+          };
+
+          const systemAudioWaveform = () => {
+            if (
+              project.audio.systemVolumeDb &&
+              project.audio.systemVolumeDb <= -30
+            )
+              return;
+
+            const idx = segment.recordingSegment ?? i();
+            return systemAudioWaveforms()?.[idx] ?? [];
           };
 
           return (
@@ -311,15 +358,12 @@ export function ClipTrack(
                   }
                 }}
               >
-                <Show
-                  when={metaQuery.data?.hasMicrophone && waveform().length > 0}
-                >
-                  <WaveformCanvas
-                    waveform={waveform()}
-                    segment={segment}
-                    secsPerPixel={secsPerPixel()}
-                  />
-                </Show>
+                <WaveformCanvas
+                  micWaveform={micWaveform()}
+                  systemWaveform={systemAudioWaveform()}
+                  segment={segment}
+                  secsPerPixel={secsPerPixel()}
+                />
 
                 <Markings segment={segment} prevDuration={prevDuration()} />
 
