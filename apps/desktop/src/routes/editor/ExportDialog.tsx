@@ -450,28 +450,28 @@ export function ExportDialog() {
                             produce((newSettings) => {
                               newSettings.format = option.value as ExportFormat;
 
-                              // if (
-                              //   option.value === "GIF" &&
-                              //   settings.resolution.value !== "720p"
-                              // )
-                              //   newSettings.resolution =
-                              //     RESOLUTION_OPTIONS._720p;
+                              if (
+                                option.value === "Gif" &&
+                                settings.resolution.value !== "720p"
+                              )
+                                newSettings.resolution =
+                                  RESOLUTION_OPTIONS._720p;
 
-                              // if (
-                              //   option.value === "GIF" &&
-                              //   GIF_FPS_OPTIONS.every(
-                              //     (v) => v.value === settings.fps
-                              //   )
-                              // )
-                              //   newSettings.fps = 10;
+                              if (
+                                option.value === "Gif" &&
+                                GIF_FPS_OPTIONS.every(
+                                  (v) => v.value === settings.fps
+                                )
+                              )
+                                newSettings.fps = 10;
 
-                              // if (
-                              //   option.value === "MP4" &&
-                              //   FPS_OPTIONS.every(
-                              //     (v) => v.value !== settings.fps
-                              //   )
-                              // )
-                              //   newSettings.fps = 30;
+                              if (
+                                option.value === "Mp4" &&
+                                FPS_OPTIONS.every(
+                                  (v) => v.value !== settings.fps
+                                )
+                              )
+                                newSettings.fps = 30;
                             })
                           );
                         }}

@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use cap_export::{ExportCompression, Exporter, GifExportSettings, Mp4ExportSettings};
+use cap_export::ExporterBase;
 use cap_media::sources::get_target_fps;
 use cap_project::{RecordingMeta, XY};
 use cap_rendering::{ProjectRecordingsMeta, RenderVideoConstants};
@@ -164,26 +164,24 @@ struct Export {
 
 impl Export {
     async fn run(self) -> Result<(), String> {
-        let exporter = Exporter::builder(self.project_path)
+        let exporter_base = ExporterBase::builder(self.project_path)
             .build()
             .await
             .map_err(|v| format!("Exporter build error: {}", v.to_string()))?;
 
         let mut stdout = stdout();
-        let exporter_output_path = exporter
-            .export_gif(
-                GifExportSettings {
-                    fps: 10,
-                    resolution_base: XY::new(1920, 1080),
-                },
-                move |f| {
-                    print!("\rrendered frame {f}");
 
-                    stdout.flush().unwrap();
-                },
-            )
-            .await
-            .map_err(|v| format!("Exporter error: {}", v.to_string()))?;
+        let exporter_output_path = cap_export::gif::GifExportSettings {
+            fps: 10,
+            resolution_base: XY::new(1920, 1080),
+        }
+        .export(exporter_base, move |f| {
+            print!("\rrendered frame {f}");
+
+            stdout.flush().unwrap();
+        })
+        .await
+        .map_err(|v| format!("Exporter error: {}", v.to_string()))?;
 
         let output_path = if let Some(output_path) = self.output_path {
             std::fs::copy(&exporter_output_path, &output_path).unwrap();

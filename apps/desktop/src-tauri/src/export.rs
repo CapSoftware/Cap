@@ -1,5 +1,5 @@
 use crate::{get_video_metadata, FramesRendered};
-use cap_export::{Exporter, GifExportSettings, Mp4ExportSettings};
+use cap_export::ExporterBase;
 use cap_project::{RecordingMeta, XY};
 use serde::Deserialize;
 use specta::Type;
@@ -8,8 +8,8 @@ use std::path::PathBuf;
 #[derive(Deserialize, Clone, Copy, Debug, Type)]
 #[serde(tag = "format")]
 pub enum ExportSettings {
-    Mp4(Mp4ExportSettings),
-    Gif(GifExportSettings),
+    Mp4(cap_export::mp4::Mp4ExportSettings),
+    Gif(cap_export::gif::GifExportSettings),
 }
 
 impl ExportSettings {
@@ -28,12 +28,15 @@ pub async fn export_video(
     progress: tauri::ipc::Channel<FramesRendered>,
     settings: ExportSettings,
 ) -> Result<PathBuf, String> {
-    let exporter = Exporter::builder(project_path).build().await.map_err(|e| {
-        sentry::capture_message(&e.to_string(), sentry::Level::Error);
-        e.to_string()
-    })?;
+    let exporter_base = ExporterBase::builder(project_path)
+        .build()
+        .await
+        .map_err(|e| {
+            sentry::capture_message(&e.to_string(), sentry::Level::Error);
+            e.to_string()
+        })?;
 
-    let total_frames = exporter.total_frames(settings.fps());
+    let total_frames = exporter_base.total_frames(settings.fps());
 
     let _ = progress.send(FramesRendered {
         rendered_count: 0,
@@ -42,8 +45,8 @@ pub async fn export_video(
 
     match settings {
         ExportSettings::Mp4(settings) => {
-            exporter
-                .export_mp4(settings, move |frame_index| {
+            settings
+                .export(exporter_base, move |frame_index| {
                     // Ensure progress never exceeds total frames
                     let _ = progress.send(FramesRendered {
                         rendered_count: (frame_index + 1).min(total_frames),
@@ -53,8 +56,8 @@ pub async fn export_video(
                 .await
         }
         ExportSettings::Gif(settings) => {
-            exporter
-                .export_gif(settings, move |frame_index| {
+            settings
+                .export(exporter_base, move |frame_index| {
                     // Ensure progress never exceeds total frames
                     let _ = progress.send(FramesRendered {
                         rendered_count: (frame_index + 1).min(total_frames),

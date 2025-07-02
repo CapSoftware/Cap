@@ -558,8 +558,12 @@ function createRecordingMutations(
   ) =>
     exportVideo(
       media.path,
-      { fps: FPS, resolution_base: OUTPUT_SIZE, compression: "Web" },
-      "MP4",
+      {
+        format: "Mp4",
+        fps: FPS,
+        resolution_base: OUTPUT_SIZE,
+        compression: "Web",
+      },
       onProgress
     );
 
