@@ -19,9 +19,43 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [emailSent, setEmailSent] = useState(false);
+  const [otpCode, setOtpCode] = useState("");
+  const [verifyingOtp, setVerifyingOtp] = useState(false);
 
   const handleGoogleSignIn = () => {
     signIn("google");
+  };
+
+  const handleOtpVerification = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!otpCode || otpCode.length !== 6) {
+      toast.error("Please enter a 6-digit verification code");
+      return;
+    }
+
+    setVerifyingOtp(true);
+    try {
+      const result = await signIn("otp", {
+        email,
+        otp: otpCode,
+        redirect: false,
+      });
+
+      if (result?.ok) {
+        toast.success("Successfully signed in!");
+        onClose();
+        window.location.reload(); // Reload to update auth state
+      } else if (result?.error) {
+        toast.error("Invalid or expired verification code");
+        setOtpCode("");
+      } else {
+        toast.error("Sign in failed. Please try again.");
+      }
+    } catch (error) {
+      toast.error("Failed to verify code. Please try again.");
+    } finally {
+      setVerifyingOtp(false);
+    }
   };
 
   return (
@@ -100,73 +134,107 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
             )}
 
             <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                if (!email) return;
+              onSubmit={
+                emailSent
+                  ? handleOtpVerification
+                  : async (e) => {
+                      e.preventDefault();
+                      if (!email) return;
 
-                setLoading(true);
-                signIn("email", {
-                  email,
-                  redirect: false,
-                })
-                  .then((res) => {
-                    setLoading(false);
-                    if (res?.ok && !res?.error) {
-                      setEmail("");
-                      setEmailSent(true);
-                      toast.success("Email sent - check your inbox!");
-                    } else {
-                      toast.error("Error sending email - try again?");
+                      setLoading(true);
+                      signIn("email", {
+                        email,
+                        redirect: false,
+                      })
+                        .then((res) => {
+                          setLoading(false);
+                          if (res?.ok && !res?.error) {
+                            setEmailSent(true);
+                            toast.success("Code sent - check your email!");
+                          } else {
+                            toast.error("Error sending code - try again?");
+                          }
+                        })
+                        .catch(() => {
+                          setEmailSent(false);
+                          setLoading(false);
+                          toast.error("Error sending code - try again?");
+                        });
                     }
-                  })
-                  .catch(() => {
-                    setEmailSent(false);
-                    setLoading(false);
-                    toast.error("Error sending email - try again?");
-                  });
-              }}
+              }
               className="flex flex-col space-y-3"
             >
-              <div>
-                <input
-                  id="email"
-                  name="email"
-                  autoFocus
-                  type="email"
-                  placeholder={emailSent ? "" : "tim@apple.com"}
-                  autoComplete="email"
-                  required
-                  value={email}
-                  disabled={emailSent}
-                  onChange={(e) => {
-                    setEmail(e.target.value);
-                  }}
-                  className="block px-3 w-full h-12 text-lg placeholder-gray-400 rounded-full border border-gray-300 shadow-sm appearance-none focus:border-black focus:outline-none focus:ring-black"
-                />
-                {NODE_ENV === "development" && (
-                  <div className="flex justify-center items-center px-6 py-3 mt-3 bg-red-600 rounded-xl">
-                    <p className="text-lg text-white">
-                      <span className="font-medium text-white">
-                        Development mode:
-                      </span>{" "}
-                      Auth URL will be logged to your dev console.
-                    </p>
+              {emailSent ? (
+                <>
+                  <p className="text-center text-sm">
+                    Enter the 6-digit code sent to {email}
+                  </p>
+                  <input
+                    id="otp"
+                    name="otp"
+                    type="text"
+                    autoFocus
+                    placeholder="000000"
+                    maxLength={6}
+                    pattern="[0-9]{6}"
+                    autoComplete="one-time-code"
+                    required
+                    value={otpCode}
+                    onChange={(e) => {
+                      const value = e.target.value.replace(/\D/g, "");
+                      setOtpCode(value.slice(0, 6));
+                    }}
+                    className="block px-3 w-full h-12 text-2xl tracking-widest font-mono text-center placeholder-gray-400 rounded-full border border-gray-300 shadow-sm appearance-none focus:border-black focus:outline-none focus:ring-black"
+                  />
+                  <Button
+                    variant="primary"
+                    size="lg"
+                    className="h-12 text-lg"
+                    type="submit"
+                    disabled={verifyingOtp || otpCode.length !== 6}
+                  >
+                    {verifyingOtp ? "Verifying..." : "Verify Code"}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <input
+                      id="email"
+                      name="email"
+                      autoFocus
+                      type="email"
+                      placeholder="tim@apple.com"
+                      autoComplete="email"
+                      required
+                      value={email}
+                      onChange={(e) => {
+                        setEmail(e.target.value);
+                      }}
+                      className="block px-3 w-full h-12 text-lg placeholder-gray-400 rounded-full border border-gray-300 shadow-sm appearance-none focus:border-black focus:outline-none focus:ring-black"
+                    />
+                    {NODE_ENV === "development" && (
+                      <div className="flex justify-center items-center px-6 py-3 mt-3 bg-red-600 rounded-xl">
+                        <p className="text-lg text-white">
+                          <span className="font-medium text-white">
+                            Development mode:
+                          </span>{" "}
+                          Code will be logged to your dev console.
+                        </p>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-              <Button
-                variant="primary"
-                size="lg"
-                className="h-12 text-lg"
-                type="submit"
-                disabled={loading || emailSent}
-              >
-                {emailSent
-                  ? NODE_ENV === "development"
-                    ? "Email sent to your terminal"
-                    : "Email sent to your inbox"
-                  : "Continue with Email"}
-              </Button>
+                  <Button
+                    variant="primary"
+                    size="lg"
+                    className="h-12 text-lg"
+                    type="submit"
+                    disabled={loading}
+                  >
+                    {loading ? "Sending..." : "Send verification code"}
+                  </Button>
+                </>
+              )}
               <p className="pt-2 text-xs text-gray-1">
                 By typing your email and clicking continue, you acknowledge that
                 you have both read and agree to Cap's{" "}
@@ -196,11 +264,11 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
                 className="mt-5 text-sm underline text-gray-1 hover:text-black"
                 onClick={() => {
                   setEmailSent(false);
-                  setEmail("");
+                  setOtpCode("");
                   setLoading(false);
                 }}
               >
-                Click to restart sign in process.
+                Use a different email
               </button>
             </div>
           )}

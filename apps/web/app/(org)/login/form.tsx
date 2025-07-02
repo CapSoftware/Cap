@@ -16,12 +16,13 @@ import { LucideArrowUpRight } from "lucide-react";
 import { signIn } from "next-auth/react";
 import Image from "next/image";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 export function LoginForm() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const next = searchParams?.get("next");
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
@@ -30,6 +31,8 @@ export function LoginForm() {
   const [showOrgInput, setShowOrgInput] = useState(false);
   const [organizationId, setOrganizationId] = useState("");
   const [organizationName, setOrganizationName] = useState<string | null>(null);
+  const [otpCode, setOtpCode] = useState("");
+  const [verifyingOtp, setVerifyingOtp] = useState(false);
   const theme = Cookies.get("theme") || "light";
 
   useEffect(() => {
@@ -101,6 +104,39 @@ export function LoginForm() {
     signIn("google", {
       ...(next && next.length > 0 ? { callbackUrl: next } : {}),
     });
+  };
+
+  const handleOtpVerification = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!otpCode || otpCode.length !== 6) {
+      toast.error("Please enter a 6-digit verification code");
+      return;
+    }
+
+    setVerifyingOtp(true);
+    try {
+      // Sign in with NextAuth using the OTP credentials provider
+      const result = await signIn("otp", {
+        email,
+        otp: otpCode,
+        redirect: false,
+        callbackUrl: next || "/dashboard",
+      });
+
+      if (result?.ok) {
+        trackEvent("auth_completed", { method: "otp" });
+        router.push(next || "/dashboard");
+      } else if (result?.error) {
+        toast.error("Invalid or expired verification code");
+        setOtpCode("");
+      } else {
+        toast.error("Sign in failed. Please try again.");
+      }
+    } catch (error) {
+      toast.error("Failed to verify code. Please try again.");
+    } finally {
+      setVerifyingOtp(false);
+    }
   };
 
   const handleOrganizationLookup = async (e: React.FormEvent) => {
@@ -183,49 +219,65 @@ export function LoginForm() {
                   animate={{ x: 0, opacity: 1, filter: "blur(0px)" }}
                   exit={{ x: -450, opacity: 0, filter: "blur(10px)" }}
                   transition={{ duration: 0.2, type: "spring", bounce: 0.2 }}
-                  onSubmit={async (e) => {
-                    e.preventDefault();
-                    if (!email) return;
+                  onSubmit={
+                    emailSent
+                      ? handleOtpVerification
+                      : async (e) => {
+                          e.preventDefault();
+                          if (!email) return;
 
-                    setLoading(true);
-                    trackEvent("auth_started", {
-                      method: "email",
-                      is_signup: !oauthError,
-                    });
-                    signIn("email", {
-                      email,
-                      redirect: false,
-                      ...(next && next.length > 0 ? { callbackUrl: next } : {}),
-                    })
-                      .then((res) => {
-                        setLoading(false);
-                        if (res?.ok && !res?.error) {
-                          setEmailSent(true);
-                          trackEvent("auth_email_sent", {
-                            email_domain: email.split("@")[1],
+                          setLoading(true);
+                          trackEvent("auth_started", {
+                            method: "email",
+                            is_signup: !oauthError,
                           });
-                          toast.success("Email sent - check your inbox!");
-                        } else {
-                          toast.error("Error sending email - try again?");
+                          signIn("email", {
+                            email,
+                            redirect: false,
+                            ...(next && next.length > 0
+                              ? { callbackUrl: next }
+                              : {}),
+                          })
+                            .then((res) => {
+                              setLoading(false);
+                              if (res?.ok && !res?.error) {
+                                setEmailSent(true);
+                                trackEvent("auth_email_sent", {
+                                  email_domain: email.split("@")[1],
+                                });
+                                toast.success("Code sent - check your email!");
+                              } else {
+                                toast.error("Error sending code - try again?");
+                              }
+                            })
+                            .catch(() => {
+                              setEmailSent(false);
+                              setLoading(false);
+                              toast.error("Error sending email - try again?");
+                            });
                         }
-                      })
-                      .catch(() => {
-                        setEmailSent(false);
-                        setLoading(false);
-                        toast.error("Error sending email - try again?");
-                      });
-                  }}
+                  }
                   className="flex flex-col space-y-3"
                 >
-                  <NormalLogin
-                    setShowOrgInput={setShowOrgInput}
-                    email={email}
-                    emailSent={emailSent}
-                    setEmail={setEmail}
-                    loading={loading}
-                    oauthError={oauthError}
-                    handleGoogleSignIn={handleGoogleSignIn}
-                  />
+                  {emailSent ? (
+                    <OtpVerification
+                      email={email}
+                      otpCode={otpCode}
+                      setOtpCode={setOtpCode}
+                      verifyingOtp={verifyingOtp}
+                      setEmailSent={setEmailSent}
+                    />
+                  ) : (
+                    <NormalLogin
+                      setShowOrgInput={setShowOrgInput}
+                      email={email}
+                      emailSent={emailSent}
+                      setEmail={setEmail}
+                      loading={loading}
+                      oauthError={oauthError}
+                      handleGoogleSignIn={handleGoogleSignIn}
+                    />
+                  )}
                 </motion.form>
               )}
             </AnimatePresence>
@@ -304,6 +356,112 @@ const LoginWithSSO = ({
   );
 };
 
+const OtpVerification = ({
+  email,
+  otpCode,
+  setOtpCode,
+  verifyingOtp,
+  setEmailSent,
+}: {
+  email: string;
+  otpCode: string;
+  setOtpCode: (code: string) => void;
+  verifyingOtp: boolean;
+  setEmailSent: (sent: boolean) => void;
+}) => {
+  const [resending, setResending] = useState(false);
+  const [resendTimer, setResendTimer] = useState(0);
+
+  useEffect(() => {
+    if (resendTimer > 0) {
+      const timer = setTimeout(() => setResendTimer(resendTimer - 1), 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [resendTimer]);
+
+  const handleResend = async () => {
+    setResending(true);
+    try {
+      const result = await signIn("email", {
+        email,
+        redirect: false,
+      });
+
+      if (result?.ok) {
+        toast.success("New code sent - check your email!");
+        setOtpCode("");
+        setResendTimer(60); // 60 seconds before allowing resend again
+      } else {
+        toast.error("Failed to resend code. Please try again.");
+      }
+    } catch (error) {
+      toast.error("Failed to resend code. Please try again.");
+    } finally {
+      setResending(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="flex flex-col space-y-3">
+        <p className="text-center text-sm text-gray-10">
+          Enter the 6-digit code sent to {email}
+        </p>
+        <Input
+          id="otp"
+          name="otp"
+          type="text"
+          autoFocus
+          placeholder="000000"
+          maxLength={6}
+          pattern="[0-9]{6}"
+          autoComplete="one-time-code"
+          required
+          value={otpCode}
+          onChange={(e) => {
+            const value = e.target.value.replace(/\D/g, "");
+            setOtpCode(value.slice(0, 6));
+          }}
+          className="text-center text-2xl tracking-widest font-mono"
+        />
+        <Button
+          variant="primary"
+          type="submit"
+          disabled={verifyingOtp || otpCode.length !== 6}
+          spinner={verifyingOtp}
+        >
+          Verify Code
+        </Button>
+        <div className="flex justify-center items-center space-x-2">
+          <span className="text-sm text-gray-9">Didn't receive a code?</span>
+          <button
+            type="button"
+            className="text-sm text-gray-12 hover:text-gray-11 underline disabled:opacity-50"
+            onClick={handleResend}
+            disabled={resending || resendTimer > 0}
+          >
+            {resending
+              ? "Sending..."
+              : resendTimer > 0
+              ? `Resend in ${resendTimer}s`
+              : "Resend"}
+          </button>
+        </div>
+      </div>
+      <button
+        type="button"
+        className="mt-3 text-sm underline text-gray-10 hover:text-gray-8"
+        onClick={() => {
+          setEmailSent(false);
+          setOtpCode("");
+        }}
+      >
+        Use a different email
+      </button>
+    </>
+  );
+};
+
 const NormalLogin = ({
   setShowOrgInput,
   email,
@@ -346,9 +504,9 @@ const NormalLogin = ({
         >
           {emailSent
             ? NODE_ENV === "development"
-              ? "Email sent to your terminal"
-              : "Email sent to your inbox"
-            : "Login with email"}
+              ? "Code sent to your terminal"
+              : "Code sent to your email"
+            : "Send verification code"}
         </Button>
         {/* {NODE_ENV === "development" && (
                   <div className="flex justify-center items-center px-6 py-3 mt-3 bg-red-600 rounded-xl">

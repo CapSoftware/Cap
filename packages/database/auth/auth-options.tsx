@@ -4,6 +4,7 @@ import type { NextAuthOptions } from "next-auth";
 import EmailProvider from "next-auth/providers/email";
 import GoogleProvider from "next-auth/providers/google";
 import WorkOSProvider from "next-auth/providers/workos";
+import CredentialsProvider from "next-auth/providers/credentials";
 import { NODE_ENV, serverEnv } from "@cap/env";
 import type { Adapter } from "next-auth/adapters";
 import type { Provider } from "next-auth/providers/index";
@@ -13,6 +14,8 @@ import { users, organizations, organizationMembers } from "../schema";
 import { nanoId } from "../helpers";
 import { sendEmail } from "../emails/config";
 import { LoginLink } from "../emails/login-link";
+import { OtpCode } from "../emails/otp-code";
+import { createOTP, verifyOTP } from "./otp";
 
 export const config = {
   maxDuration: 120,
@@ -31,6 +34,10 @@ export const authOptions = (): NextAuthOptions => {
     debug: true,
     session: {
       strategy: "jwt",
+      maxAge: 30 * 24 * 60 * 60,
+    },
+    jwt: {
+      maxAge: 30 * 24 * 60 * 60,
     },
     get secret() {
       return serverEnv().NEXTAUTH_SECRET;
@@ -41,6 +48,54 @@ export const authOptions = (): NextAuthOptions => {
     get providers() {
       if (_providers) return _providers;
       _providers = [
+        CredentialsProvider({
+          id: "otp",
+          name: "OTP",
+          credentials: {
+            email: { label: "Email", type: "email" },
+            otp: { label: "OTP", type: "text" },
+          },
+          async authorize(credentials) {
+            if (!credentials?.email || !credentials?.otp) {
+              return null;
+            }
+
+            const isValid = await verifyOTP(credentials.email, credentials.otp);
+            if (!isValid) {
+              return null;
+            }
+
+            const [existingUser] = await db()
+              .select()
+              .from(users)
+              .where(eq(users.email, credentials.email))
+              .limit(1);
+
+            if (existingUser) {
+              return {
+                id: existingUser.id,
+                email: existingUser.email,
+                name: existingUser.name,
+                image: existingUser.image,
+              };
+            }
+
+            const newUserId = nanoId();
+            await db().insert(users).values({
+              id: newUserId,
+              email: credentials.email,
+              emailVerified: new Date(),
+              activeOrganizationId: "",
+            });
+
+            return {
+              id: newUserId,
+              email: credentials.email,
+              name: null,
+              image: null,
+            };
+          },
+        }),
         GoogleProvider({
           clientId: serverEnv().GOOGLE_CLIENT_ID!,
           clientSecret: serverEnv().GOOGLE_CLIENT_SECRET!,
@@ -71,19 +126,30 @@ export const authOptions = (): NextAuthOptions => {
         EmailProvider({
           async sendVerificationRequest({ identifier, url }) {
             console.log("sendVerificationRequest");
-            if (!serverEnv().RESEND_API_KEY) {
-              console.log(`Login link: ${url}`);
-            } else {
-              console.log({ identifier, url });
-              const email = LoginLink({ url, email: identifier });
-              console.log({ email });
-              await sendEmail({
-                email: identifier,
-                subject: `Your Cap Login Link`,
-                react: email,
-              });
+            try {
+              const otpCode = await createOTP(identifier);
+
+              if (!serverEnv().RESEND_API_KEY) {
+                console.log(`Login OTP code for ${identifier}: ${otpCode}`);
+              } else {
+                console.log({ identifier, otpCode });
+                const email = OtpCode({ code: otpCode, email: identifier });
+                await sendEmail({
+                  email: identifier,
+                  subject: `Your Cap verification code: ${otpCode}`,
+                  react: email,
+                });
+              }
+            } catch (error) {
+              console.error("Failed to create OTP:", error);
+              throw new Error(
+                error instanceof Error
+                  ? error.message
+                  : "Failed to send verification code"
+              );
             }
           },
+          maxAge: 10 * 60,
         }),
       ];
 
@@ -97,6 +163,7 @@ export const authOptions = (): NextAuthOptions => {
           sameSite: "none",
           path: "/",
           secure: true,
+          maxAge: 30 * 24 * 60 * 60,
         },
       },
     },
@@ -126,6 +193,38 @@ export const authOptions = (): NextAuthOptions => {
       },
     },
     callbacks: {
+      async signIn({ user, account }) {
+        if (account?.provider === "otp" && user) {
+          const [existingUser] = await db()
+            .select()
+            .from(users)
+            .where(eq(users.id, user.id))
+            .limit(1);
+
+          if (existingUser && !existingUser.activeOrganizationId) {
+            const organizationId = nanoId();
+
+            await db().insert(organizations).values({
+              id: organizationId,
+              name: "My Organization",
+              ownerId: user.id,
+            });
+
+            await db().insert(organizationMembers).values({
+              id: nanoId(),
+              userId: user.id,
+              organizationId: organizationId,
+              role: "owner",
+            });
+
+            await db()
+              .update(users)
+              .set({ activeOrganizationId: organizationId })
+              .where(eq(users.id, user.id));
+          }
+        }
+        return true;
+      },
       async session({ token, session }) {
         if (!session.user) return session;
 
