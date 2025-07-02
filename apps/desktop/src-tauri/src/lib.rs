@@ -1601,6 +1601,41 @@ async fn seek_to(editor_instance: WindowEditorInstance, frame_number: u32) -> Re
 
 #[tauri::command]
 #[specta::specta]
+async fn get_mic_waveforms(editor_instance: WindowEditorInstance) -> Result<Vec<Vec<f32>>, String> {
+    let mut out = Vec::new();
+
+    for segment in editor_instance.segments.iter() {
+        if let Some(audio) = &segment.audio {
+            out.push(audio::get_waveform(audio));
+        } else {
+            out.push(Vec::new());
+        }
+    }
+
+    Ok(out)
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn get_system_audio_waveforms(
+    editor_instance: WindowEditorInstance,
+) -> Result<Vec<Vec<f32>>, String> {
+    let mut out = Vec::new();
+
+    for segment in editor_instance.segments.iter() {
+        if let Some(audio) = &segment.system_audio {
+            out.push(audio::get_waveform(audio));
+        } else {
+            out.push(Vec::new());
+        }
+    }
+
+    Ok(out)
+}
+
+// keep this async otherwise opening windows may hang on windows
+#[tauri::command]
+#[specta::specta]
 async fn show_window(app: AppHandle, window: ShowCapWindow) -> Result<(), String> {
     window.show(&app).await.unwrap();
     Ok(())
@@ -1729,6 +1764,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             open_file_path,
             get_video_metadata,
             create_editor_instance,
+            get_mic_waveforms,
+            get_system_audio_waveforms,
             start_playback,
             stop_playback,
             set_playhead_position,

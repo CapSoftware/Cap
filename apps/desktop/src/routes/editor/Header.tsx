@@ -5,7 +5,14 @@ import { remove } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
-import { ComponentProps, createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
+import {
+  ComponentProps,
+  createEffect,
+  createSignal,
+  onCleanup,
+  onMount,
+  Show,
+} from "solid-js";
 
 import { Button } from "@cap/ui-solid";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
@@ -44,7 +51,7 @@ export function Header() {
     meta,
     exportState,
     setExportState,
-    customDomain
+    customDomain,
   } = useEditorContext();
 
   let unlistenTitlebar: UnlistenFn | undefined;
@@ -95,11 +102,11 @@ export function Header() {
         />
 
         <div class="flex flex-row items-center">
-          <Tooltip
-            disabled={!truncated()}
-            content={meta().prettyName}
-          >
-            <p ref={prettyNameRef} class="text-sm truncate text-gray-12 max-w-[300px] cursor-default">
+          <Tooltip disabled={!truncated()} content={meta().prettyName}>
+            <p
+              ref={prettyNameRef}
+              class="text-sm truncate text-gray-12 max-w-[300px] cursor-default"
+            >
               {meta().prettyName}
             </p>
           </Tooltip>
@@ -167,7 +174,7 @@ export function Header() {
           leftIcon={<IconCapRedo class="w-5" />}
         />
         <div data-tauri-drag-region class="flex-1 h-full" />
-        <Show when={customDomain()}>
+        <Show when={customDomain.data}>
           <ShareButton />
         </Show>
         <Button
