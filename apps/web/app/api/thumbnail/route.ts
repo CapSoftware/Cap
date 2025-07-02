@@ -60,43 +60,45 @@ export async function GET(request: NextRequest) {
 
   const { video } = result;
   const prefix = `${userId}/${videoId}/`;
-
+  const screenshotPath = `${prefix}screenshot/screen-capture.jpg`;
   let thumbnailUrl: string;
 
-  if (!result.bucket || video.awsBucket === serverEnv().CAP_AWS_BUCKET) {
-    thumbnailUrl = `${S3_BUCKET_URL}/${prefix}screenshot/screen-capture.jpg`;
+  const usePathStyle = serverEnv().S3_PATH_STYLE;
+  const customBucketUrl = serverEnv().CAP_AWS_BUCKET_URL;
+  const endpoint = serverEnv().CAP_AWS_ENDPOINT;
+
+  // Handle path-style URLs
+  if (usePathStyle && endpoint && video.awsBucket) {
+    thumbnailUrl = `${endpoint}/${video.awsBucket}/${screenshotPath}`;
     return new Response(JSON.stringify({ screen: thumbnailUrl }), {
       status: 200,
       headers: getHeaders(origin),
     });
   }
 
-  const bucketProvider = await createBucketProvider(result.bucket);
-
-  try {
-    const listResponse = await bucketProvider.listObjects({
-      prefix: prefix,
+  // Handle virtual-hosted/subdomain style URLs
+  if (!usePathStyle && customBucketUrl) {
+    thumbnailUrl = `${customBucketUrl}/${screenshotPath}`;
+    return new Response(JSON.stringify({ screen: thumbnailUrl }), {
+      status: 200,
+      headers: getHeaders(origin),
     });
-    const contents = listResponse.Contents || [];
+  }
 
-    const thumbnailKey = contents.find((item: any) =>
-      item.Key?.endsWith("screen-capture.jpg")
-    )?.Key;
 
-    if (!thumbnailKey) {
-      return new Response(
-        JSON.stringify({
-          error: true,
-          message: "No thumbnail found for this video",
-        }),
-        {
-          status: 404,
-          headers: getHeaders(origin),
-        }
-      );
-    }
+  // Fallback if no custom URL/endpoint is configured
+  if (!result.bucket || video.awsBucket === serverEnv().CAP_AWS_BUCKET) {
+    thumbnailUrl = `${S3_BUCKET_URL}/${screenshotPath}`;
+    return new Response(JSON.stringify({ screen: thumbnailUrl }), {
+      status: 200,
+      headers: getHeaders(origin),
+    });
+  }
 
-    thumbnailUrl = await bucketProvider.getSignedObjectUrl(thumbnailKey);
+  // Fallback for other custom S3 setups that require pre-signed URLs
+  const bucketProvider = await createBucketProvider(result.bucket);
+  try {
+    thumbnailUrl = await bucketProvider.getSignedObjectUrl(screenshotPath);
   } catch (error) {
     return new Response(
       JSON.stringify({
