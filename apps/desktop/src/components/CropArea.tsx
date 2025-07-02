@@ -9,6 +9,7 @@ import {
 import { type as ostype } from "@tauri-apps/plugin-os";
 import {
   type ParentProps,
+  batch,
   createEffect,
   createMemo,
   createRoot,
@@ -24,10 +25,10 @@ import {
 import { createStore } from "solid-js/store";
 import { Transition } from "solid-transition-group";
 import { generalSettingsStore } from "~/store";
-import { Box, type Ratio } from "~/utils/crop/controller";
+import { Box, type Ratio } from "~/utils/cropController";
 import { type XY, commands } from "~/utils/tauri";
 import CropAreaRenderer from "./CropAreaRenderer";
-import { CropController } from "~/utils/crop/controller";
+import { CropController } from "~/utils/cropController";
 
 type Direction = "n" | "e" | "s" | "w" | "nw" | "ne" | "se" | "sw";
 type HandleSide = {
@@ -237,17 +238,17 @@ export default function Cropper(
     controller.options.aspectRatio ? 60 : 40
   );
 
-  // createEffect(() => {
-  //   if (!interactionState.dragging) return;
-  //   const snapEl = snapRatioEl;
-  //   if (!snapEl) return;
+  createEffect(() => {
+    if (!interactionState.dragging) return;
+    const snapEl = snapRatioEl;
+    if (!snapEl) return;
 
-  //   const scaled = scaledCrop();
-  //   snapEl.style.top = `${scaled.y + 10}px`;
-  //   snapEl.style.left = `${
-  //     scaled.x + scaled.x / 2 - snapRatioElementWidthPx() / 2
-  //   }px`;
-  // });
+    const scaled = scaledCrop();
+    snapEl.style.top = `${scaled.y + 10}px`;
+    snapEl.style.left = `${
+      scaled.x + scaled.width / 2 - snapRatioElementWidthPx() / 2
+    }px`;
+  });
 
   function handleDragStart(e: MouseEvent) {
     if (gestureState.isTrackpadGesture) return; // Don't start drag if we're in a trackpad gesture
@@ -274,8 +275,8 @@ export default function Cropper(
           const dy = (e.clientY - lastValidPos.y) / scale.y;
 
           box.move(
-            clamp(box.x + dx, 0, logical.x - box.width),
-            clamp(box.y + dy, 0, logical.y - box.height)
+            Math.round(clamp(box.x + dx, 0, logical.x - box.width)),
+            Math.round(clamp(box.y + dy, 0, logical.y - box.height))
           );
 
           const newBox = box;
@@ -421,17 +422,265 @@ export default function Cropper(
     });
   }
 
+  function handleResizeStartTouch(event: TouchEvent, dir: Direction) {
+    if (event.touches.length !== 1) return;
+    event.stopPropagation();
+    const touch = event.touches[0];
+    handleResizeStart(touch.clientX, touch.clientY, dir);
+  }
+
+  function handleTouchStart(event: TouchEvent) {
+    if (event.touches.length === 2) {
+      // Initialize pinch zoom
+      const distance = distanceOf(event.touches[0], event.touches[1]);
+
+      // Initialize touch center
+      const centerX = (event.touches[0].clientX + event.touches[1].clientX) / 2;
+      const centerY = (event.touches[0].clientY + event.touches[1].clientY) / 2;
+      const crop = controller.crop();
+
+      batch(() => {
+        setGestureState("initialPinchDistance", distance);
+        setGestureState("initialSize", {
+          width: crop.width,
+          height: crop.height,
+        });
+        setGestureState("lastTouchCenter", { x: centerX, y: centerY });
+      });
+    } else if (event.touches.length === 1) {
+      // Handle single touch as drag
+      batch(() => {
+        setInteractionState("dragging", true);
+        setGestureState("lastTouchCenter", {
+          x: event.touches[0].clientX,
+          y: event.touches[0].clientY,
+        });
+      });
+    }
+  }
+
+  function handleTouchMove(event: TouchEvent) {
+    const box = Box.fromBounds(controller.crop());
+    const crop = controller.crop();
+    const logicalMax = controller.logicalMaxSize();
+
+    if (event.touches.length === 2) {
+      // Handle pinch zoom
+      const currentDistance = distanceOf(event.touches[0], event.touches[1]);
+      const scale = currentDistance / gestureState.initialPinchDistance;
+      const logicalMin = controller.logicalMinSize();
+
+      // Calculate new dimensions while maintaining aspect ratio
+      const currentRatio = crop.width / crop.height;
+      let newWidth = clamp(
+        gestureState.initialSize.width * scale,
+        logicalMin.x,
+        logicalMax.x
+      );
+      let newHeight = newWidth / currentRatio;
+
+      // Adjust if height exceeds bounds
+      if (newHeight < logicalMin.y || newHeight > logicalMax.y) {
+        newHeight = clamp(newHeight, logicalMin.y, logicalMax.y);
+        newWidth = newHeight * currentRatio;
+      }
+
+      // Resize from center
+      box.resize(newWidth, newHeight, ORIGIN_CENTER);
+
+      // Handle two-finger pan
+      const centerX = (event.touches[0].clientX + event.touches[1].clientX) / 2;
+      const centerY = (event.touches[0].clientY + event.touches[1].clientY) / 2;
+
+      if (gestureState.lastTouchCenter) {
+        const scaleFactors = logicalScale();
+        const dx = (centerX - gestureState.lastTouchCenter.x) / scaleFactors.x;
+        const dy = (centerY - gestureState.lastTouchCenter.y) / scaleFactors.y;
+
+        box.move(
+          clamp(box.x + dx, 0, logicalMax.x - box.width),
+          clamp(box.y + dy, 0, logicalMax.y - box.height)
+        );
+      }
+
+      setGestureState("lastTouchCenter", { x: centerX, y: centerY });
+    } else if (event.touches.length === 1 && interactionState.dragging) {
+      // Handle single touch drag
+      const scaleFactors = logicalScale();
+
+      if (gestureState.lastTouchCenter) {
+        const dx =
+          (event.touches[0].clientX - gestureState.lastTouchCenter.x) /
+          scaleFactors.x;
+        const dy =
+          (event.touches[0].clientY - gestureState.lastTouchCenter.y) /
+          scaleFactors.y;
+
+        box.move(
+          clamp(box.x + dx, 0, logicalMax.x - box.width),
+          clamp(box.y + dy, 0, logicalMax.y - box.height)
+        );
+      }
+
+      setGestureState("lastTouchCenter", {
+        x: event.touches[0].clientX,
+        y: event.touches[0].clientY,
+      });
+    }
+
+    controller.uncheckedSetCrop(box.toBounds());
+  }
+
+  function handleTouchEnd(event: TouchEvent) {
+    if (event.touches.length === 0) {
+      batch(() => {
+        setInteractionState("dragging", false);
+        setGestureState("lastTouchCenter", null);
+      });
+    } else if (event.touches.length === 1) {
+      setGestureState("lastTouchCenter", {
+        x: event.touches[0].clientX,
+        y: event.touches[0].clientY,
+      });
+    }
+  }
+
+  let pressedKeys = new Set<string>([]);
+  let lastKeyHandleFrame: number | null = null;
+
+  function handleKeyUp() {
+    pressedKeys.clear();
+    lastKeyHandleFrame = null;
+  }
+
+  function handleKeyDown(e: KeyboardEvent) {
+    if (interactionState.dragging) return;
+    const dir = KEY_MAPPINGS.get(e.key);
+    if (!dir) return;
+    e.preventDefault();
+    pressedKeys.add(e.key);
+    const logicalMax = controller.logicalMaxSize();
+    const logicalMin = controller.logicalMinSize();
+    const scaleFactors = logicalScale();
+
+    if (lastKeyHandleFrame) return;
+    lastKeyHandleFrame = requestAnimationFrame(() => {
+      const box = Box.fromBounds(controller.crop());
+      const moveDelta = e.shiftKey ? 50 : 5;
+      const origin = e.altKey ? ORIGIN_CENTER : { x: 0, y: 0 };
+
+      for (const key of pressedKeys) {
+        const dir = KEY_MAPPINGS.get(key);
+        if (!dir) continue;
+
+        const isUpKey = dir === "n";
+        const isLeftKey = dir === "w";
+        const isDownKey = dir === "s";
+        const isRightKey = dir === "e";
+
+        if (e.metaKey || e.ctrlKey) {
+          const scaleMultiplier = e.altKey ? 2 : 1;
+
+          let newWidth = box.width;
+          let newHeight = box.height;
+
+          if (isLeftKey || isRightKey) {
+            newWidth = clamp(
+              isLeftKey
+                ? box.width - moveDelta * scaleMultiplier
+                : box.width + moveDelta * scaleMultiplier,
+              logicalMin.x,
+              logicalMax.x
+            );
+          }
+
+          if (isUpKey || isDownKey) {
+            newHeight = clamp(
+              isUpKey
+                ? box.height - moveDelta * scaleMultiplier
+                : box.height + moveDelta * scaleMultiplier,
+              logicalMin.y,
+              logicalMax.y
+            );
+          }
+
+          box.resize(newWidth, newHeight, origin);
+        } else {
+          const dx =
+            (isRightKey ? moveDelta : isLeftKey ? -moveDelta : 0) /
+            scaleFactors.x;
+          const dy =
+            (isDownKey ? moveDelta : isUpKey ? -moveDelta : 0) / scaleFactors.y;
+
+          box.move(
+            clamp(box.x + dx, 0, logicalMax.x - box.width),
+            clamp(box.y + dy, 0, logicalMax.y - box.height)
+          );
+        }
+      }
+
+      if (effectiveAspectRatio())
+        box.constrainToRatio(effectiveAspectRatio()!, origin);
+      box.constrainToBoundary(logicalMax.x, logicalMax.y, origin);
+
+      controller.uncheckedSetCrop(box.toBounds());
+
+      pressedKeys.clear();
+      lastKeyHandleFrame = null;
+    });
+  }
+
+  function handleWheel(event: WheelEvent) {
+    event.preventDefault();
+    const box = Box.fromBounds(controller.crop());
+    const logicalMax = controller.logicalMaxSize();
+    const logicalMin = controller.logicalMinSize();
+
+    if (event.ctrlKey) {
+      setGestureState("isTrackpadGesture", true);
+
+      const velocity = Math.max(0.001, Math.abs(event.deltaY) * 0.001);
+      const scale = 1 - event.deltaY * velocity;
+
+      box.resize(
+        clamp(box.width * scale, logicalMin.x, logicalMax.x),
+        clamp(box.height * scale, logicalMin.y, logicalMax.y),
+        ORIGIN_CENTER
+      );
+
+      if (effectiveAspectRatio())
+        box.constrainToRatio(effectiveAspectRatio()!, ORIGIN_CENTER);
+      box.constrainToBoundary(logicalMax.x, logicalMax.y, ORIGIN_CENTER);
+
+      setTimeout(() => setGestureState("isTrackpadGesture", false), 100);
+      setAspectState("snappedRatio", null);
+    } else {
+      const velocity = Math.max(1, Math.abs(event.deltaY) * 0.01);
+      const scaleFactors = logicalScale();
+      const dx = (-event.deltaX * velocity) / scaleFactors.x;
+      const dy = (-event.deltaY * velocity) / scaleFactors.y;
+
+      box.move(
+        Math.round(clamp(box.x + dx, 0, logicalMax.x - box.width)),
+        Math.round(clamp(box.y + dy, 0, logicalMax.y - box.height))
+      );
+    }
+
+    controller.uncheckedSetCrop(box.toBounds());
+  }
+
   return (
     <div
       aria-label="Crop area"
       ref={containerRef}
       class={`relative h-full w-full overflow-hidden overscroll-contain *:overscroll-none ${props.class}`}
       style={{ cursor: interactionState.cursorStyle ?? "auto" }}
-      // onWheel={handleWheel}
-      // onTouchStart={handleTouchStart}
-      // onTouchMove={handleTouchMove}
-      // onTouchEnd={handleTouchEnd}
-      // onKeyDown={handleKeyDown}
+      onWheel={handleWheel}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      onKeyDown={handleKeyDown}
+      onKeyUp={handleKeyUp}
       tabIndex={0}
       onContextMenu={async (e) => {
         e.preventDefault();
@@ -484,9 +733,8 @@ export default function Cropper(
                   handleResizeStart(e.clientX, e.clientY, handle.direction);
                   setInteractionState("cursorStyle", handle.cursor);
                 }}
-                onTouchStart={
-                  (e) => {}
-                  // handleResizeStartTouch(e, handle.direction)
+                onTouchStart={(e) =>
+                  handleResizeStartTouch(e, handle.direction)
                 }
               />
             ) : (
@@ -527,9 +775,8 @@ export default function Cropper(
                   handleResizeStart(e.clientX, e.clientY, handle.direction);
                   setInteractionState("cursorStyle", handle.cursor);
                 }}
-                onTouchStart={
-                  (e) => {}
-                  // handleResizeStartTouch(e, handle.direction)
+                onTouchStart={(e) =>
+                  handleResizeStartTouch(e, handle.direction)
                 }
               />
             );

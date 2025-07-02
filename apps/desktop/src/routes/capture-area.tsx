@@ -8,11 +8,10 @@ import {
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { Transition } from "solid-transition-group";
-import Cropper from "~/components/CropperOLD";
 import CropArea from "~/components/CropArea";
 import { createOptionsQuery } from "~/utils/queries";
 import { type Crop } from "~/utils/tauri";
-import { createCropController, CropBounds } from "~/utils/crop/controller";
+import { createCropController, CropBounds } from "~/utils/cropController";
 
 export default function CaptureArea() {
   const { rawOptions, setOptions } = createOptionsQuery();

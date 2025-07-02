@@ -2,7 +2,6 @@ import { createStore, SetStoreFunction, type Store } from "solid-js/store";
 import {
   createSignal,
   createMemo,
-  batch,
   type Accessor,
   createEffect,
   on,
@@ -99,6 +98,8 @@ export function createCropController(
   };
 
   const uncheckedSetCrop = (bounds: CropBounds) => {
+    console.log(`Setting unchecked: ${JSON.stringify(bounds)}`);
+
     box.setFromBounds(bounds);
     setCropBounds(bounds);
   };
@@ -272,10 +273,10 @@ export class Box {
     const fromX = this.x + this.width * origin.x;
     const fromY = this.y + this.height * origin.y;
 
-    this.x = fromX - newWidth * origin.x;
-    this.y = fromY - newHeight * origin.y;
-    this.width = newWidth;
-    this.height = newHeight;
+    this.x = Math.round(fromX - newWidth * origin.x);
+    this.y = Math.round(fromY - newHeight * origin.y);
+    this.width = Math.round(newWidth);
+    this.height = Math.round(newHeight);
 
     return this;
   }
@@ -288,10 +289,10 @@ export class Box {
 
   move(x: number | null, y: number | null): Box {
     if (x !== null) {
-      this.x = x;
+      this.x = Math.round(x);
     }
     if (y !== null) {
-      this.y = y;
+      this.y = Math.round(y);
     }
     return this;
   }
