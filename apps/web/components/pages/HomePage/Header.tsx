@@ -177,7 +177,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
             custom={6}
             variants={fadeIn}
           >
-            <p className="mb-2 text-sm italic text-gray-10">
+            <p className="mb-4 text-sm italic text-gray-10">
               Trusted by <strong>10,000+</strong> teams, builders and creators
             </p>
             <LogoMarquee />
