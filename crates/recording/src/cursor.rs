@@ -172,14 +172,12 @@ pub fn spawn_cursor_recorder(
 
                 // Clamp values to ensure they're within valid range
                 let x = if x.is_nan() || x.is_infinite() {
-                    debug!("X coordinate is invalid: {}", x);
                     0.5
                 } else {
                     x
                 };
 
                 let y = if y.is_nan() || y.is_infinite() {
-                    debug!("Y coordinate is invalid: {}", y);
                     0.5
                 } else {
                     y
