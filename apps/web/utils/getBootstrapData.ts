@@ -13,7 +13,6 @@ export const generateId = cache(() => {
 export interface BootstrapData {
   distinctID: string;
   featureFlags: Record<string, string | boolean>;
-  allowedEmails: string[];
 }
 
 export const getBootstrapData = cache(async (): Promise<BootstrapData> => {
@@ -21,7 +20,6 @@ export const getBootstrapData = cache(async (): Promise<BootstrapData> => {
     return {
       distinctID: "",
       featureFlags: {},
-      allowedEmails: [],
     };
 
   let distinct_id = "";
@@ -50,48 +48,9 @@ export const getBootstrapData = cache(async (): Promise<BootstrapData> => {
 
   const flags = await client.getAllFlags(distinct_id);
 
-  let allowedEmails: string[] = [];
-  try {
-    const remoteConfigPayload = await client.getRemoteConfigPayload(
-      "cap-ai-testers"
-    );
-
-    if (remoteConfigPayload) {
-      let parsedPayload = remoteConfigPayload;
-      if (typeof remoteConfigPayload === "string") {
-        try {
-          parsedPayload = JSON.parse(remoteConfigPayload);
-        } catch (parseError) {
-          console.error(
-            "Error parsing remote config payload as JSON:",
-            parseError
-          );
-        }
-      }
-
-      if (
-        parsedPayload &&
-        typeof parsedPayload === "object" &&
-        !Array.isArray(parsedPayload) &&
-        "emails" in parsedPayload
-      ) {
-        const emails = (parsedPayload as { emails: unknown }).emails;
-
-        if (Array.isArray(emails)) {
-          allowedEmails = emails.filter(
-            (email): email is string => typeof email === "string"
-          );
-        }
-      }
-    }
-  } catch (e) {
-    console.error("Error fetching PostHog remote config:", e);
-  }
-
   const bootstrap: BootstrapData = {
     distinctID: distinct_id,
     featureFlags: flags,
-    allowedEmails,
   };
 
   return bootstrap;

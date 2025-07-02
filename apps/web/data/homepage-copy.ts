@@ -182,7 +182,7 @@ export const homepageCopy: HomePageCopy = {
         description: "Comments, reactions, and transcripts keep conversations moving without another meeting. See who watched, get notified on feedback, and turn recordings into actionable next steps. Replace those \"quick sync\" calls for good.",
       },
       {
-        title: "Works on your machine™ (and theirs)",
+        title: "Cross-platform for your entire team",
         description: "Native apps for macOS and Windows that feel at home on each platform. No janky Electron apps or browser extensions. Just fast, reliable recording that works with your existing tools and workflow.",
       },
       {

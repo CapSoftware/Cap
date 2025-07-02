@@ -45,7 +45,6 @@ interface ShareProps {
     processing?: boolean;
   } | null;
   aiGenerationEnabled: boolean;
-  aiUiEnabled: boolean;
 }
 
 const useVideoStatus = (
@@ -142,7 +141,6 @@ export const Share = ({
   views,
   initialAiData,
   aiGenerationEnabled,
-  aiUiEnabled,
 }: ShareProps) => {
   const effectiveDate: Date = data.metadata?.customCreatedAt
     ? new Date(data.metadata.customCreatedAt)
@@ -257,7 +255,6 @@ export const Share = ({
             videoId={data.id}
             aiData={aiData}
             aiGenerationEnabled={aiGenerationEnabled}
-            aiUiEnabled={aiUiEnabled}
           />
         </div>
       </div>
