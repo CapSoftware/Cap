@@ -293,7 +293,6 @@ impl MultipleSegment {
         };
 
         let full_path = meta.path(cursor_path);
-        println!("Loading cursor data from: {:?}", full_path);
 
         // Try to load the cursor data
         match CursorEvents::load_from_file(&full_path) {
