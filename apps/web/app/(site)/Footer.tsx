@@ -101,144 +101,142 @@ export const Footer = () => {
         style={{ boxShadow: "0px 2px 8px rgba(18, 22, 31, 0.02)" }}
         className="mx-auto max-w-[1400px] bg-gray-1 border-[1px] border-gray-200 p-8 lg:p-12 rounded-[20px] mb-10 relative overflow-hidden"
       >
-        <div className="grid relative z-10 grid-cols-1 gap-8 justify-between items-start lg:grid-cols-12">
+        <div className="flex relative z-10 flex-col-reverse items-center">
           {/* Logo Column */}
-          <div className="col-span-12 space-y-2 sm:space-y-4 lg:col-span-5">
-            <Logo className="w-[104px] h-auto" />
+          <div className="flex-1 mt-10 space-y-2 text-center md:mt-0">
+            <Logo className="w-[104px] h-auto mx-auto" />
             <div className="w-full">
               <p className="max-w-sm text-gray-12">
                 Cap is the open source alternative to Loom. Lightweight,
                 powerful, and cross-platform. Record and share in seconds.
               </p>
             </div>
-            <p className="text-gray-10">
+            <p className="pt-4 text-sm text-gray-9">
               © Cap Software, Inc. {new Date().getFullYear()}.
             </p>
-            <div className="flex space-x-3">
-              <a className="text-sm text-gray-10" href="/terms">
+            <div className="flex justify-center pt-6 space-x-10">
+              <a className="text-sm text-gray-8" href="/terms">
                 Terms of Service
               </a>
-              <a className="text-sm text-gray-10" href="/privacy">
+              <a className="text-sm text-gray-8" href="/privacy">
                 Privacy Policy
               </a>
             </div>
           </div>
 
           {/* Links Container Column */}
-          <div className="col-span-12 lg:col-span-7">
-            <div className="grid grid-cols-1 gap-8 xs:grid-cols-2 sm:grid-cols-3">
-              {/* Product Column */}
-              <div className="space-y-4">
-                <h3 className="text-lg font-semibold text-gray-12">Product</h3>
-                <ul className="space-y-2">
-                  {footerLinks.product.map((link, index) => (
-                    <li key={index}>
-                      <Link
-                        className="text-gray-10"
-                        href={link.href}
-                        target={link.isExternal ? "_blank" : undefined}
-                      >
-                        {link.label}
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
+          <div className="grid grid-cols-1 gap-10 w-full md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+            {/* Product Column */}
+            <div className="space-y-2">
+              <h3 className="text-lg font-semibold text-gray-12">Product</h3>
+              <ul className="grid grid-cols-1 gap-2 pt-2">
+                {footerLinks.product.map((link, index) => (
+                  <li key={index}>
+                    <Link
+                      className="text-gray-10"
+                      href={link.href}
+                      target={link.isExternal ? "_blank" : undefined}
+                    >
+                      {link.label}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
 
-                <div className="pt-4">
-                  <h3 className="text-lg font-semibold text-gray-12">
-                    Additional Links
-                  </h3>
-                  <ul className="grid grid-cols-1 gap-2 pt-2">
-                    {footerLinks.additional.map((link, index) => (
-                      <li key={index}>
-                        <Link
-                          className="text-gray-10"
-                          href={link.href}
-                          target={link.isExternal ? "_blank" : undefined}
-                        >
-                          {link.label}
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
+            <div className="space-y-2">
+              <h3 className="text-lg font-semibold text-gray-12">
+                Additional Links
+              </h3>
+              <ul className="grid grid-cols-1 gap-2 pt-2">
+                {footerLinks.additional.map((link, index) => (
+                  <li key={index}>
+                    <Link
+                      className="text-gray-10"
+                      href={link.href}
+                      target={link.isExternal ? "_blank" : undefined}
+                    >
+                      {link.label}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
 
-              {/* Help Column */}
-              <div className="space-y-4">
-                <ul className="space-y-2">
-                  {footerLinks.help.map((link, index) => (
-                    <li key={index}>
-                      <Link
-                        className="text-gray-10"
-                        href={link.href}
-                        target={link.isExternal ? "_blank" : undefined}
-                      >
-                        {link.label}
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
+            {/* Help Column */}
+            <div className="space-y-2">
+              <h3 className="text-lg font-semibold text-gray-12">Cap</h3>
+              <ul className="grid grid-cols-1 gap-2 pt-2">
+                {footerLinks.help.map((link, index) => (
+                  <li key={index}>
+                    <Link
+                      className="text-gray-10"
+                      href={link.href}
+                      target={link.isExternal ? "_blank" : undefined}
+                    >
+                      {link.label}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
 
-                <div className="pt-4">
-                  <h3 className="text-lg font-semibold text-gray-12">
-                    Use Cases
-                  </h3>
-                  <ul className="grid grid-cols-1 gap-2 pt-2">
-                    {footerLinks.useCases.map((link, index) => (
-                      <li key={index}>
-                        <Link
-                          className="text-gray-10"
-                          href={link.href}
-                          target={link.isExternal ? "_blank" : undefined}
-                        >
-                          {link.label}
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
+            <div className="space-y-2">
+              <h3 className="text-lg font-semibold text-gray-12">Use Cases</h3>
+              <ul className="grid grid-cols-1 gap-2 pt-2">
+                {footerLinks.useCases.map((link, index) => (
+                  <li key={index}>
+                    <Link
+                      className="text-gray-10"
+                      href={link.href}
+                      target={link.isExternal ? "_blank" : undefined}
+                    >
+                      {link.label}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
 
-              {/* Socials Column */}
-              <div className="space-y-4">
-                <h3 className="text-lg font-semibold text-gray-12">Socials</h3>
-                <ul className="space-y-2">
-                  {footerLinks.socials.map((link, index) => (
-                    <li key={index}>
-                      <Link
-                        className="text-gray-10"
-                        href={link.href}
-                        target={link.isExternal ? "_blank" : undefined}
-                      >
-                        {link.label}
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
+            {/* Socials Column */}
+            <div className="space-y-2">
+              <h3 className="text-lg font-semibold text-gray-12">Socials</h3>
+              <ul className="grid grid-cols-1 gap-2 pt-2">
+                {footerLinks.socials.map((link, index) => (
+                  <li key={index}>
+                    <Link
+                      className="text-gray-10"
+                      href={link.href}
+                      target={link.isExternal ? "_blank" : undefined}
+                    >
+                      {link.label}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
 
-                <div className="pt-4">
-                  <Link
-                    href="/tools"
-                    className="text-lg font-semibold text-gray-12"
-                  >
-                    Tools
-                  </Link>
-                  <ul className="grid grid-cols-1 gap-2 pt-2">
-                    {footerLinks.tools.map((link, index) => (
-                      <li key={index}>
-                        <Link
-                          className="text-gray-10"
-                          href={link.href}
-                          target={link.isExternal ? "_blank" : undefined}
-                        >
-                          {link.label}
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
+            <div className="space-y-2">
+              <Link
+                href="/tools"
+                className="text-lg font-semibold text-gray-12"
+              >
+                Tools
+              </Link>
+
+              <ul className="grid grid-cols-1 gap-2 pt-2">
+                {footerLinks.tools.map((link, index) => (
+                  <li key={index}>
+                    <Link
+                      className="text-gray-10"
+                      href={link.href}
+                      target={link.isExternal ? "_blank" : undefined}
+                    >
+                      {link.label}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
             </div>
           </div>
         </div>

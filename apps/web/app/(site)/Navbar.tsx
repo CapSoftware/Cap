@@ -169,7 +169,7 @@ export const Navbar = () => {
               <Suspense
                 fallback={
                   <Button
-                    variant="darkgradient"
+                    variant="dark"
                     disabled
                     size="sm"
                     className="w-full font-medium sm:w-auto"
@@ -229,7 +229,7 @@ function LoginOrDashboard() {
   const auth = use(useAuthContext().user);
   return (
     <Button
-      variant="darkgradient"
+      variant="dark"
       href={auth ? "/dashboard" : "/login"}
       size="sm"
       className="w-full font-medium sm:w-auto"

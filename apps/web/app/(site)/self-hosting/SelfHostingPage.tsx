@@ -39,7 +39,7 @@ export const SelfHostingPage = () => {
           </div>
           <div className="flex flex-col justify-center items-center mb-5 space-y-2 fade-in-up animate-delay-2 sm:flex-row sm:space-y-0 sm:space-x-2">
             <Button
-              variant="radialblue"
+              variant="blue"
               href="#features"
               size="lg"
               className="flex justify-center items-center w-full font-medium text-md sm:w-auto"

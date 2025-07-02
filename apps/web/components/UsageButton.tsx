@@ -29,14 +29,14 @@ export const UsageButton = memo(
               className={clsx(
                 "overflow-hidden truncate",
                 sidebarCollapsed
-                  ? "p-0 w-10 h-10 rounded-full min-w-10"
+                  ? "p-0 w-10 h-10 rounded-full min-w-[unset] max-w-10"
                   : "w-full"
               )}
-              variant="primary"
+              variant="blue"
             >
               <FontAwesomeIcon
                 className={clsx(
-                  "text-white",
+                  "text-white size-4",
                   sidebarCollapsed ? "mr-0" : "mr-1"
                 )}
                 icon={faCheck}
@@ -77,7 +77,9 @@ const ProRiveButton = memo(
     });
 
     return (
-      <div
+      <Button
+        variant="blue"
+        size="lg"
         onMouseEnter={() => {
           if (rive) {
             rive.stop();
@@ -92,8 +94,8 @@ const ProRiveButton = memo(
         }}
         className={clsx(
           "flex overflow-visible relative gap-3 justify-evenly items-center cursor-pointer",
-          "mx-auto bg-blue-600 rounded-full transition-colors hover:bg-blue-700",
-          sidebarCollapsed ? "py-0 h-[45px] min-w-[unset]" : "py-3 w-full h-fit"
+          "mx-auto",
+          sidebarCollapsed ? "py-0 h-10 min-w-[unset]" : "py-3 w-full h-fit"
         )}
         onClick={() => {
           setUpgradeModalOpen(true);
@@ -103,7 +105,7 @@ const ProRiveButton = memo(
         <ProRive
           className={clsx(
             sidebarCollapsed
-              ? "bottom-[4px] absolute h-[45px] w-[68px]"
+              ? "bottom-[4px] h-10 absolute w-[68px]"
               : "absolute w-[90px] h-[66px] bottom-[-3px] left-[-20px]",
             "scale-[0.8]"
           )}
@@ -113,7 +115,7 @@ const ProRiveButton = memo(
             Upgrade to Pro
           </p>
         ) : null}
-      </div>
+      </Button>
     );
   }
 );

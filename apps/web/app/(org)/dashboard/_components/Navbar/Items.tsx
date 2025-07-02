@@ -21,6 +21,8 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@cap/ui";
+import CapAIBox from "./CapAIBox";
+import { AnimatePresence } from "framer-motion";
 import { classNames } from "@cap/utils";
 import { faBuilding } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -36,7 +38,6 @@ import { CapIcon } from "../AnimatedIcons/Cap";
 import { CogIcon, CogIconHandle } from "../AnimatedIcons/Cog";
 import { updateActiveOrganization } from "./server";
 import SpacesList from "./SpacesList";
-
 
 interface Props {
   toggleMobileNav?: () => void;
@@ -88,6 +89,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
   const [createLoading, setCreateLoading] = useState(false);
   const [organizationName, setOrganizationName] = useState("");
   const isOwner = activeOrg?.organization.ownerId === user.id;
+  const [openAIDialog, setOpenAIDialog] = useState(false);
 
   const isPathActive = (path: string) => pathname.includes(path);
 
@@ -320,6 +322,25 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
           <SpacesList toggleMobileNav={() => toggleMobileNav?.()} />
         </div>
         <div className="pb-4 mt-auto w-full">
+          <AnimatePresence>
+            {!sidebarCollapsed && (
+              <motion.div
+                initial={{ scale: 0 }}
+                animate={{ scale: 1 }}
+                exit={{ scale: 0 }}
+                transition={{
+                  type: "spring",
+                  bounce: 0.2,
+                  duration: 0.2,
+                }}
+              >
+                <CapAIBox
+                  openAIDialog={openAIDialog}
+                  setOpenAIDialog={setOpenAIDialog}
+                />
+              </motion.div>
+            )}
+          </AnimatePresence>
           <UsageButton
             toggleMobileNav={() => toggleMobileNav?.()}
             subscribed={userIsSubscribed}

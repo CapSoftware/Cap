@@ -45,7 +45,8 @@ export default async function sitemap() {
   // Add blog post routes
   const blogPosts = getBlogPosts();
   const blogRoutes = blogPosts.map((post) => {
-    const publishDate = new Date(post.metadata.publishedAt);
+    const publishedAt = 'publishedAt' in post.metadata ? post.metadata.publishedAt : new Date().toISOString();
+    const publishDate = new Date(publishedAt);
     publishDate.setHours(9, 0, 0, 0); // Set time to 9:00 AM
     return {
       path: `/blog/${post.slug}`,
