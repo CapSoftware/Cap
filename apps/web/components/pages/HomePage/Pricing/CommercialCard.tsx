@@ -158,11 +158,18 @@ export const CommercialCard = () => {
           </div>
         </div>
 
-        <ul className="mb-8 space-y-3 text-base">
+        <ul className="mb-8 space-y-4">
           {homepageCopy.pricing.commercial.features.map((feature) => (
-            <li key={feature} className="flex items-center text-gray-12">
-              <FontAwesomeIcon icon={faCheck} className="mr-2 text-gray-12" />
-              {feature}
+            <li
+              key={feature}
+              className="flex items-start text-base text-gray-12"
+            >
+              <FontAwesomeIcon
+                icon={faCheck}
+                className="mr-3 mt-0.5 text-gray-12 flex-shrink-0"
+                style={{ fontSize: "18px", minWidth: "18px" }}
+              />
+              <span className="leading-6">{feature}</span>
             </li>
           ))}
         </ul>

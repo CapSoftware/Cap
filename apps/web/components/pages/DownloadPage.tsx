@@ -113,7 +113,9 @@ export const DownloadPage = () => {
           </div>
         </div>
 
-        <PlatformIcons />
+        <div className="flex justify-center items-center fade-in-up animate-delay-2">
+          <PlatformIcons />
+        </div>
 
         <div className="pb-4 mt-6 fade-in-up animate-delay-2">
           <h3 className="mb-2 text-sm font-medium text-gray-8">

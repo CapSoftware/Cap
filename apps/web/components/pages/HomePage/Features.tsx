@@ -2,6 +2,7 @@ import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import clsx from "clsx";
 import { memo } from "react";
 import { homepageCopy } from "../../../data/homepage-copy";
+import { Button } from "@cap/ui";
 
 type Feature = {
   title: string;
@@ -195,6 +196,18 @@ const Features = () => {
             />
           ))}
         </div>
+      </div>
+
+      <div className="mt-10">
+        {/* View all features button */}
+        <Button
+          href="/features"
+          variant="primary"
+          size="lg"
+          className="inline-flex"
+        >
+          View all features
+        </Button>
       </div>
     </div>
   );

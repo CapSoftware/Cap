@@ -22,9 +22,9 @@ export const getDownloadButtonText = (
   if (loading) {
     return "Download Cap";
   } else if (platform === "windows") {
-    return "Download for Windows (Beta)";
+    return "Download for free";
   } else if (platform === "macos") {
-    return isIntel ? "Download for Apple Intel" : "Download for Apple Silicon";
+    return isIntel ? "Download for free" : "Download for free";
   } else {
     return "Download Cap";
   }
@@ -67,7 +67,7 @@ export const PlatformIcons: React.FC = () => {
             window.location.href = "/download/apple-silicon";
           }}
           className="focus:outline-none"
-          aria-label="Download for Apple Silicon"
+          aria-label="Download for free"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"

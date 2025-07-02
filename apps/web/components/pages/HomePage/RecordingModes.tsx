@@ -44,14 +44,10 @@ const RecordingModes = () => {
   ];
 
   const [activeMode, setActiveMode] = useState<Mode | undefined>(modes[0]);
-  const [hasEverSwitched, setHasEverSwitched] = useState(false);
   const { platform, isIntel } = useDetectPlatform();
   const loading = platform === null;
 
   const handleModeSwitch = (mode: Mode) => {
-    if (activeMode?.name !== mode.name) {
-      setHasEverSwitched(true);
-    }
     setActiveMode(mode);
   };
 
@@ -102,8 +98,7 @@ const RecordingModes = () => {
               }}
             >
               <iframe
-                src={`https://cap.so/embed/9et66p4qsdz0rgh${hasEverSwitched ? "?autoplay=true" : ""
-                  }`}
+                src="https://cap.so/embed/8cq21vmz12tm1zf"
                 frameBorder="0"
                 allowFullScreen
                 style={{
@@ -128,8 +123,7 @@ const RecordingModes = () => {
               }}
             >
               <iframe
-                src={`https://cap.so/embed/xt3nhh0zkdw034h${hasEverSwitched ? "?autoplay=true" : ""
-                  }`}
+                src="https://cap.so/embed/qk8gt56e1q1r735"
                 frameBorder="0"
                 allowFullScreen
                 style={{

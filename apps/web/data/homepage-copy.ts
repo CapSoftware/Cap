@@ -122,13 +122,13 @@ export interface HomePageCopy {
 export const homepageCopy: HomePageCopy = {
   header: {
     announcement: {
-      text: "Introducing Auto Zoom ✨",
-      href: "https://x.com/richiemcilroy/status/1895526857807733018",
+      text: "🚨 Early Adopter Pricing ends soon!",
+      href: "/pricing",
     },
     variants: {
       1: {
         title: "Beautiful, shareable screen recordings",
-        description: "Cap is the open source Loom alternative that creators, designers, and engineers actually want to use. Open source, cross-platform, and built for how you work.",
+        description: "Cap is the open source alternative to Loom. Lightweight, powerful, and cross-platform. Record and share securely in seconds with custom S3 bucket support. Connect your own domain.",
       },
       2: {
         title: "The screen recorder that respects your workflow",
@@ -140,13 +140,13 @@ export const homepageCopy: HomePageCopy = {
       },
       default: {
         title: "Beautiful, shareable screen recordings",
-        description: "Cap is the open source Loom alternative that creators, designers, and engineers actually want to use. Open source, cross-platform, and built for how you work.",
+        description: "Cap is the open source alternative to Loom. Lightweight, powerful, and cross-platform. Record and share securely in seconds with custom S3 bucket support. Connect your own domain.",
       },
     },
     cta: {
-      primaryButton: "Download for free",
-      secondaryButton: "Download", // Dynamic based on platform
-      freeVersionText: "No credit card required",
+      primaryButton: "Upgrade to Cap Pro",
+      secondaryButton: "Download",
+      freeVersionText: "No credit card required. Get started for free.",
       seeOtherOptionsText: "See pricing",
     },
   },
@@ -175,7 +175,7 @@ export const homepageCopy: HomePageCopy = {
       },
       {
         title: "Privacy by default, sharing by choice",
-        description: "Instant sharing when you need it, local recording when you want it. Share publicly or privately — password protect sensitive recordings or keep them local-only.",
+        description: "Instant sharing when you need it, local recording when you want it. Share publicly or privately. Password protect sensitive recordings or keep them local only.",
       },
       {
         title: "Async collaboration that actually works",
@@ -187,7 +187,7 @@ export const homepageCopy: HomePageCopy = {
       },
       {
         title: "Quality that makes you look professional",
-        description: "4K recording, 60fps capture, and intelligent compression that keeps file sizes reasonable. Auto-enhance removes background noise and balances audio.",
+        description: "4K recording, 60fps capture, and intelligent compression that keeps file sizes reasonable.",
       },
       {
         title: "Truly open source",
@@ -202,7 +202,7 @@ export const homepageCopy: HomePageCopy = {
   testimonials: {
     title: "Loved by builders, trusted by teams",
     subtitle: "Join thousands who've made Cap their daily driver for visual communication.",
-    cta: "Read more stories",
+    cta: "Read more testimonials",
   },
   pricing: {
     title: "Simple, honest pricing",
@@ -212,7 +212,7 @@ export const homepageCopy: HomePageCopy = {
       title: "Desktop License",
       description: "For professionals who want unlimited local recording and editing.",
       features: [
-        "Commercial use rights",
+        "Commercial usage",
         "Unlimited local recordings",
         "Studio Mode with full editor",
         "Export to any format",
@@ -236,6 +236,7 @@ export const homepageCopy: HomePageCopy = {
       features: [
         "Everything in Desktop License",
         "Unlimited cloud storage & bandwidth",
+        "Auto-generated titles, summaries, clickable chapters, and transcriptions for every recording",
         "Custom domain (cap.yourdomain.com)",
         "Password protected shares",
         "Viewer analytics & engagement",
@@ -243,7 +244,7 @@ export const homepageCopy: HomePageCopy = {
         "Custom S3 bucket support",
         "Priority support & early features",
       ],
-      cta: "Start Free Trial",
+      cta: "Get started",
       pricing: {
         annual: 6,
         monthly: 9,
@@ -272,7 +273,7 @@ export const homepageCopy: HomePageCopy = {
       },
       {
         question: "Which platforms do you support?",
-        answer: "Native desktop apps for macOS (Apple Silicon & Intel) and Windows. Web viewer works everywhere. Linux support is in beta. Mobile apps for iOS and Android coming soon.",
+        answer: "Native desktop apps for macOS (Apple Silicon & Intel) and Windows. View your shareable linkes from anywhere.",
       },
       {
         question: "Can I use Cap for commercial purposes?",
@@ -280,7 +281,7 @@ export const homepageCopy: HomePageCopy = {
       },
       {
         question: "Is my data secure?",
-        answer: "Security is core to Cap. End-to-end encryption for cloud storage, SOC 2 Type II compliance in progress, and option to use your own infrastructure. Regular security audits and bug bounty program keep your content safe.",
+        answer: "Security is core to Cap. As an open source project, our code is fully auditable and transparent - you can see exactly how your data is handled. End-to-end encryption for cloud storage, option to use your own infrastructure, and community-driven security reviews keep your content safe.",
       },
       {
         question: "What about GDPR/HIPAA compliance?",
@@ -292,7 +293,7 @@ export const homepageCopy: HomePageCopy = {
     title: "Ready to upgrade how you communicate?",
     buttons: {
       primary: "Download Cap",
-      secondary: "Start Free Trial",
+      secondary: "Started",
     },
   },
 }; 

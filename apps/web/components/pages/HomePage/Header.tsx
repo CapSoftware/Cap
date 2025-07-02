@@ -78,7 +78,6 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
           >
             <Link
               href={homepageCopy.header.announcement.href}
-              target="_blank"
               className="flex gap-2 items-center px-3 py-2 mb-8 bg-white rounded-full border group border-gray-4 w-fit"
             >
               <p className="font-mono text-xs text-gray-12">
@@ -135,7 +134,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
               {getDownloadButtonText(platform, loading, isIntel)}
             </Button>
             <Button
-              variant="primary"
+              variant="radialblue"
               href="/pricing"
               size="lg"
               className="relative z-[20] w-full font-medium sm:w-auto"
@@ -178,6 +177,9 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
             custom={6}
             variants={fadeIn}
           >
+            <p className="text-sm text-gray-10 mb-2 italic">
+              Trusted by <strong>10,000+</strong> teams, builders and creators
+            </p>
             <LogoMarquee />
           </motion.div>
         </div>

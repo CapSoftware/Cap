@@ -28,7 +28,7 @@ const CapAIBox = ({
         >
           <div className="flex justify-between items-center px-3 pb-3 w-full">
             <h3 className="text-sm font-medium text-gray-12">Cap AI</h3>
-            <p className="text-xs text-gray-10">Coming soon</p>
+            <p className="text-xs text-gray-10">Read more</p>
           </div>
           <CapAIArt />
           <div
