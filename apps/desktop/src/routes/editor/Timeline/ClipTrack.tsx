@@ -109,7 +109,7 @@ function WaveformCanvas(props: {
         ctx,
         h,
         props.micWaveform,
-        "rgba(255,255,255,0.3)",
+        "rgba(255,255,255,0.4)",
         project.audio.micVolumeDb
       );
 
