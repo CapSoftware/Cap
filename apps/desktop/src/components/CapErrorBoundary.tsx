@@ -33,6 +33,16 @@ export function CapErrorBoundary(props: ParentProps) {
                 Reload
               </Button>
             </div>
+
+            {import.meta.env.DEV && (
+              <div class="h-0 text-sm">
+                <pre class="text-left mt-8">{`${e.toString()}\n\n${e.stack
+                  ?.toString()
+                  .split("\n")
+                  .slice(0, 10)
+                  .join("\n")}`}</pre>
+              </div>
+            )}
           </div>
         );
       }}

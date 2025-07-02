@@ -1085,6 +1085,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1128,6 +1129,8 @@ dependencies = [
  "ffmpeg-sys-next",
  "flume 0.11.0",
  "futures",
+ "gif",
+ "image 0.25.5",
  "indexmap 2.5.0",
  "nokhwa",
  "nokhwa-bindings-macos",

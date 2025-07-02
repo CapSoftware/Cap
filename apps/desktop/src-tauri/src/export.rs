@@ -1,7 +1,25 @@
 use crate::{get_video_metadata, FramesRendered};
-use cap_export::{ExportSettings, Exporter};
+use cap_export::ExporterBase;
 use cap_project::{RecordingMeta, XY};
+use serde::Deserialize;
+use specta::Type;
 use std::path::PathBuf;
+
+#[derive(Deserialize, Clone, Copy, Debug, Type)]
+#[serde(tag = "format")]
+pub enum ExportSettings {
+    Mp4(cap_export::mp4::Mp4ExportSettings),
+    Gif(cap_export::gif::GifExportSettings),
+}
+
+impl ExportSettings {
+    fn fps(&self) -> u32 {
+        match self {
+            ExportSettings::Mp4(settings) => settings.fps,
+            ExportSettings::Gif(settings) => settings.fps,
+        }
+    }
+}
 
 #[tauri::command]
 #[specta::specta]
@@ -10,31 +28,49 @@ pub async fn export_video(
     progress: tauri::ipc::Channel<FramesRendered>,
     settings: ExportSettings,
 ) -> Result<PathBuf, String> {
-    let exporter = Exporter::builder(project_path).build().await.map_err(|e| {
-        sentry::capture_message(&e.to_string(), sentry::Level::Error);
-        e.to_string()
-    })?;
+    let exporter_base = ExporterBase::builder(project_path)
+        .build()
+        .await
+        .map_err(|e| {
+            sentry::capture_message(&e.to_string(), sentry::Level::Error);
+            e.to_string()
+        })?;
 
-    let total_frames = exporter.total_frames(&settings);
+    let total_frames = exporter_base.total_frames(settings.fps());
 
     let _ = progress.send(FramesRendered {
         rendered_count: 0,
         total_frames,
     });
 
-    exporter
-        .export_mp4(settings, move |frame_index| {
-            // Ensure progress never exceeds total frames
-            let _ = progress.send(FramesRendered {
-                rendered_count: (frame_index + 1).min(total_frames),
-                total_frames,
-            });
-        })
-        .await
-        .map_err(|e| {
-            sentry::capture_message(&e.to_string(), sentry::Level::Error);
-            e.to_string()
-        })
+    match settings {
+        ExportSettings::Mp4(settings) => {
+            settings
+                .export(exporter_base, move |frame_index| {
+                    // Ensure progress never exceeds total frames
+                    let _ = progress.send(FramesRendered {
+                        rendered_count: (frame_index + 1).min(total_frames),
+                        total_frames,
+                    });
+                })
+                .await
+        }
+        ExportSettings::Gif(settings) => {
+            settings
+                .export(exporter_base, move |frame_index| {
+                    // Ensure progress never exceeds total frames
+                    let _ = progress.send(FramesRendered {
+                        rendered_count: (frame_index + 1).min(total_frames),
+                        total_frames,
+                    });
+                })
+                .await
+        }
+    }
+    .map_err(|e| {
+        sentry::capture_message(&e.to_string(), sentry::Level::Error);
+        e.to_string()
+    })
 }
 
 #[derive(Debug, serde::Serialize, specta::Type)]
