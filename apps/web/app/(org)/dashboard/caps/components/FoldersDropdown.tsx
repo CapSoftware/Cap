@@ -5,17 +5,19 @@ import { faCopy, faEllipsis, faPencil, faTrash } from "@fortawesome/free-solid-s
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { RefObject } from "react";
 import { toast } from "sonner";
-import { deleteFolder, duplicateFolder } from "../../folder/[id]/actions";
+import { duplicateFolder } from "../../folder/[id]/actions";
 
 interface FoldersDropdownProps {
   id: string;
   setIsRenaming: (isRenaming: boolean) => void;
   setConfirmDeleteFolderOpen: (open: boolean) => void;
   nameRef: RefObject<HTMLTextAreaElement>;
+  parentId?: string | null;
 }
 
 export const FoldersDropdown = ({
   id,
+  parentId,
   setIsRenaming,
   setConfirmDeleteFolderOpen,
   nameRef,
@@ -54,7 +56,7 @@ export const FoldersDropdown = ({
               icon: faCopy,
               onClick: async () => {
                 try {
-                  await duplicateFolder(id);
+                  await duplicateFolder(id, parentId);
                   toast.success("Folder duplicated successfully");
                 } catch (error) {
                   toast.error("Failed to duplicate folder");

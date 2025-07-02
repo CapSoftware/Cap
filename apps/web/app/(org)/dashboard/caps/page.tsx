@@ -2,15 +2,11 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
   comments,
-  organizationMembers,
-  organizations,
-  sharedVideos,
-  users,
-  videos,
-  spaces,
-  folders,
+  folders, organizations,
+  sharedVideos, users,
+  videos
 } from "@cap/database/schema";
-import { count, desc, eq, sql } from "drizzle-orm";
+import { and, count, desc, eq, isNull, sql } from "drizzle-orm";
 import { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { Caps } from "./Caps";
@@ -135,7 +131,7 @@ export default async function CapsPage({
     .leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
     .leftJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
     .leftJoin(users, eq(videos.ownerId, users.id))
-    .where(eq(videos.ownerId, userId))
+    .where(and(eq(videos.ownerId, userId), isNull(videos.folderId)))
     .groupBy(
       videos.id,
       videos.ownerId,
@@ -158,12 +154,18 @@ export default async function CapsPage({
       id: folders.id,
       name: folders.name,
       color: folders.color,
+      parentId: folders.parentId,
       videoCount: sql<number>`(
-        SELECT COUNT(*) FROM videos WHERE videos.folderId = ${folders.id}
+        SELECT COUNT(*) FROM videos WHERE videos.folderId = folders.id
       )`,
     })
     .from(folders)
-    .where(eq(folders.organizationId, user.activeOrganizationId));
+    .where(
+      and(
+        eq(folders.organizationId, user.activeOrganizationId),
+        isNull(folders.parentId)
+      )
+    );
 
   const processedVideoData = videoData.map((video) => {
     const { effectiveDate, ...videoWithoutEffectiveDate } = video;
@@ -178,13 +180,15 @@ export default async function CapsPage({
       ownerName: video.ownerName ?? "",
       metadata: video.metadata as
         | {
-            customCreatedAt?: string;
-            [key: string]: any;
-          }
+          customCreatedAt?: string;
+          [key: string]: any;
+        }
         | undefined,
       hasPassword: video.hasPassword === 1,
     };
   });
+
+  console.log(foldersData, 'folders')
 
   return (
     <Caps
