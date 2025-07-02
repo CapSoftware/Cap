@@ -1,16 +1,4 @@
 export interface HeaderCopyVariants {
-  1: {
-    title: string;
-    description: string;
-  };
-  2: {
-    title: string;
-    description: string;
-  };
-  3: {
-    title: string;
-    description: string;
-  };
   default: {
     title: string;
     description: string;
@@ -126,18 +114,6 @@ export const homepageCopy: HomePageCopy = {
       href: "/pricing",
     },
     variants: {
-      1: {
-        title: "Beautiful, shareable screen recordings",
-        description: "Cap is the open source alternative to Loom. Lightweight, powerful, and cross-platform. Record and share securely in seconds with custom S3 bucket support. Connect your own domain.",
-      },
-      2: {
-        title: "The screen recorder that respects your workflow",
-        description: "Record, edit, and share in seconds — not minutes. Cap gives you studio-quality recordings without the studio complexity. Own your content, control your data.",
-      },
-      3: {
-        title: "Screen recording with superpowers",
-        description: "Beautiful recordings in one click. Professional editing when you need it. Share instantly or polish to perfection — Cap adapts to how you work, not the other way around.",
-      },
       default: {
         title: "Beautiful, shareable screen recordings",
         description: "Cap is the open source alternative to Loom. Lightweight, powerful, and cross-platform. Record and share securely in seconds with custom S3 bucket support. Connect your own domain.",
