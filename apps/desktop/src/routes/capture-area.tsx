@@ -9,8 +9,10 @@ import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { Transition } from "solid-transition-group";
 import Cropper from "~/components/CropperOLD";
+import CropArea from "~/components/CropArea";
 import { createOptionsQuery } from "~/utils/queries";
 import { type Crop } from "~/utils/tauri";
+import { createCropController, CropBounds } from "~/utils/crop/controller";
 
 export default function CaptureArea() {
   const { rawOptions, setOptions } = createOptionsQuery();
@@ -25,6 +27,11 @@ export default function CaptureArea() {
 
   const setPendingState = (pending: boolean) =>
     webview.emitTo("main", "cap-window://capture-area/state/pending", pending);
+
+  const screenId: number | null =
+    rawOptions.captureTarget.variant === "screen"
+      ? rawOptions.captureTarget.id
+      : null;
 
   let unlisten: () => void | undefined;
   onMount(async () => {
@@ -49,9 +56,23 @@ export default function CaptureArea() {
     });
   });
 
-  const [crop, setCrop] = createStore<Crop>({
-    size: { x: 0, y: 0 },
-    position: { x: 0, y: 0 },
+  const [lastSelectedBounds, setLastSelectedBounds] = makePersisted(
+    createStore<{ screenId: number; bounds: CropBounds }[]>([]),
+    {
+      name: "lastSelectedBounds",
+    }
+  );
+
+  const cropController = createCropController({
+    mappedSize: { x: windowSize().x, y: windowSize().y },
+    // Try to find stored bounds for current screen
+    initialCrop: (() => {
+      if (!screenId) return undefined;
+      return (
+        lastSelectedBounds.find((item) => item.screenId === screenId)?.bounds ??
+        undefined
+      );
+    })(),
   });
 
   async function handleConfirm() {
@@ -59,17 +80,32 @@ export default function CaptureArea() {
     if (target.variant !== "screen") return;
     setPendingState(false);
 
+    const currentBounds = cropController.crop();
+
+    // Store the bounds for this screen
+    if (screenId) {
+      const existingIndex = lastSelectedBounds.findIndex(
+        (item) => item.screenId === screenId
+      );
+      if (existingIndex >= 0) {
+        setLastSelectedBounds(existingIndex, {
+          screenId,
+          bounds: currentBounds,
+        });
+      } else {
+        setLastSelectedBounds([
+          ...lastSelectedBounds,
+          { screenId, bounds: currentBounds },
+        ]);
+      }
+    }
+
     setOptions(
       "captureTarget",
       reconcile({
         variant: "area",
         screen: target.id,
-        bounds: {
-          x: crop.position.x,
-          y: crop.position.y,
-          width: crop.size.x,
-          height: crop.size.y,
-        },
+        bounds: currentBounds,
       })
     );
 
@@ -147,12 +183,9 @@ export default function CaptureArea() {
         exitActiveClass="fade-out animate-out"
       >
         <Show when={visible()}>
-          <Cropper
-            class="transition-all duration-200"
-            value={crop}
-            onCropChange={setCrop}
+          <CropArea
+            controller={cropController}
             showGuideLines={state.showGrid}
-            mappedSize={{ x: windowSize().x, y: windowSize().y }}
           />
         </Show>
       </Transition>

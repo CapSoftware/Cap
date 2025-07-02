@@ -87,6 +87,7 @@ declare global {
   const IconLucideHardDrive: typeof import('~icons/lucide/hard-drive.jsx')['default']
   const IconLucideLayoutGrid: typeof import("~icons/lucide/layout-grid.jsx")["default"]
   const IconLucideLoaderCircle: typeof import('~icons/lucide/loader-circle.jsx')['default']
+  const IconLucideLock: typeof import('~icons/lucide/lock.jsx')['default']
   const IconLucideMessageCircle: typeof import("~icons/lucide/message-circle.jsx")["default"]
   const IconLucideMessageSquare: typeof import("~icons/lucide/message-square.jsx")["default"]
   const IconLucideMessageSquarePlus: typeof import('~icons/lucide/message-square-plus.jsx')['default']

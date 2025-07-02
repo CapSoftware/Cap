@@ -1,5 +1,12 @@
 import { createStore, SetStoreFunction, type Store } from "solid-js/store";
-import { createSignal, createMemo, batch, type Accessor } from "solid-js";
+import {
+  createSignal,
+  createMemo,
+  batch,
+  type Accessor,
+  createEffect,
+  on,
+} from "solid-js";
 
 type Vec2 = { x: number; y: number };
 export type CropBounds = {
@@ -8,6 +15,7 @@ export type CropBounds = {
   width: number;
   height: number;
 };
+export type Ratio = [number, number];
 
 const ORIGIN_CENTER: Vec2 = { x: 0.5, y: 0.5 };
 
@@ -15,7 +23,7 @@ type CropControllerOptions = {
   mappedSize?: Vec2;
   minSize?: Vec2;
   maxSize?: Vec2;
-  aspectRatio?: number;
+  aspectRatio?: Ratio;
   initialCrop?: CropBounds;
 };
 
@@ -24,43 +32,41 @@ export type CropController = {
   setCrop: (bounds: CropBounds) => void;
   options: Store<CropControllerOptions>;
   setOptions: SetStoreFunction<CropControllerOptions>;
+  aspectRatioValue: Accessor<number | null>;
   logicalMaxSize: Accessor<Vec2>;
+  logicalMinSize: Accessor<Vec2>;
   containerSize: Accessor<Vec2>;
   center: (halvedSize?: boolean) => void;
   fill: () => void;
   reset: () => void;
   uncheckedSetCrop: (bounds: CropBounds) => void;
-  // For direct manipulation during events
-  updateBox: (updater: (box: Box) => void) => void;
+  uncheckedUpdateBox: (updater: (currentBox: Box) => Box | null) => void;
+  // Internal lifecycle methods
+  _internalInitController: (containerElement: HTMLElement) => void;
+  _internalCleanupController: () => void;
 };
 
 export function createCropController(
   initialOptions: CropControllerOptions
 ): CropController {
-  const initialBox = initialOptions.initialCrop
+  let box = initialOptions.initialCrop
     ? Box.fromBounds(initialOptions.initialCrop)
     : Box.default();
 
-  const [box, setBox] = createSignal<Box>(initialBox);
+  const [cropBounds, setCropBounds] = createSignal(box as CropBounds);
   const [options, setOptions] = createStore(initialOptions);
   const [containerSize, setContainerSize] = createSignal({ x: 1, y: 1 });
+  const [aspectRatioValue, setAspectRatioValue] = createSignal<number | null>(
+    null
+  );
 
-  // Reactive crop bounds derived from box
-  const crop = createMemo(() => {
-    const currentBox = box();
-    return {
-      x: currentBox.x,
-      y: currentBox.y,
-      width: currentBox.width,
-      height: currentBox.height,
-    };
-  });
+  let resizeObserver: ResizeObserver | null = null;
 
   const logicalMaxSize = createMemo(
     () => options.mappedSize || containerSize()
   );
 
-  const minSize = createMemo(() => {
+  const logicalMinSize = createMemo(() => {
     const logical = logicalMaxSize();
     return {
       x: Math.max(100, options.minSize?.x ?? logical.x * 0.1),
@@ -68,103 +74,157 @@ export function createCropController(
     };
   });
 
-  const applyConstraints = () => {
-    const currentBox = box();
+  const setBoxAndApplyConstraints = (withBox?: Box) => {
+    const newBox = withBox ? withBox : box;
     const currentOptions = options;
     const container = containerSize();
-    const min = minSize();
+    const min = logicalMinSize();
 
-    if (currentOptions.aspectRatio) {
-      currentBox.constrainToRatio(currentOptions.aspectRatio, ORIGIN_CENTER);
+    const ratio = aspectRatioValue();
+    if (ratio) {
+      newBox.constrainToRatio(ratio, ORIGIN_CENTER);
     }
 
-    currentBox.constrainToSize(
+    newBox.constrainToSize(
       currentOptions.maxSize?.x || null,
       currentOptions.maxSize?.y || null,
       min.x,
       min.y,
       ORIGIN_CENTER,
-      currentOptions.aspectRatio
+      ratio
     );
 
-    currentBox.constrainToBoundary(container.x, container.y, ORIGIN_CENTER);
-    setBox(currentBox);
+    newBox.constrainToBoundary(container.x, container.y, ORIGIN_CENTER);
+    setCropBounds(newBox.toBounds());
   };
 
-  const center = (halvedSize = false) => {
-    const currentBox = box();
+  const uncheckedSetCrop = (bounds: CropBounds) => {
+    box.setFromBounds(bounds);
+    setCropBounds(bounds);
+  };
+
+  const setCrop = (bounds: CropBounds) => {
+    box.setFromBounds(bounds);
+    setBoxAndApplyConstraints(box);
+  };
+
+  const fill = () => {
     const container = containerSize();
-    let finalWidth = currentBox.width;
-    let finalHeight = currentBox.height;
+    box.x = 0;
+    box.y = 0;
+    box.width = container.x;
+    box.height = container.y;
+    setCropBounds(box.toBounds());
+    setBoxAndApplyConstraints();
+  };
+
+  const center = (halvedSize = true) => {
+    const container = containerSize();
+    let finalWidth = box.width;
+    let finalHeight = box.height;
 
     if (halvedSize) {
-      finalWidth = currentBox.width / 2;
-      finalHeight = currentBox.height / 2;
-      currentBox.width = finalWidth;
-      currentBox.height = finalHeight;
+      finalWidth = box.width / 2;
+      finalHeight = box.height / 2;
+      box.width = finalWidth;
+      box.height = finalHeight;
     }
 
     const x = container.x / 2 - finalWidth / 2;
     const y = container.y / 2 - finalHeight / 2;
-    currentBox.move(x, y);
-    setBox(currentBox);
+    box.move(x, y);
+    setCropBounds(box.toBounds());
+    setBoxAndApplyConstraints();
   };
 
-  const uncheckedSetCrop = (bounds: CropBounds) => {
-    const currentBox = box();
-    currentBox.setFromBounds(bounds);
-    setBox(currentBox);
-  };
-
-  const setCrop = (bounds: CropBounds) => {
-    const currentBox = box();
-    currentBox.setFromBounds(bounds);
-    setBox(currentBox);
-    applyConstraints();
-  };
-
-  const fill = () => {
-    const currentBox = box();
-    const container = containerSize();
-    currentBox.x = 0;
-    currentBox.y = 0;
-    currentBox.width = container.x;
-    currentBox.height = container.y;
-    setBox(currentBox);
-    applyConstraints();
-  };
-
-  const reset = () => {
-    let newBox: Box;
-    if (options.initialCrop) {
-      newBox = Box.fromBounds(options.initialCrop);
-    } else {
-      newBox = Box.default();
+  const uncheckedUpdateBox = (updater: (currentBox: Box) => Box | null) => {
+    const newBox = updater(box);
+    if (newBox) {
+      setCropBounds(newBox.toBounds());
+      box = newBox;
     }
-    setBox(newBox);
-    center();
-    applyConstraints();
   };
 
-  // For direct manipulation during events (like dragging)
-  const updateBox = (updater: (box: Box) => void) => {
-    const currentBox = box();
-    updater(currentBox);
-    setBox(currentBox);
+  createEffect(
+    on(
+      () => [options.aspectRatio, options.minSize, options.maxSize],
+      () => {
+        setBoxAndApplyConstraints();
+      }
+    )
+  );
+
+  createEffect(
+    on(
+      () => options.aspectRatio,
+      () => {
+        if (options.aspectRatio) {
+          setAspectRatioValue(
+            options.aspectRatio![0] / options.aspectRatio![1]
+          );
+        }
+      }
+    )
+  );
+
+  const initBox = () => {
+    let newBox: Box;
+    if (initialOptions.initialCrop) {
+      newBox = Box.fromBounds(initialOptions.initialCrop);
+      setCropBounds(newBox.toBounds());
+      box = newBox;
+    } else {
+      const container = containerSize();
+      const width = container.x / 2;
+      const height = container.y / 2;
+      newBox = Box.fromBounds({
+        x: container.x / 4,
+        y: container.y / 4,
+        width,
+        height,
+      });
+      box = newBox;
+    }
+    setBoxAndApplyConstraints();
+  };
+
+  const init = (containerElement: HTMLElement) => {
+    const updateSize = () => {
+      setContainerSize({
+        x: containerElement.clientWidth,
+        y: containerElement.clientHeight,
+      });
+    };
+    updateSize();
+    resizeObserver = new ResizeObserver(updateSize);
+    resizeObserver.observe(containerElement);
+
+    initBox();
+  };
+
+  const cleanup = () => {
+    if (resizeObserver) {
+      resizeObserver.disconnect();
+      resizeObserver = null;
+    }
   };
 
   return {
-    crop,
+    crop: cropBounds,
     setCrop,
     options,
     setOptions,
+    aspectRatioValue,
     logicalMaxSize,
+    logicalMinSize,
     containerSize,
     center,
     fill,
-    reset,
+    reset: initBox,
     uncheckedSetCrop,
-    updateBox,
+    uncheckedUpdateBox,
+    _internalInitController: init,
+    _internalCleanupController: cleanup,
   };
 }
 
@@ -197,6 +257,15 @@ export class Box {
     this.width = bounds.width;
     this.height = bounds.height;
     return this;
+  }
+
+  toBounds(): CropBounds {
+    return {
+      x: this.x,
+      y: this.y,
+      width: this.width,
+      height: this.height,
+    };
   }
 
   resize(newWidth: number, newHeight: number, origin: Vec2): Box {
