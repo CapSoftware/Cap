@@ -64,6 +64,8 @@ export const FPS_OPTIONS = [
 export const GIF_FPS_OPTIONS = [
   { label: "10 FPS", value: 10 },
   { label: "15 FPS", value: 15 },
+  { label: "20 FPS", value: 20 },
+  { label: "25 FPS", value: 25 },
   { label: "30 FPS", value: 30 },
 ] satisfies Array<{ label: string; value: number }>;
 
@@ -463,7 +465,7 @@ export function ExportDialog() {
                                   (v) => v.value === settings.fps
                                 )
                               )
-                                newSettings.fps = 10;
+                                newSettings.fps = 15;
 
                               if (
                                 option.value === "Mp4" &&
