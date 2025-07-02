@@ -6,12 +6,17 @@ import {
   DialogFooter,
 } from "@cap/ui";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faInfoCircle } from "@fortawesome/free-solid-svg-icons";
+import {
+  faInfoCircle,
+  faWandMagicSparkles,
+} from "@fortawesome/free-solid-svg-icons";
 import { useRive, Fit, Layout } from "@rive-app/react-canvas";
-import { useTheme } from "../../Contexts";
+import { useTheme, useDashboardContext } from "../../Contexts";
 
 const CapAIDialog = ({ setOpen }: { setOpen: (open: boolean) => void }) => {
   const { theme } = useTheme();
+  const { isSubscribed, setUpgradeModalOpen } = useDashboardContext();
+
   const { RiveComponent: CapAIArt } = useRive({
     src: "/rive/bento.riv",
     artboard: theme === "light" ? "capai" : "capaidark",
@@ -21,33 +26,97 @@ const CapAIDialog = ({ setOpen }: { setOpen: (open: boolean) => void }) => {
       fit: Fit.Contain,
     }),
   });
+
   return (
     <DialogContent
       onOpenAutoFocus={(e) => e.preventDefault()}
       className="w-[calc(100%-20px)] max-w-[500px]"
     >
       <DialogHeader icon={<FontAwesomeIcon icon={faInfoCircle} />}>
-        <DialogTitle className="text-lg font-medium text-gray-12">
+        <DialogTitle className="text-lg font-medium text-gray-12 flex items-center gap-2">
           Cap AI
+          <span className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 text-white">
+            Pro
+          </span>
         </DialogTitle>
       </DialogHeader>
       <div className="p-8">
         <CapAIArt className="w-full max-w-[450px] mx-auto h-[240px]" />
-        <p className="pt-5 text-base text-gray-11">
-          Cap AI is a powerful tool that allows you to generate Cap files using
-          AI. With Cap AI, you can create Cap files quickly and easily, without
-          the need for any technical expertise.
-        </p>
+        <div className="pt-5 space-y-4">
+          <p className="text-base text-gray-11">
+            Cap AI automatically processes your recordings to make them more
+            useful and accessible.
+          </p>
+          <div className="space-y-3">
+            <h4 className="text-sm font-medium text-gray-12">
+              Features include:
+            </h4>
+            <ul className="space-y-2 text-sm text-gray-11">
+              <li className="flex items-start">
+                <FontAwesomeIcon
+                  icon={faWandMagicSparkles}
+                  className="mr-2 mt-0.5 text-blue-11 size-3"
+                />
+                <span>Auto-generated titles</span>
+              </li>
+              <li className="flex items-start">
+                <FontAwesomeIcon
+                  icon={faWandMagicSparkles}
+                  className="mr-2 mt-0.5 text-blue-11 size-3"
+                />
+                <span>Recording summaries</span>
+              </li>
+              <li className="flex items-start">
+                <FontAwesomeIcon
+                  icon={faWandMagicSparkles}
+                  className="mr-2 mt-0.5 text-blue-11 size-3"
+                />
+                <span>Clickable chapters</span>
+              </li>
+              <li className="flex items-start">
+                <FontAwesomeIcon
+                  icon={faWandMagicSparkles}
+                  className="mr-2 mt-0.5 text-blue-11 size-3"
+                />
+                <span>Automatic transcriptions</span>
+              </li>
+            </ul>
+          </div>
+        </div>
       </div>
       <DialogFooter>
-        <Button
-          autoFocus={false}
-          className="min-w-[100px] max-w-fit ml-auto"
-          variant="primary"
-          onClick={() => setOpen(false)}
-        >
-          Close
-        </Button>
+        {!isSubscribed ? (
+          <div className="flex gap-2 ml-auto">
+            <Button
+              autoFocus={false}
+              className="min-w-[100px]"
+              variant="gray"
+              onClick={() => setOpen(false)}
+            >
+              Close
+            </Button>
+            <Button
+              autoFocus={false}
+              className="min-w-[100px]"
+              variant="radialblue"
+              onClick={() => {
+                setOpen(false);
+                setUpgradeModalOpen(true);
+              }}
+            >
+              Upgrade to Pro
+            </Button>
+          </div>
+        ) : (
+          <Button
+            autoFocus={false}
+            className="min-w-[100px] max-w-fit ml-auto"
+            variant="primary"
+            onClick={() => setOpen(false)}
+          >
+            Close
+          </Button>
+        )}
       </DialogFooter>
     </DialogContent>
   );
