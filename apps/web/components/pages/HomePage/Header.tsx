@@ -67,7 +67,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
   const headerContent = getHeaderContent();
 
   return (
-    <div className="mt-[60px] min-h-screen w-full max-w-[1920px] overflow-x-hidden md:overflow-visible mx-auto md:mt-[15vh]">
+    <div className="mt-[60px] mb-[150px] min-h-screen w-full max-w-[1920px] overflow-x-hidden md:overflow-visible mx-auto md:mt-[15vh]">
       <div className="flex flex-col justify-center lg:justify-start xl:flex-row relative z-10 px-5 w-full mb-[200px]">
         <div className="w-full max-w-[500px] 2xl:mt-12 mx-auto xl:ml-[100px] 2xl:ml-[150px]">
           <motion.div
@@ -134,7 +134,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
               {getDownloadButtonText(platform, loading, isIntel)}
             </Button>
             <Button
-              variant="radialblue"
+              variant="blue"
               href="/pricing"
               size="lg"
               className="relative z-[20] w-full font-medium sm:w-auto"
@@ -177,7 +177,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
             custom={6}
             variants={fadeIn}
           >
-            <p className="text-sm text-gray-10 mb-2 italic">
+            <p className="mb-2 text-sm italic text-gray-10">
               Trusted by <strong>10,000+</strong> teams, builders and creators
             </p>
             <LogoMarquee />

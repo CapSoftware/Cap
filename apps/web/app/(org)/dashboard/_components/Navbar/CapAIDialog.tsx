@@ -33,7 +33,7 @@ const CapAIDialog = ({ setOpen }: { setOpen: (open: boolean) => void }) => {
       className="w-[calc(100%-20px)] max-w-[500px]"
     >
       <DialogHeader icon={<FontAwesomeIcon icon={faInfoCircle} />}>
-        <DialogTitle className="text-lg font-medium text-gray-12 flex items-center gap-2">
+        <DialogTitle className="flex gap-2 items-center text-lg font-medium text-gray-12">
           Cap AI
           <span className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 text-white">
             Pro
@@ -47,41 +47,39 @@ const CapAIDialog = ({ setOpen }: { setOpen: (open: boolean) => void }) => {
             Cap AI automatically processes your recordings to make them more
             useful and accessible.
           </p>
-          <div className="space-y-3">
-            <h4 className="text-sm font-medium text-gray-12">
-              Features include:
-            </h4>
-            <ul className="space-y-2 text-sm text-gray-11">
-              <li className="flex items-start">
-                <FontAwesomeIcon
-                  icon={faWandMagicSparkles}
-                  className="mr-2 mt-0.5 text-blue-11 size-3"
-                />
-                <span>Auto-generated titles</span>
-              </li>
-              <li className="flex items-start">
-                <FontAwesomeIcon
-                  icon={faWandMagicSparkles}
-                  className="mr-2 mt-0.5 text-blue-11 size-3"
-                />
-                <span>Recording summaries</span>
-              </li>
-              <li className="flex items-start">
-                <FontAwesomeIcon
-                  icon={faWandMagicSparkles}
-                  className="mr-2 mt-0.5 text-blue-11 size-3"
-                />
-                <span>Clickable chapters</span>
-              </li>
-              <li className="flex items-start">
-                <FontAwesomeIcon
-                  icon={faWandMagicSparkles}
-                  className="mr-2 mt-0.5 text-blue-11 size-3"
-                />
-                <span>Automatic transcriptions</span>
-              </li>
-            </ul>
-          </div>
+          <h4 className="text-sm font-medium text-gray-12">
+            Features include:
+          </h4>
+          <ul className="flex flex-wrap gap-2 text-sm text-gray-11">
+            <li className="flex flex-1 items-center border border-gray-5 py-2 px-2.5 rounded-xl min-w-fit bg-gray-3">
+              <FontAwesomeIcon
+                icon={faWandMagicSparkles}
+                className="mr-2 mt-0.5 text-blue-11 size-3"
+              />
+              <span>Auto-generated titles</span>
+            </li>
+            <li className="flex flex-1 items-center border border-gray-5 py-2 px-2.5 rounded-xl min-w-fit bg-gray-3">
+              <FontAwesomeIcon
+                icon={faWandMagicSparkles}
+                className="mr-2 mt-0.5 text-blue-11 size-3"
+              />
+              <span>Recording summaries</span>
+            </li>
+            <li className="flex flex-1 items-center border border-gray-5 py-2 px-2.5 rounded-xl min-w-fit bg-gray-3">
+              <FontAwesomeIcon
+                icon={faWandMagicSparkles}
+                className="mr-2 mt-0.5 text-blue-11 size-3"
+              />
+              <span>Clickable chapters</span>
+            </li>
+            <li className="flex flex-1 items-center border border-gray-5 py-2 px-2.5 rounded-xl min-w-fit bg-gray-3">
+              <FontAwesomeIcon
+                icon={faWandMagicSparkles}
+                className="mr-2 mt-0.5 text-blue-11 size-3"
+              />
+              <span>Automatic transcriptions</span>
+            </li>
+          </ul>
         </div>
       </div>
       <DialogFooter>
@@ -98,7 +96,7 @@ const CapAIDialog = ({ setOpen }: { setOpen: (open: boolean) => void }) => {
             <Button
               autoFocus={false}
               className="min-w-[100px]"
-              variant="radialblue"
+              variant="blue"
               onClick={() => {
                 setOpen(false);
                 setUpgradeModalOpen(true);

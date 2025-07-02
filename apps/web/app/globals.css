@@ -506,9 +506,6 @@ label {
   @apply mx-auto max-w-2xl text-base fade-in-down animate-delay-1 sm:text-xl;
 }
 
-ul {
-  @apply pl-5 list-disc;
-}
 /*
 .embossed {
   @apply bg-white-a12 border-2 border-filler-3 relative w-[320px] max-w-full min-h-[60px] rounded-xl z-10;

@@ -19,7 +19,6 @@ import {
 import { script } from "./themeScript";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { AuthContextProvider } from "./Layout/AuthContext";
-import { Intercom } from "./Layout/Intercom";
 import { PosthogIdentify } from "./Layout/PosthogIdentify";
 
 const defaultFont = localFont({

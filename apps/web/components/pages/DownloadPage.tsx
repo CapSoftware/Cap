@@ -33,29 +33,26 @@ export const DownloadPage = () => {
             <div className="mb-2 text-xs text-gray-300">Platform Simulator</div>
             <div className="space-y-2">
               <button
-                className={`text-xs px-2 py-1 rounded w-full text-left ${
-                  platform === "windows"
+                className={`text-xs px-2 py-1 rounded w-full text-left ${platform === "windows"
                     ? "bg-blue-600"
                     : "bg-gray-700 hover:bg-gray-600"
-                }`}
+                  }`}
               >
                 Windows (Beta)
               </button>
               <button
-                className={`text-xs px-2 py-1 rounded w-full text-left ${
-                  platform === "macos" && isIntel
+                className={`text-xs px-2 py-1 rounded w-full text-left ${platform === "macos" && isIntel
                     ? "bg-blue-600"
                     : "bg-gray-700 hover:bg-gray-600"
-                }`}
+                  }`}
               >
                 macOS (Intel)
               </button>
               <button
-                className={`text-xs px-2 py-1 rounded w-full text-left ${
-                  platform === "macos" && !isIntel
+                className={`text-xs px-2 py-1 rounded w-full text-left ${platform === "macos" && !isIntel
                     ? "bg-blue-600"
                     : "bg-gray-700 hover:bg-gray-600"
-                }`}
+                  }`}
               >
                 macOS (Apple Silicon)
               </button>
@@ -78,7 +75,7 @@ export const DownloadPage = () => {
         <div className="flex flex-col justify-center items-center space-y-4 fade-in-up animate-delay-2">
           <div className="flex flex-col items-center space-y-4">
             <Button
-              variant="radialblue"
+              variant="blue"
               size="lg"
               href={getDownloadUrl(platform, isIntel)}
               className="flex justify-center items-center py-6 font-medium text-white"

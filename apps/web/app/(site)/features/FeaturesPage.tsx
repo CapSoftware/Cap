@@ -377,7 +377,7 @@ export const FeaturesPage = () => {
             </Button>
             <Button
               href="/pricing"
-              variant="radialblue"
+              variant="blue"
               size="lg"
               className="flex justify-center items-center w-full font-medium text-md sm:w-auto"
             >
@@ -440,9 +440,8 @@ export const FeaturesPage = () => {
                 <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity">
                   <FontAwesomeIcon
                     icon={categoryIcons[feature.category].icon}
-                    className={`w-4 h-4 ${
-                      categoryIcons[feature.category].color
-                    } opacity-50`}
+                    className={`w-4 h-4 ${categoryIcons[feature.category].color
+                      } opacity-50`}
                   />
                 </div>
               </div>
