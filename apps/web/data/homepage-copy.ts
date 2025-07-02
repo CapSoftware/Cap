@@ -122,7 +122,7 @@ export interface HomePageCopy {
 export const homepageCopy: HomePageCopy = {
   header: {
     announcement: {
-      text: "🚨 Early Adopter Pricing ends soon!",
+      text: "🚨 Early adopter pricing ending soon",
       href: "/pricing",
     },
     variants: {

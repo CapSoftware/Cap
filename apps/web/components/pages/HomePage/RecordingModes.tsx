@@ -146,19 +146,29 @@ const RecordingModes = () => {
           </p>
         </div>
         <div className="p-6">
-          <Button
-            variant="primary"
-            href={
-              platform === "windows"
-                ? "/download"
-                : getDownloadUrl(platform, isIntel)
-            }
-            size="lg"
-            className="flex justify-center items-center mx-auto font-medium w-fit"
-          >
-            {!loading && getPlatformIcon(platform)}
-            {getDownloadButtonText(platform, loading, isIntel)}
-          </Button>
+          <div className="flex flex-col items-center space-y-2 sm:flex-row sm:space-y-0 sm:space-x-4 sm:justify-center">
+            <Button
+              variant="gray"
+              href={
+                platform === "windows"
+                  ? "/download"
+                  : getDownloadUrl(platform, isIntel)
+              }
+              size="lg"
+              className="flex justify-center items-center w-full font-medium sm:w-auto"
+            >
+              {!loading && getPlatformIcon(platform)}
+              {getDownloadButtonText(platform, loading, isIntel)}
+            </Button>
+            <Button
+              variant="blue"
+              href="/pricing"
+              size="lg"
+              className="w-full font-medium sm:w-auto"
+            >
+              {homepageCopy.header.cta.primaryButton}
+            </Button>
+          </div>
         </div>
       </div>
     </div>

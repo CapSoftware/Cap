@@ -157,17 +157,11 @@ const features: Feature[] = [
     isComingSoon: true,
   },
   {
-    icon: faEye,
-    title: "Eye Contact Correction",
-    description: "AI adjusts your gaze to maintain eye contact with viewers",
-    category: "ai",
-    isComingSoon: true,
-  },
-  {
     icon: faVolumeUp,
     title: "Noise Reduction",
     description: "Advanced AI noise reduction for crystal-clear audio",
     category: "ai",
+    isComingSoon: true,
   },
 
   {
@@ -238,7 +232,7 @@ const features: Feature[] = [
     icon: faShieldAlt,
     title: "Local Recording",
     description:
-      "Record and store everything locally - your data never leaves your device",
+      "Record and store everything locally with Cap Studio Mode - your data never leaves your device",
     category: "privacy",
     size: "medium",
   },
@@ -403,7 +397,7 @@ export const FeaturesPage = () => {
                   ${sizeClasses[feature.size || "small"]}
                   group relative overflow-hidden rounded-xl border p-6
                   ${categoryColors[feature.category]}
-                  hover:border-gray-4 hover:shadow-md transition-all duration-200
+                  hover:border-gray-5 transition-all duration-200
                   ${feature.isComingSoon ? "opacity-75" : ""}
                 `}
               >
@@ -440,8 +434,9 @@ export const FeaturesPage = () => {
                 <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity">
                   <FontAwesomeIcon
                     icon={categoryIcons[feature.category].icon}
-                    className={`w-4 h-4 ${categoryIcons[feature.category].color
-                      } opacity-50`}
+                    className={`w-4 h-4 ${
+                      categoryIcons[feature.category].color
+                    } opacity-50`}
                   />
                 </div>
               </div>

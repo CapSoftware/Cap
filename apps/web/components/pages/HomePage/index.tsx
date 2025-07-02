@@ -21,7 +21,7 @@ export const HomePage: React.FC<HomePageProps> = ({
   return (
     <>
       <Header serverHomepageCopyVariant={serverHomepageCopyVariant} />
-      <div className="space-y-[150px] md:space-y-[200px] lg:space-y-[300px]">
+      <div className="space-y-[150px] lg:space-y-[200px]">
         <RecordingModes />
         <Features />
         <Testimonials />
