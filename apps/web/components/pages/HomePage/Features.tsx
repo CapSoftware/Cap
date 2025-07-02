@@ -150,7 +150,7 @@ const Features = () => {
   return (
     <div className="text-center max-w-[1440px] mx-auto px-5">
       <h2 className="mb-3">{homepageCopy.features.title}</h2>
-      <p className="text-lg leading-[1.75rem] w-full max-w-[800px] mx-auto">
+      <p className="text-lg leading-[1.75rem] w-full max-w-[600px] mx-auto">
         {homepageCopy.features.subtitle}
       </p>
       <div className="flex flex-col gap-4 mt-[52px]">
