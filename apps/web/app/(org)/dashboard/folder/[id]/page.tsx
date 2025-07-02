@@ -1,27 +1,23 @@
-import { getFolderById, getChildFolders, getFolderBreadcrumb, getVideosByFolderId } from "./actions";
-import Link from 'next/link';
+import { getChildFolders, getFolderBreadcrumb, getVideosByFolderId } from "./actions";
 import { NewSubfolderButton } from "./components/NewSubfolderButton";
 import Folder from "../../caps/components/Folder";
 import { ClientCapCard } from "./components/ClientCapCard";
 import { ClientBreadcrumbItem } from "./components/ClientBreadcrumbItem";
+import { ClientMyCapsLink } from "./components/ClientMyCapsLink";
 
 const FolderPage = async ({ params }: {
   params: { id: string }
 }) => {
-  const folderData = await getFolderById(params.id);
   const childFolders = await getChildFolders(params.id);
   const breadcrumb = await getFolderBreadcrumb(params.id);
+  const videosData = await getVideosByFolderId(params.id);
 
-  // Fetch videos in this folder using the action function
-  const processedVideoData = await getVideosByFolderId(params.id);
 
   return (
     <div>
       <div className="flex justify-between items-center mb-6 w-full">
         <div className="flex overflow-x-auto items-center font-medium">
-          <Link href="/dashboard/caps" className="text-xl whitespace-nowrap transition-colors duration-200 text-gray-9 hover:text-gray-12">
-            My Caps
-          </Link>
+          <ClientMyCapsLink />
 
           {breadcrumb.map((folder, index) => (
             <div key={folder.id} className="flex items-center">
@@ -60,10 +56,10 @@ const FolderPage = async ({ params }: {
       {/* Display Videos */}
       <h1 className="mb-3 text-xl font-medium text-gray-12">Videos</h1>
       <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-        {processedVideoData.length === 0 ? (
+        {videosData.length === 0 ? (
           <p className="col-span-full text-gray-9">No videos in this folder yet. Drag and drop videos here to add them.</p>
         ) : (
-          processedVideoData.map((video) => (
+          videosData.map((video) => (
             <ClientCapCard
               key={video.id}
               videoId={video.id}

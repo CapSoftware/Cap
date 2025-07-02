@@ -134,8 +134,8 @@ const Folder = ({ name, color, id, parentId, videoCount }: FolderDataType) => {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         className={clsx(
-          "flex justify-between items-center px-4 py-4 w-full h-auto rounded-lg border transition-colors duration-200 cursor-pointer bg-gray-3 border-gray-5 hover:bg-gray-4 hover:border-gray-6",
-          isDragOver && "border-blue-10 bg-gray-4",
+          "flex justify-between items-center px-4 py-4 w-full h-auto rounded-lg border transition-colors duration-200 cursor-pointer bg-gray-3 hover:bg-gray-4 hover:border-gray-6",
+          isDragOver ? "border-blue-10 bg-gray-4" : "border-gray-5",
           isMovingVideo && "opacity-70"
         )}
       >

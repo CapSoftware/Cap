@@ -16,15 +16,22 @@ export function ClientCapCard(props: ClientCapCardProps) {
     await deleteVideo(videoId);
   };
 
-  // Create a drag preview element
+  // Create a drag preview element with thumbnail
   const createDragPreview = (text: string): HTMLElement => {
-    const element = document.createElement('div');
-    element.textContent = text;
-    element.className = 'px-2 py-1.5 text-sm font-medium rounded-lg shadow-md text-gray-1 bg-gray-12';
-    element.style.position = 'absolute';
-    element.style.top = '-9999px';
-    element.style.left = '-9999px';
-    return element;
+    // Create the container element
+    const container = document.createElement('div');
+    container.className = 'flex gap-2 items-center px-3 py-2 rounded-lg border shadow-md bg-gray-1 border-gray-4';
+    container.style.position = 'absolute';
+    container.style.top = '-9999px';
+    container.style.left = '-9999px';
+
+    // Add the text
+    const textElement = document.createElement('span');
+    textElement.textContent = text;
+    textElement.className = 'text-sm font-medium text-gray-12';
+    container.appendChild(textElement);
+
+    return container;
   };
 
   // Handle drag start event
@@ -45,9 +52,9 @@ export function ClientCapCard(props: ClientCapCardProps) {
     try {
       const dragPreview = createDragPreview(props.cap.name);
       document.body.appendChild(dragPreview);
+
       e.dataTransfer.setDragImage(dragPreview, 10, 10);
 
-      // Clean up after a short delay
       setTimeout(() => document.body.removeChild(dragPreview), 100);
     } catch (error) {
       console.error('Error setting drag image:', error);
