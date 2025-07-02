@@ -51,34 +51,23 @@ const CapAIDialog = ({ setOpen }: { setOpen: (open: boolean) => void }) => {
             Features include:
           </h4>
           <ul className="flex flex-wrap gap-2 text-sm text-gray-11">
-            <li className="flex flex-1 items-center border border-gray-5 py-2 px-2.5 rounded-xl min-w-fit bg-gray-3">
-              <FontAwesomeIcon
-                icon={faWandMagicSparkles}
-                className="mr-2 mt-0.5 text-blue-11 size-3"
-              />
-              <span>Auto-generated titles</span>
-            </li>
-            <li className="flex flex-1 items-center border border-gray-5 py-2 px-2.5 rounded-xl min-w-fit bg-gray-3">
-              <FontAwesomeIcon
-                icon={faWandMagicSparkles}
-                className="mr-2 mt-0.5 text-blue-11 size-3"
-              />
-              <span>Recording summaries</span>
-            </li>
-            <li className="flex flex-1 items-center border border-gray-5 py-2 px-2.5 rounded-xl min-w-fit bg-gray-3">
-              <FontAwesomeIcon
-                icon={faWandMagicSparkles}
-                className="mr-2 mt-0.5 text-blue-11 size-3"
-              />
-              <span>Clickable chapters</span>
-            </li>
-            <li className="flex flex-1 items-center border border-gray-5 py-2 px-2.5 rounded-xl min-w-fit bg-gray-3">
-              <FontAwesomeIcon
-                icon={faWandMagicSparkles}
-                className="mr-2 mt-0.5 text-blue-11 size-3"
-              />
-              <span>Automatic transcriptions</span>
-            </li>
+            {[
+              "Auto-generated titles",
+              "Recording summaries",
+              "Clickable chapters",
+              "Automatic transcriptions",
+            ].map((feature) => (
+              <li
+                key={feature}
+                className="flex flex-1 items-center border border-gray-5 py-2 px-2.5 rounded-xl min-w-fit bg-gray-3"
+              >
+                <FontAwesomeIcon
+                  icon={faWandMagicSparkles}
+                  className="mr-2 mt-0.5 text-blue-11 size-3"
+                />
+                <span>{feature}</span>
+              </li>
+            ))}
           </ul>
         </div>
       </div>
