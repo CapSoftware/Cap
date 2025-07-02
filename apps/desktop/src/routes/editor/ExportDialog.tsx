@@ -24,7 +24,6 @@ import {
 import { createStore, produce, reconcile } from "solid-js/store";
 import toast from "solid-toast";
 
-import Tooltip from "~/components/Tooltip";
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { exportVideo } from "~/utils/export";
@@ -32,7 +31,7 @@ import {
   commands,
   events,
   ExportCompression,
-  ExportFormat,
+  ExportSettings,
   FramesRendered,
 } from "~/utils/tauri";
 import { RenderState, useEditorContext } from "./context";
@@ -86,9 +85,11 @@ export const EXPORT_TO_OPTIONS = [
   },
 ] as const;
 
+type ExportFormat = ExportSettings["format"];
+
 export const FORMAT_OPTIONS = [
-  { label: "MP4", value: "MP4" },
-  { label: "GIF", value: "GIF" },
+  { label: "MP4", value: "Mp4" },
+  { label: "GIF", value: "Gif" },
 ] as { label: string; value: ExportFormat; disabled?: boolean }[];
 
 type ExportToOption = (typeof EXPORT_TO_OPTIONS)[number]["value"];
@@ -119,6 +120,7 @@ export function ExportDialog() {
     exportVideo(
       projectPath,
       {
+        format: settings.format,
         fps: settings.fps,
         resolution_base: {
           x: settings.resolution.width,
@@ -126,7 +128,6 @@ export function ExportDialog() {
         },
         compression: settings.compression,
       },
-      settings.format,
       onProgress
     );
 
@@ -202,7 +203,7 @@ export function ExportDialog() {
     mutationFn: async () => {
       if (exportState.type !== "idle") return;
 
-      const extension = settings.format === "GIF" ? "gif" : "mp4";
+      const extension = settings.format === "Gif" ? "gif" : "mp4";
       const savePath = await saveDialog({
         filters: [
           {
@@ -492,18 +493,18 @@ export function ExportDialog() {
                 <h3 class="text-gray-12">Frame rate</h3>
                 <KSelect<{ label: string; value: number }>
                   options={
-                    settings.format === "GIF" ? GIF_FPS_OPTIONS : FPS_OPTIONS
+                    settings.format === "Gif" ? GIF_FPS_OPTIONS : FPS_OPTIONS
                   }
                   optionValue="value"
                   optionTextValue="label"
                   placeholder="Select FPS"
-                  value={(settings.format === "GIF"
+                  value={(settings.format === "Gif"
                     ? GIF_FPS_OPTIONS
                     : FPS_OPTIONS
                   ).find((opt) => opt.value === settings.fps)}
                   onChange={(option) => {
                     const value =
-                      option?.value ?? (settings.format === "GIF" ? 10 : 30);
+                      option?.value ?? (settings.format === "Gif" ? 10 : 30);
                     trackEvent("export_fps_changed", {
                       fps: value,
                     });
@@ -605,7 +606,7 @@ export function ExportDialog() {
                 <div class="flex gap-2">
                   <For
                     each={
-                      settings.format === "GIF"
+                      settings.format === "Gif"
                         ? [RESOLUTION_OPTIONS._720p]
                         : [
                             RESOLUTION_OPTIONS._720p,

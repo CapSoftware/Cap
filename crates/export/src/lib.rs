@@ -41,10 +41,16 @@ pub enum ExportError {
 }
 
 #[derive(Deserialize, Type, Clone, Copy, Debug)]
-pub struct ExportSettings {
+pub struct Mp4ExportSettings {
     pub fps: u32,
     pub resolution_base: XY<u32>,
     pub compression: ExportCompression,
+}
+
+#[derive(Deserialize, Type, Clone, Copy, Debug)]
+pub struct GifExportSettings {
+    pub fps: u32,
+    pub resolution_base: XY<u32>,
 }
 
 #[derive(Deserialize, Clone, Copy, Debug, Type)]
@@ -172,7 +178,7 @@ impl Exporter {
 
     pub async fn export_mp4(
         self,
-        export_settings: ExportSettings,
+        export_settings: Mp4ExportSettings,
         mut on_progress: impl FnMut(u32) + Send + 'static,
     ) -> Result<PathBuf, String> {
         let output_path = self.output_path.clone();
@@ -354,7 +360,7 @@ impl Exporter {
 
     pub async fn export_gif(
         self,
-        export_settings: ExportSettings,
+        export_settings: GifExportSettings,
         mut on_progress: impl FnMut(u32) + Send + 'static,
     ) -> Result<PathBuf, String> {
         let meta = &self.studio_meta;

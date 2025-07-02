@@ -1,14 +1,24 @@
 use crate::{get_video_metadata, FramesRendered};
-use cap_export::{ExportSettings, Exporter};
+use cap_export::{Exporter, GifExportSettings, Mp4ExportSettings};
 use cap_project::{RecordingMeta, XY};
 use serde::Deserialize;
 use specta::Type;
 use std::path::PathBuf;
 
 #[derive(Deserialize, Clone, Copy, Debug, Type)]
-pub enum ExportFormat {
-    MP4,
-    GIF,
+#[serde(tag = "format")]
+pub enum ExportSettings {
+    Mp4(Mp4ExportSettings),
+    Gif(GifExportSettings),
+}
+
+impl ExportSettings {
+    fn fps(&self) -> u32 {
+        match self {
+            ExportSettings::Mp4(settings) => settings.fps,
+            ExportSettings::Gif(settings) => settings.fps,
+        }
+    }
 }
 
 #[tauri::command]
@@ -17,22 +27,21 @@ pub async fn export_video(
     project_path: PathBuf,
     progress: tauri::ipc::Channel<FramesRendered>,
     settings: ExportSettings,
-    format: ExportFormat,
 ) -> Result<PathBuf, String> {
     let exporter = Exporter::builder(project_path).build().await.map_err(|e| {
         sentry::capture_message(&e.to_string(), sentry::Level::Error);
         e.to_string()
     })?;
 
-    let total_frames = exporter.total_frames(settings.fps);
+    let total_frames = exporter.total_frames(settings.fps());
 
     let _ = progress.send(FramesRendered {
         rendered_count: 0,
         total_frames,
     });
 
-    match format {
-        ExportFormat::MP4 => {
+    match settings {
+        ExportSettings::Mp4(settings) => {
             exporter
                 .export_mp4(settings, move |frame_index| {
                     // Ensure progress never exceeds total frames
@@ -43,7 +52,7 @@ pub async fn export_video(
                 })
                 .await
         }
-        ExportFormat::GIF => {
+        ExportSettings::Gif(settings) => {
             exporter
                 .export_gif(settings, move |frame_index| {
                     // Ensure progress never exceeds total frames

@@ -6,8 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use cap_editor::create_segments;
-use cap_export::{ExportCompression, ExportSettings, Exporter};
+use cap_export::{ExportCompression, Exporter, GifExportSettings, Mp4ExportSettings};
 use cap_media::sources::get_target_fps;
 use cap_project::{RecordingMeta, XY};
 use cap_rendering::{ProjectRecordingsMeta, RenderVideoConstants};
@@ -173,10 +172,9 @@ impl Export {
         let mut stdout = stdout();
         let exporter_output_path = exporter
             .export_gif(
-                ExportSettings {
+                GifExportSettings {
                     fps: 10,
                     resolution_base: XY::new(1920, 1080),
-                    compression: ExportCompression::Minimal,
                 },
                 move |f| {
                     print!("\rrendered frame {f}");
