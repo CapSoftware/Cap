@@ -1,5 +1,6 @@
 import { Tooltip } from "@/components/Tooltip";
-import { buildEnv } from "@cap/env";
+import { usePublicEnv } from "@/utils/public-env";
+import { buildEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
 import { faDownload, faLink } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -68,13 +69,20 @@ const buttons = (
       onClick: (e: React.MouseEvent) => {
         e.stopPropagation();
 
+        const { webUrl } = usePublicEnv();
+
+
         const getVideoLink = () => {
-          if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
-            return `https://${customDomain}/s/${capId}`;
+          if (NODE_ENV === "development" && customDomain && domainVerified) {
+            return `${customDomain}/s/${capId}`;
+          } else if (NODE_ENV === "development" && !customDomain && !domainVerified) {
+            return `${webUrl}/s/${capId}`;
+          } else if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
+            return `${customDomain}/s/${capId}`;
           } else if (buildEnv.NEXT_PUBLIC_IS_CAP && !customDomain && !domainVerified) {
-            return `https://cap.link/${capId}`;
+            return `cap.link/${capId}`;
           } else {
-            return `${location.origin}/s/${capId}`;
+            return `${webUrl}/s/${capId}`;
           }
         };
 
