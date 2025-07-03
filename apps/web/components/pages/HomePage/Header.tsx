@@ -163,7 +163,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
             <PlatformIcons />
 
             <Link
-              href="/download"
+              href="/pricing"
               className="mt-2 text-sm underline text-gray-10 hover:text-gray-12"
             >
               {homepageCopy.header.cta.seeOtherOptionsText}
