@@ -93,7 +93,7 @@ export const ShareHeader = ({
   const getVideoLink = () => {
     if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
       return `https://${customDomain}/s/${data.id}`;
-    } else if (buildEnv.NEXT_PUBLIC_IS_CAP && !customDomain && !domainVerified) {
+    } else if (!buildEnv.NEXT_PUBLIC_IS_CAP && !customDomain && !domainVerified) {
       return `https://cap.link/${data.id}`;
     } else {
       return `${webUrl}/s/${data.id}`;
@@ -103,7 +103,7 @@ export const ShareHeader = ({
   const getDisplayLink = () => {
     if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
       return `${customDomain}/s/${data.id}`;
-    } else if (buildEnv.NEXT_PUBLIC_IS_CAP && !customDomain && !domainVerified) {
+    } else if (!buildEnv.NEXT_PUBLIC_IS_CAP && !customDomain && !domainVerified) {
       return `cap.link/${data.id}`;
     } else {
       return `${webUrl}/s/${data.id}`;
