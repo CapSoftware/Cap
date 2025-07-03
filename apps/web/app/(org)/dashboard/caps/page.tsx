@@ -52,7 +52,7 @@ export default async function CapsPage({
       domainVerified: organizations.domainVerified,
     })
     .from(organizations)
-    .where(eq(organizations.ownerId, userId))
+    .where(eq(organizations.id, user.activeOrganizationId))
     .limit(1);
 
   let customDomain: string | null = null;
