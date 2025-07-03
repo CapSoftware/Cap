@@ -176,7 +176,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 
   return (
     <div className={`relative ${className}`}>
-      <div className="h-[46.5px]">
+      <div className="h-[44px]">
         {" "}
         {/* Fixed height container to prevent resizing */}
         {selectedFile || previewUrl ? (
@@ -242,16 +242,16 @@ export const FileInput: React.FC<FileInputProps> = ({
           >
             {isLoading ? (
               <FontAwesomeIcon
-                className="animate-spin text-gray-10 size-5"
+                className="animate-spin text-gray-10 size-4"
                 icon={faSpinner}
               />
             ) : (
               <FontAwesomeIcon
-                className="text-gray-10 size-5"
+                className="text-gray-10 size-4"
                 icon={faCloudUpload}
               />
             )}
-            <p className="text-sm truncate text-gray-11">
+            <p className="text-[13px] truncate text-gray-11">
               {isLoading
                 ? "Uploading..."
                 : "Choose a file or drag & drop it here"}
