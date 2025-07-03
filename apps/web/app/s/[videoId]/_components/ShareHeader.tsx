@@ -10,7 +10,7 @@ import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { Copy, Globe2 } from "lucide-react";
-import { buildEnv, NODE_ENV } from "@cap/env";
+import { buildEnv } from "@cap/env";
 import { editTitle } from "@/actions/videos/edit-title";
 import { usePublicEnv } from "@/utils/public-env";
 import { isUserOnProPlan } from "@cap/utils";

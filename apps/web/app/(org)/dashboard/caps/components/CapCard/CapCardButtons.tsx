@@ -68,7 +68,7 @@ const buttons = (
       tooltipContent: "Copy link",
       onClick: (e: React.MouseEvent) => {
         e.stopPropagation();
-
+        
         const { webUrl } = usePublicEnv();
 
 

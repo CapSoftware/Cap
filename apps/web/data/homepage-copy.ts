@@ -268,8 +268,8 @@ export const homepageCopy: HomePageCopy = {
   readyToGetStarted: {
     title: "Ready to upgrade how you communicate?",
     buttons: {
-      primary: "Download Cap",
-      secondary: "Started",
+      primary: "Upgrade to Cap Pro",
+      secondary: "Download for free",
     },
   },
 }; 
