@@ -22,6 +22,17 @@ export async function createOrganization(formData: FormData) {
   const name = formData.get("name") as string;
   if (!name) throw new Error("Organization name is required");
 
+  // Check if organization with the same name already exists
+  const existingOrg = await db()
+    .select({ id: organizations.id })
+    .from(organizations)
+    .where(eq(organizations.name, name))
+    .limit(1);
+
+  if (existingOrg.length > 0) {
+    throw new Error("Organization with this name already exists");
+  }
+
   const organizationId = nanoId();
 
   // Create the organization first

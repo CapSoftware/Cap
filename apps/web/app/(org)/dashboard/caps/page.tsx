@@ -1,13 +1,10 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
-  comments,
-  organizationMembers,
-  organizations,
+  comments, organizations,
   sharedVideos,
   users,
-  videos,
-  spaces,
+  videos
 } from "@cap/database/schema";
 import { count, desc, eq, sql } from "drizzle-orm";
 import { Metadata } from "next";
@@ -47,6 +44,30 @@ export default async function CapsPage({
     .where(eq(videos.ownerId, userId));
 
   const totalCount = totalCountResult[0]?.count || 0;
+
+  // Get custom domain and verification status for the user's organization
+  const organizationData = await db()
+    .select({
+      customDomain: organizations.customDomain,
+      domainVerified: organizations.domainVerified,
+    })
+    .from(organizations)
+    .where(eq(organizations.id, user.activeOrganizationId))
+    .limit(1);
+
+  let customDomain: string | null = null;
+  let domainVerified = false;
+
+  if (
+    organizationData.length > 0 &&
+    organizationData[0] &&
+    organizationData[0].customDomain
+  ) {
+    customDomain = organizationData[0].customDomain;
+    if (organizationData[0].domainVerified !== null) {
+      domainVerified = true;
+    }
+  }
 
   const videoData = await db()
     .select({
@@ -164,9 +185,9 @@ export default async function CapsPage({
       ownerName: video.ownerName ?? "",
       metadata: video.metadata as
         | {
-            customCreatedAt?: string;
-            [key: string]: any;
-          }
+          customCreatedAt?: string;
+          [key: string]: any;
+        }
         | undefined,
       hasPassword: video.hasPassword === 1,
     };
@@ -175,6 +196,8 @@ export default async function CapsPage({
   return (
     <Caps
       data={processedVideoData}
+      customDomain={customDomain}
+      domainVerified={domainVerified}
       count={totalCount}
       dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
     />

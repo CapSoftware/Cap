@@ -35,10 +35,14 @@ type VideoData = {
 export const Caps = ({
   data,
   count,
+  customDomain,
+  domainVerified,
   dubApiKeyEnabled,
 }: {
   data: VideoData;
   count: number;
+  customDomain: string | null;
+  domainVerified: boolean;
   dubApiKeyEnabled: boolean;
 }) => {
   const { refresh } = useRouter();
@@ -286,6 +290,8 @@ export const Caps = ({
             analytics={analytics[cap.id] || 0}
             onDelete={deleteCap}
             userId={user?.id}
+            customDomain={customDomain}
+            domainVerified={domainVerified}
             isSelected={selectedCaps.includes(cap.id)}
             onSelectToggle={() => handleCapSelection(cap.id)}
             anyCapSelected={anyCapSelected}
