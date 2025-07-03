@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { eq, desc, sql, count, InferSelectModel } from "drizzle-orm";
+import { eq, InferSelectModel } from "drizzle-orm";
 import { Logo } from "@cap/ui";
 import {
   videos,
@@ -10,8 +10,8 @@ import {
   organizations,
 } from "@cap/database/schema";
 import { VideoMetadata } from "@cap/database/types";
-import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
-import type { Metadata, ResolvingMetadata } from "next";
+import { getCurrentUser } from "@cap/database/auth/session";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { buildEnv } from "@cap/env";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
@@ -498,14 +498,14 @@ async function AuthorizedContent({
 
   const membersListPromise = video.sharedOrganization?.organizationId
     ? db()
-        .select({ userId: organizationMembers.userId })
-        .from(organizationMembers)
-        .where(
-          eq(
-            organizationMembers.organizationId,
-            video.sharedOrganization.organizationId
-          )
+      .select({ userId: organizationMembers.userId })
+      .from(organizationMembers)
+      .where(
+        eq(
+          organizationMembers.organizationId,
+          video.sharedOrganization.organizationId
         )
+      )
     : Promise.resolve([]);
 
   const commentsPromise = db()
