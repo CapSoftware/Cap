@@ -95,7 +95,7 @@ impl H264EncoderBuilder {
         encoder.set_time_base(input_config.frame_rate.invert());
         encoder.set_frame_rate(Some(input_config.frame_rate));
 
-        // let target_bitrate = compression.bitrate();
+        // Calculate bitrate based on bits per pixel
         let bitrate = get_bitrate(
             input_config.width,
             input_config.height,

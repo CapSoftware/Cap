@@ -25,6 +25,14 @@ export default function AppsTab() {
       url: "/settings/integrations/s3-config",
       pro: true,
     },
+    {
+      name: "Export Compression",
+      description:
+        "Automatically compress exported videos to reduce file size while maintaining quality. Ideal for web sharing and reducing storage usage.",
+      icon: IconLucideHardDrive,
+      url: "/settings/integrations/compression",
+      pro: false,
+    },
   ];
 
   const handleAppClick = async (app: (typeof apps)[number]) => {

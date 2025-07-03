@@ -1,10 +1,19 @@
+use crate::general_settings::GeneralSettingsStore;
 use crate::{get_video_metadata, FramesRendered};
 use cap_export::ExporterBase;
 use cap_project::{RecordingMeta, XY};
 use serde::Deserialize;
 use specta::Type;
 use std::path::PathBuf;
+use tauri::Manager;
 use tracing::info;
+
+#[derive(serde::Serialize, specta::Type, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CompressionProgress {
+    pub progress: f32,
+    pub status: String,
+}
 
 #[derive(Deserialize, Clone, Copy, Debug, Type)]
 #[serde(tag = "format")]
@@ -25,10 +34,42 @@ impl ExportSettings {
 #[tauri::command]
 #[specta::specta]
 pub async fn export_video(
+    app: tauri::AppHandle,
     project_path: PathBuf,
     progress: tauri::ipc::Channel<FramesRendered>,
-    settings: ExportSettings,
+    mut settings: ExportSettings,
 ) -> Result<PathBuf, String> {
+    // Check if compression is enabled and modify settings before export
+    let general_settings = GeneralSettingsStore::get(&app)
+        .map_err(|e| format!("Failed to get general settings: {}", e))?;
+
+    if let Some(general_settings) = general_settings {
+        if general_settings.compression_config.enabled {
+            // Apply compression settings to the export
+            if let ExportSettings::Mp4(ref mut mp4_settings) = settings {
+                info!("Applying compression settings to export");
+
+                // Map compression quality to ExportCompression
+                mp4_settings.compression = match general_settings.compression_config.quality {
+                    crate::general_settings::CompressionQuality::High => {
+                        cap_export::mp4::ExportCompression::Social // CRF ~23
+                    }
+                    crate::general_settings::CompressionQuality::Medium => {
+                        cap_export::mp4::ExportCompression::Web // CRF ~28
+                    }
+                    crate::general_settings::CompressionQuality::Low => {
+                        cap_export::mp4::ExportCompression::Potato // CRF ~35
+                    }
+                };
+
+                info!("Using compression quality: {:?}", mp4_settings.compression);
+
+                // Note: H264 preset (slow/medium/fast) and custom audio bitrate
+                // would require modifications to the cap_media encoders
+            }
+        }
+    }
+
     let exporter_base = ExporterBase::builder(project_path)
         .build()
         .await
@@ -73,7 +114,7 @@ pub async fn export_video(
         e.to_string()
     })?;
 
-    info!("Exported to {} completed", output_path.display());
+    info!("Export to {} completed", output_path.display());
 
     Ok(output_path)
 }

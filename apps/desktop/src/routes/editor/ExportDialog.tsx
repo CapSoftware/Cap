@@ -25,6 +25,7 @@ import { createStore, produce, reconcile } from "solid-js/store";
 import toast from "solid-toast";
 
 import { authStore } from "~/store";
+import { generalSettingsStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { exportVideo } from "~/utils/export";
 import {
@@ -249,6 +250,16 @@ export function ExportDialog() {
       const videoPath = await exportWithSettings((progress) => {
         setExportState({ type: "rendering", progress });
       });
+
+      // Check if compression is enabled
+      const generalSettings = await generalSettingsStore.get();
+      if (
+        generalSettings?.compressionConfig?.enabled &&
+        settings.format === "Mp4"
+      ) {
+        // The compression is handled in the backend now
+        // The videoPath returned will be the compressed path if compression is enabled
+      }
 
       setExportState({ type: "copying" });
 

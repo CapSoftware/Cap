@@ -21,6 +21,44 @@ pub enum MainWindowRecordingStartBehaviour {
     Minimise,
 }
 
+#[derive(Serialize, Deserialize, Type, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CompressionConfig {
+    pub enabled: bool,
+    pub quality: CompressionQuality,
+    pub preset: CompressionPreset,
+    pub audio_bitrate: u32,
+    pub delete_original: bool,
+}
+
+#[derive(Serialize, Deserialize, Type, Debug, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+pub enum CompressionQuality {
+    High,
+    Medium,
+    Low,
+}
+
+#[derive(Serialize, Deserialize, Type, Debug, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+pub enum CompressionPreset {
+    Slow,
+    Medium,
+    Fast,
+}
+
+impl Default for CompressionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            quality: CompressionQuality::High,
+            preset: CompressionPreset::Slow,
+            audio_bitrate: 128,
+            delete_original: false,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Type, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct GeneralSettingsStore {
@@ -57,6 +95,8 @@ pub struct GeneralSettingsStore {
     pub custom_cursor_capture: bool,
     #[serde(default = "default_server_url")]
     pub server_url: String,
+    #[serde(default)]
+    pub compression_config: CompressionConfig,
     #[serde(default, alias = "open_editor_after_recording")]
     #[deprecated]
     _open_editor_after_recording: bool,
@@ -96,6 +136,7 @@ impl Default for GeneralSettingsStore {
             main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour::Close,
             custom_cursor_capture: false,
             server_url: default_server_url(),
+            compression_config: CompressionConfig::default(),
             _open_editor_after_recording: false,
         }
     }
