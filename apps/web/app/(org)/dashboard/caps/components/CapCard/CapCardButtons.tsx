@@ -1,5 +1,5 @@
 import { Tooltip } from "@/components/Tooltip";
-import { buildEnv, NODE_ENV } from "@cap/env";
+import { buildEnv } from "@cap/env";
 import { Button } from "@cap/ui";
 import { faDownload, faLink } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -20,6 +20,8 @@ export interface CapCardButtonsProps {
   isDownloading: boolean;
   handleCopy: (url: string) => void;
   handleDownload: () => void;
+  customDomain?: string | null;
+  domainVerified?: boolean;
 }
 
 export const CapCardButtons: React.FC<CapCardButtonsProps> = ({
@@ -28,10 +30,12 @@ export const CapCardButtons: React.FC<CapCardButtonsProps> = ({
   isDownloading,
   handleCopy,
   handleDownload,
+  customDomain,
+  domainVerified,
 }) => {
   return (
     <>
-      {buttons(capId, copyPressed, isDownloading, handleCopy, handleDownload).map((button, index) => (
+      {buttons(capId, copyPressed, isDownloading, handleCopy, handleDownload, customDomain, domainVerified).map((button, index) => (
         <Tooltip key={index} content={button.tooltipContent}>
           <Button
             onClick={button.onClick}
@@ -55,18 +59,26 @@ const buttons = (
   copyPressed: boolean,
   isDownloading: boolean,
   handleCopy: (url: string) => void,
-  handleDownload: () => void
+  handleDownload: () => void,
+  customDomain?: string | null,
+  domainVerified?: boolean,
 ): ButtonConfig[] => [
     {
       tooltipContent: "Copy link",
       onClick: (e: React.MouseEvent) => {
         e.stopPropagation();
-        handleCopy(
 
-          buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-            ? `https://cap.link/${capId}`
-            : `${location.origin}/s/${capId}`
-        );
+        const getVideoLink = () => {
+          if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
+            return `https://${customDomain}/s/${capId}`;
+          } else if (buildEnv.NEXT_PUBLIC_IS_CAP && !customDomain && !domainVerified) {
+            return `https://cap.link/${capId}`;
+          } else {
+            return `${location.origin}/s/${capId}`;
+          }
+        };
+
+        handleCopy(getVideoLink());
       },
       className: "delay-0",
       disabled: false,
