@@ -62,6 +62,7 @@ const buttons = (
       onClick: (e: React.MouseEvent) => {
         e.stopPropagation();
         handleCopy(
+
           buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
             ? `https://cap.link/${capId}`
             : `${location.origin}/s/${capId}`
