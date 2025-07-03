@@ -10,7 +10,7 @@ import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { Copy, Globe2 } from "lucide-react";
-import { buildEnv, NODE_ENV } from "@cap/env";
+import { buildEnv } from "@cap/env";
 import { editTitle } from "@/actions/videos/edit-title";
 import { usePublicEnv } from "@/utils/public-env";
 import { isUserOnProPlan } from "@cap/utils";
@@ -93,23 +93,23 @@ export const ShareHeader = ({
   const getVideoLink = () => {
     return customDomain && domainVerified
       ? `https://${customDomain}/s/${data.id}`
-      : buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-      ? `https://cap.link/${data.id}`
-      : `${webUrl}/s/${data.id}`;
+      : buildEnv.NEXT_PUBLIC_IS_CAP
+        ? `https://cap.link/${data.id}`
+        : `${webUrl}/s/${data.id}`;
   };
 
   const getDisplayLink = () => {
     return customDomain && domainVerified
       ? `${customDomain}/s/${data.id}`
-      : buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-      ? `cap.link/${data.id}`
-      : `${webUrl}/s/${data.id}`;
+      : buildEnv.NEXT_PUBLIC_IS_CAP
+        ? `cap.link/${data.id}`
+        : `${webUrl}/s/${data.id}`;
   };
 
   const isUserPro = user
     ? isUserOnProPlan({
-        subscriptionStatus: user.stripeSubscriptionStatus,
-      })
+      subscriptionStatus: user.stripeSubscriptionStatus,
+    })
     : false;
 
   const handleSharingUpdated = () => {
@@ -127,7 +127,7 @@ export const ShareHeader = ({
       ) {
         return (
           <p
-            className={clsx(baseClassName, "hover:text-gray-12 cursor-pointer")}
+            className={clsx(baseClassName, "cursor-pointer hover:text-gray-12")}
             onClick={() => setIsSharingDialogOpen(true)}
           >
             Not shared{" "}
@@ -137,7 +137,7 @@ export const ShareHeader = ({
       } else {
         return (
           <p
-            className={clsx(baseClassName, "hover:text-gray-12 cursor-pointer")}
+            className={clsx(baseClassName, "cursor-pointer hover:text-gray-12")}
             onClick={() => setIsSharingDialogOpen(true)}
           >
             Shared{" "}
@@ -188,7 +188,7 @@ export const ShareHeader = ({
                 )}
               </div>
               {user && renderSharedStatus()}
-              <p className="text-sm text-gray-10 mt-1">
+              <p className="mt-1 text-sm text-gray-10">
                 {moment(data.createdAt).fromNow()}
               </p>
             </div>
@@ -196,10 +196,10 @@ export const ShareHeader = ({
           {user !== null && (
             <div className="flex space-x-2">
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex gap-2 items-center">
                   {data.password && (
                     <FontAwesomeIcon
-                      className="size-4 text-amber-600"
+                      className="text-amber-600 size-4"
                       icon={faLock}
                     />
                   )}
