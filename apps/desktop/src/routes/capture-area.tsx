@@ -16,13 +16,6 @@ export default function CaptureArea() {
   const { rawOptions, setOptions } = createOptionsQuery();
   const webview = getCurrentWebviewWindow();
 
-  const [state, setState] = makePersisted(
-    createStore({
-      showGrid: true,
-    }),
-    { name: "captureArea" }
-  );
-
   const setPendingState = (pending: boolean) =>
     webview.emitTo("main", "cap-window://capture-area/state/pending", pending);
 
@@ -137,27 +130,6 @@ export default function CaptureArea() {
               >
                 <IconCapCircleX class="size-5" />
               </button>
-              <Tooltip.Root openDelay={500}>
-                <Tooltip.Trigger tabIndex={-1}>
-                  <button
-                    class={`py-[0.25rem] px-2 gap-[0.25rem] mr-2 hover:bg-gray-3 flex flex-row items-center rounded-[8px] transition-colors duration-200 ${
-                      state.showGrid
-                        ? "bg-gray-3 text-blue-9"
-                        : "text-gray-12 opacity-50"
-                    }`}
-                    type="button"
-                    onClick={() => setState("showGrid", (v) => !v)}
-                  >
-                    <IconCapPadding class="size-5" />
-                  </button>
-                </Tooltip.Trigger>
-                <Tooltip.Portal>
-                  <Tooltip.Content class="z-50 px-2 py-1 text-xs rounded shadow-lg duration-500 delay-1000 text-gray-1 bg-gray-12 animate-in fade-in">
-                    Rule of Thirds
-                    <Tooltip.Arrow class="fill-gray-12" />
-                  </Tooltip.Content>
-                </Tooltip.Portal>
-              </Tooltip.Root>
               <div class="flex flex-row flex-grow gap-2 justify-center">
                 <button
                   class="text-blue-9 px-2 gap-[0.25rem] hover:bg-blue-3 flex flex-row items-center rounded-[8px] grow justify-center transition-colors duration-200"
@@ -181,10 +153,7 @@ export default function CaptureArea() {
         exitActiveClass="fade-out animate-out"
       >
         <Show when={visible()}>
-          <CropArea
-            controller={cropController}
-            showGuideLines={state.showGrid}
-          />
+          <CropArea controller={cropController} />
         </Show>
       </Transition>
     </div>

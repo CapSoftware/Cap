@@ -32,14 +32,9 @@ function drawHandles({
     ? "rgba(255, 255, 255, 1)"
     : highlighted
     ? "rgba(60, 150, 280, 1)"
-    : "rgba(255, 255, 255, 0.8)";
+    : "rgba(255, 255, 255, 1)";
 
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.roundRect(x, y, width, height, radius);
-  ctx.stroke();
-
-  ctx.lineWidth = 5;
+  ctx.lineWidth = 4;
   ctx.lineCap = "round";
   ctx.setLineDash([]);
 
@@ -120,10 +115,14 @@ function drawHandles({
 }
 
 // Rule of thirds guide lines and center crosshair
-function drawGuideLines({ ctx, bounds, prefersDark }: DrawContext) {
-  ctx.strokeStyle = prefersDark
-    ? "rgba(255, 255, 255, 0.5)"
-    : "rgba(0, 0, 0, 0.5)";
+function drawGuideLines(
+  { ctx, bounds, prefersDark }: DrawContext,
+  opacity: number = 1
+) {
+  const baseColor = prefersDark ? [255, 255, 255] : [0, 0, 0];
+  ctx.strokeStyle = `rgba(${baseColor[0]}, ${baseColor[1]}, ${baseColor[2]}, ${
+    0.5 * opacity
+  })`;
   ctx.lineWidth = 1;
   ctx.setLineDash([5, 2]);
 
@@ -173,7 +172,8 @@ function draw(
   highlighted: boolean,
   selected: boolean,
   prefersDark: boolean,
-  borderColor?: string
+  borderColor?: string,
+  guideLinesOpacity: number = 1
 ) {
   if (bounds.width <= 0 || bounds.height <= 0) return;
   const drawContext: DrawContext = {
@@ -194,21 +194,19 @@ function draw(
   // Shadow
   ctx.save();
   ctx.shadowColor = "rgba(0, 0, 0, 0.4)";
-  ctx.shadowBlur = 80;
-  ctx.shadowOffsetY = 25;
+  ctx.shadowBlur = 40;
+  ctx.shadowOffsetY = 15;
   ctx.beginPath();
   ctx.roundRect(bounds.x, bounds.y, bounds.width, bounds.height, radius);
   ctx.fill();
   ctx.restore();
-
-  if (showHandles) drawHandles(drawContext);
 
   ctx.beginPath();
   ctx.roundRect(bounds.x, bounds.y, bounds.width, bounds.height, radius);
   ctx.clip();
   ctx.clearRect(bounds.x, bounds.y, bounds.width, bounds.height);
 
-  if (guideLines) drawGuideLines(drawContext);
+  if (guideLinesOpacity > 0) drawGuideLines(drawContext, guideLinesOpacity);
 
   if (borderColor) {
     ctx.beginPath();
@@ -219,6 +217,21 @@ function draw(
   }
 
   ctx.restore();
+
+  if (showHandles) {
+    ctx.strokeStyle = selected
+      ? "rgba(255, 255, 255, 0.8)"
+      : highlighted
+      ? "rgba(60, 150, 280, 0.8)"
+      : "rgba(255, 255, 255, 0.4)";
+
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(bounds.x, bounds.y, bounds.width, bounds.height, radius);
+    ctx.stroke();
+
+    drawHandles(drawContext);
+  }
 }
 
 function hexToRgb(hex: string): [number, number, number] | null {
@@ -238,7 +251,7 @@ export default function CropAreaRenderer(
     borderColor?: string;
   }>
 ) {
-  let canvasRef: HTMLCanvasElement | undefined;
+  let canvasRef: HTMLCanvasElement | null = null;
   const [prefersDarkScheme, setPrefersDarkScheme] = createSignal(false);
   const borderColorRgba = createMemo(() => {
     if (!props.borderColor) return;
@@ -247,6 +260,69 @@ export default function CropAreaRenderer(
     // prettier-ignore
     return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.5)`;
   });
+
+  const GUIDE_LINES_ANIM_DURATION_MS = 150;
+
+  let guideLinesOpacity = props.guideLines ? 1 : 0;
+  let targetOpacity = props.guideLines ? 1 : 0;
+  let animating = false;
+  let animationFrameId: number | null = null;
+
+  let latestProps = { ...props };
+  let latestPrefersDark = prefersDarkScheme();
+
+  createEffect(() => {
+    latestProps = { ...props };
+    latestPrefersDark = prefersDarkScheme();
+    // Only redraw if not animating
+    if (!animating) {
+      redraw();
+    }
+  });
+
+  function animateGuideLinesOpacity(to: number) {
+    if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
+    animating = true;
+    const from = guideLinesOpacity;
+    const start = performance.now();
+    targetOpacity = to;
+
+    function step(now: number) {
+      // Easing: ease-in-out
+      const t = Math.min((now - start) / GUIDE_LINES_ANIM_DURATION_MS, 1);
+      const eased = t * (2 - t);
+      guideLinesOpacity = from + (to - from) * eased;
+      redraw();
+      if (
+        (to > from && guideLinesOpacity < to) ||
+        (to < from && guideLinesOpacity > to)
+      ) {
+        animationFrameId = requestAnimationFrame(step);
+      } else {
+        guideLinesOpacity = to;
+        animating = false;
+        redraw();
+      }
+    }
+    animationFrameId = requestAnimationFrame(step);
+  }
+
+  let ctx: CanvasRenderingContext2D | null = null;
+  function redraw() {
+    if (!ctx) return;
+    draw(
+      ctx,
+      latestProps.bounds,
+      latestProps.borderRadius || 0,
+      latestProps.guideLines || false,
+      latestProps.handles || false,
+      latestProps.highlighted || false,
+      latestProps.selected || false,
+      latestPrefersDark,
+      borderColorRgba(),
+      guideLinesOpacity
+    );
+  }
 
   onMount(() => {
     if (!canvasRef) {
@@ -260,48 +336,32 @@ export default function CropAreaRenderer(
       setPrefersDarkScheme(e.matches);
     colorSchemeQuery.addEventListener("change", handleChange);
 
-    const hidpiCanvas = createHiDPICanvasContext(canvasRef, (ctx) =>
-      draw(
-        ctx,
-        props.bounds,
-        props.borderRadius || 0,
-        props.guideLines || false,
-        props.handles || false,
-        props.highlighted || false,
-        props.selected || false,
-        prefersDarkScheme(),
-        borderColorRgba()
-      )
-    );
-    const ctx = hidpiCanvas?.ctx;
+    const hidpiCanvas = createHiDPICanvasContext(canvasRef, (c) => {
+      ctx = c;
+      redraw();
+    });
+    ctx = hidpiCanvas?.ctx ?? null;
 
     let lastFrameId: number | null = null;
 
     createEffect(() => {
+      // Animate guide lines opacity on prop change
+      const shouldShow = props.guideLines || false;
+      if (shouldShow !== guideLinesOpacity > 0.5) {
+        animateGuideLinesOpacity(shouldShow ? 1 : 0);
+      } else {
+        redraw();
+      }
+      // Redraw on other prop changes
       if (lastFrameId !== null) cancelAnimationFrame(lastFrameId);
-
-      const { x, y, width, height } = props.bounds;
-      const { guideLines, handles, borderRadius, highlighted, selected } =
-        props;
-      const borderColor = borderColorRgba();
-
       lastFrameId = requestAnimationFrame(() => {
-        draw(
-          ctx!,
-          { x, y, width, height },
-          borderRadius || 0,
-          guideLines || false,
-          handles || false,
-          highlighted || false,
-          selected || false,
-          prefersDarkScheme(),
-          borderColor
-        );
+        redraw();
       });
     });
 
     onCleanup(() => {
       if (lastFrameId !== null) cancelAnimationFrame(lastFrameId);
+      if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
       colorSchemeQuery.removeEventListener("change", handleChange);
       hidpiCanvas?.cleanup();
     });
@@ -309,7 +369,10 @@ export default function CropAreaRenderer(
 
   return (
     <div class="*:h-full *:w-full animate-in fade-in">
-      <canvas ref={canvasRef} class="pointer-events-none absolute" />
+      <canvas
+        ref={(el) => (canvasRef = el)}
+        class="pointer-events-none absolute"
+      />
       <div>{props.children}</div>
     </div>
   );

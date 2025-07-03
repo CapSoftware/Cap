@@ -302,13 +302,6 @@ function Dialogs() {
                   mappedSize: { x: display.width, y: display.height },
                 });
 
-                const [cropOptions, setCropOptions] = makePersisted(
-                  createStore({
-                    showGrid: false,
-                  }),
-                  { name: "cropOptionsState" }
-                );
-
                 return (
                   <>
                     <Dialog.Header>
@@ -371,7 +364,7 @@ function Dialogs() {
                         </div>
                       </div>
                       <div class="flex flex-row gap-3 justify-end items-center w-full">
-                        <div class="flex flex-row items-center space-x-[0.5rem] text-gray-11">
+                        {/* <div class="flex flex-row items-center space-x-[0.5rem] text-gray-11">
                           <Tooltip content="Rule of Thirds">
                             <button
                               type="button"
@@ -388,7 +381,7 @@ function Dialogs() {
                               <IconCapPadding class="w-4" />
                             </button>
                           </Tooltip>
-                        </div>
+                        </div> */}
                         <EditorButton
                           leftIcon={<IconCapCircleX />}
                           onClick={() => cropController.reset()}
@@ -400,10 +393,7 @@ function Dialogs() {
                     <Dialog.Content>
                       <div class="flex flex-row justify-center">
                         <div class="overflow-hidden rounded divide-black-transparent-10">
-                          <CropArea
-                            controller={cropController}
-                            showGuideLines={cropOptions.showGrid}
-                          >
+                          <CropArea controller={cropController}>
                             <img
                               class="shadow pointer-events-none max-h-[70vh]"
                               alt="screenshot"

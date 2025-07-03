@@ -89,7 +89,6 @@ export default function Cropper(
   props: ParentProps<{
     class?: string;
     controller: CropController;
-    showGuideLines?: boolean;
   }>
 ) {
   const controller = props.controller;
@@ -119,6 +118,11 @@ export default function Cropper(
     selectedRatio: null as Ratio | null,
   });
 
+  createEffect(() => {
+    if (!interactionState.resizing) return;
+    setAspectState("snappedRatio", null);
+  });
+
   createEffect(
     on(
       () => aspectState.selectedRatio,
@@ -135,6 +139,15 @@ export default function Cropper(
       }
     )
   );
+
+  // Reset aspect state when controller resets
+  createEffect(() => {
+    controller.resetTrigger();
+    setAspectState({
+      snappedRatio: null,
+      selectedRatio: null,
+    });
+  });
 
   const effectiveAspectRatio = createMemo(() => {
     if (controller.options.aspectRatio) {
@@ -440,6 +453,7 @@ export default function Cropper(
       const crop = controller.crop();
 
       batch(() => {
+        setInteractionState("resizing", true);
         setGestureState("initialPinchDistance", distance);
         setGestureState("initialSize", {
           width: crop.width,
@@ -485,8 +499,7 @@ export default function Cropper(
         newWidth = newHeight * currentRatio;
       }
 
-      // Resize from center
-      box.resize(newWidth, newHeight, ORIGIN_CENTER);
+      box.resize(Math.round(newWidth), Math.round(newHeight), ORIGIN_CENTER);
 
       // Handle two-finger pan
       const centerX = (event.touches[0].clientX + event.touches[1].clientX) / 2;
@@ -498,8 +511,8 @@ export default function Cropper(
         const dy = (centerY - gestureState.lastTouchCenter.y) / scaleFactors.y;
 
         box.move(
-          clamp(box.x + dx, 0, logicalMax.x - box.width),
-          clamp(box.y + dy, 0, logicalMax.y - box.height)
+          Math.round(clamp(box.x + dx, 0, logicalMax.x - box.width)),
+          Math.round(clamp(box.y + dy, 0, logicalMax.y - box.height))
         );
       }
 
@@ -517,8 +530,8 @@ export default function Cropper(
           scaleFactors.y;
 
         box.move(
-          clamp(box.x + dx, 0, logicalMax.x - box.width),
-          clamp(box.y + dy, 0, logicalMax.y - box.height)
+          Math.round(clamp(box.x + dx, 0, logicalMax.x - box.width)),
+          Math.round(clamp(box.y + dy, 0, logicalMax.y - box.height))
         );
       }
 
@@ -538,6 +551,7 @@ export default function Cropper(
         setGestureState("lastTouchCenter", null);
       });
     } else if (event.touches.length === 1) {
+      setInteractionState("resizing", false);
       setGestureState("lastTouchCenter", {
         x: event.touches[0].clientX,
         y: event.touches[0].clientY,
@@ -630,52 +644,12 @@ export default function Cropper(
     });
   }
 
-  function handleWheel(event: WheelEvent) {
-    event.preventDefault();
-    const box = Box.fromBounds(controller.crop());
-    const logicalMax = controller.logicalMaxSize();
-    const logicalMin = controller.logicalMinSize();
-
-    if (event.ctrlKey) {
-      setGestureState("isTrackpadGesture", true);
-
-      const velocity = Math.max(0.001, Math.abs(event.deltaY) * 0.001);
-      const scale = 1 - event.deltaY * velocity;
-
-      box.resize(
-        clamp(box.width * scale, logicalMin.x, logicalMax.x),
-        clamp(box.height * scale, logicalMin.y, logicalMax.y),
-        ORIGIN_CENTER
-      );
-
-      if (effectiveAspectRatio())
-        box.constrainToRatio(effectiveAspectRatio()!, ORIGIN_CENTER);
-      box.constrainToBoundary(logicalMax.x, logicalMax.y, ORIGIN_CENTER);
-
-      setTimeout(() => setGestureState("isTrackpadGesture", false), 100);
-      setAspectState("snappedRatio", null);
-    } else {
-      const velocity = Math.max(1, Math.abs(event.deltaY) * 0.01);
-      const scaleFactors = logicalScale();
-      const dx = (-event.deltaX * velocity) / scaleFactors.x;
-      const dy = (-event.deltaY * velocity) / scaleFactors.y;
-
-      box.move(
-        Math.round(clamp(box.x + dx, 0, logicalMax.x - box.width)),
-        Math.round(clamp(box.y + dy, 0, logicalMax.y - box.height))
-      );
-    }
-
-    controller.uncheckedSetCrop(box.toBounds());
-  }
-
   return (
     <div
       aria-label="Crop area"
       ref={containerRef}
       class={`relative h-full w-full overflow-hidden overscroll-contain *:overscroll-none ${props.class}`}
       style={{ cursor: interactionState.cursorStyle ?? "auto" }}
-      onWheel={handleWheel}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -690,8 +664,8 @@ export default function Cropper(
     >
       <CropAreaRenderer
         bounds={scaledCrop()}
-        borderRadius={5}
-        guideLines={props.showGuideLines}
+        borderRadius={6}
+        guideLines={interactionState.dragging || interactionState.resizing}
         handles={true}
         highlighted={aspectState.snappedRatio !== null}
       >
@@ -844,7 +818,6 @@ export default function Cropper(
             }
           >
             {(ratio) => {
-              const locked = controller.options.aspectRatio !== null;
               return (
                 <div
                   ref={snapRatioEl}
@@ -859,7 +832,12 @@ export default function Cropper(
                   }}
                   class="absolute bg-gray-3 opacity-80 h-6 rounded-[7px] text-center text-neutral-300 text-sm border border-neutral-300 outline-[#dedede] dark:outline-[#000] flex items-center justify-evenly"
                 >
-                  <Show when={locked}>
+                  <Show
+                    when={
+                      controller.options.aspectRatio !== null &&
+                      !aspectState.selectedRatio
+                    }
+                  >
                     <IconLucideLock class="size-4" />
                   </Show>
                   {ratio()[0]}:{ratio()[1]}

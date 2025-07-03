@@ -30,6 +30,15 @@ function clamp(n: number, min = 0, max = 1) {
   return Math.max(min, Math.min(max, n));
 }
 
+function roundBounds(bounds: CropBounds) {
+  return {
+    x: Math.round(bounds.x),
+    y: Math.round(bounds.y),
+    width: Math.round(bounds.width),
+    height: Math.round(bounds.height),
+  };
+}
+
 export type CropController = {
   crop: Accessor<CropBounds>;
   setCrop: (bounds: CropBounds) => void;
@@ -39,8 +48,6 @@ export type CropController = {
   logicalMaxSize: Accessor<Vec2>;
   logicalMinSize: Accessor<Vec2>;
   containerSize: Accessor<Vec2>;
-  center: (halvedSize?: boolean) => void;
-  fill: () => void;
   reset: () => void;
   uncheckedSetCrop: (bounds: CropBounds) => void;
   uncheckedUpdateBox: (updater: (currentBox: Box) => Box | null) => void;
@@ -111,35 +118,6 @@ export function createCropController(
     setBoxAndApplyConstraints(box);
   };
 
-  const fill = () => {
-    const container = containerSize();
-    box.x = 0;
-    box.y = 0;
-    box.width = container.x;
-    box.height = container.y;
-    setCropBounds(box.toBounds());
-    setBoxAndApplyConstraints();
-  };
-
-  const center = (halvedSize = true) => {
-    const container = containerSize();
-    let finalWidth = box.width;
-    let finalHeight = box.height;
-
-    if (halvedSize) {
-      finalWidth = box.width / 2;
-      finalHeight = box.height / 2;
-      box.width = finalWidth;
-      box.height = finalHeight;
-    }
-
-    const x = container.x / 2 - finalWidth / 2;
-    const y = container.y / 2 - finalHeight / 2;
-    box.move(x, y);
-    setCropBounds(box.toBounds());
-    setBoxAndApplyConstraints();
-  };
-
   const uncheckedUpdateBox = (updater: (currentBox: Box) => Box | null) => {
     const newBox = updater(box);
     if (newBox) {
@@ -173,21 +151,23 @@ export function createCropController(
   const initBox = () => {
     let newBox: Box;
     if (initialOptions.initialCrop) {
-      newBox = Box.fromBounds(initialOptions.initialCrop);
-      setCropBounds(newBox.toBounds());
-      box = newBox;
+      const bounds = roundBounds(initialOptions.initialCrop);
+      box = Box.fromBounds(bounds);
+      setCropBounds(bounds);
     } else {
       const mapped = options.mappedSize || containerSize();
 
       let width = clamp(mapped.x / 2, logicalMinSize().x, mapped.x);
       let height = clamp(mapped.y / 2, logicalMinSize().y, mapped.y);
 
-      newBox = Box.fromBounds({
-        x: (mapped.x - width) / 2,
-        y: (mapped.y - height) / 2,
-        width,
-        height,
-      });
+      newBox = Box.fromBounds(
+        roundBounds({
+          x: (mapped.x - width) / 2,
+          y: (mapped.y - height) / 2,
+          width,
+          height,
+        })
+      );
 
       if (options.aspectRatio) {
         newBox.constrainToRatio(
@@ -231,8 +211,6 @@ export function createCropController(
     logicalMaxSize,
     logicalMinSize,
     containerSize,
-    center,
-    fill,
     reset: initBox,
     uncheckedSetCrop,
     uncheckedUpdateBox,
