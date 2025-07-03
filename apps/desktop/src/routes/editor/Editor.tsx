@@ -36,6 +36,7 @@ import { Player } from "./Player";
 import { Timeline } from "./Timeline";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
 import { createCropController } from "~/utils/cropController";
+import AltSwitch from "~/components/AltSwitch";
 
 export function Editor() {
   return (
@@ -300,6 +301,12 @@ function Dialogs() {
                 const display = editorInstance.recordings.segments[0].display;
                 const cropController = createCropController({
                   mappedSize: { x: display.width, y: display.height },
+                  initialCrop: {
+                    x: dialog().position.x,
+                    y: dialog().position.y,
+                    width: dialog().size.x,
+                    height: dialog().size.y,
+                  },
                 });
 
                 return (
@@ -364,30 +371,24 @@ function Dialogs() {
                         </div>
                       </div>
                       <div class="flex flex-row gap-3 justify-end items-center w-full">
-                        {/* <div class="flex flex-row items-center space-x-[0.5rem] text-gray-11">
-                          <Tooltip content="Rule of Thirds">
-                            <button
-                              type="button"
-                              class={cx(
-                                "flex items-center bg-gray-3 justify-center text-center rounded-[0.5rem] h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-9 outline-none transition-colors duration-200",
-                                cropOptions.showGrid
-                                  ? "bg-gray-3 text-blue-9 border-blue-9"
-                                  : "text-gray-12"
-                              )}
-                              onClick={() =>
-                                setCropOptions("showGrid", (s) => !s)
-                              }
+                        <AltSwitch
+                          normal={
+                            <EditorButton
+                              leftIcon={<IconCapCircleX />}
+                              onClick={() => cropController.reset()}
                             >
-                              <IconCapPadding class="w-4" />
-                            </button>
-                          </Tooltip>
-                        </div> */}
-                        <EditorButton
-                          leftIcon={<IconCapCircleX />}
-                          onClick={() => cropController.reset()}
-                        >
-                          Reset
-                        </EditorButton>
+                              Reset
+                            </EditorButton>
+                          }
+                          alt={
+                            <EditorButton
+                              leftIcon={<IconLucideMaximize />}
+                              onClick={() => cropController.fill()}
+                            >
+                              Fill
+                            </EditorButton>
+                          }
+                        />
                       </div>
                     </Dialog.Header>
                     <Dialog.Content>

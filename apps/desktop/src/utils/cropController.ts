@@ -48,9 +48,12 @@ export type CropController = {
   logicalMaxSize: Accessor<Vec2>;
   logicalMinSize: Accessor<Vec2>;
   containerSize: Accessor<Vec2>;
+  fill: () => void;
   reset: () => void;
+  resetTrigger: Accessor<number>;
   uncheckedSetCrop: (bounds: CropBounds) => void;
   uncheckedUpdateBox: (updater: (currentBox: Box) => Box | null) => void;
+  onReset: (fn: () => void) => void;
   // Internal lifecycle methods
   _internalInitController: (containerElement: HTMLElement) => void;
   _internalCleanupController: () => void;
@@ -69,6 +72,8 @@ export function createCropController(
   const [aspectRatioValue, setAspectRatioValue] = createSignal<number | null>(
     null
   );
+
+  const [resetTrigger, setResetTrigger] = createSignal(0);
 
   let resizeObserver: ResizeObserver | null = null;
 
@@ -148,9 +153,15 @@ export function createCropController(
     )
   );
 
-  const initBox = () => {
+  let resetListeners: (() => void)[] = [];
+
+  const onReset = (fn: () => void) => {
+    resetListeners.push(fn);
+  };
+
+  const initBox = (useInitial = true) => {
     let newBox: Box;
-    if (initialOptions.initialCrop) {
+    if (useInitial && initialOptions.initialCrop) {
       const bounds = roundBounds(initialOptions.initialCrop);
       box = Box.fromBounds(bounds);
       setCropBounds(bounds);
@@ -202,6 +213,57 @@ export function createCropController(
     }
   };
 
+  const fill = () => {
+    // Set the crop to the maximum allowed size, constrained by aspect ratio if present
+    const mapped = options.mappedSize || containerSize();
+    const min = logicalMinSize();
+    let width = mapped.x;
+    let height = mapped.y;
+
+    // If aspect ratio is set, constrain the box to that ratio
+    let ratio: number | null = null;
+    if (options.aspectRatio) {
+      ratio = options.aspectRatio[0] / options.aspectRatio[1];
+    } else if (aspectRatioValue()) {
+      ratio = aspectRatioValue();
+    }
+
+    if (ratio) {
+      // Fit the largest box of the given aspect ratio inside mapped size
+      if (mapped.x / mapped.y > ratio) {
+        // Container is wider than ratio, fit by height
+        height = mapped.y;
+        width = height * ratio;
+      } else {
+        // Container is taller than ratio, fit by width
+        width = mapped.x;
+        height = width / ratio;
+      }
+    }
+
+    // Clamp to min size
+    width = Math.max(width, min.x);
+    height = Math.max(height, min.y);
+
+    const newBox = Box.fromBounds(
+      roundBounds({
+        x: (mapped.x - width) / 2,
+        y: (mapped.y - height) / 2,
+        width,
+        height,
+      })
+    );
+
+    box = newBox;
+    setCropBounds(newBox.toBounds());
+  };
+
+  const reset = () => {
+    initBox(false);
+    setResetTrigger((prev) => prev + 1);
+    resetListeners.forEach((listener) => listener());
+  };
+
   return {
     crop: cropBounds,
     setCrop,
@@ -211,9 +273,12 @@ export function createCropController(
     logicalMaxSize,
     logicalMinSize,
     containerSize,
-    reset: initBox,
+    fill,
+    reset,
+    resetTrigger,
     uncheckedSetCrop,
     uncheckedUpdateBox,
+    onReset,
     _internalInitController: init,
     _internalCleanupController: cleanup,
   };

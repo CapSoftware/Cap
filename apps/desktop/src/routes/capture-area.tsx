@@ -11,6 +11,7 @@ import { Transition } from "solid-transition-group";
 import CropArea from "~/components/CropArea";
 import { createOptionsQuery } from "~/utils/queries";
 import { createCropController, CropBounds } from "~/utils/cropController";
+import AltSwitch from "~/components/AltSwitch";
 
 export default function CaptureArea() {
   const { rawOptions, setOptions } = createOptionsQuery();
@@ -118,21 +119,43 @@ export default function CaptureArea() {
       <div class="flex fixed z-50 justify-center items-center w-full">
         <Transition
           appear
-          enterActiveClass="fade-in animate-in slide-in-from-top-6"
-          exitActiveClass="fade-out animate-out slide-out-to-top-6"
+          enterActiveClass="fade-in animate-in slide-in-from-top-8"
+          exitActiveClass="fade-out animate-out slide-out-to-top-8"
         >
           <Show when={visible()}>
-            <div class="transition-all ease-out duration-200 absolute w-auto h-10 bg-gray-1 rounded-[12px] drop-shadow-2xl overflow-visible border border-gray-3 outline outline-1 outline-gray-6 flex justify-around p-1 top-11">
+            <div class="transition-all ease-out duration-250 absolute w-auto h-10 bg-gray-1 rounded-full drop-shadow-2xl overflow-visible border border-gray-3 outline outline-1 outline-gray-6 flex justify-around p-1 top-11">
               <button
-                class="py-[0.25rem] px-2 text-gray-11 gap-[0.25rem] flex flex-row items-center rounded-[8px] ml-0 right-auto"
+                class="py-[0.25rem] px-2 text-gray-11 gap-[0.25rem] flex flex-row items-center rounded-full ml-0 right-auto"
                 type="button"
                 onClick={close}
               >
                 <IconCapCircleX class="size-5" />
               </button>
               <div class="flex flex-row flex-grow gap-2 justify-center">
+                <AltSwitch
+                  normal={
+                    <button
+                      class="px-2 gap-[0.25rem] flex flex-row items-center rounded-[8px] grow justify-center transition-colors duration-200"
+                      type="button"
+                      onClick={() => cropController.fill()}
+                    >
+                      <IconLucideMaximize class="size-5" />
+                      <span class="font-[500] text-[0.875rem]">Fill</span>
+                    </button>
+                  }
+                  alt={
+                    <button
+                      class="px-2 gap-[0.25rem] flex flex-row items-center rounded-[8px] grow justify-center transition-colors duration-200"
+                      type="button"
+                      onClick={() => cropController.reset()}
+                    >
+                      <IconLucideMaximize class="size-5" />
+                      <span class="font-[500] text-[0.875rem]">Reset</span>
+                    </button>
+                  }
+                />
                 <button
-                  class="text-blue-9 px-2 gap-[0.25rem] hover:bg-blue-3 flex flex-row items-center rounded-[8px] grow justify-center transition-colors duration-200"
+                  class="text-blue-9 px-2 gap-[0.25rem] hover:bg-blue-3 flex flex-row items-center rounded-full grow justify-center transition-colors duration-200"
                   type="button"
                   onClick={handleConfirm}
                 >

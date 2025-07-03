@@ -31,12 +31,19 @@ function drawHandles({
   ctx.strokeStyle = selected
     ? "rgba(255, 255, 255, 1)"
     : highlighted
-    ? "rgba(60, 150, 280, 1)"
-    : "rgba(255, 255, 255, 1)";
+    ? "rgba(80, 160, 255, 0.8)"
+    : "rgba(255, 255, 255, 0.8)";
 
   ctx.lineWidth = 4;
   ctx.lineCap = "round";
-  ctx.setLineDash([]);
+
+  // Shadow
+  ctx.save();
+  ctx.shadowColor = "rgba(0, 0, 0, 1)";
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.beginPath();
 
   const cornerHandleLength = radius === 0 ? 20 : 10;
 
@@ -167,7 +174,6 @@ function draw(
   ctx: CanvasRenderingContext2D,
   bounds: Bounds,
   radius: number,
-  guideLines: boolean,
   showHandles: boolean,
   highlighted: boolean,
   selected: boolean,
@@ -220,10 +226,10 @@ function draw(
 
   if (showHandles) {
     ctx.strokeStyle = selected
-      ? "rgba(255, 255, 255, 0.8)"
+      ? "rgba(255, 255, 255, 1)"
       : highlighted
-      ? "rgba(60, 150, 280, 0.8)"
-      : "rgba(255, 255, 255, 0.4)";
+      ? "rgba(80, 160, 255, 0.8)"
+      : "rgba(255, 255, 255, 0.8)";
 
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -231,6 +237,7 @@ function draw(
     ctx.stroke();
 
     drawHandles(drawContext);
+    ctx.restore();
   }
 }
 
@@ -314,7 +321,6 @@ export default function CropAreaRenderer(
       ctx,
       latestProps.bounds,
       latestProps.borderRadius || 0,
-      latestProps.guideLines || false,
       latestProps.handles || false,
       latestProps.highlighted || false,
       latestProps.selected || false,

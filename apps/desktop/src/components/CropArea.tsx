@@ -140,7 +140,6 @@ export default function Cropper(
     )
   );
 
-  // Reset aspect state when controller resets
   createEffect(() => {
     controller.resetTrigger();
     setAspectState({
@@ -172,9 +171,7 @@ export default function Cropper(
   async function menu() {
     const aspects = {
       id: "crop-options-aspect",
-      text: controller.options.aspectRatio
-        ? `Aspect (${controller.options.aspectRatio[0]}:${controller.options.aspectRatio[1]})`
-        : "Aspect",
+      text: "Aspect",
       enabled: !controller.options.aspectRatio,
       items: [
         {
