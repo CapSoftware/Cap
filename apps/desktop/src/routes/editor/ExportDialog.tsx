@@ -258,7 +258,9 @@ export function ExportDialog() {
     },
     onError: (error) => {
       commands.globalMessageDialog(
-        error instanceof Error ? error.message : "Failed to export recording"
+        error instanceof Error
+          ? error.message
+          : `Failed to export recording: ${error}`
       );
       setExportState({ type: "idle" });
     },

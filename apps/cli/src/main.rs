@@ -3,13 +3,11 @@ mod record;
 use std::{
     io::{stdout, Write},
     path::PathBuf,
-    sync::Arc,
 };
 
 use cap_export::ExporterBase;
 use cap_media::sources::get_target_fps;
-use cap_project::{RecordingMeta, XY};
-use cap_rendering::{ProjectRecordingsMeta, RenderVideoConstants};
+use cap_project::XY;
 use clap::{Args, Parser, Subcommand};
 use record::RecordStart;
 use serde_json::json;
@@ -171,9 +169,10 @@ impl Export {
 
         let mut stdout = stdout();
 
-        let exporter_output_path = cap_export::gif::GifExportSettings {
+        let exporter_output_path = cap_export::mp4::Mp4ExportSettings {
             fps: 10,
             resolution_base: XY::new(1920, 1080),
+            compression: cap_export::mp4::ExportCompression::Minimal,
         }
         .export(exporter_base, move |f| {
             print!("\rrendered frame {f}");

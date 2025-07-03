@@ -45,6 +45,8 @@ pub enum ExporterBuildError {
     RendererSetup(#[source] cap_rendering::RenderingError),
     #[error("Failed to load media: {0}")]
     MediaLoad(String),
+    #[error("IO error at path '{0}': {1}")]
+    IO(PathBuf, std::io::Error),
 }
 
 pub struct ExporterBuilder {
@@ -89,10 +91,17 @@ impl ExporterBuilder {
             .await
             .map_err(Error::MediaLoad)?;
 
+        let output_path = self
+            .output_path
+            .unwrap_or_else(|| recording_meta.output_path());
+
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| ExporterBuildError::IO(parent.to_path_buf(), e))?;
+        }
+
         Ok(ExporterBase {
-            output_path: self
-                .output_path
-                .unwrap_or_else(|| recording_meta.output_path()),
+            output_path,
             studio_meta: studio_meta.clone(),
             recordings,
             render_constants,

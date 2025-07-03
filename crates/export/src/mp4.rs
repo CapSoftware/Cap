@@ -12,7 +12,7 @@ use futures::FutureExt;
 use image::ImageBuffer;
 use serde::Deserialize;
 use specta::Type;
-use tracing::{info, warn};
+use tracing::{info, trace, warn};
 
 use crate::{ExportError, ExporterBase};
 
@@ -78,6 +78,8 @@ impl Mp4ExportSettings {
         let has_audio = audio_renderer.is_some();
 
         let encoder_thread = tokio::task::spawn_blocking(move || {
+            trace!("Creating MP4File encoder");
+
             let mut encoder = cap_media::encoders::MP4File::init(
                 "output",
                 base.output_path.clone(),
@@ -93,14 +95,23 @@ impl Mp4ExportSettings {
                     })
                 },
             )
+            .inspect_err(|e| {
+                dbg!(e);
+            })
             .map_err(|v| v.to_string())?;
 
+            info!("Created MP4File encoder");
+
+            let mut encoded_frames = 0;
             while let Ok(frame) = frame_rx.recv() {
                 encoder.queue_video_frame(frame.video);
+                encoded_frames += 1;
                 if let Some(audio) = frame.audio {
                     encoder.queue_audio_frame(audio);
                 }
             }
+
+            info!("Encoded {encoded_frames} video frames");
 
             encoder.finish();
 
@@ -217,6 +228,9 @@ impl Mp4ExportSettings {
         .then(|v| async { Ok(v.map_err(|e| e.to_string())) });
 
         let _ = tokio::try_join!(encoder_thread, render_video_task, render_task)
+            .inspect_err(|e| {
+                dbg!(e);
+            })
             .map_err(|e| e.to_string())?;
 
         Ok(output_path)
