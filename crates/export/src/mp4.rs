@@ -95,9 +95,6 @@ impl Mp4ExportSettings {
                     })
                 },
             )
-            .inspect_err(|e| {
-                dbg!(e);
-            })
             .map_err(|v| v.to_string())?;
 
             info!("Created MP4File encoder");
@@ -116,7 +113,8 @@ impl Mp4ExportSettings {
             encoder.finish();
 
             Ok::<_, String>(base.output_path)
-        });
+        })
+        .then(|r| async { r.map_err(|e| e.to_string()).and_then(|v| v) });
 
         let render_task = tokio::spawn({
             let project = base.project_config.clone();
@@ -159,16 +157,17 @@ impl Mp4ExportSettings {
                             frame
                         });
 
-                    frame_tx
-                        .send(MP4Input {
-                            audio: audio_frame,
-                            video: video_info.wrap_frame(
-                                &frame.data,
-                                frame_number as i64,
-                                frame.padded_bytes_per_row as usize,
-                            ),
-                        })
-                        .ok();
+                    if let Err(_) = frame_tx.send(MP4Input {
+                        audio: audio_frame,
+                        video: video_info.wrap_frame(
+                            &frame.data,
+                            frame_number as i64,
+                            frame.padded_bytes_per_row as usize,
+                        ),
+                    }) {
+                        warn!("Renderer task sender dropped. Exiting");
+                        return Ok(());
+                    }
 
                     frame_count += 1;
                 }
@@ -203,10 +202,13 @@ impl Mp4ExportSettings {
                     warn!("No frames were processed, cannot save screenshot or thumbnail");
                 }
 
-                Ok::<_, ExportError>(())
+                Ok::<_, String>(())
             }
         })
-        .then(|f| async { f.map(|v| v.map_err(|e| e.to_string())) });
+        .then(|r| async {
+            r.map_err(|e| e.to_string())
+                .and_then(|v| v.map_err(|e| e.to_string()))
+        });
 
         let render_video_task = cap_rendering::render_video_to_channel(
             &base.render_constants,
@@ -225,13 +227,9 @@ impl Mp4ExportSettings {
             self.resolution_base,
             &base.recordings,
         )
-        .then(|v| async { Ok(v.map_err(|e| e.to_string())) });
+        .then(|v| async { v.map_err(|e| e.to_string()) });
 
-        let _ = tokio::try_join!(encoder_thread, render_video_task, render_task)
-            .inspect_err(|e| {
-                dbg!(e);
-            })
-            .map_err(|e| e.to_string())?;
+        tokio::try_join!(encoder_thread, render_video_task, render_task)?;
 
         Ok(output_path)
     }

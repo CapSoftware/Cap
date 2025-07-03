@@ -33,7 +33,7 @@ pub enum ExportError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ExporterBuildError {
-    #[error("Failled to load config: {0}")]
+    #[error("Failed to load config: {0}")]
     ConfigLoad(#[source] Box<dyn std::error::Error>),
     #[error("Failed to load meta: {0}")]
     MetaLoad(#[source] Box<dyn std::error::Error>),
