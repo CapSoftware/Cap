@@ -110,6 +110,10 @@ export const ShareHeader = ({
     }
   };
 
+  console.log("customDomain", customDomain);
+  console.log("domainVerified", domainVerified);
+  console.log("buildEnv.NEXT_PUBLIC_IS_CAP", buildEnv.NEXT_PUBLIC_IS_CAP);
+
   const isUserPro = user
     ? isUserOnProPlan({
       subscriptionStatus: user.stripeSubscriptionStatus,
