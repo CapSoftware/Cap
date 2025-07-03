@@ -26,6 +26,7 @@ export const ShareHeader = ({
   domainVerified,
   sharedOrganizations = [],
   sharedSpaces = [],
+  NODE_ENV,
 }: {
   data: typeof videos.$inferSelect;
   user: typeof userSelectProps | null;
@@ -45,6 +46,7 @@ export const ShareHeader = ({
     iconUrl?: string;
     organizationId: string;
   }[];
+  NODE_ENV: "production" | "development" | "test";
 }) => {
   const { push, refresh } = useRouter();
   const [isEditing, setIsEditing] = useState(false);
@@ -87,17 +89,11 @@ export const ShareHeader = ({
   };
 
   const getVideoLink = () => {
-    if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
-      return `https://${customDomain}/s/${data.id}`;
-    } else if (buildEnv.NEXT_PUBLIC_IS_CAP && !customDomain && !domainVerified) {
-      return `https://cap.link/${data.id}`;
-    } else {
+    if (NODE_ENV === "development" && customDomain && domainVerified) {
+      return `${customDomain}/s/${data.id}`;
+    } else if (NODE_ENV === "development" && !customDomain && !domainVerified) {
       return `${webUrl}/s/${data.id}`;
-    }
-  };
-
-  const getDisplayLink = () => {
-    if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
+    } else if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
       return `${customDomain}/s/${data.id}`;
     } else if (buildEnv.NEXT_PUBLIC_IS_CAP && !customDomain && !domainVerified) {
       return `cap.link/${data.id}`;
@@ -210,7 +206,7 @@ export const ShareHeader = ({
                       toast.success("Link copied to clipboard!");
                     }}
                   >
-                    {getDisplayLink()}
+                    {getVideoLink()}
                     <Copy className="ml-2 w-4 h-4" />
                   </Button>
                 </div>
