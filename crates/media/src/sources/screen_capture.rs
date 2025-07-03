@@ -679,9 +679,20 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                                 return ControlFlow::Continue(());
                             }
 
-                            if let Err(_) = video_tx.send((sample_buffer, relative_time)) {
-                                error!("Pipeline is unreachable. Shutting down recording.");
-                                return ControlFlow::Continue(());
+                            let check_skip_send = || {
+                                cap_fail::fail_err!(
+                                    "media::sources::screen_capture::skip_send",
+                                    ()
+                                );
+
+                                Ok::<(), ()>(())
+                            };
+
+                            if check_skip_send().is_ok() {
+                                if let Err(_) = video_tx.send((sample_buffer, relative_time)) {
+                                    error!("Pipeline is unreachable. Shutting down recording.");
+                                    return ControlFlow::Continue(());
+                                }
                             }
                         }
                         SCStreamOutputType::Audio => {

@@ -9,6 +9,7 @@ import {
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import {
+  batch,
   createEffect,
   createRoot,
   createSignal,
@@ -23,7 +24,6 @@ import {
 import { createStore, produce, reconcile } from "solid-js/store";
 import toast from "solid-toast";
 
-import Tooltip from "~/components/Tooltip";
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { exportVideo } from "~/utils/export";
@@ -31,6 +31,7 @@ import {
   commands,
   events,
   ExportCompression,
+  ExportSettings,
   FramesRendered,
 } from "~/utils/tauri";
 import { RenderState, useEditorContext } from "./context";
@@ -60,6 +61,14 @@ export const FPS_OPTIONS = [
   { label: "60 FPS", value: 60 },
 ] satisfies Array<{ label: string; value: number }>;
 
+export const GIF_FPS_OPTIONS = [
+  { label: "10 FPS", value: 10 },
+  { label: "15 FPS", value: 15 },
+  { label: "20 FPS", value: 20 },
+  { label: "25 FPS", value: 25 },
+  { label: "30 FPS", value: 30 },
+] satisfies Array<{ label: string; value: number }>;
+
 export const EXPORT_TO_OPTIONS = [
   {
     label: "File",
@@ -78,13 +87,22 @@ export const EXPORT_TO_OPTIONS = [
   },
 ] as const;
 
+type ExportFormat = ExportSettings["format"];
+
 export const FORMAT_OPTIONS = [
-  { label: "MP4", value: "mp4" },
-  { label: "GIF", value: "gif", disabled: true },
-] as { label: string; value: string; disabled?: boolean }[];
+  { label: "MP4", value: "Mp4" },
+  { label: "GIF", value: "Gif" },
+] as { label: string; value: ExportFormat; disabled?: boolean }[];
 
 type ExportToOption = (typeof EXPORT_TO_OPTIONS)[number]["value"];
 
+interface Settings {
+  format: ExportFormat;
+  fps: number;
+  exportTo: ExportToOption;
+  resolution: { label: string; value: string; width: number; height: number };
+  compression: ExportCompression;
+}
 export function ExportDialog() {
   const {
     dialog,
@@ -97,21 +115,23 @@ export function ExportDialog() {
   } = useEditorContext();
 
   const [settings, setSettings] = makePersisted(
-    createStore({
-      format: "mp4" as "mp4" | "gif",
+    createStore<Settings>({
+      format: "Mp4",
       fps: 30,
-      exportTo: "file" as ExportToOption,
+      exportTo: "file",
       resolution: { label: "720p", value: "720p", width: 1280, height: 720 },
-      compression: "Minimal" as ExportCompression,
+      compression: "Minimal",
     }),
     { name: "export_settings" }
   );
 
-  // just a wrapper of exportVideo that provides the current settings
+  if (!["Mp4", "Gif"].includes(settings.format)) setSettings("format", "Mp4");
+
   const exportWithSettings = (onProgress: (progress: FramesRendered) => void) =>
     exportVideo(
       projectPath,
       {
+        format: settings.format,
         fps: settings.fps,
         resolution_base: {
           x: settings.resolution.width,
@@ -158,7 +178,6 @@ export function ExportDialog() {
       setExportState(reconcile({ action: "copy", type: "starting" }));
 
       const outputPath = await exportWithSettings((progress) => {
-        console.log(progress);
         setExportState({ type: "rendering", progress });
       });
 
@@ -187,7 +206,12 @@ export function ExportDialog() {
             )
           );
         });
-      } else toast.success("Recording exported to clipboard");
+      } else
+        toast.success(
+          `${
+            settings.format === "Gif" ? "GIF" : "Recording"
+          } exported to clipboard`
+        );
     },
   }));
 
@@ -195,9 +219,15 @@ export function ExportDialog() {
     mutationFn: async () => {
       if (exportState.type !== "idle") return;
 
+      const extension = settings.format === "Gif" ? "gif" : "mp4";
       const savePath = await saveDialog({
-        filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
-        defaultPath: `~/Desktop/${meta().prettyName}.mp4`,
+        filters: [
+          {
+            name: `${extension.toUpperCase()} filter`,
+            extensions: [extension],
+          },
+        ],
+        defaultPath: `~/Desktop/${meta().prettyName}.${extension}`,
       });
       if (!savePath) {
         setExportState(reconcile({ type: "idle" }));
@@ -226,7 +256,9 @@ export function ExportDialog() {
     },
     onError: (error) => {
       commands.globalMessageDialog(
-        error instanceof Error ? error.message : "Failed to export recording"
+        error instanceof Error
+          ? error.message
+          : `Failed to export recording: ${error}`
       );
       setExportState({ type: "idle" });
     },
@@ -243,7 +275,10 @@ export function ExportDialog() {
             )
           );
         });
-      } else toast.success("Recording exported to file");
+      } else
+        toast.success(
+          `${settings.format === "Gif" ? "GIF" : "Recording"} exported to file`
+        );
     },
   }));
 
@@ -428,41 +463,47 @@ export function ExportDialog() {
                 <h3 class="text-gray-12">Format</h3>
                 <div class="flex flex-row gap-2">
                   <For each={FORMAT_OPTIONS}>
-                    {(option) =>
-                      option.disabled ? (
-                        <Tooltip content={"Coming soon"}>
-                          <Button
-                            variant="secondary"
-                            onClick={() =>
-                              setSettings(
-                                "format",
-                                option.value as "mp4" | "gif"
+                    {(option) => (
+                      <Button
+                        variant="secondary"
+                        onClick={() => {
+                          setSettings(
+                            produce((newSettings) => {
+                              newSettings.format = option.value as ExportFormat;
+
+                              if (
+                                option.value === "Gif" &&
+                                settings.resolution.value !== "720p"
                               )
-                            }
-                            disabled={option.disabled}
-                            autofocus={false}
-                            class={cx(
-                              settings.format === option.value && selectedStyle
-                            )}
-                          >
-                            {option.label}
-                          </Button>
-                        </Tooltip>
-                      ) : (
-                        <Button
-                          variant="secondary"
-                          onClick={() =>
-                            setSettings("format", option.value as "mp4")
-                          }
-                          autofocus={false}
-                          class={cx(
-                            settings.format === option.value && selectedStyle
-                          )}
-                        >
-                          {option.label}
-                        </Button>
-                      )
-                    }
+                                newSettings.resolution =
+                                  RESOLUTION_OPTIONS._720p;
+
+                              if (
+                                option.value === "Gif" &&
+                                GIF_FPS_OPTIONS.every(
+                                  (v) => v.value === settings.fps
+                                )
+                              )
+                                newSettings.fps = 15;
+
+                              if (
+                                option.value === "Mp4" &&
+                                FPS_OPTIONS.every(
+                                  (v) => v.value !== settings.fps
+                                )
+                              )
+                                newSettings.fps = 30;
+                            })
+                          );
+                        }}
+                        autofocus={false}
+                        class={cx(
+                          settings.format === option.value && selectedStyle
+                        )}
+                      >
+                        {option.label}
+                      </Button>
+                    )}
                   </For>
                 </div>
               </div>
@@ -471,14 +512,20 @@ export function ExportDialog() {
             <div class="overflow-hidden relative p-4 rounded-xl bg-gray-2">
               <div class="flex flex-col gap-3">
                 <h3 class="text-gray-12">Frame rate</h3>
-                <KSelect
-                  options={FPS_OPTIONS}
+                <KSelect<{ label: string; value: number }>
+                  options={
+                    settings.format === "Gif" ? GIF_FPS_OPTIONS : FPS_OPTIONS
+                  }
                   optionValue="value"
                   optionTextValue="label"
                   placeholder="Select FPS"
-                  value={FPS_OPTIONS.find((opt) => opt.value === settings.fps)}
+                  value={(settings.format === "Gif"
+                    ? GIF_FPS_OPTIONS
+                    : FPS_OPTIONS
+                  ).find((opt) => opt.value === settings.fps)}
                   onChange={(option) => {
-                    const value = option?.value ?? 30;
+                    const value =
+                      option?.value ?? (settings.format === "Gif" ? 10 : 30);
                     trackEvent("export_fps_changed", {
                       fps: value,
                     });
@@ -579,11 +626,15 @@ export function ExportDialog() {
                 <h3 class="text-gray-12">Resolution</h3>
                 <div class="flex gap-2">
                   <For
-                    each={[
-                      RESOLUTION_OPTIONS._720p,
-                      RESOLUTION_OPTIONS._1080p,
-                      RESOLUTION_OPTIONS._4k,
-                    ]}
+                    each={
+                      settings.format === "Gif"
+                        ? [RESOLUTION_OPTIONS._720p]
+                        : [
+                            RESOLUTION_OPTIONS._720p,
+                            RESOLUTION_OPTIONS._1080p,
+                            RESOLUTION_OPTIONS._4k,
+                          ]
+                    }
                   >
                     {(option) => (
                       <Button
@@ -647,7 +698,9 @@ export function ExportDialog() {
                             {copyState.type === "starting"
                               ? "Preparing..."
                               : copyState.type === "rendering"
-                              ? "Rendering video..."
+                              ? settings.format === "Gif"
+                                ? "Rendering GIF..."
+                                : "Rendering video..."
                               : copyState.type === "copying"
                               ? "Copying to clipboard..."
                               : "Copied to clipboard"}
@@ -661,7 +714,10 @@ export function ExportDialog() {
                             keyed
                           >
                             {(copyState) => (
-                              <RenderProgress state={copyState} />
+                              <RenderProgress
+                                state={copyState}
+                                format={settings.format}
+                              />
                             )}
                           </Show>
                         </div>
@@ -684,7 +740,9 @@ export function ExportDialog() {
                                   {saveState.type === "starting"
                                     ? "Preparing..."
                                     : saveState.type === "rendering"
-                                    ? "Rendering video..."
+                                    ? settings.format === "Gif"
+                                      ? "Rendering GIF..."
+                                      : "Rendering video..."
                                     : saveState.type === "copying"
                                     ? "Exporting to file..."
                                     : "Export completed"}
@@ -698,7 +756,10 @@ export function ExportDialog() {
                                   keyed
                                 >
                                   {(copyState) => (
-                                    <RenderProgress state={copyState} />
+                                    <RenderProgress
+                                      state={copyState}
+                                      format={settings.format}
+                                    />
                                   )}
                                 </Show>
                               </>
@@ -714,7 +775,11 @@ export function ExportDialog() {
                                     Export Completed
                                   </h1>
                                   <p class="text-sm text-gray-11">
-                                    Your video has successfully been exported
+                                    Your{" "}
+                                    {settings.format === "Gif"
+                                      ? "GIF"
+                                      : "video"}{" "}
+                                    has successfully been exported
                                   </p>
                                 </div>
                               </div>
@@ -763,7 +828,10 @@ export function ExportDialog() {
                                     keyed
                                   >
                                     {(renderState) => (
-                                      <RenderProgress state={renderState} />
+                                      <RenderProgress
+                                        state={renderState}
+                                        format={settings.format}
+                                      />
                                     )}
                                   </Match>
                                 </Switch>
@@ -854,7 +922,11 @@ export function ExportDialog() {
                             setClipboardCopyPressed(false);
                           }, 2000);
                           await commands.copyVideoToClipboard(path);
-                          toast.success("Video copied to clipboard");
+                          toast.success(
+                            `${
+                              settings.format === "Gif" ? "GIF" : "Video"
+                            } copied to clipboard`
+                          );
                         }
                       }}
                     >
@@ -876,7 +948,7 @@ export function ExportDialog() {
   );
 }
 
-function RenderProgress(props: { state: RenderState }) {
+function RenderProgress(props: { state: RenderState; format?: ExportFormat }) {
   return (
     <ProgressView
       amount={
@@ -888,7 +960,9 @@ function RenderProgress(props: { state: RenderState }) {
       }
       label={
         props.state.type === "rendering"
-          ? `Rendering video (${props.state.progress.renderedCount}/${props.state.progress.totalFrames} frames)`
+          ? `Rendering ${props.format === "Gif" ? "GIF" : "video"} (${
+              props.state.progress.renderedCount
+            }/${props.state.progress.totalFrames} frames)`
           : "Preparing to render..."
       }
     />

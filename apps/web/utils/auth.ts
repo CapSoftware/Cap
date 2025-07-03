@@ -12,12 +12,17 @@ async function verifyPasswordCookie(videoPassword: string) {
 }
 
 export async function userHasAccessToVideo(
-  user: { id: string } | undefined | null,
+  user: MaybePromise<{ id: string } | undefined | null>,
   video: InferSelectModel<typeof videos>
-): Promise<"has-access" | "private" | "needs-password"> {
-  if (video.public === false && (!user || user.id !== video.ownerId))
+): Promise<"has-access" | "private" | "needs-password" | "not-org-email"> {
+  if (video.public && video.password === null) return "has-access";
+
+  const _user = await user;
+  if (video.public === false && (!_user || _user.id !== video.ownerId))
     return "private";
+
   if (video.password === null) return "has-access";
+
   if (!(await verifyPasswordCookie(video.password))) return "needs-password";
   return "has-access";
 }

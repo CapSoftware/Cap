@@ -12,12 +12,11 @@ use crate::{
     upload::{
         create_or_get_video, prepare_screenshot_upload, upload_video, InstantMultipartUpload,
     },
-    web_api::{self, ManagerExt},
+    web_api::ManagerExt,
     windows::{CapWindowId, ShowCapWindow},
     App, CurrentRecordingChanged, DynLoggingLayer, MutableState, NewStudioRecordingAdded,
     RecordingStarted, RecordingStopped, VideoUploadInfo,
 };
-use base64::{prelude::BASE64_STANDARD, Engine};
 use cap_fail::fail;
 use cap_media::{feeds::CameraFeed, platform::display_for_window, sources::ScreenCaptureTarget};
 use cap_media::{
@@ -30,15 +29,14 @@ use cap_project::{
 };
 use cap_recording::{
     instant_recording::{CompletedInstantRecording, InstantRecordingHandle},
-    CompletedStudioRecording, RecordingError, RecordingMode, RecordingOptions,
-    StudioRecordingHandle,
+    CompletedStudioRecording, RecordingError, RecordingMode, StudioRecordingHandle,
 };
-use cap_rendering::ProjectRecordings;
+use cap_rendering::ProjectRecordingsMeta;
 use cap_utils::{ensure_dir, spawn_actor};
-use scap::Target;
 use serde::Deserialize;
 use specta::Type;
 use tauri::{AppHandle, Manager};
+use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder};
 use tauri_specta::Event;
 use tracing::{error, info};
 
@@ -49,11 +47,13 @@ pub enum InProgressRecording {
         progressive_upload: Option<InstantMultipartUpload>,
         video_upload_info: VideoUploadInfo,
         inputs: StartRecordingInputs,
+        recording_dir: PathBuf,
     },
     Studio {
         target_name: String,
         handle: StudioRecordingHandle,
         inputs: StartRecordingInputs,
+        recording_dir: PathBuf,
     },
 }
 
@@ -83,6 +83,13 @@ impl InProgressRecording {
         match self {
             Self::Instant { handle, .. } => handle.resume().await,
             Self::Studio { handle, .. } => handle.resume().await,
+        }
+    }
+
+    pub fn recording_dir(&self) -> &PathBuf {
+        match self {
+            Self::Instant { recording_dir, .. } => recording_dir,
+            Self::Studio { recording_dir, .. } => recording_dir,
         }
     }
 
@@ -297,7 +304,8 @@ pub async fn start_recording(
 
             #[cfg(windows)]
             let display = {
-                let Target::Window(target) = inputs.capture_target.get_target().unwrap() else {
+                let scap::Target::Window(target) = inputs.capture_target.get_target().unwrap()
+                else {
                     unreachable!();
                 };
                 display_for_window(target.raw_handle).unwrap().0 as u32
@@ -369,6 +377,7 @@ pub async fn start_recording(
                             handle,
                             target_name,
                             inputs,
+                            recording_dir: recording_dir.clone(),
                         },
                         actor_done_rx,
                     )
@@ -397,6 +406,7 @@ pub async fn start_recording(
                             video_upload_info,
                             target_name,
                             inputs,
+                            recording_dir: recording_dir.clone(),
                         },
                         actor_done_rx,
                     )
@@ -416,16 +426,32 @@ pub async fn start_recording(
         let state_mtx = Arc::clone(&state_mtx);
         async move {
             fail!("recording::wait_actor_done");
-            let Ok(_) = actor_done_rx.await else {
-                return;
-            };
+            match actor_done_rx.await {
+                Ok(Ok(_)) => {
+                    let _ = finish_upload_tx.send(());
+                    return;
+                }
+                Ok(Err(e)) => {
+                    let mut state = state_mtx.write().await;
 
-            let _ = finish_upload_tx.send(());
+                    let mut dialog = MessageDialogBuilder::new(
+                        app.dialog().clone(),
+                        format!("An error occurred"),
+                        e,
+                    )
+                    .kind(tauri_plugin_dialog::MessageDialogKind::Error);
 
-            let mut state = state_mtx.write().await;
+                    if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
+                        dialog = dialog.parent(&window);
+                    }
 
-            // this clears the current recording for us
-            handle_recording_end(app, None, &mut state).await.ok();
+                    dialog.blocking_show();
+
+                    // this clears the current recording for us
+                    handle_recording_end(app, None, &mut state).await.ok();
+                }
+                _ => {}
+            }
         }
     });
 
@@ -499,6 +525,64 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+pub async fn restart_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
+    let Some(recording) = state.write().await.clear_current_recording() else {
+        return Err("No recording in progress".to_string());
+    };
+
+    let _ = CurrentRecordingChanged.emit(&app);
+
+    let inputs = recording.inputs().clone();
+
+    let _ = recording.cancel().await;
+
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+    start_recording(app.clone(), state, inputs).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
+    let recording_data = {
+        let mut app_state = state.write().await;
+        if let Some(recording) = app_state.clear_current_recording() {
+            let recording_dir = recording.recording_dir().clone();
+            let video_id = match &recording {
+                InProgressRecording::Instant {
+                    video_upload_info, ..
+                } => Some(video_upload_info.id.clone()),
+                _ => None,
+            };
+            Some((recording, recording_dir, video_id))
+        } else {
+            None
+        }
+    };
+
+    if let Some((recording, recording_dir, video_id)) = recording_data {
+        CurrentRecordingChanged.emit(&app).ok();
+        RecordingStopped {}.emit(&app).ok();
+
+        let _ = recording.cancel().await;
+
+        std::fs::remove_dir_all(&recording_dir).ok();
+
+        if let Some(id) = video_id {
+            let _ = app
+                .authed_api_request(
+                    format!("/api/desktop/video/delete?videoId={}", id),
+                    |c, url| c.delete(url),
+                )
+                .await;
+        }
+    }
+
+    Ok(())
+}
+
 // runs when a recording ends, whether from success or failure
 async fn handle_recording_end(
     handle: AppHandle,
@@ -511,6 +595,8 @@ async fn handle_recording_end(
     if let Some(recording) = recording {
         handle_recording_finish(&handle, recording).await?;
     };
+
+    let _ = RecordingStopped.emit(&handle);
 
     let _ = app.recording_logging_handle.reload(None);
 
@@ -528,9 +614,6 @@ async fn handle_recording_end(
         app.mic_feed.take();
     }
 
-    // Play sound to indicate recording has stopped
-    AppSounds::StopRecording.play();
-
     CurrentRecordingChanged.emit(&handle).ok();
 
     Ok(())
@@ -542,7 +625,6 @@ async fn handle_recording_finish(
     completed_recording: CompletedRecording,
 ) -> Result<(), String> {
     let recording_dir = completed_recording.project_path().clone();
-    let id = completed_recording.id().clone();
 
     let screenshots_dir = recording_dir.join("screenshots");
     std::fs::create_dir_all(&screenshots_dir).ok();
@@ -572,7 +654,7 @@ async fn handle_recording_finish(
 
     let (meta_inner, sharing) = match completed_recording {
         CompletedRecording::Studio { recording, .. } => {
-            let recordings = ProjectRecordings::new(&recording_dir, &recording.meta)?;
+            let recordings = ProjectRecordingsMeta::new(&recording_dir, &recording.meta)?;
 
             let config = project_config_from_recording(
                 &recording,
@@ -675,11 +757,6 @@ async fn handle_recording_finish(
         }
     };
 
-    let _ = RecordingStopped {
-        path: recording_dir.clone(),
-    }
-    .emit(app);
-
     let meta = RecordingMeta {
         platform: Some(Platform::default()),
         project_path: recording_dir.clone(),
@@ -724,12 +801,15 @@ async fn handle_recording_finish(
         };
     }
 
+    // Play sound to indicate recording has stopped
+    AppSounds::StopRecording.play();
+
     Ok(())
 }
 
 fn generate_zoom_segments_from_clicks(
     recording: &CompletedStudioRecording,
-    recordings: &ProjectRecordings,
+    recordings: &ProjectRecordingsMeta,
 ) -> Vec<ZoomSegment> {
     let mut segments = vec![];
 
@@ -773,7 +853,7 @@ fn generate_zoom_segments_from_clicks(
 
 fn project_config_from_recording(
     completed_recording: &CompletedStudioRecording,
-    recordings: &ProjectRecordings,
+    recordings: &ProjectRecordingsMeta,
     default_config: Option<ProjectConfiguration>,
 ) -> ProjectConfiguration {
     ProjectConfiguration {

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
     collections::HashMap,
+    error::Error,
     path::{Path, PathBuf},
 };
 use tracing::{debug, info, warn};
@@ -89,11 +90,9 @@ impl RecordingMeta {
     pub fn path(&self, relative: &RelativePathBuf) -> PathBuf {
         relative.to_path(&self.project_path)
     }
-    pub fn load_for_project(project_path: &PathBuf) -> Result<Self, String> {
+    pub fn load_for_project(project_path: &PathBuf) -> Result<Self, Box<dyn Error>> {
         let meta_path = project_path.join("recording-meta.json");
-        let mut meta: Self =
-            serde_json::from_str(&std::fs::read_to_string(&meta_path).map_err(|e| e.to_string())?)
-                .map_err(|e| e.to_string())?;
+        let mut meta: Self = serde_json::from_str(&std::fs::read_to_string(&meta_path)?)?;
         meta.project_path = project_path.clone();
 
         Ok(meta)
@@ -294,7 +293,6 @@ impl MultipleSegment {
         };
 
         let full_path = meta.path(cursor_path);
-        println!("Loading cursor data from: {:?}", full_path);
 
         // Try to load the cursor data
         match CursorEvents::load_from_file(&full_path) {

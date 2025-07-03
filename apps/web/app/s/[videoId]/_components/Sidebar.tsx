@@ -4,7 +4,7 @@ import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { classNames } from "@cap/utils";
 import { AnimatePresence, motion } from "framer-motion";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { Activity } from "./tabs/Activity";
 import { Settings } from "./tabs/Settings";
 import { Summary } from "./tabs/Summary";
@@ -21,17 +21,11 @@ type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
   organizationId?: string;
 };
 
-interface Analytics {
-  views: number;
-  comments: number;
-  reactions: number;
-}
-
 interface SidebarProps {
   data: VideoWithOrganizationInfo;
   user: typeof userSelectProps | null;
-  comments: CommentType[];
-  analytics: Analytics;
+  comments: MaybePromise<CommentType[]>;
+  views: MaybePromise<number>;
   onSeek?: (time: number) => void;
   videoId: string;
   aiData?: {
@@ -41,7 +35,6 @@ interface SidebarProps {
     processing?: boolean;
   } | null;
   aiGenerationEnabled?: boolean;
-  aiUiEnabled?: boolean;
 }
 
 const TabContent = motion.div;
@@ -72,12 +65,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   data,
   user,
   comments,
-  analytics,
+  views,
   onSeek,
   videoId,
   aiData,
   aiGenerationEnabled = false,
-  aiUiEnabled = false,
 }) => {
   const isOwnerOrMember: boolean = Boolean(
     user?.id === data.ownerId ||
@@ -93,9 +85,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const tabs = [
     { id: "activity", label: "Comments" },
-    ...(aiUiEnabled || hasExistingAiData
-      ? [{ id: "summary", label: "Summary" }]
-      : []),
+    { id: "summary", label: "Summary" },
     { id: "transcript", label: "Transcript" },
   ];
 
@@ -112,14 +102,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
     switch (activeTab) {
       case "activity":
         return (
-          <Activity
-            analytics={analytics}
-            comments={comments}
-            user={user}
-            onSeek={onSeek}
-            videoId={videoId}
-            isOwnerOrMember={isOwnerOrMember}
-          />
+          <Suspense
+            fallback={
+              <Activity.Skeleton
+                user={user}
+                isOwnerOrMember={isOwnerOrMember}
+              />
+            }
+          >
+            <Activity
+              views={views}
+              comments={comments}
+              user={user}
+              isOwnerOrMember={isOwnerOrMember}
+              onSeek={onSeek}
+              videoId={videoId}
+            />
+          </Suspense>
         );
       case "summary":
         return (
@@ -128,7 +127,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             onSeek={onSeek}
             initialAiData={aiData || undefined}
             aiGenerationEnabled={aiGenerationEnabled}
-            aiUiEnabled={aiUiEnabled}
             user={user}
           />
         );

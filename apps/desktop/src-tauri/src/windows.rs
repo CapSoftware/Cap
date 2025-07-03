@@ -444,8 +444,7 @@ impl ShowCapWindow {
             Self::InProgressRecording {
                 position: _position,
             } => {
-                let mut width = 180.0 + 32.0;
-
+                let width = 244.0;
                 let height = 40.0;
 
                 let window = self

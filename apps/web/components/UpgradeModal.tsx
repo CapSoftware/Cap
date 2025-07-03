@@ -257,7 +257,7 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
                   </div>
 
                   <Button
-                    variant="primary"
+                    variant="blue"
                     onClick={planCheckout}
                     className="mt-5 w-full max-w-sm h-14 text-lg"
                     disabled={proLoading}

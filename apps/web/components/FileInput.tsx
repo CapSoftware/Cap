@@ -180,7 +180,7 @@ export const FileInput: React.FC<FileInputProps> = ({
         {" "}
         {/* Fixed height container to prevent resizing */}
         {selectedFile || previewUrl ? (
-          <div className="flex gap-2 items-center p-1.5 rounded-xl border bg-gray-1 border-gray-3 h-full">
+          <div className="flex gap-2 items-center p-1.5 rounded-xl border bg-gray-1 border-gray-4 h-full">
             <div className="flex flex-1 gap-1.5 items-center">
               <div className="flex flex-1 gap-1 items-center">
                 {selectedFile ? (
@@ -214,7 +214,6 @@ export const FileInput: React.FC<FileInputProps> = ({
             <Button
               variant="destructive"
               size="xs"
-              spinner={isLoading}
               disabled={isLoading || disabled}
               onClick={handleRemove}
               style={
@@ -243,16 +242,16 @@ export const FileInput: React.FC<FileInputProps> = ({
           >
             {isLoading ? (
               <FontAwesomeIcon
-                className="animate-spin text-gray-10 size-5"
+                className="animate-spin text-gray-10 size-4"
                 icon={faSpinner}
               />
             ) : (
               <FontAwesomeIcon
-                className="text-gray-10 size-5"
+                className="text-gray-10 size-4"
                 icon={faCloudUpload}
               />
             )}
-            <p className="text-sm truncate text-gray-11">
+            <p className="text-[13px] truncate text-gray-11">
               {isLoading
                 ? "Uploading..."
                 : "Choose a file or drag & drop it here"}

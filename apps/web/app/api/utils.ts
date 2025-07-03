@@ -23,7 +23,7 @@ async function getAuth(c: Context) {
       .where(eq(authApiKeys.id, authHeader));
     user = res[0]?.users;
   } else {
-    if (authHeader) {
+    if (authHeader)
       cookies().set({
         name: "next-auth.session-token",
         value: authHeader,
@@ -32,11 +32,8 @@ async function getAuth(c: Context) {
         secure: true,
         httpOnly: true,
       });
-    }
 
-    const session = await getServerSession(authOptions());
-    if (!session) return;
-    user = await getCurrentUser(session);
+    user = await getCurrentUser();
   }
 
   if (!user) return;
@@ -60,9 +57,7 @@ export const withAuth = createMiddleware<{
     user: NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>;
   };
 }>(async (c, next) => {
-  console.log("withAuth", c.req);
   const auth = await getAuth(c);
-  console.log("withAuth", { auth });
   if (!auth) return c.text("User not authenticated", 401);
 
   c.set("user", auth.user);

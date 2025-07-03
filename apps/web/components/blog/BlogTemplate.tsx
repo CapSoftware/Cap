@@ -162,7 +162,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
           <Button
             href={content.cta.buttonLink}
             size="lg"
-            variant="radialblue"
+            variant="blue"
             className="px-6 py-3 shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all duration-300"
           >
             {content.cta.buttonText}
