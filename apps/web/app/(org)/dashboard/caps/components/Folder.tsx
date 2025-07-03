@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import Link from "next/link";
 import { useTheme } from "../../Contexts";
 import { deleteFolder, updateFolder, moveVideoToFolder } from "../../folder/[id]/actions";
+import { registerDropTarget } from "../../folder/[id]/components/ClientCapCard";
 import { ConfirmationDialog } from "../../_components/ConfirmationDialog";
 import { FoldersDropdown } from "./FoldersDropdown";
 import clsx from "clsx";
@@ -26,8 +27,17 @@ const Folder = ({ name, color, id, parentId, videoCount }: FolderDataType) => {
   const [isRenaming, setIsRenaming] = useState(false);
   const [updateName, setUpdateName] = useState(name);
   const nameRef = useRef<HTMLTextAreaElement>(null);
+  const folderRef = useRef<HTMLDivElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isMovingVideo, setIsMovingVideo] = useState(false);
+  // Use a ref to track drag state to avoid re-renders during animation
+  const dragStateRef = useRef({
+    isDragging: false,
+    isAnimating: false
+  });
+
+  // Add a debounce timer ref to prevent animation stuttering
+  const animationTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const artboard =
     theme === "dark" && color === "normal"
@@ -66,6 +76,93 @@ const Folder = ({ name, color, id, parentId, videoCount }: FolderDataType) => {
     }
   }, [isRenaming]);
 
+  // Register this folder as a drop target for mobile drag and drop
+  useEffect(() => {
+    if (!folderRef.current) return;
+
+    const unregister = registerDropTarget(
+      folderRef.current,
+      // onDrop handler
+      async (data) => {
+        if (!data || !data.id) return;
+
+        try {
+          setIsMovingVideo(true);
+          await moveVideoToFolder({ videoId: data.id, folderId: id });
+          toast.success(`"${data.name}" moved to "${name}" folder`);
+        } catch (error) {
+          console.error("Error moving video to folder:", error);
+          toast.error("Failed to move video to folder");
+        } finally {
+          setIsMovingVideo(false);
+          dragStateRef.current.isDragging = false;
+        }
+      },
+      // onDragOver handler
+      () => {
+        dragStateRef.current.isDragging = true;
+        setIsDragOver(true);
+
+        // Clear any pending animation timer
+        if (animationTimerRef.current) {
+          clearTimeout(animationTimerRef.current);
+          animationTimerRef.current = null;
+        }
+
+        // Play the folder-open animation
+        if (rive) {
+          rive.stop();
+          rive.play("folder-open");
+        }
+      },
+      // onDragLeave handler
+      () => {
+        setIsDragOver(false);
+
+        // Clear any pending animation timer
+        if (animationTimerRef.current) {
+          clearTimeout(animationTimerRef.current);
+          animationTimerRef.current = null;
+        }
+
+        // Play the folder-close animation
+        if (rive) {
+          rive.stop();
+          rive.play("folder-close");
+        }
+      }
+    );
+
+    // Add global drag end listener
+    const handleDragEnd = () => {
+      if (dragStateRef.current.isDragging) {
+        dragStateRef.current.isDragging = false;
+        if (!isDragOver) {
+          // Only reset animation if we're not currently over this folder
+          if (rive) {
+            // Clear any pending animation timer
+            if (animationTimerRef.current) {
+              clearTimeout(animationTimerRef.current);
+              animationTimerRef.current = null;
+            }
+
+            rive.stop();
+            rive.play("folder-close");
+          }
+        }
+      }
+    };
+
+    document.addEventListener('dragend', handleDragEnd);
+
+    return () => {
+      unregister();
+      document.removeEventListener('dragend', handleDragEnd);
+    };
+  }, [id, name, rive, isDragOver]);
+
+
+
   const updateFolderNameHandler = async () => {
     try {
       await updateFolder({ folderId: id, name: updateName });
@@ -83,21 +180,67 @@ const Folder = ({ name, color, id, parentId, videoCount }: FolderDataType) => {
 
     // Check if the dragged item is a CapCard
     if (e.dataTransfer.types.includes("application/cap")) {
-      setIsDragOver(true);
-      e.dataTransfer.dropEffect = "move";
+      if (!isDragOver) {
+        setIsDragOver(true);
+        dragStateRef.current.isDragging = true;
+        e.dataTransfer.dropEffect = "move";
+
+        // Clear any pending animation timer
+        if (animationTimerRef.current) {
+          clearTimeout(animationTimerRef.current);
+          animationTimerRef.current = null;
+        }
+
+        // Play the folder-open animation when first dragging over
+        if (rive) {
+          rive.stop();
+          rive.play("folder-open");
+        }
+      }
     }
   };
 
   const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDragOver(false);
+
+    // Check if this is a real leave event (not just moving within the element)
+    // by checking if the related target is not a child of our folder element
+    const relatedTarget = e.relatedTarget as Node;
+    if (folderRef.current && !folderRef.current.contains(relatedTarget)) {
+      setIsDragOver(false);
+
+      // Clear any pending animation timer
+      if (animationTimerRef.current) {
+        clearTimeout(animationTimerRef.current);
+        animationTimerRef.current = null;
+      }
+
+      // Play the folder-close animation when dragging leaves
+      if (rive) {
+        rive.stop();
+        rive.play("folder-close");
+      }
+    }
   };
 
   const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
     setIsDragOver(false);
+    dragStateRef.current.isDragging = false;
+
+    // Clear any pending animation timer
+    if (animationTimerRef.current) {
+      clearTimeout(animationTimerRef.current);
+      animationTimerRef.current = null;
+    }
+
+    // Keep the folder open after a successful drop
+    if (rive) {
+      rive.stop();
+      rive.play("folder-close");
+    }
 
     try {
       const data = e.dataTransfer.getData("application/cap");
@@ -120,15 +263,40 @@ const Folder = ({ name, color, id, parentId, videoCount }: FolderDataType) => {
   return (
     <Link legacyBehavior prefetch={false} href={`/dashboard/folder/${id}`}>
       <div
+        ref={folderRef}
         onMouseEnter={() => {
+          // Don't play mouse animations during drag operations
+          if (dragStateRef.current.isDragging) return;
           if (!rive) return;
-          rive.stop();
-          rive.play("folder-open");
+
+          // Clear any pending animation timer
+          if (animationTimerRef.current) {
+            clearTimeout(animationTimerRef.current);
+            animationTimerRef.current = null;
+          }
+
+          // Use a small delay to prevent stuttering when moving the mouse quickly
+          animationTimerRef.current = setTimeout(() => {
+            rive.stop();
+            rive.play("folder-open");
+          }, 50);
         }}
         onMouseLeave={() => {
+          // Don't play mouse animations during drag operations
+          if (dragStateRef.current.isDragging) return;
           if (!rive) return;
-          rive.stop();
-          rive.play("folder-close");
+
+          // Clear any pending animation timer
+          if (animationTimerRef.current) {
+            clearTimeout(animationTimerRef.current);
+            animationTimerRef.current = null;
+          }
+
+          // Use a small delay to prevent stuttering when moving the mouse quickly
+          animationTimerRef.current = setTimeout(() => {
+            rive.stop();
+            rive.play("folder-close");
+          }, 50);
         }}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}

@@ -2,8 +2,7 @@
 
 import { CapCard, CapCardProps } from "../../../caps/components/CapCard/CapCard";
 import { deleteVideo } from "@/actions/videos/delete";
-import { useState, useEffect, useRef } from "react";
-import { useDashboardContext } from "../../../Contexts";
+import { useState, useRef } from "react";
 import { createPortal } from "react-dom";
 
 type ClientCapCardProps = Omit<CapCardProps, 'onDelete'> & {
@@ -14,14 +13,21 @@ type ClientCapCardProps = Omit<CapCardProps, 'onDelete'> & {
 interface DropTarget {
   element: HTMLElement;
   onDrop: (data: any) => void;
+  onDragOver?: () => void;
+  onDragLeave?: () => void;
 }
 
 // Global registry for drop targets
 let dropTargets: DropTarget[] = [];
 
 // Register a drop target element
-export function registerDropTarget(element: HTMLElement, onDrop: (data: any) => void) {
-  dropTargets.push({ element, onDrop });
+export function registerDropTarget(
+  element: HTMLElement, 
+  onDrop: (data: any) => void,
+  onDragOver?: () => void,
+  onDragLeave?: () => void
+) {
+  dropTargets.push({ element, onDrop, onDragOver, onDragLeave });
   return () => {
     dropTargets = dropTargets.filter(target => target.element !== element);
   };
@@ -39,17 +45,6 @@ export function ClientCapCard(props: ClientCapCardProps) {
     await deleteVideo(videoId);
   };
 
-  // Get the current user from context
-  const { user } = useDashboardContext();
-  const [thumbnailUrl, setThumbnailUrl] = useState<string>("");
-
-  useEffect(() => {
-    // Fetch thumbnail URL when component mounts
-    if (user?.id && videoId) {
-      const thumbnailUrl = `/api/thumbnail?userId=${user.id}&videoId=${videoId}`;
-      setThumbnailUrl(thumbnailUrl);
-    }
-  }, [user, videoId]);
 
   // Create a drag preview element with thumbnail
   const createDragPreview = (text: string): HTMLElement => {
@@ -98,8 +93,7 @@ export function ClientCapCard(props: ClientCapCardProps) {
       document.body.appendChild(dragPreview);
 
       // Adjust offset based on whether we have a thumbnail
-      const offsetX = thumbnailUrl ? 20 : 10;
-      e.dataTransfer.setDragImage(dragPreview, offsetX, 10);
+      e.dataTransfer.setDragImage(dragPreview, 10, 10);
 
       // Clean up after a short delay
       setTimeout(() => document.body.removeChild(dragPreview), 100);
@@ -118,7 +112,7 @@ export function ClientCapCard(props: ClientCapCardProps) {
   const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
     // Store the drag data for potential drop
     dragDataRef.current = createDragData();
-    
+
     // Get touch position
     if (e.touches.length > 0) {
       const touch = e.touches[0];
@@ -126,55 +120,55 @@ export function ClientCapCard(props: ClientCapCardProps) {
       if (touch) {
         const initialX = touch.clientX;
         const initialY = touch.clientY;
-        
+
         // Set a timeout to distinguish between tap and drag
         const timer = setTimeout(() => {
           // Start dragging after a short delay to avoid accidental drags
           setTouchDragging(true);
           setTouchPosition({ x: initialX, y: initialY });
         }, 200);
-        
+
         // Clear the timer if the touch ends quickly (tap)
         const clearTimer = () => clearTimeout(timer);
         document.addEventListener('touchend', clearTimer, { once: true });
       }
     }
   };
-  
+
   const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
     if (!touchDragging) return;
-    
+
     // Prevent scrolling while dragging
     e.preventDefault();
-    
+
     if (e.touches.length > 0) {
       const touch = e.touches[0];
       // Safely access touch properties
       if (touch) {
         setTouchPosition({ x: touch.clientX, y: touch.clientY });
-        
+
         // Check if we're over any drop targets
         checkDropTargets(touch.clientX, touch.clientY);
       }
     }
   };
-  
+
   const handleTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
     if (!touchDragging) return;
-    
+
     // Check if we're over a drop target and trigger the drop
     if (e.changedTouches.length > 0) {
       const lastTouch = e.changedTouches[0];
       // Safely access touch properties
       if (lastTouch) {
         const dropTarget = findDropTargetAtPosition(lastTouch.clientX, lastTouch.clientY);
-        
+
         if (dropTarget && dragDataRef.current) {
           dropTarget.onDrop(dragDataRef.current);
         }
       }
     }
-    
+
     // Reset dragging state
     setTouchDragging(false);
     dragDataRef.current = null;
@@ -190,8 +184,16 @@ export function ClientCapCard(props: ClientCapCardProps) {
       // Add/remove a class to highlight the drop target
       if (isOver) {
         target.element.classList.add('drag-over');
-      } else {
+        // Trigger the onDragOver callback if provided
+        if (target.onDragOver) {
+          target.onDragOver();
+        }
+      } else if (target.element.classList.contains('drag-over')) {
         target.element.classList.remove('drag-over');
+        // Trigger the onDragLeave callback if provided
+        if (target.onDragLeave) {
+          target.onDragLeave();
+        }
       }
     });
   };
@@ -218,25 +220,16 @@ export function ClientCapCard(props: ClientCapCardProps) {
       >
         <CapCard {...rest} onDelete={() => handleDelete(videoId)} />
       </div>
-      
+
       {/* Mobile drag preview */}
       {touchDragging && typeof document !== 'undefined' && createPortal(
-        <div 
-          className="fixed z-50 pointer-events-none flex items-center gap-2 px-3 py-2 rounded-lg shadow-md bg-gray-1 border border-gray-4"
+        <div
+          className="flex fixed z-50 gap-2 items-center px-3 py-2 rounded-lg border shadow-md pointer-events-none bg-gray-1 border-gray-4"
           style={{
             left: `${touchPosition.x - 20}px`,
             top: `${touchPosition.y - 30}px`,
           }}
         >
-          {thumbnailUrl && (
-            <div className="relative w-10 h-6 overflow-hidden rounded">
-              <img 
-                src={thumbnailUrl} 
-                className="object-cover w-full h-full" 
-                alt={props.cap.name} 
-              />
-            </div>
-          )}
           <span className="text-sm font-medium text-gray-12">{props.cap.name}</span>
         </div>,
         document.body

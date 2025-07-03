@@ -1,16 +1,15 @@
 import { getChildFolders, getFolderBreadcrumb, getVideosByFolderId } from "./actions";
-import { NewSubfolderButton } from "./components/NewSubfolderButton";
+import { ClientMyCapsLink, NewSubfolderButton, BreadcrumbItem, ClientCapCard } from "./components";
 import Folder from "../../caps/components/Folder";
-import { ClientCapCard } from "./components/ClientCapCard";
-import { ClientBreadcrumbItem } from "./components/ClientBreadcrumbItem";
-import { ClientMyCapsLink } from "./components/ClientMyCapsLink";
 
 const FolderPage = async ({ params }: {
   params: { id: string }
 }) => {
-  const childFolders = await getChildFolders(params.id);
-  const breadcrumb = await getFolderBreadcrumb(params.id);
-  const videosData = await getVideosByFolderId(params.id);
+  const [childFolders, breadcrumb, videosData] = await Promise.all([
+    getChildFolders(params.id),
+    getFolderBreadcrumb(params.id),
+    getVideosByFolderId(params.id),
+  ]);
 
 
   return (
@@ -22,7 +21,7 @@ const FolderPage = async ({ params }: {
           {breadcrumb.map((folder, index) => (
             <div key={folder.id} className="flex items-center">
               <p className="mx-2 text-gray-10">/</p>
-              <ClientBreadcrumbItem
+              <BreadcrumbItem
                 id={folder.id}
                 name={folder.name}
                 color={folder.color}

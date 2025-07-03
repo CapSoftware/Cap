@@ -14,7 +14,7 @@ interface BreadcrumbItemProps {
   isLast: boolean;
 }
 
-export function ClientBreadcrumbItem({ id, name, color, isLast }: BreadcrumbItemProps) {
+export function BreadcrumbItem({ id, name, color, isLast }: BreadcrumbItemProps) {
   const [isDragOver, setIsDragOver] = useState(false);
   const [isMoving, setIsMoving] = useState(false);
 
@@ -91,7 +91,9 @@ export function ClientBreadcrumbItem({ id, name, color, isLast }: BreadcrumbItem
         className="flex gap-1.5 items-center transition-colors duration-200 z-10 relative"
       >
         <AllFolders color={color} className="size-5" />
-        <p className="text-lg whitespace-nowrap transition-colors duration-200 text-gray-9 hover:text-gray-11">
+        <p className={clsx("text-lg whitespace-nowrap transition-colors duration-200 hover:text-gray-11",
+          isDragOver ? 'text-gray-12' : 'text-gray-9'
+        )}>
           {name}
         </p>
       </Link>

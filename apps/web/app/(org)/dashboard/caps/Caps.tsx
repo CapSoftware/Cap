@@ -267,7 +267,7 @@ export const Caps = ({
         <div className="fixed inset-0 z-50 pointer-events-none">
           <div className="flex justify-center items-center w-full h-full">
             <div className="px-5 py-3 text-sm font-medium text-white rounded-xl bg-blue-10">
-              Drag to a space or folder to share
+              Drag to a space to share or folder to move
             </div>
           </div>
         </div>

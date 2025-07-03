@@ -261,7 +261,7 @@ export const CapCard = ({
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
         className={clsx(
-          "flex relative flex-col gap-4 w-full h-full rounded-xl cursor-default bg-gray-1 border border-gray-3 group border-px",
+          "flex relative transition-colors duration-200 flex-col gap-4 w-full h-full rounded-xl cursor-default bg-gray-1 border border-gray-3 group border-px",
           isSelected
             ? "!border-blue-10 border-px"
             : anyCapSelected
