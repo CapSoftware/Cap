@@ -96,6 +96,13 @@ export const FORMAT_OPTIONS = [
 
 type ExportToOption = (typeof EXPORT_TO_OPTIONS)[number]["value"];
 
+interface Settings {
+  format: ExportFormat;
+  fps: number;
+  exportTo: ExportToOption;
+  resolution: { label: string; value: string; width: number; height: number };
+  compression: ExportCompression;
+}
 export function ExportDialog() {
   const {
     dialog,
@@ -108,15 +115,19 @@ export function ExportDialog() {
   } = useEditorContext();
 
   const [settings, setSettings] = makePersisted(
-    createStore({
-      format: "MP4" as ExportFormat,
+    createStore<Settings>({
+      format: "Mp4",
       fps: 30,
-      exportTo: "file" as ExportToOption,
+      exportTo: "file",
       resolution: { label: "720p", value: "720p", width: 1280, height: 720 },
-      compression: "Minimal" as ExportCompression,
+      compression: "Minimal",
     }),
     { name: "export_settings" }
   );
+
+  if ((settings.format as string) === "MP4") {
+    setSettings("format", "Mp4");
+  }
 
   const exportWithSettings = (onProgress: (progress: FramesRendered) => void) =>
     exportVideo(

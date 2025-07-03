@@ -37,7 +37,7 @@ export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
             variant="primary"
           >
             <FontAwesomeIcon
-              className="text-white size-3.5"
+              className="size-3.5"
               icon={faDownload}
             />
             Download Cap
