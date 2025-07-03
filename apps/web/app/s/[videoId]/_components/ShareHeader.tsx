@@ -91,19 +91,23 @@ export const ShareHeader = ({
   };
 
   const getVideoLink = () => {
-    return customDomain && domainVerified
-      ? `https://${customDomain}/s/${data.id}`
-      : buildEnv.NEXT_PUBLIC_IS_CAP
-        ? `https://cap.link/${data.id}`
-        : `${webUrl}/s/${data.id}`;
+    if (customDomain && domainVerified) {
+      return `https://${customDomain}/s/${data.id}`;
+    } else if (buildEnv.NEXT_PUBLIC_IS_CAP) {
+      return `https://cap.link/${data.id}`;
+    } else {
+      return `${webUrl}/s/${data.id}`;
+    }
   };
 
   const getDisplayLink = () => {
-    return customDomain && domainVerified
-      ? `${customDomain}/s/${data.id}`
-      : buildEnv.NEXT_PUBLIC_IS_CAP
-        ? `cap.link/${data.id}`
-        : `${webUrl}/s/${data.id}`;
+    if (customDomain && domainVerified) {
+      return `${customDomain}/s/${data.id}`;
+    } else if (buildEnv.NEXT_PUBLIC_IS_CAP && !customDomain && !domainVerified) {
+      return `cap.link/${data.id}`;
+    } else {
+      return `${webUrl}/s/${data.id}`;
+    }
   };
 
   const isUserPro = user
