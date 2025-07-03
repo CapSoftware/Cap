@@ -25,9 +25,7 @@ export const ShareHeader = ({
   customDomain,
   domainVerified,
   sharedOrganizations = [],
-  userOrganizations = [],
   sharedSpaces = [],
-  userSpaces = [],
 }: {
   data: typeof videos.$inferSelect;
   user: typeof userSelectProps | null;
@@ -51,12 +49,10 @@ export const ShareHeader = ({
   const { push, refresh } = useRouter();
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(data.name);
-  const [isDownloading, setIsDownloading] = useState(false);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
 
   const contextData = useDashboardContext();
-  const contextSpaces = contextData?.spacesData || null;
   const contextSharedSpaces = contextData?.sharedSpaces || null;
   const effectiveSharedSpaces = contextSharedSpaces || sharedSpaces;
 
@@ -109,10 +105,6 @@ export const ShareHeader = ({
       return `${webUrl}/s/${data.id}`;
     }
   };
-
-  console.log("customDomain", customDomain);
-  console.log("domainVerified", domainVerified);
-  console.log("buildEnv.NEXT_PUBLIC_IS_CAP", buildEnv.NEXT_PUBLIC_IS_CAP);
 
   const isUserPro = user
     ? isUserOnProPlan({
