@@ -546,6 +546,7 @@ async function AuthorizedContent({
             videoWithOrganizationInfo.sharedOrganizations || []
           }
           userOrganizations={userOrganizations}
+          NODE_ENV={process.env.NODE_ENV}
         />
 
         <Share

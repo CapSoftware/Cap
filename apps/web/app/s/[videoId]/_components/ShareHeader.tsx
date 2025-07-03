@@ -26,6 +26,7 @@ export const ShareHeader = ({
   domainVerified,
   sharedOrganizations = [],
   sharedSpaces = [],
+  NODE_ENV,
 }: {
   data: typeof videos.$inferSelect;
   user: typeof userSelectProps | null;
@@ -45,6 +46,7 @@ export const ShareHeader = ({
     iconUrl?: string;
     organizationId: string;
   }[];
+  NODE_ENV: "production" | "development" | "test";
 }) => {
   const { push, refresh } = useRouter();
   const [isEditing, setIsEditing] = useState(false);
