@@ -195,7 +195,10 @@ export function CustomDomain({ isOwner, showOwnerToast }: CustomDomainProps) {
         checkVerification(false);
       }, POLL_INTERVAL);
     } catch (error) {
-      toast.error("Failed to update domain settings");
+      console.error("Error updating domain:", error);
+      toast.error(
+        error instanceof Error ? error.message : "Failed to update domain settings"
+      );
     } finally {
       setLoading(false);
     }
