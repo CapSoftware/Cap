@@ -34,9 +34,10 @@ export const CapCardButtons: React.FC<CapCardButtonsProps> = ({
   customDomain,
   domainVerified,
 }) => {
+  const { webUrl } = usePublicEnv();
   return (
     <>
-      {buttons(capId, copyPressed, isDownloading, handleCopy, handleDownload, customDomain, domainVerified).map((button, index) => (
+      {buttons(capId, copyPressed, isDownloading, handleCopy, handleDownload, webUrl, customDomain, domainVerified).map((button, index) => (
         <Tooltip key={index} content={button.tooltipContent}>
           <Button
             onClick={button.onClick}
@@ -61,6 +62,7 @@ const buttons = (
   isDownloading: boolean,
   handleCopy: (url: string) => void,
   handleDownload: () => void,
+  webUrl: string,
   customDomain?: string | null,
   domainVerified?: boolean,
 ): ButtonConfig[] => [
@@ -68,19 +70,16 @@ const buttons = (
       tooltipContent: "Copy link",
       onClick: (e: React.MouseEvent) => {
         e.stopPropagation();
-        
-        const { webUrl } = usePublicEnv();
-
 
         const getVideoLink = () => {
           if (NODE_ENV === "development" && customDomain && domainVerified) {
-            return `${customDomain}/s/${capId}`;
+            return `https://${customDomain}/s/${capId}`;
           } else if (NODE_ENV === "development" && !customDomain && !domainVerified) {
             return `${webUrl}/s/${capId}`;
           } else if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
-            return `${customDomain}/s/${capId}`;
+            return `https://${customDomain}/s/${capId}`;
           } else if (buildEnv.NEXT_PUBLIC_IS_CAP && !customDomain && !domainVerified) {
-            return `cap.link/${capId}`;
+            return `https://cap.link/${capId}`;
           } else {
             return `${webUrl}/s/${capId}`;
           }

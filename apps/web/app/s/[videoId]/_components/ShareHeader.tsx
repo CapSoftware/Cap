@@ -90,6 +90,20 @@ export const ShareHeader = ({
 
   const getVideoLink = () => {
     if (NODE_ENV === "development" && customDomain && domainVerified) {
+      return `https://${customDomain}/s/${data.id}`;
+    } else if (NODE_ENV === "development" && !customDomain && !domainVerified) {
+      return `${webUrl}/s/${data.id}`;
+    } else if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
+      return `https://${customDomain}/s/${data.id}`;
+    } else if (buildEnv.NEXT_PUBLIC_IS_CAP && !customDomain && !domainVerified) {
+      return `https://cap.link/${data.id}`;
+    } else {
+      return `${webUrl}/s/${data.id}`;
+    }
+  };
+
+  const getDisplayLink = () => {
+    if (NODE_ENV === "development" && customDomain && domainVerified) {
       return `${customDomain}/s/${data.id}`;
     } else if (NODE_ENV === "development" && !customDomain && !domainVerified) {
       return `${webUrl}/s/${data.id}`;
@@ -206,7 +220,7 @@ export const ShareHeader = ({
                       toast.success("Link copied to clipboard!");
                     }}
                   >
-                    {getVideoLink()}
+                    {getDisplayLink()}
                     <Copy className="ml-2 w-4 h-4" />
                   </Button>
                 </div>
