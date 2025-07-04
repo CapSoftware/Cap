@@ -42,11 +42,15 @@ type VideoData = {
 export const Caps = ({
   data,
   count,
+  customDomain,
+  domainVerified,
   dubApiKeyEnabled,
   folders,
 }: {
   data: VideoData;
   count: number;
+  customDomain: string | null;
+  domainVerified: boolean;
   folders: FolderDataType[];
   dubApiKeyEnabled: boolean;
 }) => {
@@ -304,36 +308,34 @@ export const Caps = ({
         </>
       )}
       {data.length > 0 && (
-        <>
-          <h1 className="mb-3 text-xl font-medium text-gray-12">Videos</h1>
-          <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-            {uploadPlaceholders.map((u) => (
-              <UploadPlaceholderCard
-                key={u.id}
-                thumbnail={u.thumbnail}
-                progress={u.progress}
-                uploadProgress={u.uploadProgress}
-              />
-            ))}
-            {data.map((cap) => (
-              <CapCard
-                key={cap.id}
-                cap={cap}
-                analytics={analytics[cap.id] || 0}
-                onDelete={deleteCap}
-                userId={user?.id}
-                isSelected={selectedCaps.includes(cap.id)}
-                onSelectToggle={() => handleCapSelection(cap.id)}
-                anyCapSelected={anyCapSelected}
-              />
-            ))}
-          </div>
-          {(data.length > limit || data.length === limit || page !== 1) && (
-            <div className="mt-7">
-              <CapPagination currentPage={page} totalPages={totalPages} />
-            </div>
-          )}
-        </>
+        <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+          {uploadPlaceholders.map((u) => (
+            <UploadPlaceholderCard
+              key={u.id}
+              thumbnail={u.thumbnail}
+              progress={u.progress}
+              uploadProgress={u.uploadProgress}
+            />
+          ))}
+          {data.map((cap) => (
+            <CapCard
+              key={cap.id}
+              cap={cap}
+              analytics={analytics[cap.id] || 0}
+              onDelete={deleteCap}
+              userId={user?.id}
+              customDomain={customDomain}
+              domainVerified={domainVerified}
+              isSelected={selectedCaps.includes(cap.id)}
+              onSelectToggle={() => handleCapSelection(cap.id)}
+              anyCapSelected={anyCapSelected}
+            />
+          ))}
+        </div>
+      {(data.length > limit || data.length === limit || page !== 1) && (
+        <div className="mt-7">
+          <CapPagination currentPage={page} totalPages={totalPages} />
+        </div>
       )}
 
       <SelectedCapsBar

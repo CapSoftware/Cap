@@ -952,7 +952,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop"
-version = "0.3.54"
+version = "0.3.55"
 dependencies = [
  "anyhow",
  "axum",

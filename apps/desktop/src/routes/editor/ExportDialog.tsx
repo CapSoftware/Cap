@@ -125,9 +125,7 @@ export function ExportDialog() {
     { name: "export_settings" }
   );
 
-  if ((settings.format as string) === "MP4") {
-    setSettings("format", "Mp4");
-  }
+  if (!["Mp4", "Gif"].includes(settings.format)) setSettings("format", "Mp4");
 
   const exportWithSettings = (onProgress: (progress: FramesRendered) => void) =>
     exportVideo(
@@ -258,7 +256,9 @@ export function ExportDialog() {
     },
     onError: (error) => {
       commands.globalMessageDialog(
-        error instanceof Error ? error.message : "Failed to export recording"
+        error instanceof Error
+          ? error.message
+          : `Failed to export recording: ${error}`
       );
       setExportState({ type: "idle" });
     },

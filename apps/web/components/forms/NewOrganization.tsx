@@ -61,7 +61,7 @@ export const NewOrganization: React.FC<NewOrganizationProps> = (props) => {
             props.onOrganizationCreated();
           } catch (error) {
             console.error("Error creating organization:", error);
-            toast.error("Failed to create organization");
+            error instanceof Error ? toast.error(error.message) : toast.error("Failed to create organization");
           } finally {
             setIsUploading(false);
             props.setCreateLoading?.(false);

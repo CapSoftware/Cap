@@ -17,7 +17,7 @@ const buttonVariants = cva(
         destructive:
           "bg-red-500 text-white hover:bg-red-600 disabled:bg-red-200",
         white: "bg-gray-1 text-gray-12 hover:bg-gray-2 disabled:bg-gray-8",
-        gray: "bg-gray-4 text-gray-12 hover:bg-gray-5 disabled:bg-gray-1",
+        gray: "bg-gray-4 text-gray-12 hover:bg-gray-5 disabled:bg-gray-8",
         dark: "bg-gray-12 text-gray-1 disabled:cursor-not-allowed hover:bg-gray-11 disabled:text-gray-10 disabled:bg-gray-7 disabled:border-gray-8",
         darkgradient:
           "bg-gradient-to-t button-gradient-border from-[#0f0f0f] to-[#404040] shadow-[0_0_0_1px] hover:brightness-110 shadow-[#383838] text-gray-50 hover:bg-[#383838] disabled:bg-[#383838] border-transparent",

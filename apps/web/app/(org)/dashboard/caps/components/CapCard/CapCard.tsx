@@ -56,6 +56,8 @@ export interface CapCardProps extends PropsWithChildren {
   sharedCapCard?: boolean;
   isSelected?: boolean;
   onSelectToggle?: () => void;
+  customDomain?: string | null;
+  domainVerified?: boolean;
   hideSharedStatus?: boolean;
   anyCapSelected?: boolean;
 }
@@ -68,6 +70,8 @@ export const CapCard = ({
   userId,
   sharedCapCard = false,
   hideSharedStatus = false,
+  customDomain,
+  domainVerified,
   isSelected = false,
   onSelectToggle,
   anyCapSelected = false,
@@ -293,6 +297,8 @@ export const CapCard = ({
               capId={cap.id}
               copyPressed={copyPressed}
               isDownloading={isDownloading}
+              customDomain={customDomain}
+              domainVerified={domainVerified}
               handleCopy={handleCopy}
               handleDownload={handleDownload}
             />

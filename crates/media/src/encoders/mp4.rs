@@ -8,7 +8,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
-use tracing::info;
+use tracing::{info, trace};
 
 use super::{audio::AudioEncoder, H264Encoder};
 
@@ -49,7 +49,14 @@ impl MP4File {
         ) -> Option<Result<Box<dyn AudioEncoder + Send>, MediaError>>,
     ) -> Result<Self, InitError> {
         output.set_extension("mp4");
+
+        if let Some(parent) = output.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
         let mut output = format::output(&output).map_err(InitError::Ffmpeg)?;
+
+        trace!("Preparing encoders for mp4 file");
 
         let video = video(&mut output).map_err(InitError::VideoInit)?;
         let audio = audio(&mut output)

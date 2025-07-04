@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { eq, desc, sql, count, InferSelectModel } from "drizzle-orm";
+import { eq, InferSelectModel } from "drizzle-orm";
 import { Logo } from "@cap/ui";
 import {
   videos,
@@ -10,8 +10,8 @@ import {
   organizations,
 } from "@cap/database/schema";
 import { VideoMetadata } from "@cap/database/types";
-import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
-import type { Metadata, ResolvingMetadata } from "next";
+import { getCurrentUser } from "@cap/database/auth/session";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { buildEnv } from "@cap/env";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
@@ -412,54 +412,34 @@ async function AuthorizedContent({
   }
 
   const customDomainPromise = (async () => {
-    let customDomain: string | null = null;
-    let domainVerified = false;
-
-    if (video.sharedOrganization?.organizationId) {
-      const organizationData = await db()
-        .select({
-          customDomain: organizations.customDomain,
-          domainVerified: organizations.domainVerified,
-        })
-        .from(organizations)
-        .where(eq(organizations.id, video.sharedOrganization.organizationId))
-        .limit(1);
-
-      if (
-        organizationData.length > 0 &&
-        organizationData[0] &&
-        organizationData[0].customDomain
-      ) {
-        customDomain = organizationData[0].customDomain;
-        if (organizationData[0].domainVerified !== null) {
-          domainVerified = true;
-        }
-      }
+    if (!user) {
+      return { customDomain: null, domainVerified: false };
+    }
+    const activeOrganizationId = user.activeOrganizationId;
+    if (!activeOrganizationId) {
+      return { customDomain: null, domainVerified: false };
     }
 
-    if (!customDomain && video.ownerId) {
-      const ownerOrganizations = await db()
-        .select({
-          customDomain: organizations.customDomain,
-          domainVerified: organizations.domainVerified,
-        })
-        .from(organizations)
-        .where(eq(organizations.ownerId, video.ownerId))
-        .limit(1);
+    // Fetch the active org
+    const orgArr = await db()
+      .select({
+        customDomain: organizations.customDomain,
+        domainVerified: organizations.domainVerified,
+      })
+      .from(organizations)
+      .where(eq(organizations.id, activeOrganizationId))
+      .limit(1);
 
-      if (
-        ownerOrganizations.length > 0 &&
-        ownerOrganizations[0] &&
-        ownerOrganizations[0].customDomain
-      ) {
-        customDomain = ownerOrganizations[0].customDomain;
-        if (ownerOrganizations[0].domainVerified !== null) {
-          domainVerified = true;
-        }
-      }
+    const org = orgArr[0];
+    if (
+      org &&
+      org.customDomain &&
+      org.domainVerified !== null &&
+      user.id === video.ownerId
+    ) {
+      return { customDomain: org.customDomain, domainVerified: true };
     }
-
-    return { customDomain, domainVerified };
+    return { customDomain: null, domainVerified: false };
   })();
 
   const sharedOrganizationsPromise = db()
@@ -498,14 +478,14 @@ async function AuthorizedContent({
 
   const membersListPromise = video.sharedOrganization?.organizationId
     ? db()
-        .select({ userId: organizationMembers.userId })
-        .from(organizationMembers)
-        .where(
-          eq(
-            organizationMembers.organizationId,
-            video.sharedOrganization.organizationId
-          )
+      .select({ userId: organizationMembers.userId })
+      .from(organizationMembers)
+      .where(
+        eq(
+          organizationMembers.organizationId,
+          video.sharedOrganization.organizationId
         )
+      )
     : Promise.resolve([]);
 
   const commentsPromise = db()
@@ -566,6 +546,7 @@ async function AuthorizedContent({
             videoWithOrganizationInfo.sharedOrganizations || []
           }
           userOrganizations={userOrganizations}
+          NODE_ENV={process.env.NODE_ENV}
         />
 
         <Share

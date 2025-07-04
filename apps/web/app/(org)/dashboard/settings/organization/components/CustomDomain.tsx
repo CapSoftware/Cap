@@ -195,7 +195,10 @@ export function CustomDomain({ isOwner, showOwnerToast }: CustomDomainProps) {
         checkVerification(false);
       }, POLL_INTERVAL);
     } catch (error) {
-      toast.error("Failed to update domain settings");
+      console.error("Error updating domain:", error);
+      toast.error(
+        error instanceof Error ? error.message : "Failed to update domain settings"
+      );
     } finally {
       setLoading(false);
     }
@@ -273,6 +276,7 @@ export function CustomDomain({ isOwner, showOwnerToast }: CustomDomainProps) {
               size="sm"
               className="px-[1.5rem]"
               variant="dark"
+              className="px-[1.5rem]"
               onClick={handleSubmit}
               spinner={loading}
               disabled={loading}
@@ -283,7 +287,7 @@ export function CustomDomain({ isOwner, showOwnerToast }: CustomDomainProps) {
               {activeOrganization?.organization.customDomain && (
                 <Button
                   type="button"
-                  variant="white"
+                  variant="gray"
                   size="sm"
                   onClick={() => checkVerification(true)}
                   disabled={verifying}
@@ -291,11 +295,11 @@ export function CustomDomain({ isOwner, showOwnerToast }: CustomDomainProps) {
                 >
                   {verifying ? (
                     <FontAwesomeIcon
-                      className="animate-spin size-3 mr-0.5"
+                      className="animate-spin size-4 mr-0.5"
                       icon={faRefresh}
                     />
                   ) : (
-                    <FontAwesomeIcon className="size-3 mr-0.5" icon={faRefresh} />
+                    <FontAwesomeIcon className="size-4 mr-0.5" icon={faRefresh} />
                   )}
                   Refresh
                 </Button>
@@ -304,7 +308,7 @@ export function CustomDomain({ isOwner, showOwnerToast }: CustomDomainProps) {
                 <Button
                   type="button"
                   size="sm"
-                  variant="white"
+                  variant="gray"
                   onClick={handleRemoveDomain}
                   disabled={loading}
                 >

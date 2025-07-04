@@ -4,6 +4,7 @@ use cap_project::{RecordingMeta, XY};
 use serde::Deserialize;
 use specta::Type;
 use std::path::PathBuf;
+use tracing::info;
 
 #[derive(Deserialize, Clone, Copy, Debug, Type)]
 #[serde(tag = "format")]
@@ -43,7 +44,7 @@ pub async fn export_video(
         total_frames,
     });
 
-    match settings {
+    let output_path = match settings {
         ExportSettings::Mp4(settings) => {
             settings
                 .export(exporter_base, move |frame_index| {
@@ -70,7 +71,11 @@ pub async fn export_video(
     .map_err(|e| {
         sentry::capture_message(&e.to_string(), sentry::Level::Error);
         e.to_string()
-    })
+    })?;
+
+    info!("Exported to {} completed", output_path.display());
+
+    Ok(output_path)
 }
 
 #[derive(Debug, serde::Serialize, specta::Type)]
