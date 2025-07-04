@@ -1,16 +1,18 @@
-import { getChildFolders, getFolderBreadcrumb, getVideosByFolderId } from "./actions";
-import { ClientMyCapsLink, NewSubfolderButton, BreadcrumbItem, ClientCapCard } from "./components";
+import { ClientMyCapsLink, NewSubfolderButton, BreadcrumbItem } from "./components";
 import Folder from "../../caps/components/Folder";
+import dynamic from "next/dynamic";
+import { getFolderBreadcrumb } from "@/actions/folders/getFolderBreadcrumb";
+import { getChildFolders } from "@/actions/folders/getChildFolders";
+import { getVideosByFolderId } from "@/actions/folders/getVideosByFolderId";
 
-const FolderPage = async ({ params }: {
-  params: { id: string }
-}) => {
+const FolderVideosSection = dynamic(() => import("./components/FolderVideosSection"), { ssr: false });
+
+const FolderPage = async ({ params }: { params: { id: string } }) => {
   const [childFolders, breadcrumb, videosData] = await Promise.all([
     getChildFolders(params.id),
     getFolderBreadcrumb(params.id),
     getVideosByFolderId(params.id),
   ]);
-
 
   return (
     <div>
@@ -36,7 +38,7 @@ const FolderPage = async ({ params }: {
       {/* Display Child Folders */}
       {childFolders.length > 0 && (
         <>
-          <h1 className="mb-3 text-xl font-medium text-gray-12">Subfolders</h1>
+          <h1 className="mb-6 text-xl font-medium text-gray-12">Subfolders</h1>
           <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4 mb-10">
             {childFolders.map((folder) => (
               <Folder
@@ -53,21 +55,10 @@ const FolderPage = async ({ params }: {
       )}
 
       {/* Display Videos */}
-      <h1 className="mb-3 text-xl font-medium text-gray-12">Videos</h1>
-      <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-        {videosData.length === 0 ? (
-          <p className="col-span-full text-gray-9">No videos in this folder yet. Drag and drop videos here to add them.</p>
-        ) : (
-          videosData.map((video) => (
-            <ClientCapCard
-              key={video.id}
-              videoId={video.id}
-              cap={video}
-              analytics={0}
-            />
-          ))
-        )}
-      </div>
+      <FolderVideosSection
+        folderId={params.id}
+        initialVideos={videosData}
+      />
     </div>
   );
 };

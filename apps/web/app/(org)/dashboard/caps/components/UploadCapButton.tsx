@@ -23,12 +23,14 @@ export const UploadCapButton = ({
   onComplete,
   size = "md",
   grey = false,
+  folderId,
 }: {
   onStart?: (id: string, thumbnail?: string) => void;
   onProgress?: (id: string, progress: number, uploadProgress?: number) => void;
   onComplete?: (id: string) => void;
   size?: "sm" | "lg" | "md";
   grey?: boolean;
+  folderId?: string;
 }) => {
   const { user, isSubscribed } = useDashboardContext();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -101,6 +103,7 @@ export const UploadCapButton = ({
         audioCodec: "aac",
         isScreenshot: false,
         isUpload: true,
+        folderId,
       });
 
       const uploadId = videoData.id;
@@ -206,7 +209,7 @@ export const UploadCapButton = ({
             resolve(false);
           });
 
-          testVideo.addEventListener("loadstart", () => {});
+          testVideo.addEventListener("loadstart", () => { });
 
           testVideo.src = URL.createObjectURL(optimizedBlob);
         });
@@ -297,7 +300,7 @@ export const UploadCapButton = ({
             resolve(null);
           });
 
-          video.addEventListener("loadstart", () => {});
+          video.addEventListener("loadstart", () => { });
         });
       };
 
@@ -410,7 +413,7 @@ export const UploadCapButton = ({
         spinner={uploading}
       >
         <FontAwesomeIcon className="size-3.5" icon={faUpload} />
-        Upload Video
+        {uploading ? "Uploading..." : "Upload Video"}
       </Button>
       <input
         ref={inputRef}

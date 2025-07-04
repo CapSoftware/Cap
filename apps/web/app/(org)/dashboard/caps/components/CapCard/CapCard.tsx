@@ -7,8 +7,8 @@ import { VideoMetadata } from "@cap/database/types";
 import { Button, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@cap/ui";
 import {
   faCheck,
-  faEllipsis,
-  faLock,
+  faCopy,
+  faEllipsis, faLock,
   faTrash,
   faUnlock,
   faVideo
@@ -24,6 +24,7 @@ import { SharingDialog } from "../SharingDialog";
 import { CapCardAnalytics } from "./CapCardAnalytics";
 import { CapCardButtons } from "./CapCardButtons";
 import { CapCardContent } from "./CapCardContent";
+import { duplicateVideo } from "@/actions/videos/duplicate";
 
 
 
@@ -327,7 +328,24 @@ export const CapCard = ({
                 sideOffset={5}
               >
                 <DropdownMenuItem
-                  onClick={(e) => {
+                  onClick={async () => {
+                    try {
+                      await duplicateVideo(cap.id)
+                      toast.success("Cap duplicated successfully");
+                    } catch (error) {
+                      toast.error("Failed to duplicate cap");
+                    }
+                  }}
+                  className="flex gap-2 items-center rounded-lg"
+                >
+                  <FontAwesomeIcon
+                    className="size-3"
+                    icon={faCopy}
+                  />
+                  <p className="text-sm text-gray-12">Duplicate</p>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
                     if (!isSubscribed) {
                       setUpgradeModalOpen(true);
                     } else {

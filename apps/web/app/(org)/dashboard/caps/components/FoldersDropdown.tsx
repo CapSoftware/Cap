@@ -5,7 +5,7 @@ import { faCopy, faEllipsis, faPencil, faTrash } from "@fortawesome/free-solid-s
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { RefObject } from "react";
 import { toast } from "sonner";
-import { duplicateFolder } from "../../folder/[id]/actions";
+import { duplicateFolder } from "@/actions/folders/duplicateFolder";
 
 interface FoldersDropdownProps {
   id: string;

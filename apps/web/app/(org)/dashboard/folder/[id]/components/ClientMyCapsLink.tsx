@@ -2,15 +2,17 @@
 
 import Link from "next/link";
 import { useState, useEffect, useRef } from "react";
-import { moveVideoToFolder } from "../actions";
+import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
 import { toast } from "sonner";
 import clsx from "clsx";
 import { registerDropTarget } from "./ClientCapCard";
+import { useRouter } from "next/navigation";
 
 export function ClientMyCapsLink() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [isMovingVideo, setIsMovingVideo] = useState(false);
   const linkRef = useRef<HTMLAnchorElement>(null);
+  const router = useRouter();
 
   // Register this component as a drop target for mobile drag and drop
   useEffect(() => {
@@ -82,6 +84,7 @@ export function ClientMyCapsLink() {
         videoId: capData.id,
         folderId: null
       });
+      router.refresh();
 
       toast.success(`Moved "${capData.name}" to My Caps`);
     } catch (error) {

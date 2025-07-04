@@ -3,9 +3,10 @@
 import { AllFolders } from "../../../caps/components/Folders";
 import Link from "next/link";
 import { useState } from "react";
-import { moveVideoToFolder } from "../actions";
+import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
 import { toast } from "sonner";
 import clsx from "clsx";
+import { useRouter } from "next/navigation";
 
 interface BreadcrumbItemProps {
   id: string;
@@ -17,6 +18,7 @@ interface BreadcrumbItemProps {
 export function BreadcrumbItem({ id, name, color, isLast }: BreadcrumbItemProps) {
   const [isDragOver, setIsDragOver] = useState(false);
   const [isMoving, setIsMoving] = useState(false);
+  const router = useRouter();
 
   const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -49,6 +51,7 @@ export function BreadcrumbItem({ id, name, color, isLast }: BreadcrumbItemProps)
 
       setIsMoving(true);
       await moveVideoToFolder({ videoId: capData.id, folderId: id });
+      router.refresh();
       toast.success(`"${capData.name}" moved to "${name}" folder`);
     } catch (error) {
       console.error("Error moving video to folder:", error);

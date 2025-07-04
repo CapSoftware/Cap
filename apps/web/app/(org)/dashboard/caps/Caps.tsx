@@ -276,30 +276,35 @@ export const Caps = ({
           </div>
         </div>
       )}
-      <div className="flex gap-3 justify-start mb-10">
-        <UploadCapButton
-          onStart={handleUploadStart}
-          size="sm"
-          onProgress={handleUploadProgress}
-          onComplete={handleUploadComplete}
-        />
-        <Button
-          onClick={() => setOpenNewFolderDialog(true)}
-          size="sm"
-          variant="dark"
-          className="flex gap-2 items-center"
-        >
-          <FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
-          New Folder
-        </Button>
-      </div>
       <NewFolderDialog
         open={openNewFolderDialog}
         onOpenChange={setOpenNewFolderDialog}
       />
+      {folders.length === 0 && (
+        <Button
+          onClick={() => setOpenNewFolderDialog(true)}
+          size="sm"
+          variant="dark"
+          className="flex gap-2 items-center mb-6 max-w-fit"
+        >
+          <FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
+          New Folder
+        </Button>
+      )}
       {folders.length > 0 && (
         <>
-          <h1 className="mb-5 text-xl font-medium text-gray-12">Folders</h1>
+          <div className="flex justify-between items-center mb-6 w-full">
+            <h1 className="text-2xl font-medium text-gray-12">Folders</h1>
+            <Button
+              onClick={() => setOpenNewFolderDialog(true)}
+              size="sm"
+              variant="dark"
+              className="flex gap-2 items-center"
+            >
+              <FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
+              New Folder
+            </Button>
+          </div>
           <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4 mb-10">
             {folders.map((folder) => (
               <Folder key={folder.id} {...folder} />
@@ -309,7 +314,16 @@ export const Caps = ({
       )}
       {data.length > 0 && (
         <>
-          <h1 className="mb-5 text-xl font-medium text-gray-12">Caps</h1>
+          <div className="flex justify-between items-center mb-6 w-full">
+            <h1 className="text-2xl font-medium text-gray-12">Videos</h1>
+            <UploadCapButton
+              onStart={handleUploadStart}
+              size="sm"
+              onProgress={handleUploadProgress}
+              onComplete={handleUploadComplete}
+            />
+          </div>
+
           <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
             {uploadPlaceholders.map((u) => (
               <UploadPlaceholderCard

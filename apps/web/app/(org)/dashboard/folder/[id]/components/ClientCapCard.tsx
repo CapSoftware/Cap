@@ -4,6 +4,8 @@ import { CapCard, CapCardProps } from "../../../caps/components/CapCard/CapCard"
 import { deleteVideo } from "@/actions/videos/delete";
 import { useState, useRef } from "react";
 import { createPortal } from "react-dom";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 
 type ClientCapCardProps = Omit<CapCardProps, 'onDelete'> & {
   videoId: string;
@@ -22,7 +24,7 @@ let dropTargets: DropTarget[] = [];
 
 // Register a drop target element
 export function registerDropTarget(
-  element: HTMLElement, 
+  element: HTMLElement,
   onDrop: (data: any) => void,
   onDragOver?: () => void,
   onDragLeave?: () => void
@@ -35,6 +37,7 @@ export function registerDropTarget(
 
 export function ClientCapCard(props: ClientCapCardProps) {
   const { videoId, ...rest } = props;
+  const router = useRouter();
   const [isDragging, setIsDragging] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const [touchDragging, setTouchDragging] = useState(false);
@@ -42,7 +45,14 @@ export function ClientCapCard(props: ClientCapCardProps) {
   const dragDataRef = useRef<any>(null);
 
   const handleDelete = async (videoId: string) => {
-    await deleteVideo(videoId);
+    try {
+      await deleteVideo(videoId);
+      router.refresh();
+      toast.success('Video deleted successfully');
+    } catch (error) {
+      console.error('Error deleting video:', error);
+      toast.error('Failed to delete video');
+    }
   };
 
 
