@@ -90,13 +90,13 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
             let result = loop {
                 use flume::RecvTimeoutError;
 
-                match source.1.recv_timeout(Duration::from_secs(3)) {
+                match source.1.recv() {
                     Ok(frame) => {
                         let _ = screen_encoder.queue_video_frame(frame.0.as_ref());
                     }
-                    Err(RecvTimeoutError::Timeout) => {
-                        break Err("Frame receive timeout".to_string());
-                    }
+                    // Err(RecvTimeoutError::Timeout) => {
+                    //     break Err("Frame receive timeout".to_string());
+                    // }
                     Err(_) => {
                         break Ok(());
                     }
