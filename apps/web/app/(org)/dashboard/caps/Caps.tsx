@@ -299,7 +299,7 @@ export const Caps = ({
       />
       {folders.length > 0 && (
         <>
-          <h1 className="mb-3 text-xl font-medium text-gray-12">Folders</h1>
+          <h1 className="mb-5 text-xl font-medium text-gray-12">Folders</h1>
           <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4 mb-10">
             {folders.map((folder) => (
               <Folder key={folder.id} {...folder} />
@@ -308,30 +308,33 @@ export const Caps = ({
         </>
       )}
       {data.length > 0 && (
-        <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-          {uploadPlaceholders.map((u) => (
-            <UploadPlaceholderCard
-              key={u.id}
-              thumbnail={u.thumbnail}
-              progress={u.progress}
-              uploadProgress={u.uploadProgress}
-            />
-          ))}
-          {data.map((cap) => (
-            <CapCard
-              key={cap.id}
-              cap={cap}
-              analytics={analytics[cap.id] || 0}
-              onDelete={deleteCap}
-              userId={user?.id}
-              customDomain={customDomain}
-              domainVerified={domainVerified}
-              isSelected={selectedCaps.includes(cap.id)}
-              onSelectToggle={() => handleCapSelection(cap.id)}
-              anyCapSelected={anyCapSelected}
-            />
-          ))}
-        </div>
+        <>
+          <h1 className="mb-5 text-xl font-medium text-gray-12">Caps</h1>
+          <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+            {uploadPlaceholders.map((u) => (
+              <UploadPlaceholderCard
+                key={u.id}
+                thumbnail={u.thumbnail}
+                progress={u.progress}
+                uploadProgress={u.uploadProgress}
+              />
+            ))}
+            {data.map((cap) => (
+              <CapCard
+                key={cap.id}
+                cap={cap}
+                analytics={analytics[cap.id] || 0}
+                onDelete={deleteCap}
+                userId={user?.id}
+                customDomain={customDomain}
+                domainVerified={domainVerified}
+                isSelected={selectedCaps.includes(cap.id)}
+                onSelectToggle={() => handleCapSelection(cap.id)}
+                anyCapSelected={anyCapSelected}
+              />
+            ))}
+          </div>
+        </>
       )}
       {(data.length > limit || data.length === limit || page !== 1) && (
         <div className="mt-7">
