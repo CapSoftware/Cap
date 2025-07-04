@@ -333,7 +333,7 @@ const NormalLogin = ({
           autoComplete="email"
           required
           value={email}
-          disabled={emailSent}
+          disabled={emailSent || loading}
           onChange={(e) => {
             setEmail(e.target.value);
           }}
@@ -342,7 +342,7 @@ const NormalLogin = ({
           variant="primary"
           type="submit"
           disabled={loading || emailSent}
-          icon={<FontAwesomeIcon className="size-4" icon={faEnvelope} />}
+          icon={<FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />}
         >
           {emailSent
             ? NODE_ENV === "development"
