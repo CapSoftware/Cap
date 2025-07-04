@@ -71,16 +71,15 @@ const buttons = (
       onClick: (e: React.MouseEvent) => {
         e.stopPropagation();
 
-
         const getVideoLink = () => {
           if (NODE_ENV === "development" && customDomain && domainVerified) {
-            return `${customDomain}/s/${capId}`;
+            return `https://${customDomain}/s/${capId}`;
           } else if (NODE_ENV === "development" && !customDomain && !domainVerified) {
             return `${webUrl}/s/${capId}`;
           } else if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
-            return `${customDomain}/s/${capId}`;
+            return `https://${customDomain}/s/${capId}`;
           } else if (buildEnv.NEXT_PUBLIC_IS_CAP && !customDomain && !domainVerified) {
-            return `cap.link/${capId}`;
+            return `https://cap.link/${capId}`;
           } else {
             return `${webUrl}/s/${capId}`;
           }
