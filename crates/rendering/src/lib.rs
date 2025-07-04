@@ -6,6 +6,7 @@ use cap_project::{
 use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
 use cursor_interpolation::{interpolate_cursor, InterpolatedCursorPosition};
+use cursor_texture_manager::{CursorTextureManager, EnhancedCursorTexture};
 use decoder::{spawn_decoder, AsyncVideoDecoderHandle};
 use frame_pipeline::finish_encoder;
 use futures::future::OptionFuture;
@@ -23,6 +24,9 @@ use tokio::sync::mpsc;
 mod composite_frame;
 mod coord;
 mod cursor_interpolation;
+mod cursor_svg;
+mod cursor_svg_tests;
+mod cursor_texture_manager;
 pub mod decoder;
 mod frame_pipeline;
 mod layers;
@@ -167,6 +171,8 @@ pub enum RenderingError {
     ChannelSendFrameFailed(#[from] mpsc::error::SendError<(RenderedFrame, u32)>),
     #[error("Failed to load image: {0}")]
     ImageLoadError(String),
+    #[error("Other error: {0}")]
+    Other(String),
 }
 
 pub struct RenderSegment {
@@ -293,18 +299,13 @@ pub fn get_duration(
     }
 }
 
-pub struct CursorTexture {
-    inner: wgpu::Texture,
-    hotspot: XY<f32>,
-}
-
 pub struct RenderVideoConstants {
     pub _instance: wgpu::Instance,
     pub _adapter: wgpu::Adapter,
     pub queue: wgpu::Queue,
     pub device: wgpu::Device,
     pub options: RenderOptions,
-    pub cursor_textures: HashMap<String, CursorTexture>,
+    pub cursor_texture_manager: CursorTextureManager,
     background_textures: std::sync::Arc<tokio::sync::RwLock<HashMap<String, wgpu::Texture>>>,
 }
 
@@ -337,7 +338,7 @@ impl RenderVideoConstants {
             )
             .await?;
 
-        let cursor_textures = Self::load_cursor_textures(&device, &queue, recording_meta, meta);
+        let cursor_texture_manager = Self::load_cursor_textures(&device, &queue, recording_meta, meta)?;
         let background_textures = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
 
         Ok(Self {
@@ -346,7 +347,7 @@ impl RenderVideoConstants {
             device,
             queue,
             options,
-            cursor_textures,
+            cursor_texture_manager,
             background_textures,
         })
     }
@@ -356,8 +357,12 @@ impl RenderVideoConstants {
         queue: &wgpu::Queue,
         recording_meta: &RecordingMeta,
         meta: &StudioRecordingMeta,
-    ) -> HashMap<String, CursorTexture> {
-        let mut textures = HashMap::new();
+    ) -> Result<CursorTextureManager, RenderingError> {
+        let mut manager = CursorTextureManager::new();
+
+        // Initialize SVG cursors first
+        manager.initialize_svg_cursors(device, queue)
+            .map_err(|e| RenderingError::Other(format!("Failed to initialize SVG cursors: {}", e)))?;
 
         let cursor_images = match &meta {
             StudioRecordingMeta::SingleSegment { .. } => Default::default(),
@@ -371,69 +376,25 @@ impl RenderVideoConstants {
                 continue;
             }
 
-            match image::open(&cursor.path) {
-                Ok(img) => {
-                    let dimensions = img.dimensions();
-
-                    let rgba = img.into_rgba8();
-
-                    // Create the texture
-                    let texture = device.create_texture(&wgpu::TextureDescriptor {
-                        label: Some(&format!("Cursor Texture {}", cursor_id)),
-                        size: wgpu::Extent3d {
-                            width: dimensions.0,
-                            height: dimensions.1,
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                        view_formats: &[],
-                    });
-
-                    queue.write_texture(
-                        wgpu::ImageCopyTexture {
-                            texture: &texture,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        &rgba,
-                        wgpu::ImageDataLayout {
-                            offset: 0,
-                            bytes_per_row: Some(4 * dimensions.0),
-                            rows_per_image: None,
-                        },
-                        wgpu::Extent3d {
-                            width: dimensions.0,
-                            height: dimensions.1,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-
-                    textures.insert(
-                        cursor_id.clone(),
-                        CursorTexture {
-                            inner: texture,
-                            hotspot: cursor.hotspot.map(|v| v as f32),
-                        },
-                    );
-                }
-                Err(e) => {
-                    println!(
-                        "Failed to load cursor image {}: {}",
-                        cursor.path.display(),
-                        e
-                    );
-                    // Don't return error, just skip this cursor image
-                    continue;
-                }
+            // Load the captured cursor and analyze its type
+            if let Err(e) = manager.load_captured_cursor(
+                device, 
+                queue, 
+                cursor_id.clone(), 
+                &cursor.path, 
+                cursor.hotspot.map(|v| v as f32)
+            ) {
+                println!(
+                    "Failed to load cursor image {}: {}",
+                    cursor.path.display(),
+                    e
+                );
+                // Don't return error, just skip this cursor image
+                continue;
             }
         }
 
-        textures
+        Ok(manager)
     }
 }
 
@@ -1278,3 +1239,4 @@ fn get_either<T>((a, b): (T, T), left: bool) -> T {
         b
     }
 }
+

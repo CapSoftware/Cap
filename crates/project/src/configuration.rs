@@ -354,6 +354,8 @@ pub struct CursorConfiguration {
     pub raw: bool,
     #[serde(default)]
     pub motion_blur: f32,
+    #[serde(default = "CursorConfiguration::default_use_svg")]
+    pub use_svg: bool,
 }
 
 impl Default for CursorConfiguration {
