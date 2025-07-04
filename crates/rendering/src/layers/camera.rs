@@ -88,7 +88,6 @@ impl CameraLayer {
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
         if let Some(bind_group) = &self.bind_group {
-            dbg!(bind_group.global_id());
             pass.set_pipeline(&self.pipeline.render_pipeline);
             pass.set_bind_group(0, bind_group, &[]);
             pass.draw(0..4, 0..1);

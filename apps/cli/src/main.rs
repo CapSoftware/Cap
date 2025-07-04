@@ -170,12 +170,12 @@ impl Export {
         let mut stdout = stdout();
 
         let exporter_output_path = cap_export::mp4::Mp4ExportSettings {
-            fps: 10,
+            fps: 60,
             resolution_base: XY::new(1920, 1080),
             compression: cap_export::mp4::ExportCompression::Minimal,
         }
         .export(exporter_base, move |f| {
-            print!("\rrendered frame {f}");
+            // print!("\rrendered frame {f}");
 
             stdout.flush().unwrap();
         })
