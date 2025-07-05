@@ -359,7 +359,7 @@ pub type ScreenCaptureMethod = CMSampleBufferCapture;
 #[cfg(not(target_os = "macos"))]
 pub type ScreenCaptureMethod = AVFrameCapture;
 
-pub fn create_screen_capture(
+pub async fn create_screen_capture(
     capture_target: &ScreenCaptureTarget,
     show_camera: bool,
     force_show_cursor: bool,
@@ -379,6 +379,7 @@ pub fn create_screen_capture(
         audio_tx,
         start_time,
     )
+    .await
     .map(|v| (v, video_rx))
     .map_err(|e| RecordingError::Media(MediaError::TaskLaunch(e)))
 }

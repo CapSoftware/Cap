@@ -197,7 +197,7 @@ pub struct CropRatio {
 }
 
 impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
-    pub fn init(
+    pub async fn init(
         target: &ScreenCaptureTarget,
         output_type: Option<FrameType>,
         show_camera: bool,
@@ -242,7 +242,9 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             start_time,
         };
 
-        let options = this.create_options(scap_target, crop_area, captures_audio)?;
+        let options = this
+            .create_options(scap_target, crop_area, captures_audio)
+            .await?;
 
         this.options = Arc::new(options);
 
@@ -305,7 +307,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                 let id = {
                     #[cfg(target_os = "macos")]
                     {
-                        display.raw_handle.id
+                        display.raw_handle.0
                     }
 
                     #[cfg(windows)]
@@ -394,7 +396,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         })
     }
 
-    fn create_options(
+    async fn create_options(
         &self,
         target: scap::Target,
         crop_area: Option<Area>,
@@ -660,6 +662,8 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
             control_signal,
             |capturer| match capturer.raw().get_next_sample_buffer() {
                 Ok((sample_buffer, typ)) => {
+                    use cidre::sc;
+
                     let sample_buffer = unsafe {
                         std::mem::transmute::<_, cidre::arc::R<cidre::cm::SampleBuf>>(sample_buffer)
                     };
@@ -670,7 +674,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                     let relative_time = unix_timestamp - start_time_f64;
 
                     match typ {
-                        SCStreamOutputType::Screen => {
+                        sc::stream::OutputType::Screen => {
                             let Some(pixel_buffer) = sample_buffer.image_buf() else {
                                 return ControlFlow::Continue(());
                             };
@@ -695,7 +699,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                                 }
                             }
                         }
-                        SCStreamOutputType::Audio => {
+                        sc::stream::OutputType::Audio => {
                             let res = || {
                                 cap_fail::fail_err!("screen_capture audio skip", ());
                                 Ok::<(), ()>(())
@@ -729,6 +733,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
 
                             let _ = audio_tx.send((frame, relative_time));
                         }
+                        _ => {}
                     }
 
                     ControlFlow::Continue(())
@@ -818,7 +823,7 @@ pub fn list_windows() -> Vec<(CaptureWindow, Target)> {
 pub fn get_target_fps(target: &scap::Target) -> Result<u32, String> {
     #[cfg(target_os = "macos")]
     match target {
-        scap::Target::Display(display) => platform::get_display_refresh_rate(display.raw_handle.id),
+        scap::Target::Display(display) => platform::get_display_refresh_rate(display.raw_handle.0),
         scap::Target::Window(window) => platform::get_display_refresh_rate(
             platform::display_for_window(window.raw_handle)
                 .ok_or_else(|| "failed to get display for window".to_string())?
@@ -848,7 +853,7 @@ fn display_for_target<'a>(
             {
                 let id = platform::display_for_window(window.raw_handle)?;
                 targets.iter().find(|t| match t {
-                    scap::Target::Display(d) => d.raw_handle.id == id.id,
+                    scap::Target::Display(d) => d.raw_handle.0 == id.id,
                     _ => false,
                 })
             }
