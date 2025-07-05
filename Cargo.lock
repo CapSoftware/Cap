@@ -189,7 +189,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "41058deaa38c9d9dd933d6d238d825227cffa668e2839b52879f6619c63eee3b"
 dependencies = [
  "futures",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -1289,7 +1289,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -1408,18 +1408,21 @@ dependencies = [
 
 [[package]]
 name = "cidre"
-version = "0.6.0"
-source = "git+https://github.com/yury/cidre?rev=ef04aaabe14ffbbce4a330973a74b6d797d073ff#ef04aaabe14ffbbce4a330973a74b6d797d073ff"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5b83f5e597a8fb4ba25eec2683aa3e89f9890dd7524622639a38e3f854c60eb"
 dependencies = [
  "cidre-macros",
+ "half",
  "parking_lot",
  "tokio",
 ]
 
 [[package]]
 name = "cidre-macros"
-version = "0.1.0"
-source = "git+https://github.com/yury/cidre?rev=ef04aaabe14ffbbce4a330973a74b6d797d073ff#ef04aaabe14ffbbce4a330973a74b6d797d073ff"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f07a383a232853874a9b0b3e80e6eefe9bea73495b8ab4bdd960bc7c1db4c6d"
 
 [[package]]
 name = "clang-sys"
@@ -1747,17 +1750,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "core-audio-types"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bb31b6a9e9c7cdfbc73bed41f978c41f294e7fc1218f9d74a4bd8901beb87a1"
-dependencies = [
- "cfg-if 1.0.0",
- "core-foundation-sys 0.8.7",
- "libc",
-]
-
-[[package]]
 name = "core-audio-types-rs"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1882,34 +1874,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "core-graphics2"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e4583956b9806b69f73fcb23aee05eb3620efc282972f08f6a6db7504f8334d"
-dependencies = [
- "bitflags 2.9.0",
- "block",
- "cfg-if 1.0.0",
- "core-foundation 0.10.0",
- "libc",
-]
-
-[[package]]
-name = "core-media"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "735c25a66449364e6850ac0e27e45d5b13c6e6fe6f44a2f96cbff2d9d29447e3"
-dependencies = [
- "block",
- "cfg-if 1.0.0",
- "core-audio-types",
- "core-foundation 0.10.0",
- "core-graphics2",
- "core-video",
- "libc",
-]
-
-[[package]]
 name = "core-media-rs"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1919,7 +1883,7 @@ dependencies = [
  "core-foundation 0.10.0",
  "core-utils-rs",
  "core-video-rs",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -1944,19 +1908,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "core-video"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d45e71d5be22206bed53c3c3cb99315fc4c3d31b8963808c6bc4538168c4f8ef"
-dependencies = [
- "block",
- "core-foundation 0.10.0",
- "core-graphics2",
- "io-surface",
- "libc",
-]
-
-[[package]]
 name = "core-video-rs"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1966,7 +1917,7 @@ dependencies = [
  "core-graphics 0.24.0",
  "core-utils-rs",
  "io-surface",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -3510,9 +3461,9 @@ dependencies = [
 
 [[package]]
 name = "half"
-version = "2.4.1"
+version = "2.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6dd08c532ae367adf81c312a4580bc67f1d0fe8bc9c460520283f4c0ff277888"
+checksum = "459196ed295495a68f7d7fe1d84f6c4b7ff0e21fe3017b2f283c6fac3ad803c9"
 dependencies = [
  "cfg-if 1.0.0",
  "crunchy",
@@ -3961,6 +3912,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "io-uring"
+version = "0.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b86e202f00093dcba4275d4636b93ef9dd75d025ae560d2521b45ea28ab49013"
+dependencies = [
+ "bitflags 2.9.0",
+ "cfg-if 1.0.0",
+ "libc",
+]
+
+[[package]]
 name = "ipnet"
 version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4224,9 +4186,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.161"
+version = "0.2.174"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e9489c2807c139ffd9c1794f4af0ebe86a828db53ecdc7fea2111d0fed085d1"
+checksum = "1171693293099992e19cddea4e8b849964e9846f4acee11b3948bcc337be8776"
 
 [[package]]
 name = "libdbus-sys"
@@ -4649,7 +4611,7 @@ dependencies = [
  "once_cell",
  "png",
  "serde",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
  "windows-sys 0.59.0",
 ]
 
@@ -6254,7 +6216,7 @@ dependencies = [
  "rustc-hash 2.1.1",
  "send_wrapper",
  "slotmap",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
  "web-sys",
 ]
 
@@ -6297,7 +6259,7 @@ checksum = "dd6f9d3d47bdd2ad6945c5015a226ec6155d0bcdfd8f7cd29f86b71f8de99d2b"
 dependencies = [
  "getrandom 0.2.15",
  "libredox",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -6623,22 +6585,19 @@ dependencies = [
 [[package]]
 name = "scap"
 version = "0.0.8"
-source = "git+https://github.com/CapSoftware/scap?rev=b914379d787f#b914379d787f934b0cf1f8db6d3cdbd6947b144c"
+source = "git+https://github.com/CapSoftware/scap?rev=d69dcb2e653a#d69dcb2e653a714bf91d147333deb5fb06acb940"
 dependencies = [
+ "cidre",
  "cocoa 0.25.0",
- "core-foundation 0.10.0",
- "core-graphics 0.24.0",
  "core-graphics-helmer-fork",
- "core-media",
- "core-media-rs",
  "cpal 0.15.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "dbus",
+ "futures",
  "objc",
  "pipewire",
  "rand 0.8.5",
- "screencapturekit",
  "sysinfo",
- "tao-core-video-sys",
+ "thiserror 2.0.12",
  "windows 0.58.0",
  "windows-capture",
 ]
@@ -7608,18 +7567,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tao-core-video-sys"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "271450eb289cb4d8d0720c6ce70c72c8c858c93dd61fc625881616752e6b98f6"
-dependencies = [
- "cfg-if 1.0.0",
- "core-foundation-sys 0.8.7",
- "libc",
- "objc",
-]
-
-[[package]]
 name = "tao-macros"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7690,7 +7637,7 @@ dependencies = [
  "tauri-runtime",
  "tauri-runtime-wry",
  "tauri-utils",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
  "tokio",
  "tray-icon",
  "url",
@@ -7743,7 +7690,7 @@ dependencies = [
  "sha2",
  "syn 2.0.90",
  "tauri-utils",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
  "time",
  "url",
  "uuid",
@@ -7809,7 +7756,7 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-plugin",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -7825,7 +7772,7 @@ dependencies = [
  "tauri",
  "tauri-plugin",
  "tauri-utils",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
  "tracing",
  "url",
  "windows-registry 0.3.0",
@@ -7846,7 +7793,7 @@ dependencies = [
  "tauri",
  "tauri-plugin",
  "tauri-plugin-fs",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
  "url",
 ]
 
@@ -7867,7 +7814,7 @@ dependencies = [
  "tauri",
  "tauri-plugin",
  "tauri-utils",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
  "toml",
  "url",
  "uuid",
@@ -7885,7 +7832,7 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-plugin",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -7904,7 +7851,7 @@ dependencies = [
  "tauri",
  "tauri-plugin",
  "tauri-plugin-fs",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
  "tokio",
  "url",
  "urlpattern",
@@ -7924,7 +7871,7 @@ dependencies = [
  "serde_repr",
  "tauri",
  "tauri-plugin",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
  "time",
  "url",
 ]
@@ -7959,7 +7906,7 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-plugin",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
  "url",
  "windows 0.60.0",
  "zbus 5.3.0",
@@ -7980,7 +7927,7 @@ dependencies = [
  "sys-locale",
  "tauri",
  "tauri-plugin",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -7995,7 +7942,7 @@ dependencies = [
  "serde_repr",
  "tauri",
  "tauri-plugin",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -8025,7 +7972,7 @@ dependencies = [
  "shared_child",
  "tauri",
  "tauri-plugin",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
  "tokio",
 ]
 
@@ -8039,7 +7986,7 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-plugin-deep-link",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
  "tracing",
  "windows-sys 0.59.0",
  "zbus 5.3.0",
@@ -8056,7 +8003,7 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-plugin",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
  "tokio",
  "tracing",
 ]
@@ -8084,7 +8031,7 @@ dependencies = [
  "tauri",
  "tauri-plugin",
  "tempfile",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
  "time",
  "tokio",
  "url",
@@ -8104,7 +8051,7 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-plugin",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -8124,7 +8071,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tauri-utils",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
  "url",
  "windows 0.61.1",
 ]
@@ -8214,7 +8161,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "swift-rs",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
  "toml",
  "url",
  "urlpattern",
@@ -8302,11 +8249,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.6"
+version = "2.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fec2a1820ebd077e2b90c4df007bebf344cd394098a13c563957d0afc83ea47"
+checksum = "567b8a2dae586314f7be2a752ec7474332959c6460e02bde30d702a66d488708"
 dependencies = [
- "thiserror-impl 2.0.6",
+ "thiserror-impl 2.0.12",
 ]
 
 [[package]]
@@ -8322,9 +8269,9 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.6"
+version = "2.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d65750cab40f4ff1929fb1ba509e9914eb756131cef4210da8d5d700d26f6312"
+checksum = "7f7cf42b4507d8ea322120659672cf1b9dbb93f8f2d4ecfd6e51350ff5b17a1d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8409,16 +8356,18 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.39.3"
+version = "1.46.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9babc99b9923bfa4804bd74722ff02c0381021eafa4db9949217e3be8e84fff5"
+checksum = "0cc3a2344dafbe23a245241fe8b09735b521110d30fcefbbd5feb1797ca35d17"
 dependencies = [
  "backtrace",
  "bytes",
+ "io-uring",
  "libc",
  "mio 1.0.2",
  "pin-project-lite",
  "signal-hook-registry",
+ "slab",
  "socket2",
  "tokio-macros",
  "tracing",
@@ -8427,9 +8376,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-macros"
-version = "2.4.0"
+version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "693d596312e88961bc67d7f1f97af8a70227d9f90c31bba5806eec004978d752"
+checksum = "6e06d43f1345a3bcd39f6a56dbb7dcab2ba47e68e8ac134855e7e2bdbaf8cab8"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8685,7 +8634,7 @@ dependencies = [
  "once_cell",
  "png",
  "serde",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
  "windows-sys 0.59.0",
 ]
 
@@ -9297,7 +9246,7 @@ version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ae2d11c4a686e4409659d7891791254cf9286d3cfe0eef54df1523533d22295"
 dependencies = [
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
  "windows 0.61.1",
  "windows-core 0.61.0",
 ]
@@ -10298,7 +10247,7 @@ dependencies = [
  "sha2",
  "soup3",
  "tao-macros",
- "thiserror 2.0.6",
+ "thiserror 2.0.12",
  "url",
  "webkit2gtk",
  "webkit2gtk-sys",

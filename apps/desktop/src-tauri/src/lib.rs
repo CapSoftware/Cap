@@ -1153,10 +1153,11 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
         };
 
         if let Some(window) = CapWindowId::Main.get(&app) {
-            window.hide().ok();
+            let _ = window.hide();
         }
 
-        let mut capturer = Capturer::new(options);
+        let mut capturer =
+            Capturer::build(options).map_err(|e| format!("Failed to construct error: {e}"))?;
         capturer.start_capture();
         let frame = capturer
             .get_next_frame()
@@ -1164,7 +1165,7 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
         capturer.stop_capture();
 
         if let Some(window) = CapWindowId::Main.get(&app) {
-            window.show().ok();
+            let _ = window.show();
         }
 
         match frame {

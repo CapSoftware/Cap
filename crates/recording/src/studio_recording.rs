@@ -655,7 +655,8 @@ async fn create_segment_pipeline(
         120,
         system_audio.0,
         start_time,
-    )?;
+    )
+    .await?;
     let screen_crop_ratio = screen_source.crop_ratio();
 
     let camera_feed = match camera_feed.as_ref() {
