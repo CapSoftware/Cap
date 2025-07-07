@@ -55,7 +55,7 @@ async function main() {
     const frameworkDir = path.join(nativeDepsDir, "Spacedrive.framework");
     if (downloadedNativeDeps || !(await fileExists(nativeDepsDir))) {
       await fs.mkdir(nativeDepsDir, { recursive: true });
-      await exec(`tar xf ${nativeDepsTarPath} -C ${nativeDepsDir}`);
+      await exec(`tar xf "${nativeDepsTarPath}" -C "${nativeDepsDir}"`);
       console.log(`Extracted ${nativeDepsFolder}`);
     } else console.log(`Using cached ${nativeDepsFolder}`);
 
@@ -108,7 +108,7 @@ async function main() {
 
     const ffmpegDir = path.join(targetDir, "ffmpeg");
     if (!(await fileExists(ffmpegDir)) || downloadedFfmpeg) {
-      await exec(`tar xf ${ffmpegZipPath} -C ${targetDir}`);
+      await exec(`tar xf "${ffmpegZipPath}" -C "${targetDir}"`);
       await fs.rm(ffmpegDir, { recursive: true, force: true }).catch(() => {});
       await fs.rename(path.join(targetDir, FFMPEG_ZIP_NAME), ffmpegDir);
       console.log("Extracted ffmpeg");
