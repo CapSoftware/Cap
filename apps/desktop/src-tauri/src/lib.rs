@@ -3,6 +3,7 @@ mod audio_meter;
 mod auth;
 mod camera;
 mod captions;
+mod commands;
 mod deeplink_actions;
 mod editor_window;
 mod export;
@@ -282,18 +283,18 @@ pub type MutableState<'a, T> = State<'a, Arc<RwLock<T>>>;
 type SingleTuple<T> = (T,);
 
 #[derive(Serialize, Type)]
-struct JsonValue<T>(
+struct JsonValueWrapper<T>(
     #[serde(skip)] PhantomData<T>,
     #[specta(type = SingleTuple<T>)] serde_json::Value,
 );
 
-impl<T> Clone for JsonValue<T> {
+impl<T> Clone for JsonValueWrapper<T> {
     fn clone(&self) -> Self {
         Self(PhantomData, self.1.clone())
     }
 }
 
-impl<T: Serialize> JsonValue<T> {
+impl<T: Serialize> JsonValueWrapper<T> {
     fn new(value: &T) -> Self {
         Self(PhantomData, json!(value))
     }
@@ -324,31 +325,33 @@ struct CurrentRecording {
 #[specta::specta]
 async fn get_current_recording(
     state: MutableState<'_, App>,
-) -> Result<JsonValue<Option<CurrentRecording>>, ()> {
+) -> Result<JsonValueWrapper<Option<CurrentRecording>>, ()> {
     let state = state.read().await;
-    Ok(JsonValue::new(&state.current_recording.as_ref().map(|r| {
-        let bounds = r.bounds();
+    Ok(JsonValueWrapper::new(
+        &state.current_recording.as_ref().map(|r| {
+            let bounds = r.bounds();
 
-        let target = match r.capture_target() {
-            ScreenCaptureTarget::Screen { id } => CurrentRecordingTarget::Screen { id: *id },
-            ScreenCaptureTarget::Window { id } => CurrentRecordingTarget::Window {
-                id: *id,
-                bounds: bounds.clone(),
-            },
-            ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {
-                screen: *screen,
-                bounds: bounds.clone(),
-            },
-        };
+            let target = match r.capture_target() {
+                ScreenCaptureTarget::Screen { id } => CurrentRecordingTarget::Screen { id: *id },
+                ScreenCaptureTarget::Window { id } => CurrentRecordingTarget::Window {
+                    id: *id,
+                    bounds: bounds.clone(),
+                },
+                ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {
+                    screen: *screen,
+                    bounds: bounds.clone(),
+                },
+            };
 
-        CurrentRecording {
-            target,
-            r#type: match r {
-                InProgressRecording::Instant { .. } => RecordingType::Instant,
-                InProgressRecording::Studio { .. } => RecordingType::Studio,
-            },
-        }
-    })))
+            CurrentRecording {
+                target,
+                r#type: match r {
+                    InProgressRecording::Instant { .. } => RecordingType::Instant,
+                    InProgressRecording::Studio { .. } => RecordingType::Studio,
+                },
+            }
+        }),
+    ))
 }
 
 #[derive(Serialize, Type, tauri_specta::Event, Clone)]
@@ -1807,7 +1810,10 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             captions::download_whisper_model,
             captions::check_model_exists,
             captions::delete_whisper_model,
-            captions::export_captions_srt
+            captions::export_captions_srt,
+            commands::diagnostics::collect_diagnostics,
+            commands::diagnostics::submit_device_profile,
+            commands::upload_bundle::upload_recording_bundle
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,

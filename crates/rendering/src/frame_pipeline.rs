@@ -1,4 +1,3 @@
-use cap_project::XY;
 use futures_intrusive::channel::shared::oneshot_channel;
 use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 

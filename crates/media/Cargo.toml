@@ -10,7 +10,10 @@ workspace = true
 
 [features]
 default = []
-debug-logging = [] # Feature flag to control debug logging
+debug-logging = []      # Feature flag to control debug logging
+testing = []
+telemetry = ["reqwest"]
+sentry = ["dep:sentry"]
 
 [dependencies]
 cap-project = { path = "../project" }
@@ -37,6 +40,17 @@ tokio.workspace = true
 cap-fail = { version = "0.1.0", path = "../fail" }
 image = { version = "0.25.2", features = ["gif"] }
 gif = "0.13.1"
+
+# Add these new dependencies
+chrono = { version = "0.4", features = ["serde"] }
+serde_json = "1.0"
+sys-info = "0.9"
+num_cpus = "1.16"
+reqwest = { version = "0.11", features = ["json"], optional = true }
+dirs = "5.0"
+sentry = { version = "0.32", optional = true }
+clap = { version = "4.5", features = ["derive"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true, default-features = false, features = [
@@ -73,3 +87,7 @@ windows = { workspace = true, features = [
 	"Win32_Media_MediaFoundation",
 ] }
 windows-capture = { workspace = true }
+
+[[bin]]
+name = "device-diagnostics"
+path = "src/bin/device-diagnostics.rs"

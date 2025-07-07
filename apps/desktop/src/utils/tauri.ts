@@ -56,7 +56,7 @@ async removeFakeWindow(name: string) : Promise<null> {
 async focusCapturesPanel() : Promise<void> {
     await TAURI_INVOKE("focus_captures_panel");
 },
-async getCurrentRecording() : Promise<JsonValue<CurrentRecording | null>> {
+async getCurrentRecording() : Promise<JsonValueWrapper<CurrentRecording | null>> {
     return await TAURI_INVOKE("get_current_recording");
 },
 async exportVideo(projectPath: string, progress: TAURI_CHANNEL<FramesRendered>, settings: ExportSettings) : Promise<string> {
@@ -238,6 +238,15 @@ async deleteWhisperModel(modelPath: string) : Promise<null> {
  */
 async exportCaptionsSrt(videoId: string) : Promise<string | null> {
     return await TAURI_INVOKE("export_captions_srt", { videoId });
+},
+async collectDiagnostics() : Promise<SystemDiagnostics> {
+    return await TAURI_INVOKE("collect_diagnostics");
+},
+async submitDeviceProfile(diagnostics: SystemDiagnostics, description: string | null, includeErrors: boolean) : Promise<DiagnosticsSubmissionResponse> {
+    return await TAURI_INVOKE("submit_device_profile", { diagnostics, description, includeErrors });
+},
+async uploadRecordingBundle(recordingPath: string) : Promise<null> {
+    return await TAURI_INVOKE("upload_recording_bundle", { recordingPath });
 }
 }
 
@@ -290,6 +299,8 @@ export type AppTheme = "system" | "light" | "dark"
 export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
 export type Audio = { duration: number; sample_rate: number; channels: number; start_time: number }
 export type AudioConfiguration = { mute: boolean; improve: boolean; micVolumeDb?: number; micStereoMode?: StereoMode; systemVolumeDb?: number }
+export type AudioDeviceInfo = { name: string; sample_rates: number[]; channels: number; sample_formats: string[]; is_default: boolean; buffer_size_range: [number, number] | null; latency_ms: number | null }
+export type AudioDevicesInfo = { input_devices: AudioDeviceInfo[]; output_devices: AudioDeviceInfo[] }
 export type AudioInputLevelChange = number
 export type AudioMeta = { path: string; 
 /**
@@ -311,6 +322,7 @@ export type CaptionData = { segments: CaptionSegment[]; settings: CaptionSetting
 export type CaptionSegment = { id: string; start: number; end: number; text: string }
 export type CaptionSettings = { enabled: boolean; font: string; size: number; color: string; backgroundColor: string; backgroundOpacity: number; position: string; bold: boolean; italic: boolean; outline: boolean; outlineColor: string; exportWithSubtitles: boolean }
 export type CaptionsData = { segments: CaptionSegment[]; settings: CaptionSettings }
+export type CaptureCapabilities = { screen_capture_api: string; supports_hardware_encoding: boolean; supports_audio_capture: boolean; max_supported_fps: number; hardware_encoder: string | null; supported_codecs: string[] }
 export type CaptureScreen = { id: number; name: string; refresh_rate: number }
 export type CaptureWindow = { id: number; owner_name: string; name: string; bounds: Bounds; refresh_rate: number }
 export type CommercialLicense = { licenseKey: string; expiryDate: number | null; refresh: number; activatedOn: number }
@@ -323,11 +335,15 @@ export type CursorConfiguration = { hide?: boolean; hideWhenIdle: boolean; size:
 export type CursorMeta = { imagePath: string; hotspot: XY<number> }
 export type CursorType = "pointer" | "circle"
 export type Cursors = { [key in string]: string } | { [key in string]: CursorMeta }
+export type DiagnosticsSubmissionResponse = { success: boolean; message: string; profileId: string | null; localPath: string | null }
+export type DisplayInfo = { id: number; name: string; resolution: [number, number]; refresh_rate: number; scale_factor: number; is_primary: boolean; color_space: string | null; bit_depth: number | null }
 export type DownloadProgress = { progress: number; message: string }
 export type EditorStateChanged = { playhead_position: number }
 export type ExportCompression = "Minimal" | "Social" | "Web" | "Potato"
 export type ExportEstimates = { duration_seconds: number; estimated_time_seconds: number; estimated_size_mb: number }
 export type ExportSettings = ({ format: "Mp4" } & Mp4ExportSettings) | ({ format: "Gif" } & GifExportSettings)
+export type FfmpegInfo = { version: string; configuration: string[]; libraries: FfmpegLibrary[]; hardware_acceleration: string[] }
+export type FfmpegLibrary = { name: string; version: string }
 export type Flags = { captions: boolean }
 export type FramesRendered = { renderedCount: number; totalFrames: number; type: "FramesRendered" }
 export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; hapticsEnabled?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; customCursorCapture?: boolean; serverUrl?: string; 
@@ -336,14 +352,16 @@ export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?
  */
 openEditorAfterRecording?: boolean }
 export type GifExportSettings = { fps: number; resolution_base: XY<number> }
+export type GpuInfo = { name: string; vendor: string; driver_version: string | null; vram_mb: number | null }
 export type HapticPattern = "Alignment" | "LevelChange" | "Generic"
 export type HapticPerformanceTime = "Default" | "Now" | "DrawCompleted"
+export type HardwareInfo = { cpu_model: string; cpu_cores: number; total_memory_gb: number; available_memory_gb: number; gpu_info: GpuInfo[] }
 export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
 export type HotkeyAction = "startRecording" | "stopRecording" | "restartRecording"
 export type HotkeysConfiguration = { show: boolean }
 export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } }
 export type InstantRecordingMeta = { fps: number; sample_rate: number | null }
-export type JsonValue<T> = [T]
+export type JsonValueWrapper<T> = [T]
 export type MainWindowRecordingStartBehaviour = "close" | "minimise"
 export type Mp4ExportSettings = { fps: number; resolution_base: XY<number>; compression: ExportCompression }
 export type MultipleSegment = { display: VideoMeta; camera?: VideoMeta | null; mic?: AudioMeta | null; system_audio?: AudioMeta | null; cursor?: string | null }
@@ -354,6 +372,7 @@ export type NewStudioRecordingAdded = { path: string }
 export type OSPermission = "screenRecording" | "camera" | "microphone" | "accessibility"
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; camera: OSPermissionStatus; accessibility: OSPermissionStatus }
+export type OsInfo = { name: string; version: string; arch: string; kernel_version: string | null }
 export type Plan = { upgraded: boolean; manual: boolean; last_checked: number }
 export type Platform = "MacOS" | "Windows"
 export type PostStudioRecordingBehaviour = "openEditor" | "showOverlay"
@@ -383,12 +402,15 @@ export type SingleSegment = { display: VideoMeta; camera?: VideoMeta | null; aud
 export type StartRecordingInputs = { capture_target: ScreenCaptureTarget; capture_system_audio?: boolean; mode: RecordingMode }
 export type StereoMode = "stereo" | "monoL" | "monoR"
 export type StudioRecordingMeta = { segment: SingleSegment } | { inner: MultipleSegments }
+export type SystemDiagnostics = { os: OsInfo; hardware: HardwareInfo; video_devices: VideoDeviceInfo[]; audio_devices: AudioDevicesInfo; displays: DisplayInfo[]; capture_capabilities: CaptureCapabilities; ffmpeg_info: FfmpegInfo | null; performance_hints: string[] }
 export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments: ZoomSegment[] }
 export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number }
 export type UploadMode = { Initial: { pre_created_video: VideoUploadInfo | null } } | "Reupload"
 export type UploadProgress = { progress: number }
 export type UploadResult = { Success: string } | "NotAuthenticated" | "PlanCheckFailed" | "UpgradeRequired"
 export type Video = { duration: number; width: number; height: number; fps: number; start_time: number }
+export type VideoDeviceInfo = { name: string; index: string; supported_formats: VideoFormat[]; preferred_format: VideoFormat | null; driver_info: string | null; is_virtual: boolean; backend: string }
+export type VideoFormat = { format: string; width: number; height: number; fps: number }
 export type VideoMeta = { path: string; fps?: number; 
 /**
  * unix time of the first frame

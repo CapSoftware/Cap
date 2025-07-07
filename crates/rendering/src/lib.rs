@@ -94,6 +94,7 @@ impl RecordingSegmentDecoders {
         )
         .await
         .map_err(|e| format!("Screen:{e}"))?;
+
         let camera = OptionFuture::from(segment.camera.map(|camera| {
             spawn_decoder(
                 "camera",
@@ -135,7 +136,7 @@ impl RecordingSegmentDecoders {
         segment_time: f32,
         needs_camera: bool,
     ) -> Option<DecodedSegmentFrames> {
-        let (screen, camera) = tokio::join!(
+        let (screen, camera): (Option<DecodedFrame>, Option<Option<DecodedFrame>>) = tokio::join!(
             self.screen.get_frame(segment_time),
             OptionFuture::from(
                 needs_camera

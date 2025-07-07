@@ -10,15 +10,32 @@ use data::AudioInfoError;
 use thiserror::Error;
 
 pub mod data;
+pub mod device_fallback;
+pub mod diagnostics;
 pub mod encoders;
+pub mod error_context;
 pub mod feeds;
 pub mod frame_ws;
 pub mod pipeline;
 pub mod platform;
 pub mod sources;
 
+// Re-export commonly used types
+#[cfg(not(target_os = "android"))]
+pub use diagnostics::SystemDiagnostics;
+
+#[cfg(not(target_os = "android"))]
+pub use error_context::{DeviceContext, ErrorContext, FfmpegErrorDetails, PerformanceMetrics};
+
+use std::sync::atomic::AtomicBool;
+
+static INITIALIZED: AtomicBool = AtomicBool::new(false);
+
 pub fn init() -> Result<(), MediaError> {
-    ffmpeg::init()?;
+    if !INITIALIZED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        tracing::debug!("Initializing media subsystem");
+        ffmpeg::init()?;
+    }
 
     Ok(())
 }
@@ -57,4 +74,7 @@ pub enum MediaError {
 
     #[error("AudioInfo: {0}")]
     AudioInfoError(#[from] AudioInfoError),
+
+    #[error("{0}")]
+    Other(String),
 }

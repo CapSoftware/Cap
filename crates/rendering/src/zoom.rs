@@ -1,4 +1,4 @@
-use cap_project::{cursor::CursorEvents, ZoomSegment, XY};
+use cap_project::{ZoomSegment, XY};
 
 use crate::{Coord, RawDisplayUVSpace};
 
