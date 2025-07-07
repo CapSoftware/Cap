@@ -2,29 +2,40 @@
 
 import { UploadCapButton } from "../../../caps/components/UploadCapButton";
 import { useRouter } from "next/navigation";
-
+import { useUploadingContext } from "../../../caps/UploadingContext";
 export function UploadCapButtonWithFolder({
   folderId,
-  onUploaded,
-  onStart,
-  onProgress,
-  onComplete,
 }: {
   folderId: string;
-  onUploaded?: () => void;
-  onStart?: (id: string, thumbnail?: string) => void;
-  onProgress?: (id: string, progress: number, uploadProgress?: number) => void;
-  onComplete?: (id: string) => void;
 }) {
   const router = useRouter();
+  const {
+    setIsUploading,
+    setUploadingCapId,
+    setUploadingThumbnailUrl,
+    setUploadProgress
+  } = useUploadingContext();
 
   return (
     <UploadCapButton
-      onStart={onStart}
-      onProgress={onProgress}
+      onStart={(id, thumbnail) => {
+        setIsUploading(true);
+        setUploadingCapId(id);
+        setUploadingThumbnailUrl(thumbnail);
+        setUploadProgress(0);
+      }}
+      onProgress={(id, progress, uploadProgress) => {
+        // Update progress in the context
+        if (uploadProgress !== undefined) {
+          setUploadProgress(Math.round(uploadProgress * 100));
+        }
+      }}
       onComplete={(id) => {
-        onComplete?.(id);
-        onUploaded?.();
+        // Reset all uploading state
+        setIsUploading(false);
+        setUploadingCapId(null);
+        setUploadingThumbnailUrl(undefined);
+        setUploadProgress(0);
         router.refresh();
       }}
       folderId={folderId}

@@ -5,7 +5,7 @@ import { VideoMetadata } from "@cap/database/types";
 import { Button } from "@cap/ui";
 import { faFolderPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams, } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { NewFolderDialog } from "./components/NewFolderDialog";
@@ -19,6 +19,7 @@ import { UploadPlaceholderCard } from "./components/UploadPlaceholderCard";
 import Folder from "./components/Folder";
 import { faInfoCircle } from "@fortawesome/free-solid-svg-icons";
 import type { FolderDataType } from "./components/Folder";
+import { useUploadingContext } from "./UploadingContext";
 
 type VideoData = {
   id: string;
@@ -67,14 +68,16 @@ export const Caps = ({
   const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDraggingCap, setIsDraggingCap] = useState(false);
-  const [uploadPlaceholders, setUploadPlaceholders] = useState<
-    {
-      id: string;
-      progress: number;
-      thumbnail?: string;
-      uploadProgress?: number;
-    }[]
-  >([]);
+  const {
+    isUploading,
+    setIsUploading,
+    uploadingCapId,
+    setUploadingCapId,
+    uploadingThumbnailUrl,
+    setUploadingThumbnailUrl,
+    uploadProgress,
+    setUploadProgress
+  } = useUploadingContext();
 
   const anyCapSelected = selectedCaps.length > 0;
 
@@ -177,7 +180,7 @@ export const Caps = ({
     setIsDeleting(true);
 
     try {
-      await toast.promise(
+      toast.promise(
         async () => {
           const results = await Promise.allSettled(
             selectedCaps.map((capId) => deleteVideo(capId))
@@ -224,25 +227,6 @@ export const Caps = ({
     }
   };
 
-  const handleUploadStart = (id: string, thumbnail?: string) => {
-    setUploadPlaceholders((prev) => [{ id, progress: 0, thumbnail }, ...prev]);
-  };
-
-  const handleUploadProgress = (
-    id: string,
-    progress: number,
-    uploadProgress?: number
-  ) => {
-    setUploadPlaceholders((prev) =>
-      prev.map((u) => (u.id === id ? { ...u, progress, uploadProgress } : u))
-    );
-  };
-
-  const handleUploadComplete = (id: string) => {
-    setUploadPlaceholders((prev) => prev.filter((u) => u.id !== id));
-    refresh();
-  };
-
   if (count === 0) {
     return <EmptyCapState />;
   }
@@ -263,30 +247,42 @@ export const Caps = ({
         open={openNewFolderDialog}
         onOpenChange={setOpenNewFolderDialog}
       />
-      {folders.length === 0 && (
+      <div className="flex gap-3 items-center mb-10 w-full">
         <Button
           onClick={() => setOpenNewFolderDialog(true)}
           size="sm"
           variant="dark"
-          className="flex gap-2 items-center mb-6 max-w-fit"
+          className="flex gap-2 items-center w-fit"
         >
           <FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
           New Folder
         </Button>
-      )}
+        <UploadCapButton
+          onStart={(id, thumbnailUrl) => {
+            setIsUploading(true);
+            setUploadingCapId(id);
+            setUploadingThumbnailUrl(thumbnailUrl);
+            setUploadProgress(0);
+          }}
+          size="sm"
+          onProgress={(id, progress, uploadProgress) => {
+            // Update progress in the context
+            if (uploadProgress !== undefined) {
+              setUploadProgress(Math.round(uploadProgress * 100));
+            }
+          }}
+          onComplete={() => {
+            setIsUploading(false);
+            setUploadingCapId(null);
+            setUploadingThumbnailUrl(undefined);
+            setUploadProgress(0);
+          }}
+        />
+      </div>
       {folders.length > 0 && (
         <>
-          <div className="flex justify-between items-center mb-6 w-full">
+          <div className="flex gap-3 items-center mb-6 w-full">
             <h1 className="text-2xl font-medium text-gray-12">Folders</h1>
-            <Button
-              onClick={() => setOpenNewFolderDialog(true)}
-              size="sm"
-              variant="dark"
-              className="flex gap-2 items-center"
-            >
-              <FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
-              New Folder
-            </Button>
           </div>
           <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4 mb-10">
             {folders.map((folder) => (
@@ -299,23 +295,17 @@ export const Caps = ({
         <>
           <div className="flex justify-between items-center mb-6 w-full">
             <h1 className="text-2xl font-medium text-gray-12">Videos</h1>
-            <UploadCapButton
-              onStart={handleUploadStart}
-              size="sm"
-              onProgress={handleUploadProgress}
-              onComplete={handleUploadComplete}
-            />
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-            {uploadPlaceholders.map((u) => (
+            {isUploading && (
               <UploadPlaceholderCard
-                key={u.id}
-                thumbnail={u.thumbnail}
-                progress={u.progress}
-                uploadProgress={u.uploadProgress}
+                key={"upload-placeholder"}
+                id={uploadingCapId || undefined}
+                thumbnailUrl={uploadingThumbnailUrl}
+                progress={uploadProgress}
               />
-            ))}
+            )}
             {data.map((cap) => (
               <CapCard
                 key={cap.id}

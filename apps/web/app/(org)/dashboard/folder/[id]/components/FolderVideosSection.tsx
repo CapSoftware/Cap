@@ -1,14 +1,14 @@
 "use client";
 
-import { UploadCapButtonWithFolder } from "./UploadCapButtonWithFolder";
 import { UploadPlaceholderCard } from "../../../caps/components/UploadPlaceholderCard";
-import { useUploadPlaceholders } from "./useUploadPlaceholders";
 import { ClientCapCard } from "./index";
 import { useRouter } from "next/navigation";
 import { useState, useRef, useEffect } from "react";
 import { toast } from "sonner";
 import { deleteVideo } from "@/actions/videos/delete";
 import { SelectedCapsBar } from "../../../caps/components/SelectedCapsBar";
+import { useApiClient } from "@/utils/web-api";
+import { useUploadingContext } from "../../../caps/UploadingContext";
 
 interface FolderVideosSectionProps {
   folderId: string;
@@ -18,12 +18,9 @@ interface FolderVideosSectionProps {
 
 export default function FolderVideosSection({ folderId, initialVideos, dubApiKeyEnabled }: FolderVideosSectionProps) {
   const router = useRouter();
-  const {
-    uploadPlaceholders,
-    handleUploadStart,
-    handleUploadProgress,
-    handleUploadComplete,
-  } = useUploadPlaceholders();
+  const apiClient = useApiClient();
+  const { isUploading, uploadingCapId, uploadingThumbnailUrl } = useUploadingContext();
+
   const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
   const previousCountRef = useRef<number>(0);
   const [analytics, setAnalytics] = useState<Record<string, number>>({});
@@ -36,7 +33,7 @@ export default function FolderVideosSection({ folderId, initialVideos, dubApiKey
     setIsDeleting(true);
 
     try {
-      await toast.promise(
+      toast.promise(
         async () => {
           const results = await Promise.allSettled(
             selectedCaps.map((capId) => deleteVideo(capId))
@@ -122,39 +119,33 @@ export default function FolderVideosSection({ folderId, initialVideos, dubApiKey
     <>
       <div className="flex justify-between items-center mb-6 w-full">
         <h1 className="text-2xl font-medium text-gray-12">Videos</h1>
-        <UploadCapButtonWithFolder
-          folderId={folderId}
-          onStart={(id, thumbnail) => {
-            handleUploadStart(id, thumbnail);
-            router.refresh();
-          }}
-          onProgress={handleUploadProgress}
-          onComplete={(id) => {
-            handleUploadComplete(id);
-            router.refresh();
-          }}
-        />
       </div>
       <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-        {uploadPlaceholders.map((u) => (
-          <UploadPlaceholderCard key={u.id} {...u} />
-        ))}
-        {initialVideos.length === 0 && uploadPlaceholders.length === 0 ? (
+        {initialVideos.length === 0 && !isUploading ? (
           <p className="col-span-full text-gray-9">No videos in this folder yet. Drag and drop into the folder or upload.</p>
         ) : (
-          initialVideos.map((video: any) => (
-            <ClientCapCard
-              key={video.id}
-              videoId={video.id}
-              cap={video}
-              analytics={analytics[video.id] || 0}
-              isSelected={selectedCaps.includes(video.id)}
-              anyCapSelected={selectedCaps.length > 0}
-              isDeleting={isDeleting}
-              onSelectToggle={() => handleCapSelection(video.id)}
-              onDelete={deleteSelectedCaps}
-            />
-          ))
+          <>
+            {isUploading && (
+              <UploadPlaceholderCard
+                key={"upload-placeholder"}
+                id={uploadingCapId || undefined}
+                thumbnailUrl={uploadingThumbnailUrl}
+              />
+            )}
+            {initialVideos.map((video: any) => (
+              <ClientCapCard
+                key={video.id}
+                videoId={video.id}
+                cap={video}
+                analytics={analytics[video.id] || 0}
+                isSelected={selectedCaps.includes(video.id)}
+                anyCapSelected={selectedCaps.length > 0}
+                isDeleting={isDeleting}
+                onSelectToggle={() => handleCapSelection(video.id)}
+                onDelete={deleteSelectedCaps}
+              />
+            ))}
+          </>
         )}
       </div>
       <SelectedCapsBar

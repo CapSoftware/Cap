@@ -11,6 +11,12 @@ import { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { Caps } from "./Caps";
 import { serverEnv } from "@cap/env";
+import { UploadingProvider } from "./UploadingContext";
+
+// Client component wrapper to provide the uploading context
+const ClientCapsPage = ({ children }: { children: React.ReactNode }) => {
+  return <UploadingProvider>{children}</UploadingProvider>;
+};
 
 export const metadata: Metadata = {
   title: "My Caps — Cap",
@@ -213,13 +219,15 @@ export default async function CapsPage({
   });
 
   return (
-    <Caps
-      data={processedVideoData}
-      folders={foldersData}
-      customDomain={customDomain}
-      domainVerified={domainVerified}
-      count={totalCount}
-      dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
-    />
+    <ClientCapsPage>
+      <Caps
+        data={processedVideoData}
+        folders={foldersData}
+        customDomain={customDomain}
+        domainVerified={domainVerified}
+        count={totalCount}
+        dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
+      />
+    </ClientCapsPage>
   );
 }

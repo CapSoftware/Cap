@@ -5,13 +5,7 @@ import { Button } from "@cap/ui";
 import { createVideoAndGetUploadUrl } from "@/actions/video/upload";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import {
-  getProgressCircleConfig,
-  calculateStrokeDashoffset,
-  getUploadStatus,
-  getDisplayProgress,
-  isUserOnProPlan,
-} from "@cap/utils";
+import { isUserOnProPlan } from "@cap/utils";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faUpload } from "@fortawesome/free-solid-svg-icons";
@@ -22,7 +16,6 @@ export const UploadCapButton = ({
   onProgress,
   onComplete,
   size = "md",
-  grey = false,
   folderId,
 }: {
   onStart?: (id: string, thumbnail?: string) => void;
@@ -41,17 +34,6 @@ export const UploadCapButton = ({
   const [processingProgress, setProcessingProgress] = useState(0);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const router = useRouter();
-
-  const { circumference } = getProgressCircleConfig();
-  const status = getUploadStatus(uploadProgress);
-  const displayProgress = getDisplayProgress(
-    uploadProgress,
-    processingProgress
-  );
-  const strokeDashoffset = calculateStrokeDashoffset(
-    displayProgress,
-    circumference
-  );
 
   const handleClick = () => {
     if (!user) return;
@@ -107,6 +89,7 @@ export const UploadCapButton = ({
       });
 
       const uploadId = videoData.id;
+      // Initial start with thumbnail as undefined
       onStart?.(uploadId);
       onProgress?.(uploadId, 10);
 
@@ -309,6 +292,7 @@ export const UploadCapButton = ({
         ? URL.createObjectURL(thumbnailBlob)
         : undefined;
 
+      // Pass the thumbnail URL to the parent component
       onStart?.(uploadId, thumbnailUrl);
       onProgress?.(uploadId, 100);
 
