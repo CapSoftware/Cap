@@ -16,19 +16,26 @@ pub struct CameraLayer {
 impl CameraLayer {
     pub fn new(device: &wgpu::Device) -> Self {
         let frame_texture = CompositeVideoFramePipeline::create_frame_texture(device, 1920, 1080);
+        let frame_texture_view = frame_texture.create_view(&Default::default());
+
+        let pipeline = CompositeVideoFramePipeline::new(device);
+
+        let uniforms_buffer = device.create_buffer_init(
+            &(wgpu::util::BufferInitDescriptor {
+                label: Some("CameraLayer Uniforms Buffer"),
+                contents: bytemuck::cast_slice(&[CompositeVideoFrameUniforms::default()]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }),
+        );
+
+        let bind_group = Some(pipeline.bind_group(&device, &uniforms_buffer, &frame_texture_view));
 
         Self {
-            frame_texture_view: frame_texture.create_view(&Default::default()),
             frame_texture,
-            uniforms_buffer: device.create_buffer_init(
-                &(wgpu::util::BufferInitDescriptor {
-                    label: Some("CameraLayer Uniforms Buffer"),
-                    contents: bytemuck::cast_slice(&[CompositeVideoFrameUniforms::default()]),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                }),
-            ),
-            bind_group: None,
-            pipeline: CompositeVideoFramePipeline::new(device),
+            frame_texture_view,
+            uniforms_buffer,
+            bind_group,
+            pipeline,
         }
     }
 

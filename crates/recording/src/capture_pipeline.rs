@@ -90,13 +90,13 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
             let result = loop {
                 use flume::RecvTimeoutError;
 
-                match source.1.recv_timeout(Duration::from_secs(3)) {
+                match source.1.recv() {
                     Ok(frame) => {
                         let _ = screen_encoder.queue_video_frame(frame.0.as_ref());
                     }
-                    Err(RecvTimeoutError::Timeout) => {
-                        break Err("Frame receive timeout".to_string());
-                    }
+                    // Err(RecvTimeoutError::Timeout) => {
+                    //     break Err("Frame receive timeout".to_string());
+                    // }
                     Err(_) => {
                         break Ok(());
                     }
@@ -359,7 +359,7 @@ pub type ScreenCaptureMethod = CMSampleBufferCapture;
 #[cfg(not(target_os = "macos"))]
 pub type ScreenCaptureMethod = AVFrameCapture;
 
-pub fn create_screen_capture(
+pub async fn create_screen_capture(
     capture_target: &ScreenCaptureTarget,
     show_camera: bool,
     force_show_cursor: bool,
@@ -379,6 +379,7 @@ pub fn create_screen_capture(
         audio_tx,
         start_time,
     )
+    .await
     .map(|v| (v, video_rx))
     .map_err(|e| RecordingError::Media(MediaError::TaskLaunch(e)))
 }

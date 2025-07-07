@@ -190,7 +190,8 @@ pub async fn spawn_instant_recording_actor<'a>(
         30,
         system_audio.0,
         start_time,
-    )?;
+    )
+    .await?;
 
     debug!("screen capture: {screen_source:#?}");
 

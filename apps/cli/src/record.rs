@@ -30,26 +30,19 @@ pub struct RecordStart {
 
 impl RecordStart {
     pub async fn run(self) -> Result<(), String> {
-        let (target_info, _) = self
-            .target
-            .screen
-            .map(|id| {
-                cap_media::sources::list_screens()
-                    .into_iter()
-                    .find(|s| s.0.id == id)
-                    .map(|(s, t)| (ScreenCaptureTarget::Screen { id: s.id }, t))
-                    .ok_or(format!("Screen with id '{id}' not found"))
-            })
-            .or_else(|| {
-                self.target.window.map(|id| {
-                    cap_media::sources::list_windows()
-                        .into_iter()
-                        .find(|s| s.0.id == id)
-                        .map(|(s, t)| (ScreenCaptureTarget::Window { id: s.id }, t))
-                        .ok_or(format!("Window with id '{id}' not found"))
-                })
-            })
-            .ok_or("No target specified".to_string())??;
+        let (target_info, _) = match (self.target.screen, self.target.window) {
+            (Some(id), _) => cap_media::sources::list_screens()
+                .into_iter()
+                .find(|s| s.0.id == id)
+                .map(|(s, t)| (ScreenCaptureTarget::Screen { id: s.id }, t))
+                .ok_or(format!("Screen with id '{id}' not found")),
+            (_, Some(id)) => cap_media::sources::list_windows()
+                .into_iter()
+                .find(|s| s.0.id == id)
+                .map(|(s, t)| (ScreenCaptureTarget::Window { id: s.id }, t))
+                .ok_or(format!("Window with id '{id}' not found")),
+            _ => Err("No target specified".to_string()),
+        }?;
 
         let camera = if let Some(camera_index) = self.camera {
             if let Some(camera_info) = nokhwa::query(ApiBackend::Auto)

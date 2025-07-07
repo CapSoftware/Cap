@@ -16,12 +16,18 @@ pub struct DisplayLayer {
 impl DisplayLayer {
     pub fn new(device: &wgpu::Device) -> Self {
         let frame_texture = CompositeVideoFramePipeline::create_frame_texture(device, 1920, 1080);
+        let frame_texture_view = frame_texture.create_view(&Default::default());
+
+        let uniforms_buffer = CompositeVideoFrameUniforms::default().to_buffer(device);
+        let pipeline = CompositeVideoFramePipeline::new(device);
+        let bind_group = Some(pipeline.bind_group(&device, &uniforms_buffer, &frame_texture_view));
+
         Self {
-            frame_texture_view: frame_texture.create_view(&Default::default()),
+            frame_texture_view,
             frame_texture,
-            uniforms_buffer: CompositeVideoFrameUniforms::default().to_buffer(device),
-            pipeline: CompositeVideoFramePipeline::new(device),
-            bind_group: None,
+            uniforms_buffer,
+            pipeline,
+            bind_group,
         }
     }
 
