@@ -17,6 +17,7 @@ import { SelectedCapsBar } from "./components/SelectedCapsBar";
 import { UploadCapButton } from "./components/UploadCapButton";
 import { UploadPlaceholderCard } from "./components/UploadPlaceholderCard";
 import Folder from "./components/Folder";
+import { faInfoCircle } from "@fortawesome/free-solid-svg-icons";
 import type { FolderDataType } from "./components/Folder";
 
 type VideoData = {
@@ -251,8 +252,9 @@ export const Caps = ({
       {isDraggingCap && (
         <div className="fixed inset-0 z-50 pointer-events-none">
           <div className="flex justify-center items-center w-full h-full">
-            <div className="px-5 py-3 text-sm font-medium text-white rounded-xl bg-blue-10">
-              Drag to a space to share or folder to move
+            <div className="flex gap-2 items-center px-5 py-3 text-sm font-medium text-white rounded-xl bg-blue-12">
+              <FontAwesomeIcon className="size-3.5 text-white opacity-50" icon={faInfoCircle} />
+              <p className="text-white">Drag to a space to share or folder to move</p>
             </div>
           </div>
         </div>
