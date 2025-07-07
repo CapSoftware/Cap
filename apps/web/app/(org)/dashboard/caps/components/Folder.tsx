@@ -147,9 +147,6 @@ const Folder = ({ name, color, id, parentId, videoCount }: FolderDataType) => {
               clearTimeout(animationTimerRef.current);
               animationTimerRef.current = null;
             }
-
-            rive.stop();
-            rive.play("folder-close");
           }
         }
       }
@@ -192,12 +189,12 @@ const Folder = ({ name, color, id, parentId, videoCount }: FolderDataType) => {
           clearTimeout(animationTimerRef.current);
           animationTimerRef.current = null;
         }
-
         // Play the folder-open animation when first dragging over
         if (rive) {
           rive.stop();
           rive.play("folder-open");
         }
+
       }
     }
   };
@@ -217,12 +214,11 @@ const Folder = ({ name, color, id, parentId, videoCount }: FolderDataType) => {
         clearTimeout(animationTimerRef.current);
         animationTimerRef.current = null;
       }
-
-      // Play the folder-close animation when dragging leaves
       if (rive) {
         rive.stop();
         rive.play("folder-close");
       }
+
     }
   };
 
