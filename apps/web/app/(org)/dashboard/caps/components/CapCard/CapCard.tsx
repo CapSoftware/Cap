@@ -52,7 +52,7 @@ export interface CapCardProps extends PropsWithChildren {
     hasPassword?: boolean;
   };
   analytics: number;
-  onDelete?: (videoId: string) => Promise<void>;
+  onDelete?: () => Promise<void>;
   userId?: string;
   sharedCapCard?: boolean;
   isSelected?: boolean;

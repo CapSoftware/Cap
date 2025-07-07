@@ -7,7 +7,7 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
-type ClientCapCardProps = Omit<CapCardProps, 'onDelete'> & {
+type ClientCapCardProps = CapCardProps & {
   videoId: string;
 };
 
@@ -228,7 +228,7 @@ export function ClientCapCard(props: ClientCapCardProps) {
         onTouchEnd={handleTouchEnd}
         className={isDragging || touchDragging ? "opacity-50" : ""}
       >
-        <CapCard {...rest} onDelete={() => handleDelete(videoId)} />
+        <CapCard {...rest} />
       </div>
 
       {/* Mobile drag preview */}

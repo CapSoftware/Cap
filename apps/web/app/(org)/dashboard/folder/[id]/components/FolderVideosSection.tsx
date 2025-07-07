@@ -5,13 +5,18 @@ import { UploadPlaceholderCard } from "../../../caps/components/UploadPlaceholde
 import { useUploadPlaceholders } from "./useUploadPlaceholders";
 import { ClientCapCard } from "./index";
 import { useRouter } from "next/navigation";
+import { useState, useRef, useEffect } from "react";
+import { toast } from "sonner";
+import { deleteVideo } from "@/actions/videos/delete";
+import { SelectedCapsBar } from "../../../caps/components/SelectedCapsBar";
 
 interface FolderVideosSectionProps {
   folderId: string;
   initialVideos: Array<any>; // Replace 'any' with your Video type if available
+  dubApiKeyEnabled: boolean;
 }
 
-export default function FolderVideosSection({ folderId, initialVideos }: FolderVideosSectionProps) {
+export default function FolderVideosSection({ folderId, initialVideos, dubApiKeyEnabled }: FolderVideosSectionProps) {
   const router = useRouter();
   const {
     uploadPlaceholders,
@@ -19,6 +24,99 @@ export default function FolderVideosSection({ folderId, initialVideos }: FolderV
     handleUploadProgress,
     handleUploadComplete,
   } = useUploadPlaceholders();
+  const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
+  const previousCountRef = useRef<number>(0);
+  const [analytics, setAnalytics] = useState<Record<string, number>>({});
+
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const deleteSelectedCaps = async () => {
+    if (selectedCaps.length === 0) return;
+
+    setIsDeleting(true);
+
+    try {
+      await toast.promise(
+        async () => {
+          const results = await Promise.allSettled(
+            selectedCaps.map((capId) => deleteVideo(capId))
+          );
+
+          const successCount = results.filter(
+            (result) => result.status === "fulfilled" && result.value.success
+          ).length;
+
+          const errorCount = selectedCaps.length - successCount;
+
+          if (successCount > 0 && errorCount > 0) {
+            return { success: successCount, error: errorCount };
+          } else if (successCount > 0) {
+            return { success: successCount };
+          } else {
+            throw new Error(
+              `Failed to delete ${errorCount} cap${errorCount === 1 ? "" : "s"}`
+            );
+          }
+        },
+        {
+          loading: `Deleting ${selectedCaps.length} cap${selectedCaps.length === 1 ? "" : "s"
+            }...`,
+          success: (data) => {
+            if (data.error) {
+              return `Successfully deleted ${data.success} cap${data.success === 1 ? "" : "s"
+                }, but failed to delete ${data.error} cap${data.error === 1 ? "" : "s"
+                }`;
+            }
+            return `Successfully deleted ${data.success} cap${data.success === 1 ? "" : "s"
+              }`;
+          },
+          error: (error) =>
+            error.message || "An error occurred while deleting caps",
+        }
+      );
+
+      setSelectedCaps([]);
+      router.refresh();
+    } catch (error) {
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleCapSelection = (capId: string) => {
+    setSelectedCaps((prev) => {
+      const newSelection = prev.includes(capId)
+        ? prev.filter((id) => id !== capId)
+        : [...prev, capId];
+
+      previousCountRef.current = prev.length;
+
+      return newSelection;
+    });
+  };
+
+  useEffect(() => {
+    const fetchAnalytics = async () => {
+      if (!dubApiKeyEnabled) return;
+
+      const analyticsData: Record<string, number> = {};
+      for (const video of initialVideos) {
+        const response = await apiClient.video.getAnalytics({
+          query: { videoId: video.id },
+          fetchOptions: {
+            cache: "force-cache",
+          },
+        });
+
+        if (response.status !== 200) continue;
+
+        analyticsData[video.id] = response.body.count || 0;
+      }
+      setAnalytics(analyticsData);
+    };
+
+    fetchAnalytics();
+  }, [initialVideos]);
 
   return (
     <>
@@ -49,11 +147,21 @@ export default function FolderVideosSection({ folderId, initialVideos }: FolderV
               key={video.id}
               videoId={video.id}
               cap={video}
-              analytics={0}
+              analytics={analytics[video.id] || 0}
+              isSelected={selectedCaps.includes(video.id)}
+              anyCapSelected={selectedCaps.length > 0}
+              onSelectToggle={() => handleCapSelection(video.id)}
+              onDelete={deleteSelectedCaps}
             />
           ))
         )}
       </div>
+      <SelectedCapsBar
+        selectedCaps={selectedCaps}
+        setSelectedCaps={setSelectedCaps}
+        deleteSelectedCaps={deleteSelectedCaps}
+        isDeleting={isDeleting}
+      />
     </>
   );
 }

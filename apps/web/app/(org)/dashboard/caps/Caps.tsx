@@ -62,8 +62,8 @@ export const Caps = ({
   const limit = 15;
   const [openNewFolderDialog, setOpenNewFolderDialog] = useState(false);
   const totalPages = Math.ceil(count / limit);
-  const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
   const previousCountRef = useRef<number>(0);
+  const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDraggingCap, setIsDraggingCap] = useState(false);
   const [uploadPlaceholders, setUploadPlaceholders] = useState<
@@ -157,25 +157,6 @@ export const Caps = ({
     };
   }, []);
 
-  const deleteCap = async (videoId: string) => {
-    try {
-      const response = await deleteVideo(videoId);
-      if (response.success) {
-        refresh();
-        toast.success("Cap deleted successfully");
-      } else {
-        throw new Error(
-          response.message || "Failed to delete Cap - please try again later"
-        );
-      }
-    } catch (error) {
-      if (error instanceof Error) {
-        toast.error(error.message);
-      } else {
-        toast.error("Failed to delete Cap - please try again later");
-      }
-    }
-  };
 
   const handleCapSelection = (capId: string) => {
     setSelectedCaps((prev) => {
@@ -338,13 +319,13 @@ export const Caps = ({
                 key={cap.id}
                 cap={cap}
                 analytics={analytics[cap.id] || 0}
-                onDelete={deleteCap}
+                onDelete={deleteSelectedCaps}
                 userId={user?.id}
                 customDomain={customDomain}
                 domainVerified={domainVerified}
                 isSelected={selectedCaps.includes(cap.id)}
-                onSelectToggle={() => handleCapSelection(cap.id)}
                 anyCapSelected={anyCapSelected}
+                onSelectToggle={() => handleCapSelection(cap.id)}
               />
             ))}
           </div>

@@ -4,6 +4,8 @@ import dynamic from "next/dynamic";
 import { getFolderBreadcrumb } from "@/actions/folders/getFolderBreadcrumb";
 import { getChildFolders } from "@/actions/folders/getChildFolders";
 import { getVideosByFolderId } from "@/actions/folders/getVideosByFolderId";
+import { serverEnv } from "@cap/env";
+
 
 const FolderVideosSection = dynamic(() => import("./components/FolderVideosSection"), { ssr: false });
 
@@ -58,6 +60,7 @@ const FolderPage = async ({ params }: { params: { id: string } }) => {
       <FolderVideosSection
         folderId={params.id}
         initialVideos={videosData}
+        dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
       />
     </div>
   );
