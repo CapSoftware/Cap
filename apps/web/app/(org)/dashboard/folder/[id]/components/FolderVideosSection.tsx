@@ -150,6 +150,7 @@ export default function FolderVideosSection({ folderId, initialVideos, dubApiKey
               analytics={analytics[video.id] || 0}
               isSelected={selectedCaps.includes(video.id)}
               anyCapSelected={selectedCaps.length > 0}
+              isDeleting={isDeleting}
               onSelectToggle={() => handleCapSelection(video.id)}
               onDelete={deleteSelectedCaps}
             />

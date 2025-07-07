@@ -61,6 +61,7 @@ export interface CapCardProps extends PropsWithChildren {
   domainVerified?: boolean;
   hideSharedStatus?: boolean;
   anyCapSelected?: boolean;
+  isDeleting?: boolean;
 }
 
 export const CapCard = ({
@@ -76,6 +77,7 @@ export const CapCard = ({
   isSelected = false,
   onSelectToggle,
   anyCapSelected = false,
+  isDeleting = false,
 }: CapCardProps) => {
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
   const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
@@ -105,7 +107,7 @@ export const CapCard = ({
   const confirmRemoveCap = async () => {
     if (!onDelete) return;
     setRemoving(true);
-    await onDelete(cap.id);
+    await onDelete();
     setRemoving(false);
     setConfirmOpen(false);
   };
@@ -416,6 +418,11 @@ export const CapCard = ({
             "block group",
             anyCapSelected && "cursor-pointer pointer-events-none"
           )}
+          onClick={(e) => {
+            if (isDeleting) {
+              e.preventDefault();
+            }
+          }}
           href={`/s/${cap.id}`}
         >
           <VideoThumbnail
