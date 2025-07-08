@@ -5,13 +5,7 @@ import { Button } from "@cap/ui";
 import { createVideoAndGetUploadUrl } from "@/actions/video/upload";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import {
-  getProgressCircleConfig,
-  calculateStrokeDashoffset,
-  getUploadStatus,
-  getDisplayProgress,
-  isUserOnProPlan,
-} from "@cap/utils";
+import { isUserOnProPlan } from "@cap/utils";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faUpload } from "@fortawesome/free-solid-svg-icons";
@@ -22,13 +16,14 @@ export const UploadCapButton = ({
   onProgress,
   onComplete,
   size = "md",
-  grey = false,
+  folderId,
 }: {
   onStart?: (id: string, thumbnail?: string) => void;
   onProgress?: (id: string, progress: number, uploadProgress?: number) => void;
   onComplete?: (id: string) => void;
   size?: "sm" | "lg" | "md";
   grey?: boolean;
+  folderId?: string;
 }) => {
   const { user, isSubscribed } = useDashboardContext();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -39,17 +34,6 @@ export const UploadCapButton = ({
   const [processingProgress, setProcessingProgress] = useState(0);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const router = useRouter();
-
-  const { circumference } = getProgressCircleConfig();
-  const status = getUploadStatus(uploadProgress);
-  const displayProgress = getDisplayProgress(
-    uploadProgress,
-    processingProgress
-  );
-  const strokeDashoffset = calculateStrokeDashoffset(
-    displayProgress,
-    circumference
-  );
 
   const handleClick = () => {
     if (!user) return;
@@ -101,9 +85,11 @@ export const UploadCapButton = ({
         audioCodec: "aac",
         isScreenshot: false,
         isUpload: true,
+        folderId,
       });
 
       const uploadId = videoData.id;
+      // Initial start with thumbnail as undefined
       onStart?.(uploadId);
       onProgress?.(uploadId, 10);
 
@@ -206,7 +192,7 @@ export const UploadCapButton = ({
             resolve(false);
           });
 
-          testVideo.addEventListener("loadstart", () => {});
+          testVideo.addEventListener("loadstart", () => { });
 
           testVideo.src = URL.createObjectURL(optimizedBlob);
         });
@@ -297,7 +283,7 @@ export const UploadCapButton = ({
             resolve(null);
           });
 
-          video.addEventListener("loadstart", () => {});
+          video.addEventListener("loadstart", () => { });
         });
       };
 
@@ -306,6 +292,7 @@ export const UploadCapButton = ({
         ? URL.createObjectURL(thumbnailBlob)
         : undefined;
 
+      // Pass the thumbnail URL to the parent component
       onStart?.(uploadId, thumbnailUrl);
       onProgress?.(uploadId, 100);
 
@@ -410,7 +397,7 @@ export const UploadCapButton = ({
         spinner={uploading}
       >
         <FontAwesomeIcon className="size-3.5" icon={faUpload} />
-        Upload Video
+        {uploading ? "Uploading..." : "Upload Video"}
       </Button>
       <input
         ref={inputRef}

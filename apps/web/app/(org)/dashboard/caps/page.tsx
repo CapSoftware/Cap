@@ -1,16 +1,22 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
-  comments, organizations,
-  sharedVideos,
-  users,
+  comments,
+  folders, organizations,
+  sharedVideos, users,
   videos
 } from "@cap/database/schema";
-import { count, desc, eq, sql } from "drizzle-orm";
+import { and, count, desc, eq, isNull, sql } from "drizzle-orm";
 import { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { Caps } from "./Caps";
 import { serverEnv } from "@cap/env";
+import { UploadingProvider } from "./UploadingContext";
+
+// Client component wrapper to provide the uploading context
+const ClientCapsPage = ({ children }: { children: React.ReactNode }) => {
+  return <UploadingProvider>{children}</UploadingProvider>;
+};
 
 export const metadata: Metadata = {
   title: "My Caps — Cap",
@@ -155,7 +161,7 @@ export default async function CapsPage({
     .leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
     .leftJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
     .leftJoin(users, eq(videos.ownerId, users.id))
-    .where(eq(videos.ownerId, userId))
+    .where(and(eq(videos.ownerId, userId), isNull(videos.folderId)))
     .groupBy(
       videos.id,
       videos.ownerId,
@@ -173,11 +179,30 @@ export default async function CapsPage({
     .limit(limit)
     .offset(offset);
 
+  const foldersData = await db()
+    .select({
+      id: folders.id,
+      name: folders.name,
+      color: folders.color,
+      parentId: folders.parentId,
+      videoCount: sql<number>`(
+        SELECT COUNT(*) FROM videos WHERE videos.folderId = folders.id
+      )`,
+    })
+    .from(folders)
+    .where(
+      and(
+        eq(folders.organizationId, user.activeOrganizationId),
+        isNull(folders.parentId)
+      )
+    );
+
   const processedVideoData = videoData.map((video) => {
     const { effectiveDate, ...videoWithoutEffectiveDate } = video;
 
     return {
       ...videoWithoutEffectiveDate,
+      foldersData,
       sharedOrganizations: video.sharedOrganizations.filter(
         (organization) => organization.id !== null
       ),
@@ -194,12 +219,15 @@ export default async function CapsPage({
   });
 
   return (
-    <Caps
-      data={processedVideoData}
-      customDomain={customDomain}
-      domainVerified={domainVerified}
-      count={totalCount}
-      dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
-    />
+    <ClientCapsPage>
+      <Caps
+        data={processedVideoData}
+        folders={foldersData}
+        customDomain={customDomain}
+        domainVerified={domainVerified}
+        count={totalCount}
+        dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
+      />
+    </ClientCapsPage>
   );
 }
