@@ -188,7 +188,6 @@ function Page() {
   const toggleRecording = createMutation(() => ({
     mutationFn: async () => {
       if (!isRecording()) {
-        console.log("bruh", rawOptions, options.screen());
         await commands.startRecording({
           capture_target: options.target(),
           mode: rawOptions.mode,
