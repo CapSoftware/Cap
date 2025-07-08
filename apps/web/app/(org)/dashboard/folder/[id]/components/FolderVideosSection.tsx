@@ -19,7 +19,7 @@ interface FolderVideosSectionProps {
 export default function FolderVideosSection({ folderId, initialVideos, dubApiKeyEnabled }: FolderVideosSectionProps) {
   const router = useRouter();
   const apiClient = useApiClient();
-  const { isUploading, uploadingCapId, uploadingThumbnailUrl } = useUploadingContext();
+  const { isUploading, uploadingCapId, uploadingThumbnailUrl, uploadProgress } = useUploadingContext();
 
   const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
   const previousCountRef = useRef<number>(0);
@@ -130,6 +130,7 @@ export default function FolderVideosSection({ folderId, initialVideos, dubApiKey
                 key={"upload-placeholder"}
                 id={uploadingCapId || undefined}
                 thumbnailUrl={uploadingThumbnailUrl}
+                progress={uploadProgress}
               />
             )}
             {initialVideos.map((video: any) => (

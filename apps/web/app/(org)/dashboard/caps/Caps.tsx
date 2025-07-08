@@ -265,12 +265,6 @@ export const Caps = ({
             setUploadProgress(0);
           }}
           size="sm"
-          onProgress={(id, progress, uploadProgress) => {
-            // Update progress in the context
-            if (uploadProgress !== undefined) {
-              setUploadProgress(Math.round(uploadProgress * 100));
-            }
-          }}
           onComplete={() => {
             setIsUploading(false);
             setUploadingCapId(null);
