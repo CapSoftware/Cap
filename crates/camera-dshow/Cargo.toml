@@ -1,0 +1,18 @@
+[package]
+name = "cap-camera-windows"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+windows-core = { version = "0.60" }
+windows = { version = "0.60", features = [
+	"Win32_System_Com",
+	"Win32_Media_MediaFoundation",
+	"Win32_Media_DirectShow",
+	"Win32_System_Com_StructuredStorage",
+	"Win32_System_Ole",
+	"Win32_System_Variant",
+] }
+
+[lints]
+workspace = true
