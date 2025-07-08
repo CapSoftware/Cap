@@ -141,7 +141,7 @@ export const NewFolderDialog: React.FC<Props> = ({ open, onOpenChange }) => {
             variant="dark"
             disabled={!selectedColor || !folderName.trim().length || loading}
           >
-            Create
+            {loading ? "Creating..." : "Create"}
           </Button>
         </DialogFooter>
       </DialogContent>

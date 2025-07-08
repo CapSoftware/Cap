@@ -24,12 +24,6 @@ export function UploadCapButtonWithFolder({
         setUploadingThumbnailUrl(thumbnail);
         setUploadProgress(0);
       }}
-      onProgress={(id, progress, uploadProgress) => {
-        // Update progress in the context
-        if (uploadProgress !== undefined) {
-          setUploadProgress(Math.round(uploadProgress * 100));
-        }
-      }}
       onComplete={(id) => {
         // Reset all uploading state
         setIsUploading(false);
