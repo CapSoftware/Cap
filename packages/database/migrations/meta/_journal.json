@@ -22,20 +22,6 @@
       "when": 1750935538683,
       "tag": "0002_dusty_maginty",
       "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "5",
-      "when": 1751274435418,
-      "tag": "0003_outstanding_kylun",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "5",
-      "when": 1751299325634,
-      "tag": "0004_optimal_eddie_brock",
-      "breakpoints": true
     }
   ]
 }
