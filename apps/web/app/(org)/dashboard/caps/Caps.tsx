@@ -21,7 +21,7 @@ import { faInfoCircle } from "@fortawesome/free-solid-svg-icons";
 import type { FolderDataType } from "./components/Folder";
 import { useUploadingContext } from "./UploadingContext";
 
-type VideoData = {
+export type VideoData = {
   id: string;
   ownerId: string;
   name: string;
@@ -295,9 +295,6 @@ export const Caps = ({
             {isUploading && (
               <UploadPlaceholderCard
                 key={"upload-placeholder"}
-                id={uploadingCapId || undefined}
-                thumbnailUrl={uploadingThumbnailUrl}
-                progress={uploadProgress}
               />
             )}
             {data.map((cap) => (

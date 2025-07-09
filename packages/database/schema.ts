@@ -196,10 +196,16 @@ export const folders = mysqlTable(
   {
     id: nanoId("id").notNull().primaryKey().unique(),
     name: varchar("name", { length: 255 }).notNull(),
-    color: varchar("color", { length: 16, enum: ["normal", "blue", "red", "yellow"] }).notNull().default("normal"),
+    color: varchar("color", {
+      length: 16,
+      enum: ["normal", "blue", "red", "yellow"],
+    })
+      .notNull()
+      .default("normal"),
     organizationId: nanoId("organizationId").notNull(),
     createdById: nanoId("createdById").notNull(),
     parentId: nanoIdNullable("parentId"),
+    spaceId: nanoIdNullable("spaceId"),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
   },
@@ -207,6 +213,7 @@ export const folders = mysqlTable(
     organizationIdIndex: index("organization_id_idx").on(table.organizationId),
     createdByIdIndex: index("created_by_id_idx").on(table.createdById),
     parentIdIndex: index("parent_id_idx").on(table.parentId),
+    spaceIdIndex: index("space_id_idx").on(table.spaceId),
   })
 );
 
@@ -436,8 +443,6 @@ export const sharedVideosRelations = relations(sharedVideos, ({ one }) => ({
   }),
 }));
 
-
-
 export const spaces = mysqlTable(
   "spaces",
   {
@@ -485,12 +490,14 @@ export const spaceVideos = mysqlTable(
   {
     id: nanoId("id").notNull().primaryKey().unique(),
     spaceId: nanoId("spaceId").notNull(),
+    folderId: nanoIdNullable("folderId"),
     videoId: nanoId("videoId").notNull(),
     addedById: nanoId("addedById").notNull(),
     addedAt: timestamp("addedAt").notNull().defaultNow(),
   },
   (table) => ({
     spaceIdIndex: index("space_id_idx").on(table.spaceId),
+    folderIdIndex: index("folder_id_idx").on(table.folderId),
     videoIdIndex: index("video_id_idx").on(table.videoId),
     addedByIdIndex: index("added_by_id_idx").on(table.addedById),
     spaceIdVideoIdIndex: index("space_id_video_id_idx").on(
@@ -551,7 +558,7 @@ export const foldersRelations = relations(folders, ({ one, many }) => ({
   parentFolder: one(folders, {
     fields: [folders.parentId],
     references: [folders.id],
-    relationName: "parentChild"
+    relationName: "parentChild",
   }),
   childFolders: many(folders, { relationName: "parentChild" }),
   videos: many(videos),

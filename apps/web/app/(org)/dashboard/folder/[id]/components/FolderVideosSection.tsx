@@ -9,17 +9,27 @@ import { deleteVideo } from "@/actions/videos/delete";
 import { SelectedCapsBar } from "../../../caps/components/SelectedCapsBar";
 import { useApiClient } from "@/utils/web-api";
 import { useUploadingContext } from "../../../caps/UploadingContext";
+import { type VideoData } from "../../../caps/Caps";
+import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import { SharedCapCard } from "../../../spaces/[spaceId]/components/SharedCapCard";
 
 interface FolderVideosSectionProps {
-  folderId: string;
-  initialVideos: Array<any>; // Replace 'any' with your Video type if available
+  initialVideos: VideoData;
   dubApiKeyEnabled: boolean;
+  cardType?: "shared" | "default";
+  userId?: string;
 }
 
-export default function FolderVideosSection({ folderId, initialVideos, dubApiKeyEnabled }: FolderVideosSectionProps) {
+export default function FolderVideosSection({
+  initialVideos,
+  dubApiKeyEnabled,
+  cardType = "default",
+  userId,
+}: FolderVideosSectionProps) {
   const router = useRouter();
   const apiClient = useApiClient();
-  const { isUploading, uploadingCapId, uploadingThumbnailUrl, uploadProgress } = useUploadingContext();
+  const { isUploading } = useUploadingContext();
+  const { activeOrganization } = useDashboardContext();
 
   const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
   const previousCountRef = useRef<number>(0);
@@ -122,30 +132,42 @@ export default function FolderVideosSection({ folderId, initialVideos, dubApiKey
       </div>
       <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
         {initialVideos.length === 0 && !isUploading ? (
-          <p className="col-span-full text-gray-9">No videos in this folder yet. Drag and drop into the folder or upload.</p>
+          <p className="col-span-full text-gray-9">
+            No videos in this folder yet. Drag and drop into the folder or
+            upload.
+          </p>
         ) : (
           <>
             {isUploading && (
-              <UploadPlaceholderCard
-                key={"upload-placeholder"}
-                id={uploadingCapId || undefined}
-                thumbnailUrl={uploadingThumbnailUrl}
-                progress={uploadProgress}
-              />
+              <UploadPlaceholderCard key={"upload-placeholder"} />
             )}
-            {initialVideos.map((video: any) => (
-              <ClientCapCard
-                key={video.id}
-                videoId={video.id}
-                cap={video}
-                analytics={analytics[video.id] || 0}
-                isSelected={selectedCaps.includes(video.id)}
-                anyCapSelected={selectedCaps.length > 0}
-                isDeleting={isDeleting}
-                onSelectToggle={() => handleCapSelection(video.id)}
-                onDelete={deleteSelectedCaps}
-              />
-            ))}
+
+            {cardType === "shared" ? (
+              initialVideos.map((video) => (
+                <SharedCapCard
+                  key={video.id}
+                  cap={video}
+                  hideSharedStatus
+                  analytics={analytics[video.id] || 0}
+                  organizationName={activeOrganization?.organization.name || ""}
+                  userId={userId}
+                />
+              ))
+            ) : (
+              initialVideos.map((video) => (
+                <ClientCapCard
+                  key={video.id}
+                  videoId={video.id}
+                  cap={video}
+                  analytics={analytics[video.id] || 0}
+                  isSelected={selectedCaps.includes(video.id)}
+                  anyCapSelected={selectedCaps.length > 0}
+                  isDeleting={isDeleting}
+                  onSelectToggle={() => handleCapSelection(video.id)}
+                  onDelete={deleteSelectedCaps}
+                />
+              ))
+            )}
           </>
         )}
       </div>

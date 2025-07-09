@@ -16,6 +16,7 @@ import clsx from "clsx";
 import { createFolder } from "@/actions/folders/createFolder";
 import { toast } from "sonner";
 import { BlueFolder, NormalFolder, RedFolder, YellowFolder } from "../../../caps/components/Folders";
+import { useDashboardContext } from "../../../Contexts";
 
 interface Props {
   open: boolean;
@@ -53,6 +54,7 @@ export const SubfolderDialog: React.FC<Props> = ({ open, onOpenChange, parentFol
   const [folderName, setFolderName] = useState<string>("");
   const folderRefs = useRef<Record<string, any>>({});
   const [loading, setLoading] = useState<boolean>(false);
+  const { activeSpace } = useDashboardContext();
 
   useEffect(() => {
     if (!open) {
@@ -69,6 +71,7 @@ export const SubfolderDialog: React.FC<Props> = ({ open, onOpenChange, parentFol
         name: folderName,
         color: selectedColor,
         parentId: parentFolderId,
+        spaceId: activeSpace?.id,
       });
       setFolderName("");
       setSelectedColor(null);

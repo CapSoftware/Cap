@@ -4,35 +4,25 @@ import { LogoSpinner } from "@cap/ui";
 import {
   getProgressCircleConfig,
   calculateStrokeDashoffset,
-  getUploadStatus,
-  getDisplayProgress,
+  getUploadStatus
 } from "@cap/utils";
+import { useUploadingContext } from "../UploadingContext";
 
-export const UploadPlaceholderCard = ({
-  thumbnail,
-  progress,
-  uploadProgress,
-}: {
-  thumbnail?: string;
-  progress: number;
-  uploadProgress?: number;
-}) => {
+export const UploadPlaceholderCard = () => {
+  const { uploadingThumbnailUrl, uploadProgress } = useUploadingContext();
   const { circumference } = getProgressCircleConfig();
   const status = getUploadStatus(uploadProgress);
-  const displayProgress = getDisplayProgress(uploadProgress, progress);
   const strokeDashoffset = calculateStrokeDashoffset(
-    displayProgress,
+    uploadProgress,
     circumference
   );
-
-  console.log(displayProgress, 'display progress')
 
   return (
     <div className="flex flex-col gap-4 w-full h-full rounded-xl bg-gray-1 border-gray-3 border-[1px]">
       <div className="overflow-hidden relative w-full bg-black rounded-t-xl border-b border-gray-3 aspect-video group">
-        {thumbnail ? (
+        {uploadingThumbnailUrl ? (
           <img
-            src={thumbnail}
+            src={uploadingThumbnailUrl}
             alt="Uploading thumbnail"
             className="object-cover w-full h-full"
           />

@@ -1,12 +1,12 @@
 "use server";
 
 import { db } from "@cap/database";
-import { folders, videos } from "@cap/database/schema";
-import { eq } from "drizzle-orm";
+import { folders, videos, spaceVideos } from "@cap/database/schema";
+import { eq, and } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { getFolderById } from "./getFolderById";
 
-export async function deleteFolder(folderId: string) {
+export async function deleteFolder(folderId: string, spaceId?: string | null) {
   if (!folderId) throw new Error("Folder ID is required");
 
   // Get the folder to find its parent
@@ -22,13 +22,30 @@ export async function deleteFolder(folderId: string) {
     await deleteFolder(child.id);
   }
 
-  // Set folderId to parentId for all videos in this folder
+  // Always update videos.folderId so videos move up to parent folder
   await db()
     .update(videos)
     .set({ folderId: parentId })
     .where(eq(videos.folderId, folderId));
 
+  // If spaceId is provided, also update spaceVideos.folderId for consistency
+  if (spaceId) {
+    await db()
+      .update(spaceVideos)
+      .set({ folderId: parentId })
+      .where(
+        and(
+          eq(spaceVideos.folderId, folderId),
+          eq(spaceVideos.spaceId, spaceId)
+        )
+      );
+  }
+
   // Delete the folder itself
   await db().delete(folders).where(eq(folders.id, folderId));
-  revalidatePath(`/dashboard/caps`);
+  if (spaceId) {
+    revalidatePath(`/dashboard/spaces/${spaceId}`);
+  } else {
+    revalidatePath(`/dashboard/caps`);
+  }
 }
