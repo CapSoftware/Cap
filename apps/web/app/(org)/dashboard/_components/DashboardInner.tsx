@@ -25,12 +25,10 @@ import { usePathname } from "next/navigation";
 import React, { cloneElement, memo, useMemo, useRef, useState } from "react";
 import { useDashboardContext, useTheme } from "../Contexts";
 import { MembersDialog } from "../spaces/[spaceId]/components/MembersDialog";
-import { ArrowUpIcon } from "./AnimatedIcons/ArrowUp";
-import { MessageCircleMoreIcon } from "./AnimatedIcons/Chat";
-import { DownloadIcon, DownloadIconHandle } from "./AnimatedIcons/Download";
-import { HomeIcon } from "./AnimatedIcons/Home";
-import { LogoutIcon } from "./AnimatedIcons/Logout";
-import { SettingsGearIcon } from "./AnimatedIcons/Settings";
+import { ArrowUpIcon, MessageCircleMoreIcon, DownloadIcon, HomeIcon, LogoutIcon, SettingsGearIcon } from "./AnimatedIcons";
+import { DownloadIconHandle } from "./AnimatedIcons/Download";
+
+
 
 export const navItemClass =
   "flex items-center justify-start rounded-xl outline-none tracking-tight overflow-hidden";

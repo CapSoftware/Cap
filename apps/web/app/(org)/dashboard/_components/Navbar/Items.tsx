@@ -34,10 +34,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cloneElement, useRef, useState } from "react";
 import { useDashboardContext } from "../../Contexts";
-import { CapIcon } from "../AnimatedIcons/Cap";
-import { CogIcon, CogIconHandle } from "../AnimatedIcons/Cog";
+import { CogIcon, CapIcon } from "../AnimatedIcons";
 import { updateActiveOrganization } from "./server";
 import SpacesList from "./SpacesList";
+import { CogIconHandle } from "../AnimatedIcons/Cog";
 
 interface Props {
   toggleMobileNav?: () => void;

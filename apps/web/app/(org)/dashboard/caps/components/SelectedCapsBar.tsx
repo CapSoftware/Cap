@@ -80,7 +80,7 @@ export const SelectedCapsBar = ({
             </Button>
             <ConfirmationDialog
               open={confirmOpen}
-              icon={<FontAwesomeIcon icon={faFilm} className="text-red-10" />}
+              icon={<FontAwesomeIcon icon={faFilm} />}
               title="Delete selected Caps"
               description={`Are you sure you want to delete ${selectedCaps.length} cap${selectedCaps.length === 1 ? '' : 's'}? This action cannot be undone.`}
               confirmLabel="Delete"

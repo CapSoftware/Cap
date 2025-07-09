@@ -95,4 +95,4 @@ const DownloadIcon = forwardRef<DownloadIconHandle, DownloadIconProps>(
 
 DownloadIcon.displayName = 'DownloadIcon';
 
-export { DownloadIcon };
+export default DownloadIcon;

@@ -16,7 +16,7 @@ pub async fn main() {
                 return;
             };
 
-            dbg!(frame.pts());
+            println!("{:?}", frame.pts());
         }
     })
     .join();
