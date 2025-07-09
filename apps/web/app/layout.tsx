@@ -8,6 +8,7 @@ import type { Metadata } from "next";
 import localFont from "next/font/local";
 import { PropsWithChildren } from "react";
 import { getBootstrapData } from "@/utils/getBootstrapData";
+import { Analytics as DubAnalytics } from "@dub/analytics/react";
 
 import {
   SessionProvider,
@@ -127,6 +128,11 @@ export default async function RootLayout({ children }: PropsWithChildren) {
             </AuthContextProvider>
           </PostHogProvider>
         </TooltipPrimitive.Provider>
+        <DubAnalytics
+          domainsConfig={{
+            refer: "cap.link",
+          }}
+        />
       </body>
     </html>
   );

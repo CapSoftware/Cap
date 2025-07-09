@@ -24,6 +24,7 @@
     "@cap/utils": "workspace:*",
     "@cap/web-api-contract": "workspace:*",
     "@deepgram/sdk": "^3.3.4",
+    "@dub/analytics": "^0.0.27",
     "@fortawesome/free-brands-svg-icons": "^6.7.2",
     "@fortawesome/free-solid-svg-icons": "^6.7.2",
     "@fortawesome/react-fontawesome": "^0.2.2",
