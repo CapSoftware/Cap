@@ -31,7 +31,7 @@ import { motion } from "framer-motion";
 import { Check, ChevronDown, Plus } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { cloneElement, useRef, useState } from "react";
 import { useDashboardContext } from "../../Contexts";
 import { CogIcon, CapIcon } from "../AnimatedIcons";
@@ -68,13 +68,13 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
     },
     ...(buildEnv.NEXT_PUBLIC_IS_CAP && user.email.endsWith("@cap.so")
       ? [
-          {
-            name: "Admin Dev",
-            href: "/dashboard/admin",
-            icon: <CogIcon />,
-            subNav: [],
-          },
-        ]
+        {
+          name: "Admin Dev",
+          href: "/dashboard/admin",
+          icon: <CogIcon />,
+          subNav: [],
+        },
+      ]
       : []),
   ];
 
@@ -89,6 +89,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
   const [organizationName, setOrganizationName] = useState("");
   const isOwner = activeOrg?.organization.ownerId === user.id;
   const [openAIDialog, setOpenAIDialog] = useState(false);
+  const router = useRouter();
 
   const isPathActive = (path: string) => pathname.includes(path);
 
@@ -197,6 +198,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
                               organization.organization.id
                             );
                             setOpen(false);
+                            router.push("/dashboard/caps");
                           }}
                         >
                           <div className="flex gap-2 items-center w-full">
@@ -347,10 +349,10 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
             subscribed={userIsSubscribed}
           />
           {buildEnv.NEXT_PUBLIC_IS_CAP && (
-            <div className="mt-2 flex justify-center items-center">
+            <div className="flex justify-center items-center mt-2">
               <Link
                 href="/dashboard/refer"
-                className="text-sm text-gray-10 hover:text-gray-12 underline"
+                className="text-sm underline text-gray-10 hover:text-gray-12"
               >
                 Earn 40% Referral
               </Link>
