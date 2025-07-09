@@ -128,11 +128,13 @@ export default async function RootLayout({ children }: PropsWithChildren) {
             </AuthContextProvider>
           </PostHogProvider>
         </TooltipPrimitive.Provider>
-        <DubAnalytics
-          domainsConfig={{
-            refer: "cap.link",
-          }}
-        />
+        {buildEnv.NEXT_PUBLIC_IS_CAP && (
+          <DubAnalytics
+            domainsConfig={{
+              refer: "cap.link",
+            }}
+          />
+        )}
       </body>
     </html>
   );
