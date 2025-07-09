@@ -326,7 +326,7 @@ export const SeoPageTemplate = ({
       </div>
 
       {/* Main Content */}
-      <div className="wrapper py-24 bg-gradient-to-b from-white to-gray-50 relative z-10">
+      <div className="wrapper py-24 relative z-10">
         {/* Features Section */}
         <div className="mb-28">
           <div className="text-center max-w-[800px] mx-auto mb-16">
@@ -338,7 +338,7 @@ export const SeoPageTemplate = ({
               {renderHTML(content.featuresDescription)}
             </p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 px-4">
             {content.features.map((feature, index) => (
               <div
                 key={index}
@@ -468,7 +468,7 @@ export const SeoPageTemplate = ({
               </h2>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full max-w-4xl mx-auto bg-gray-1 rounded-xl shadow-md">
+              <table className="w-full max-w-4xl mx-auto bg-gray-1 shadow-md rounded-2xl overflow-hidden">
                 <thead className="bg-blue-50">
                   <tr>
                     {content.comparisonTable.headers.map((header, index) => (
@@ -485,9 +485,7 @@ export const SeoPageTemplate = ({
                   {content.comparisonTable.rows.map((row, rowIndex) => (
                     <tr
                       key={rowIndex}
-                      className={
-                        rowIndex % 2 === 0 ? "bg-gray-1" : "bg-gray-50"
-                      }
+                      className={rowIndex % 2 === 0 ? "bg-gray-1" : "bg-gray-50"}
                     >
                       {row.map((cell, cellIndex) => (
                         <td
@@ -516,7 +514,7 @@ export const SeoPageTemplate = ({
               {renderHTML(content.useCasesDescription)}
             </p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 px-4">
             {content.useCases.map((useCase, index) => (
               <div
                 key={index}
