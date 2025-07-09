@@ -331,7 +331,7 @@ export function PageContent() {
         }}
         >
           <div
-            id="cloud-1"
+            id="cloud-4"
             className="absolute top-0 -right-20 opacity-30 z-0 pointer-events-none transition-transform duration-700 ease-in-out"
           >
             <img
@@ -341,7 +341,7 @@ export function PageContent() {
             />
           </div>
           <div
-            id="cloud-2"
+            id="cloud-5"
             className="absolute bottom-0 left-0 opacity-30 z-0 pointer-events-none transition-transform duration-700 ease-in-out"
           >
             <img
