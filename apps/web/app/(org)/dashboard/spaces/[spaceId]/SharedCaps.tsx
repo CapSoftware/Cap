@@ -73,7 +73,10 @@ export const SharedCaps = ({
   const limit = 15;
   const [openNewFolderDialog, setOpenNewFolderDialog] = useState(false);
   const totalPages = Math.ceil(count / limit);
-  const [isDraggingCap, setIsDraggingCap] = useState(false);
+  const [isDraggingCap, setIsDraggingCap] = useState({
+    isOwner: false,
+    isDragging: false,
+  });
   const [isAddVideosDialogOpen, setIsAddVideosDialogOpen] = useState(false);
   const [
     isAddOrganizationVideosDialogOpen,
@@ -101,18 +104,6 @@ export const SharedCaps = ({
     fetchAnalytics();
   }, [data]);
 
-  useEffect(() => {
-    const handleDragStart = () => setIsDraggingCap(true);
-    const handleDragEnd = () => setIsDraggingCap(false);
-
-    window.addEventListener("dragstart", handleDragStart);
-    window.addEventListener("dragend", handleDragEnd);
-
-    return () => {
-      window.removeEventListener("dragstart", handleDragStart);
-      window.removeEventListener("dragend", handleDragEnd);
-    };
-  }, []);
 
   const handleVideosAdded = () => {
     router.refresh();
@@ -175,7 +166,7 @@ export const SharedCaps = ({
 
   return (
     <div className="flex relative flex-col w-full h-full">
-      {isDraggingCap && (
+      {isDraggingCap.isDragging && (
         <div className="fixed inset-0 z-50 pointer-events-none">
           <div className="flex justify-center items-center w-full h-full">
             <div className="flex gap-2 items-center px-5 py-3 text-sm font-medium text-white rounded-xl bg-blue-12">
@@ -184,17 +175,20 @@ export const SharedCaps = ({
                 icon={faInfoCircle}
               />
               <p className="text-white">
-                Drag to a space to share or folder to move
+                {isDraggingCap.isOwner ? " Drag to a space to share or folder to move" : "Only the video owner can drag and move the video"}
               </p>
             </div>
           </div>
         </div>
       )}
-      <NewFolderDialog
-        open={openNewFolderDialog}
-        spaceId={spaceData?.id}
-        onOpenChange={setOpenNewFolderDialog}
-      />
+      {/* Only render NewFolderDialog if not in All Spaces (Caps/personal) context */}
+      {spaceData && (
+        <NewFolderDialog
+          open={openNewFolderDialog}
+          spaceId={spaceData.id}
+          onOpenChange={setOpenNewFolderDialog}
+        />
+      )}
       <div className="flex flex-wrap gap-3 mb-10">
         {spaceData && spaceMembers && (
           <MembersIndicator
@@ -233,15 +227,16 @@ export const SharedCaps = ({
             onVideosAdded={handleVideosAdded}
           />
         )}
-        <Button
-          onClick={() => setOpenNewFolderDialog(true)}
-          size="sm"
-          variant="dark"
-          className="flex gap-2 items-center w-fit"
-        >
-          <FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
-          New Folder
-        </Button>
+        {spaceData && (
+          <Button
+            onClick={() => setOpenNewFolderDialog(true)}
+            size="sm"
+            variant="dark"
+            className="flex gap-2 items-center w-fit"
+          >
+            <FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
+            New Folder
+          </Button>)}
       </div>
       {folders && folders.length > 0 && (
         <>
@@ -256,17 +251,22 @@ export const SharedCaps = ({
 
       <h1 className="mb-4 text-2xl font-medium text-gray-12">Videos</h1>
       <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-        {data.map((cap) => (
-          <SharedCapCard
-            key={cap.id}
-            cap={cap}
-            hideSharedStatus
-            analytics={analytics[cap.id] || 0}
-            organizationName={activeOrganization?.organization.name || ""}
-            spaceName={spaceData?.name || ""}
-            userId={currentUserId}
-          />
-        ))}
+        {data.map((cap) => {
+          const isOwner = cap.ownerId === currentUserId;
+          return (
+            <SharedCapCard
+              key={cap.id}
+              cap={cap}
+              hideSharedStatus
+              analytics={analytics[cap.id] || 0}
+              organizationName={activeOrganization?.organization.name || ""}
+              spaceName={spaceData?.name || ""}
+              userId={currentUserId}
+              onDragStart={() => setIsDraggingCap({ isOwner, isDragging: true })}
+              onDragEnd={() => setIsDraggingCap({ isOwner, isDragging: false })}
+            />
+          );
+        })}
       </div>
       {(data.length > limit || data.length === limit || page !== 1) && (
         <div className="mt-4">
