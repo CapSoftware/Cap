@@ -7,6 +7,7 @@ import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
 import { toast } from "sonner";
 import clsx from "clsx";
 import { useRouter } from "next/navigation";
+import { useDashboardContext } from "../../../Contexts";
 
 interface BreadcrumbItemProps {
   id: string;
@@ -19,6 +20,7 @@ export function BreadcrumbItem({ id, name, color, isLast }: BreadcrumbItemProps)
   const [isDragOver, setIsDragOver] = useState(false);
   const [isMoving, setIsMoving] = useState(false);
   const router = useRouter();
+  const { activeSpace } = useDashboardContext();
 
   const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -90,7 +92,7 @@ export function BreadcrumbItem({ id, name, color, isLast }: BreadcrumbItemProps)
       })}
     >
       <Link
-        href={`/dashboard/folder/${id}`}
+        href={activeSpace ? `/dashboard/spaces/${activeSpace.id}/folder/${id}` : `/dashboard/folder/${id}`}
         className="flex gap-1.5 items-center transition-colors duration-200 z-10 relative"
       >
         <AllFolders color={color} className="size-5" />

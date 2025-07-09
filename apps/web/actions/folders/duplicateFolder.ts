@@ -9,7 +9,8 @@ import { getFolderById } from "./getFolderById";
 
 export async function duplicateFolder(
   folderId: string,
-  parentId?: string | null
+  parentId?: string | null,
+  spaceId?: string | null
 ): Promise<string> {
   if (!folderId) throw new Error("Folder ID is required");
 
@@ -29,6 +30,7 @@ export async function duplicateFolder(
     createdAt: now,
     updatedAt: now,
     parentId: parentId ?? null,
+    spaceId: spaceId ?? null,
   };
   await db().insert(folders).values(newFolder);
 
@@ -39,13 +41,15 @@ export async function duplicateFolder(
     .where(eq(videos.folderId, folderId));
   for (const video of videosInFolder) {
     const newVideoId = nanoId();
-    await db().insert(videos).values({
-      ...video,
-      id: newVideoId,
-      folderId: newFolderId,
-      createdAt: now,
-      updatedAt: now,
-    });
+    await db()
+      .insert(videos)
+      .values({
+        ...video,
+        id: newVideoId,
+        folderId: newFolderId,
+        createdAt: now,
+        updatedAt: now,
+      });
 
     // --- S3 Asset Duplication ---
     // Copy all S3 objects from old video to new video
@@ -56,7 +60,10 @@ export async function duplicateFolder(
       let newPrefix: string | null = null;
       if (video.bucket) {
         // Modern: use custom bucket
-        const [bucketRow] = await db().select().from(s3Buckets).where(eq(s3Buckets.id, video.bucket));
+        const [bucketRow] = await db()
+          .select()
+          .from(s3Buckets)
+          .where(eq(s3Buckets.id, video.bucket));
         if (bucketRow) {
           bucketProvider = await createBucketProvider(bucketRow);
           prefix = `${video.ownerId}/${video.id}/`;
@@ -74,7 +81,10 @@ export async function duplicateFolder(
           for (const obj of objects.Contents) {
             if (!obj.Key) continue;
             const newKey = obj.Key.replace(prefix, newPrefix);
-            await bucketProvider.copyObject(`${bucketProvider.name}/${obj.Key}`, newKey);
+            await bucketProvider.copyObject(
+              `${bucketProvider.name}/${obj.Key}`,
+              newKey
+            );
           }
         }
       }
