@@ -1,31 +1,29 @@
-import { ClientMyCapsLink, NewSubfolderButton, BreadcrumbItem } from "./components";
-import Folder from "../../caps/components/Folder";
+import { ClientMyCapsLink, NewSubfolderButton, BreadcrumbItem } from "../../../../folder/[id]/components";
+import Folder from "@/app/(org)/dashboard/caps/components/Folder";
 import { getFolderBreadcrumb } from "@/actions/folders/getFolderBreadcrumb";
 import { getChildFolders } from "@/actions/folders/getChildFolders";
 import { getVideosByFolderId } from "@/actions/folders/getVideosByFolderId";
 import { serverEnv } from "@cap/env";
-import { UploadCapButtonWithFolder } from "./components/UploadCapButtonWithFolder";
-import FolderVideosSection from "./components/FolderVideosSection";
+import FolderVideosSection from "../../../../folder/[id]/components/FolderVideosSection";
+import { getCurrentUser } from "@cap/database/auth/session";
 
-
-const FolderPage = async ({ params }: { params: { id: string } }) => {
+const FolderPage = async ({ params }: { params: { spaceId: string; folderId: string } }) => {
   const [childFolders, breadcrumb, videosData] = await Promise.all([
-    getChildFolders(params.id),
-    getFolderBreadcrumb(params.id),
-    getVideosByFolderId(params.id),
+    getChildFolders(params.folderId),
+    getFolderBreadcrumb(params.folderId),
+    getVideosByFolderId(params.folderId),
   ]);
+  const user = await getCurrentUser();
+  const userId = user?.id as string;
 
   return (
-
     <div>
       <div className="flex gap-2 items-center mb-10">
-        <NewSubfolderButton parentFolderId={params.id} />
-        <UploadCapButtonWithFolder folderId={params.id} />
+        <NewSubfolderButton parentFolderId={params.folderId} />
       </div>
       <div className="flex justify-between items-center mb-6 w-full">
         <div className="flex overflow-x-auto items-center font-medium">
           <ClientMyCapsLink />
-
           {breadcrumb.map((folder, index) => (
             <div key={folder.id} className="flex items-center">
               <p className="mx-2 text-gray-10">/</p>
@@ -39,7 +37,6 @@ const FolderPage = async ({ params }: { params: { id: string } }) => {
           ))}
         </div>
       </div>
-
       {/* Display Child Folders */}
       {childFolders.length > 0 && (
         <>
@@ -50,6 +47,7 @@ const FolderPage = async ({ params }: { params: { id: string } }) => {
                 key={folder.id}
                 name={folder.name}
                 color={folder.color}
+                spaceId={params.spaceId}
                 id={folder.id}
                 parentId={folder.parentId}
                 videoCount={folder.videoCount}
@@ -58,14 +56,14 @@ const FolderPage = async ({ params }: { params: { id: string } }) => {
           </div>
         </>
       )}
-
       {/* Display Videos */}
       <FolderVideosSection
+        cardType="shared"
         initialVideos={videosData}
         dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
+        userId={userId}
       />
     </div>
-
   );
 };
 

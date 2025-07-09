@@ -45,7 +45,7 @@ export const OrganizationIndicator = ({
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="flex gap-3 items-center mb-4">
+    <div className="flex gap-3 items-center">
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogTrigger asChild>
           <Button variant="gray" size="sm" className="z-10">

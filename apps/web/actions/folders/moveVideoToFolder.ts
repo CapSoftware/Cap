@@ -1,7 +1,7 @@
 "use server";
 
 import { db } from "@cap/database";
-import { folders, videos } from "@cap/database/schema";
+import { folders, videos, spaceVideos } from "@cap/database/schema";
 import { eq, and } from "drizzle-orm";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { revalidatePath } from "next/cache";
@@ -9,9 +9,11 @@ import { revalidatePath } from "next/cache";
 export async function moveVideoToFolder({
   videoId,
   folderId,
+  spaceId,
 }: {
   videoId: string;
   folderId: string | null;
+  spaceId?: string | null;
 }) {
   const user = await getCurrentUser();
   if (!user || !user.activeOrganizationId)
@@ -44,6 +46,15 @@ export async function moveVideoToFolder({
     }
   }
 
+  if (spaceId) {
+    await db()
+      .update(spaceVideos)
+      .set({
+        folderId: folderId === null ? null : folderId,
+      })
+      .where(eq(spaceVideos.videoId, videoId));
+  }
+
   // Update the video's folderId
   await db()
     .update(videos)
@@ -55,6 +66,10 @@ export async function moveVideoToFolder({
 
   // Always revalidate the main caps page
   revalidatePath(`/dashboard/caps`);
+
+  if (spaceId) {
+    revalidatePath(`/dashboard/spaces/${spaceId}/folder/${folderId}`);
+  }
 
   // Revalidate the target folder if it exists
   if (folderId) {

@@ -7,12 +7,16 @@ import { toast } from "sonner";
 import clsx from "clsx";
 import { registerDropTarget } from "./ClientCapCard";
 import { useRouter } from "next/navigation";
+import { useDashboardContext } from "../../../Contexts";
+import { Avatar } from "@cap/ui";
+import Image from "next/image";
 
 export function ClientMyCapsLink() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [isMovingVideo, setIsMovingVideo] = useState(false);
   const linkRef = useRef<HTMLAnchorElement>(null);
   const router = useRouter();
+  const { activeSpace } = useDashboardContext();
 
   // Register this component as a drop target for mobile drag and drop
   useEffect(() => {
@@ -82,11 +86,15 @@ export function ClientMyCapsLink() {
       // Move the video to the root folder (null parentId)
       await moveVideoToFolder({
         videoId: capData.id,
-        folderId: null
+        folderId: null,
+        spaceId: activeSpace?.id,
       });
       router.refresh();
-
-      toast.success(`Moved "${capData.name}" to My Caps`);
+      if (activeSpace) {
+        toast.success(`Moved "${capData.name}" to "${activeSpace.name}"`);
+      } else {
+        toast.success(`Moved "${capData.name}" to My Caps`);
+      }
     } catch (error) {
       console.error("Error moving video:", error);
       toast.error("Failed to move video");
@@ -98,9 +106,9 @@ export function ClientMyCapsLink() {
   return (
     <Link
       ref={linkRef}
-      href="/dashboard/caps"
+      href={activeSpace ? `/dashboard/spaces/${activeSpace.id}` : "/dashboard/caps"}
       className={clsx(
-        "text-xl whitespace-nowrap transition-colors duration-200 hover:text-gray-12",
+        "text-xl whitespace-nowrap flex items-center gap-1.5 transition-colors duration-200 hover:text-gray-12",
         isDragOver ? "text-blue-10" : "text-gray-9",
         isMovingVideo && "opacity-70",
         "drag-target" // Add a class for styling when used as a drop target
@@ -109,7 +117,22 @@ export function ClientMyCapsLink() {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      My Caps
+      {activeSpace && activeSpace.iconUrl ? (
+        <Image
+          src={activeSpace.iconUrl}
+          alt={activeSpace.name || "Space"}
+          width={20}
+          height={20}
+          className="rounded-full"
+        />
+      ) : activeSpace && !activeSpace.iconUrl && (
+        <Avatar
+          letterClass="text-xs"
+          className="relative flex-shrink-0 size-5"
+          name={activeSpace?.name}
+        />
+      )}
+      {activeSpace ? activeSpace.name : "My Caps"}
     </Link>
   );
 }

@@ -6,6 +6,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { RefObject } from "react";
 import { toast } from "sonner";
 import { duplicateFolder } from "@/actions/folders/duplicateFolder";
+import { useDashboardContext } from "../../Contexts";
 
 interface FoldersDropdownProps {
   id: string;
@@ -22,6 +23,7 @@ export const FoldersDropdown = ({
   setConfirmDeleteFolderOpen,
   nameRef,
 }: FoldersDropdownProps) => {
+  const { activeSpace } = useDashboardContext()
   return (
     <div
       onClick={(e) => e.stopPropagation()}
@@ -38,46 +40,54 @@ export const FoldersDropdown = ({
           </div>
         </DropdownMenuTrigger>
         <DropdownMenuContent>
-          {[
-            {
-              label: "Rename",
-              icon: faPencil,
-              onClick: () => {
-                setIsRenaming(true)
-                // Use setTimeout to ensure the textarea is rendered before focusing
-                setTimeout(() => {
-                  nameRef.current?.focus()
-                  nameRef.current?.select()
-                }, 0)
-              }
-            },
-            {
-              label: "Duplicate",
-              icon: faCopy,
-              onClick: async () => {
-                try {
-                  await duplicateFolder(id, parentId);
-                  toast.success("Folder duplicated successfully");
-                } catch (error) {
-                  toast.error("Failed to duplicate folder");
+          {(() => {
+            type FolderDropdownItem = {
+              label: string;
+              icon: any;
+              onClick: () => void | Promise<void>;
+            };
+            const items: FolderDropdownItem[] = [
+              {
+                label: "Rename",
+                icon: faPencil,
+                onClick: () => {
+                  setIsRenaming(true)
+                  setTimeout(() => {
+                    nameRef.current?.focus()
+                    nameRef.current?.select()
+                  }, 0)
                 }
+              },
+              // Only show Duplicate if there is NO active space
+              ...(!activeSpace ? [{
+                label: "Duplicate",
+                icon: faCopy,
+                onClick: async () => {
+                  try {
+                    await duplicateFolder(id, parentId);
+                    toast.success("Folder duplicated successfully");
+                  } catch (error) {
+                    toast.error("Failed to duplicate folder");
+                  }
+                }
+              }] : []),
+              {
+                label: "Delete",
+                icon: faTrash,
+                onClick: () => setConfirmDeleteFolderOpen(true)
               }
-            },
-            {
-              label: "Delete",
-              icon: faTrash,
-              onClick: () => setConfirmDeleteFolderOpen(true)
-            }
-          ].map((item, index) => (
-            <DropdownMenuItem
-              key={item.label}
-              onClick={item.onClick}
-              className="rounded-lg"
-            >
-              <FontAwesomeIcon className="mr-1.5 text-gray-10 size-3" icon={item.icon} />
-              {item.label}
-            </DropdownMenuItem>
-          ))}
+            ];
+            return items.map((item) => (
+              <DropdownMenuItem
+                key={item.label}
+                onClick={item.onClick}
+                className="rounded-lg"
+              >
+                <FontAwesomeIcon className="mr-1.5 text-gray-10 size-3" icon={item.icon} />
+                {item.label}
+              </DropdownMenuItem>
+            ));
+          })()}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
