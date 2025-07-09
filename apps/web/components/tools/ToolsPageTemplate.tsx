@@ -119,7 +119,7 @@ export const ToolsPageTemplate = ({
   return (
     <>
       {/* Compact Hero Section */}
-      <div className="relative mt-[60px] overflow-hidden bg-gradient-to-b from-blue-50/50 to-white">
+      <div className="relative pt-[60px] md:pt-[120px] overflow-hidden ">
         {/* Breadcrumbs */}
         <div className="wrapper relative z-20 pt-4 px-5 text-center">
           <div className="flex items-center justify-center text-sm">
@@ -184,17 +184,16 @@ export const ToolsPageTemplate = ({
           className="w-[500px] h-[300px] bg-gradient-to-l rounded-full blur-[80px]
           absolute top-10 z-[0] right-0 from-[#A6D7FF] to-transparent opacity-40"
         />
-      </div>
 
-      {/* Tool Container - Now positioned for visibility above the fold */}
-      <div className="wrapper py-10 bg-white relative z-10">
+
+        <div className="wrapper py-10 relative z-10">
         <div className="mx-auto max-w-4xl bg-white rounded-2xl shadow-lg p-6 md:p-8 border border-gray-100">
           {toolComponent}
         </div>
       </div>
 
       {/* Main Content - Features & FAQ */}
-      <div className="wrapper py-16 bg-gradient-to-b from-white to-gray-50 relative z-10">
+      <div className="wrapper py-16  relative z-10">
         {/* Features Section */}
         <div className="mb-20">
           <div className="text-center max-w-[800px] mx-auto mb-12">
@@ -312,6 +311,10 @@ export const ToolsPageTemplate = ({
           </div>
         </div>
       </div>
+      </div>
+
+      {/* Tool Container - Now positioned for visibility above the fold */}
+      
 
       <style jsx global>{`
         @keyframes fade-in-down {

@@ -2,7 +2,9 @@
 
 import { Button } from "@cap/ui";
 import Link from "next/link";
+import {motion} from 'framer-motion'
 import { useEffect } from "react";
+import LeftBlueHue from "@/components/pages/HomePage/LeftBlueHue";
 
 interface ToolCategory {
   title: string;
@@ -34,13 +36,13 @@ const toolCategories: ToolCategory[] = [
 ];
 
 export function PageContent() {
-  useEffect(() => {
+ useEffect(() => {
     const animateClouds = () => {
-      const cloud1 = document.getElementById("cloud-1");
-      const cloud2 = document.getElementById("cloud-2");
+      const cloud4 = document.getElementById("cloud-4");
+      const cloud5 = document.getElementById("cloud-5");
 
-      if (cloud1 && cloud2) {
-        cloud1.animate(
+      if (cloud4 && cloud5) {
+        cloud4.animate(
           [
             { transform: "translateX(0) translateY(0)" },
             { transform: "translateX(-10px) translateY(5px)" },
@@ -54,7 +56,7 @@ export function PageContent() {
           }
         );
 
-        cloud2.animate(
+        cloud5.animate(
           [
             { transform: "translateX(0) translateY(0)" },
             { transform: "translateX(10px) translateY(-5px)" },
@@ -74,24 +76,227 @@ export function PageContent() {
   }, []);
 
   return (
-    <div className="py-20 md:py-28">
-      <div className="wrapper">
-        <div className="text-center mb-12">
-          <h1 className="text-4xl font-medium tracking-tight text-gray-900 mb-4">
-            Try our free tools
-          </h1>
-          <p className="text-xl text-gray-600 max-w-3xl mx-auto">
-            Powerful browser-based utilities that run directly on your device.
-            No uploads, no installations, maximum privacy.
-          </p>
+    <>
+     <div
+        className="relative overflow-hidden mt-[60px]"
+        style={{ height: "calc(100vh - 60px)" }}
+      >
+        <div className="relative z-10 px-5 w-full h-full flex flex-col justify-center">
+          <div className="mx-auto text-center wrapper wrapper-sm">
+            <h1 className="fade-in-down text-[2.25rem] leading-[2.75rem] md:text-[3.5rem] md:leading-[4rem] relative z-10 text-black mb-6">
+               Try our free tools
+            </h1>
+            <p className="mx-auto mb-10 max-w-2xl text-md sm:text-xl text-zinc-500 fade-in-down animate-delay-1">
+             Powerful browser-based utilities that run directly on your device. No uploads, no installations, maximum privacy.
+            </p>
+          </div>
+          <div className="flex flex-col justify-center items-center space-y-2 fade-in-up animate-delay-2 sm:flex-row sm:space-y-0 sm:space-x-4">
+            <Button
+              variant="blue"
+              size="lg"
+              className="relative z-[20] w-full font-medium text-md sm:w-auto"
+              onClick={(e) => {
+                e.preventDefault();
+                const grid = document.querySelector(".wrapper");
+                if (grid) {
+                  grid.scrollIntoView({ behavior: "smooth" });
+                }
+              }}
+            >
+              Start now
+            </Button>
+          </div>
+         
+
         </div>
 
-        <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3">
-          {toolCategories.map((category) => (
+        {/** Header BG */}
+        <div className="w-full mx-auto overflow-hidden h-[830px] absolute top-0 left-0 z-0">
+          <motion.div
+            animate={{
+              x: [0, "30vw"],
+              top: 340,
+              opacity: [0.7, 0.5],
+            }}
+            transition={{
+              duration: 6,
+              repeat: Infinity,
+              repeatType: "reverse",
+              ease: "linear",
+            }}
+            className="absolute opacity-70 top-[340px] -left-[200px] z-[9]
+            w-full max-w-[1800px] h-[100px] bg-gradient-to-l from-transparent via-white/90 to-white"
+            style={{
+              borderRadius: "100%",
+              mixBlendMode: "plus-lighter",
+              filter: "blur(50px)",
+            }}
+          />
+          <motion.div
+            initial={{
+              right: -200,
+              top: 150,
+              opacity: 0.25,
+            }}
+            animate={{
+              right: [-200, 400],
+              opacity: [0.25, 0.1, 0.25],
+            }}
+            transition={{
+              duration: 6,
+              repeat: Infinity,
+              repeatType: "reverse",
+              ease: "linear",
+            }}
+            className="absolute mix-blend-plus-lighter z-[9] w-full max-w-[800px] h-[200px]
+            blur-[60px] rounded-full bg-gradient-to-r from-transparent via-white to-white"
+          />
+
+          <LeftBlueHue />
+
+          {/** Clouds - Exactly matching HomePage */}
+          <motion.img
+            style={{
+              mixBlendMode: "plus-lighter",
+            }}
+            initial={{
+              right: 100,
+              top: 50,
+              rotate: 180,
+            }}
+            animate={{
+              x: "-100vw",
+            }}
+            transition={{
+              duration: 500,
+              repeat: Infinity,
+              repeatType: "reverse",
+              ease: "linear",
+            }}
+            className="absolute w-full max-w-[500px] z-[5] select-none"
+            src="/illustrations/bottomcloud.webp"
+            alt="bottomcloudthree"
+          />
+          <motion.img
+            style={{
+              mixBlendMode: "plus-lighter",
+            }}
+            animate={{
+              x: [0, "100vw"],
+            }}
+            transition={{
+              duration: 300,
+              repeat: Infinity,
+              repeatType: "reverse",
+            }}
+            className="absolute
+            top-[180px] w-full max-w-[280px] z-[4] right-[60px] md:right-[600px] select-none"
+            src="/illustrations/smallcloudthree.webp"
+            alt="smallcloudfour"
+          />
+          <motion.img
+            style={{
+              mixBlendMode: "screen",
+            }}
+            animate={{
+              x: [0, "100vw"],
+            }}
+            transition={{
+              duration: 100,
+              repeat: Infinity,
+              repeatType: "reverse",
+              ease: "linear",
+            }}
+            className="absolute top-[20px] left-[-60px] md:left-[-400px] select-none z-[5] pointer-events-none"
+            src="/illustrations/bottomcloud.webp"
+            alt="bottomcloudthree"
+          />
+          <img
+            className="absolute
+            top-[180px] w-full max-w-[400px] z-0 select-none right-[60px] opacity-30 pointer-events-none"
+            src="/illustrations/smallcloudthree.webp"
+            alt="smallcloudthree"
+          />
+          <motion.img
+            style={{
+              mixBlendMode: "screen",
+            }}
+            animate={{
+              x: [0, "-100vw"],
+            }}
+            transition={{
+              duration: 120,
+              repeat: Infinity,
+              repeatType: "reverse",
+              ease: "linear",
+            }}
+            className="absolute
+            bottom-[240px] w-full max-w-[430px] z-[1] right-[40px] select-none opacity-80 brightness-125 pointer-events-none"
+            src="/illustrations/smallcloudtwo.webp"
+            alt="smallcloudtwo"
+          />
+          <img
+            style={{
+              mixBlendMode: "screen",
+            }}
+            className="absolute
+            w-full max-w-[500px] top-[210px] right-[300px] z-[2] select-none brightness-125 pointer-events-none"
+            src="/illustrations/chipcloud.webp"
+            alt="chipcloudtwo"
+          />
+          <motion.img
+            style={{
+              mixBlendMode: "screen",
+            }}
+            initial={{
+              x: -200,
+              rotate: 180,
+            }}
+            animate={{
+              x: [-200, "100vw"],
+            }}
+            transition={{
+              duration: 200,
+              repeat: Infinity,
+              repeatType: "reverse",
+              ease: "linear",
+            }}
+            className="absolute
+            w-full max-w-[500px] bottom-[15px] select-none left-[-200px] lg:left-[30px] z-[10] pointer-events-none"
+            src="/illustrations/chipcloud.webp"
+            alt="chipcloudfour"
+          />
+          <img
+            className="absolute
+            w-full max-w-[500px] top-[160px] select-none mix-blend-screen left-[-200px] lg:left-[30px] z-[10] pointer-events-none"
+            src="/illustrations/chipcloud.webp"
+            alt="chipcloud"
+          />
+          <img
+            className="absolute bottom-[-200px] -left-[500px] select-none z-[5] pointer-events-none"
+            src="/illustrations/bottomcloud.webp"
+            alt="bottomcloud"
+          />
+          <img
+            className="absolute bottom-[-90px] right-[-400px] select-none z-[5] pointer-events-none"
+            src="/illustrations/bottomcloud.webp"
+            alt="bottomcloudtwo"
+          />
+        </div>
+
+        {/** Right Blue Hue */}
+        <div
+          className="w-[868px] h-[502px] bg-gradient-to-l rounded-full blur-[100px]
+          absolute top-20 z-[0] right-0 from-[#A6D7FF] to-transparent"
+        />
+      </div>
+      <div className="wrapper mx-auto">
+        <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3 px-12">
+           {toolCategories.map((category) => (
             <Link
               key={category.href}
               href={category.href}
-              className="group block p-8 border border-gray-200 rounded-xl hover:border-blue-500 hover:shadow-md transition-all"
+              className="group block p-8 border border-gray-200 bg-gray-1 rounded-xl hover:border-blue-500 hover:shadow-md transition-all"
             >
               <div className="flex flex-col items-center text-center">
                 <div className="flex-shrink-0 p-3 bg-blue-100 rounded-xl mb-5">
@@ -117,14 +322,13 @@ export function PageContent() {
             </Link>
           ))}
         </div>
-
         <div
-          className="mx-auto mt-16 mb-8 rounded-3xl overflow-hidden relative flex flex-col justify-center p-12"
-          style={{
-            minHeight: "300px",
-            background:
-              "linear-gradient(135deg, #4f46e5 0%, #3b82f6 50%, #0ea5e9 100%)",
-          }}
+        className="mx-auto wrapper mt-16 mb-8 rounded-3xl overflow-hidden relative flex flex-col justify-center p-12"
+        style={{
+          minHeight: "300px",
+          background:
+            "linear-gradient(135deg, #4f46e5 0%, #3b82f6 50%, #0ea5e9 100%)",
+        }}
         >
           <div
             id="cloud-1"
@@ -146,7 +350,7 @@ export function PageContent() {
               alt="Footer Cloud Two"
             />
           </div>
-          <div className="wrapper mx-auto h-full flex flex-col justify-center items-center relative z-10">
+          <div className=" mx-auto h-full flex flex-col justify-center items-center relative z-10">
             <div className="text-center max-w-[800px] mx-auto mb-8">
               <h2 className="text-3xl md:text-4xl font-medium text-white mb-4 drop-shadow-md">
                 The open source Loom alternative
@@ -169,6 +373,8 @@ export function PageContent() {
           </div>
         </div>
       </div>
-    </div>
+      
+    </>
+
   );
 }
