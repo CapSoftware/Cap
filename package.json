@@ -35,5 +35,10 @@
   "name": "cap",
   "engines": {
     "node": "20"
+  },
+  "dependencies": {
+    "date-fns": "^3.6.0",
+    "dub": "^0.36.1",
+    "eslint": "^8.57.0"
   }
 }
