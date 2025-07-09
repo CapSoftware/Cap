@@ -4,9 +4,11 @@ import type { NextAuthOptions } from "next-auth";
 import EmailProvider from "next-auth/providers/email";
 import GoogleProvider from "next-auth/providers/google";
 import WorkOSProvider from "next-auth/providers/workos";
-import { NODE_ENV, serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 import type { Adapter } from "next-auth/adapters";
 import type { Provider } from "next-auth/providers/index";
+import { cookies } from "next/headers";
+import { dub } from "../dub";
 
 import { db } from "../";
 import { users, organizations, organizationMembers } from "../schema";
@@ -103,6 +105,30 @@ export const authOptions = (): NextAuthOptions => {
     events: {
       async signIn({ user, account, isNewUser }) {
         if (isNewUser) {
+          // Check if dub_id cookie is present
+          const dubId = cookies().get("dub_id")?.value;
+
+          if (dubId) {
+            try {
+              // Send lead event to Dub
+              await dub().track.lead({
+                clickId: dubId,
+                eventName: "Sign Up",
+                externalId: user.id,
+                customerName: user.name || undefined,
+                customerEmail: user.email || undefined,
+                customerAvatar: user.image || undefined,
+              });
+
+              // Delete the dub_id cookie
+              cookies().set("dub_id", "", {
+                expires: new Date(0),
+              });
+            } catch (error) {
+              console.error("Failed to track lead with Dub:", error);
+            }
+          }
+
           const organizationId = nanoId();
 
           await db().insert(organizations).values({
