@@ -131,7 +131,7 @@ export default async function RootLayout({ children }: PropsWithChildren) {
         {buildEnv.NEXT_PUBLIC_IS_CAP && (
           <DubAnalytics
             domainsConfig={{
-              refer: "cap.link",
+              refer: "go.cap.so",
             }}
           />
         )}
