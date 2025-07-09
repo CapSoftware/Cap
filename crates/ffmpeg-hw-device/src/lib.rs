@@ -9,9 +9,10 @@ use ffmpeg::{
     frame::{self, Video},
 };
 use ffmpeg_sys_next::{
-    av_buffer_ref, av_buffer_unref, av_hwdevice_ctx_create, av_hwframe_transfer_data,
-    avcodec_get_hw_config, AVBufferRef, AVCodecContext, AVCodecHWConfig, AVHWDeviceType,
-    AVPixelFormat, AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX,
+    av_buffer_ref, av_buffer_unref, av_hwdevice_ctx_create, av_hwdevice_get_hwframe_constraints,
+    av_hwframe_constraints_free, av_hwframe_transfer_data, avcodec_get_hw_config, AVBufferRef,
+    AVCodecContext, AVCodecHWConfig, AVHWDeviceType, AVHWFramesConstraints, AVPixelFormat,
+    AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX,
 };
 
 thread_local! {
@@ -77,9 +78,14 @@ impl CodecContextExt for codec::decoder::decoder::Decoder {
         let codec = self.codec().ok_or("no codec")?;
 
         unsafe {
-            let Some(hw_config) = codec.hw_configs().find(|&config| {
-                (*config).device_type == device_type
+            let Some(hw_config) = codec.hw_configs().find_map(|config| {
+                if (*config).device_type == device_type
                     && (*config).methods & (AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX as i32) == 1
+                {
+                    Some(&*config)
+                } else {
+                    None
+                }
             }) else {
                 return Err("no hw config");
             };
@@ -93,6 +99,13 @@ impl CodecContextExt for codec::decoder::decoder::Decoder {
             HW_PIX_FMT.set((*hw_config).pix_fmt);
 
             let context = self.as_mut_ptr();
+
+            let mut constraints = av_hwdevice_get_hwframe_constraints(hw_device_ctx, null());
+            if !constraints.is_null() {
+                (*context).pix_fmt = (*constraints).valid_sw_formats()[0];
+            }
+
+            av_hwframe_constraints_free(&raw mut constraints);
 
             (*context).get_format = Some(get_format);
             (*context).hw_device_ctx = av_buffer_ref(hw_device_ctx);
@@ -156,3 +169,22 @@ impl CodecExt for codec::codec::Codec {
 //         }
 //     }
 // }
+
+pub trait AVHWFramesConstraintsExt {
+    unsafe fn valid_sw_formats(&self) -> &[AVPixelFormat];
+}
+
+impl AVHWFramesConstraintsExt for AVHWFramesConstraints {
+    unsafe fn valid_sw_formats(&self) -> &[AVPixelFormat] {
+        let mut len = 0;
+
+        loop {
+            if *self.valid_sw_formats.offset(len as isize) == AVPixelFormat::AV_PIX_FMT_NONE {
+                break;
+            }
+            len += 1;
+        }
+
+        std::slice::from_raw_parts(self.valid_sw_formats, len)
+    }
+}

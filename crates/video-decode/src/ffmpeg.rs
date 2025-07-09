@@ -49,13 +49,14 @@ impl FFmpegDecoder {
 
             let exceeds_common_hw_limits = width > 4096 || height > 4096;
 
+            let codec = decoder.codec();
             let hw_device = hw_device_type
-                .and_then(|_| {
+                .and_then(|v| {
 		                if exceeds_common_hw_limits{
 				                debug!("Video dimensions {width}x{height} exceed common hardware decoder limits (4096x4096), not using hardware acceleration");
 				                None
 		                } else {
-			               		None
+			               	Some(v)
 		                }
                 })
                 .and_then(|hw_device_type| decoder.try_use_hw_device(hw_device_type).ok());
@@ -124,9 +125,14 @@ impl<'a> Iterator for FramesIter<'a> {
             match self.decoder.receive_frame(&mut frame) {
                 Ok(()) => {
                     return match &self.hw_device {
-                        Some(hw_device) => Some(Ok(hw_device.get_hwframe(&frame).unwrap_or(frame))),
+                        Some(hw_device) => {
+                            let pts = frame.pts();
+                            let mut sw_frame = hw_device.get_hwframe(&frame).unwrap_or(frame);
+                            sw_frame.set_pts(pts);
+                            Some(Ok(sw_frame))
+                        }
                         None => Some(Ok(frame)),
-                    }
+                    };
                 }
                 Err(ffmpeg::Error::Eof) => return None,
                 Err(ffmpeg::Error::Other { errno }) if errno == EAGAIN => {}

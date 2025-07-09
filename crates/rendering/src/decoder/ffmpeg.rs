@@ -85,7 +85,7 @@ impl FfmpegDecoder {
             Some(if cfg!(target_os = "macos") {
                 AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX
             } else {
-                AVHWDeviceType::AV_HWDEVICE_TYPE_D3D12VA
+                AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA
             }),
         )?;
 
