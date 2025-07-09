@@ -307,7 +307,7 @@ export default async function SharedCapsPage({
           .innerJoin(videos, eq(sharedVideos.videoId, videos.id))
           .leftJoin(comments, eq(videos.id, comments.videoId))
           .leftJoin(users, eq(videos.ownerId, users.id))
-          .where(eq(sharedVideos.organizationId, orgId))
+          .where(and(eq(sharedVideos.organizationId, orgId), isNull(videos.folderId)))
           .groupBy(
             videos.id,
             videos.ownerId,
@@ -326,7 +326,8 @@ export default async function SharedCapsPage({
         db()
           .select({ count: count() })
           .from(sharedVideos)
-          .where(eq(sharedVideos.organizationId, orgId)),
+          .innerJoin(videos, eq(sharedVideos.videoId, videos.id))
+          .where(and(eq(sharedVideos.organizationId, orgId), isNull(videos.folderId))),
       ]);
       return {
         videos: videoRows,

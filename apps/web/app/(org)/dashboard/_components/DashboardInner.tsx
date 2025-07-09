@@ -300,14 +300,13 @@ const MenuItem = memo(({ icon, name, href, onClick, iconClassName }: Props) => {
 
 const ReferButton = () => {
   const iconRef = useRef<ReferIconHandle>(null);
-  const [isHovered, setIsHovered] = useState(false);
 
   return (
-    <Link href="/dashboard/refer" className="relative hidden lg:block">
+    <Link href="/dashboard/refer" className="hidden relative lg:block">
       {/* Red notification dot with pulse animation */}
-      <div className="absolute top-1 right-1 z-10">
+      <div className="absolute right-0 top-1 z-10">
         <div className="relative">
-          <div className="absolute inset-0 w-2 h-2 bg-red-500 rounded-full animate-ping opacity-75" />
+          <div className="absolute inset-0 w-2 h-2 bg-red-500 rounded-full opacity-75 animate-ping" />
           <div className="relative w-2 h-2 bg-red-500 rounded-full" />
         </div>
       </div>
@@ -315,11 +314,9 @@ const ReferButton = () => {
       <div
         onMouseEnter={() => {
           iconRef.current?.startAnimation();
-          setIsHovered(true);
         }}
         onMouseLeave={() => {
           iconRef.current?.stopAnimation();
-          setIsHovered(false);
         }}
         className="flex justify-center items-center rounded-full transition-colors cursor-pointer bg-gray-3 hover:bg-gray-5 size-9"
       >

@@ -181,14 +181,11 @@ export const SharedCaps = ({
           </div>
         </div>
       )}
-      {/* Only render NewFolderDialog if not in All Spaces (Caps/personal) context */}
-      {spaceData && (
-        <NewFolderDialog
-          open={openNewFolderDialog}
-          spaceId={spaceData.id}
-          onOpenChange={setOpenNewFolderDialog}
-        />
-      )}
+      <NewFolderDialog
+        open={openNewFolderDialog}
+        spaceId={spaceData?.id ?? activeOrganization?.organization.id}
+        onOpenChange={setOpenNewFolderDialog}
+      />
       <div className="flex flex-wrap gap-3 mb-10">
         {spaceData && spaceMembers && (
           <MembersIndicator
@@ -227,16 +224,15 @@ export const SharedCaps = ({
             onVideosAdded={handleVideosAdded}
           />
         )}
-        {spaceData && (
-          <Button
-            onClick={() => setOpenNewFolderDialog(true)}
-            size="sm"
-            variant="dark"
-            className="flex gap-2 items-center w-fit"
-          >
-            <FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
-            New Folder
-          </Button>)}
+        <Button
+          onClick={() => setOpenNewFolderDialog(true)}
+          size="sm"
+          variant="dark"
+          className="flex gap-2 items-center w-fit"
+        >
+          <FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
+          New Folder
+        </Button>
       </div>
       {folders && folders.length > 0 && (
         <>
