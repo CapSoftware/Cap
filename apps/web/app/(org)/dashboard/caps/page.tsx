@@ -187,7 +187,8 @@ export default async function CapsPage({
     .where(
       and(
         eq(folders.organizationId, user.activeOrganizationId),
-        isNull(folders.parentId)
+        isNull(folders.parentId),
+        isNull(folders.spaceId)
       )
     );
 

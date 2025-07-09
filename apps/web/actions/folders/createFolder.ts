@@ -10,10 +10,12 @@ import { revalidatePath } from "next/cache";
 export async function createFolder({
   name,
   color,
+  spaceId,
   parentId,
 }: {
   name: string;
   color: "normal" | "blue" | "red" | "yellow";
+  spaceId?: string;
   parentId?: string;
 }) {
   const user = await getCurrentUser();
@@ -50,6 +52,7 @@ export async function createFolder({
     parentId: parentId || null,
     createdAt: now,
     updatedAt: now,
+    spaceId: spaceId || null,
   };
 
   await db().insert(folders).values(folder);

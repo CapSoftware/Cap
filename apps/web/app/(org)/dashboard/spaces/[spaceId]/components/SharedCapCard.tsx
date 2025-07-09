@@ -18,6 +18,7 @@ interface SharedCapCardProps {
   organizationName: string;
   userId?: string;
   hideSharedStatus?: boolean;
+  spaceName?: string;
 }
 
 export const SharedCapCard: React.FC<SharedCapCardProps> = ({
@@ -26,6 +27,7 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
   organizationName,
   userId,
   hideSharedStatus,
+  spaceName,
 }) => {
   const displayCount =
     analytics === 0
@@ -55,9 +57,9 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
               className="text-gray-10 size-2.5"
             />
             <p className="text-sm pointer-events-none text-gray-10">
-              Shared with{"  "}
+              Shared with{" "}
               <span className="text-sm font-medium text-gray-12">
-                {organizationName}
+                {spaceName || organizationName}
               </span>
             </p>
           </div>

@@ -1,6 +1,9 @@
 "use client";
 
-import { CapCard, CapCardProps } from "../../../caps/components/CapCard/CapCard";
+import {
+  CapCard,
+  CapCardProps,
+} from "../../../caps/components/CapCard/CapCard";
 import { deleteVideo } from "@/actions/videos/delete";
 import { useState, useRef } from "react";
 import { createPortal } from "react-dom";
@@ -31,7 +34,7 @@ export function registerDropTarget(
 ) {
   dropTargets.push({ element, onDrop, onDragOver, onDragLeave });
   return () => {
-    dropTargets = dropTargets.filter(target => target.element !== element);
+    dropTargets = dropTargets.filter((target) => target.element !== element);
   };
 }
 
@@ -48,27 +51,27 @@ export function ClientCapCard(props: ClientCapCardProps) {
     try {
       await deleteVideo(videoId);
       router.refresh();
-      toast.success('Video deleted successfully');
+      toast.success("Video deleted successfully");
     } catch (error) {
-      console.error('Error deleting video:', error);
-      toast.error('Failed to delete video');
+      console.error("Error deleting video:", error);
+      toast.error("Failed to delete video");
     }
   };
-
 
   // Create a drag preview element with thumbnail
   const createDragPreview = (text: string): HTMLElement => {
     // Create the container element
-    const container = document.createElement('div');
-    container.className = 'flex gap-2 items-center px-3 py-2 rounded-lg border shadow-md bg-gray-1 border-gray-4';
-    container.style.position = 'absolute';
-    container.style.top = '-9999px';
-    container.style.left = '-9999px';
+    const container = document.createElement("div");
+    container.className =
+      "flex gap-2 items-center px-3 py-2 rounded-lg border shadow-md bg-gray-1 border-gray-4";
+    container.style.position = "absolute";
+    container.style.top = "-9999px";
+    container.style.left = "-9999px";
 
     // Add the text
-    const textElement = document.createElement('span');
+    const textElement = document.createElement("span");
     textElement.textContent = text;
-    textElement.className = 'text-sm font-medium text-gray-12';
+    textElement.className = "text-sm font-medium text-gray-12";
     container.appendChild(textElement);
 
     return container;
@@ -79,7 +82,7 @@ export function ClientCapCard(props: ClientCapCardProps) {
     return {
       id: videoId,
       name: props.cap.name,
-      type: "application/cap"
+      type: "application/cap",
     };
   };
 
@@ -95,7 +98,7 @@ export function ClientCapCard(props: ClientCapCardProps) {
     );
 
     // Set drag effect to 'move'
-    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.effectAllowed = "move";
 
     // Set the drag image
     try {
@@ -108,7 +111,7 @@ export function ClientCapCard(props: ClientCapCardProps) {
       // Clean up after a short delay
       setTimeout(() => document.body.removeChild(dragPreview), 100);
     } catch (error) {
-      console.error('Error setting drag image:', error);
+      console.error("Error setting drag image:", error);
     }
 
     setIsDragging(true);
@@ -140,7 +143,7 @@ export function ClientCapCard(props: ClientCapCardProps) {
 
         // Clear the timer if the touch ends quickly (tap)
         const clearTimer = () => clearTimeout(timer);
-        document.addEventListener('touchend', clearTimer, { once: true });
+        document.addEventListener("touchend", clearTimer, { once: true });
       }
     }
   };
@@ -171,7 +174,10 @@ export function ClientCapCard(props: ClientCapCardProps) {
       const lastTouch = e.changedTouches[0];
       // Safely access touch properties
       if (lastTouch) {
-        const dropTarget = findDropTargetAtPosition(lastTouch.clientX, lastTouch.clientY);
+        const dropTarget = findDropTargetAtPosition(
+          lastTouch.clientX,
+          lastTouch.clientY
+        );
 
         if (dropTarget && dragDataRef.current) {
           dropTarget.onDrop(dragDataRef.current);
@@ -187,19 +193,20 @@ export function ClientCapCard(props: ClientCapCardProps) {
   // Helper function to check if we're over a drop target
   const checkDropTargets = (x: number, y: number) => {
     // Highlight the drop target we're over (if any)
-    dropTargets.forEach(target => {
+    dropTargets.forEach((target) => {
       const rect = target.element.getBoundingClientRect();
-      const isOver = x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+      const isOver =
+        x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
 
       // Add/remove a class to highlight the drop target
       if (isOver) {
-        target.element.classList.add('drag-over');
+        target.element.classList.add("drag-over");
         // Trigger the onDragOver callback if provided
         if (target.onDragOver) {
           target.onDragOver();
         }
-      } else if (target.element.classList.contains('drag-over')) {
-        target.element.classList.remove('drag-over');
+      } else if (target.element.classList.contains("drag-over")) {
+        target.element.classList.remove("drag-over");
         // Trigger the onDragLeave callback if provided
         if (target.onDragLeave) {
           target.onDragLeave();
@@ -210,9 +217,11 @@ export function ClientCapCard(props: ClientCapCardProps) {
 
   // Helper function to find a drop target at a position
   const findDropTargetAtPosition = (x: number, y: number) => {
-    return dropTargets.find(target => {
+    return dropTargets.find((target) => {
       const rect = target.element.getBoundingClientRect();
-      return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+      return (
+        x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+      );
     });
   };
 
@@ -232,18 +241,22 @@ export function ClientCapCard(props: ClientCapCardProps) {
       </div>
 
       {/* Mobile drag preview */}
-      {touchDragging && typeof document !== 'undefined' && createPortal(
-        <div
-          className="flex fixed z-50 gap-2 items-center px-3 py-2 rounded-lg border shadow-md pointer-events-none bg-gray-1 border-gray-4"
-          style={{
-            left: `${touchPosition.x - 20}px`,
-            top: `${touchPosition.y - 30}px`,
-          }}
-        >
-          <span className="text-sm font-medium text-gray-12">{props.cap.name}</span>
-        </div>,
-        document.body
-      )}
+      {touchDragging &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            className="flex fixed z-50 gap-2 items-center px-3 py-2 rounded-lg border shadow-md pointer-events-none bg-gray-1 border-gray-4"
+            style={{
+              left: `${touchPosition.x - 20}px`,
+              top: `${touchPosition.y - 30}px`,
+            }}
+          >
+            <span className="text-sm font-medium text-gray-12">
+              {props.cap.name}
+            </span>
+          </div>,
+          document.body
+        )}
     </>
   );
 }

@@ -18,6 +18,7 @@ import { BlueFolder, NormalFolder, RedFolder, YellowFolder } from "./Folders";
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  spaceId?: string;
 }
 
 const FolderOptions = [
@@ -43,7 +44,7 @@ const FolderOptions = [
   },
 ] as const;
 
-export const NewFolderDialog: React.FC<Props> = ({ open, onOpenChange }) => {
+export const NewFolderDialog: React.FC<Props> = ({ open, onOpenChange, spaceId }) => {
   const [selectedColor, setSelectedColor] = useState<
     (typeof FolderOptions)[number]["value"] | null
   >(null);
@@ -62,6 +63,7 @@ export const NewFolderDialog: React.FC<Props> = ({ open, onOpenChange }) => {
       await createFolder({
         name: folderName,
         color: selectedColor,
+        spaceId,
       });
       setFolderName("");
       setSelectedColor(null);
