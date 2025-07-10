@@ -907,23 +907,15 @@ export const EmbedVideo = forwardRef<
                           }}
                         />
                         {isCurrentChapter && (
-                          <>
-                            <div
-                              className="absolute top-0 left-0 h-full bg-white transition-all duration-100"
-                              style={{ width: `${chapterProgress * 100}%`, maxWidth: '100%', pointerEvents: 'none' }}
-                            />
-                            <div
-                              className="absolute top-0 h-full bg-white"
-                              style={{
-                                left: `calc(${chapterProgress * 100}% - 12px)`, // 12px = half the thumb width
-                                width: '24px', // thumb width
-                                borderRadius: '50%',
-                                pointerEvents: 'none',
-                                zIndex: 30,
-                              }}
-                            />
-                          </>
-                        )}
+  <div
+    className="absolute top-0 left-0 h-full bg-white transition-all duration-100"
+    style={{
+      left: 0,
+      right: `calc(100% - ${chapterProgress * 100}%)`,
+      pointerEvents: 'none',
+    }}
+  />
+)}
                         {currentTime > chapterEnd && (
                           <div className="absolute top-0 left-0 w-full h-full bg-white" />
                         )}
