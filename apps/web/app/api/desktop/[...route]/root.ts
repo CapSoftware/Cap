@@ -12,16 +12,16 @@ import { withAuth } from "../../utils";
 
 export const app = new Hono().use(withAuth);
 
+// Define schemas separately to avoid deep type instantiation
+const feedbackSchema = z.object({
+  feedback: z.string(),
+  os: z.union([z.literal("macos"), z.literal("windows")]).optional(),
+  version: z.string().optional(),
+});
+
 app.post(
   "/feedback",
-  zValidator(
-    "form",
-    z.object({
-      feedback: z.string(),
-      os: z.union([z.literal("macos"), z.literal("windows")]).optional(),
-      version: z.string().optional(),
-    })
-  ),
+  zValidator("form", feedbackSchema),
   async (c) => {
     const { feedback, os, version } = c.req.valid("form");
 
@@ -142,9 +142,11 @@ app.get("/plan", async (c) => {
   });
 });
 
+const subscribeSchema = z.object({ priceId: z.string() });
+
 app.post(
   "/subscribe",
-  zValidator("json", z.object({ priceId: z.string() })),
+  zValidator("json", subscribeSchema),
   async (c) => {
     const { priceId } = c.req.valid("json");
     const user = c.get("user");

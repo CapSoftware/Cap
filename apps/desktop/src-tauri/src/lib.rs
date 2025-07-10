@@ -1,3 +1,4 @@
+mod ai_vision;
 mod audio;
 mod audio_meter;
 mod auth;
@@ -1808,7 +1809,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             captions::download_whisper_model,
             captions::check_model_exists,
             captions::delete_whisper_model,
-            captions::export_captions_srt
+            captions::export_captions_srt,
+            ai_vision::analyze_video_content,
+            ai_vision::analyze_frame_batch
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,

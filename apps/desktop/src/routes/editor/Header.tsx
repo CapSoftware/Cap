@@ -20,6 +20,7 @@ import Tooltip from "~/components/Tooltip";
 import { trackEvent } from "~/utils/analytics";
 import { initializeTitlebar } from "~/utils/titlebar-state";
 import { useEditorContext } from "./context";
+import { AIAssistant } from "./AIAssistant";
 import PresetsDropdown from "./PresetsDropdown";
 import ShareButton from "./ShareButton";
 import { EditorButton } from "./ui";
@@ -177,6 +178,7 @@ export function Header() {
         <Show when={customDomain.data}>
           <ShareButton />
         </Show>
+        <AIAssistant />
         <Button
           variant="lightdark"
           class={cx("flex gap-2 justify-center")}

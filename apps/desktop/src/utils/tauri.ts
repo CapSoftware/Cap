@@ -238,6 +238,12 @@ async deleteWhisperModel(modelPath: string) : Promise<null> {
  */
 async exportCaptionsSrt(videoId: string) : Promise<string | null> {
     return await TAURI_INVOKE("export_captions_srt", { videoId });
+},
+async analyzeVideoContent(videoPath: string, frameInterval: number) : Promise<VideoContentAnalysis> {
+    return await TAURI_INVOKE("analyze_video_content", { videoPath, frameInterval });
+},
+async analyzeFrameBatch(videoPath: string, timestamps: number[]) : Promise<FrameAnalysis[]> {
+    return await TAURI_INVOKE("analyze_frame_batch", { videoPath, timestamps });
 }
 }
 
@@ -301,6 +307,7 @@ export type AuthStore = { secret: AuthSecret; user_id: string | null; plan: Plan
 export type AuthenticationInvalid = null
 export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; inset: number; crop: Crop | null; shadow?: number; advancedShadow?: ShadowConfiguration | null }
 export type BackgroundSource = { type: "wallpaper"; path: string | null } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number] } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number }
+export type BoundingBox = { x: number; y: number; width: number; height: number }
 export type Bounds = { x: number; y: number; width: number; height: number }
 export type Camera = { hide: boolean; mirror: boolean; position: CameraPosition; size: number; zoom_size: number | null; rounding?: number; shadow?: number; advanced_shadow?: ShadowConfiguration | null; shape?: CameraShape }
 export type CameraPosition = { x: CameraXPosition; y: CameraYPosition }
@@ -323,12 +330,14 @@ export type CursorConfiguration = { hide?: boolean; hideWhenIdle: boolean; size:
 export type CursorMeta = { imagePath: string; hotspot: XY<number> }
 export type CursorType = "pointer" | "circle"
 export type Cursors = { [key in string]: string } | { [key in string]: CursorMeta }
+export type DetectedObject = { label: string; confidence: number; bounding_box: BoundingBox; attributes: string[] }
 export type DownloadProgress = { progress: number; message: string }
 export type EditorStateChanged = { playhead_position: number }
 export type ExportCompression = "Minimal" | "Social" | "Web" | "Potato"
 export type ExportEstimates = { duration_seconds: number; estimated_time_seconds: number; estimated_size_mb: number }
 export type ExportSettings = ({ format: "Mp4" } & Mp4ExportSettings) | ({ format: "Gif" } & GifExportSettings)
 export type Flags = { captions: boolean }
+export type FrameAnalysis = { timestamp: number; objects: DetectedObject[]; scene_description: string; dominant_colors: string[]; motion_intensity: number }
 export type FramesRendered = { renderedCount: number; totalFrames: number; type: "FramesRendered" }
 export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; hapticsEnabled?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; customCursorCapture?: boolean; serverUrl?: string; 
 /**
@@ -354,6 +363,7 @@ export type NewStudioRecordingAdded = { path: string }
 export type OSPermission = "screenRecording" | "camera" | "microphone" | "accessibility"
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; camera: OSPermissionStatus; accessibility: OSPermissionStatus }
+export type ObjectTimeline = { label: string; appearances: TimeRange[]; attributes: string[] }
 export type Plan = { upgraded: boolean; manual: boolean; last_checked: number }
 export type Platform = "MacOS" | "Windows"
 export type PostStudioRecordingBehaviour = "openEditor" | "showOverlay"
@@ -373,6 +383,7 @@ export type RequestNewScreenshot = null
 export type RequestOpenSettings = { page: string }
 export type RequestStartRecording = null
 export type S3UploadMeta = { id: string }
+export type SceneSegment = { start: number; end: number; description: string; tags: string[] }
 export type ScreenCaptureTarget = { variant: "window"; id: number } | { variant: "screen"; id: number } | { variant: "area"; screen: number; bounds: Bounds }
 export type SegmentRecordings = { display: Video; camera: Video | null; mic: Audio | null; system_audio: Audio | null }
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordingsMeta; path: string }
@@ -383,12 +394,14 @@ export type SingleSegment = { display: VideoMeta; camera?: VideoMeta | null; aud
 export type StartRecordingInputs = { capture_target: ScreenCaptureTarget; capture_system_audio?: boolean; mode: RecordingMode }
 export type StereoMode = "stereo" | "monoL" | "monoR"
 export type StudioRecordingMeta = { segment: SingleSegment } | { inner: MultipleSegments }
+export type TimeRange = { start: number; end: number }
 export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments: ZoomSegment[] }
 export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number }
 export type UploadMode = { Initial: { pre_created_video: VideoUploadInfo | null } } | "Reupload"
 export type UploadProgress = { progress: number }
 export type UploadResult = { Success: string } | "NotAuthenticated" | "PlanCheckFailed" | "UpgradeRequired"
 export type Video = { duration: number; width: number; height: number; fps: number; start_time: number }
+export type VideoContentAnalysis = { frames: FrameAnalysis[]; object_timelines: ObjectTimeline[]; scene_segments: SceneSegment[] }
 export type VideoMeta = { path: string; fps?: number; 
 /**
  * unix time of the first frame
