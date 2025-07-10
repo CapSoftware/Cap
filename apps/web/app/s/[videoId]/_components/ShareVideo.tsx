@@ -1167,72 +1167,43 @@ export const ShareVideo = forwardRef<
             onMouseMove={handleTimelineHover}
             onMouseLeave={handleTimelineLeave}
           >
+            {/* Render chapter backgrounds */}
             {chapters.length > 0 && longestDuration > 0 ? (
               <div className="absolute top-2.5 w-full h-1 sm:h-1.5 z-10 flex">
                 {chapters.map((chapter, index) => {
                   const nextChapter = chapters[index + 1];
                   const chapterStart = chapter.start;
-                  const chapterEnd = nextChapter
-                    ? nextChapter.start
-                    : longestDuration;
+                  const chapterEnd = nextChapter ? nextChapter.start : longestDuration;
                   const chapterDuration = chapterEnd - chapterStart;
-                  const chapterWidth =
-                    (chapterDuration / longestDuration) * 100;
-
-                  const chapterProgress = Math.max(
-                    0,
-                    Math.min((currentTime - chapterStart) / chapterDuration, 1)
-                  );
-
-                  const isCurrentChapter =
-                    currentTime >= chapterStart && currentTime < chapterEnd;
-
+                  const chapterWidth = (chapterDuration / longestDuration) * 100;
                   return (
                     <div
                       key={chapter.start}
                       className="relative h-full cursor-pointer group"
-                      style={{ width: `${chapterWidth}%` }}
+                      style={{
+                        width: `${chapterWidth}%`,
+                        background: "rgba(156, 163, 175, 0.5)", // bg-gray-400 bg-opacity-50
+                        borderRight:
+                          index < chapters.length - 1
+                            ? "1px solid rgba(255,255,255,0.3)"
+                            : "none",
+                      }}
                       onClick={(e) => {
                         e.stopPropagation();
                         applyTimeToVideos(chapter.start);
                       }}
-                    >
-                      <div
-                        className="w-full h-full bg-gray-400 bg-opacity-50 transition-colors group-hover:bg-opacity-70"
-                        style={{
-                          boxShadow: "0 0 20px rgba(0,0,0,0.6)",
-                          borderRight:
-                            index < chapters.length - 1
-                              ? "1px solid rgba(255,255,255,0.3)"
-                              : "none",
-                        }}
-                      />
-                      {isCurrentChapter && (
-                        <div
-                          className="absolute top-0 left-0 h-full bg-white transition-all duration-100"
-                          style={{ width: `${chapterProgress * 100}%` }}
-                        />
-                      )}
-                      {currentTime > chapterEnd && (
-                        <div className="absolute top-0 left-0 w-full h-full bg-white" />
-                      )}
-                    </div>
+                    />
                   );
                 })}
               </div>
             ) : (
-              <>
-                <div
-                  style={{ boxShadow: "0 0 20px rgba(0,0,0,0.6)" }}
-                  className="absolute top-2.5 w-full h-1 sm:h-1.5 bg-gray-400 bg-opacity-50 z-10"
-                />
-                <div
-                  className="absolute top-2.5 h-1 sm:h-1.5 bg-white cursor-pointer z-10"
-                  style={{ width: `${watchedPercentage}%` }}
-                />
-              </>
+              <div className="absolute top-2.5 w-full h-1 sm:h-1.5 bg-gray-400 bg-opacity-50 z-10" />
             )}
-
+            {/* Render the main progress bar (white) */}
+            <div
+              className="absolute top-2.5 h-1 sm:h-1.5 bg-white z-20"
+              style={{ width: `${watchedPercentage}%` }}
+            />
             <div
               style={{
                 boxShadow: "0 0 20px rgba(0,0,0,0.1)",
@@ -1305,7 +1276,7 @@ export const ShareVideo = forwardRef<
               <span className="inline-flex">
                 <button
                   aria-label={`Change video speed to ${videoSpeed}x`}
-                  className="inline-flex min-w-[35px] sm:min-w-[45px] items-center text-xs sm:text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-gray-100 border-transparent hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-gray-100 active:bg-opacity-10 px-1 sm:px-2 py-1 sm:py-2 justify-center rounded-lg"
+                  className="inline-flex min-w-[35px] sm:min-w-[45px] items-center text-xs sm:text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-gray-100 border-transparent hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 px-1 sm:px-2 py-1 sm:py-2 justify-center rounded-lg"
                   tabIndex={0}
                   type="button"
                   onClick={handleSpeedChange}
